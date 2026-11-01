@@ -8,9 +8,7 @@ import AppKit
 
 extension AppDelegate {
 
-    /// The Cast speaker that is on, by app ID (`CastID`): it starts streaming
-    /// and keeps it going like any other speaker.
-    var castSwitchedOn: Set<String> { castModel.enabled.map { [CastID.app($0)] } ?? [] }
+    var castSwitchedOn: Set<String> { CastID.switchedOn(castModel.enabled) }
 
     /// From every speaker reconcile: the first one starts the sender. A
     /// sender that couldn't start or stopped working stays off until
@@ -21,6 +19,8 @@ extension AppDelegate {
                                 onChanges: { [weak self] changes in self?.castDevicesChanged(changes) },
                                 onEvents: { [weak self] events in self?.castEventsArrived(events) })
         castSender = sender
+        sender.setMaster(masterVolume)
+        if let settings = equalizerModel?.settings { sender.setEqualizer(settings) }
         castModel.foundIDs = store.castFoundIDs
         sender.start { [weak self] running, discovering in
             self?.castSenderStarted(sender, running: running, discovering: discovering)
@@ -54,17 +54,26 @@ extension AppDelegate {
     /// The addresses the user added before, given to the sender again: it
     /// keeps nothing added by hand from one launch to the next.
     private func addStoredCastAddresses(_ sender: CastSender) {
-        for address in store.castManualList.addresses {
-            // Not probed: a speaker that is off now still comes back once it answers.
-            sender.addDevice(address, probe: false, offsetFrom: castModel.foundIDs[address.text]) { [weak self] id in
-                guard let self, self.castSender === sender else { return }
-                guard let id else {
-                    DebugTrace.log("[AudioSync] Cast: the stored address \(address.text) could not be added")
-                    return
+        for address in store.castManualList.addresses { addStoredCastAddress(address, to: sender) }
+    }
+
+    /// `relisting`: the device a browse lost at the address, off when the add fails.
+    private func addStoredCastAddress(_ address: CastManualAddress, to sender: CastSender, relisting: String? = nil) {
+        // Not probed: a speaker that is off now still comes back once it answers.
+        sender.addDevice(address, probe: false, offsetFrom: castModel.foundIDs[address.text],
+                         stillWanted: { [weak self] in self?.store.castManualList.addresses.contains(address) == true }
+        ) { [weak self] id in
+            guard let self, self.castSender === sender else { return }
+            guard let id else {
+                DebugTrace.log("[AudioSync] Cast: the stored address \(address.text) could not be added")
+                if let relisting, let outcome = self.castModel.relistFailed(relisting) {
+                    self.castOutcome(outcome)
+                    self.castFollow()
                 }
-                self.castModel.addedManually(id, address: address)
-                self.pushModel()
+                return
             }
+            self.castModel.addedManually(id, address: address)
+            self.pushModel()
         }
     }
 
@@ -79,7 +88,10 @@ extension AppDelegate {
                 postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id))
             }
             if let level = castModel.takeLevelDue() { castSender?.setVolume(level) }
-            if case .appeared(let device, _, let former?) = change {
+            if let address = castModel.takeRelistDue(), let sender = castSender {
+                addStoredCastAddress(address, to: sender, relisting: change.id)
+            }
+            if case .appeared(let device, _, let former?, _) = change {
                 moveCastNotices(from: former, to: device.id)
                 moveCastSettings(from: former, to: device.id)
             }
@@ -214,9 +226,16 @@ extension AppDelegate {
         castFollow()
     }
 
-    /// The device's own level (slider position 0 to 100); the device gets it
-    /// times the master (C104).
+    /// The row moved to `position`, 0 to 100: the level the device gets (S415).
     func setCastVolume(_ appID: String, _ position: Double) {
+        guard let id = CastID.device(appID) else { return }
+        if let level = castModel.moveRow(id, row: position) { castSender?.setVolume(level) }
+        pushModel()
+    }
+
+    /// The device's own level, as a preset keeps it; the device gets it
+    /// times the zone (C104, S415).
+    func setCastOwnVolume(_ appID: String, _ position: Double) {
         guard let id = CastID.device(appID) else { return }
         if let level = castModel.setVolume(id, position: position) { castSender?.setVolume(level) }
         pushModel()
@@ -357,7 +376,7 @@ extension AppDelegate {
             let volume = castModel.volumes[id]
             return AppModel.Speaker(id: CastID.app(id), name: castName(id), tag: .cast,
                                     enabled: castModel.enabled == id,
-                                    volume: castModel.volume(of: id),
+                                    volume: castModel.rowVolume(of: id),
                                     offsetMs: castModel.offset(of: id),
                                     systemName: text.deviceName(device.name),
                                     cast: CastRow(status: castModel.status(of: id), muted: volume?.muted ?? false,
@@ -402,6 +421,8 @@ extension AppDelegate {
         case .volume(let a, let v, _):
             return "attempt \(a): volume \(Int((v.level * 100).rounded()))" + (v.muted ? ", muted" : "")
                 + (v.fixed ? ", fixed" : "")
+        case .volumeUnanswered(let a, let level):
+            return "attempt \(a): volume \(Int((level * 100).rounded())) gets no answer"
         case .commandFailed(let a, let error): return "attempt \(a): a request failed (\(String(describing: error)))"
         case .ended(let a, .failed(_, let detail)): return "attempt \(a) ended: failed: \(detail)"
         case .ended(let a, let end): return "attempt \(a) ended: \(end)"

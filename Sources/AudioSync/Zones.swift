@@ -36,6 +36,16 @@ struct SpeakerZone: Codable, Equatable {
         listed.isEmpty ? storedName(of: key, in: zones) ?? "" : listed
     }
 
+    /// `zones` without their hidden members, so the web remote counts what
+    /// the zone header counts (S256).
+    static func withoutHidden(_ zones: [SpeakerZone], isHidden: (String) -> Bool) -> [SpeakerZone] {
+        zones.map { zone in
+            var shown = zone
+            shown.members.removeAll(where: isHidden)
+            return shown
+        }
+    }
+
     /// `zones` keeping `listed`, the names members are listed under now, as
     /// each member's last name (S286); a blank name keeps the last one.
     static func remembering(_ listed: [String: String], in zones: [SpeakerZone]) -> [SpeakerZone] {

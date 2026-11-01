@@ -29,7 +29,9 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::volume::Volume;
 use plist::Value;
 
-use common::ap2::{Ap2Server, FakeAp2, dict, int, open_packet, plist, stream_key};
+use common::ap2::{
+    Ap2Server, DATA_PORT, FakeAp2, RECEIVER_CONTROL_PORT, dict, int, open_packet, plist, stream_key,
+};
 use common::net::{Events, HostAudio, host_frame_of, recv_queued, serial, wait_until};
 use common::rig::decode;
 
@@ -460,6 +462,26 @@ struct Datagram {
     bytes: Vec<u8>,
 }
 
+#[test]
+fn the_fake_default_stream_ports_lie_below_every_ephemeral_range() {
+    for port in [DATA_PORT, RECEIVER_CONTROL_PORT] {
+        assert!(port < 32_768, "{port} is in an ephemeral range");
+    }
+}
+
+#[test]
+fn a_stream_port_the_test_sets_to_a_fake_default_is_kept() {
+    let mut fake = FakeAp2::new();
+    fake.data_port = Some(DATA_PORT);
+    fake.control_port = Some(RECEIVER_CONTROL_PORT);
+    let server = Ap2Server::start(fake);
+    let fake = server.fake();
+    assert_eq!(
+        (fake.data_port, fake.control_port),
+        (Some(DATA_PORT), Some(RECEIVER_CONTROL_PORT))
+    );
+}
+
 /// A data port that keeps the RTP header of every audio datagram.
 fn data_port() -> (UdpSocket, Arc<Mutex<Vec<Datagram>>>) {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a UDP socket");
@@ -528,12 +550,13 @@ fn flush_point(server: &Ap2Server, nth: usize) -> (u16, u32) {
 // Part of P213 on the AirPlay 2 path, over loopback: every pause sends the
 // television one FLUSH naming the first packet not sent and stops the
 // audio; every resume continues from that packet with no request.
+// covers: P213
 #[test]
 fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues() {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
@@ -674,7 +697,7 @@ fn capture_switch_without_flush() {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 250));
@@ -760,7 +783,7 @@ fn timeline_restart_waits_for_flush() {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
@@ -814,7 +837,7 @@ fn w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second() {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
@@ -1024,7 +1047,7 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     fake.info_body = samsung_info(PROGRESS_BIT, None);
     let server = Ap2Server::start(fake);
     let mut tv = play_listed(
@@ -1124,8 +1147,9 @@ const RETRY_WINDOW: Duration = Duration::from_secs(2);
 const MOST_SESSIONS: usize = 4;
 
 /// Adds the television answering `refusals` and watches it for
-/// [`RETRY_WINDOW`]: the reasons reported and how many sessions started.
-fn refused_for_a_while(refusals: &[(&str, u16)]) -> (Vec<UserReason>, usize) {
+/// [`RETRY_WINDOW`] from its first error, and then until `at_least`
+/// sessions started: the reasons reported and how many sessions started.
+fn refused_for_a_while(refusals: &[(&str, u16)], at_least: usize) -> (Vec<UserReason>, usize) {
     let mut fake = FakeAp2::samsung();
     for (key, status) in refusals {
         fake.status.insert((*key).to_owned(), *status);
@@ -1136,12 +1160,26 @@ fn refused_for_a_while(refusals: &[(&str, u16)]) -> (Vec<UserReason>, usize) {
     let device = samsung_tv(&server);
     let key = device.key.clone();
     sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+    let reported = wait_until(LONG, || {
+        events.drain(&sender);
+        events
+            .of(&key)
+            .iter()
+            .any(|event| matches!(event, SpeakerEvent::Error(_)))
+    });
     let end = Instant::now() + RETRY_WINDOW;
     while Instant::now() < end {
         events.drain(&sender);
         thread::sleep(Duration::from_millis(10));
     }
+    // A loaded machine starts a retry late, never early: the fewest sessions
+    // are waited for, and only the most are held to the window.
+    let started = wait_until(LONG, || count(&server, "GET /info") >= at_least);
+    events.drain(&sender);
+    let sessions = count(&server, "GET /info");
     sender.shutdown();
+    assert!(reported, "no error reported");
+    assert!(started, "{sessions} sessions, not {at_least}");
     let reasons = events
         .of(&key)
         .into_iter()
@@ -1150,7 +1188,7 @@ fn refused_for_a_while(refusals: &[(&str, u16)]) -> (Vec<UserReason>, usize) {
             _ => None,
         })
         .collect();
-    (reasons, count(&server, "GET /info"))
+    (reasons, sessions)
 }
 
 // The weekend sheet's L341 on the fake Samsung: a television another
@@ -1160,8 +1198,7 @@ fn refused_for_a_while(refusals: &[(&str, u16)]) -> (Vec<UserReason>, usize) {
 #[test]
 fn l341_a_busy_or_refusing_samsung_reports_an_error_and_retries_on_the_back_off() {
     let _serial = serial();
-    let (busy, busy_sessions) = refused_for_a_while(&[("SETUP session", 453)]);
-    assert!(!busy.is_empty(), "no error reported");
+    let (busy, busy_sessions) = refused_for_a_while(&[("SETUP session", 453)], 3);
     assert!(
         busy.iter().all(|reason| *reason == UserReason::Busy),
         "{busy:?}"
@@ -1171,12 +1208,15 @@ fn l341_a_busy_or_refusing_samsung_reports_an_error_and_retries_on_the_back_off(
         "{busy_sessions} sessions in {RETRY_WINDOW:?}"
     );
 
-    let (refused, refused_sessions) = refused_for_a_while(&[
-        ("GET /info", 403),
-        ("POST /pair-setup", 403),
-        ("POST /pair-verify", 403),
-        ("SETUP session", 403),
-    ]);
+    let (refused, refused_sessions) = refused_for_a_while(
+        &[
+            ("GET /info", 403),
+            ("POST /pair-setup", 403),
+            ("POST /pair-verify", 403),
+            ("SETUP session", 403),
+        ],
+        1,
+    );
     // A 403 at pair-setup reads as a PIN the television wants; the user
     // then acts, so the retries stop.
     assert_eq!(refused, [UserReason::PairingRequired]);

@@ -404,6 +404,11 @@ fn civil_date(days: u64) -> (u64, u64, u64) {
     (year, month, day)
 }
 
+/// Held for its whole run by every test that panics on purpose or reads
+/// where the latest panic happened, so no other panic lands in between.
+#[cfg(test)]
+pub static PANIC_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// How long a test waits for the writer thread.
 #[cfg(test)]
 pub const TEST_FLUSH: Duration = Duration::from_secs(10);

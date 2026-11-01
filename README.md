@@ -57,7 +57,7 @@ The Windows parts are in the Windows preview, out since 0.7.1.
 - The Web Remote can switch the source, zones and presets too.
 - On the Mac, a Bluetooth headset's call microphone isn't offered as a source anymore, since using it drops the headset to call quality.
 - Calibrate with Microphone works on Windows too.
-- Master Volume scales Google Cast speakers and groups too, on the device's own volume.
+- Master Volume turns Google Cast speakers and groups down too, inside AudioSync, without touching the TV's own volume.
 - A Cast speaker that doesn't show up can be added by its IP address or host name, with Add by Address… under Connected Speakers on the Mac or in the Speakers menu on Windows.
 - Cast speakers show the track that's playing, with the title, artist, album and cover.
 - On Windows you can rename a speaker too, with a double-click on its name.
@@ -121,7 +121,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 
 A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay and Google Cast speakers (AirPlay 2 out of the box, with AirPlay 1 first for a speaker that does both, as on the Mac), it asks for AirPlay PINs and passwords, and it hasn't been tried on a real speaker yet.
 
-Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch, at most once a day. Nothing downloads until you click Download and Install.
+Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch and while the app runs, at most once a day. Nothing downloads until you click Download and Install.
 
 The exe isn't signed, so the first time you open it Windows SmartScreen may say it protected your PC. Click More info, then Run anyway, to open it.
 

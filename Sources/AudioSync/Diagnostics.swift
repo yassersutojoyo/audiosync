@@ -26,8 +26,8 @@ enum DebugTrace {
     /// Where the log is written.
     static let path = "/tmp/audiosync-debug.log"
 
-    /// True when this run writes the debug log. Also handed to the AirPlay
-    /// engine, which then logs in detail too (spec S96).
+    /// True when this run writes the debug log (S170). The core reads the same
+    /// variable to turn on the AirPlay sender's trace lines.
     static let enabled = isEnabled(environment: ProcessInfo.processInfo.environment)
 
     /// The log while it is on; nil otherwise, so a normal launch never touches

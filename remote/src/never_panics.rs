@@ -569,6 +569,9 @@ fn check_bodies(body: &[u8]) {
     if let Ok(id) = state::source_id_from_body(body) {
         assert!(id.len() <= body.len());
     }
+    if let Some(apps) = state::mix_apps_from_body(body) {
+        assert!((1..=state::MAX_MIX_APPS).contains(&apps.len()));
+    }
     if let Ok(code) = state::pairing_code_from_body(body) {
         assert!(code.len() <= body.len());
     }

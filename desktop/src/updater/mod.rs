@@ -131,6 +131,8 @@ pub struct Updater {
     record: Option<UpdateRecord>,
     /// The version whose `.new` vanished at step 4 once (spec S302).
     vanished: Option<String>,
+    /// When this process last started an automatic check (spec S305).
+    auto_started: Option<u64>,
 }
 
 impl Updater {
@@ -152,6 +154,7 @@ impl Updater {
             after_undo: None,
             record: None,
             vanished: None,
+            auto_started: None,
         }
     }
 
@@ -249,12 +252,29 @@ impl Updater {
                 self.env
                     .log
                     .log(|| format!("updater: launch check due ({why})"));
+                self.auto_started = Some(now);
                 self.check(Trigger::Launch);
             }
             skipped => self
                 .env
                 .log
                 .log(|| format!("updater: launch check skipped ({skipped:?})")),
+        }
+    }
+
+    /// The same check while the app runs (spec S305), asked at every poll;
+    /// after a swap it would only bring a dismissed Restart Now back.
+    pub fn periodic_check(&mut self, automatic: bool, last: Option<u64>, now: u64) {
+        if self.swapped.is_some() {
+            return;
+        }
+        let idle = self.work == Work::Idle;
+        if flow::periodic_check(automatic, last, self.auto_started, idle, now) {
+            self.env
+                .log
+                .log(|| "updater: 24 hours passed, checking again".to_owned());
+            self.auto_started = Some(now);
+            self.check(Trigger::Launch);
         }
     }
 
@@ -1187,6 +1207,41 @@ pub mod tests {
         updater.check(Trigger::Manual);
         updater.wait();
         assert_eq!(fetch.asked.lock().unwrap().len(), 1);
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Available { .. })
+        ));
+    }
+
+    // covers: S305
+    #[test]
+    fn the_check_while_running_skips_a_swapped_process() {
+        let mut updater = swapped("periodic-swapped", Arc::new(Never));
+        updater.dismiss();
+        let now = 1_800_000_000;
+        updater.periodic_check(true, Some(now - 24 * 3600), now);
+        assert_eq!(updater.notice(), None, "Restart Now stays dismissed");
+        assert_eq!(updater.work, Work::Idle);
+    }
+
+    // covers: S305
+    #[test]
+    fn the_check_while_running_waits_a_day_after_the_launch_check() {
+        let (mut updater, fetch) = updater("periodic");
+        let now = 1_800_000_000;
+        updater.launch_check(true, None, now);
+        updater.periodic_check(true, None, now);
+        updater.wait();
+        assert_eq!(fetch.asked.lock().unwrap().len(), 1);
+        updater.dismiss();
+        // As if the launch check had failed and stored no time.
+        updater.periodic_check(true, None, now + 60);
+        updater.periodic_check(true, Some(now), now + 23 * 3600);
+        updater.periodic_check(false, Some(now), now + 24 * 3600);
+        assert_eq!(updater.work, Work::Idle);
+        updater.periodic_check(true, Some(now), now + 24 * 3600);
+        updater.wait();
+        assert_eq!(fetch.asked.lock().unwrap().len(), 2);
         assert!(matches!(
             updater.notice(),
             Some(UpdaterNotice::Available { .. })

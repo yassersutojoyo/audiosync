@@ -14,8 +14,8 @@ use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
 use audiosync_cast::client::Fingerprint;
 use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::host::{
-    AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, MAX_HOST_EVENTS, MAX_OFFSET,
-    OUTPUT_SYNC, OutputSync, StartRefused,
+    AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, MAX_HOST_EVENTS, MAX_MEMORY_DEVICES,
+    MAX_OFFSET, MEMORY_VERSION, OUTPUT_SYNC, OutputSync, StartRefused,
 };
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
@@ -566,6 +566,52 @@ fn device_memory_keeps_formats_and_offsets_and_skips_damaged_entries() {
     host.set_offset(B, Duration::from_millis(40));
     assert_eq!(host.memory().offset(&B), Some(Duration::from_millis(40)));
     assert!(host.shutdown());
+}
+
+#[test]
+fn device_memory_keeps_its_first_devices_up_to_the_cap() {
+    let ids: Vec<DeviceId> = (0..MAX_MEMORY_DEVICES as u16 + 50)
+        .map(|n| {
+            let mut id = [0; 16];
+            id[..2].copy_from_slice(&n.to_be_bytes());
+            DeviceId(id)
+        })
+        .collect();
+    let entries: Vec<String> = ids
+        .iter()
+        .map(|id| format!(r#""{id}": {{"offsetMs": 10}}"#))
+        .collect();
+    let memory = DeviceMemory::read_json(&format!("{{{}}}", entries.join(","))).expect("reads");
+    let kept: Vec<&DeviceId> = ids
+        .iter()
+        .filter(|id| memory.offset(id).is_some())
+        .collect();
+    assert_eq!(kept, ids[..MAX_MEMORY_DEVICES].iter().collect::<Vec<_>>());
+}
+
+#[test]
+fn device_memory_writes_its_version_and_turns_down_a_newer_one() {
+    let mut memory = DeviceMemory::default();
+    memory.set_offset(A, Duration::from_millis(900));
+    let written: Value = serde_json::from_str(&memory.to_json()).expect("json");
+    assert_eq!(written["version"], json!(MEMORY_VERSION));
+    let entry = format!(r#""{A}": {{"offsetMs": 900}}"#);
+    assert_eq!(
+        DeviceMemory::read_json(&format!("{{{entry}}}")),
+        Some(memory.clone()),
+        "a file without a version is the current format"
+    );
+    assert_eq!(
+        DeviceMemory::read_json(&format!(r#"{{"version": {MEMORY_VERSION}, {entry}}}"#)),
+        Some(memory)
+    );
+    assert_eq!(
+        DeviceMemory::read_json(&format!(
+            r#"{{"version": {}, {entry}}}"#,
+            MEMORY_VERSION + 1
+        )),
+        None
+    );
 }
 
 #[test]

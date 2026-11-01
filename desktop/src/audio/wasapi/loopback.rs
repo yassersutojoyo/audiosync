@@ -123,12 +123,7 @@ impl CaptureHandle for LoopbackCapture {
         }
         if self.ended.load(Ordering::Acquire) {
             let code = HRESULT(self.failure.load(Ordering::Relaxed));
-            let error = if self.input {
-                input_code_error(self.call, code)
-            } else {
-                device_code_error(self.call, code)
-            };
-            return CaptureState::Failed(error);
+            return CaptureState::Failed(failure_error(self.input, self.call, code));
         }
         CaptureState::Running
     }
@@ -160,6 +155,22 @@ impl CaptureHandle for LoopbackCapture {
 
     fn watch_refused(&self) -> Option<i32> {
         self.watch_refused
+    }
+
+    fn went_quiet(&self) -> bool {
+        self.ended.load(Ordering::Acquire) && self.failure.load(Ordering::Relaxed) == WENT_QUIET.0
+    }
+}
+
+/// How [`CaptureHandle::state`] reads the HRESULT a capture ended with.
+fn failure_error(input: bool, call: &'static str, code: HRESULT) -> BackendError {
+    if code == WENT_QUIET {
+        // Read as a lost device, so the capture gets S329's tries.
+        BackendError::DeviceGone
+    } else if input {
+        input_code_error(call, code)
+    } else {
+        device_code_error(call, code)
     }
 }
 
@@ -343,7 +354,8 @@ fn run(
         let _ = unsafe { stream.client.Stop() };
         return;
     }
-    let result = capture_loop(&stream, &mut converter, stop, counters);
+    let input = matches!(target, CaptureTarget::Input { .. });
+    let result = capture_loop(&stream, &mut converter, stop, counters, input);
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
     if let Err(code) = result {
@@ -661,17 +673,20 @@ fn now_hns(frequency: i64) -> u64 {
 /// Process loopback delivers nothing while the captured audio is silent, so
 /// [`GapFill`] keeps the ring in real time: silence for a jump in the
 /// packets' positions, and, while nothing comes, silence up to shortly
-/// before now at every wake. Never allocates, locks or logs; it leaves on
-/// the first error.
+/// before now at every wake. An input device that delivers no packet for
+/// 2 s after its first leaves as lost ([`Quiet`]). Never allocates, locks or
+/// logs; it leaves on the first error.
 fn capture_loop(
     stream: &CaptureStream,
     converter: &mut CaptureConverter,
     stop: &Event,
     counters: &CaptureCounters,
+    input: bool,
 ) -> Result<(), HRESULT> {
     let handles = [stop.raw(), stream.event.raw()];
     let packet_ready = WAIT_EVENT(WAIT_OBJECT_0.0 + 1);
     let mut gaps = GapFill::new(stream.format.rate);
+    let mut quiet = Quiet::new(input);
     let mut frequency = 0_i64;
     // SAFETY: writes one integer.
     let _ = unsafe { QueryPerformanceFrequency(&mut frequency) };
@@ -693,13 +708,62 @@ fn capture_loop(
                 converter.push(data, frames, silent);
             },
         )?;
-        if packets == 0 {
-            let fill = gaps.idle(now_hns(frequency));
-            if fill > 0 {
-                converter.push(&[], fill, true);
-            }
+        let fill = after_drain(&mut gaps, &mut quiet, packets, now_hns(frequency))?;
+        if fill > 0 {
+            converter.push(&[], fill, true);
         }
     }
+}
+
+/// How long an input device may deliver no packet after its first before
+/// its capture counts as stopped, 2 s (S329, as S335 on the Mac).
+const INPUT_QUIET_HNS: u64 = 2_000 * HNS_PER_MS as u64;
+
+/// What an input capture that went quiet ends with: a customer HRESULT
+/// (bit 29 set), which no Windows call returns.
+const WENT_QUIET: HRESULT = HRESULT(0xA000_0001_u32 as i32);
+
+/// Tells when an input device stopped delivering packets. Windows feeds an
+/// input with packets even while it is silent; a loopback delivers none
+/// while nothing plays, so it is never stopped for that (S398).
+struct Quiet {
+    input: bool,
+    /// When the last packet was read; `None` before the first.
+    last: Option<u64>,
+}
+
+impl Quiet {
+    fn new(input: bool) -> Quiet {
+        Quiet { input, last: None }
+    }
+
+    /// A wake at `now` that read `packets` packets; true once the capture
+    /// counts as stopped.
+    fn stopped(&mut self, packets: usize, now: u64) -> bool {
+        if packets > 0 {
+            self.last = Some(now);
+            return false;
+        }
+        self.input
+            && self
+                .last
+                .is_some_and(|last| now.saturating_sub(last) >= INPUT_QUIET_HNS)
+    }
+}
+
+/// What a wake of [`capture_loop`] at `now` that read `packets` packets
+/// leaves to do: the silent frames to write, or the HRESULT the capture
+/// ends with once it counts as stopped.
+fn after_drain(
+    gaps: &mut GapFill,
+    quiet: &mut Quiet,
+    packets: usize,
+    now: u64,
+) -> Result<usize, HRESULT> {
+    if quiet.stopped(packets, now) {
+        return Err(WENT_QUIET);
+    }
+    Ok(if packets == 0 { gaps.idle(now) } else { 0 })
 }
 
 /// Reads every packet `stream` holds and hands each to `deliver` as its
@@ -1475,6 +1539,56 @@ mod tests {
                 BackendError::MicrophoneBlocked,
                 "{call}"
             );
+        }
+    }
+
+    // covers: S329, S355
+    #[test]
+    fn a_quiet_input_stops_at_2_s_and_a_quiet_loopback_fills_silence_past_it() {
+        const PACKET_HNS: u64 = 10 * HNS_PER_MS as u64;
+        const SECOND_HNS: u64 = 1_000 * HNS_PER_MS as u64;
+        // A fake endpoint: 10 ms packets for 1 s, then none, a wake every 10 ms.
+        for input in [true, false] {
+            let mut gaps = GapFill::new(SESSION_RATE);
+            let mut quiet = Quiet::new(input);
+            let mut now = SECOND_HNS;
+            while now < 2 * SECOND_HNS {
+                gaps.packet(now, 480, false);
+                now += PACKET_HNS;
+                assert_eq!(after_drain(&mut gaps, &mut quiet, 1, now), Ok(0));
+            }
+            let last_packet = now;
+            let mut filled = 0;
+            let mut stopped = None;
+            while now < last_packet + 3 * SECOND_HNS {
+                now += PACKET_HNS;
+                match after_drain(&mut gaps, &mut quiet, 0, now) {
+                    Ok(fill) => filled += fill,
+                    Err(code) => {
+                        stopped = Some((now - last_packet, code));
+                        break;
+                    }
+                }
+            }
+            if input {
+                let (after, code) = stopped.expect("a quiet input is stopped");
+                assert_eq!(after, 2 * SECOND_HNS, "2 s after its last packet");
+                assert_eq!(
+                    failure_error(true, "input device capture", code),
+                    BackendError::DeviceGone,
+                    "so it takes S329's tries"
+                );
+            } else {
+                assert_eq!(stopped, None, "a quiet loopback is never stopped");
+                assert!(filled > 2 * SESSION_RATE as usize, "{filled} frames filled");
+            }
+        }
+        // A slow start: no packet for 3 s from the open never stops an input.
+        let mut gaps = GapFill::new(SESSION_RATE);
+        let mut quiet = Quiet::new(true);
+        for wake in 1..=300 {
+            let now = SECOND_HNS + wake * PACKET_HNS;
+            assert!(after_drain(&mut gaps, &mut quiet, 0, now).is_ok(), "{now}");
         }
     }
 

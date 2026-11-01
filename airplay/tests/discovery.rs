@@ -88,6 +88,7 @@ impl Browser for ReplayBrowser {
 }
 
 // Part of P7 (live mDNS browsing comes with the transport stage).
+// covers: P7
 #[test]
 fn discovery_browse_follows_ptr_to_srv_txt_and_addresses_for_both_types() {
     assert_eq!(ServiceKind::Raop.service_type(), "_raop._tcp");

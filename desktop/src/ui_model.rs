@@ -71,6 +71,8 @@ pub struct MixApp {
     pub name: String,
     /// Checked in the mode the list shows.
     pub checked: bool,
+    /// False for an app the list keeps only because a chosen source holds it.
+    pub running: bool,
 }
 
 /// Something AudioSync can capture.
@@ -438,6 +440,10 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped announcing itself on the network; it
     /// plays once it is announced again (P215).
     NotOnNetwork,
+    /// Its password prompt is open or queued (S223).
+    ForPassword,
+    /// Its PIN pairing runs (S223).
+    ForPin,
 }
 
 /// Where a pairing's PIN prompt is.
@@ -492,7 +498,8 @@ impl Speaker {
     /// Whether the speaker lists show it. A virtual output (a loopback
     /// driver, a voice changer, a meeting app's device) is listed only while
     /// Show Virtual Devices is on or while it is turned on. The main window
-    /// also keeps one listed once it was shown (`ListedVirtual` in
+    /// also lists one set to auto-connect or in a zone, and keeps one listed
+    /// once it was shown (`ListedVirtual` in
     /// src/view.rs), so turning it off doesn't remove its row.
     pub fn is_listed(&self, show_virtual: bool) -> bool {
         show_virtual || self.enabled || self.kind != SpeakerKind::Virtual
@@ -661,6 +668,9 @@ pub enum NoticeMessage {
     CaptureFailed,
     /// Capture stopped working while streaming, so streaming stopped.
     CaptureLost,
+    /// Streaming is on but the source hasn't played anything yet (S350);
+    /// `app` names the one app captured, `None` for any other source.
+    WaitingForAudio { app: Option<String> },
     /// A speaker couldn't start, so it was turned off.
     SpeakerFailed { speaker: String },
     /// A speaker's device went away while it played. It stays on and plays
@@ -717,9 +727,10 @@ pub enum NoticeMessage {
     /// could be read again, it was kept aside as `file`, in the app's data
     /// folder, before the first write over it.
     PairingsKeptAside { file: String },
-    /// Windows has no active sound output while an AirPlay speaker is on, so
-    /// apps have nowhere to play and nothing reaches the speaker. Clears
-    /// itself once an output is back or no AirPlay speaker is on.
+    /// Windows has no active sound output while an AirPlay or Cast speaker is
+    /// on, so apps have nowhere to play and nothing reaches the speaker.
+    /// Clears itself once an output is back or no AirPlay or Cast speaker is
+    /// on.
     NoSoundOutput,
     /// The source also plays straight from these outputs, undelayed, so it
     /// is heard twice. `source` names the app, or is `None` for the whole
@@ -776,12 +787,14 @@ pub enum NoticeMessage {
 }
 
 impl NoticeMessage {
-    /// Whether the notice tells of a change AudioSync made or will make,
-    /// with nothing that failed, so it shows the info glyph.
+    /// Whether the notice tells of a change AudioSync made or will make, or
+    /// that it waits for audio, with nothing that failed, so it shows the
+    /// info glyph.
     pub fn reports_a_change(&self) -> bool {
         matches!(
             self,
             Self::SourceSwitched { .. }
+                | Self::WaitingForAudio { .. }
                 | Self::AirPlay2NextLaunch { .. }
                 | Self::GroupsBecameZones
                 | Self::Update(
@@ -908,11 +921,17 @@ pub fn show_presets(state: &mut AppState, presets: &[Preset]) {
 }
 
 /// The next N for a `<prefix>N` ID: above `last`, the highest given out, and
-/// above every ID in `ids`, so a deleted ID never comes back.
+/// above every ID in `ids`, so a deleted ID never comes back. Past
+/// `u64::MAX` (an edited settings file) it is the lowest N no ID in `ids` has.
 pub fn next_id<'a>(prefix: &str, ids: impl Iterator<Item = &'a str>, last: u64) -> u64 {
-    ids.filter_map(|id| id.strip_prefix(prefix)?.parse::<u64>().ok())
-        .fold(last, u64::max)
-        .saturating_add(1)
+    let taken: Vec<u64> = ids
+        .filter_map(|id| id.strip_prefix(prefix)?.parse::<u64>().ok())
+        .collect();
+    let highest = taken.iter().copied().fold(last, u64::max);
+    highest
+        .checked_add(1)
+        .or_else(|| (1..).find(|n| !taken.contains(n)))
+        .unwrap_or(highest)
 }
 
 /// The preset notice after a recall of `preset` (spec S265); `None` when
@@ -922,7 +941,7 @@ pub fn preset_notice(
     left_off: Vec<(String, PresetLeftOff)>,
     nothing_changed: bool,
 ) -> Option<NoticeMessage> {
-    (nothing_changed || !left_off.is_empty()).then(|| NoticeMessage::PresetLeftOff {
+    (!left_off.is_empty()).then(|| NoticeMessage::PresetLeftOff {
         preset: preset.to_owned(),
         left_off,
         nothing_changed,
@@ -1145,6 +1164,8 @@ pub struct CalibrationState {
     /// A run holds the outputs (it runs, or a cut-off sweep plays out),
     /// this one or Calibrate All: no other may start.
     pub busy: bool,
+    /// The run holding the outputs is `speaker_id`'s own, not Calibrate All.
+    pub own_run_holds: bool,
 }
 
 impl AppState {
@@ -1287,13 +1308,6 @@ impl AppState {
     /// (spec S246), so a Cast member the click leaves off counts toward
     /// neither. Playing, it waits when each member it counts waits.
     pub fn zone_state(&self, zone: &Zone) -> SpeakerState {
-        let switched: Vec<&Speaker> = self
-            .zone_members(zone)
-            .filter(|s| s.in_target.is_none())
-            .collect();
-        let (cast, others): (Vec<&Speaker>, Vec<&Speaker>) =
-            switched.iter().partition(|s| s.kind == SpeakerKind::Cast);
-        let cast_on: Vec<&Speaker> = cast.iter().copied().filter(|s| s.enabled).collect();
         let members: Vec<zones::Member> = self
             .zone_members(zone)
             .map(|s| zones::Member {
@@ -1324,17 +1338,30 @@ impl AppState {
         let on = zones::click_plan(&members, situation).action == ClickAction::TurnOff;
         match SpeakerState::new(on, self.running) {
             SpeakerState::Playing => {
-                let waiting: Option<Vec<Waiting>> = others
-                    .iter()
-                    .chain(cast_on.iter().take(1))
-                    .map(|s| s.waiting)
-                    .collect();
+                let waiting: Option<Vec<Waiting>> =
+                    self.zone_counted(zone).iter().map(|s| s.waiting).collect();
                 waiting
                     .and_then(|w| w.first().copied())
                     .map_or(SpeakerState::Playing, SpeakerState::Waiting)
             }
             state => state,
         }
+    }
+
+    /// The members a playing zone waits on: every switched member but Cast,
+    /// and the first Cast member on.
+    fn zone_counted<'a>(&'a self, zone: &'a Zone) -> Vec<&'a Speaker> {
+        let (cast, mut others): (Vec<&Speaker>, Vec<&Speaker>) = self
+            .zone_members(zone)
+            .filter(|s| s.in_target.is_none())
+            .partition(|s| s.kind == SpeakerKind::Cast);
+        others.extend(cast.into_iter().filter(|s| s.enabled).take(1));
+        others
+    }
+
+    /// The member whose wait a waiting zone shows, named in its note.
+    pub fn zone_waiter<'a>(&'a self, zone: &'a Zone) -> Option<&'a str> {
+        self.zone_counted(zone).first().map(|s| s.name.as_str())
     }
 
     /// Whether a hidden speaker that is present belongs under This PC
@@ -1530,6 +1557,9 @@ pub trait Backend {
     fn select_input_pair(&mut self, pair: u16);
     /// Checks or unchecks an app of the several-apps list, by executable.
     fn toggle_mix_app(&mut self, executable: &str);
+    /// Picks the source the several-apps list builds in "only these" mode
+    /// with exactly these of its apps checked, by executable (S353).
+    fn select_mix(&mut self, executables: &[String]);
     /// Switches the several-apps list to "all except" (true) or "only" (false).
     fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
@@ -1542,6 +1572,11 @@ pub trait Backend {
     fn set_speaker_volume(&mut self, id: &str, volume: f64);
     /// The speaker's volume slider is held (true) or let go (false).
     fn set_speaker_volume_editing(&mut self, _id: &str, _on: bool) {}
+    /// A phone's volume step: it holds an AirPlay row as a drag does until
+    /// its steps rest, since the page sends no release (S291).
+    fn hold_speaker_volume_for_phone(&mut self, id: &str) {
+        self.set_speaker_volume_editing(id, true);
+    }
     /// The now-playing card's play-pause went to `app`, which the card shows
     /// playing or paused: the AirPlay speakers may pause with it (P213).
     fn play_pause_pressed(&mut self, _app: &str, _playing: bool) {}
@@ -1923,11 +1958,24 @@ pub struct MockBackend {
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each AirPlay delay applied, as asked.
     pub airplay_delays: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+    /// Calibrate All's left-out list, read at each snapshot.
+    pub left_out: std::rc::Rc<std::cell::RefCell<Vec<LeftOutRow>>>,
+    /// Each Include Anyway (true) or Leave Out, by output ID.
+    pub includes: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
+    /// Each volume slider hold (true) or release (false), by speaker key.
+    pub volume_editing: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Window settings the next poll takes in, as a settings file read
     /// after launch brings them.
     pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
     /// The window settings each save found.
     pub saved_views: std::rc::Rc<std::cell::RefCell<Vec<ViewSettings>>>,
+    /// While `Some`, an input device is captured, and it counts the level
+    /// meter's reads of its peak.
+    pub input_peak_reads: std::rc::Rc<std::cell::Cell<Option<u32>>>,
+    /// How many times Refresh Devices ran.
+    pub refreshes: std::rc::Rc<std::cell::Cell<u32>>,
+    /// Runs at each save, to look at the app as the save happens.
+    pub on_save: std::rc::Rc<std::cell::OnceCell<Box<dyn Fn()>>>,
     view_restored: bool,
     /// The speaker that asks for its password once it is turned on.
     password_on: Option<String>,
@@ -2063,11 +2111,13 @@ impl MockBackend {
                     id: "player.exe".into(),
                     name: "Music Player".into(),
                     checked: false,
+                    running: true,
                 },
                 MixApp {
                     id: "browser.exe".into(),
                     name: "Web Browser".into(),
                     checked: false,
+                    running: true,
                 },
             ],
             mix_all_except: false,
@@ -2104,8 +2154,14 @@ impl MockBackend {
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
             airplay_delays: std::rc::Rc::default(),
+            left_out: std::rc::Rc::default(),
+            includes: std::rc::Rc::default(),
+            volume_editing: std::rc::Rc::default(),
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
+            input_peak_reads: std::rc::Rc::default(),
+            refreshes: std::rc::Rc::default(),
+            on_save: std::rc::Rc::default(),
             view_restored: false,
             password_on: None,
         }
@@ -2168,6 +2224,12 @@ impl MockBackend {
         self.state.airplay_searching = on;
     }
 
+    /// How the Google Cast search goes while it lists no speaker.
+    #[cfg(test)]
+    pub fn set_cast_list(&mut self, list: CastList) {
+        self.state.cast_list = list;
+    }
+
     /// Streaming is on with every speaker off.
     #[cfg(test)]
     pub fn set_no_speaker_on(&mut self, on: bool) {
@@ -2186,6 +2248,16 @@ impl MockBackend {
     #[cfg(test)]
     pub fn retain_speakers(&mut self, keep: impl Fn(&Speaker) -> bool) {
         self.state.speakers.retain(keep);
+    }
+
+    /// Makes the example input the source, unplugged, last seen as `name`.
+    #[cfg(test)]
+    pub fn unplug_chosen_input(&mut self, name: &str) {
+        self.state.source_id = "input:line".into();
+        if let Some(input) = self.state.sources.iter_mut().find(|s| s.id == "input:line") {
+            input.name = name.into();
+            input.unplugged = true;
+        }
     }
 
     /// Adds preset `id` of the speakers `members` at the master and the
@@ -2420,6 +2492,12 @@ impl Backend for MockBackend {
         true
     }
 
+    fn input_peak(&mut self) -> Option<f32> {
+        let reads = self.input_peak_reads.get()?;
+        self.input_peak_reads.set(Some(reads + 1));
+        Some(0.5)
+    }
+
     fn take_view_restored(&mut self) -> bool {
         std::mem::take(&mut self.view_restored)
     }
@@ -2437,6 +2515,7 @@ impl Backend for MockBackend {
             .iter()
             .any(|speaker| speaker.kind == SpeakerKind::Cast && speaker.enabled);
         show_presets(&mut state, &self.presets);
+        state.calibrate_all.left_out = self.left_out.borrow().clone();
         state
     }
 
@@ -2449,6 +2528,9 @@ impl Backend for MockBackend {
     }
 
     fn save_settings(&mut self) -> bool {
+        if let Some(look) = self.on_save.get() {
+            look();
+        }
         self.saved_views.borrow_mut().push(self.view.clone());
         true
     }
@@ -2472,6 +2554,12 @@ impl Backend for MockBackend {
             .find(|source| source.id == self.state.source_id);
         if chosen.is_some_and(|source| source.kind == SourceKind::Input) {
             self.state.input_pair = pair;
+        }
+    }
+
+    fn select_mix(&mut self, executables: &[String]) {
+        for app in &mut self.state.mix_apps {
+            app.checked = executables.contains(&app.id);
         }
     }
 
@@ -2549,12 +2637,20 @@ impl Backend for MockBackend {
         }
     }
 
+    fn set_speaker_volume_editing(&mut self, id: &str, on: bool) {
+        self.volume_editing.borrow_mut().push((id.to_owned(), on));
+    }
+
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {
         if let Some(speaker) = self.speaker_mut(id)
             && speaker.delay_ms.is_some()
         {
             speaker.delay_ms = Some(clamp_delay_ms(ms));
         }
+    }
+
+    fn include_in_calibration(&mut self, id: &str, included: bool) {
+        self.includes.borrow_mut().push((id.to_owned(), included));
     }
 
     fn set_airplay_delay(&mut self, ms: f64) {
@@ -2893,7 +2989,9 @@ impl Backend for MockBackend {
         self.state.notices.clear();
     }
 
-    fn refresh_devices(&mut self) {}
+    fn refresh_devices(&mut self) {
+        self.refreshes.set(self.refreshes.get() + 1);
+    }
 
     /// As Windows would report it once the fix is written.
     fn fix_device_volume(&mut self, id: &str) {
@@ -2951,6 +3049,7 @@ pub fn picked_curve(index: i32, saved: usize) -> Option<CurveMatch> {
 mod tests {
     use super::*;
 
+    // covers: S220
     #[test]
     fn a_delay_field_takes_digits_after_one_leading_sign_and_blocks_the_rest() {
         for typed in ["", "+", "-", "150", "+150", "\u{2212}250", "-25"] {
@@ -3115,6 +3214,7 @@ mod tests {
         }
     }
 
+    // covers: S381
     #[test]
     fn this_pc_comes_first_then_the_rest_by_name() {
         let state = MockBackend::new().snapshot();
@@ -3335,6 +3435,32 @@ mod tests {
         );
         let office = &state.zones[2];
         assert_eq!(state.zone_counts(office), ZoneCounts::default());
+    }
+
+    // covers: S256
+    #[test]
+    fn the_web_remote_counts_a_hidden_zone_member_nowhere() {
+        let mut mock = MockBackend::zones_preview();
+        mock.hide_speaker("airplay:kitchen", "AirPlay");
+        let page = crate::remote::snapshot(
+            &mock.snapshot(),
+            |_| true,
+            None,
+            "Desk PC",
+            &crate::remote::tests::Text,
+        );
+        let living = &page.zones[0];
+        assert_eq!(
+            living.members,
+            ["airplay:pair", "cc:attic", "local:desk"],
+            "Den and Kitchen are hidden; the home theater isn't found yet"
+        );
+        assert_eq!(
+            (living.counts.on, living.counts.total, living.counts.all),
+            (1, 3, 4),
+            "Kitchen was on"
+        );
+        assert!(page.speaker("airplay:kitchen").is_none());
     }
 
     // covers: S255

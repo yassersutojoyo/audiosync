@@ -98,7 +98,7 @@ impl Tv {
             television::FEATURES_METADATA,
             television::DEVICE_ID,
         );
-        fake.data_port = socket.local_addr().expect("its address").port();
+        fake.data_port = Some(socket.local_addr().expect("its address").port());
         let audio = Arc::new(AtomicUsize::new(0));
         let counted = audio.clone();
         thread::spawn(move || {

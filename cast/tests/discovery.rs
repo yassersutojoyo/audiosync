@@ -172,6 +172,10 @@ fn the_keys_the_sender_reads_and_an_id_that_must_be_a_uuid() {
     let device = CastDevice::from_record(&full).expect("device");
     assert_eq!(device.id, DeviceId::parse(ID).expect("id"));
     assert_eq!(device.id.to_string(), ID);
+    assert_eq!(
+        format!("{:?}", ListEvent::Added(DeviceKey::Id(device.id))),
+        format!("Added(Id({ID}))")
+    );
     assert_eq!(device.name.as_deref(), Some("Office"));
     assert_eq!(device.model.as_deref(), Some("Chromecast"));
     assert_eq!(device.version.as_deref(), Some("05"));
@@ -696,6 +700,7 @@ fn adding_the_address_of_a_listed_device_names_that_device() {
 
 // Partly C16 and C18: a manual address that a found device already has
 // stays that device's one row.
+// covers: C16
 #[test]
 fn a_manual_address_of_a_listed_device_names_that_device() {
     let mut list = DeviceList::new();

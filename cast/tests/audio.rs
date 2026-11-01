@@ -5,7 +5,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
-use audiosync_cast::audio::audio_ring;
+use audiosync_cast::audio::{MasterGain, audio_ring};
 
 struct Counting;
 
@@ -59,6 +59,43 @@ fn the_host_write_neither_allocates_nor_blocks_with_a_stalled_reader() {
     assert_eq!(taken, 4800, "the ring takes what fits");
     assert_eq!(reader.available(), 4800);
     assert_eq!(reader.overflow(), 100 * 480 - 4800, "the rest is counted");
+}
+
+fn samples(out: &[u8]) -> Vec<i16> {
+    out.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
+        .collect()
+}
+
+/// The host's master scales every frame read, and a change fades in over
+/// the next read (S415 in `docs/ENGINE_SPEC.md`).
+#[test]
+fn the_master_scales_the_frames_read_and_a_change_fades_over_one_read() {
+    let master = MasterGain::default();
+    master.set(0.5);
+    let (writer, reader) = audio_ring(16);
+    let mut reader = reader.with_master(master.clone());
+    let mut out = Vec::new();
+    writer.write_i16(&[1000, -1000, 1000, -1000]);
+    reader.read_into(&mut out, 2);
+    assert_eq!(samples(&out), [500, -500, 500, -500]);
+
+    master.set(1.0);
+    writer.write_i16(&[1000, -1000, 1000, -1000, 1000, -1000, 1000, -1000]);
+    out.clear();
+    reader.read_into(&mut out, 4);
+    assert_eq!(
+        samples(&out),
+        [625, -625, 750, -750, 875, -875, 1000, -1000],
+        "0.5 to 1 over the read"
+    );
+
+    writer.write_i16(&[12345, -32768]);
+    out.clear();
+    reader.read_into(&mut out, 1);
+    assert_eq!(samples(&out), [12345, -32768], "bit for bit at 1");
 }
 
 #[test]

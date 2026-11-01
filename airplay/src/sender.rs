@@ -642,7 +642,8 @@ pub enum SenderEvent {
     DiscoveryFailed,
     /// The members of a target the host added that play nothing now: out
     /// of view at the start, or lost and waiting for a retry (P181). Sent
-    /// whenever the list changes, empty once every member plays again.
+    /// whenever the list changes and once when the target is added, empty
+    /// when every member plays.
     TargetMissing {
         id: TargetId,
         missing: Vec<DeviceKey>,
@@ -1022,6 +1023,12 @@ impl Sender {
     /// timeline restarts (P201).
     pub fn set_latency(&self, frames: u32) {
         self.command(Command::SetLatency(frames));
+    }
+
+    /// Scales every packet cut from now on by the linear `gain`, once for
+    /// all speakers (P80): the host's master (S413).
+    pub fn set_master_gain(&self, gain: f64) {
+        self.command(Command::SetMasterGain(gain));
     }
 
     /// Starts the timeline over now, as a hole longer than L does (P143):

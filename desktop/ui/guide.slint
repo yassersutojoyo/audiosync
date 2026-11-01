@@ -20,6 +20,10 @@ export component GuideWindow inherits Window {
     callback exit-requested();
     // Ctrl+1 to Ctrl+9: recall the preset in that place (spec S261).
     callback preset-shortcut(int);
+    // F1, Ctrl+N and F5: the main window's menu items of those shortcuts.
+    callback help-requested();
+    callback new-zone-requested();
+    callback refresh-devices();
 
     title: Strings.guide-title;
     icon: @image-url("../res/audiosync-256.png");
@@ -45,6 +49,18 @@ export component GuideWindow inherits Window {
             }
             if event.modifiers.control && event.text.to-lowercase() == "q" {
                 root.exit-requested();
+                return accept;
+            }
+            if event.text == Key.F1 {
+                root.help-requested();
+                return accept;
+            }
+            if event.modifiers.control && event.text.to-lowercase() == "n" {
+                root.new-zone-requested();
+                return accept;
+            }
+            if event.text == Key.F5 {
+                root.refresh-devices();
                 return accept;
             }
             if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && event.text.character-count == 1 && event.text.is-float() && event.text.to-float() >= 1 {

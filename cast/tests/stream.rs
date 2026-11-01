@@ -98,6 +98,7 @@ fn the_url_is_the_local_address_an_ephemeral_port_and_a_fresh_random_token() {
     second.stop();
 }
 
+// covers: C55
 #[test]
 fn an_ipv6_url_has_the_address_in_brackets() {
     let (_writer, reader) = audio_ring(4800);
@@ -225,6 +226,7 @@ fn a_second_get_ends_the_first_and_a_reset_by_the_device_is_no_error() {
 }
 
 // The WAV half of C63; FLAC is pending.
+// covers: C63
 #[test]
 fn the_wav_header_is_16_bit_stereo_lpcm_with_largest_value_sizes() {
     for rate in [44_100u32, 48_000] {
@@ -422,6 +424,7 @@ fn the_stream_server_writes_the_samples_as_given() {
     server.stop();
 }
 
+// covers: C53
 #[test]
 fn artwork_is_served_under_its_own_random_path_up_to_720p() {
     let (server, _writer) = server(vec![LOCAL]);

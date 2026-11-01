@@ -75,6 +75,13 @@ pub const OUTPUT_SYNC: OutputSync = OutputSync::MeasuredOffset;
 /// back, so a damaged file can't make them wait longer.
 pub const MAX_OFFSET: Duration = Duration::from_secs(20);
 
+/// The most devices a stored memory keeps: far more than anyone has, small
+/// enough that a damaged file can't make the host slow.
+pub const MAX_MEMORY_DEVICES: usize = 256;
+
+/// The format version [`DeviceMemory::to_json`] writes.
+pub const MEMORY_VERSION: u64 = 1;
+
 /// What the host stores per device `id` between runs: the format that last
 /// worked (C84) and the measured offset (C77). Only the user, through the
 /// host, changes an offset; the sender never corrects one on its own.
@@ -122,7 +129,8 @@ impl DeviceMemory {
     }
 
     /// A JSON object keyed by device `id` in hex, each entry with an
-    /// optional `format` and `offsetMs`.
+    /// optional `format` and `offsetMs`, and a `version`
+    /// ([`MEMORY_VERSION`]).
     pub fn to_json(&self) -> String {
         let mut entries = Map::new();
         for (device, codec) in &self.formats {
@@ -134,18 +142,22 @@ impl DeviceMemory {
                 .or_insert_with(|| json!({}));
             entry["offsetMs"] = json!(offset.as_millis() as u64);
         }
+        entries.insert("version".to_owned(), json!(MEMORY_VERSION));
         Value::Object(entries).to_string()
     }
 
     /// Reads [`DeviceMemory::to_json`]; entries it can't read are skipped,
-    /// so a damaged file costs only those devices, and an offset past
+    /// so a damaged file costs only those devices, only the first
+    /// [`MAX_MEMORY_DEVICES`] devices are kept, and an offset past
     /// [`MAX_OFFSET`] reads as that.
     pub fn from_json(text: &str) -> DeviceMemory {
         DeviceMemory::read_json(text).unwrap_or_default()
     }
 
     /// [`DeviceMemory::from_json`], or `None` when `text` isn't a JSON
-    /// object at all, so a host can keep that file before it saves over it.
+    /// object at all or a newer format version than [`MEMORY_VERSION`], so a
+    /// host can keep that file before it saves over it. A file without a
+    /// version is the current format.
     /// An object whose entries are all damaged reads as an empty memory,
     /// not `None`: its entries are lost at the next save.
     pub fn read_json(text: &str) -> Option<DeviceMemory> {
@@ -153,10 +165,18 @@ impl DeviceMemory {
         let Ok(Value::Object(entries)) = serde_json::from_str::<Value>(text) else {
             return None;
         };
-        for (key, entry) in entries {
-            let Some(device) = DeviceId::parse(&key) else {
-                continue;
-            };
+        if entries
+            .get("version")
+            .and_then(Value::as_u64)
+            .is_some_and(|version| version > MEMORY_VERSION)
+        {
+            return None;
+        }
+        for (device, entry) in entries
+            .into_iter()
+            .filter_map(|(key, entry)| Some((DeviceId::parse(&key)?, entry)))
+            .take(MAX_MEMORY_DEVICES)
+        {
             if let Some(codec) = entry["format"].as_str().and_then(Codec::from_name)
                 && codec != Codec::Wav
             {
@@ -697,7 +717,7 @@ impl Worker {
         }
     }
 
-    fn emit(&mut self, event: HostEvent) {
+    fn emit(&mut self, mut event: HostEvent) {
         let mut held = lock(&self.held);
         flush(&mut held, &self.outbox);
         if event.is_routine() {
@@ -708,16 +728,25 @@ impl Worker {
             }
             return;
         }
-        // A level is reported once (C70): a newer one replaces it, nothing else pushes it out.
+        // A level is reported once (C70): a newer one replaces it, keeping its mute
+        // answer, and nothing else pushes it out.
         if let HostEvent::Session {
             device,
-            event: SessionEvent::Volume(..),
+            event: SessionEvent::Volume(_, answers_mute),
             ..
-        } = &event
+        } = &mut event
         {
             let device = *device;
-            held.retain(|held| {
-                !matches!(held, HostEvent::Session { device: d, event: SessionEvent::Volume(..), .. } if *d == device)
+            held.retain(|held| match held {
+                HostEvent::Session {
+                    device: d,
+                    event: SessionEvent::Volume(_, earlier),
+                    ..
+                } if *d == device => {
+                    *answers_mute |= earlier;
+                    false
+                }
+                _ => true,
             });
         }
         if held.len() >= MAX_HOST_EVENTS {
@@ -1039,6 +1068,7 @@ impl Worker {
 mod tests {
     use super::*;
     use crate::audio::audio_ring;
+    use crate::status::DeviceVolume;
 
     fn target(byte: u8) -> CastTarget {
         CastTarget {
@@ -1074,6 +1104,39 @@ mod tests {
             thread::sleep(Duration::from_millis(10));
         }
         panic!("no event of {attempt:?}");
+    }
+
+    // covers: C70
+    #[test]
+    fn a_newer_held_level_keeps_the_mute_answer_of_the_one_it_replaces() {
+        let (_commands, inbox) = mpsc::channel();
+        // No room at all, so every report stays held.
+        let (outbox, _events) = mpsc::sync_channel(0);
+        let shared = Arc::new(Shared {
+            active: Mutex::new(None),
+            memory: Mutex::new(DeviceMemory::default()),
+            quitting: Arc::new(AtomicBool::new(false)),
+            panic_in_start: std::sync::atomic::AtomicU32::new(0),
+        });
+        let mut worker = Worker::new(inbox, outbox, shared);
+        for answers_mute in [true, false] {
+            worker.emit(HostEvent::Session {
+                attempt: AttemptId(1),
+                device: DeviceId([1; 16]),
+                event: SessionEvent::Volume(DeviceVolume::default(), answers_mute),
+            });
+        }
+        let mut held = lock(&worker.held);
+        assert!(
+            matches!(
+                held.make_contiguous(),
+                [HostEvent::Session {
+                    event: SessionEvent::Volume(_, true),
+                    ..
+                }]
+            ),
+            "{held:?}"
+        );
     }
 
     #[test]

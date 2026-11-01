@@ -112,7 +112,7 @@ struct AudioDevices: Sendable {
     /// The outputs the speaker list shows, in the order given. With
     /// `showVirtual` (the Show Virtual Devices setting) that is every device;
     /// otherwise the ones `isVirtual` hides are left out, except those whose
-    /// UID is in `keep`: devices the user chose (on, auto-connect, in a group)
+    /// UID is in `keep`: devices the user chose (on, auto-connect, in a zone)
     /// or that are already in the list.
     static func listed(_ devices: [Device], showVirtual: Bool, keep: Set<String>) -> [Device] {
         guard !showVirtual else { return devices }

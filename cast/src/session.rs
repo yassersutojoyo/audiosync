@@ -146,6 +146,11 @@ pub enum SessionEvent {
     /// it is the first status since a mute was sent, so a level it repeats
     /// leaves a level the host still awaits awaited.
     Volume(DeviceVolume, bool),
+    /// A level asked for that no status will answer (C70, C104), as the
+    /// channel reports it.
+    VolumeUnanswered {
+        level: f64,
+    },
     /// A connect attempt failed; the next one follows after `retry_in`
     /// (C80).
     ConnectFailed {
@@ -312,7 +317,9 @@ pub struct CastSession {
     stalled: Duration,
     stall_since: Option<Instant>,
     next_diagnostics: Instant,
-    error_recovered: bool,
+    /// When the recovery after an `IDLE` `ERROR` ended, on `clock`; another
+    /// within [`ReconnectPacer::HEALTHY`] of play ends the session (C86).
+    error_recovered: Option<Instant>,
     /// When the latest unrequested `FINISHED` arrived, on `clock` (C86).
     last_finished: Option<Instant>,
     finished_window: Duration,
@@ -479,7 +486,7 @@ impl CastSession {
             stalled: Duration::ZERO,
             stall_since: None,
             next_diagnostics: Instant::now(),
-            error_recovered: false,
+            error_recovered: None,
             last_finished: None,
             finished_window: FINISHED_WINDOW,
             clock: Arc::new(Instant::now),
@@ -550,6 +557,13 @@ impl CastSession {
     /// never scaled (C71).
     pub fn set_volume(&mut self, level: f64) -> Result<(), VolumeError> {
         self.client.set_volume(level)
+    }
+
+    /// Replaces the C70 interval on the current channel only; a reconnect's
+    /// channel keeps the default. For tests.
+    #[doc(hidden)]
+    pub fn set_volume_interval(&mut self, interval: Duration) {
+        self.client.set_volume_interval(interval);
     }
 
     pub fn set_muted(&mut self, muted: bool) -> Result<(), VolumeError> {
@@ -715,13 +729,7 @@ impl CastSession {
     }
 
     fn report(&mut self, event: SessionEvent) {
-        // A level is reported once (C70): a newer one replaces it, a full queue never drops it.
-        if matches!(event, SessionEvent::Volume(..)) {
-            self.events
-                .retain(|queued| !matches!(queued, SessionEvent::Volume(..)));
-        }
-        make_room(&mut self.events);
-        self.events.push_back(event);
+        queue_report(&mut self.events, event);
         if self.recovering {
             self.send_live();
         }
@@ -853,6 +861,9 @@ impl CastSession {
                     self.report(SessionEvent::Volume(status.volume, answers_mute));
                 }
             }
+            Event::VolumeUnanswered { level } => {
+                self.report(SessionEvent::VolumeUnanswered { level });
+            }
             Event::MediaStatus(status) => self.last_media = Some(status),
             Event::Multizone(message) => self.on_multizone(message),
             Event::Rebuffering => {
@@ -867,12 +878,18 @@ impl CastSession {
             }
             Event::PlaybackEnded(PlaybackEnd::Replaced) => self.end(SessionEnd::TakenOver),
             Event::PlaybackEnded(PlaybackEnd::Error(reason)) => {
-                if self.error_recovered {
+                let now = (self.clock)();
+                if self
+                    .error_recovered
+                    .is_some_and(|at| now.saturating_duration_since(at) < ReconnectPacer::HEALTHY)
+                {
                     let reason = reason.unwrap_or(IdleReason::Error);
                     self.end(SessionEnd::Failed(MediaError::Idle(reason).into()));
                 } else {
-                    self.error_recovered = true;
+                    // An ERROR during the recovery still ends the session.
+                    self.error_recovered = Some(now);
                     self.recover(EndReason::Io("playback error".to_owned()), true);
+                    self.error_recovered = Some((self.clock)());
                 }
             }
             Event::PlaybackEnded(PlaybackEnd::Finished) => {
@@ -1077,6 +1094,22 @@ impl CastSession {
     }
 }
 
+fn queue_report(events: &mut VecDeque<SessionEvent>, mut event: SessionEvent) {
+    // A level is reported once (C70): a newer one replaces it, keeping its mute
+    // answer, and a full queue never drops it.
+    if let SessionEvent::Volume(_, answers_mute) = &mut event {
+        events.retain(|queued| match queued {
+            SessionEvent::Volume(_, earlier) => {
+                *answers_mute |= earlier;
+                false
+            }
+            _ => true,
+        });
+    }
+    make_room(events);
+    events.push_back(event);
+}
+
 /// Frees a place in a full event queue: the oldest routine event goes
 /// first, then the oldest connect failure, which a long outage repeats.
 fn make_room(events: &mut VecDeque<SessionEvent>) {
@@ -1175,6 +1208,24 @@ mod tests {
             events
                 .iter()
                 .any(|event| matches!(event, SessionEvent::Volume(..)))
+        );
+    }
+
+    // covers: C70
+    #[test]
+    fn a_newer_level_keeps_the_mute_answer_of_the_report_it_replaces() {
+        let mut events = VecDeque::new();
+        queue_report(
+            &mut events,
+            SessionEvent::Volume(DeviceVolume::default(), true),
+        );
+        queue_report(
+            &mut events,
+            SessionEvent::Volume(DeviceVolume::default(), false),
+        );
+        assert!(
+            matches!(events.make_contiguous(), [SessionEvent::Volume(_, true)]),
+            "{events:?}"
         );
     }
 

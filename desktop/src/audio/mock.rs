@@ -254,6 +254,10 @@ struct RendererLink {
     id: String,
     /// The ring its reader reads.
     ring: Arc<Ring>,
+    /// What its renderer is made of until [`MockBackend::render_output`]
+    /// first renders it.
+    unstarted: Option<(Reader, RendererControl, Arc<SharedGain>)>,
+    renderer: Option<Renderer>,
     ended: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
     stall: Arc<StallSlot>,
@@ -351,6 +355,7 @@ pub struct MockDriver {
     hold_fades: Arc<AtomicBool>,
     captures_started: Vec<CaptureTarget>,
     renderers_started: Vec<String>,
+    start_gains: Vec<(String, f32)>,
     /// Every capture start asked for, refused ones included.
     capture_attempts: usize,
     /// Windows' suspend and resume notices not yet taken.
@@ -422,6 +427,7 @@ impl MockDriver {
             hold_fades: Arc::new(AtomicBool::new(false)),
             captures_started: Vec::new(),
             renderers_started: Vec::new(),
+            start_gains: Vec::new(),
             capture_attempts: 0,
             renderer_attempts: Vec::new(),
             power_notices: Vec::new(),
@@ -472,6 +478,12 @@ impl MockDriver {
     /// The endpoint ID of every output started, in order.
     pub fn renderers_started(&self) -> &[String] {
         &self.renderers_started
+    }
+
+    /// The endpoint ID and gain of every output started, in order: a real
+    /// render thread plays its first period at that gain.
+    pub fn start_gains(&self) -> &[(String, f32)] {
+        &self.start_gains
     }
 
     /// How many capture starts were asked for, refused ones included.
@@ -825,15 +837,22 @@ impl Driver for MockDriver {
         let invalidated = Arc::new(AtomicBool::new(false));
         let format = self.device_format(&endpoint.id);
         let ring = Arc::clone(reader.ring());
-        if let Some(period) = self.periods.remove(&endpoint.id) {
-            let channels = usize::from(format.channels);
-            Renderer::new(reader, &control, gain, SESSION_RATE, format.rate, channels)
-                .expect("a mock format renders")
-                .set_period_frames(period);
-        }
+        self.start_gains.push((endpoint.id.clone(), gain.get()));
+        let unstarted = match self.periods.remove(&endpoint.id) {
+            Some(period) => {
+                let channels = usize::from(format.channels);
+                Renderer::new(reader, &control, gain, SESSION_RATE, format.rate, channels)
+                    .expect("a mock format renders")
+                    .set_period_frames(period);
+                None
+            }
+            None => Some((reader, control, gain)),
+        };
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
             ring,
+            unstarted,
+            renderer: None,
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
             stall: Arc::clone(&stall),
@@ -1137,6 +1156,32 @@ impl Controller<MockDriver> {
         self.driver_mut().end_renderers_of(id);
     }
 
+    /// Renders `frames` frames of the output playing on `id` as its render
+    /// thread would.
+    pub fn render_output(&mut self, id: &str, frames: usize) {
+        for link in &mut self.driver_mut().renderers {
+            if link.id != id || !link.plays() {
+                continue;
+            }
+            if let Some((reader, control, gain)) = link.unstarted.take() {
+                let channels = usize::from(link.format.channels);
+                link.renderer = Renderer::new(
+                    reader,
+                    &control,
+                    gain,
+                    SESSION_RATE,
+                    link.format.rate,
+                    channels,
+                )
+                .ok();
+            }
+            if let Some(renderer) = link.renderer.as_mut() {
+                let mut out = vec![0.0; frames * renderer.channels()];
+                renderer.render(&mut out);
+            }
+        }
+    }
+
     /// Ends the output playing on `id` as a render thread ends a stream
     /// that stopped taking frames (S326), while the device stays listed.
     pub fn stall_renderer(&mut self, id: &str, stall: Stall) {
@@ -1383,6 +1428,17 @@ impl Controller<MockDriver> {
         equalizer.process(&mut block);
         writer.write(&block, frames);
         block
+    }
+
+    /// Hands `frames` stereo frames whose every sample is `level` to the
+    /// running capture's Cast tap, as a real capture does after its ring.
+    pub fn feed_cast(&mut self, frames: usize, level: f32) {
+        let Some(link) = &self.driver().capture else {
+            return;
+        };
+        if let Some(cast) = lock(link).feeds.cast.as_mut() {
+            cast.push(&vec![level; frames * 2], frames);
+        }
     }
 }
 

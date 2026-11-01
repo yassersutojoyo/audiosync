@@ -412,6 +412,7 @@ extension AppDelegate {
         clearNotices(wasRunning ? [Notice.capture, Notice.source] : [Notice.capture])
         clearNotices(stallRetry.lost.map { SpeakerKey.make(id: $0, airplay: false) })   // nothing retries them now
         clearNotices(runawayRetry.struggling.map { SpeakerKey.make(id: $0, airplay: false) })
+        clearNotices(goneNotices.stop().map { SpeakerKey.make(id: $0, airplay: false) })
         runawayRetry.reset()
         refreshStreamingViews()
     }
@@ -429,7 +430,8 @@ extension AppDelegate {
             let playing = sourcePlayingReading()
             let verdict = watch.verdict(at: ProcessInfo.processInfo.systemUptime,
                                         sessionHeard: engine.sessionHeard, runHeard: engine.runHeard,
-                                        reportsPlaying: playing != nil, position: playing?.position)
+                                        reportsPlaying: playing != nil, position: playing?.position,
+                                        callbacks: engine.captureCallbacks)
             switch gate.step(verdict: verdict, session: session, running: engine.isRunning, app: sourceDisplayName()) {
             case .end:
                 return

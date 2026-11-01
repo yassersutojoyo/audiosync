@@ -105,7 +105,7 @@ final class WebRemote {
         if settings.enabled || debugPort != nil { start() }
     }
 
-    /// The window opened: a code shown earlier stops working (design: a new code each time).
+    /// The hidden window opened: a code shown earlier stops working (S368: a new code each time).
     func windowOpened() {
         refreshAddresses()
         if isRunning { newCode() } else { readDevicesFile() }
@@ -255,14 +255,15 @@ final class WebRemote {
         return RemoteSnapshot(computerName: computerName, master: model.master, nowPlaying: playing, rows: listed,
                               zones: host.zones().map { RemoteZoneRow($0, listed: listed) }, presets: host.presets(),
                               calibrating: RemoteSnapshot.calibrating(model.calibration, model.calibrateAll),
-                              sources: sources, sourceID: current)
+                              sources: sources, sourceID: current,
+                              mixApps: model.mixApps.map { RemoteMixApp(id: $0.id, name: $0.name, running: $0.available) })
     }
 
     /// The picker's entries and the page ID of the one in use, if it is listed.
     private func sourceList() -> (sources: [RemoteSource], current: String?) {
         let sources = model.sources.map {
             RemoteSource(pickerID: $0.id, name: $0.deviceName ?? $0.name,
-                         notConnected: $0.connected ? nil : model.text.sourceNotConnectedNote)
+                         notConnected: $0.connected ? nil : model.text.sourceNotConnectedNote, available: $0.available)
         }
         let current = RemoteSource.pageID(model.sourceID)
         return (sources, sources.contains { $0.id == current } ? current : nil)
@@ -280,11 +281,13 @@ final class WebRemote {
                 castVolumeFixed: s.cast?.volumeFixed, castVolumeStep: s.cast?.volumeStep ?? 0,
                 offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
                 needsCode: s.availability != .open, paired: s.paired, holdsPassword: s.holdsPassword,
-                memberAsksPassword: s.airPlayTarget?.asksPassword == true,
+                memberAsksPassword: s.airPlayTarget?.asksPassword == true, refusedForCode: s.refusedForCode,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2,
-                                waitingForPtp: s.waitingForPtp, reconnecting: s.reconnecting, unannounced: s.unannounced,
+                                waitingForPtp: s.waitingForPtp, reconnecting: s.reconnecting,
+                                codeWait: s.codeWait, name: s.name, unannounced: s.unannounced,
                                 target: s.airPlayTarget),
-                key: s.key, waiting: s.enabled && (s.waitingForAirPlay2 || s.waitingForPtp)), text: t)
+                key: s.key, waiting: s.enabled && (s.waitingForAirPlay2 || s.waitingForPtp),
+                streaming: model.running), text: t)
         }
     }
 
@@ -313,8 +316,11 @@ final class WebRemote {
             DebugTrace.log("[AudioSync] web remote: ignored a pick of a source the picker no longer lists")
         }
         let actions = RemoteAction.plan(command, rows: now.rows, zones: now.zones, presets: now.presets,
-                                        calibrating: now.calibrating, sources: now.sources)
-        DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
+                                        calibrating: now.calibrating, sources: now.sources, mixApps: now.mixApps,
+                                        inUse: AudioSource(defaultsValue: model.sourceID))
+        if RemoteVolumeLog.logsPlan(actions) {
+            DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
+        }
         actions.forEach(apply)
         // Sent even when unchanged: the core streams it so the phone drops a value the app refused.
         lastPublished = ""
@@ -328,13 +334,14 @@ final class WebRemote {
             if let s = speaker(id) { model.setEnabled(s, on, origin: .remote) }
         case .setVolume(let id, let position):
             if let s = speaker(id) {
+                // A step holds an AirPlay row's read-backs as a slider drag does (S291).
+                model.setVolumeDragging(s, true, byPhone: true)
                 model.setVolume(s, position)
-                if s.tag != .airplay && s.tag != .cast {
-                    let n = volumeLog.step(id)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                        guard let self, self.handle != nil, self.volumeLog.isLast(id, n) else { return }
-                        self.model.actions.localVolumeSettled(id)
-                    }
+                let n = volumeLog.step(id)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    // No handle check: the hold must end even after the remote stops.
+                    guard let self, self.volumeLog.isLast(id, n) else { return }
+                    self.model.setVolumeDragging(s, false, byPhone: true)
                 }
             }
         case .setLocalOffset(let id, let ms): model.actions.setLocalOffset(id, ms)

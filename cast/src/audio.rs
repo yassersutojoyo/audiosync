@@ -281,7 +281,11 @@ pub fn audio_ring(capacity: usize) -> (AudioWriter, AudioReader) {
         AudioWriter {
             shared: Arc::clone(&shared),
         },
-        AudioReader { shared },
+        AudioReader {
+            shared,
+            master: MasterGain::default(),
+            cut_gain: 1.0,
+        },
     )
 }
 
@@ -342,12 +346,55 @@ fn to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
 }
 
+/// At gain 1 a sample passes bit for bit.
+fn scaled(sample: i16, gain: f64) -> i16 {
+    if gain == 1.0 {
+        sample
+    } else {
+        (f64::from(sample) * gain).round() as i16
+    }
+}
+
+/// The host's master as a linear gain on every frame the stream server
+/// reads (S415 in `docs/ENGINE_SPEC.md`); its clones share one value.
+#[derive(Clone, Debug)]
+pub struct MasterGain(Arc<AtomicU64>);
+
+impl Default for MasterGain {
+    fn default() -> MasterGain {
+        MasterGain(Arc::new(AtomicU64::new(1.0f64.to_bits())))
+    }
+}
+
+impl MasterGain {
+    /// Sets the gain the frames read from now on are scaled by.
+    pub fn set(&self, gain: f64) {
+        self.0.store(gain.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn get(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::Relaxed))
+    }
+}
+
 /// The stream server's end of the ring.
 pub struct AudioReader {
     shared: Arc<Shared>,
+    master: MasterGain,
+    /// The gain the last frame read was scaled by.
+    cut_gain: f64,
 }
 
 impl AudioReader {
+    /// The reader, its frames scaled by `master` (S415).
+    pub fn with_master(self, master: MasterGain) -> AudioReader {
+        AudioReader {
+            cut_gain: master.get(),
+            master,
+            ..self
+        }
+    }
+
     /// Frames waiting.
     pub fn available(&self) -> usize {
         let written = self.shared.written.load(Ordering::Acquire);
@@ -360,16 +407,28 @@ impl AudioReader {
     }
 
     /// Appends up to `frames` frames to `out` as little-endian 16-bit
-    /// samples; returns the frames read.
+    /// samples scaled by the master; a master change fades in linearly
+    /// over this read. Returns the frames read.
     pub fn read_into(&mut self, out: &mut Vec<u8>, frames: usize) -> usize {
         let shared = &*self.shared;
         let capacity = shared.slots.len();
         let read = shared.read.load(Ordering::Relaxed);
         let count = frames.min(self.available());
+        let from = self.cut_gain;
+        let to = self.master.get();
         for index in 0..count {
             let frame = shared.slots[read.wrapping_add(index) % capacity].load(Ordering::Relaxed);
-            out.extend_from_slice(&(frame as u16).to_le_bytes());
-            out.extend_from_slice(&((frame >> 16) as u16).to_le_bytes());
+            let gain = if from == to {
+                to
+            } else {
+                from + (to - from) * (index + 1) as f64 / count as f64
+            };
+            for sample in [frame as u16 as i16, (frame >> 16) as u16 as i16] {
+                out.extend_from_slice(&scaled(sample, gain).to_le_bytes());
+            }
+        }
+        if count > 0 {
+            self.cut_gain = to;
         }
         shared
             .read

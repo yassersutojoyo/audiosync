@@ -388,6 +388,7 @@ mod tests {
 
     // P143: the stream filled the switch with silence, so the new capture's
     // first write lands behind the floor and must start the audio there.
+    // covers: P143
     #[test]
     fn a_new_captures_first_write_behind_the_floor_is_kept() {
         let origin = Instant::now();

@@ -341,7 +341,8 @@ enum NativeSpeakerEvent: Equatable {
             line = "\(label(id)): \(state.rawValue)" + (state == .retrying ? ", " + retry(retryMs) : "")
                 + (state == .unannounced ? ", waiting until it is announced again" : "")
         case .error(let id, let problem, let retryMs, let detail):
-            line = "\(label(id)) error: \(problem.rawValue) (\(detail)); \(retry(retryMs))"
+            line = "\(label(id)) error: \(problem.rawValue) (\(detail)); "
+                + (problem.waits && retryMs == nil ? "waiting for the sender to start it" : retry(retryMs))
         case .latency(let id, let ms, let frames, let reportedUs, let sources):
             line = "\(label(id)) latency: L + d_s = \(String(format: "%.0f", ms)) ms, the receiver reports "
                 + (frames.map { "\($0) frames" } ?? "nothing") + "; "
@@ -441,6 +442,10 @@ struct NativePrompt: Equatable {
     let wrong: Bool
 }
 
+/// What a speaker's row waits for while the user's attempt runs: its PIN or
+/// password prompt, queued or open (S223).
+enum NativeCodeWait: Equatable { case pin, password }
+
 /// What the app does with the user's answer to a `NativePrompt`.
 enum NativePromptAnswer: Equatable {
     /// Hand the PIN to the pairing.
@@ -538,6 +543,9 @@ struct NativeAirPlayModel {
     /// A speaker of the stream reached its first-sound time, as the last
     /// poll found.
     var sounding = false
+    /// From the Mac's sleep notice until its wake, a reconcile starts nothing
+    /// and a retried error doesn't count toward reconnecting (S412).
+    var asleep = false
 
     /// The sessions a row in the sender plays: a target's members as last
     /// listed, or the speaker itself.
@@ -557,7 +565,7 @@ struct NativeAirPlayModel {
     /// The last name of every receiver seen, for rows and notices.
     private(set) var names: [String: String] = [:]
     /// This Mac's computer name: a receiver announced under it is this Mac's
-    /// own AirPlay Receiver, which is never listed (S100,
+    /// own AirPlay Receiver, which is never listed (S222,
     /// `NativeReceiver.isThisMac`). Nil hides nothing.
     var computerName: String?
     /// The target each member was last listed in (P176), kept while that
@@ -623,7 +631,7 @@ struct NativeAirPlayModel {
         let others = (control.isEmpty ? [] : [control]) + receivers.values.filter { $0.control == id }.map(\.id)
         return others.contains { other in
             guard enabled.contains(NativeAirPlayID.app(other)) else { return false }
-            switch receivers[other]?.availability {
+            switch availability(other) {
             case .available?: return true
             case .needsPassword?: return passwords.contains(other) || isPlaying(other)
             default: return isPlaying(other)
@@ -688,7 +696,7 @@ struct NativeAirPlayModel {
     /// until switched off, and a member it holds shows as part of it
     /// (P176). `enabled`: the switched-on app IDs.
     func rows(enabled: Set<String>) -> [String] {
-        var ids = Set(receivers.values.filter { $0.access != nil }.map(\.id))
+        var ids = Set(receivers.keys.filter { access($0) != nil })
         ids.formUnion(states.keys.filter { isPlaying($0) || receivers[$0] == nil || NativeTarget.kind($0) != nil })
         ids = ids.filter { holdingTarget($0, on: enabled.contains(NativeAirPlayID.app($0))) == nil }
         return ids.sorted { a, b in
@@ -699,8 +707,23 @@ struct NativeAirPlayModel {
 
     /// How a row shows the receiver; one that only plays on is open.
     func access(_ id: String) -> AirPlayPairing.Access? {
-        if let receiver = receivers[id] { return receiver.access }
+        if let receiver = receivers[id] {
+            return receiver.isTarget && availability(id) != .available ? nil : receiver.access
+        }
         return isPlaying(id) ? .open : nil
+    }
+
+    /// The listed receiver's availability; a target's follows its members in
+    /// view, as on Windows (P176, P181): it can be switched on while one can
+    /// play or asks for a password, which is asked for by name. With none
+    /// that can, it reads as its first member, a PIN as needing pairing,
+    /// since a target never pairs.
+    func availability(_ id: String) -> NativeReceiver.Availability? {
+        guard let receiver = receivers[id] else { return nil }
+        guard receiver.isTarget else { return receiver.availability }
+        let inView = members(of: id).compactMap { receivers[$0]?.availability }
+        if inView.isEmpty || inView.contains(where: { $0 == .available || $0 == .needsPassword }) { return .available }
+        return inView[0] == .needsPin ? .needsPairing : inView[0]
     }
 
     /// The rows (app IDs) missing from `known` whose receiver is listed as
@@ -713,8 +736,8 @@ struct NativeAirPlayModel {
         return rows.filter { id in
             guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id),
                   !refusedOff.contains(receiver), !asksEveryTime(receiver) else { return false }
-            let availability = receivers[receiver]?.availability
-            return availability == .available || (availability == .needsPassword && passwords.contains(receiver))
+            let listed = availability(receiver)
+            return listed == .available || (listed == .needsPassword && passwords.contains(receiver))
         }
     }
 
@@ -761,9 +784,9 @@ struct NativeAirPlayModel {
     /// as unable to play and not playing, or one that is gone, doesn't hold
     /// local outputs back.
     var soundingIDs: [String] {
-        let ids = Set(receivers.values.filter {
-            $0.availability == .available || ($0.availability == .needsPassword && passwords.contains($0.id))
-        }.map(\.id))
+        let ids = Set(receivers.keys.filter {
+            availability($0) == .available || (availability($0) == .needsPassword && passwords.contains($0))
+        })
             .union(states.keys.filter { isPlaying($0) })
         return ids.sorted().map(NativeAirPlayID.app)
     }
@@ -803,9 +826,19 @@ struct NativeAirPlayModel {
             .union(promptTargets.values.map(NativeAirPlayID.app))
     }
 
-    /// A PIN as the sender takes it: ASCII digits, at least one.
+    /// What the row of the receiver or target `id` waits for, if anything.
+    func codeWait(_ id: String) -> NativeCodeWait? {
+        if promptTargets.values.contains(id) { return .password }
+        switch stages[id] {
+        case .askingPassword?: return .password
+        case .askingPin?: return .pin
+        case .pairing?, .checkingPin?, nil: return nil
+        }
+    }
+
+    /// A PIN as the Apple TV shows it: four ASCII digits.
     static func isPin(_ code: String) -> Bool {
-        !code.isEmpty && code.unicodeScalars.allSatisfy { ("0"..."9").contains($0) }
+        code.unicodeScalars.count == 4 && code.unicodeScalars.allSatisfy { ("0"..."9").contains($0) }
     }
 
     /// The user turned the receiver `id` on: a new attempt. One that asks
@@ -902,7 +935,7 @@ struct NativeAirPlayModel {
         return prompt
     }
 
-    /// The user answered `prompt` with `code`, nil or empty for Cancel.
+    /// The user answered `prompt` with `code`, nil for Cancel.
     /// A prompt that isn't the open one (taken back meanwhile) is ignored.
     mutating func answered(_ prompt: NativePrompt, code: String?) -> NativePromptAnswer {
         guard openPrompt == prompt else { return .ignore }
@@ -1052,6 +1085,8 @@ struct NativeAirPlayModel {
     /// unable to play in another way (which can be a moment's flicker
     /// while its records lapse), waits, and so does one that just
     /// paired while the sender's new listing of it is still on its way.
+    /// While the Mac sleeps speakers only leave; the wake's reconcile starts
+    /// what waited (S412).
     func plan(streaming: Bool, enabled: Set<String>) -> NativeAirPlayPlan {
         let wanted = Set(enabled.compactMap(NativeAirPlayID.receiver))
         var plan = NativeAirPlayPlan()
@@ -1060,11 +1095,11 @@ struct NativeAirPlayModel {
         }
         plan.release = released.sorted()
         plan.remove = states.keys.filter { !streaming || !wanted.contains($0) || released.contains($0) }.sorted()
-        guard streaming else { return plan }
+        guard streaming, !asleep else { return plan }
         for id in wanted.sorted() where states[id] == nil && !released.contains(id) {
             // A target waits while a member's password prompt is open.
             if promptTargets.values.contains(id) { continue }
-            switch receivers[id]?.availability {
+            switch availability(id) {
             case .available? where refusedOff.contains(id):
                 // Switched on without a new attempt (a recalled preset): off again, once.
                 plan.turnOff.append(.init(id: id, reason: .needsCode))
@@ -1084,6 +1119,18 @@ struct NativeAirPlayModel {
             }
         }
         return plan
+    }
+
+    /// The plan a reconcile carries out: none from the sleep notice until
+    /// the wake, whose reconcile starts what waited (S412).
+    func reconcilePlan(streaming: Bool, enabled: Set<String>) -> NativeAirPlayPlan {
+        asleep ? NativeAirPlayPlan() : plan(streaming: streaming, enabled: enabled)
+    }
+
+    /// The own volume of AirPlay speaker `appID`: its stored one, else the
+    /// 60 a local output starts at (S399).
+    static func ownVolume(_ appID: String, stored: [String: Double]) -> Double {
+        stored[appID] ?? AppSettings.defaultVolume
     }
 
     /// The app added a speaker to the sender.
@@ -1151,6 +1198,7 @@ struct NativeAirPlayModel {
             waiting.removeValue(forKey: id)
             if retryMs != nil && problem.retried {
                 // A retrying state event follows.
+                guard !asleep else { return nil }
                 retriedErrors[id, default: 0] += 1
                 return retriedErrors[id] == 3 ? .reconnecting(NativeAirPlayID.app(id), problem) : nil
             }

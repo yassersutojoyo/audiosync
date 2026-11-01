@@ -802,6 +802,7 @@ fn a_group_keeps_one_stream_response_per_address() {
     server.stop();
 }
 
+// covers: C103
 #[test]
 fn an_address_the_group_dropped_gets_403() {
     // A group's session leaves the static list empty; the leader is seeded

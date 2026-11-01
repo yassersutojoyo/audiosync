@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::channel::{
     Channel, DEAD_AFTER, Dropped, Event, LAUNCH_TIMEOUT, PING_INTERVAL, STATUS_TIMEOUT,
-    STOP_STEP_TIMEOUT,
+    STOP_STEP_TIMEOUT, VOLUME_INTERVAL,
 };
-use audiosync_cast::error::{EndReason, LaunchError};
+use audiosync_cast::error::{EndReason, LaunchError, ReconnectPacer};
 use audiosync_cast::ids::RequestIds;
 use audiosync_cast::media::MAX_DEVICE_TEXT_CHARS;
 use audiosync_cast::message::{
@@ -685,6 +685,122 @@ fn the_answer_to_an_older_level_keeps_the_newer_one_unanswered() {
     assert!((step - 0.4).abs() < 1e-9, "the step builds on 0.35: {step}");
 }
 
+// covers: C70, C104
+#[test]
+fn a_level_sent_that_no_status_will_answer_is_reported() {
+    let start = Instant::now();
+    let later = start + VOLUME_INTERVAL;
+    let drag = |channel: &mut Channel| {
+        for level in [0.55, 0.6, 0.55] {
+            channel.set_volume(start, level).expect("sent or waiting");
+        }
+    };
+    let unanswered = |channel: &mut Channel| {
+        channel.tick(later);
+        let seen = events(channel);
+        for level in [0.6, 0.55] {
+            assert!(
+                seen.contains(&Event::VolumeUnanswered { level }),
+                "{level}: {seen:?}"
+            );
+        }
+    };
+
+    // 0.6 never went out, so the device answers 0.55 once.
+    let mut channel = running(start);
+    drag(&mut channel);
+    unanswered(&mut channel);
+
+    let mut channel = running(start);
+    drag(&mut channel);
+    channel.handle(
+        start,
+        json_message(
+            PLATFORM,
+            SENDER,
+            NS_RECEIVER,
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"volume": {"level": 0.55}}}),
+        ),
+    );
+    unanswered(&mut channel);
+}
+
+/// The levels `asks` put on the wire and those reported unanswered, with
+/// each ask at its offset in ms after `start` and the device at 0.5.
+fn volume_outcomes(asks: &[(u64, f64)], fixed_at: Option<u64>) -> (Vec<f64>, Vec<f64>) {
+    let start = Instant::now();
+    let mut channel = running(start);
+    let volume = |control: &str| {
+        json_message(
+            PLATFORM,
+            SENDER,
+            NS_RECEIVER,
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"volume": {"level": 0.5, "controlType": control}}}),
+        )
+    };
+    channel.handle(start, volume("attenuation"));
+    for &(ms, level) in asks {
+        let now = start + Duration::from_millis(ms);
+        channel.tick(now);
+        channel.set_volume(now, level).expect("sent or waiting");
+    }
+    let last = asks.last().map_or(0, |&(ms, _)| ms);
+    if let Some(ms) = fixed_at {
+        channel.handle(start + Duration::from_millis(ms), volume("fixed"));
+    }
+    channel.tick(start + Duration::from_millis(last) + VOLUME_INTERVAL);
+    let wire = sent(&mut channel)
+        .iter()
+        .filter(|(_, _, payload)| payload["type"] == "SET_VOLUME")
+        .filter_map(|(_, _, payload)| payload["volume"]["level"].as_f64())
+        .collect();
+    let unanswered = events(&mut channel)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::VolumeUnanswered { level } => Some(level),
+            _ => None,
+        })
+        .collect();
+    (wire, unanswered)
+}
+
+// covers: C70, C104
+#[test]
+fn every_level_asked_for_is_awaited_or_reported_unanswered_exactly_once() {
+    // The middle three wait in one interval, each replacing the one before.
+    let replaced = [(0, 0.55), (10, 0.6), (20, 0.55), (30, 0.6), (40, 0.55)];
+    assert_eq!(
+        volume_outcomes(&replaced, None),
+        (vec![0.55, 0.55], vec![0.6, 0.55, 0.6, 0.55]),
+        "0.55 is awaited once"
+    );
+    // 0.55, 0.6 and 0.55 go out; then 0.6 is replaced and 0.55 repeats.
+    let wobble = [(0, 0.55), (100, 0.6), (200, 0.55), (250, 0.6), (280, 0.55)];
+    assert_eq!(
+        volume_outcomes(&wobble, None),
+        (vec![0.55, 0.6, 0.55, 0.55], vec![0.6, 0.55]),
+        "the first three are awaited"
+    );
+    // A level still waiting when the next one goes out at once never goes out.
+    let start = Instant::now();
+    let mut channel = running(start);
+    for (ms, level) in [(0, 0.55), (10, 0.6), (150, 0.7)] {
+        channel
+            .set_volume(start + Duration::from_millis(ms), level)
+            .expect("sent or waiting");
+    }
+    let seen = events(&mut channel);
+    assert!(
+        seen.contains(&Event::VolumeUnanswered { level: 0.6 }),
+        "{seen:?}"
+    );
+    // A level waiting when the volume turns fixed never goes out (C68).
+    assert_eq!(
+        volume_outcomes(&[(0, 0.55), (10, 0.6)], Some(20)),
+        (vec![0.55], vec![0.6])
+    );
+}
+
 // covers: C44
 #[test]
 fn stop_sends_receiver_stop_with_the_session_then_closes_both_endpoints() {
@@ -711,6 +827,7 @@ fn stop_sends_receiver_stop_with_the_session_then_closes_both_endpoints() {
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::Stopped)));
 }
 
+// covers: C87
 #[test]
 fn a_silent_stop_reply_holds_the_teardown_at_most_two_seconds() {
     let start = Instant::now();
@@ -728,6 +845,7 @@ fn a_silent_stop_reply_holds_the_teardown_at_most_two_seconds() {
     assert_eq!(closes, 2);
 }
 
+// covers: C87
 #[test]
 fn stop_never_stops_an_app_the_sender_did_not_launch_or_reuse() {
     let start = Instant::now();
@@ -739,6 +857,7 @@ fn stop_never_stops_an_app_the_sender_did_not_launch_or_reuse() {
     assert_eq!(out[0].0, PLATFORM);
 }
 
+// covers: C82
 #[test]
 fn a_close_from_the_app_checks_the_status_and_reconnects_once() {
     let start = Instant::now();
@@ -768,6 +887,39 @@ fn a_close_from_the_app_checks_the_status_and_reconnects_once() {
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::AppClosed)));
 }
 
+// covers: C82
+#[test]
+fn a_close_after_a_minute_of_play_since_the_reconnect_reconnects_again() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    let close = json_message("t-1", SENDER, NS_CONNECTION, json!({"type": "CLOSE"}));
+    let mut now = start;
+    for _ in 0..2 {
+        channel.handle(now, close.clone());
+        let out = sent(&mut channel);
+        assert_eq!(out[0].2["type"], "GET_STATUS", "{out:?}");
+        let id = out[0].2["requestId"].as_u64().expect("id") as u32;
+        channel.handle(
+            now,
+            status(id, vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")]),
+        );
+        sent(&mut channel);
+        assert!(events(&mut channel).contains(&Event::AppReconnected));
+        let healthy = now + ReconnectPacer::HEALTHY;
+        while now < healthy {
+            now += PING_INTERVAL;
+            channel.handle(
+                now,
+                json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PONG"})),
+            );
+            channel.tick(now);
+            sent(&mut channel);
+        }
+    }
+    assert!(!channel.is_ended());
+}
+
+// covers: C32
 #[test]
 fn a_close_from_the_platform_ends_the_channel() {
     let start = Instant::now();
@@ -1010,6 +1162,22 @@ fn a_close_from_the_app_ends_as_taken_over_when_the_status_lacks_it() {
     assert!(channel.is_ended());
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::TakenOver)));
     assert!(sent(&mut channel).is_empty(), "no CONNECT, no relaunch");
+}
+
+// covers: C82
+#[test]
+fn a_close_from_the_app_with_no_status_answer_ends_as_silent() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    channel.handle(
+        start,
+        json_message("t-1", SENDER, NS_CONNECTION, json!({"type": "CLOSE"})),
+    );
+    assert_eq!(sent(&mut channel)[0].2["type"], "GET_STATUS");
+    channel.tick(start + Duration::from_secs(5));
+    assert!(channel.is_ended());
+    let seen = events(&mut channel);
+    assert!(seen.contains(&Event::Ended(EndReason::Silent)), "{seen:?}");
 }
 
 // covers: C87

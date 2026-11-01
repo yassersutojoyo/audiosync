@@ -25,6 +25,7 @@ fn hex32(text: &str) -> [u8; 32] {
 
 // Part of P50: k, x, u, A and S follow RFC 5054 (the RFC's own test vector,
 // appendix B, in its 1024-bit group with SHA-1).
+// covers: P50
 #[test]
 fn srp_matches_the_rfc_5054_test_vector() {
     let salt = hex("BEB25379 D1A8581E B5A72767 3A2441EE");
@@ -84,6 +85,7 @@ fn srp_matches_the_rfc_5054_test_vector() {
 
 // Part of P50: a_pub is the RFC 8032 public key of the 32-byte secret
 // (RFC 8032 §7.1, test 1).
+// covers: P50
 #[test]
 fn the_public_key_is_the_ed25519_key_of_the_secret() {
     let secret = hex32("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60");
@@ -95,6 +97,7 @@ fn the_public_key_is_the_ed25519_key_of_the_secret() {
 
 // Part of P55 and P60: X25519 keys and the shared secret follow RFC 7748
 // (§6.1, Alice and Bob).
+// covers: P55
 #[test]
 fn x25519_follows_rfc_7748() {
     let alice = hex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
@@ -124,6 +127,7 @@ fn x25519_follows_rfc_7748() {
 
 // Part of P50: K is H(S | 00 00 00 00) | H(S | 00 00 00 01), and the
 // pair-setup nonce adds 1 to the last byte only, modulo 256 (P53).
+// covers: P50, P53
 #[test]
 fn the_session_key_and_the_nonce_follow_the_spec() {
     let premaster = [0x11u8; 256];

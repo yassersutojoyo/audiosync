@@ -214,7 +214,8 @@ pub struct SavedSpeaker {
     pub volume: f64,
     /// The delay in milliseconds: for an output its offset relative to the
     /// reference, −2000 to +20 000 (0 to 20 000 in format 1, where it was
-    /// the output's own trim); 0 to 20 000 for an AirPlay speaker's own delay.
+    /// the output's own trim); an AirPlay speaker's is ignored and cleared by
+    /// the next save while the speaker is listed (spec S180).
     #[serde(deserialize_with = "number_or_nan")]
     pub delay_ms: f64,
 }
@@ -2216,7 +2217,7 @@ mod tests {
         assert_eq!(keys(&value["zones"][0]), ["id", "volume"]);
     }
 
-    // covers: S23
+    // covers: S23, S24
     #[test]
     fn an_equalizer_with_another_band_count_loads_missing_bands_flat_and_drops_extra_ones() {
         let gains = |saved: &str| {
@@ -2231,6 +2232,30 @@ mod tests {
         let mut kept = [0.0; BAND_COUNT];
         kept.copy_from_slice(&long[..BAND_COUNT]);
         assert_eq!(gains(&format!("{long:?}")), kept);
+    }
+
+    // covers: S24
+    #[test]
+    fn the_equalizer_starts_off_flat_at_0_db_and_comes_back_from_the_saved_json() {
+        let off_and_flat = EqSettings {
+            enabled: false,
+            preamp_db: 0.0,
+            gains_db: [0.0; BAND_COUNT],
+        };
+        assert_eq!(Settings::default().equalizer.settings(), off_and_flat);
+        let (unsaved, _) = Settings::from_json(r#"{"version": 2}"#).expect("read");
+        assert_eq!(unsaved.equalizer.settings(), off_and_flat);
+
+        let settings = Settings {
+            equalizer: SavedEqualizer {
+                enabled: true,
+                preamp_db: -4.5,
+                gains_db: vec![3.0, -2.5, 1.0, 0.0, 6.0, -6.0, 0.5, 12.0, -12.0, 2.0],
+            },
+            ..Settings::default()
+        };
+        let (read, _) = Settings::from_json(&settings.to_json()).expect("read");
+        assert_eq!(read.equalizer, settings.equalizer);
     }
 
     // covers: S270

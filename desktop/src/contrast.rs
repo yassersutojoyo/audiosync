@@ -630,7 +630,7 @@ fn keyboard_shortcuts_are_declared() {
 /// short name for the dismiss button, the notice that another app holds
 /// the PTP ports, and the note that discovery has found
 /// no speaker yet (alone, or with Google Cast's in one sentence), which
-/// shows only while it runs. The note and row state for a speaker waiting
+/// shows only while it runs, as does the note that it still looks. The note and row state for a speaker waiting
 /// for the one AirPlay 2 slot show only behind the AirPlay 2 switch, whose
 /// File menu item says it is experimental, as do the notice that turning
 /// the item on or off applies at the next launch and its short name.
@@ -665,7 +665,7 @@ fn no_text_promises_airplay() {
                 || line.contains("property <string> airplay-delay-")
                 || line
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
-                || line.contains("notice-retry-label: @tr(\"Start AirPlay again\")")
+                || line.contains("notice-retry-label: @tr(\"Retry, AirPlay\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
                 || line.contains(
                     "notice-airplay-ptp-ports-taken: @tr(\"Another app is using port 319 or 320,"
@@ -685,6 +685,9 @@ fn no_text_promises_airplay() {
                 || line.contains(
                     "airplay-none-found: root.public-network ? \
                      @tr(\"No AirPlay speakers found yet.",
+                )
+                || line.contains(
+                    "looking-for-airplay-speakers: @tr(\"Looking for AirPlay speakers…\")"
                 )
                 || line.contains("plays up to {0} AirPlay 2 speakers at once, so {1} waits.")
                 || line.contains("@tr(\"Waiting: too many AirPlay 2 speakers\")")
@@ -732,7 +735,7 @@ fn no_text_promises_airplay() {
     assert!(strings.contains("connected-none: @tr(\"No connected speakers\")"));
     assert!(
         include_str!("../ui/main.slint")
-            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? Strings.looking-for-speakers : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
+            .contains("root.connected.length > 0 || root.connected-zoned.length > 0 ? \"\" : root.connected-all-hidden ? Strings.all-speakers-hidden : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : root.connected-virtual-hidden ? Strings.connected-none-virtual-hidden : Strings.connected-none;"),
         "the empty Connected Speakers list says it looks while AirPlay searches, then uses the plain note"
     );
     assert!(
@@ -780,6 +783,65 @@ fn accessible_names_have_no_private_use_characters() {
     for line in strings.lines() {
         assert!(!has_private_use(line), "strings.slint: `{}`", line.trim());
     }
+}
+
+/// The English text inside the first `@tr("…")` of string or function `name`.
+fn tr_text<'a>(strings: &'a str, name: &str) -> &'a str {
+    let start = strings
+        .find(&format!("out property <string> {name}: @tr(\""))
+        .or_else(|| strings.find(&format!("function {name}(")))
+        .unwrap_or_else(|| panic!("strings.slint has {name}"));
+    let rest = &strings[start..];
+    let open = rest.find("@tr(\"").expect("a translatable string") + "@tr(\"".len();
+    let len = rest[open..].find('"').expect("a closed string");
+    &rest[open..open + len]
+}
+
+/// Whether `line` names `Strings.{name}` itself, not a longer name it prefixes.
+fn names_string(line: &str, name: &str) -> bool {
+    let pattern = format!("Strings.{name}");
+    line.match_indices(&pattern).any(|(i, _)| {
+        !line[i + pattern.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+/// Voice Access clicks a button by the words it shows, so a button's Narrator
+/// name starts with its visible text, and every button showing that text
+/// takes its Narrator name from the matching label.
+#[test]
+fn accessible_names_start_with_the_visible_text() {
+    let strings = include_str!("../ui/strings.slint");
+    let mut buttons = 0;
+    for (text, label) in [
+        ("notice-retry", "notice-retry-label"),
+        ("notice-open-privacy", "notice-open-privacy-label"),
+        ("leave-out", "leave-out-label"),
+        ("include-anyway", "include-anyway-label"),
+        ("calibrate-all-again", "calibrate-all-again-label"),
+        ("calibrate-with-microphone", "calibrate-label"),
+    ] {
+        for (file, source) in UI_FILES {
+            for block in blocks(source, "Button") {
+                let lines: Vec<&str> = block.lines().map(str::trim).collect();
+                if !lines
+                    .iter()
+                    .any(|l| l.starts_with("text:") && names_string(l, text))
+                {
+                    continue;
+                }
+                buttons += 1;
+                assert!(
+                    lines
+                        .iter()
+                        .any(|l| l.starts_with("accessible-label:") && names_string(l, label)),
+                    "{file}: a {text} button without accessible-label {label}:\n{block}"
+                );
+            }
+        }
+        let (text, label) = (tr_text(strings, text), tr_text(strings, label));
+        assert!(label.starts_with(text), "`{label}` starts with `{text}`");
+    }
+    assert_eq!(buttons, 8, "the check found the buttons");
 }
 
 /// Retry on the notice that AirPlay stopped: the button shows only on a
@@ -1301,14 +1363,20 @@ fn a_flyout_row_shows_the_speakers_note() {
     let note = lines
         .iter()
         .position(|line| {
-            *line
-                == "if Strings.speaker-caption(root.caption, Strings.row-note(root.state)) != \"\": QuietText {"
+            *line == "if Strings.speaker-caption(root.caption, root.note) != \"\": QuietText {"
         })
         .expect("FlyoutRow shows a QuietText while its state has a note");
     assert_eq!(
         lines.get(note + 1).copied(),
-        Some("text: Strings.speaker-caption(root.caption, Strings.row-note(root.state));"),
+        Some("text: Strings.speaker-caption(root.caption, root.note);"),
         "the QuietText shows the note"
+    );
+    assert_eq!(
+        include_str!("../ui/flyout.slint")
+            .matches("note: Strings.speaker-note(speaker);")
+            .count(),
+        3,
+        "every speaker row takes the main window's note"
     );
 }
 

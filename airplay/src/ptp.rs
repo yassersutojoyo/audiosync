@@ -294,14 +294,6 @@ impl PtpService {
         }
     }
 
-    /// The Sync with `sequence_id` left at `sent`: its Follow_Up carries
-    /// that time (P161). For the first receiver served.
-    pub fn sync_sent(&mut self, sequence_id: u16, sent: Instant) {
-        if let Some(&peer) = self.peers.first() {
-            self.sync_sent_to(sequence_id, peer, sent);
-        }
-    }
-
     /// The Sync with `sequence_id` left for `peer` at `sent`: that
     /// receiver's Follow_Up carries the time.
     pub fn sync_sent_to(&mut self, sequence_id: u16, peer: SocketAddr, sent: Instant) {

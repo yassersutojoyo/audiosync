@@ -14,7 +14,7 @@ final class EqualizerWindowController {
                                      askSave: { [weak self] in self?.promptSaveCurve() },
                                      askRename: { [weak self] index in self?.promptRenameCurve(index) })
             let host = NSHostingController(rootView: view)
-            let panel = NSWindow(contentViewController: host)
+            let panel = EqualizerPanel(contentViewController: host)
             panel.title = UIStrings().equalizerTitle
             panel.styleMask = [.titled, .closable]
             panel.isReleasedWhenClosed = false   // kept and shown again by the next show()
@@ -78,6 +78,13 @@ final class EqualizerWindowController {
         alert.messageText = title
         alert.informativeText = message
         alert.runModal()
+    }
+}
+
+/// Escape closes the equalizer, as it does the Guide.
+private final class EqualizerPanel: NSWindow {
+    override func cancelOperation(_ sender: Any?) {
+        performClose(sender)
     }
 }
 

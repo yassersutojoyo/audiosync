@@ -54,6 +54,9 @@ final class NativeAirPlay {
     private var explicitPause = ExplicitPause()
     /// While paused, checks whether the capture carries sound again (main queue).
     private var soundWatch: Timer?
+    /// The store this sender opened keeps pairings only until it goes
+    /// (main queue, set before `start` completes).
+    private(set) var pairingsNotSaved = false
     /// The hold-back last asked for (main queue), and the one the sender
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
@@ -61,6 +64,9 @@ final class NativeAirPlay {
     /// The zone position of every receiver in a zone, which the sender gets,
     /// also when it is created later (queue only, S249).
     private var zoneVolumes: [String: Double] = [:]
+    /// The equalizer, whose headroom cut the sender gives back under the
+    /// master, also when it is created later (queue only, S26, S413).
+    private var equalizer = Equalizer.Settings()
     /// The receivers added to the sender, in the order they were added, and
     /// the uptime of the last status line (queue only; `logStatusIfDue`).
     private var addedIDs: [String] = []
@@ -139,7 +145,7 @@ final class NativeAirPlay {
     /// Removes the speaker `id` from the sender. Main queue.
     func remove(_ id: String) {
         model.removed(id)
-        sentOffsets.removeValue(forKey: id)
+        let hadOffset = sentOffsets.removeValue(forKey: id) != nil
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
             _ = asc_airplay_remove_speaker(handle, id)
@@ -147,7 +153,7 @@ final class NativeAirPlay {
         }
         if model.states.isEmpty { latencyWarned.removeAll() }
         syncLatency(canChange: model.states.isEmpty)
-        sendOffsets()
+        sendOffsets(moved: hadOffset)
     }
 
     /// The slider position (0 to 100) of the speaker `id`, live.
@@ -271,17 +277,34 @@ final class NativeAirPlay {
         }
     }
 
+    /// The equalizer settings, live: the stream's gain gives their headroom
+    /// cut back under the master (S26, S413). Main queue.
+    func setEqualizer(_ settings: Equalizer.Settings) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.equalizer = settings
+            if let handle = self.handle { Self.sendEqualizer(settings, to: handle) }
+        }
+    }
+
+    private static func sendEqualizer(_ settings: Equalizer.Settings, to handle: OpaquePointer) {
+        var gains = [Double](repeating: 0, count: Int(ASC_EQ_BANDS))
+        for band in 0..<min(gains.count, settings.gains.count) { gains[band] = settings.gains[band] }
+        _ = asc_airplay_set_equalizer(handle, settings.enabled, &gains)
+    }
+
     /// The zone position (0 to 100) of every receiver in a zone, live; the
     /// rest are in no zone (S249). Main queue.
     func setZones(_ zones: [String: Double]) {
+        let moved = volumeEvents.sendingZones(zones)
         queue.async { [weak self] in
             guard let self else { return }
-            let old = self.zoneVolumes
             self.zoneVolumes = zones
-            guard let handle = self.handle else { return }
-            for id in Set(old.keys).union(zones.keys) where old[id] != zones[id] {
-                _ = asc_airplay_set_zone_volume(handle, id, zones[id] ?? SpeakerZone.noZoneVolume)
+            if let handle = self.handle {
+                for id in moved { _ = asc_airplay_set_zone_volume(handle, id, zones[id] ?? SpeakerZone.noZoneVolume) }
             }
+            // Behind every report polled before the move, as in setVolume.
+            DispatchQueue.main.async { [weak self] in self?.volumeEvents.reachedZones(moved) }
         }
     }
 
@@ -376,7 +399,9 @@ final class NativeAirPlay {
     static func pairingsLogLine(_ loaded: Int32) -> String {
         switch loaded {
         case ASC_AIRPLAY_PAIRINGS_IGNORED:
-            return "the pairings file was unreadable or not in the expected format; it is ignored; a file in the wrong format is replaced by the next pairing, an unreadable one is left as it is"
+            return "the pairings file was not in the expected format; it is ignored and replaced by the next pairing"
+        case ASC_AIRPLAY_PAIRINGS_UNREADABLE:
+            return "the pairings file couldn't be read; it is left as it is, and pairings made now last until AudioSync quits"
         case ASC_AIRPLAY_PAIRINGS_NEWER:
             return "a newer AudioSync wrote the pairings file; it is left as it is, and pairings made now last until AudioSync quits"
         case ASC_AIRPLAY_PAIRINGS_FAILED:
@@ -384,6 +409,13 @@ final class NativeAirPlay {
         default:
             return "\(loaded) paired Apple TV(s) in the pairings file"
         }
+    }
+
+    /// Whether pairings made while the store opened with `loaded` is in use
+    /// are lost when AudioSync quits.
+    static func pairingsNotSaved(_ loaded: Int32) -> Bool {
+        loaded == ASC_AIRPLAY_PAIRINGS_FAILED || loaded == ASC_AIRPLAY_PAIRINGS_NEWER
+            || loaded == ASC_AIRPLAY_PAIRINGS_UNREADABLE
     }
 
     /// How private the core found a pairing file, for the debug log; nil
@@ -465,18 +497,30 @@ final class NativeAirPlay {
             + (each.isEmpty ? "no speaker" : each.joined(separator: "; "))
     }
 
+    /// The offset E - e_s each row in the sender has, in ms (S283), also
+    /// while a new E's `.latencyChanged` runs ahead of `sendOffsets`.
+    var speakerOffsetsMs: [Double] {
+        model.states.keys.map { model.receiverLatency.offsetMs(row: $0, of: model.sessions(of: $0)) }
+    }
+    /// Called when a row's offset E - e_s moved (main queue).
+    var onOffsetsMoved: (() -> Void)?
+
     /// Gives each row in the sender whose offset E - e_s moved its new one
-    /// (S283). Main queue, after the row's add on the queue.
-    private func sendOffsets() {
+    /// (S283). Main queue, after the row's add on the queue. `moved`: a row
+    /// with an offset left the sender.
+    private func sendOffsets(moved: Bool = false) {
+        var moved = moved
         for row in model.states.keys.sorted() {
             let offset = model.receiverLatency.offsetMs(row: row, of: model.sessions(of: row))
             guard offset != (sentOffsets[row] ?? 0) else { continue }
             sentOffsets[row] = offset
+            moved = true
             queue.async { [weak self] in
                 guard let handle = self?.handle else { return }
                 _ = asc_airplay_set_speaker_offset(handle, row, offset)
             }
         }
+        if moved { onOffsetsMoved?() }
     }
 
     /// Tears everything down and waits for it (at most about 2 s): the input
@@ -538,6 +582,7 @@ final class NativeAirPlay {
                 DebugTrace.log("[AudioSync] native AirPlay: " + line)
             }
             DebugTrace.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
+            self.pairingsNotSaved = Self.pairingsNotSaved(loaded)
             if let airPlay2, airPlay2 != 0 {
                 DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: "
                     + (airPlay2 > 0 ? "\(airPlay2) paired receiver(s)" : "ignored or left as it is (code \(airPlay2))"))
@@ -553,6 +598,7 @@ final class NativeAirPlay {
             }
         }
         asc_airplay_set_master(created, master)
+        Self.sendEqualizer(equalizer, to: created)
         for (id, zone) in zoneVolumes { _ = asc_airplay_set_zone_volume(created, id, zone) }
         _ = asc_airplay_set_hold_back(created, queuedHoldBackMs)
         _ = asc_airplay_set_playback(created, playback.app, playback.state)

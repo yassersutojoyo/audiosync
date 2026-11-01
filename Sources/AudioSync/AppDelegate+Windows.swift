@@ -40,14 +40,9 @@ extension AppDelegate {
         let saved = AppSettings.load(store.read)
         let remote = WebRemote(model: appModel, store: store, enabled: saved.webRemote, port: saved.webRemotePort)
         remote.onNowPlayingNeedChange = { [weak self] in self?.syncTrackInfo() }
-        // Hidden members left out, so the page counts what the zone header counts.
         remote.host.zones = { [weak self] in
             guard let self else { return [] }
-            return zones.map { zone in
-                var shown = zone
-                shown.members.removeAll(where: self.isHidden)
-                return shown
-            }
+            return SpeakerZone.withoutHidden(zones, isHidden: self.isHidden)
         }
         remote.host.presets = { [weak self] in
             guard let self else { return [] }
@@ -73,6 +68,9 @@ extension AppDelegate {
 
     private func equalizerChanged(_ settings: Equalizer.Settings) {
         engine.updateEqualizer(settings)
+        reapplyLocalGains()   // the headroom cut given back changes with the curve (S26)
+        nativeAirPlay?.setEqualizer(settings)
+        castSender?.setEqualizer(settings)
         if let data = StoredEqualizer.encode(settings) {
             store.write(data, Keys.equalizer)
         }
@@ -472,7 +470,9 @@ extension AppDelegate {
     /// through the menu bar icon.
     private func rereadExternalState() {
         launchAtLogin = SMAppService.mainApp.status == .enabled
-        if launchAtLogin { clearNotices([Notice.login]) }   // approved meanwhile
+        if Notice.loginSettled(in: appModel.notices, enabled: launchAtLogin, text) {
+            clearNotices([Notice.login])   // changed in System Settings meanwhile
+        }
         recheckLocalNetwork()
         pushSources()
         pushModel()
@@ -627,7 +627,8 @@ extension AppDelegate {
             }
             return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs,
                                    connected: entry.connected,
-                                   deviceName: entry.connected ? nil : inputName ?? text.sourceInputDevice)
+                                   deviceName: entry.connected ? nil : inputName ?? text.sourceInputDevice,
+                                   available: entry.available)
         }
         publish(\.sources, sources)
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
@@ -638,7 +639,8 @@ extension AppDelegate {
         publish(\.mixChecked, checked)
         publish(\.mixApps, mixApps.map { entry in
             AppModel.Source(id: entry.id, name: entry.name,
-                            icon: (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized), isInput: false)
+                            icon: (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized), isInput: false,
+                            available: entry.available)
         })
     }
 
@@ -691,10 +693,12 @@ extension AppDelegate {
                                     waitingForAirPlay2: receiver.map { native?.waitReason($0) == .tooManyAirPlay2 } ?? false,
                                     waitingForPtp: receiver.map { native?.waitReason($0) == .ptpOtherNetwork } ?? false,
                                     reconnecting: receiver.map { native?.isReconnecting($0) == true } ?? false,
+                                    codeWait: receiver.flatMap { native?.codeWait($0) },
                                     unannounced: receiver.map { native?.isUnannounced($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,
                                     holdsPassword: receiver.map { native?.holdsPassword($0) == true } ?? false,
+                                    refusedForCode: receiver.map { native?.refusedOff.contains($0) == true } ?? false,
                                     airPlayTarget: receiver.flatMap { native?.targetRow($0) })
         }
     }

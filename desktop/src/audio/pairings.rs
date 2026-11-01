@@ -264,29 +264,36 @@ impl PairingStore {
         let _ = if matches!(loaded, Loaded::Partly { .. }) {
             store.save()
         } else {
-            store.keep_ignored_aside()
+            store.keep_ignored_aside().map(drop)
         };
         (store, loaded)
     }
 
     /// Keeps the file ignored at launch aside now, when it can be read, for
-    /// [`PairingStore::take_kept_aside`]. While it can't, the error is
-    /// returned and the next try is due
+    /// [`PairingStore::take_kept_aside`], and returns the bytes it kept. While
+    /// it can't, the error is returned and the next try is due
     /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls later.
-    fn keep_ignored_aside(&mut self) -> io::Result<()> {
+    fn keep_ignored_aside(&mut self) -> io::Result<Option<Vec<u8>>> {
         let Some(path) = &self.path else {
-            return Ok(());
+            return Ok(None);
         };
         if !self.keep_aside {
-            return Ok(());
+            return Ok(None);
         }
-        match data_folder::keep_aside(path, IGNORED_FILE_NAME) {
+        let kept = match fs::read(path) {
+            Ok(bytes) => data_folder::keep_bytes_aside(path, IGNORED_FILE_NAME, &bytes)
+                .map(|copy| Some((copy, bytes))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
+        match kept {
             Ok(kept) => {
+                let (copy, bytes) = kept.unzip();
                 if self.tell_kept_aside {
-                    self.kept_aside = kept;
+                    self.kept_aside = copy;
                 }
                 self.keep_aside = false;
-                Ok(())
+                Ok(bytes)
             }
             Err(error) => {
                 self.keep_aside_wait = data_folder::KEEP_ASIDE_RETRY_POLLS;
@@ -298,15 +305,53 @@ impl PairingStore {
     /// Called at every poll: while the file ignored at launch couldn't be
     /// kept aside yet, tries again every
     /// [`data_folder::KEEP_ASIDE_RETRY_POLLS`] polls, so the user is told
-    /// without pairing anything first.
-    pub fn keep_aside_if_due(&mut self) {
+    /// without pairing anything first. Returns why the file kept aside
+    /// couldn't be written without the speakers forgotten meanwhile.
+    pub fn keep_aside_if_due(&mut self) -> io::Result<()> {
         if !self.keep_aside {
-            return;
+            return Ok(());
         }
         self.keep_aside_wait = self.keep_aside_wait.saturating_sub(1);
-        if self.keep_aside_wait == 0 {
-            let _ = self.keep_ignored_aside();
+        if self.keep_aside_wait == 0
+            && let Ok(Some(bytes)) = self.keep_ignored_aside()
+        {
+            return self.drop_forgotten(&bytes);
         }
+        Ok(())
+    }
+
+    /// Writes the file kept aside just now, `sealed`, without the speakers
+    /// forgotten while it couldn't be read, and deletes the copies that hold
+    /// them, so they don't come back at the next launch.
+    fn drop_forgotten(&self, sealed: &[u8]) -> io::Result<()> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        let Some((mut entries, _)) = self
+            .sealer
+            .open(sealed)
+            .ok()
+            .and_then(|plain| decode(&plain))
+        else {
+            return Ok(());
+        };
+        let count = entries.len();
+        entries.retain(|id, _| !self.forgotten.contains(id));
+        if entries.len() == count {
+            return Ok(());
+        }
+        data_folder::write_atomically(path, &self.sealer.seal(&encode(&entries)?)?)?;
+        self.prune_forgotten()
+    }
+
+    /// Deletes the copies kept aside that hold a speaker forgotten this run.
+    fn prune_forgotten(&self) -> io::Result<()> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        self.forgotten.iter().try_for_each(|id| {
+            prune_copies(path, IGNORED_FILE_NAME, id, self.sealer, self.remove_copy)
+        })
     }
 
     /// Where the file ignored at launch was kept aside, once that was done
@@ -564,11 +609,15 @@ impl PairingStore {
 
     /// Writes every entry to the file, through a temporary file renamed over
     /// it; removes the file once nothing is paired. A file ignored at launch
-    /// is first kept aside ([`data_folder::keep_aside`] with
-    /// [`IGNORED_FILE_NAME`]); while it can't be read, it is
+    /// is first kept aside ([`data_folder::keep_bytes_aside`] with
+    /// [`IGNORED_FILE_NAME`]), and that copy deleted when it holds a speaker
+    /// forgotten meanwhile; while it can't be read, it is
     /// left alone and the error returned.
     fn save(&mut self) -> io::Result<()> {
-        self.keep_ignored_aside()?;
+        if self.keep_ignored_aside()?.is_some() {
+            // A copy whose delete fails stays (S224); the write still counts.
+            let _ = self.prune_forgotten();
+        }
         let Some(path) = &self.path else {
             return Ok(());
         };
@@ -1107,6 +1156,63 @@ pub mod tests {
         assert!(!store.contains("02005E005301"));
         let (reopened, _) = PairingStore::open(path.clone(), sealer());
         assert!(!reopened.contains("02005E005301"));
+    }
+
+    // covers: S224
+    #[test]
+    fn a_speaker_forgotten_while_the_file_cant_be_read_is_left_out_once_it_is_kept_aside() {
+        let path = test_dir("pairings-forget-kept-aside").join(FILE_NAME);
+        fs::create_dir(&path).unwrap();
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        assert!(!removed(&mut store, "02005E005301"));
+        let mut plain = MAGIC.to_vec();
+        for (id, fill) in [(b"02005E005301", 1), (b"02005E005302", 2)] {
+            let blob = credentials("0123456789ABCDEF", fill).to_bytes();
+            plain.extend(entry(id, &blob));
+        }
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, sealer().seal(&plain).unwrap()).unwrap();
+
+        for _ in 0..data_folder::KEEP_ASIDE_RETRY_POLLS {
+            store.keep_aside_if_due().expect("written");
+        }
+        assert!(store.take_kept_aside().is_some());
+        let (reopened, _) = PairingStore::open(path.clone(), sealer());
+        assert!(!reopened.contains("02005E005301"));
+        assert!(reopened.contains("02005E005302"));
+        let folder = path.parent().expect("a folder");
+        assert!(
+            copies_kept_aside(folder, "airplay-pairings.ignored").is_empty(),
+            "the copy held the forgotten speaker's key"
+        );
+    }
+
+    // covers: S224
+    #[test]
+    fn a_pairing_written_once_the_file_reads_again_keeps_no_copy_of_a_speaker_forgotten_before() {
+        let dir = test_dir("pairings-forget-then-pair");
+        let path = dir.join(FILE_NAME);
+        fs::create_dir(&path).unwrap();
+        let (mut store, _) = PairingStore::open(path.clone(), sealer());
+        assert!(!removed(&mut store, "02005E005301"));
+        let mut plain = MAGIC.to_vec();
+        for (id, fill) in [(b"02005E005301", 1), (b"02005E005302", 2)] {
+            let blob = credentials("0123456789ABCDEF", fill).to_bytes();
+            plain.extend(entry(id, &blob));
+        }
+        fs::remove_dir(&path).unwrap();
+        fs::write(&path, sealer().seal(&plain).unwrap()).unwrap();
+
+        store
+            .insert("02005E005303", credentials("0123456789ABCDEE", 3))
+            .expect("saved");
+        let framed = &entry(b"02005E005301", b"")[..14];
+        let mut files = copies_kept_aside(&dir, "airplay-pairings.ignored");
+        files.push(fs::read(&path).expect("written"));
+        for sealed in files {
+            let plain = sealer().open(&sealed).expect("opened");
+            assert!(!plain.windows(framed.len()).any(|window| window == framed));
+        }
     }
 
     // covers: S387

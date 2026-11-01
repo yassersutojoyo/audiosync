@@ -56,31 +56,47 @@ fn unit(value: f64) -> f64 {
 /// The zone level of a speaker in no zone (C104).
 pub const NO_ZONE_LEVEL: f64 = 1.0;
 
-/// The level the host sends for its master, the speaker's zone
-/// ([`NO_ZONE_LEVEL`] outside a zone) and its own level, all 0.0 to 1.0:
-/// master × zone × own (C104). Anything not finite counts as 0.
-pub fn device_level(master: f64, zone: f64, own: f64) -> f64 {
-    unit(master) * unit(zone) * unit(own)
+/// The level the host sends for the speaker's zone ([`NO_ZONE_LEVEL`]
+/// outside a zone), 0.0 to 1.0, and its own level, which may pass 1.0:
+/// zone × own, at most 1.0 (C104). The master scales the audio instead
+/// (ENGINE_SPEC S415). Anything not finite counts as 0.
+pub fn device_level(zone: f64, own: f64) -> f64 {
+    (unit(zone) * own_unit(own)).min(1.0)
 }
 
-/// The own level a reported level means at `master` and `zone` (C104):
-/// level ÷ (master × zone), clamped; `own` as it is when master × zone is 0
-/// or a value isn't finite.
-pub fn own_level(reported: f64, master: f64, zone: f64, own: f64) -> f64 {
-    let stage = |value: f64| value.is_finite() && value > 0.0;
-    if !reported.is_finite() || !stage(master) || !stage(zone) {
+/// An own level: at least 0 and unbounded above; 0 when not finite.
+fn own_unit(value: f64) -> f64 {
+    if value.is_finite() {
+        value.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+/// The own level a row moved to `row`, 0 to 100, stores: row ÷ zone,
+/// unclamped, so the device gets the row itself. None at zone 0, where the
+/// move sends nothing, or when `row` isn't finite.
+pub fn row_own_level(row: f64, zone: f64) -> Option<f64> {
+    let zone = unit(zone);
+    (row.is_finite() && zone > 0.0).then(|| row.clamp(0.0, 100.0) / 100.0 / zone)
+}
+
+/// The own level a reported level means at `zone` (C104): level ÷ zone,
+/// unclamped above; `own` as it is at zone 0 or when a value isn't finite.
+pub fn own_level(reported: f64, zone: f64, own: f64) -> f64 {
+    if !reported.is_finite() || !zone.is_finite() || zone <= 0.0 {
         return own;
     }
-    unit(unit(reported) / (master.min(1.0) * zone.min(1.0)))
+    unit(reported) / zone.min(1.0)
 }
 
 /// The own level a session starts from (C105): the one kept, whatever the
 /// first status reports; without one, that status's level read as
 /// [`own_level`] reads it.
-pub fn start_own_level(master: f64, zone: f64, own: Option<f64>, reported: f64) -> f64 {
+pub fn start_own_level(zone: f64, own: Option<f64>, reported: f64) -> f64 {
     match own.filter(|own| own.is_finite()) {
-        Some(own) => own.clamp(0.0, 1.0),
-        None => own_level(reported, master, zone, unit(reported)),
+        Some(own) => own.max(0.0),
+        None => own_level(reported, zone, unit(reported)),
     }
 }
 

@@ -71,17 +71,17 @@ pub fn member_keeps<'a>(keys: impl IntoIterator<Item = Option<&'a str>>) -> Vec<
 }
 
 /// A stored own volume whose member isn't known: at least 0 and not capped,
-/// since an AirPlay member's may pass 100 (S290); none when it isn't a
-/// number. A local or Cast member is clamped where its volume is applied.
+/// since an AirPlay or Cast member's may pass 100 (S290, S415); none when it
+/// isn't a number. A local member is clamped where its volume is applied.
 pub fn member_volume(stored: Option<f64>) -> Option<f64> {
     stored.filter(|volume| volume.is_finite()).map(sanitize_own)
 }
 
-/// Member `key`'s stored own volume: an AirPlay member's as
+/// Member `key`'s stored own volume: an AirPlay or Cast member's as
 /// [`member_volume`] keeps it, any other clamped to 0 to 100.
 fn member_volume_of(key: &str, stored: Option<f64>) -> Option<f64> {
     match usable(key) {
-        Some(SpeakerKey::AirPlay(_)) => member_volume(stored),
+        Some(SpeakerKey::AirPlay(_) | SpeakerKey::Cast(_)) => member_volume(stored),
         _ => stored.and_then(sanitize_position),
     }
 }
@@ -94,9 +94,9 @@ pub fn master_volume(stored: f64) -> f64 {
 
 impl Preset {
     /// The preset as S251 keeps it on load: bad, repeated and second Cast
-    /// member keys dropped, a repeated zone ID dropped, a local or Cast
-    /// member's volume clamped to 0 to 100 (an AirPlay member's may pass
-    /// 100, S290) and the gains on the controls' steps (S23).
+    /// member keys dropped, a repeated zone ID dropped, a local member's
+    /// volume clamped to 0 to 100 (an AirPlay or Cast member's may pass
+    /// 100, S290, S415) and the gains on the controls' steps (S23).
     pub fn sanitized(self) -> Preset {
         let keeps = member_keeps(self.members.iter().map(|member| Some(member.key.as_str())));
         let members = self

@@ -348,7 +348,7 @@ fn ptp_messages() {
             if header(&transmit.bytes).kind == 0x0 {
                 let at = now + Duration::from_micros(40);
                 follow_up_times.insert(transmit.sequence_id, at);
-                service.sync_sent(transmit.sequence_id, at);
+                service.sync_sent_to(transmit.sequence_id, transmit.to, at);
             }
             sent.push((now, transmit));
         }
@@ -691,8 +691,8 @@ impl Udp {
     }
 
     fn fake(&self, mut fake: FakeAp2) -> FakeAp2 {
-        fake.data_port = self.data.port();
-        fake.control_port = self.control.port();
+        fake.data_port = Some(self.data.port());
+        fake.control_port = Some(self.control.port());
         fake
     }
 }
@@ -952,6 +952,7 @@ fn ap2_a_pair_sends_every_member_the_same_full_stereo_audio() {
 // Part of P213 on the AirPlay 2 path: the pause sends the realtime FLUSH,
 // whose answer releases the resume while the answer to a delay FLUSH still
 // in flight does not, and POST /feedback goes on while paused.
+// covers: P213
 #[test]
 fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     const ANSWER: Duration = Duration::from_millis(800);

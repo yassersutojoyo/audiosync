@@ -106,6 +106,8 @@ final class StreamEngine {
     /// The running session's capture watch (S335), its 0.5 s timer, what a
     /// reopen opens and the last try's error.
     private var flowWatch = CaptureFlowWatch()
+    /// Kept here so a session restarted inside the latest wake's window keeps it (S332).
+    private var wakeWindowEnds = -TimeInterval.infinity
     private var flowTimer: DispatchSourceTimer?
     private var opened: (source: AudioSource, inputPair: Int)?
     private var reopenError: SourceCapture.CaptureError?
@@ -141,6 +143,9 @@ final class StreamEngine {
 
     /// Some frame a system or app tap captured in this app run was not silent.
     var runHeard: Bool { SourceCapture.runHeard }
+
+    /// The capture's callbacks so far this session; nil while stopped.
+    var captureCallbacks: UInt64? { capture.counts?.callbacks }
 
     /// The rate the running capture delivers at, which the ring's frames are
     /// clocked at (S16).
@@ -269,6 +274,7 @@ final class StreamEngine {
         let now = ProcessInfo.processInfo.systemUptime
         stallWatch.resume(nowS: now)
         flowWatch.resume(at: now)
+        wakeWindowEnds = flowWatch.wakeWindowEnds
     }
 
     private func stopStallWatch() {
@@ -330,6 +336,7 @@ final class StreamEngine {
                 frames: renderer.framesRendered.load(ordering: .relaxed),
                 starvedRenders: counted.starvedRenders, starvedFrames: counted.starvedFrames,
                 driftSkips: counted.driftSkips, driftSilences: counted.driftSilences,
+                rejectedCopies: counted.rejectedCopies,
                 lateCallbacks: renderer.lateCallbacks, overloads: renderer.ioOverloads,
                 anchor: renderer.takeAnchorSpan())
         }
@@ -465,7 +472,7 @@ final class StreamEngine {
 
     private func startFlowWatch(source: AudioSource, inputPair: Int) {
         stopFlowWatch()
-        flowWatch = CaptureFlowWatch()
+        flowWatch = CaptureFlowWatch(wakeWindowEnds: wakeWindowEnds)
         if asleep { flowWatch.pause() }
         opened = (source, inputPair)
         reopenError = nil
@@ -511,6 +518,13 @@ final class StreamEngine {
         }
     }
 
+    private func reopenTry(_ number: Int) -> String {
+        guard !flowWatch.inWakeWindow(at: ProcessInfo.processInfo.systemUptime) else {
+            return "after-wake try, outside the \(CaptureFlowWatch.tries) tries"
+        }
+        return "try \(number) of \(CaptureFlowWatch.tries)"
+    }
+
     /// Opens only the capture again, into the session's parts: every output
     /// keeps its renderer and hold-back and the senders stay fed (S335).
     private func reopenCapture(try number: Int) {
@@ -531,7 +545,7 @@ final class StreamEngine {
                 flowWatch.busy(at: now)
                 return
             }
-            DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries) failed: \(failure)")
+            DebugTrace.log("[AudioSync] capture reopen \(reopenTry(number)) failed: \(failure)")
             reopenError = failure
             var listed = false
             if case .input(let uid) = opened.source { listed = SourceCapture.inputListed(uid: uid) }
@@ -550,7 +564,7 @@ final class StreamEngine {
             follow(flowWatch.failed(at: ProcessInfo.processInfo.systemUptime))
             return
         }
-        DebugTrace.log("[AudioSync] capture reopen try \(number) of \(CaptureFlowWatch.tries): "
+        DebugTrace.log("[AudioSync] capture reopen \(reopenTry(number)): "
                        + "open at \(capture.sampleRate) Hz")
         reopenError = nil
         if let since = busySince {
@@ -611,7 +625,8 @@ final class StreamEngine {
         guard let renderer = parts.makeRenderer(captureRate: capture.sampleRate) else {
             throw OutputRenderer.StartFailure.coreUnavailable
         }
-        renderer.setGain(linear: gain)
+        let (played, returnedDb) = parts.equalizer.returnedGain(gain)
+        renderer.setGain(linear: gain, givingBack: parts.equalizer)
         renderer.onDeviceGone = { [weak self, weak renderer] in
             guard let self, let renderer else { return }
             self.handleOutputLost(uid, renderer, .deviceGone)
@@ -623,13 +638,27 @@ final class StreamEngine {
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
         attachTokens.attached(uid)
-        DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
+        DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(played), "
+            + "EQ headroom returned \(String(format: "%.2f", returnedDb)) dB")
         if DebugTrace.enabled {
             DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self, weak renderer] in
                 guard let self, let renderer, self.renderers[uid] === renderer else { return }
                 DebugTrace.log("[AudioSync] output at 1 minute: \(uid), "
                     + renderer.statusText(bluetoothOutputs: self.bluetoothOutputs))
             }
+            logLevel(uid, renderer)
+        }
+    }
+
+    /// Logs the level output `uid` got every 10 s while `renderer` plays it.
+    private func logLevel(_ uid: String, _ renderer: OutputRenderer) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self, weak renderer] in
+            guard let self, let renderer, self.renderers[uid] === renderer else { return }
+            if let level = renderer.takeLevel() {
+                DebugTrace.log("[AudioSync] output level: \(uid), peak "
+                    + String(format: "%.1f dBFS, RMS %.1f dBFS", level.peakDb, level.rmsDb))
+            }
+            self.logLevel(uid, renderer)
         }
     }
 
@@ -703,9 +732,19 @@ final class StreamEngine {
             + "(\(counted.driftSilenceFrames) frames)"
     }
 
-    /// A new linear gain for output `uid`, applied from its next callback (S64).
+    /// A new linear gain for output `uid`, with the equalizer's headroom cut
+    /// given back (S26, S71), applied from its next callback (S64).
     func setGain(uid: String, g: Double) {
-        renderers[uid]?.setGain(linear: g)
+        renderers[uid]?.setGain(linear: g, givingBack: parts?.equalizer)
+    }
+
+    /// Logs the gain output `uid` plays linear gain `g` at, the equalizer's
+    /// headroom cut given back; nothing when it isn't playing.
+    func logGain(uid: String, g: Double) {
+        guard DebugTrace.enabled, renderers[uid] != nil, let parts else { return }
+        let (played, returnedDb) = parts.equalizer.returnedGain(g)
+        DebugTrace.log("[AudioSync] output gain: \(uid), gain \(String(format: "%.3f", played)), "
+            + "EQ headroom returned \(String(format: "%.2f", returnedDb)) dB")
     }
 
     /// The device of output `uid` is gone (S68), its render callback stopped
@@ -798,6 +837,7 @@ struct SessionTally: Equatable {
         var starvedFrames: Int64 = 0
         var driftSkips: Int64 = 0
         var driftSilences: Int64 = 0
+        var rejectedCopies: Int64 = 0
         var lateCallbacks: Int64 = 0
         var overloads: Int64 = 0
         /// Not a count: the span since the previous line (`AnchorSpan`).
@@ -836,10 +876,11 @@ struct SessionTally: Equatable {
             let starvedFrames = change(now.starvedFrames, since: before.starvedFrames)
             let skips = change(now.driftSkips, since: before.driftSkips)
             let silences = change(now.driftSilences, since: before.driftSilences)
+            let rejected = change(now.rejectedCopies, since: before.rejectedCopies)
             let late = change(now.lateCallbacks, since: before.lateCallbacks)
             let overloads = change(now.overloads, since: before.overloads)
             text += "; output \(now.number): \(rendered) frames, starved \(starved) (\(starvedFrames) frames), "
-            text += "drift skips \(skips), drift silences \(silences), "
+            text += "drift skips \(skips), drift silences \(silences), rejected copies \(rejected), "
             text += "late callbacks \(late), IO overloads \(overloads)"
             if let anchor = now.anchor { text += ", " + anchor.text }
         }

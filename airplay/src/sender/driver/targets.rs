@@ -23,8 +23,9 @@ pub(super) struct TargetRun {
     /// Its control device played by itself when it was added: every member
     /// was refused (P177).
     refused: bool,
-    /// The members last reported missing (P181).
-    missing: Vec<DeviceKey>,
+    /// The members last reported missing; None before the run's first
+    /// report, which goes out even when empty (P181).
+    missing: Option<Vec<DeviceKey>>,
 }
 
 impl Driver {
@@ -95,7 +96,7 @@ impl Driver {
                     .collect(),
                 airplay2,
                 refused,
-                missing: Vec::new(),
+                missing: None,
             },
         );
         for device in in_view {
@@ -395,19 +396,26 @@ impl Driver {
         let mut changed = Vec::new();
         for (id, run) in &self.driven {
             if run.refused {
+                if run.missing.is_none() {
+                    changed.push((id.clone(), Vec::new()));
+                }
                 continue;
             }
             let now_missing = run
                 .members
                 .keys()
                 .filter(|key| missing(&self.speakers, key));
-            if !now_missing.clone().eq(run.missing.iter()) {
+            if run
+                .missing
+                .as_ref()
+                .is_none_or(|last| !now_missing.clone().eq(last))
+            {
                 changed.push((id.clone(), now_missing.cloned().collect::<Vec<_>>()));
             }
         }
         for (id, missing) in changed {
             if let Some(run) = self.driven.get_mut(&id) {
-                run.missing = missing.clone();
+                run.missing = Some(missing.clone());
             }
             self.emit(SenderEvent::TargetMissing { id, missing });
         }

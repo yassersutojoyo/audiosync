@@ -30,6 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// that is quitting no longer answers a second launch, which then waits
     /// for it to go instead of leaving.
     nonisolated static let exiting = Atomic<Bool>(false)
+    /// Set by main.swift when another copy keeps the speakers: this copy
+    /// shows and starts nothing until `applicationDidFinishLaunching` decides.
+    var defersToRunningCopy = false
 
     // MARK: - The engine and its helpers
 
@@ -122,7 +125,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet {
             guard masterVolume != oldValue else { return }
             store.save(master: masterVolume)
-            airplayHeldLevel = [:]   // the rows show min(100, s × k) again (S290)
         }
     }
     /// Slider positions (0…100) of local speakers, by device UID.
@@ -140,14 +142,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     /// The delays were migrated to offsets (S179), in this launch or before.
     private var localDelaysMigrated: Bool
-    /// Each AirPlay speaker's own volume s, by output ID (S73): unrounded,
-    /// above 100 when the zone or the master is below 100 (S290).
+    /// Each AirPlay speaker's own volume s, by output ID (S290): unrounded,
+    /// above 100 when the zone or the master is below 100.
     var airplayVolume: [String: Double] {
         didSet { if airplayVolume != oldValue { store.save(levels: airplayVolume, forKey: Keys.airplayVolumes) } }
     }
     /// A level set on an AirPlay speaker while its k was 0, by output ID,
     /// which its row shows until s, its zone or the master moves (S290).
     var airplayHeldLevel: [String: Double] = [:]
+    var airPlayVolumeLog = RemoteVolumeLog()
     var groups: [SpeakerGroup] {
         didSet { if groups != oldValue { store.save(groups: groups) } }
     }
@@ -206,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     }
     var inputListings = InputListings()
 
-    /// Where a speaker without a volume of its own starts (S71, S105).
+    /// Where a speaker without a volume of its own starts (S71, S399).
     let defaultVolume = AppSettings.defaultVolume
 
     // MARK: - AirPlay speakers (`+AirPlay`)
@@ -265,6 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var runawayRetry = OutputRunawayRetry()
     /// Local outputs whose listed device refuses to start, until one starts (S331).
     var refusalRetry = OutputRefusalRetry()
+    var goneNotices = OutputGoneNotices()
     /// The microphone calibration under way, if any (S232).
     var calibrationRun: CalibrationRun?
     /// Calibrate All Speakers under way, its sheet and the Undo of its Apply (S235 to S240).
@@ -351,7 +355,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         super.init()
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
-        _ = castModel.setMaster(saved.master)
         _ = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast))
         castModel.savedOn = saved.castOnAtLaunch
     }
@@ -375,6 +378,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     // MARK: - Launch
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        guard !defersToRunningCopy else { return }   // the running copy's debug log stays as it is
         DebugTrace.beginLaunchLog()   // each launch starts a fresh debug log (S170)
         if LaunchAutoConnect.skipped {
             DebugTrace.log("[AudioSync] auto-connect: skipped in this run (\(LaunchAutoConnect.environmentKey)=1 with \(DebugTrace.environmentKey)=1); speakers saved as on stay off, and nothing is saved until the next launch")
@@ -388,6 +392,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let loginItem = Self.launchedAsLoginItem()
+        if defersToRunningCopy {
+            guard AppLifecycle.asksRunningCopyToShow(loginItemLaunch: loginItem), !leavesToRunningCopy()
+            else { exit(0) }
+            // The running copy went away while quitting: this copy takes over.
+            defersToRunningCopy = false
+            NSApp.setActivationPolicy(.regular)
+            applicationWillFinishLaunching(notification)
+        }
         DebugTrace.log("[AudioSync] launched\(loginItem ? " at login" : ""); audio engine: the Rust core")
         store.retiredChoiceNotes(environment: ProcessInfo.processInfo.environment)
             .forEach { DebugTrace.log($0) }
@@ -452,6 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 self.devicesChanged()
             case .deviceGone:
                 self.noteRelinked(lostUID)   // it may return inside one rescan, never missing from a list
+                self.goneNotices.deviceGone(lostUID)
                 DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
                 self.devicesChanged()
             }
@@ -713,6 +726,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// signal runs the same steps before it exits (S111, `SignalQuit` in
     /// main.swift). Runs once, whichever asks first.
     func runQuitSteps() {
+        guard !defersToRunningCopy else { return }   // this copy set nothing up to quit
         quitOnce.run()
     }
 

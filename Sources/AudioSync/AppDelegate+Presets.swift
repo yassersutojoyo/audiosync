@@ -108,7 +108,7 @@ extension AppDelegate {
         syncCast()
         for (index, member) in preset.members.enumerated() where plan.setVolume[index] {
             guard let state = states[index], state.kind == .cast, let volume = member.volume else { continue }
-            setCastVolume(state.appID, volume)
+            setCastOwnVolume(state.appID, volume)
         }
         stopIfIdle()
         retimeLocalOutputs()

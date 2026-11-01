@@ -17,6 +17,7 @@ fn c_rule(reported_us: &[i64]) -> u32 {
     unsafe { asc_airplay_session_latency_frames(reported_us.as_ptr(), reported_us.len()) }
 }
 
+// covers: P202
 #[test]
 fn the_c_session_latency_matches_the_crate() {
     // SAFETY: a null array is allowed.
@@ -55,6 +56,7 @@ fn latency_becomes(handle: *mut audiosync_core::ffi::airplay::AscAirPlay, ms: f6
     false
 }
 
+// covers: P202
 #[test]
 fn set_latency_clamps_and_ignores_a_null_handle() {
     // SAFETY: a null handle does nothing.

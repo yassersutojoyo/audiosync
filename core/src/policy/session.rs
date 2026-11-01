@@ -53,7 +53,7 @@ pub fn starts(has_speaker: bool, continuing: bool, had_speaker: bool, origin: St
 pub enum AfterStart {
     /// Add the enabled AirPlay speakers to the AirPlay sender.
     ApplyAirPlaySelection,
-    /// Send the master volume to the AirPlay sender (S72).
+    /// Hand the master to the AirPlay sender as its stream gain (S413).
     SendMasterVolume,
     /// Add every enabled, present local output (S117).
     AddLocalOutputs,

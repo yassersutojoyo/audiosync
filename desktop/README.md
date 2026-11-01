@@ -189,8 +189,9 @@ The speakers in it keep their own rows. AirPlay speakers wait for a Cast
 speaker that plays later than them, but only up to 20 s; past that a notice
 says how far ahead they play.
 
-If none show up, check that the PC is on the same network and that the
-network is set to Private, or that Windows Firewall allows AudioSync on it.
+If none show up, check that the PC is on the same network and that
+Windows Firewall allows AudioSync on it. On a Public network, setting it to
+Private can help too.
 If one still doesn't, choose Speakers > Add by Address…, or the Add by
 Address… link in the speaker list, and enter its IP address or host name.
 AudioSync keeps the address, and Remove in the speaker's menu forgets it.

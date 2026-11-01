@@ -66,7 +66,7 @@ struct NativeReceiver: Equatable {
     }
 
     /// Whether a receiver named `name` is this Mac's own AirPlay Receiver,
-    /// which is never listed (S100): its name equals the computer name,
+    /// which is never listed (S222): its name equals the computer name,
     /// ignoring case. An unknown or empty computer name matches nothing, so
     /// nothing is hidden by mistake.
     static func isThisMac(_ name: String, computerName: String?) -> Bool {

@@ -892,6 +892,7 @@ private struct ZoneMemberCompactRow: View {
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                            waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                           codeWait: speaker.codeWait, name: speaker.name,
                            unannounced: speaker.unannounced, target: speaker.airPlayTarget)
             ?? zone.members.first { $0.key == speaker.key }?.note
     }
@@ -1096,7 +1097,9 @@ struct SpeakerRow: View {
                         if showTag {
                             SpeakerTypeIcon(kind: speaker.tag, state: state, text: t, airPlay2: speaker.airPlay2)
                         }
-                        AvailabilityNote(availability: speaker.availability, text: t)
+                        if speaker.codeWait == nil {
+                            AvailabilityNote(availability: speaker.availability, text: t)
+                        }
                         if let note {
                             // Read in the speaker's hint.
                             Text(note)
@@ -1272,6 +1275,7 @@ struct SpeakerRow: View {
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                            waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                           codeWait: speaker.codeWait, name: speaker.name,
                            unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? zoneNote
     }
 

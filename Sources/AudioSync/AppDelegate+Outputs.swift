@@ -16,8 +16,8 @@ extension AppDelegate {
 
     /// Zone `id`'s volume (0 to 100, S245); its playing members hear it at once (S249).
     func setZoneVolume(_ id: String, _ position: Double) {
-        guard position.isFinite, let index = zones.firstIndex(where: { $0.id == id }) else { return }
-        zones[index].volume = max(0, min(100, position))
+        guard let v = VolumeCurve.accepted(position), let index = zones.firstIndex(where: { $0.id == id }) else { return }
+        zones[index].volume = v
         pushModel()
     }
 
@@ -79,7 +79,7 @@ extension AppDelegate {
     }
 
     func setLocalVolume(_ uid: String, _ position: Double) {
-        let v = max(0, min(100, position))
+        guard let v = VolumeCurve.accepted(position) else { return }
         localVolume[uid] = v
         engine.setGain(uid: uid, g: effectiveGain(uid))
         pushModel()
@@ -89,17 +89,29 @@ extension AppDelegate {
     func logLocalVolume(_ uid: String) {
         guard let v = localVolume[uid] else { return }
         DebugTrace.log("[AudioSync] volume of \(uid) set to \(String(format: "%.2f", v))")
+        engine.logGain(uid: uid, g: effectiveGain(uid))
     }
 
     /// The master scales every speaker AudioSync plays: a local speaker's
     /// gain, each AirPlay speaker's volume, which AudioSync's own sender
-    /// scales by it, and the Cast speaker's device volume (C104).
+    /// scales by it, and the audio the Cast speaker gets (S415).
     func setMasterVolume(_ position: Double) {
-        masterVolume = max(0, min(100, position))
+        guard let v = VolumeCurve.accepted(position) else { return }
+        masterVolume = v
         LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
         nativeAirPlay?.setMaster(masterVolume)
-        if let level = castModel.setMaster(masterVolume) { castSender?.setVolume(level) }
+        castSender?.setMaster(masterVolume)
         pushModel()
+        if DebugTrace.enabled {
+            // Per drag, not per step: logged once the master rests.
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(logMasterGains), object: nil)
+            perform(#selector(logMasterGains), with: nil, afterDelay: 0.5)
+        }
+    }
+
+    @objc private func logMasterGains() {
+        DebugTrace.log("[AudioSync] master volume set to \(String(format: "%.2f", masterVolume))")
+        for uid in engine.activeOutputUIDs { engine.logGain(uid: uid, g: effectiveGain(uid)) }
     }
 
     // MARK: - Local delays (the local delay model, LocalDelay.swift, S172 to S181)
@@ -187,7 +199,8 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] Cast: the feed is held back \(Int(castWait.rounded())) ms to meet L")
         }
         let device = cast == nil ? nil : castModel.enabled
-        guard let step = airPlayAheadNotice.update(device: device, aheadMs: NetworkHoldBack.airPlayAheadMs(wanted)) else { return }
+        let aheadMs = NetworkHoldBack.airPlayAheadMs(wanted, offsetsMs: nativeAirPlay?.speakerOffsetsMs ?? [])
+        guard let step = airPlayAheadNotice.update(device: device, aheadMs: aheadMs) else { return }
         if let cleared = step.clear { clearNotices([Notice.airPlayAhead(cleared)]) }
         if let shown = step.post {
             postNotice(text.airPlayAheadOfCast(tenths: shown.tenths, speaker: castName(shown.device)),
@@ -363,6 +376,7 @@ extension AppDelegate {
         }
         if keepListed { chosen.formUnion(localOrder) }
         let available = AudioDevices.listed(outputs, showVirtual: showVirtualDevices, keep: chosen)
+        followMovedOutputs(available.filter { !localOrder.contains($0.uid) }, listed: Set(outputs.map(\.uid)))
         var known = Set(localOrder)
         var appeared: [String] = []
         for device in available {
@@ -373,6 +387,33 @@ extension AppDelegate {
         syncLocalOutputs(available: available, origin: .automatic)
         autoConnect(appeared.map { SpeakerKey.make(id: $0, airplay: false) })
         pushModel()
+    }
+
+    /// What was set for an output that left goes to the one of its name that
+    /// appeared under a new UID (`SpeakerIDMigration.movedOutputs`, S384).
+    private func followMovedOutputs(_ appeared: [AudioDevices.Device], listed: Set<String>) {
+        var saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
+                                             groups: groups, autoConnect: autoConnect, zones: zones,
+                                             presets: presets, names: speakerNames, hidden: hiddenSpeakers,
+                                             enabledLocal: enabledLocal, localVolumes: localVolume,
+                                             localOffsets: localOffsetMs)
+        let moves = SpeakerIDMigration.movedOutputs(appeared: appeared, seen: localDevices, listed: listed,
+                                                    saved: saved)
+        guard !moves.isEmpty else { return }
+        for (new, old) in moves {
+            saved = SpeakerIDMigration.localMoved(old, as: new, in: saved)
+            localDevices[old] = nil   // its UID counts as new if the device comes back to that port
+        }
+        groups = saved.groups
+        zones = saved.zones
+        presets = saved.presets
+        autoConnect = saved.autoConnect
+        speakerNames = saved.names
+        hiddenSpeakers = saved.hidden
+        enabledLocal = saved.enabledLocal
+        localVolume = saved.localVolumes
+        localOffsetMs = saved.localOffsets
+        clearNotices(moves.values.map { SpeakerKey.make(id: $0, airplay: false) })
     }
 
     // MARK: - Local renderers (the running engine follows the speakers that are on)
@@ -399,6 +440,12 @@ extension AppDelegate {
         refusalRetry.settle(enabled: enabledLocal, listed: listed)
         clearNotices(runawayRetry.settle(enabled: enabledLocal, listed: listed)
             .map { SpeakerKey.make(id: $0, airplay: false) })
+        let gone = goneNotices.settle(enabled: enabledLocal, listed: listed)   // after the stall settle, which would clear it
+        clearNotices(gone.clear.map { SpeakerKey.make(id: $0, airplay: false) })
+        for uid in gone.post {
+            postNotice(text.outputLost(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
+                       subject: SpeakerKey.make(id: uid, airplay: false))
+        }
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
                                                 .subtracting(stallRetry.held(nowS: now))
@@ -408,6 +455,7 @@ extension AppDelegate {
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })
         for (uid, holdBack) in applied.attached {
             localHoldBacks[uid] = holdBack
+            goneNotices.started(uid)
             // A disconnected notice stays until the reopened stream has played 5 s (S334).
             if !stallRetry.lost.contains(uid), !runawayRetry.struggling.contains(uid) {
                 clearNotices([SpeakerKey.make(id: uid, airplay: false)])
@@ -508,8 +556,8 @@ extension AppDelegate {
     }
 
     /// The listed device of output `uid` refused its start (S331): the speaker
-    /// stays on and is tried again every 3 s. Like a speaker whose device left
-    /// the list (S68), it gets no notice on the Mac, even past 30 s.
+    /// stays on and is tried again every 3 s; past 30 s it gets the notice of
+    /// a speaker whose device left the list (S68).
     private func outputRefused(_ uid: String, _ refusal: String, nowS: Double) {
         let step = refusalRetry.refused(uid, nowS: nowS)
         let number = engine.outputNumber(uid)
@@ -518,6 +566,9 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] output \(number) refused by its device (\(refusal)); "
                 + "trying again every \(Int(OutputRefusalRetry.retryEveryS)) s")
         case .lost?:
+            goneNotices.refusedLost(uid)
+            postNotice(text.outputLost(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
+                       subject: SpeakerKey.make(id: uid, airplay: false))
             DebugTrace.log("[AudioSync] output \(number) still refused after \(Int(OutputRefusalRetry.lostAfterS)) s; "
                 + "counted as lost, still trying every \(Int(OutputRefusalRetry.retryEveryS)) s")
         case nil:

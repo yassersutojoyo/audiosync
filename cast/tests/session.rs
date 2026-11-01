@@ -60,6 +60,7 @@ fn a_self_signed_certificate_for_another_name_is_accepted_and_fingerprinted() {
     );
 }
 
+// covers: C20
 #[test]
 fn a_tls_1_2_only_device_connects() {
     let device = FakeDevice::start(Behavior {
@@ -74,6 +75,7 @@ fn a_tls_1_2_only_device_connects() {
 
 // C20's ECDHE-RSA AES-GCM half; the fake device's rustls has no CBC suites to
 // serve, so the ClientHello test below shows the sender offers them.
+// covers: C20
 #[test]
 fn a_tls_1_2_device_with_an_rsa_key_connects_on_each_ecdhe_rsa_aes_gcm_suite() {
     use rustls::crypto::ring::cipher_suite::{
@@ -193,6 +195,7 @@ fn the_windows_installation_type_is_read() {
     }
 }
 
+// covers: C23, C33
 #[test]
 fn every_message_on_the_wire_is_one_length_prefixed_cast_message() {
     let device = FakeDevice::start(Behavior::default());
@@ -212,6 +215,7 @@ fn every_message_on_the_wire_is_one_length_prefixed_cast_message() {
     device.join();
 }
 
+// covers: C33, C80
 #[test]
 fn a_device_that_never_reports_its_status_is_a_connect_failure() {
     let device = FakeDevice::start(Behavior {
@@ -230,6 +234,7 @@ fn a_device_that_never_reports_its_status_is_a_connect_failure() {
     device.join();
 }
 
+// covers: C80
 #[test]
 fn connect_failures_say_their_cause_and_retries_back_off() {
     let address = common::refused_address();
@@ -329,6 +334,7 @@ fn a_deselect_ends_a_connect_while_it_waits() {
     );
 }
 
+// covers: C16
 #[test]
 fn ipv4_is_tried_before_ipv6() {
     let v4 = common::refused_address();
@@ -405,6 +411,7 @@ fn launch_only_ever_starts_the_default_media_receiver() {
     device.join();
 }
 
+// covers: C40
 #[test]
 fn a_running_default_media_receiver_is_reused_over_the_wire() {
     let device = FakeDevice::start(Behavior {
@@ -419,6 +426,7 @@ fn a_running_default_media_receiver_is_reused_over_the_wire() {
     device.join();
 }
 
+// covers: C41
 #[test]
 fn a_launch_after_a_refused_one_waits_for_its_own_answer() {
     let device = FakeDevice::start(Behavior {
@@ -435,6 +443,7 @@ fn a_launch_after_a_refused_one_waits_for_its_own_answer() {
     device.join();
 }
 
+// covers: C41
 #[test]
 fn a_launch_after_a_timed_out_one_succeeds() {
     let device = FakeDevice::start(Behavior {
@@ -463,6 +472,7 @@ fn a_launch_after_a_timed_out_one_succeeds() {
     let _ = pinger.join();
 }
 
+// covers: C41, C83
 #[test]
 fn launch_errors_over_the_wire() {
     let device = FakeDevice::start(Behavior {
@@ -490,6 +500,7 @@ fn launch_errors_over_the_wire() {
     device.join();
 }
 
+// covers: C35
 #[test]
 fn the_sender_answers_device_pings_over_the_wire() {
     let device = FakeDevice::start(Behavior::default());
@@ -506,6 +517,7 @@ fn the_sender_answers_device_pings_over_the_wire() {
     device.join();
 }
 
+// covers: C31
 #[test]
 fn a_device_auth_message_from_the_device_is_ignored_over_the_wire() {
     let device = FakeDevice::start(Behavior::default());
@@ -528,6 +540,7 @@ fn a_device_auth_message_from_the_device_is_ignored_over_the_wire() {
     device.join();
 }
 
+// covers: C43
 #[test]
 fn another_sender_taking_over_ends_the_session() {
     let device = FakeDevice::start(Behavior::default());
@@ -545,6 +558,7 @@ fn another_sender_taking_over_ends_the_session() {
     device.join();
 }
 
+// covers: C25
 #[test]
 fn a_broken_frame_from_the_device_closes_the_channel() {
     let device = FakeDevice::start(Behavior::default());
@@ -562,6 +576,7 @@ fn a_broken_frame_from_the_device_closes_the_channel() {
     device.join();
 }
 
+// covers: C87
 #[test]
 fn stop_tears_down_in_order_over_the_wire() {
     let device = FakeDevice::start(Behavior::default());

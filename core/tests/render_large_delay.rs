@@ -1,4 +1,4 @@
-//! An output at the largest hold-back (S77, S175, S176) plays, as it would on
+//! An output at the largest hold-back (S175, S176) plays, as it would on
 //! the Mac: its first sound comes a hold-back after the capture, and a change
 //! from 0 to 20 s or from 20 s to 10 s lands and plays on without the output
 //! being started again (S46, S48, S187). An increase of more than

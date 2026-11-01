@@ -27,7 +27,8 @@ use crate::text::{self, ApiError};
 /// The port the remote listens on unless the user picks another. Unassigned
 /// in the IANA service name and port number registry (range 7649-7662).
 pub const DEFAULT_PORT: u16 = 7655;
-/// The cookie that carries the device token.
+/// The device token cookie's name before it took the port; still read, so a
+/// device paired then moves to the port-named cookie without pairing again.
 pub const TOKEN_COOKIE: &str = "as_token";
 // 400 days, the longest a browser keeps a cookie; the server forgets the device sooner if asked.
 const COOKIE_MAX_AGE: u64 = 400 * 24 * 60 * 60;
@@ -530,13 +531,17 @@ impl Shared {
             .is_some_and(|state| state.calibrating)
     }
 
-    fn paired(&self, request: &Request) -> Option<String> {
-        let token = request.cookie(TOKEN_COOKIE)?;
+    /// The paired device's token, and whether it came under [`TOKEN_COOKIE`].
+    fn paired(&self, request: &Request, port: u16) -> Option<(String, bool)> {
+        let (token, old_name) = match request.cookie(&token_cookie_name(port)) {
+            Some(token) => (token, false),
+            None => (request.cookie(TOKEN_COOKIE)?, true),
+        };
         let (paired, snapshot) = lock(&self.devices).check(token, SystemTime::now());
         if let Some(snapshot) = snapshot {
             self.save(snapshot);
         }
-        paired.then(|| token.to_owned())
+        paired.then(|| (token.to_owned(), old_name))
     }
 
     /// Hands `command` to the app; false once the server is stopping.
@@ -979,7 +984,7 @@ fn admit(
 /// What a request gets: one response, or the event stream.
 enum Answer {
     Response(Response),
-    Events { token: String },
+    Events { token: String, cookies: Vec<String> },
 }
 
 impl From<Response> for Answer {
@@ -1030,7 +1035,11 @@ fn serve(
     if shared.stopped.load(Ordering::SeqCst) {
         return;
     }
-    if shared.paired(&request).is_some() {
+    let Some(host) = allowed_host(&request, from, local, shared) else {
+        let _ = http::write_response(&mut stream, &Response::error(&text::bad_host()), csp);
+        return;
+    };
+    if shared.paired(&request, local.port()).is_some() {
         if !shared.mark_paired(paired) {
             return;
         }
@@ -1039,11 +1048,11 @@ fn serve(
         let _ = http::write_response(&mut stream, &Response::error(&text::busy()), csp);
         return;
     }
-    match route(&request, from, local, shared) {
+    match route(&request, host, from, local, shared) {
         Answer::Response(response) => {
             let _ = http::write_response(&mut stream, &response, csp);
         }
-        Answer::Events { token } => stream_events(stream, &token, shared),
+        Answer::Events { token, cookies } => stream_events(stream, &token, &cookies, shared),
     }
 }
 
@@ -1083,6 +1092,7 @@ enum ApiRoute {
     Zone(Option<String>),
     Preset(Option<String>),
     Source,
+    Mix,
 }
 
 impl ApiRoute {
@@ -1096,23 +1106,35 @@ impl ApiRoute {
                 | ApiRoute::Zone(_)
                 | ApiRoute::Preset(_)
                 | ApiRoute::Source
+                | ApiRoute::Mix
         )
     }
 }
 
-fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) -> Answer {
-    let host = match request.header("host") {
-        Some(host)
-            if request.header_count("host") == 1
-                && net::host_allowed(host, local, lock(&shared.local_name).as_deref()) =>
-        {
-            host
-        }
-        _ => {
-            shared.report(ServerEvent::Refused { from, status: 403 });
-            return error(text::bad_host());
-        }
-    };
+/// The request's one `Host` when it names this server; reports a refusal otherwise.
+fn allowed_host<'a>(
+    request: &'a Request,
+    from: IpAddr,
+    local: SocketAddr,
+    shared: &Shared,
+) -> Option<&'a str> {
+    let host = request.header("host").filter(|host| {
+        request.header_count("host") == 1
+            && net::host_allowed(host, local, lock(&shared.local_name).as_deref())
+    });
+    if host.is_none() {
+        shared.report(ServerEvent::Refused { from, status: 403 });
+    }
+    host
+}
+
+fn route(
+    request: &Request,
+    host: &str,
+    from: IpAddr,
+    local: SocketAddr,
+    shared: &Shared,
+) -> Answer {
     let path = request.path.as_str();
     if !path.starts_with("/api/") {
         return static_route(request, path);
@@ -1128,7 +1150,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
     }
     if path == "/api/pair" {
         return match request.method.as_str() {
-            "POST" => pair(request, from, shared),
+            "POST" => pair(request, from, local.port(), shared),
             _ => method_not_allowed("POST"),
         };
     }
@@ -1138,6 +1160,7 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
         "/api/master" => ApiRoute::Master,
         "/api/unpair" => ApiRoute::Unpair,
         "/api/source" => ApiRoute::Source,
+        "/api/mix" => ApiRoute::Mix,
         _ => {
             if let Some(id) = path.strip_prefix("/api/speakers/") {
                 ApiRoute::Speaker(percent_decode(id))
@@ -1157,24 +1180,42 @@ fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) ->
     if request.method != method {
         return method_not_allowed(allow);
     }
-    let Some(token) = shared.paired(request) else {
+    let Some((token, old_name)) = shared.paired(request, local.port()) else {
         return error(text::not_paired());
     };
     if api.writes() && shared.calibrating() {
         return error(text::calibrating());
     }
-    match api {
+    let name = token_cookie_name(local.port());
+    let mut cookies = Vec::new();
+    if old_name {
+        cookies.push(token_cookie(TOKEN_COOKIE, "", 0));
+        if !matches!(api, ApiRoute::Unpair) {
+            cookies.push(token_cookie(&name, &token, COOKIE_MAX_AGE));
+        }
+    }
+    let answer = match api {
         ApiRoute::State => match lock(&shared.published).history.back() {
             Some((_, json)) => Response::json(200, json.to_string()).into(),
             None => error(text::not_ready()),
         },
-        ApiRoute::Events => Answer::Events { token },
+        ApiRoute::Events => return Answer::Events { token, cookies },
         ApiRoute::Master => master(request, shared),
-        ApiRoute::Unpair => unpair(&token, from, shared),
+        ApiRoute::Unpair => unpair(&token, from, &name, shared),
         ApiRoute::Speaker(id) => speaker(request, id, shared),
         ApiRoute::Zone(id) => zone(request, id, shared),
         ApiRoute::Preset(id) => preset(request, id, shared),
         ApiRoute::Source => source(request, shared),
+        ApiRoute::Mix => mix(request, shared),
+    };
+    match answer {
+        Answer::Response(response) => cookies
+            .into_iter()
+            .fold(response, |response, cookie| {
+                response.with("Set-Cookie", cookie)
+            })
+            .into(),
+        answer => answer,
     }
 }
 
@@ -1220,11 +1261,17 @@ pub(crate) fn percent_decode(segment: &str) -> Option<String> {
     String::from_utf8(out).ok().filter(|id| !id.is_empty())
 }
 
-fn token_cookie(value: &str, max_age: u64) -> String {
-    format!("{TOKEN_COOKIE}={value}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict")
+/// The cookie that carries the device token. Browsers send a cookie to every
+/// port of its host (RFC 6265 §8.5), so the name carries the remote's port.
+fn token_cookie_name(port: u16) -> String {
+    format!("{TOKEN_COOKIE}_{port}")
 }
 
-fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
+fn token_cookie(name: &str, value: &str, max_age: u64) -> String {
+    format!("{name}={value}; Max-Age={max_age}; Path=/; HttpOnly; SameSite=Strict")
+}
+
+fn pair(request: &Request, from: IpAddr, port: u16, shared: &Shared) -> Answer {
     let Ok(code) = state::pairing_code_from_body(&request.body) else {
         return error(text::bad_json());
     };
@@ -1260,11 +1307,14 @@ fn pair(request: &Request, from: IpAddr, shared: &Shared) -> Answer {
         shared.report(ServerEvent::PairingCode(next_code));
     }
     Response::json(200, json!({ "paired": true }).to_string())
-        .with("Set-Cookie", token_cookie(&token, COOKIE_MAX_AGE))
+        .with(
+            "Set-Cookie",
+            token_cookie(&token_cookie_name(port), &token, COOKIE_MAX_AGE),
+        )
         .into()
 }
 
-fn unpair(token: &str, from: IpAddr, shared: &Shared) -> Answer {
+fn unpair(token: &str, from: IpAddr, cookie: &str, shared: &Shared) -> Answer {
     let snapshot = lock(&shared.devices).remove(token);
     shared.wake_streams();
     if let Some(snapshot) = snapshot {
@@ -1272,7 +1322,7 @@ fn unpair(token: &str, from: IpAddr, shared: &Shared) -> Answer {
     }
     shared.report(ServerEvent::Unpaired { from });
     Response::json(200, json!({ "paired": false }).to_string())
-        .with("Set-Cookie", token_cookie("", 0))
+        .with("Set-Cookie", token_cookie(cookie, "", 0))
         .into()
 }
 
@@ -1379,6 +1429,28 @@ fn source(request: &Request, shared: &Shared) -> Answer {
     }
 }
 
+/// `POST /api/mix` `{apps}`: the apps checked in the several-apps list, of
+/// those the snapshot lists as running, once each in the order sent. The app
+/// checks them again when it applies them.
+fn mix(request: &Request, shared: &Shared) -> Answer {
+    let Some(asked) = state::mix_apps_from_body(&request.body) else {
+        return error(text::bad_request());
+    };
+    let mut apps: Vec<String> = Vec::new();
+    if let Some(state) = lock(&shared.published).current.as_ref() {
+        for id in asked {
+            let running = state.mix_apps.iter().any(|app| app.running && app.id == id);
+            if running && !apps.contains(&id) {
+                apps.push(id);
+            }
+        }
+    }
+    if apps.is_empty() {
+        return error(text::unknown_source());
+    }
+    accepted(&Command::Mix { apps }, shared)
+}
+
 fn preset(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
     if let Err(problem) = state::preset_recall_from_body(&request.body) {
         return body_error(problem);
@@ -1400,12 +1472,12 @@ fn preset(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
 /// for a heartbeat, so the page can tell a dead stream. It ends when the
 /// server stops, the device is forgotten or the device opens a stream too
 /// many, which sends a last `replaced` event.
-fn stream_events(stream: TcpStream, token: &str, shared: &Shared) {
+fn stream_events(stream: TcpStream, token: &str, cookies: &[String], shared: &Shared) {
     let Ok(probe) = stream.try_clone() else {
         return;
     };
     let id = shared.open_stream(token, probe);
-    send_events(stream, token, id, shared);
+    send_events(stream, token, cookies, id, shared);
     shared.close_stream(id);
 }
 
@@ -1423,11 +1495,12 @@ fn closed(stream: &TcpStream) -> bool {
     }
 }
 
-fn send_events(mut stream: TcpStream, token: &str, id: u64, shared: &Shared) {
-    let headers = [
+fn send_events(mut stream: TcpStream, token: &str, cookies: &[String], id: u64, shared: &Shared) {
+    let mut headers = vec![
         ("Content-Type", "text/event-stream".to_owned()),
         ("Cache-Control", "no-store".to_owned()),
     ];
+    headers.extend(cookies.iter().map(|cookie| ("Set-Cookie", cookie.clone())));
     let head = http::head(200, &headers, &shared.content_security_policy) + "\r\n";
     if stream
         .write_all(head.as_bytes())
@@ -1771,7 +1844,11 @@ mod tests {
             let host = 1 + (index as usize / auth::WRONG_PER_WINDOW) as u8;
             let from = IpAddr::V4(Ipv4Addr::new(127, 0, 0, host));
             let request = pair_request(&named("kitchen"), &wrong);
-            assert_eq!(status(route(&request, from, local, &server.shared)), 401);
+            let host = named("kitchen");
+            assert_eq!(
+                status(route(&request, &host, from, local, &server.shared)),
+                401
+            );
         }
         assert!(server.pairing_locked());
 
@@ -1781,9 +1858,61 @@ mod tests {
         assert_eq!(server.pairing_code().as_deref(), Some(code.as_str()));
         let from = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 100));
         let renamed = pair_request(&named("kitchen-2"), &code);
-        assert_eq!(status(route(&renamed, from, local, &server.shared)), 429);
+        let host = named("kitchen-2");
+        assert_eq!(
+            status(route(&renamed, &host, from, local, &server.shared)),
+            429
+        );
         let old = pair_request(&named("kitchen"), &code);
-        assert_eq!(status(route(&old, from, local, &server.shared)), 403);
+        assert!(allowed_host(&old, from, local, &server.shared).is_none());
+        server.stop();
+    }
+
+    // Through serve on a socket of the test's own, listed as a held connection.
+    // covers: S373
+    #[test]
+    fn a_foreign_host_with_a_paired_token_leaves_last_seen_and_the_slot_alone() {
+        let config = Config {
+            port: 0,
+            listen: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            ..Config::default()
+        };
+        let server = RemoteServer::start(config, |_: &Command| {}).unwrap();
+        let shared = &server.shared;
+        let token = auth::random_token().unwrap();
+        let paired_at = SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60);
+        let _ = lock(&shared.devices).add(&token, paired_at);
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let (stream, from) = listener.accept().unwrap();
+        let paired = Arc::new(AtomicBool::new(false));
+        lock(&shared.connections).push(Connection {
+            slot: Slot {
+                peer: from.ip(),
+                reserved: false,
+                paired: false,
+            },
+            paired: Arc::clone(&paired),
+            stream: stream.try_clone().unwrap(),
+            thread: thread::spawn(|| {}),
+        });
+        let raw = format!(
+            "GET /api/state HTTP/1.1\r\nHost: evil.example:{port}\r\nCookie: {}={token}\r\n\r\n",
+            token_cookie_name(port)
+        );
+        client.write_all(raw.as_bytes()).unwrap();
+        let closer = stream.try_clone().unwrap();
+        serve(stream, from.ip(), false, &paired, shared);
+        let _ = closer.shutdown(Shutdown::Both);
+        let mut answer = String::new();
+        let _ = client.read_to_string(&mut answer);
+        assert!(answer.starts_with("HTTP/1.1 403 "), "{answer:?}");
+        assert!(!paired.load(Ordering::SeqCst), "the slot was marked paired");
+        assert!(
+            !lock(&shared.devices).contains(&token, paired_at + auth::DEVICE_IDLE_LIMIT),
+            "last-seen moved"
+        );
         server.stop();
     }
 

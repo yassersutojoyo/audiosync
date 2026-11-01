@@ -16,8 +16,6 @@ import AppKit
 /// written on the queue, whenever it changes.
 final class CastSender {
     static let pollInterval: DispatchTimeInterval = .milliseconds(250)
-    /// While a slider drags, at most one volume request per this long.
-    static let volumeSpacing: TimeInterval = 0.1
     /// How long the quit waits for the destroy: its 3.5 s, with room.
     static let shutdownWait: TimeInterval = 3.7
     /// A cover's largest side: C53 allows 1280 by 720, so a square one fits at 720.
@@ -39,11 +37,14 @@ final class CastSender {
     // On the queue only.
     /// The hold-back the sender gets, also when it is created later.
     private var queuedHoldBackMs = 0.0
+    /// The master the sender gets, also when it is created later.
+    private var queuedMaster = 100.0
+    /// The equalizer, whose headroom cut the sender gives back under the
+    /// master, also when it is created later (S26, S415).
+    private var equalizer = Equalizer.Settings()
     private var handle: OpaquePointer?
     private var input: OpaquePointer?
     private var timer: DispatchSourceTimer?
-    private var lastVolumeSent: Date?
-    private var pendingVolume: Double?
     /// The track and cover given last, also for a handle created later.
     private var track: TrackMetadata.Fields?
     private var artwork: Data?
@@ -68,6 +69,8 @@ final class CastSender {
             }
             self.handle = created
             _ = asc_cast_set_hold_back(created, self.queuedHoldBackMs)
+            asc_cast_set_master(created, self.queuedMaster)
+            Self.sendEqualizer(self.equalizer, to: created)
             self.sendTrack()
             if let taken = asc_cast_take_input(created) {
                 self.input = taken
@@ -107,36 +110,23 @@ final class CastSender {
     func stopSession() {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
-            self.pendingVolume = nil
             asc_cast_stop(handle)
         }
     }
 
-    /// The device's own volume, 0 to 1, spaced out while a slider drags.
+    /// The device's own volume, 0 to 1. Every level goes to the sender,
+    /// which paces a drag and reports each level it won't get an answer for (C70).
     func setVolume(_ level: Double) {
         queue.async { [weak self] in
-            guard let self else { return }
-            let waiting = self.pendingVolume != nil
-            self.pendingVolume = level
-            guard !waiting else { return }
-            let wait = self.lastVolumeSent.map { Self.volumeSpacing - Date().timeIntervalSince($0) } ?? 0
-            self.queue.asyncAfter(deadline: .now() + max(0, wait)) { [weak self] in self?.sendVolume() }
+            guard let handle = self?.handle else { return }
+            _ = asc_cast_set_volume(handle, level)
         }
     }
 
-    private func sendVolume() {
-        guard let level = pendingVolume else { return }
-        pendingVolume = nil
-        lastVolumeSent = Date()
-        if let handle { _ = asc_cast_set_volume(handle, level) }
-    }
-
-    /// One of the device's own volume steps (C69); a level a slider left
-    /// waiting is dropped, so it can't undo the step.
+    /// One of the device's own volume steps (C69).
     func stepVolume(up: Bool) {
         queue.async { [weak self] in
-            guard let self, let handle = self.handle else { return }
-            self.pendingVolume = nil
+            guard let handle = self?.handle else { return }
             _ = asc_cast_step_volume(handle, up)
         }
     }
@@ -207,6 +197,32 @@ final class CastSender {
             if let handle = self.handle { _ = asc_cast_set_hold_back(handle, ms) }
         }
         return true
+    }
+
+    /// The master position (0 to 100), live: it scales the audio, never the
+    /// device's volume (S415).
+    func setMaster(_ master: Double) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.queuedMaster = master
+            if let handle = self.handle { asc_cast_set_master(handle, master) }
+        }
+    }
+
+    /// The equalizer settings, live: the master's gain gives their headroom
+    /// cut back (S26, S415). Main queue.
+    func setEqualizer(_ settings: Equalizer.Settings) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.equalizer = settings
+            if let handle = self.handle { Self.sendEqualizer(settings, to: handle) }
+        }
+    }
+
+    private static func sendEqualizer(_ settings: Equalizer.Settings, to handle: OpaquePointer) {
+        var gains = [Double](repeating: 0, count: Int(ASC_EQ_BANDS))
+        for band in 0..<min(gains.count, settings.gains.count) { gains[band] = settings.gains[band] }
+        _ = asc_cast_set_equalizer(handle, settings.enabled, &gains)
     }
 
     /// Names the device the user selected, or none with nil (C108).

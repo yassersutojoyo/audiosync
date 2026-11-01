@@ -119,6 +119,45 @@ enum OutputLoss: Equatable {
     }
 }
 
+/// Local outputs whose device went while they played (S68): each gets the
+/// disconnected notice at the next sync that no longer lists its device, so
+/// one listed again at once (a Core Audio restart) gets none. An output
+/// refused for 30 s (S331) gets it too. Main queue only.
+struct OutputGoneNotices {
+    private var gone: Set<String> = []
+    /// The outputs whose disconnected notice is up.
+    private var shown: Set<String> = []
+
+    mutating func deviceGone(_ uid: String) {
+        gone.insert(uid)
+    }
+
+    mutating func refusedLost(_ uid: String) {
+        shown.insert(uid)
+    }
+
+    /// Output `uid` started, and the sync clears its notice.
+    mutating func started(_ uid: String) {
+        shown.remove(uid)
+    }
+
+    /// `post`: the outputs whose notice is due now, still on and not listed.
+    /// `clear`: those switched off, whose notice ends.
+    mutating func settle(enabled: Set<String>, listed: Set<String>) -> (post: Set<String>, clear: Set<String>) {
+        let post = gone.intersection(enabled).subtracting(listed)
+        let clear = shown.subtracting(enabled)
+        gone = []
+        shown = shown.intersection(enabled).union(post)
+        return (post, clear)
+    }
+
+    /// Streaming stopped: the notices that end.
+    mutating func stop() -> Set<String> {
+        defer { gone = []; shown = [] }
+        return shown
+    }
+}
+
 /// What follows a stall (S334, S326): a first stall reopens the output at
 /// once. A stall before the reopened stream has played 5 s, or a start the
 /// device refuses after a stall, is a stall in a row: the output stays on

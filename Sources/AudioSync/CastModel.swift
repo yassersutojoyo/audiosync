@@ -24,6 +24,9 @@ enum CastID {
 
     static func app(_ device: String) -> String { prefix + device }
 
+    /// The Cast speaker that is on, as the streaming policy counts it with the AirPlay ones (S162).
+    static func switchedOn(_ enabled: String?) -> Set<String> { enabled.map { [app($0)] } ?? [] }
+
     static func device(_ appID: String) -> String? {
         appID.hasPrefix(prefix) ? String(appID.dropFirst(prefix.count)) : nil
     }
@@ -68,14 +71,15 @@ struct CastDevice: Equatable {
 enum CastDeviceChange: Equatable {
     /// `offsetMs`: what the device memory holds for it, nil when nothing.
     /// `former`: the `manual:` ID it was listed under until a browse found
-    /// it (C18), nil otherwise.
-    case appeared(CastDevice, offsetMs: Double?, former: String? = nil)
+    /// it (C18), nil otherwise. `offsetMoved`: that re-key moved the
+    /// address's offset to the ID.
+    case appeared(CastDevice, offsetMs: Double?, former: String? = nil, offsetMoved: Bool = false)
     case changed(CastDevice, offsetMs: Double?)
     case gone(id: String)
 
     var id: String {
         switch self {
-        case .appeared(let device, _, _), .changed(let device, _): return device.id
+        case .appeared(let device, _, _, _), .changed(let device, _): return device.id
         case .gone(let id): return id
         }
     }
@@ -118,7 +122,7 @@ enum CastProblem: Equatable {
 }
 
 enum CastError: Equatable {
-    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, `internal`
+    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, `internal`, noAddress
     case other(Int32)
 
     init?(_ code: Int32) {
@@ -134,6 +138,7 @@ enum CastError: Equatable {
         case ASC_CAST_ERROR_VOLUME: self = .volume
         case ASC_CAST_ERROR_ARTWORK: self = .artwork
         case ASC_CAST_ERROR_INTERNAL: self = .internal
+        case ASC_CAST_ERROR_NO_ADDRESS: self = .noAddress
         default: self = .other(code)
         }
     }
@@ -194,6 +199,8 @@ enum CastEvent: Equatable {
     case reloaded(attempt: UInt64)
     /// `answersMute`: the first status since a mute was sent (C70).
     case volume(attempt: UInt64, CastVolume, answersMute: Bool = false)
+    /// A level asked for that no status will answer, once per ask (C70).
+    case volumeUnanswered(attempt: UInt64, level: Double)
     case commandFailed(attempt: UInt64, error: CastError?)
     case ended(attempt: UInt64, CastEnd)
     /// The device refused WAV; `format` is loaded instead (C84).
@@ -213,7 +220,7 @@ enum CastEvent: Equatable {
         switch self {
         case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .connectFailed(let a, _, _, _),
              .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _, _), .commandFailed(let a, _),
-             .ended(let a, _), .note(let a, _), .members(let a, _):
+             .volumeUnanswered(let a, _), .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
         case .groupLog, .memoryChanged, .discoveryStopped, .failed:
             return nil
@@ -247,6 +254,8 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_VOLUME:
             self = .volume(attempt: a, CastVolume(level: raw.level, muted: raw.muted, fixed: raw.volume_fixed,
                                                   step: raw.step), answersMute: raw.answers_mute)
+        case ASC_CAST_EVENT_VOLUME_UNANSWERED:
+            self = .volumeUnanswered(attempt: a, level: raw.level)
         case ASC_CAST_EVENT_COMMAND_FAILED: self = .commandFailed(attempt: a, error: error)
         case ASC_CAST_EVENT_ENDED:
             let end: CastEnd
@@ -309,7 +318,8 @@ extension CastDeviceChange {
         switch raw.event {
         case ASC_CAST_APPEARED:
             let former = raw.former.map { String(cString: $0) } ?? ""
-            self = .appeared(device, offsetMs: offsetMs(id), former: former.isEmpty ? nil : former)
+            self = .appeared(device, offsetMs: offsetMs(id), former: former.isEmpty ? nil : former,
+                             offsetMoved: raw.flags & UInt32(ASC_CAST_FLAG_OFFSET_MOVED) != 0)
         case ASC_CAST_CHANGED: self = .changed(device, offsetMs: offsetMs(id))
         case ASC_CAST_GONE: self = .gone(id: id)
         default: return nil
@@ -322,7 +332,7 @@ extension CastDeviceChange {
                 + (d.offline ? ", offline" : "") + (offset.map { ", offset \(Int($0)) ms" } ?? "")
         }
         switch self {
-        case .appeared(let d, let offset, let former):
+        case .appeared(let d, let offset, let former, _):
             return "appeared: " + describe(d, offset) + (former.map { ", was \($0)" } ?? "")
         case .changed(let d, let offset): return "changed: " + describe(d, offset)
         case .gone(let id): return "gone: \(id)"
@@ -390,7 +400,7 @@ enum CastOutcome: Equatable {
     case playing(String)
     /// The device went off on its own; a notice says why when `problem` is set.
     case turnedOff(String, problem: CastProblem?)
-    /// Send this level, 0 to 1, to the device: its session starts at master
+    /// Send this level, 0 to 1, to the device: its session starts at zone
     /// × own level (C105). The row changed too.
     case setVolume(Double)
     case memoryChanged
@@ -439,6 +449,9 @@ struct CastModel {
 
     /// The connect failures before a first connect that turn the device off (C80).
     static let failuresBeforeOff = 3
+    /// From the Mac's will-sleep notice to its wake: a connect failure doesn't
+    /// count toward turning the device off (S412).
+    var asleep = false
 
     var discovery = Discovery.off
     private(set) var devices: [String: CastDevice] = [:]
@@ -457,10 +470,12 @@ struct CastModel {
     private(set) var volumes: [String: CastVolume] = [:]
     /// An own level the user set that no status has answered yet.
     private(set) var requested: (id: String, level: Double)?
-    /// Each device's own level, 0 to 1, which the master scales (C104).
+    /// Each device's own level, at least 0 and possibly above 1, which the
+    /// zone scales (C104).
     private(set) var levels: [String: Double] = [:]
-    /// The master, 0 to 1.
-    private(set) var master = 1.0
+    /// A level set on the device while its zone is 0, which its row shows
+    /// until its own level or zone moves or the session ends (S415).
+    private var held: (id: String, level: Double)?
     /// The zone level, 0 to 1, of each device in a zone (S249); one not here
     /// is in no zone.
     private(set) var zoneLevels: [String: Double] = [:]
@@ -498,6 +513,9 @@ struct CastModel {
     /// address ended, by the saved `id`: its changes are left out, and
     /// Remove still takes it back.
     private var stranded: [String: String] = [:]
+    /// The address of a device added by hand that a browse found and then
+    /// lost, for the sender to list again (S341).
+    private var relistDue: CastManualAddress?
     /// The name each device had when it left the list in this run.
     private(set) var goneNames: [String: String] = [:]
     /// Devices another app took over, until the user turns one on again.
@@ -525,10 +543,10 @@ struct CastModel {
     @discardableResult
     mutating func apply(_ change: CastDeviceChange, now: Date = Date()) -> CastOutcome? {
         switch change {
-        case .appeared(let device, let offset, _), .changed(let device, let offset):
+        case .appeared(let device, let offset, _, _), .changed(let device, let offset):
             leftOn = nil
             if removedManual.contains(device.id) { return nil }
-            if case .appeared(_, _, let former?) = change { levelDue = identified(former, as: device.id) }
+            if case .appeared(_, _, let former?, _) = change { levelDue = identified(former, as: device.id) }
             if savedOn == device.id && !device.offline {
                 savedOn = nil
                 if enabled == nil { enabled = device.id }
@@ -541,6 +559,10 @@ struct CastModel {
         case .gone(let id):
             let removed = devices.removeValue(forKey: id)
             if let name = removed?.name, !name.isEmpty { goneNames[id] = name }
+            if removed?.manual == false, let address = manualAddresses[id] {
+                relistDue = address
+                return .changed
+            }
             // One added by address leaves only when a browse finds it, which moves it to its ID (C18).
             if enabled == id, !isLive(id), removed?.manual != true {
                 enabled = nil
@@ -562,13 +584,26 @@ struct CastModel {
     /// status answers it, else the one kept, else the reported level.
     func volume(of id: String) -> Double { knownVolume(of: id) ?? 100 }
 
-    /// `volume(of:)`, nil while no status reported a level and the user set none.
+    /// `volume(of:)`, nil while no status reported a level and the user set
+    /// none; it may pass 100 (S415).
     func knownVolume(of id: String) -> Double? {
-        (ownLevel(of: id) ?? volumes[id]?.level).map { min(100, max(0, $0 * 100)) }
+        (ownLevel(of: id) ?? volumes[id]?.level).map { max(0, $0 * 100) }
     }
 
     private func ownLevel(of id: String) -> Double? {
         requested?.id == id ? requested!.level : levels[id]
+    }
+
+    /// The whole number the row shows, 0 to 100: the level the device gets (S415).
+    func rowVolume(of id: String) -> Double {
+        // S290's rounding down, which AirPlay rows use too.
+        asc_airplay_row_level(deviceLevel(of: id) * 100)
+    }
+
+    /// A level held at zone 0, else zone × own, else the reported level, else 1.
+    private func deviceLevel(of id: String) -> Double {
+        if let held, held.id == id { return held.level }
+        return ownLevel(of: id).map { asc_cast_zone_level(zone(of: id), $0) } ?? volumes[id]?.level ?? 1
     }
 
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
@@ -605,16 +640,16 @@ struct CastModel {
         return keptLoudness(new, playedZone: playedZone ?? 1)
     }
 
-    /// The session's own level rescaled so master × zone × own still gives
-    /// what it played in `playedZone` (S341); the level to send when the
-    /// clamp to 0 to 1 keeps it from that.
+    /// The session's own level rescaled so zone × own still gives what it
+    /// played in `playedZone` (S341); the level to send when the new zone
+    /// can't give it, which is only at zone 0, where it sends 0.
     private mutating func keptLoudness(_ id: String, playedZone: Double) -> Double? {
         let zone = self.zone(of: id)
         guard attempt?.device == id, zone != playedZone, let own = ownLevel(of: id) else { return nil }
-        let played = asc_cast_zone_level(master, playedZone, own)
-        let kept = asc_cast_zone_own_level(played, master, zone, own)
+        let played = asc_cast_zone_level(playedZone, own)
+        let kept = asc_cast_zone_own_level(played, zone, own)
         if requested?.id == id { requested = (id, kept) } else { levels[id] = kept }
-        if asc_cast_level_answers(asc_cast_zone_level(master, zone, kept), played) { return nil }
+        if asc_cast_level_answers(asc_cast_zone_level(zone, kept), played) { return nil }
         return levelToSend(id, own: kept)
     }
 
@@ -622,6 +657,20 @@ struct CastModel {
     mutating func takeLevelDue() -> Double? {
         defer { levelDue = nil }
         return levelDue
+    }
+
+    /// The address to give the sender again, once; nil when none is due.
+    mutating func takeRelistDue() -> CastManualAddress? {
+        defer { relistDue = nil }
+        return relistDue
+    }
+
+    /// The sender couldn't list again the address of `id` that a browse
+    /// lost: one still on with no row goes off, as any device gone is (S339).
+    mutating func relistFailed(_ id: String) -> CastOutcome? {
+        guard enabled == id, devices[id] == nil, !isLive(id) else { return nil }
+        enabled = nil
+        return .turnedOff(id, problem: .notResponding)
     }
 
     /// The device whose offset the sender copied from a saved one, to clear
@@ -660,7 +709,7 @@ struct CastModel {
     /// speaker found at the address is listed as a new one.
     mutating func listed(_ change: CastDeviceChange) -> CastDeviceChange {
         switch change {
-        case .appeared(let device, let offset, let former):
+        case .appeared(let device, let offset, let former, let offsetMoved):
             if let former, let saved = listedUnder[former] {
                 endListing(former)
                 if saved != device.id, let address = manualAddresses.removeValue(forKey: saved) {
@@ -670,13 +719,12 @@ struct CastModel {
                     if enabled == saved { (enabled, savedOn) = (nil, saved) }
                 }
                 // The sender's re-key copied the saved one's offset to the other speaker.
-                let copied = saved != device.id && offset != nil && offset == offsets[saved]
-                    && offsets[device.id] == nil && !offsetsWritten.contains(device.id)
+                let copied = saved != device.id && offsetMoved
                 if copied { offsetCopiedTo = device.id }
                 return .appeared(device, offsetMs: copied ? nil : offset, former: nil)
             }
             strandListing(of: device.id)
-            return .appeared(relisted(device), offsetMs: offset, former: former)
+            return .appeared(relisted(device), offsetMs: offset, former: former, offsetMoved: offsetMoved)
         case .changed(let device, let offset):
             strandListing(of: device.id)
             return .changed(relisted(device), offsetMs: offset)
@@ -791,6 +839,7 @@ struct CastModel {
     mutating func stopSent() {
         attempt = nil
         requested = nil
+        held = nil
         unanswered = []
         members = nil
     }
@@ -875,10 +924,10 @@ struct CastModel {
             return setStatus(.playing)
         case .recovering:
             return setStatus(.reconnecting)
-        case .connectFailed:
+        case .connectFailed(_, let error, _, _):
             guard current.status == .connecting else { return setStatus(.reconnecting) }
-            // The core reports a group with no address yet as a plain connect failure, and C81 keeps it trying.
-            guard devices[id]?.group != true else { return nil }
+            // A group with no address yet waits for its records (C81).
+            guard error != .noAddress, !asleep else { return nil }
             attempt?.connectFailures += 1
             guard attempt?.connectFailures == Self.failuresBeforeOff else { return nil }
             enabled = nil
@@ -886,6 +935,9 @@ struct CastModel {
         case .volume(_, let volume, let answersMute):
             attempt?.reportedMute = nil
             return volumeReported(id, volume, answersMute: answersMute)
+        case .volumeUnanswered(_, let level):
+            volumeUnanswered(id, level)
+            return nil
         case .members(_, let list):
             guard devices[id]?.group == true, members != list else { return nil }
             members = list
@@ -893,6 +945,7 @@ struct CastModel {
         case .ended(_, let end):
             attempt = nil
             requested = nil
+            held = nil
             unanswered = []
             members = nil
             if enabled == id { enabled = nil }
@@ -914,13 +967,26 @@ struct CastModel {
         return status == .playing ? .playing(current.device) : .changed
     }
 
-    /// The user's own level for the device in a session, 0 to 100. Returns
-    /// the level to send, master × zone × own, 0 to 1 (C104); nil when no session
-    /// runs for it, the position isn't a number or the volume is fixed. A
-    /// device without a session, off or waiting for one, keeps the level for it (C105, S348).
+    /// The user's own level for the device in a session, at least 0 and
+    /// possibly above 100, as a preset keeps it. Returns the level to send,
+    /// zone × own, 0 to 1 (C104); nil when no session runs for it, the
+    /// position isn't a number or the volume is fixed. A device without a
+    /// session, off or waiting for one, keeps the level for it (C105, S348).
     mutating func setVolume(_ id: String, position: Double) -> Double? {
         guard position.isFinite else { return nil }
-        let own = min(1, max(0, position / 100))
+        return setOwn(id, own: max(0, position / 100))
+    }
+
+    /// The row moved to `row`, 0 to 100 (S415): the device gets the row and
+    /// the own level becomes row ÷ zone. Returns what `setVolume` does; nil,
+    /// changing nothing, at zone 0, where the row holds.
+    mutating func moveRow(_ id: String, row: Double) -> Double? {
+        var own = 0.0
+        guard asc_cast_row_move(row, zone(of: id), &own) else { return nil }
+        return setOwn(id, own: own)
+    }
+
+    private mutating func setOwn(_ id: String, own: Double) -> Double? {
         guard isLive(id) else {
             levels[id] = own
             return nil
@@ -938,21 +1004,10 @@ struct CastModel {
         return true
     }
 
-    /// The master position, 0 to 100 (C104). Returns the level to send to
-    /// the device in a session; nil when none runs, the master is unchanged,
-    /// the device's own level isn't known yet or its volume is fixed.
-    mutating func setMaster(_ position: Double) -> Double? {
-        guard position.isFinite else { return nil }
-        let new = min(1, max(0, position / 100))
-        guard new != master else { return nil }
-        master = new
-        guard let id = attempt?.device, let own = ownLevel(of: id) else { return nil }
-        return levelToSend(id, own: own)
-    }
-
     /// The zone position, 0 to 100, of every device ID in a zone, the rest
     /// being in no zone (S249). Returns the level to send to the device in a
-    /// session when its zone changed, as `setMaster` does.
+    /// session when its zone changed; nil when none runs, the device's own
+    /// level isn't known yet or its volume is fixed.
     mutating func setZones(_ positions: [String: Double]) -> Double? {
         var new: [String: Double] = [:]
         for (id, position) in positions where position.isFinite {
@@ -961,6 +1016,7 @@ struct CastModel {
         }
         let live = attempt?.device
         let before = live.map { zone(of: $0) }
+        if let held, new[held.id] != zoneLevels[held.id] { self.held = nil }
         zoneLevels = new
         guard let id = live, before != zone(of: id), let own = ownLevel(of: id) else { return nil }
         return levelToSend(id, own: own)
@@ -969,29 +1025,43 @@ struct CastModel {
     /// The zone level of `id`, 1 when it is in no zone.
     private func zone(of id: String) -> Double { zoneLevels[id] ?? 1 }
 
-    /// Master × zone × `own`, kept to recognize the device's answer; nil for
-    /// a fixed volume (C68).
+    /// Zone × `own`, kept to recognize the device's answer; nil for a fixed
+    /// volume (C68).
     private mutating func levelToSend(_ id: String, own: Double) -> Double? {
+        held = nil
         guard volumes[id]?.fixed != true else { return nil }
         attempt?.reportedMute = nil
-        let level = asc_cast_zone_level(master, zone(of: id), own)
+        let level = asc_cast_zone_level(zone(of: id), own)
         if let current = volumes[id], asc_cast_volume_answers(level, current.level, current.step) {
             // The device reports only changes, so this level gets no answer; it
             // is still sent, so it replaces a level the sender holds back.
             unanswered = []
             levels[id] = own
             if requested?.id == id { requested = nil }
-        } else if unanswered.last != level {
-            // The same level sent twice in a row gets one answer.
+        } else {
             if unanswered.count == Self.maxUnanswered { unanswered.removeFirst() }
             unanswered.append(level)
         }
         return level
     }
 
+    /// The sender will get no answer to one ask for `level` (C70, C104), so
+    /// the latest copy still awaited stops waiting, as the sender reports an
+    /// ask the moment it replaces or sends it.
+    private mutating func volumeUnanswered(_ id: String, _ level: Double) {
+        // The sender builds a device step on its own unrounded level (0.4 + 0.02), not the rounded one awaited here.
+        guard let index = unanswered.lastIndex(where: { abs($0 - level) < 1e-9 }) else { return }
+        unanswered.remove(at: index)
+        if unanswered.isEmpty, let requested, requested.id == id {
+            levels[id] = requested.level
+            self.requested = nil
+        }
+    }
+
     /// A status's volume (C70, C104, C105): the answer to a level sent keeps
-    /// the own level and any other level moves it by master × zone, except
-    /// the session's first, which is set to master × zone × own level instead.
+    /// the own level and any other level moves it by the zone, or is held for
+    /// the row at zone 0 (S415), except the session's first, which is set to
+    /// zone × own level instead.
     private mutating func volumeReported(_ id: String, _ volume: CastVolume, answersMute: Bool) -> CastOutcome? {
         let shown = ownLevel(of: id)
         let zone = self.zone(of: id)
@@ -1004,17 +1074,18 @@ struct CastModel {
         let elsewhere = answered == nil && !(answersMute && volumes[id]?.level == level)
         let own: Double
         if first {
-            own = asc_cast_zone_start_own_level(master, zone, shown != nil, shown ?? 0, level)
+            own = asc_cast_zone_start_own_level(zone, shown != nil, shown ?? 0, level)
         } else if !elsewhere {
-            own = shown ?? asc_cast_zone_own_level(level, master, zone, level)
+            own = shown ?? asc_cast_zone_own_level(level, zone, level)
         } else {
-            own = asc_cast_zone_own_level(level, master, zone, shown ?? level)
+            own = asc_cast_zone_own_level(level, zone, shown ?? level)
+            if zone == 0 { held = (id, level) }
         }
         if requested?.id == id, elsewhere || unanswered.isEmpty { requested = nil }
         levels[id] = own
         let changed = volumes[id] != volume || ownLevel(of: id) != shown
         volumes[id] = volume
-        if first, !asc_cast_volume_answers(asc_cast_zone_level(master, zone, own), level, volume.step),
+        if first, !asc_cast_volume_answers(asc_cast_zone_level(zone, own), level, volume.step),
            let send = levelToSend(id, own: own) {
             return .setVolume(send)
         }
@@ -1033,11 +1104,23 @@ struct CastModel {
         guard isLive(id), volumes[id]?.fixed != true else { return nil }
         let deviceStep = volumes[id]?.step ?? 0
         let size = deviceStep > 0 ? deviceStep : Self.fallbackVolumeStep
-        let own = min(1, max(0, volume(of: id) / 100 + (up ? size : -size)))
+        // A step moves the row (S415); at zone 0 it sends nothing.
+        var own = 0.0
+        // Unrounded, 0.4 + 0.02 lands past 0.42, and a status of 0.43, exactly
+        // half a step away, would answer the level sent (C70).
+        let row = ((deviceLevel(of: id) + (up ? size : -size)) * 1e8).rounded() / 1e6
+        guard asc_cast_row_move(row, zone(of: id), &own)
+        else { return nil }
         requested = (id, own)
         attempt?.reportedMute = nil
-        // The device's own step moves its level, which is the own level only at master × zone 1 (C104).
-        if deviceStep > 0, master == 1, zone(of: id) == 1 { return .device(up: up) }
+        // The device's own step moves its level, which is the own level only at zone 1 (C104).
+        if deviceStep > 0, zone(of: id) == 1 {
+            // The sender replaces a drag level still waiting for its interval
+            // with the step built on it; awaiting the step's level lets its
+            // answer clear that level and the ones before it.
+            _ = levelToSend(id, own: own)
+            return .device(up: up)
+        }
         return levelToSend(id, own: own).map { .level($0) }
     }
 
@@ -1148,8 +1231,11 @@ enum NetworkHoldBack {
     /// The part of the AirPlay hold-back `wantedMs` the sender plays.
     static func airPlayAppliedMs(_ wantedMs: Double) -> Double { min(max(0, wantedMs), airPlayLimitMs) }
 
-    /// How far ahead of the Cast device the AirPlay speakers play.
-    static func airPlayAheadMs(_ wantedMs: Double) -> Double { max(0, wantedMs - airPlayLimitMs) }
+    /// How far ahead of the Cast device the AirPlay speaker furthest past
+    /// the limit plays: the sender caps hold-back plus its offset E - e_s (S283).
+    static func airPlayAheadMs(_ wantedMs: Double, offsetsMs: [Double]) -> Double {
+        offsetsMs.map { wantedMs + $0 - airPlayLimitMs }.reduce(0, max)
+    }
 }
 
 /// The notice that the AirPlay speakers play ahead of the Cast device that
@@ -1205,11 +1291,12 @@ enum CastMemoryFile {
     }
 
     /// Whether the core reads `data` as device memory: UTF-8 text holding a
-    /// JSON object. Entries it can't use are skipped by the core alone.
+    /// JSON object that no newer format version wrote. Entries it can't use
+    /// are skipped by the core alone.
     static func reads(_ data: Data) -> Bool {
         // The core's JSON reader refuses a byte order mark, which Foundation's skips.
-        guard !data.starts(with: [0xEF, 0xBB, 0xBF]), String(data: data, encoding: .utf8) != nil else { return false }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] != nil
+        guard !data.starts(with: [0xEF, 0xBB, 0xBF]), let text = String(data: data, encoding: .utf8) else { return false }
+        return asc_cast_memory_reads(text)
     }
 
     /// Copies `bytes` next to the file at `url` as

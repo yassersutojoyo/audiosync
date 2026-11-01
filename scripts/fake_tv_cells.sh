@@ -70,16 +70,14 @@ cd "$root/core"
 cells_from_tests --lib \
     "$core::k1_at_master_63_the_row_and_the_television_agree_both_ways=K1.m63.echo,K1.m63.tv20,K1.m63.row20" \
     "$core::k1_keep_a_row_at_40_comes_back_at_40_after_a_restart=K1.keep.m63" \
-    "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.m64,S290.row100.m50,S290.tv80.cap,DV.100.m63,DV.80-99.m63,DV.40.m0" \
+    "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.z64,S290.row100.z50,S290.tv80.cap,DV.100.z63,DV.80-99.z63,DV.40.z0,S413.held.z0,S413.master" \
     "$core::a_withdrawn_receiver_loses_only_its_row_and_comes_back_when_announced=Stale.row"
 
 # Calibrate All and zones live in the Windows host's speaker list, so these cells run there;
 # elsewhere the desktop crate lacks the system libraries it links (fontconfig on Linux).
 held=(
-    "audio::airplay::tests::the_tv_keeps_a_level_held_at_master_0_through_calibrate_all_and_a_zone_at_100=S290.held.m0"
     "audio::airplay::tests::the_tv_keeps_a_level_held_at_zone_0_through_calibrate_all=S290.held.z0"
     "audio::airplay::tests::the_tv_lets_a_level_held_at_zone_0_go_once_the_zone_moves=S290.held.z0.release"
-    "audio::airplay::tests::the_tv_lets_a_level_held_at_master_0_go_once_the_master_moves=S290.held.m0.release"
 )
 if [ "$windows" = 1 ]; then
     cd "$root/desktop"

@@ -106,7 +106,12 @@ impl Seal for Unsupported {
 }
 
 pub fn computer_name() -> Option<String> {
-    std::env::var("HOSTNAME").ok()
+    crate::platform::computer_name_from(
+        std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .ok()
+            .as_deref(),
+        std::env::var("HOSTNAME").ok(),
+    )
 }
 
 /// The time now in UTC, hours and minutes: std reads no time zone.

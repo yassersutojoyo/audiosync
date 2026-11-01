@@ -74,6 +74,10 @@ enum AppLifecycle {
     /// it is quitting: the new copy then waits for it to go and carries on.
     static func answersSecondLaunch(exiting: Bool) -> Bool { !exiting }
 
+    /// Whether a second launch asks the running copy to show its window. One
+    /// at login leaves that copy as it is.
+    static func asksRunningCopyToShow(loginItemLaunch: Bool) -> Bool { !loginItemLaunch }
+
     /// Whether a new copy that finds another one running leaves it the speakers.
     /// Two copies still launching can't hear each other's show request yet, so
     /// the one whose process started first stays and only the other leaves.

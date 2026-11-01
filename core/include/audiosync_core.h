@@ -192,8 +192,9 @@ extern "C" {
 
 /* What asc_airplay_open_pairings returns when the store holds nothing it found. */
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
-#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* ignored; the wrong format is replaced by the next pairing, an unreadable file is left as it is */
+#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* not in the expected format: ignored and replaced by the next pairing */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
+#define ASC_AIRPLAY_PAIRINGS_UNREADABLE -4 /* it can't be read: ignored and left as it is */
 
 /* How private asc_airplay_pairings_access and asc_airplay_airplay2_identity_access found a file. */
 #define ASC_AIRPLAY_FILE_UNREAD -1     /* NULL or dead handle, the identity file with AirPlay 2 off, or a file not read: another account owns it, it isn't a regular file, or opening it failed */
@@ -221,6 +222,7 @@ extern "C" {
 #define ASC_CAST_FLAG_GROUP 1   /* a Cast group: plays as one device, with its own volume and offset */
 #define ASC_CAST_FLAG_OFFLINE 2 /* its records went away while a session with it runs */
 #define ASC_CAST_FLAG_MANUAL 4  /* added by address; no browse has found its id yet */
+#define ASC_CAST_FLAG_OFFSET_MOVED 8 /* on the APPEARED with a former id: the re-key moved its offset here */
 
 /* Why asc_cast_start refused (its *refused). */
 #define ASC_CAST_REFUSED_NONE 0    /* it didn't */
@@ -250,6 +252,7 @@ extern "C" {
 #define ASC_CAST_EVENT_MEMBERS 17          /* the playing group's members changed: asc_cast_member_count, asc_cast_member */
 #define ASC_CAST_EVENT_GROUP_LOG 18        /* a line about a Cast group for the debug log in .detail */
 #define ASC_CAST_EVENT_CERTIFICATE_CHANGED 19 /* the device's certificate changed since its last connect: "<before> to <after>" in .detail, for the debug log */
+#define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
 #define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */
@@ -270,6 +273,7 @@ extern "C" {
 #define ASC_CAST_ERROR_ARTWORK 9      /* artwork that is not PNG or JPEG, or over 1280 by 720 */
 #define ASC_CAST_ERROR_GROUP 10       /* no longer reported: a Cast group plays like a device */
 #define ASC_CAST_ERROR_INTERNAL 11    /* a fault inside the sender; the next start runs (C107) */
+#define ASC_CAST_ERROR_NO_ADDRESS 12  /* no address to try: a group whose records list none yet (C81) */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1
@@ -290,6 +294,10 @@ extern "C" {
 #define ASC_CALIBRATION_TOO_QUIET 4      /* no peak 12 times over the noise floor */
 #define ASC_CALIBRATION_AMBIGUOUS_ECHO 5 /* a second arrival over 0.7 of the first, 3 ms or more away */
 #define ASC_CALIBRATION_IMPLAUSIBLE 6    /* a difference over 22 000 ms */
+#define ASC_CALIBRATION_DISAGREE 7       /* asc_calibration_estimate_agreed only: all accepted, differences over 5 ms apart */
+
+/* The runs asc_calibration_estimate_agreed takes. */
+#define ASC_CALIBRATION_SWEEPS 3
 
 /* Which recording a refusal concerns (AscCalibration.recording). */
 #define ASC_CALIBRATION_RECORDING_NONE 0      /* accepted, or a refusal about the pair */
@@ -410,19 +418,18 @@ double asc_output_gain(double local_position, double master_position);
 double asc_zone_output_gain(double local_position, double zone_position, double master_position);
 
 /* An AirPlay speaker's device level D, 0 to 100: min(100, own x k), with
- * k = zone x master as fractions (zone 100 outside a zone). The own volume
- * is stored unrounded and may pass 100 (S290). */
-double asc_airplay_device_level(double own_position, double zone_position, double master_position);
+ * k = zone as a fraction (zone 100 outside a zone); the master never enters
+ * it (S413). The own volume is stored unrounded and may pass 100 (S290). */
+double asc_airplay_device_level(double own_position, double zone_position);
 
 /* The whole number an AirPlay row shows for device level D: D rounded down. */
 double asc_airplay_row_level(double device_level);
 
 /* An AirPlay row moved to `row`: writes the own volume to store, row / k
  * unrounded and possibly above 100, and the device level to send, the row
- * itself. False, writing nothing, when zone x master is 0,
+ * itself. False, writing nothing, when the zone is 0,
  * row isn't finite or a pointer is NULL. */
-bool asc_airplay_row_move(double row, double zone_position, double master_position,
-                          double *own_position, double *device_level);
+bool asc_airplay_row_move(double row, double zone_position, double *own_position, double *device_level);
 
 /*
  * Multiplies frames x 2 interleaved samples by gain, in place. Gain 0 (or a
@@ -482,6 +489,13 @@ void asc_eq_process(AscEqualizer *eq, float *interleaved, size_t frames);
 
 /* Control thread: how often a channel produced NaN or infinity and was reset. */
 uint64_t asc_eq_nan_resets(const AscEqualizer *eq);
+
+/*
+ * Control thread: a local output's linear gain with the equalizer's headroom
+ * cut given back as far as unity allows (S26, S71). The dB given back goes to
+ * returned_db when it isn't NULL. A NULL eq gives gain unchanged.
+ */
+double asc_eq_returned_gain(const AscEqualizer *eq, double gain, double *returned_db);
 
 /* ---- Delay ring, writer and readers ------------------------------------- */
 
@@ -815,6 +829,14 @@ void asc_renderer_set_gain(AscRenderer *renderer, float gain);
 float asc_renderer_gain(const AscRenderer *renderer);
 
 /*
+ * Control thread: sets the renderer's linear gain with each headroom cut of
+ * eq given back from the ring frame it starts at, so the gain changes with
+ * the first frame equalized with that cut (S26, S71). A NULL eq sets gain
+ * as is.
+ */
+void asc_eq_give_back(const AscEqualizer *eq, AscRenderer *renderer, double gain);
+
+/*
  * Any thread: a new delay in capture-rate frames. A renderer that plays
  * fades out first and hands it to its reader after the fade-out's last
  * frame, then fades in on the new timeline; a closed one takes it at once.
@@ -928,6 +950,11 @@ uint64_t asc_renderer_late_max_ns(const AscRenderer *renderer);
 /* Any thread: the callbacks that came more than 5 ms later than
    the renderer's earliest ones (S209); 0 for a NULL handle. */
 uint64_t asc_renderer_late_callbacks(const AscRenderer *renderer);
+
+/* Control thread: the peak and RMS in dBFS the device got since the last take,
+   after every gain and the equalizer; silence reads as -infinity. False,
+   writing nothing, when nothing was rendered since or a pointer is NULL. */
+bool asc_renderer_take_level(const AscRenderer *renderer, double *peak_db, double *rms_db);
 
 /* Any thread: the device frames the converter couldn't produce and that were
    played as silence, in all (0 unless the read sizing is wrong); 0 for a NULL
@@ -1310,6 +1337,18 @@ typedef struct AscCalibration {
  * array with a nonzero count or a NULL result.
  */
 bool asc_calibration_estimate(const float *signal, size_t signal_frames, const float *reference, size_t reference_frames, const float *chosen, size_t chosen_frames, uint32_t rate, double old_offset_ms, AscCalibration *result);
+
+/*
+ * Three runs, each a reference and a chosen recording as the estimate takes
+ * them, each list ASC_CALIBRATION_SWEEPS long: accepted only when all three
+ * are and their differences lie within 5 ms, largest minus smallest, then
+ * the run with the middle difference. The first refused run in order gives
+ * its refusal; a wider spread gives ASC_CALIBRATION_DISAGREE with the old
+ * offset and the spread in *spread_ms, which is 0 otherwise. False, writing
+ * nothing, for a NULL array with a nonzero count, a NULL list or a NULL
+ * result or spread_ms.
+ */
+bool asc_calibration_estimate_agreed(const float *signal, size_t signal_frames, const float *const *references, const size_t *reference_frames, const float *const *chosen, const size_t *chosen_frames, uint32_t rate, double old_offset_ms, AscCalibration *result, double *spread_ms);
 
 /* Where the signal arrived in one recording and how the peak stands out,
  * before the thresholds that would refuse it: for the debug log. */
@@ -1739,9 +1778,9 @@ bool asc_airplay_set_silenced(AscAirPlay *airplay, const char *id, bool silenced
 
 /*
  * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it
- * plays at its own position times the zone's times the master, live once
- * added and from its start when added later, and a level read back from it
- * moves its own position by the zone and the master. Returns false, changing
+ * plays at its own position times the zone's, live once added and from its
+ * start when added later, and a level read back from it moves its own
+ * position by the zone. Returns false, changing
  * nothing, when the handle or id is NULL or zone isn't finite.
  */
 bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zone);
@@ -1761,12 +1800,18 @@ bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zon
 void asc_airplay_read_volumes(AscAirPlay *airplay);
 
 /*
- * Sets the master position (0 to 100), which scales every speaker's volume,
- * live, and that of every speaker added later; a master that isn't finite is
- * ignored. A speaker plays at the product of both positions, spread evenly
- * over -30 to 0 dB, and muted at 0.
+ * Sets the master position (0 to 100), a gain on the stream every speaker
+ * hears, never a speaker's volume (S413); a master that isn't finite is
+ * ignored.
  */
 void asc_airplay_set_master(AscAirPlay *airplay, double master);
+
+/*
+ * Takes the equalizer's headroom cut (gains_db holds ASC_EQ_BANDS values, at
+ * 48 kHz), which the stream's gain gives back under the master as far as
+ * unity allows (S26, S413). Returns false when airplay or gains_db is NULL.
+ */
+bool asc_airplay_set_equalizer(AscAirPlay *airplay, bool enabled, const double *gains_db);
 
 /*
  * Holds every speaker back by hold_back_ms on top of L, live, and every
@@ -2139,6 +2184,13 @@ typedef struct AscCastEvent {
 AscCast *asc_cast_create(const char *memory_json);
 
 /*
+ * Whether asc_cast_create reads memory_json as device memory: a JSON object
+ * that no newer format version wrote. Keep a file that doesn't read before
+ * saving over it. False for NULL.
+ */
+bool asc_cast_memory_reads(const char *memory_json);
+
+/*
  * Stops the sender and frees it: a running or starting session is torn down
  * within 3 s, which this call waits for (about 3.5 s at most), so call it
  * from the quit path, off the main thread. Takes the address of the host's
@@ -2257,29 +2309,40 @@ bool asc_cast_set_muted(AscCast *cast, bool muted);
 bool asc_cast_step_volume(AscCast *cast, bool up);
 
 /*
- * The host's master on a Cast speaker, all levels 0 to 1. The level to send
- * is the master times the speaker's own level, clamped; anything not finite
- * counts as 0. A reported level that answers none the host sent means the
- * own level reported / master, clamped, and leaves `own` as it is at master 0
- * or when a value isn't finite. A reported level answers a sent one within
- * half a percent. A session starts from `own` when has_own is true, whatever
- * its first status reports; without one, from that status's level read as
- * asc_cast_own_level reads it.
+ * Sets the master position (0 to 100): every session's audio is scaled by
+ * its gain on the volume curve, a change fading in over the next read, and
+ * no device is sent a volume (S415). A master that isn't finite is ignored.
  */
-double asc_cast_device_level(double master, double own);
-double asc_cast_own_level(double reported, double master, double own);
-double asc_cast_start_own_level(double master, bool has_own, double own, double reported);
+void asc_cast_set_master(AscCast *cast, double master);
 
 /*
- * The same three with the speaker's zone level (0 to 1, 1 outside a zone)
- * as a stage between the master and the own level: the level to send is
- * master * zone * own; a report means reported / (master * zone), and leaves
- * `own` as it is when master * zone is 0. At zone 1 each is bit-identical to
- * the function above without the zone.
+ * Takes the equalizer's headroom cut (gains_db holds ASC_EQ_BANDS values, at
+ * 48 kHz), which the master's gain gives back as far as unity allows (S26,
+ * S415). Returns false when cast or gains_db is NULL.
  */
-double asc_cast_zone_level(double master, double zone, double own);
-double asc_cast_zone_own_level(double reported, double master, double zone, double own);
-double asc_cast_zone_start_own_level(double master, double zone, bool has_own, double own, double reported);
+bool asc_cast_set_equalizer(AscCast *cast, bool enabled, const double *gains_db);
+
+/*
+ * The speaker's zone level (0 to 1, 1 outside a zone) on a Cast speaker's
+ * own level, which may pass 1. The level to send is zone * own, at most 1;
+ * anything not finite counts as 0. A reported level that answers none the
+ * host sent means the own level reported / zone, unclamped above, and
+ * leaves `own` as it is at zone 0 or when a value isn't finite. A reported
+ * level answers a sent one within half a percent. A session starts from
+ * `own` when has_own is true, whatever its first status reports; without
+ * one, from that status's level read as asc_cast_zone_own_level reads it.
+ */
+double asc_cast_zone_level(double zone, double own);
+double asc_cast_zone_own_level(double reported, double zone, double own);
+double asc_cast_zone_start_own_level(double zone, bool has_own, double own, double reported);
+
+/*
+ * A Cast row moved to `row`, 0 to 100 (S415): writes the own level to store,
+ * row / zone, possibly above 1, through `own`, so the device gets the row
+ * itself. False, writing nothing, at zone 0, when `row` isn't finite or
+ * `own` is NULL.
+ */
+bool asc_cast_row_move(double row, double zone, double *own);
 bool asc_cast_level_answers(double sent, double reported);
 
 /*

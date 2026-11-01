@@ -497,6 +497,10 @@ impl CastClient {
         result
     }
 
+    pub(crate) fn set_volume_interval(&mut self, interval: Duration) {
+        self.channel.set_volume_interval(interval);
+    }
+
     /// The level still waiting for its interval or for its answer (C70),
     /// taken off the channel.
     pub fn take_unanswered_volume(&mut self) -> Option<f64> {

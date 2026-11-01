@@ -139,9 +139,9 @@ fn mix_trees(root_pids: &[u32], own_pid: u32, processes: &ProcessTable) -> Vec<A
 }
 
 /// The capture for an "only these" mix as it plays: its top processes
-/// `root_pids` that still run, and every app with an audio session running
-/// one of `executables` (an instance started later, or a second one). Fails
-/// as [`decide_capture`] does when none of them runs.
+/// `root_pids` that still run one of `executables`, and every app with an
+/// audio session running one of them (an instance started later, or a
+/// second one). Fails as [`decide_capture`] does when none of them runs.
 pub fn decide_apps_capture(
     processes: &ProcessTable,
     session_pids: &[u32],
@@ -149,17 +149,22 @@ pub fn decide_apps_capture(
     root_pids: &[u32],
     executables: &[String],
 ) -> Result<CaptureTarget, BackendError> {
-    let mut roots = root_pids.to_vec();
-    roots.extend(session_apps(
-        processes,
-        session_pids,
-        own_pid,
-        |executable| {
-            executables
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(executable))
-        },
-    ));
+    let chosen = |executable: &str| {
+        executables
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(executable))
+    };
+    // A process ID a chosen app held may have gone to another app since.
+    let mut roots: Vec<u32> = root_pids
+        .iter()
+        .copied()
+        .filter(|&pid| {
+            processes
+                .get(pid)
+                .is_some_and(|entry| chosen(&entry.executable))
+        })
+        .collect();
+    roots.extend(session_apps(processes, session_pids, own_pid, chosen));
     decide_mix(&roots, own_pid, processes)
 }
 
@@ -844,7 +849,7 @@ const IDLE_AFTER_HNS: u64 = 250_000;
 /// already.
 pub(crate) const IDLE_LAG_HNS: u64 = 100_000;
 
-/// The most silence one gap writes, 21 s: more than the longest delay (S77),
+/// The most silence one gap writes, 21 s: more than the longest delay (S176),
 /// so after a longer stall (a PC that slept) every reader finds silence.
 const MAX_FILL_SECONDS: u64 = 21;
 
@@ -2361,7 +2366,7 @@ mod tests {
     /// 100 ns units per millisecond, as packet positions count.
     const HNS_PER_MS: u64 = 10_000;
 
-    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
+    // covers: S398
     #[test]
     fn a_loopback_gap_keeps_the_ring_in_real_time_so_nothing_from_before_it_plays_after_it() {
         let (ring, writer) = session_ring();
@@ -2425,6 +2430,38 @@ mod tests {
         );
     }
 
+    // covers: S18
+    #[test]
+    fn a_loopback_that_delivers_nothing_past_the_grace_period_writes_only_silence() {
+        use audiosync_core::policy::capture::PLAYING_GRACE;
+        let (ring, writer) = session_ring();
+        let mut converter = new_converter(CAPTURE_ATTEMPTS[0].format, writer).unwrap();
+        let mut gaps = GapFill::new(SESSION_RATE);
+        // 1 s of audio, then no packet for 2 s longer than the grace period
+        // after which the Mac would blame the permission, a wake every 10 ms.
+        let audio_steps = 100_u64;
+        let quiet_steps = (PLAYING_GRACE as u64 + 2) * 100;
+        for step in 0..audio_steps {
+            gaps.packet(step * 10 * HNS_PER_MS, 480, false);
+            converter.push(&f32_bytes(&[0.5; 480 * 2]), 480, false);
+        }
+        let before = ring.frames_written();
+        for step in audio_steps..audio_steps + quiet_steps {
+            let fill = gaps.idle((step + 1) * 10 * HNS_PER_MS);
+            if fill > 0 {
+                converter.push(&[], fill, true);
+            }
+        }
+        let filled = ring.frames_written() - before;
+        let grace = PLAYING_GRACE as u64 * u64::from(SESSION_RATE);
+        assert!(filled > grace, "{filled} frames, the ring keeps pace");
+        let silent = (PLAYING_GRACE as usize + 1) * SESSION_RATE as usize;
+        assert!(
+            newest(&ring, silent).iter().all(|s| *s == 0.0),
+            "no frame of the quiet span carries a sample other than zero"
+        );
+    }
+
     // covers: S16
     #[test]
     fn contiguous_packets_need_no_silence_whatever_their_jitter() {
@@ -2470,7 +2507,7 @@ mod tests {
         assert_eq!(gaps.packet(130 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
-    // covers: S332
+    // covers: S332, S398
     #[test]
     fn an_idle_wake_two_hours_on_writes_21_s_and_keeps_pace_from_now() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2651,7 +2688,7 @@ mod tests {
         );
     }
 
-    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
+    // covers: S398
     #[test]
     fn a_packet_inside_the_silence_written_skips_the_frames_filled() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2664,7 +2701,7 @@ mod tests {
         assert_eq!(gaps.packet(45 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
-    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
+    // covers: S398
     #[test]
     fn late_packets_inside_one_fill_are_never_written_twice() {
         let mut gaps = GapFill::new(SESSION_RATE);
@@ -2679,7 +2716,7 @@ mod tests {
         assert_eq!(gaps.packet(35 * HNS_PER_MS, 480, false), (0, 0, false));
     }
 
-    // covers: S335 (the Windows gap fill the Mac's quiet capture follows)
+    // covers: S398
     #[test]
     fn an_hour_of_gap_fills_exactly_the_frames_of_an_hour() {
         let mut gaps = GapFill::new(SESSION_RATE);

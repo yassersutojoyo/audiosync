@@ -86,22 +86,27 @@ extension RemoteRow {
         /// A stereo pair or home theater whose member asks for a password
         /// this run hasn't had: turning it on prompts for that member (P176).
         var memberAsksPassword = false
+        /// Turned off for refusing a pairing: only a switch on the Mac turns it on again.
+        var refusedForCode = false
         /// What the window writes under the name, if anything.
         var note: String?
         var key = ""
         var waiting = false
+        var streaming = true
     }
 
     /// A speaker that would ask for a code when turned on can't be turned on
     /// from the phone: the prompt would open on the Mac with nobody there.
     init(_ f: Facts, text: UIStrings) {
-        let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword) && !f.on
+        let turnsOn = SpeakerState(enabled: f.on, streaming: f.streaming).clickTurnsOn
+        let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword || f.refusedForCode) && turnsOn
         let castStep = f.castVolumeStep > 0 && f.castVolumeStep <= 1 ? f.castVolumeStep : CastModel.fallbackVolumeStep
         let delay: RemoteDelay
         if f.isAirPlay { delay = .airPlay(f.airPlayDelayMs) }
         else if f.castVolumeFixed != nil { delay = f.offsetMs.map(RemoteDelay.cast) ?? .fixed }
         else { delay = f.offsetMs.map(RemoteDelay.offset) ?? .fixed }
-        self.init(id: f.id, name: f.name, kind: f.kind, on: f.on, volume: f.volume, delay: delay,
+        // Like the window's button: a speaker that will play still turns on.
+        self.init(id: f.id, name: f.name, kind: f.kind, on: !turnsOn, volume: f.volume, delay: delay,
                   available: !codeBlocked,
                   notice: codeBlocked ? text.remoteTurnOnInApp : f.note,
                   volumeAdjustable: f.castVolumeFixed != true,
@@ -181,11 +186,12 @@ struct RemoteSource: Equatable {
     var notice: String?
 
     /// `pickerID` is `AudioSource.defaultsValue`, as `SourceList.entries` gives it;
-    /// `notConnected` is the note of an unplugged chosen input, which the page greys out.
-    init(pickerID: String, name: String, notConnected: String? = nil) {
+    /// `notConnected` is the note of an unplugged chosen input, which the page greys out;
+    /// `available` is false for a chosen hands-free input, greyed with no note.
+    init(pickerID: String, name: String, notConnected: String? = nil, available: Bool = true) {
         id = Self.pageID(pickerID)
         self.name = name
-        available = notConnected == nil
+        self.available = available && notConnected == nil
         notice = notConnected
         kind = switch AudioSource(defaultsValue: pickerID) {
         case .system: .system
@@ -212,11 +218,22 @@ struct RemoteSource: Equatable {
         return nil
     }
 
-    /// Only an unplugged chosen input is unavailable, as the picker greys it.
+    /// Only an unplugged or hands-free chosen input is unavailable, as the picker greys it.
     var json: [String: Any] {
         ["id": id, "name": name, "kind": kind.rawValue, "available": available,
          "notice": notice.map { $0 as Any } ?? NSNull()]
     }
+}
+
+/// An app the several-apps menu offers, as the page lists it (S353).
+struct RemoteMixApp: Equatable {
+    /// The bundle ID.
+    var id: String
+    var name: String
+    /// False for a checked app the menu keeps while it isn't running.
+    var running: Bool
+
+    var json: [String: Any] { ["id": id, "name": name, "running": running] }
 }
 
 /// Everything the page shows, as `asc_remote_publish` takes it.
@@ -239,6 +256,8 @@ struct RemoteSnapshot: Equatable {
     var sources: [RemoteSource] = []
     /// The page ID of the source in use; nil when the picker doesn't list it.
     var sourceID: String? = nil
+    /// In the several-apps menu's order.
+    var mixApps: [RemoteMixApp] = []
 
     /// One line, keys sorted, so an unchanged snapshot gives the same text.
     var json: String {
@@ -253,6 +272,7 @@ struct RemoteSnapshot: Equatable {
             "calibrating": calibrating,
             "sources": sources.map(\.json),
             "source_id": sourceID.map { $0 as Any } ?? NSNull(),
+            "mix_apps": mixApps.map(\.json),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]) else { return "" }
         return String(decoding: data, as: UTF8.self)
@@ -276,6 +296,8 @@ enum RemoteCommand: Equatable {
     case preset(id: String)
     /// `id` is the page's ID (`RemoteSource.id`).
     case source(id: String)
+    /// Bundle IDs in the order the phone sent them.
+    case mix(apps: [String])
 
     /// Nil for anything that doesn't read as one.
     init?(json: String) {
@@ -307,6 +329,9 @@ enum RemoteCommand: Equatable {
         case "source":
             guard let id = object["id"] as? String else { return nil }
             self = .source(id: id)
+        case "mix":
+            guard let apps = object["apps"] as? [String] else { return nil }
+            self = .mix(apps: apps)
         default:
             return nil
         }
@@ -333,11 +358,13 @@ enum RemoteAction: Equatable {
     /// then the delay; a switch or delay already in place changes nothing, and
     /// a volume moves the row even when it equals the shown number (S348). A source
     /// pick needs a listed source; one of the source in use clears a failed
-    /// switch's notice, as in the picker (S163). Nothing while calibrating:
-    /// the page's snapshot can lag behind a run (S258).
+    /// switch's notice, as in the picker (S163). A mix is the several-apps
+    /// menu's "only these" with the apps it still offers checked (S353).
+    /// Nothing while calibrating: the page's snapshot can lag behind a run (S258).
     static func plan(_ command: RemoteCommand, rows: [RemoteRow], zones: [RemoteZoneRow] = [],
                      presets: [RemotePresetRow] = [], calibrating: Bool = false,
-                     sources: [RemoteSource] = []) -> [RemoteAction] {
+                     sources: [RemoteSource] = [], mixApps: [RemoteMixApp] = [],
+                     inUse: AudioSource = .system) -> [RemoteAction] {
         guard !calibrating else { return [] }
         switch command {
         case .zone(let id, let toggle, let volume):
@@ -359,6 +386,12 @@ enum RemoteAction: Equatable {
             guard sources.contains(where: { $0.id == id }),
                   let pickerID = RemoteSource.pickerID(id) else { return [] }
             return [.selectSource(pickerID: pickerID)]
+        case .mix(let apps):
+            let picked = AudioSource.mixed(.only, bundleIDs: apps.filter { id in mixApps.contains { $0.id == id } })
+            guard !picked.capturedApps.isEmpty else { return [] }
+            // The same apps in another order are the source in use (S344).
+            let same = Set(picked.capturedApps) == Set(inUse.capturedApps)
+            return [.selectSource(pickerID: (same ? inUse : picked).defaultsValue)]
         case .speaker(let id, let on, let volume, let delayMs):
             guard let row = rows.first(where: { $0.id == id }), row.available else { return [] }
             var actions: [RemoteAction] = []
@@ -382,9 +415,19 @@ enum RemoteAction: Equatable {
 }
 
 /// The page sends a step every 100 ms while a slider moves and never says when
-/// it stops, so a local volume is logged once no later step for it came.
+/// it stops, so a local or AirPlay volume is logged once no later step for it
+/// came (S348).
 struct RemoteVolumeLog {
     private var steps: [String: Int] = [:]
+
+    /// A plan of volume steps alone gets no line of its own: its speakers'
+    /// lines come after their last step.
+    static func logsPlan(_ actions: [RemoteAction]) -> Bool {
+        actions.isEmpty || actions.contains { action in
+            if case .setVolume = action { return false }
+            return true
+        }
+    }
 
     /// The step's number, for `isLast` once the pause has passed.
     mutating func step(_ id: String) -> Int {
@@ -394,6 +437,28 @@ struct RemoteVolumeLog {
     }
 
     func isLast(_ id: String, _ n: Int) -> Bool { steps[id] == n }
+}
+
+/// Who holds an AirPlay row's read-backs (S291): a window drag owns its hold
+/// until the mouse lets go, and a phone's pause ends only a hold its steps set.
+struct AirPlayVolumeHolds {
+    private var window: Set<String> = []
+    private var phone: Set<String> = []
+
+    /// Whether a hold or release from the window or the phone reaches the speaker.
+    mutating func sends(_ id: String, _ held: Bool, phone byPhone: Bool) -> Bool {
+        guard byPhone else {
+            phone.remove(id)
+            if held { window.insert(id) } else { window.remove(id) }
+            return true
+        }
+        guard !window.contains(id) else { return false }
+        if held {
+            phone.insert(id)
+            return true
+        }
+        return phone.remove(id) != nil
+    }
 }
 
 /// The port the user types in the setting.
@@ -436,6 +501,13 @@ enum RemoteDebugSwitch {
         guard debugLog, environment[switchKey] == "1" else { return nil }
         return environment[portKey].flatMap(RemotePort.parse) ?? savedPort
     }
+}
+
+/// Choosing Web Remote (S368): a new code would kill one a phone is typing and lift a
+/// lockout, so only a hidden window opening makes one; a showing window just comes forward.
+enum RemoteWindowShow {
+    /// `visible` is nil before the window was ever made.
+    static func opens(visible: Bool?) -> Bool { visible != true }
 }
 
 /// The paired devices' file the core keeps (`{"version": 1, "devices": [SHA-256 hex…], "seen": [Unix seconds…]}`),

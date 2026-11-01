@@ -115,3 +115,14 @@ fn timing_reply_layout_and_the_sender_clock() {
         "no timing requests of its own"
     );
 }
+
+#[test]
+fn a_non_finite_ptp_time_reads_as_the_origin() {
+    // A NaN used to pass the clamp and panic in `Duration::from_secs_f64`,
+    // which ended the AirPlay 2 driver thread.
+    let clock = SenderClock::new(Instant::now());
+    let origin = clock.ptp_at(0.0);
+    assert_eq!(clock.ptp_at(f64::NAN), origin);
+    assert_eq!(clock.ptp_at(f64::INFINITY), origin);
+    assert_eq!(clock.ptp_at(f64::NEG_INFINITY), origin);
+}

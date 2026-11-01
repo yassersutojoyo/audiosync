@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use crate::error::{EndReason, LaunchError};
+use crate::error::{EndReason, LaunchError, ReconnectPacer};
 use crate::group::MultizoneMessage;
 use crate::ids::RequestIds;
 use crate::media::{
@@ -73,6 +73,13 @@ pub enum Event {
     Multizone(MultizoneMessage),
     /// A message the sender dropped, for the log (C26 to C28, C31).
     Dropped(Dropped),
+    /// A level asked for that no status will answer, once per ask (C70,
+    /// C104): replaced or dropped before it went out, or sent while the
+    /// device already reports it or while the same level sent before it
+    /// still waits.
+    VolumeUnanswered {
+        level: f64,
+    },
     /// The channel is over; nothing more will be sent (sections 4 and 8).
     Ended(EndReason),
 }
@@ -172,7 +179,9 @@ pub struct Channel {
     phase: Phase,
     status: Option<ReceiverStatus>,
     app: Option<AppSession>,
-    app_reconnected: bool,
+    /// When `CLOSE` last reconnected the app; it allows no second one
+    /// until the stream has played on for [`ReconnectPacer::HEALTHY`] (C82).
+    app_reconnected: Option<Instant>,
     last_inbound: Instant,
     next_ping: Instant,
     pending: Vec<Pending>,
@@ -180,6 +189,7 @@ pub struct Channel {
     events: VecDeque<Event>,
     media: Option<Media>,
     volume_sent: Option<Instant>,
+    volume_interval: Duration,
     /// The level a drag asked for inside [`VOLUME_INTERVAL`]; the latest
     /// wins (C70).
     volume_queued: Option<f64>,
@@ -203,7 +213,7 @@ impl Channel {
             phase: Phase::AwaitingStatus,
             status: None,
             app: None,
-            app_reconnected: false,
+            app_reconnected: None,
             last_inbound: now,
             next_ping: now + PING_INTERVAL,
             pending: Vec::new(),
@@ -211,6 +221,7 @@ impl Channel {
             events: VecDeque::new(),
             media: None,
             volume_sent: None,
+            volume_interval: VOLUME_INTERVAL,
             volume_queued: None,
             volume_unconfirmed: None,
             assumed_volume: None,
@@ -410,8 +421,19 @@ impl Channel {
         }
         let level = level.clamp(0.0, 1.0);
         match self.volume_sent {
-            Some(sent) if now < sent + VOLUME_INTERVAL => self.volume_queued = Some(level),
-            _ => self.send_level(now, level),
+            Some(sent) if now < sent + self.volume_interval => {
+                if let Some(replaced) = self.volume_queued.replace(level) {
+                    self.events
+                        .push_back(Event::VolumeUnanswered { level: replaced });
+                }
+            }
+            _ => {
+                if let Some(replaced) = self.volume_queued.take() {
+                    self.events
+                        .push_back(Event::VolumeUnanswered { level: replaced });
+                }
+                self.send_level(now, level);
+            }
         }
         Ok(())
     }
@@ -453,6 +475,12 @@ impl Channel {
         self.assumed_volume = volume;
     }
 
+    /// Replaces [`VOLUME_INTERVAL`] on this channel, so a test can hold a
+    /// level waiting at a moment of its choosing.
+    pub(crate) fn set_volume_interval(&mut self, interval: Duration) {
+        self.volume_interval = interval;
+    }
+
     /// Takes the level still waiting for its interval, or else the one sent
     /// and not yet answered, for the channel that replaces this one (C70, C81).
     pub fn take_unanswered_volume(&mut self) -> Option<f64> {
@@ -481,8 +509,14 @@ impl Channel {
         );
         // A device reports only changes, so the level it already has gets no answer (C104).
         let current = self.status.as_ref().map(|status| &status.volume);
-        self.volume_unconfirmed =
-            (!current.is_some_and(|current| answers_volume(level, current))).then_some((id, level));
+        let reported = current.is_some_and(|current| answers_volume(level, current));
+        let repeated = self
+            .volume_unconfirmed
+            .is_some_and(|(_, sent)| sent == level);
+        if repeated || (reported && self.volume_unconfirmed.is_none()) {
+            self.events.push_back(Event::VolumeUnanswered { level });
+        }
+        self.volume_unconfirmed = (!reported).then_some((id, level));
     }
 
     /// Tears the session down (C44, C87): media `STOP` for the sender's
@@ -609,7 +643,7 @@ impl Channel {
                         status.volume.has_level = known.has_level;
                     }
                 }
-                self.on_status(id, status);
+                self.on_status(now, id, status);
             }
             (Namespace::Receiver, "LAUNCH_ERROR" | "INVALID_REQUEST") => {
                 let reason = device_text(
@@ -644,7 +678,7 @@ impl Channel {
             return;
         }
         if let (Some(level), Some(sent)) = (self.volume_queued, self.volume_sent)
-            && now >= sent + VOLUME_INTERVAL
+            && now >= sent + self.volume_interval
             && matches!(self.phase, Phase::Ready | Phase::Running)
         {
             self.send_level(now, level);
@@ -674,7 +708,7 @@ impl Channel {
                     self.events
                         .push_back(Event::LaunchFailed(LaunchError::Timeout));
                 }
-                Request::AppCheck => self.end(EndReason::AppClosed),
+                Request::AppCheck => self.end(EndReason::Silent),
                 Request::Stop => self.finish_stop(),
                 Request::Load | Request::Playing => {
                     self.pending.retain(|pending| {
@@ -700,7 +734,7 @@ impl Channel {
             next = next.min(pending.deadline);
         }
         if let (Some(_), Some(sent)) = (self.volume_queued, self.volume_sent) {
-            next = next.min(sent + VOLUME_INTERVAL);
+            next = next.min(sent + self.volume_interval);
         }
         next
     }
@@ -902,7 +936,7 @@ impl Channel {
             .any(|pending| pending.request == request)
     }
 
-    fn on_status(&mut self, id: u32, status: ReceiverStatus) {
+    fn on_status(&mut self, now: Instant, id: u32, status: ReceiverStatus) {
         // A status that answers LAUNCH may not list the app yet; the launch
         // stays pending until one does, or until its timeout.
         let answered = match self
@@ -917,7 +951,9 @@ impl Channel {
         if status.volume.control_type == ControlType::Fixed {
             // A drag value still waiting for its interval must not reach a
             // control that turned fixed meanwhile (C68).
-            self.volume_queued = None;
+            if let Some(level) = self.volume_queued.take() {
+                self.events.push_back(Event::VolumeUnanswered { level });
+            }
         }
         // The answer to an older level leaves the newer one unanswered (C70); a
         // device that rounds to its step may answer without the request id.
@@ -953,7 +989,7 @@ impl Channel {
                 if !status.has_session(&app.session_id) {
                     self.end(EndReason::TakenOver);
                 } else if answered == Some(Request::AppCheck) {
-                    self.app_reconnected = true;
+                    self.app_reconnected = Some(now);
                     self.connect(&app.transport_id);
                     self.events.push_back(Event::AppReconnected);
                 }
@@ -1003,7 +1039,10 @@ impl Channel {
         if !from_app || self.phase != Phase::Running {
             return;
         }
-        if self.app_reconnected {
+        if self
+            .app_reconnected
+            .is_some_and(|at| now.saturating_duration_since(at) < ReconnectPacer::HEALTHY)
+        {
             self.end(EndReason::AppClosed);
             return;
         }
@@ -1032,7 +1071,7 @@ impl Channel {
     fn attach(&mut self, app: AppSession, reused: bool) {
         self.connect(&app.transport_id);
         self.app = Some(app.clone());
-        self.app_reconnected = false;
+        self.app_reconnected = None;
         self.phase = Phase::Running;
         self.events.push_back(Event::Launched { app, reused });
     }

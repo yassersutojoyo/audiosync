@@ -18,7 +18,7 @@ use std::ptr;
 use std::sync::Arc;
 
 use super::ring::{AscReaderCounters, AscRing, ring_of};
-use super::{host_slice, host_slice_mut, samples_for, stereo_samples};
+use super::{AscEqualizer, host_slice, host_slice_mut, samples_for, stereo_samples};
 use crate::clock;
 use crate::convert;
 use crate::fade::{FadeState, fade_frames};
@@ -546,6 +546,35 @@ pub unsafe extern "C" fn asc_renderer_gain(renderer: *const AscRenderer) -> f32 
     unsafe { &(*renderer).gain }.get()
 }
 
+/// Control thread: sets the renderer's linear `gain` with each headroom cut
+/// of `eq` given back from the ring frame it starts at (S26, S71). A null
+/// `eq` sets `gain` as is.
+///
+/// # Safety
+///
+/// `eq` is null or a live equalizer, called under its threading contract (a
+/// control call); `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_eq_give_back(
+    eq: *const AscEqualizer,
+    renderer: *mut AscRenderer,
+    gain: f64,
+) {
+    if renderer.is_null() {
+        return;
+    }
+    // SAFETY: the handle is live; this borrows only the `gain` field, which
+    // the output thread only reads, atomically.
+    let shared = unsafe { &(*renderer).gain };
+    if eq.is_null() {
+        shared.set(gain as f32);
+        return;
+    }
+    // SAFETY: the handle is live; the control thread reads only the
+    // `control` field, which the capture thread never touches.
+    unsafe { &(*eq).control }.give_back(gain, shared)
+}
+
 /// Any thread: a new delay in capture-rate frames (negative counts as 0).
 /// A renderer that plays fades out first and hands it to its reader after
 /// the fade-out's last frame; one that is closed hands it on at its next
@@ -814,6 +843,36 @@ pub unsafe extern "C" fn asc_renderer_late_max_ns(renderer: *const AscRenderer) 
 pub unsafe extern "C" fn asc_renderer_late_callbacks(renderer: *const AscRenderer) -> u64 {
     // SAFETY: by the caller's contract the handle is null or live.
     unsafe { control_side(renderer) }.map_or(0, RendererControl::late_callbacks)
+}
+
+/// Control thread: [`RendererControl::take_level`] into `peak_db` and
+/// `rms_db`; false, writing nothing, when nothing was rendered since the last
+/// take or a pointer is null.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer; `peak_db` and `rms_db` are null or
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_take_level(
+    renderer: *const AscRenderer,
+    peak_db: *mut f64,
+    rms_db: *mut f64,
+) -> bool {
+    if peak_db.is_null() || rms_db.is_null() {
+        return false;
+    }
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some((peak, rms)) = unsafe { control_side(renderer) }.and_then(RendererControl::take_level)
+    else {
+        return false;
+    };
+    // SAFETY: both pointers are non-null and writable by the caller's contract.
+    unsafe {
+        *peak_db = peak;
+        *rms_db = rms;
+    }
+    true
 }
 
 /// Any thread: the device frames the converter couldn't produce and that

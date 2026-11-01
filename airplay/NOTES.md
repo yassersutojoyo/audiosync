@@ -57,7 +57,7 @@ Seams for later stages:
 - **P118**: −144 given as a number is clamped to −30 like any other value; mute is its own value, `Volume::Muted`.
 - **P120, P127**: "at most 10 per second" is at least 100 ms between two volume requests. Queue order while playing: FLUSH, volume, GET_PARAMETER, metadata, keep-alive. A pending volume holds back metadata and keep-alives.
 - **P33, P126**: progress counts as metadata, so it carries `RTP-Info: rtptime=<current>`.
-- **P124, P125**: the three DMAP items are always sent, empty strings included. Artwork is checked as JPEG by its `FF D8 FF` start.
+- **P124, P125**: the two DMAP items are always sent, empty strings included. Artwork is checked as JPEG by its `FF D8 FF` start.
 - **P131**: the keep-alive OPTIONS is implemented. A failure status to it is Refused, as P138 says for OPTIONS, except a 501, which is accepted.
 - **P138**: 1xx and 3xx answers count as failures too: Refused for OPTIONS, ANNOUNCE, SETUP and RECORD, a warning for the others.
 - **P140, P40**: a request line with a method the parser doesn't know is still a request from the receiver.

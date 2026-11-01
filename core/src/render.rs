@@ -99,6 +99,7 @@ use std::time::Duration;
 use crate::convert::map_to_device;
 use crate::fade::{Fade, FadeState};
 use crate::lead::{HeldLead, SessionLeads};
+use crate::meter::OutputLevel;
 use crate::reader::{Correction, NextRead, ReadReport, Reader, ReaderControl, ReaderCounters};
 use crate::resample::Resampler;
 use crate::ring::Ring;
@@ -470,6 +471,8 @@ struct Shared {
     /// in ns (S231); they differ only when the report was rejected.
     reported_latency_ns: AtomicU64,
     output_latency_ns: AtomicU64,
+    /// The level the device got, for the debug log.
+    level: OutputLevel,
     /// The ring whose session lead counts this renderer, and its slot
     /// there, `None` when every slot was taken (S208).
     ring: Arc<Ring>,
@@ -559,6 +562,7 @@ impl RendererControl {
                 bluetooth: AtomicBool::new(false),
                 reported_latency_ns: AtomicU64::new(0),
                 output_latency_ns: AtomicU64::new(0),
+                level: OutputLevel::default(),
                 ring,
                 slot,
             }),
@@ -670,6 +674,12 @@ impl RendererControl {
     /// The reader's counters (S158).
     pub fn counters(&self) -> ReaderCounters {
         self.reader.counters()
+    }
+
+    /// The peak and RMS in dBFS the device got since the last take, after
+    /// every gain and the equalizer; `None` when nothing was rendered.
+    pub fn take_level(&self) -> Option<(f64, f64)> {
+        self.shared.level.take()
     }
 
     /// [`Renderer::slowed_frames`], from any thread (S206, S207).
@@ -909,6 +919,10 @@ pub struct Renderer {
     resampler: Resampler,
     stage: GainStage,
     gain: Arc<SharedGain>,
+    /// The gain the latest callback ramped to.
+    target_gain: f32,
+    /// The ring frame after the latest read; `i64::MAX` before the first.
+    next_frame: i64,
     shared: Arc<Shared>,
     channels: usize,
     capture_rate: u32,
@@ -1110,6 +1124,8 @@ impl Renderer {
             reader_control: control.reader.clone(),
             resampler,
             stage: GainStage::new(),
+            target_gain: gain.get(),
+            next_frame: i64::MAX,
             gain,
             shared: Arc::clone(&control.shared),
             channels,
@@ -1393,7 +1409,12 @@ impl Renderer {
         // Before the trim, so a shortage shows as the slack it was.
         self.observe(frames, time, drop_ns);
         self.keep_reader_off_w(frames, now);
-        let ramp = self.stage.begin(self.gain.get(), frames);
+        // The gain for the frame this callback goes on from, so one that
+        // answers an equalizer change lands with its first equalized frame.
+        if let Some(gain) = self.gain.gain_at(self.next_frame) {
+            self.target_gain = gain;
+        }
+        let ramp = self.stage.begin(self.target_gain, frames);
         let read_capacity = self.stereo.len() / 2;
         let mut done = 0;
         let mut starved = false;
@@ -1428,6 +1449,7 @@ impl Renderer {
         }
         // A trailing partial frame is never played; keep it silent.
         out[frames * channels..].fill(0.0);
+        self.shared.level.add(out);
         // A stale or missing stamp means the capture isn't writing, which
         // starves every output alike.
         self.count_starved(frames, starved && capture.is_some());
@@ -2286,6 +2308,7 @@ impl Renderer {
         } else {
             self.reader.read_target(block, need)
         };
+        self.next_frame = report.start + report.frames as i64;
         if !hold {
             // The first read after a held correction's fade-out, which made
             // it if it was still due.
@@ -2553,6 +2576,26 @@ mod tests {
                 self.renderer.render_at(&mut self.out, self.now + 1_000_000);
             }
         }
+    }
+
+    #[test]
+    fn the_level_is_taken_from_what_the_device_gets() {
+        let mut stepped = Stepped::new();
+        assert_eq!(stepped.control.take_level(), None);
+        let (mut peak, mut squares, mut samples) = (0.0f32, 0.0f64, 0usize);
+        for _ in 0..50 {
+            stepped.step(1);
+            for &sample in &stepped.out {
+                peak = peak.max(sample.abs());
+                squares += f64::from(sample) * f64::from(sample);
+            }
+            samples += stepped.out.len();
+        }
+        assert!(peak > 0.0, "the block plays after the fade-in");
+        let (got_peak, got_rms) = stepped.control.take_level().expect("it rendered");
+        assert!((got_peak - 20.0 * f64::from(peak).log10()).abs() < 1e-9);
+        let rms = (squares / samples as f64).sqrt();
+        assert!((got_rms - 20.0 * rms.log10()).abs() < 1e-9);
     }
 
     /// What a [`jittered`] run trimmed: frames slowed and sped up, the most

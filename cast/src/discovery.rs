@@ -85,7 +85,7 @@ impl Txt {
 }
 
 /// A device's `id` TXT value: a UUID (C13).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeviceId(pub [u8; 16]);
 
 impl DeviceId {
@@ -118,6 +118,13 @@ impl fmt::Display for DeviceId {
             write!(f, "{byte:02x}")?;
         }
         Ok(())
+    }
+}
+
+/// The hex form, so a logged list change reads like the TXT `id`.
+impl fmt::Debug for DeviceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
     }
 }
 

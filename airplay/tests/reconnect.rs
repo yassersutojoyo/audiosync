@@ -70,6 +70,7 @@ fn playing_again_starts_the_schedule_over() {
     assert_eq!(backoff.on_failure(ErrorKind::Lost, now), Some(now + SECOND));
 }
 
+// covers: P142
 #[test]
 fn errors_that_need_the_user_stop_the_retries() {
     let now = Instant::now();

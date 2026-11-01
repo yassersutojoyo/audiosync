@@ -807,6 +807,9 @@ mod tests {
 
     #[test]
     fn a_worker_whose_thread_panics_is_joined_at_once() {
+        let _serial = crate::debug_log::PANIC_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         static STUCK: StuckThreads = StuckThreads::new();
         let (tell, told) = mpsc::channel::<()>();
         let (worker, ()) = spawn_worker_within("audiosync-test", LONG, &STUCK, move |ready| {

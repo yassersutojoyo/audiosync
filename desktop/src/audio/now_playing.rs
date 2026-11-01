@@ -71,6 +71,12 @@ pub const SMALL_ARTWORK: ArtworkLimits = ArtworkLimits {
     side: 600,
     bytes: 40 * 1024,
 };
+/// The image for Cast devices: C53 allows 1280 by 720, so a square cover
+/// fits at 720.
+pub const CAST_ARTWORK: ArtworkLimits = ArtworkLimits {
+    side: 720,
+    bytes: 256 * 1024,
+};
 /// How far a track's position may stray from where the progress sent last
 /// puts it by now before progress goes out again.
 pub const PROGRESS_SLACK: Duration = Duration::from_secs(1);
@@ -85,19 +91,21 @@ pub struct ArtworkLimits {
 }
 
 /// One picture fitted for receivers ([`fit_artwork`]); a picture within
-/// the small limits is the same bytes in both.
+/// the small limits is the same bytes in all three.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FittedArtwork {
     pub large: Arc<[u8]>,
     pub small: Arc<[u8]>,
+    pub cast: Arc<[u8]>,
 }
 
 impl FittedArtwork {
-    /// One encoding for both images.
+    /// One encoding for all three images.
     pub fn single(jpeg: Arc<[u8]>) -> FittedArtwork {
         FittedArtwork {
             large: jpeg.clone(),
-            small: jpeg,
+            small: jpeg.clone(),
+            cast: jpeg,
         }
     }
 
@@ -423,14 +431,14 @@ pub fn cast_track(track: Option<&Track>, follow: &Follow, last_played: Option<&s
             album_name: field(&session.album),
             images: Vec::new(),
         },
-        // Cast has its own limits (C53), which the small image keeps to.
-        artwork: track.artwork.as_ref().map(|artwork| artwork.small.clone()),
+        artwork: track.artwork.as_ref().map(|artwork| artwork.cast.clone()),
     }
 }
 
 /// An image of `width` × `height` pixels as both receiver images of S272:
 /// [`LARGE_ARTWORK`] and [`SMALL_ARTWORK`], the large one's bytes for both
-/// when they fit the small limits. `encode` makes a JPEG at a size and
+/// when they fit the small limits, and the Cast image ([`CAST_ARTWORK`]),
+/// the large one's bytes when they are as large as Cast takes. `encode` makes a JPEG at a size and
 /// quality (0 to 1), or fails. `None` when not even the smallest small
 /// image fits, or `encode` failed.
 pub fn fit_artwork(
@@ -447,9 +455,16 @@ pub fn fit_artwork(
     }
     let (small, _) = fit_jpeg(width, height, SMALL_ARTWORK, &mut encode)?;
     let small: Arc<[u8]> = small.into();
+    let large = large.map(|(jpeg, side)| (Arc::<[u8]>::from(jpeg), side));
+    let cast = match &large {
+        Some((jpeg, side)) if *side == width.max(height).min(CAST_ARTWORK.side) => jpeg.clone(),
+        _ => fit_jpeg(width, height, CAST_ARTWORK, &mut encode)
+            .map_or_else(|| small.clone(), |(jpeg, _)| jpeg.into()),
+    };
     Some(FittedArtwork {
-        large: large.map_or_else(|| small.clone(), |(jpeg, _)| jpeg.into()),
+        large: large.map_or_else(|| small.clone(), |(jpeg, _)| jpeg),
         small,
+        cast,
     })
 }
 
@@ -2019,9 +2034,57 @@ mod tests {
     fn a_larger_picture_gets_a_large_and_a_small_image() {
         let mut tries = Vec::new();
         let artwork = fit_artwork(3000, 1500, encoder(&mut tries, 0.1)).expect("it fits");
-        assert_eq!(tries, [(1024, 512, 0.65), (600, 300, 0.65)]);
+        assert_eq!(
+            tries,
+            [(1024, 512, 0.65), (600, 300, 0.65), (720, 360, 0.65)]
+        );
         assert!(artwork.large.len() > artwork.small.len());
         assert!(artwork.small.len() <= SMALL_ARTWORK.bytes);
+    }
+
+    // covers: C53
+    #[test]
+    fn a_cast_device_gets_a_cover_of_up_to_720_px_and_256_kib() {
+        let mut tries = Vec::new();
+        let mut playing = track("Spotify.exe", "Song", true, None);
+        playing.artwork = fit_artwork(3000, 1500, encoder(&mut tries, 0.1));
+        let artwork = playing.artwork.clone().expect("it fits");
+        let cast = cast_track(Some(&playing), &Follow::AnyApp, None)
+            .artwork
+            .expect("a cover");
+        assert!(tries.contains(&(720, 360, 0.65)), "{tries:?}");
+        assert!(cast.len() <= 256 * 1024 && cast.len() > artwork.small.len());
+        assert!(tries.contains(&(600, 300, 0.65)));
+        assert!(artwork.small.len() <= SMALL_ARTWORK.bytes);
+    }
+
+    // covers: C53
+    #[test]
+    fn a_cast_cover_takes_the_large_bytes_only_when_they_are_full_size() {
+        let mut tries = Vec::new();
+        let fitted = fit_artwork(700, 700, encoder(&mut tries, 0.1)).expect("it fits");
+        assert_eq!(tries, [(700, 700, 0.65), (600, 600, 0.65)]);
+        assert!(Arc::ptr_eq(&fitted.cast, &fitted.large));
+
+        // Over 128 KiB at 1024 px even at 0.4, so the large image steps
+        // down below 720 px; Cast's 256 KiB still takes 720 px.
+        let mut tries = Vec::new();
+        let fitted = fit_artwork(2000, 2000, encoder(&mut tries, 0.7)).expect("it fits");
+        assert!(tries.contains(&(720, 720, 0.65)), "{tries:?}");
+        assert!(fitted.cast.len() > fitted.large.len());
+        assert!(fitted.cast.len() <= CAST_ARTWORK.bytes);
+    }
+
+    // covers: C53
+    #[test]
+    fn a_failed_cast_encode_falls_back_to_the_small_image() {
+        let fails_at_720 = |width: u32, height: u32, quality: f32| -> Option<Vec<u8>> {
+            (width != 720)
+                .then(|| vec![0; (f64::from(width * height) * f64::from(quality) * 0.1) as usize])
+        };
+        let fitted = fit_artwork(3000, 1500, fails_at_720).expect("it fits");
+        assert!(Arc::ptr_eq(&fitted.cast, &fitted.small));
+        assert!(fitted.large.len() > fitted.small.len());
     }
 
     // covers: S217

@@ -17,6 +17,7 @@ final class WebRemoteWindowController {
     }
 
     func show() {
+        let opening = RemoteWindowShow.opens(visible: window?.isVisible)
         if window == nil {
             let view = WebRemoteView(settings: remote.settings, text: text, announcer: announcer)
             let host = NSHostingController(rootView: view)
@@ -28,8 +29,10 @@ final class WebRemoteWindowController {
             window = panel
             announcer.window = panel
         }
-        remote.windowOpened()
-        announcer.openedCode = remote.settings.code
+        if opening {
+            remote.windowOpened()
+            announcer.openedCode = remote.settings.code
+        }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }

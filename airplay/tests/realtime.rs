@@ -57,6 +57,7 @@ fn allocations(work: impl FnOnce()) -> usize {
 }
 
 // Part of P6 (the crate's own network threads come with the transport stage).
+// covers: P6
 #[test]
 fn rt_input_no_alloc() {
     let start = Instant::now();

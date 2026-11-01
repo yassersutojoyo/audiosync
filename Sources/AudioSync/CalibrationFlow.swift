@@ -125,6 +125,11 @@ struct CalibrationStatus: Equatable {
 
     var isRunning: Bool { phase.isRunning }
 
+    /// Whether `uid`'s row says another calibration holds the outputs.
+    func heldByAnother(_ uid: String, calibrateAllHolds: Bool) -> Bool {
+        ((holdsOutputs && self.uid != uid) || calibrateAllHolds) && !phase(of: uid).isRunning
+    }
+
     /// The status after streaming, the reference or the speaker's switch may
     /// have changed: an ended run's line goes once its context moved; a
     /// running one stays, since the run checks for itself.
@@ -369,6 +374,29 @@ enum CalibrationFlow {
             }
         }
         return ok ? result : nil
+    }
+
+    /// The core's judgement of three runs (S232) and, on a disagreement, the
+    /// spread. Unused by the app until the flow measures three times.
+    static func estimateAgreed(signal: [Float], runs: [(reference: [Float], chosen: [Float])], rate: UInt32,
+                               oldOffsetMs: Double) -> (result: AscCalibration, spreadMs: Double)? {
+        guard runs.count == Int(ASC_CALIBRATION_SWEEPS) else { return nil }
+        let recordings = runs.map(\.reference) + runs.map(\.chosen)
+        let frames = recordings.map(\.count)
+        let starts = frames.indices.map { frames[..<$0].reduce(0, +) }
+        let joined = Array(recordings.joined())
+        var result = AscCalibration()
+        var spreadMs = 0.0
+        let ok = signal.withUnsafeBufferPointer { s in
+            joined.withUnsafeBufferPointer { all in
+                let at: [UnsafePointer<Float>?] = starts.map { start in all.baseAddress.map { $0 + start } }
+                let n = runs.count
+                return asc_calibration_estimate_agreed(s.baseAddress, s.count, Array(at[..<n]), Array(frames[..<n]),
+                                                       Array(at[n...]), Array(frames[n...]), rate, oldOffsetMs,
+                                                       &result, &spreadMs)
+            }
+        }
+        return ok ? (result, spreadMs) : nil
     }
 
     /// The estimate's answer as a decision: only an accepted one moves the

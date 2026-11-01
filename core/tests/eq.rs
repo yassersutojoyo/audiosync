@@ -1,6 +1,7 @@
 //! Equalizer behavior (spec section 3).
 
 use std::f64::consts::PI;
+use std::sync::Arc;
 
 use audiosync_core::eq::{
     BAND_CENTERS_HZ, BAND_COUNT, BAND_Q, Biquad, CurveMatch, DEFAULT_SAMPLE_RATE, EqControl,
@@ -8,6 +9,10 @@ use audiosync_core::eq::{
     UserCurve, cascade_peak_db, delete_curve, design_bands, equalizer, matching_curve, preset,
     quantize_gain_db, rename_curve, sanitized_curves, save_curve,
 };
+use audiosync_core::reader::Reader;
+use audiosync_core::render::{Renderer, RendererControl};
+use audiosync_core::ring::Ring;
+use audiosync_core::volume::{GainStage, SharedGain};
 use proptest::prelude::*;
 
 const BLOCK: usize = 512;
@@ -106,6 +111,8 @@ struct Reference {
     bands: [[f64; 5]; BAND_COUNT],
     preamp: f64,
     state: [[(f64, f64); BAND_COUNT]; 2],
+    /// The linear 10 ms preamp ramp after a retune (S31): from, frames played, length.
+    ramp: (f64, u64, u64),
 }
 
 impl Reference {
@@ -116,19 +123,36 @@ impl Reference {
             }),
             preamp: 10f64.powf((settings.preamp_db - headroom_db(settings, fs)) / 20.0),
             state: [[(0.0, 0.0); BAND_COUNT]; 2],
+            ramp: (0.0, u64::MAX, 1),
         }
     }
 
     fn retune(&mut self, settings: &EqSettings, fs: f64) {
-        let state = self.state;
+        let (state, ramp, from, old) = (self.state, self.ramp, self.ramped(), self.preamp);
         *self = Reference::new(settings, fs);
         self.state = state;
+        self.ramp = if self.preamp == old {
+            ramp
+        } else {
+            (from, 0, (0.010 * fs).round() as u64)
+        };
+    }
+
+    fn ramped(&self) -> f64 {
+        let (from, done, full) = self.ramp;
+        if done >= full {
+            self.preamp
+        } else {
+            from + (self.preamp - from) * (done as f64 / full as f64)
+        }
     }
 
     fn process(&mut self, block: &mut [f32]) {
         for frame in block.chunks_exact_mut(2) {
+            self.ramp.1 = self.ramp.1.saturating_add(1);
+            let preamp = self.ramped();
             for (channel, sample) in frame.iter_mut().enumerate() {
-                let mut y = f64::from(*sample) * self.preamp;
+                let mut y = f64::from(*sample) * preamp;
                 for (c, z) in self.bands.iter().zip(self.state[channel].iter_mut()) {
                     let x = y;
                     y = c[0] * x + z.0;
@@ -389,13 +413,6 @@ fn the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state() {
     control.set_settings(settings);
     assert_eq!(control.bands(), design_bands(&settings.gains_db, 48_000.0));
 
-    // The same rate again is a no-op: the filters keep ringing into silence.
-    processor.process(&mut sine(0, BLOCK, 1000.0, 48_000.0, 0.5));
-    assert!(control.set_sample_rate(48_000.0));
-    let mut silence = vec![0.0f32; BLOCK * 2];
-    processor.process(&mut silence);
-    assert!(silence.iter().any(|&x| x != 0.0));
-
     // A new rate recomputes the coefficients and zeroes all state.
     processor.process(&mut sine(0, BLOCK, 1000.0, 48_000.0, 0.5));
     assert!(control.set_sample_rate(44_100.0));
@@ -415,6 +432,20 @@ fn the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state() {
         assert!(!control.set_sample_rate(bad));
         assert_eq!(control.sample_rate(), 44_100.0);
     }
+}
+
+// covers: S30
+#[test]
+fn a_capture_reopened_at_the_same_rate_starts_from_zeroed_state_with_the_same_curve() {
+    let settings = enabled(with_band(0, 12.0), 0.0);
+    let (mut control, mut processor) = configured(48_000.0, settings);
+    processor.process(&mut sine(0, BLOCK, 40.0, 48_000.0, 0.9));
+    assert!(control.set_sample_rate(48_000.0));
+    let mut silence = vec![0.0f32; BLOCK * 2];
+    processor.process(&mut silence);
+    assert!(silence.iter().all(|&x| x == 0.0));
+    assert_eq!(control.settings(), settings);
+    assert_eq!(control.bands(), design_bands(&settings.gains_db, 48_000.0));
 }
 
 // covers: S16
@@ -481,6 +512,49 @@ fn a_change_takes_effect_at_the_next_block_and_keeps_filter_state() {
     let copy = untouched.clone();
     processor.process(&mut untouched);
     assert_eq!(untouched, copy);
+}
+
+// covers: S26, S31
+#[test]
+fn a_curve_change_ramps_the_preamp_instead_of_stepping_it() {
+    let flat = enabled([0.0; BAND_COUNT], 0.0);
+    let bass = enabled(preset("bassBoost").unwrap().gains_db, 0.0);
+    let (mut control, mut processor) = configured(48_000.0, flat);
+    let mut reference = Reference::new(&flat, 48_000.0);
+    // A 37.5 Hz cosine peaks every 1280 frames, so the change at frame 5120
+    // lands on a peak, where Bass Boost's 6 dB headroom cut steps furthest.
+    let input: Vec<f32> = (0..40 * BLOCK)
+        .flat_map(|i| {
+            let x = (0.5 * (2.0 * PI * 37.5 * i as f64 / 48_000.0).cos()) as f32;
+            [x, x]
+        })
+        .collect();
+    let mut output = Vec::with_capacity(input.len());
+    let mut expected = Vec::with_capacity(input.len());
+    for (index, chunk) in input.chunks(2 * BLOCK).enumerate() {
+        if index == 10 {
+            control.set_settings(bass);
+            reference.retune(&bass, 48_000.0);
+        }
+        let mut block = chunk.to_vec();
+        processor.process(&mut block);
+        output.extend_from_slice(&block);
+        let mut block = chunk.to_vec();
+        reference.process(&mut block);
+        expected.extend_from_slice(&block);
+    }
+    assert_eq!(
+        output, expected,
+        "a linear preamp ramp of 10 ms, 480 frames"
+    );
+    let tone = largest_step(&input);
+    let worst = largest_step(&output);
+    // The new filters swell the bass in over the first frames at up to about
+    // three times the tone's slope; a stepped preamp jumped by 0.28.
+    assert!(
+        worst <= 4.0 * tone,
+        "step {worst} against the tone's {tone}"
+    );
 }
 
 // covers: S32
@@ -557,35 +631,12 @@ fn twelve_presets_with_unique_ids_in_menu_order() {
 
 // covers: S33
 #[test]
-fn a_preset_sets_the_gains_only_and_matching_is_exact() {
-    let mut settings = enabled([1.0; BAND_COUNT], -3.0);
-    assert_eq!(settings.matching_preset(), None);
-    settings.apply_preset(preset("rock").unwrap());
-    assert!(settings.enabled);
-    assert_eq!(settings.preamp_db, -3.0);
-    assert_eq!(settings.matching_preset().map(|p| p.id), Some("rock"));
-    settings.gains_db[4] += 0.5;
-    assert_eq!(settings.matching_preset(), None);
-    assert_eq!(
-        EqSettings::default().matching_preset().map(|p| p.id),
-        Some("flat")
-    );
-}
-
-// covers: S33
-#[test]
 fn reset_reads_flat_and_zeroes_the_preamp() {
     let mut settings = enabled(preset("rock").unwrap().gains_db, -4.5);
     settings.reset();
     assert!(settings.enabled, "Reset leaves the switch alone");
     assert_eq!(settings.preamp_db, 0.0);
-    assert_eq!(settings.matching_preset().map(|p| p.id), Some("flat"));
-    let mut flat = enabled([2.0; BAND_COUNT], 0.0);
-    flat.apply_preset(preset("flat").unwrap());
-    assert_eq!(
-        flat, settings,
-        "Flat and Reset agree once the preamp is 0 dB"
-    );
+    assert_eq!(settings.gains_db, preset("flat").unwrap().gains_db);
 }
 
 // covers: S270
@@ -808,6 +859,138 @@ fn the_engine_takes_the_cascade_peak_off_the_user_preamp() {
     assert!(
         (measured - expected).abs() < 0.05,
         "measured {measured:.3} dB, expected {expected:.3} dB"
+    );
+}
+
+// covers: S26, S71
+#[test]
+fn a_local_output_below_unity_gets_the_headroom_cut_back() {
+    // A user's curve whose cut P is 5.8 dB at about 33 Hz; 0.7.1 played it
+    // with no cut, at its +0.5 dB preamp.
+    let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+    let settings = enabled(gains, 0.5);
+    let peak = headroom_db(&settings, 48_000.0);
+    assert!((peak - 5.8).abs() < 0.01, "P is {peak:.3} dB");
+    let at_1k: f64 = design_bands(&gains, 48_000.0)
+        .iter()
+        .map(|b| response_db(b, 1000.0, 48_000.0))
+        .sum();
+    for (gain, expected) in [(0.1675, 0.5 + at_1k), (1.0, 0.5 - peak + at_1k)] {
+        let (control, mut processor) = configured(48_000.0, settings);
+        let played = control.returned_gain(gain).0 as f32;
+        let mut stage = GainStage::new();
+        let (mut energy_in, mut energy_out) = (0.0f64, 0.0f64);
+        for start in (0..48_000).step_by(BLOCK) {
+            let input = sine(start, BLOCK, 1000.0, 48_000.0, 0.25);
+            let mut block = input.clone();
+            processor.process(&mut block);
+            stage.apply(&mut block, 2, played);
+            if start >= 24_000 {
+                energy_in += input.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>();
+                energy_out += block.iter().map(|y| f64::from(*y).powi(2)).sum::<f64>();
+            }
+        }
+        let level = 10.0 * (energy_out / energy_in).log10() - 20.0 * gain.log10();
+        assert!(
+            (level - expected).abs() < 0.1,
+            "at gain {gain}: {level:.3} dB over the gain, expected {expected:.3} dB"
+        );
+    }
+}
+
+// covers: S26, S71
+#[test]
+fn the_cut_comes_back_when_the_first_equalized_frame_plays() {
+    // A local output held back 2 s, as an AirPlay speaker's delay holds it,
+    // at gain 0.1675; the curve goes on at writer frame `on_at`, and the
+    // output plays that frame 2 s later.
+    const FRAMES: usize = 480;
+    let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+    let gain = 0.1675;
+    let at_1k: f64 = design_bands(&gains, 48_000.0)
+        .iter()
+        .map(|b| response_db(b, 1000.0, 48_000.0))
+        .sum();
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let reader = Reader::new(Arc::clone(&ring), 48_000);
+    let control = RendererControl::new(&reader);
+    control.set_delay_frames(96_000);
+    let shared = Arc::new(SharedGain::new(gain as f32));
+    let mut renderer =
+        Renderer::new(reader, &control, Arc::clone(&shared), 48_000, 48_000, 2).unwrap();
+    let (mut eq, mut processor) = equalizer();
+    let mut off = enabled(gains, 0.5);
+    off.enabled = false;
+    eq.set_settings(off);
+    eq.give_back(gain, &shared);
+    let on_at = 192_000i64;
+    let (mut before, mut after) = (0, 0);
+    let mut out = vec![0.0f32; FRAMES * 2];
+    for start in (0..8 * 48_000).step_by(FRAMES) {
+        if start as i64 == on_at {
+            eq.set_settings(enabled(gains, 0.5));
+            eq.give_back(gain, &shared);
+        }
+        let mut block = sine(start, FRAMES, 1000.0, 48_000.0, 0.25);
+        processor.process(&mut block);
+        writer.write(&block, FRAMES);
+        renderer.render(&mut out);
+        // The output plays from about 2 s in; a second later its fade-in is long over.
+        if start < 3 * 48_000 {
+            continue;
+        }
+        let end = ring.frames_written() as i64 - control.lag_frames();
+        let energy = out.iter().map(|y| f64::from(*y).powi(2)).sum::<f64>();
+        let level = 10.0 * (energy / (FRAMES as f64 * 0.0625)).log10() - 20.0 * gain.log10();
+        let expected = if end <= on_at {
+            before += 1;
+            0.0
+        } else if end - FRAMES as i64 >= on_at + FRAMES as i64 {
+            after += 1;
+            0.5 + at_1k
+        } else {
+            continue;
+        };
+        assert!(
+            (level - expected).abs() < 0.1,
+            "frames up to {end}: {level:.3} dB over the gain, expected {expected:.3} dB"
+        );
+    }
+    assert!(
+        before > 200 && after > 150,
+        "{before} before, {after} after"
+    );
+}
+
+// covers: S26, S71
+#[test]
+fn a_curve_set_while_a_block_is_equalized_gives_its_cut_back_from_the_next_block() {
+    let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+    let gain = 0.1675;
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let shared = SharedGain::new(gain as f32);
+    let (mut eq, mut processor) = equalizer();
+    eq.give_back(gain, &shared);
+    let mut block = sine(0, BLOCK, 1000.0, 48_000.0, 0.25);
+    processor.process(&mut block);
+    // The capture thread holds a block equalized with no curve, not yet written.
+    eq.set_settings(enabled(gains, 0.5));
+    eq.give_back(gain, &shared);
+    writer.write(&block, BLOCK);
+    assert_eq!(
+        shared.gain_at(0),
+        Some(gain as f32),
+        "the block with no curve"
+    );
+    assert_eq!(shared.gain_at(BLOCK as i64 - 1), Some(gain as f32));
+    let returned = eq.returned_gain(gain).0 as f32;
+    assert!(returned > gain as f32);
+    assert_eq!(
+        shared.gain_at(BLOCK as i64),
+        Some(returned),
+        "the next block"
     );
 }
 

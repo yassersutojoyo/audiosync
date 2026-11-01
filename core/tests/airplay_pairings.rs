@@ -342,7 +342,7 @@ fn a_file_that_cant_be_read_keeps_every_pairing_it_holds() {
         return;
     }
     let (mut store, loaded) = PairingStore::open(path.clone());
-    assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+    assert!(matches!(loaded, Loaded::Unreadable(_)), "{loaded:?}");
     let written = store.insert("02005E005302", credentials("FEDCBA9876543210", 4));
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("mode set back");
     assert!(written.is_err(), "the unreadable file isn't written over");
@@ -484,7 +484,7 @@ fn a_symbolic_link_in_the_files_place_is_not_followed() {
     std::os::unix::fs::symlink(&target, &path).expect("a symbolic link");
 
     let (store, loaded) = PairingStore::open(path.clone());
-    assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+    assert!(matches!(loaded, Loaded::Unreadable(_)), "{loaded:?}");
     assert!(store.is_empty());
     assert_eq!(
         store.access(),
@@ -516,7 +516,7 @@ fn a_file_another_account_owns_is_reported_unread() {
         return;
     }
     let (store, loaded) = PairingStore::open(foreign);
-    assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+    assert!(matches!(loaded, Loaded::Unreadable(_)), "{loaded:?}");
     assert!(store.is_empty());
     assert_eq!(store.access(), Access::Unread);
 }

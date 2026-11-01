@@ -40,7 +40,7 @@ pub fn initial_delay_ms(legacy_delay_ms: Option<f64>) -> f64 {
 
 /// Whether an AirPlay speaker is chosen: at least one AirPlay output ID is both
 /// enabled by the user and present in the AirPlay engine's latest output list
-/// (S79). The list never holds this Mac's own receiver (S100).
+/// (S79). The list never holds this Mac's own receiver (S222).
 pub fn airplay_chosen<E: AsRef<str>, L: AsRef<str>>(enabled: &[E], listed: &[L]) -> bool {
     enabled
         .iter()
@@ -51,7 +51,7 @@ pub fn airplay_chosen<E: AsRef<str>, L: AsRef<str>>(enabled: &[E], listed: &[L])
 /// wireless output that sounds up to two seconds late (S175).
 pub const MIN_OFFSET_MS: f64 = -2000.0;
 
-/// Largest offset of a local output, in ms: S77's maximum (S175).
+/// Largest offset of a local output, in ms (S175).
 pub const MAX_OFFSET_MS: f64 = 20_000.0;
 
 /// Largest hold-back a renderer gets, in ms: what the ring covers (S36,

@@ -7,7 +7,7 @@
 //! window's own controls (`crate::remote::actions`) and the result shown and
 //! published again. The poll timer also takes commands, in case a wake-up
 //! was missed, and writes what the server reports to the debug log, which
-//! never sees a pairing code or a device token.
+//! gets each new pairing code only while it is on (S287), never a device token.
 //!
 //! While the server listens, a thread reads the networks' profiles, and the
 //! window and a notice say so when one is Public.
@@ -192,15 +192,27 @@ impl RowText for StringsText<'_> {
                 return note.into();
             }
         }
-        let note = self
-            .0
-            .invoke_availability(availability(speaker.availability));
+        let row_state = row_state(state.speaker_state(speaker));
+        let note = self.0.invoke_speaker_availability(
+            availability(speaker.availability),
+            speaker.code_every_time,
+            row_state,
+        );
         if !note.is_empty() {
             return note.into();
         }
-        self.0
-            .invoke_row_note(row_state(state.speaker_state(speaker)))
-            .into()
+        let note = self
+            .0
+            .invoke_row_note(row_state, speaker.name.as_str().into());
+        if note.is_empty()
+            && speaker
+                .cast
+                .as_ref()
+                .is_some_and(|cast| cast.added_by_address)
+        {
+            return self.0.get_cast_added_by_address().into();
+        }
+        note.into()
     }
 }
 
@@ -483,6 +495,7 @@ impl App {
                                 backend.set_speaker_enabled_from_phone(&id, on);
                             }
                             Action::Volume { id, volume } => {
+                                backend.hold_speaker_volume_for_phone(&id);
                                 backend.set_speaker_volume(&id, volume);
                             }
                             Action::Delay { id, ms } => backend.set_speaker_delay(&id, ms),
@@ -498,6 +511,7 @@ impl App {
                                 backend.recall_preset_from_phone(&id, &keep_off);
                             }
                             Action::Source { id } => backend.select_source(&id),
+                            Action::Mix { apps } => backend.select_mix(&apps),
                         }
                     }
                 }
@@ -767,6 +781,66 @@ mod tests {
             TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err(),
             "closed"
         );
+    }
+
+    // covers: S379
+    #[test]
+    fn quit_stops_the_remote_before_the_settings_are_saved() {
+        let backend = MockBackend::new();
+        let on_save = backend.on_save.clone();
+        let app = over_loopback(backend);
+        app.ui.borrow_mut().remote.port = free_port();
+        app.remote_window.invoke_remote_toggled(true);
+        assert!(app.remote_listening());
+        let listening_at_save = std::rc::Rc::new(std::cell::Cell::new(None));
+        let set = on_save.set(Box::new({
+            let app = std::rc::Rc::downgrade(&app);
+            let listening = listening_at_save.clone();
+            move || listening.set(app.upgrade().map(|app| app.remote_listening()))
+        }));
+        assert!(set.is_ok());
+        app.at_quit();
+        assert_eq!(
+            listening_at_save.get(),
+            Some(false),
+            "no phone pairs or sends a command while the rest winds down"
+        );
+        assert!(!app.remote_listening());
+    }
+
+    // covers: S379
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_stops_the_remote_before_the_settings_are_saved() {
+        let backend = MockBackend::new();
+        let on_save = backend.on_save.clone();
+        let app = over_loopback(backend);
+        app.ui.borrow_mut().remote.port = free_port();
+        app.remote_window.invoke_remote_toggled(true);
+        assert!(app.remote_listening());
+        let listening_at_save = std::rc::Rc::new(std::cell::Cell::new(None));
+        let set = on_save.set(Box::new({
+            let app = std::rc::Rc::downgrade(&app);
+            let listening = listening_at_save.clone();
+            move || listening.set(app.upgrade().map(|app| app.remote_listening()))
+        }));
+        assert!(set.is_ok());
+        app.at_session_end();
+        assert_eq!(listening_at_save.get(), Some(false));
+        assert!(!app.remote_listening());
+    }
+
+    // covers: S368
+    #[test]
+    fn web_remote_chosen_again_while_its_window_shows_keeps_the_code() {
+        let app = over_loopback(MockBackend::new());
+        app.ui.borrow_mut().remote.port = free_port();
+        app.remote_window.invoke_remote_toggled(true);
+        app.main.invoke_remote_requested();
+        assert!(app.remote_window.window().is_visible());
+        let code = current_code(&app);
+        app.main.invoke_remote_requested();
+        assert_eq!(current_code(&app), code);
     }
 
     // covers: S212
@@ -1137,6 +1211,48 @@ mod tests {
         assert!(!state.speaker(&asks).expect("listed").enabled);
     }
 
+    #[test]
+    fn the_phone_row_note_of_a_code_asking_speaker_is_the_windows_note() {
+        use crate::remote::RowText;
+        use crate::ui_model::{Availability, Waiting};
+        let app = over_loopback(MockBackend::new());
+        let text = super::StringsText(app.strings());
+        let mut state = app.snapshot();
+        state.running = true;
+        let mut speaker = state
+            .speakers
+            .iter()
+            .find(|speaker| speaker.availability == Availability::NeedsCode)
+            .expect("a speaker that asks for a code")
+            .clone();
+        speaker.name = "Den TV".into();
+        assert_eq!(text.note(&state, &speaker), "Asks for a code");
+        speaker.code_every_time = true;
+        assert_eq!(text.note(&state, &speaker), "Asks for a code every time");
+        speaker.enabled = true;
+        speaker.waiting = Some(Waiting::ForPassword);
+        assert_eq!(text.note(&state, &speaker), "Waiting for the password");
+        speaker.availability = Availability::Pairing;
+        speaker.waiting = Some(Waiting::ForPin);
+        assert_eq!(
+            text.note(&state, &speaker),
+            "Enter the code shown on Den TV"
+        );
+    }
+
+    #[test]
+    fn the_phone_row_note_of_a_cast_speaker_added_by_address_says_so() {
+        use crate::remote::RowText;
+        let app = over_loopback(MockBackend::new());
+        app.update(|b| {
+            b.add_cast_address("192.0.2.20").expect("added");
+        });
+        let state = app.snapshot();
+        let speaker = state.speaker("cc:192.0.2.20").expect("listed");
+        let text = super::StringsText(app.strings());
+        assert_eq!(text.note(&state, speaker), "Added by address");
+    }
+
     /// The mock with a zone of the kitchen and living room speakers and a
     /// preset of the kitchen and desk speakers.
     fn downstairs() -> MockBackend {
@@ -1232,6 +1348,29 @@ mod tests {
         assert!(
             app.snapshot().pin_prompt.is_some(),
             "a recall at the PC still turns it on and asks for the code"
+        );
+    }
+
+    // covers: S291
+    #[test]
+    fn a_phone_volume_step_holds_its_row_as_a_slider_drag_does() {
+        let backend = downstairs();
+        let editing = backend.volume_editing.clone();
+        let app = over_loopback(backend);
+        from_phone(
+            &app,
+            audiosync_remote::Command::Speaker {
+                id: "airplay:kitchen".into(),
+                change: audiosync_remote::SpeakerChange {
+                    volume: Some(30.0),
+                    ..Default::default()
+                },
+            },
+        );
+        assert_eq!(*editing.borrow(), [("airplay:kitchen".to_owned(), true)]);
+        assert_eq!(
+            app.snapshot().speaker("airplay:kitchen").unwrap().volume,
+            30.0
         );
     }
 

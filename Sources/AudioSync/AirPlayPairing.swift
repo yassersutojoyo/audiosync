@@ -19,7 +19,6 @@ enum AirPlayPairing {
         case unreachable
         case needsPin           // asked for a PIN after an automatic turn-on
         case needsPassword      // asked for a password after an automatic turn-on
-        case cancelled          // the user cancelled the prompt
         case stillNeedsCode     // paired, but asked for a code again
     }
 }

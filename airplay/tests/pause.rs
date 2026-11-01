@@ -156,6 +156,7 @@ fn pause_flushes_and_resumes() {
 }
 
 // Part of P213: a resume before a session's FLUSH answer waits for it.
+// covers: P213
 #[test]
 fn resume_waits_for_the_flush_answer() {
     let mut rig = Rig::with_host();
@@ -181,6 +182,7 @@ fn resume_waits_for_the_flush_answer() {
 }
 
 // Part of P213 and P85: silence never pauses.
+// covers: P85, P213
 #[test]
 fn silence_sends_no_flush() {
     let mut rig = Rig::new(Default::default());
@@ -229,6 +231,7 @@ const LONG: Duration = Duration::from_secs(15);
 
 // Part of P213, over loopback: the host's pause reaches the receiver as
 // one FLUSH and the audio stops; the resume continues at its seq.
+// covers: P213
 #[test]
 fn a_host_pause_flushes_the_receiver_over_loopback() {
     let _serial = serial();
@@ -333,6 +336,7 @@ fn first_audio_after(receiver: &NetReceiver, at: Instant) -> Option<(Instant, u1
 
 // Part of P213: a delay FLUSH still unanswered when the pause comes doesn't
 // end the resume's wait; only the pause FLUSH's answer does.
+// covers: P213
 #[test]
 fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
     const ANSWER: Duration = Duration::from_millis(800);
@@ -392,6 +396,7 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
 // Part of P100: a delay change made while artwork is in flight applies when
 // its FLUSH goes out, so no packet under the new delay reaches the receiver
 // before that FLUSH, which a receiver emptying its buffer would drop.
+// covers: P100
 #[test]
 fn a_delay_change_behind_artwork_sends_nothing_new_before_its_flush() {
     const ARTWORK: Duration = Duration::from_millis(1500);
@@ -546,6 +551,7 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
 
 // Part of P213, P91, P118 and P131: while paused the session stays up, its
 // timing requests are answered and a volume change goes out.
+// covers: P213
 #[test]
 fn timing_and_volume_go_on_while_paused() {
     let _serial = serial();

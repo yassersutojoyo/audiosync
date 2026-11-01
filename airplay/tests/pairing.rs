@@ -259,6 +259,7 @@ fn a_is_drawn_again_when_s_would_start_with_a_zero_byte() {
 
 // Part of P50: the same redraw when A would start with a zero byte, which
 // P50 asks for along with S's.
+// covers: P50
 #[test]
 fn a_is_drawn_again_when_a_would_start_with_a_zero_byte() {
     // An a whose A = g^a mod N starts with a zero byte, found the

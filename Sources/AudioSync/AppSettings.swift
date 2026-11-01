@@ -33,7 +33,7 @@ struct AppSettings: Equatable {
         /// before the local delay model (S77). Read once by the migration
         /// (S179), never written; left in place for older builds.
         static let localDelays = "localDelayMsByUID"
-        /// Each AirPlay speaker's own slider position (0…100), by output ID (S73).
+        /// Each AirPlay speaker's own volume s, unrounded, by output ID (S290).
         static let airplayVolumes = "airPlayVolumeByID"
         /// `[SpeakerGroup]` as JSON (S149). Left as it is when the groups
         /// become zones, for older builds (S248).
@@ -111,7 +111,7 @@ struct AppSettings: Equatable {
         static let speakerOnAtInstall = "thisMacOnAtInstall"
     }
 
-    /// Where a speaker without a volume of its own starts (S71, S105).
+    /// Where a speaker without a volume of its own starts (S71, S399).
     static let defaultVolume: Double = 60
     static let defaultMaster: Double = 100
     /// Where a local speaker without a delay of its own started before the
@@ -286,11 +286,16 @@ struct AppSettings: Equatable {
 
     /// The stored list without the elements that can't be read as `T`; none
     /// when the data is missing or isn't a list. The debug log names what
-    /// didn't read under `key`.
-    static func decodeList<T: Decodable>(_ type: T.Type, _ data: Data?, key: String) -> [T] {
+    /// didn't read under `key`; `log` takes the line for a list that didn't.
+    static func decodeList<T: Decodable>(_ type: T.Type, _ data: Data?, key: String,
+                                         log: (String) -> Void = { DebugTrace.log($0) }) -> [T] {
         let decoder = JSONDecoder()
         decoder.userInfo[StoredTrace.settingsKey] = key
-        guard let data, let list = try? decoder.decode([LossyDecoded<T>].self, from: data) else { return [] }
+        guard let data else { return [] }
+        guard let list = try? decoder.decode([LossyDecoded<T>].self, from: data) else {
+            log("[AudioSync] settings: \(key) unreadable, nothing kept")
+            return []
+        }
         return list.compactMap(\.value)
     }
 }
@@ -387,7 +392,7 @@ struct SettingsStore {
     /// before the mark runs again to the same presets; once marked, nothing
     /// changes.
     func migratePresets() {
-        guard read(Keys.presetsMigrated) as? Bool != true else { return }
+        guard !isMarked(Keys.presetsMigrated) else { return }
         let local = AppSettings.levels(read(Keys.localVolumes), AppSettings.volume)
         let airplay = AppSettings.levels(read(Keys.airplayVolumes), AppSettings.airPlayOwn)
         let volume: (String) -> Double? = { key in
@@ -414,11 +419,17 @@ struct SettingsStore {
     /// from the same groups, to the same zones; once marked, nothing changes.
     /// Zones made this way leave the notice due.
     func migrateZones() {
-        guard read(Keys.zonesMigrated) as? Bool != true else { return }
+        guard !isMarked(Keys.zonesMigrated) else { return }
         let zones = ZoneMigration.zones(from: AppSettings.decodeGroups(read(Keys.groups) as? Data))
         save(zones: zones)
         if !zones.isEmpty { write(true, Keys.zonesNoticeDue) }
         write(true, Keys.zonesMigrated)
+    }
+
+    /// Set unless missing or a stored boolean false (`as? Bool` alone reads a number 0 as false too) (S248, S254).
+    private func isMarked(_ key: String) -> Bool {
+        guard let value = read(key) else { return false }
+        return CFGetTypeID(value as CFTypeRef) != CFBooleanGetTypeID() || value as? Bool != false
     }
 
     /// The groups-became-zones notice was shown.
@@ -521,7 +532,7 @@ struct SettingsStore {
     /// short before the mark runs again from the same old values.
     @discardableResult
     func migrateLocalDelays(listed: [String], reference: String?) -> LocalDelay.Migration? {
-        guard read(Keys.localDelaysMigrated) as? Bool != true else { return nil }
+        guard !isMarked(Keys.localDelaysMigrated) else { return nil }
         guard let migration = LocalDelay.migrate(
             storedDelays: AppSettings.levels(read(Keys.localDelays), AppSettings.delay),
             legacyDelayMs: read(Keys.legacyDelayMs).flatMap(AppSettings.number),
