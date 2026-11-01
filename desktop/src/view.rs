@@ -9490,18 +9490,13 @@ mod tests {
             assert!(updates.contains(&named), "{named} in: {updates}");
         }
         assert!(!app.help.get_updater_available());
-        assert!(include_str!("../ui/help.slint").contains(
-            r#"root.updater-available ? Strings.help-more + "\n\n" + Strings.help-more-updates : Strings.help-more;"#
-        ));
-        assert_eq!(
-            include_str!("view.rs")
-                .matches(concat!(
-                    "help.set_updater_",
-                    "available(self.has_updater());"
-                ))
-                .count(),
-            1
-        );
+        #[cfg(windows)]
+        {
+            let (updater, _) = crate::updater::tests::updater("guide-updates");
+            *app.updater.borrow_mut() = Some(updater);
+            app.refresh();
+            assert!(app.help.get_updater_available());
+        }
     }
 
     // covers: S308
