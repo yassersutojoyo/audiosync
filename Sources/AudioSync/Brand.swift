@@ -26,6 +26,13 @@ enum Brand {
     static let errorText = dynamic("AudioSyncErrorText",
                                    light: BrandTokens.Light.errorText, dark: BrandTokens.Dark.errorText)
 
+    /// A warning's icon, left bar and meter fill: light #9A5200, 5.37:1 on `warnBackground`.
+    static let warn = dynamic("AudioSyncWarn", light: BrandTokens.Light.warn, dark: BrandTokens.Dark.warn)
+
+    /// A warning row's background and the glyph on a filled `warn` icon.
+    static let warnBackground = dynamic("AudioSyncWarnBackground",
+                                        light: BrandTokens.Light.warnBackground, dark: BrandTokens.Dark.warnBackground)
+
     /// The input level meter's track; its `tealText` fill measures 4.31:1 on
     /// it in light appearance and 5.40:1 in dark (3:1 is the graphics bar).
     static let meterTrack = dynamic("AudioSyncMeterTrack",

@@ -11,7 +11,7 @@ import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowSt
 import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
-// zone that is on but can't play right now under it (a zone's count first) ("Waiting for device",
+// zone that is on but can't play right now under it (a zone's count first) ("In use by another app",
 // "Reconnecting…", which Narrator reads as the toggle's value), and at the
 // right a small glyph
 // when a switched-on output's own volume in Windows is low or muted (spec
@@ -502,9 +502,8 @@ export component TrayFlyout inherits Window {
 
         VerticalLayout {
             alignment: start;
-            padding: 16px;
-            padding-top: 14px;
-            spacing: 10px;
+            padding: Fluent.card-padding;
+            spacing: 8px;
 
             HorizontalLayout {
                 spacing: 10px;

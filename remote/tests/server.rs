@@ -407,14 +407,29 @@ fn a_code_expires() {
     );
     assert_eq!(reply.status, 401);
     assert_eq!(reply.error(), "code_expired");
-    let fresh = remote.server.rotate_code().unwrap();
-    let reply = post(
-        &remote,
-        "/api/pair",
-        None,
-        &json!({ "code": fresh }).to_string(),
-    );
-    assert_eq!(reply.status, 200);
+    // The fresh code can expire as well before a loaded runner delivers the
+    // try; only then is it refused, and the next fresh code is tried.
+    for _ in 0..10 {
+        let made = Instant::now();
+        let fresh = remote.server.rotate_code().unwrap();
+        let reply = post(
+            &remote,
+            "/api/pair",
+            None,
+            &json!({ "code": fresh }).to_string(),
+        );
+        if reply.status == 200 {
+            return;
+        }
+        assert!(
+            reply.error() == "code_expired" && made.elapsed() >= timing.code_lifetime,
+            "{} {} after {:?}",
+            reply.status,
+            reply.error(),
+            made.elapsed()
+        );
+    }
+    panic!("every fresh code expired before its try arrived");
 }
 
 // covers: S369
@@ -813,11 +828,12 @@ impl Events {
                 Ok(count) => self
                     .data
                     .push_str(&String::from_utf8_lossy(&buffer[..count])),
+                // A WinSock read that times out on a busy runner can end in WSA_IO_PENDING (997) instead.
                 Err(error)
                     if matches!(
                         error.kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) => {}
+                    ) || (cfg!(windows) && error.raw_os_error() == Some(997)) => {}
                 Err(_) => return false,
             }
         }
@@ -1692,19 +1708,19 @@ fn a_body_at_the_limit_is_read_and_one_byte_more_gets_413() {
 // covers: S374
 #[test]
 fn a_declared_length_over_the_limit_is_refused_before_the_body_arrives() {
-    let remote = start("declared-length");
+    // A server waiting for the body leaves exchange's 20 s read timeout to fail the test; the 60 s
+    // request limit keeps it from timing the request out first, however loaded the runner.
+    let timing = Timing {
+        request: Duration::from_secs(60),
+        ..Timing::default()
+    };
+    let remote = start_with(config("declared-length", timing));
     let host = host(&remote);
     let raw = format!(
         "POST /api/pair HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\nContent-Length: 1000000\r\n\r\n{{"
     );
-    let asked = Instant::now();
     let reply = exchange(remote.server.port(), raw.as_bytes());
     assert_eq!((reply.status, reply.error().as_str()), (413, "too_large"));
-    assert!(
-        asked.elapsed() < Duration::from_secs(3),
-        "answered without waiting for the body: {:?}",
-        asked.elapsed()
-    );
     assert_eq!(remote.server.device_count(), 0);
 }
 

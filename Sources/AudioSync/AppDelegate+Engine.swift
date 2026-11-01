@@ -40,7 +40,8 @@ extension AppDelegate {
         if let switching, !beginSwitch(switching, starts: starts, origin: origin) { return }
         guard starts else {
             if engine.isRunning { stopEngine(.noSpeakerOn) }   // a rebuild with the last speaker gone
-            notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
+            notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational,
+                   shortName: text.noSpeakerNoticeName)
             return
         }
         // Input devices sit behind the microphone permission. Ask first; the
@@ -53,7 +54,8 @@ extension AppDelegate {
                 askMicrophone(origin: origin)
                 return
             case .fail:
-                failStart(text.microphoneDenied, origin: origin, settings: .microphone)
+                failStart(text.microphoneDenied, origin: origin, settings: .microphone,
+                          shortName: text.microphoneNoticeName)
                 return
             }
         }
@@ -94,7 +96,8 @@ extension AppDelegate {
             }
             guard outcome == .keptOld(.startFailed) else {
                 if let switching { finishSwitch(switching, outcome, fromRate: fromRate, origin: origin) }
-                failStart(text.streamingStartMessage(for: error), origin: origin)
+                failStart(text.streamingStartMessage(for: error), origin: origin,
+                          shortName: text.streamingStartNoticeName(for: error, input: chosenInputName()))
                 return
             }
         }
@@ -122,7 +125,8 @@ extension AppDelegate {
             return true
         case .stopSession:
             stopEngine(.noSpeakerOn)
-            notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational)
+            notify(text.chooseSpeakerBeforeStart, origin: origin, subject: Notice.start, style: .informational,
+                   shortName: text.noSpeakerNoticeName)
         case .askMicrophone:
             storeSwitch(change, new: false)   // the picker and the level meter show what still plays
             askMicrophone(origin: origin, switching: change)
@@ -177,9 +181,11 @@ extension AppDelegate {
         case .none:
             break
         case .microphoneDenied:
-            notify(text.microphoneDenied, origin: origin, subject: Notice.start, settings: .microphone)
+            notify(text.microphoneDenied, origin: origin, subject: Notice.start, settings: .microphone,
+                   shortName: text.microphoneNoticeName)
         case .stillOnOld(let new, let old):
-            postNotice(text.sourceSwitchFailed(new: new, old: old), subject: Notice.source)
+            postNotice(text.sourceSwitchFailed(new: new, old: old), subject: Notice.source,
+                       shortName: text.switchFailedNoticeName(new))
         }
     }
 
@@ -232,7 +238,8 @@ extension AppDelegate {
             if granted {
                 startEngine(origin: origin)
             } else {
-                failStart(text.microphoneDenied, origin: origin, settings: .microphone)
+                failStart(text.microphoneDenied, origin: origin, settings: .microphone,
+                          shortName: text.microphoneNoticeName)
             }
             return
         }
@@ -250,12 +257,13 @@ extension AppDelegate {
         }
     }
 
-    private func failStart(_ message: String, origin: StartOrigin, settings: PrivacyPane? = nil) {
+    private func failStart(_ message: String, origin: StartOrigin, settings: PrivacyPane? = nil,
+                           shortName: String? = nil) {
         if origin == .automatic { autoStartFailed = true }
         // Nothing is streaming now; don't leave the AirPlay speakers held
         // (an automatic restart after a format change can end up here).
         stopEngine(.startFailed)
-        notify(message, origin: origin, subject: Notice.start, settings: settings)
+        notify(message, origin: origin, subject: Notice.start, settings: settings, shortName: shortName)
     }
 
     /// Tell the user something went wrong: a modal alert when they just acted.
@@ -265,15 +273,16 @@ extension AppDelegate {
     /// `.warning` for something that failed, `.informational` for a next step.
     /// `settings`: the privacy pane that fixes it, offered as a button.
     func notify(_ message: String, origin: StartOrigin, subject: String,
-                style: NSAlert.Style = .warning, settings: PrivacyPane? = nil) {
-        postNotice(message, subject: subject, settings: settings)
+                style: NSAlert.Style = .warning, settings: PrivacyPane? = nil, shortName: String? = nil) {
+        postNotice(message, subject: subject, shortName: shortName, settings: settings)
         if origin.raisesAlert { showAlert(message, style: style, settings: settings) }
     }
 
-    func postNotice(_ message: String, subject: String, title: String? = nil, settings: PrivacyPane? = nil,
-                    info: Bool = false) {
+    func postNotice(_ message: String, subject: String, title: String? = nil, shortName: String? = nil,
+                    settings: PrivacyPane? = nil, info: Bool = false) {
         let repeated = appModel.notices.items.contains { $0.subject == subject && $0.text == message }
-        appModel.notices.post(message, subject: subject, title: title, settings: settings, info: info)
+        appModel.notices.post(message, subject: subject, title: title, shortName: shortName, settings: settings,
+                              info: info)
         if !repeated { AccessibilityNotification.Announcement(message).post() }
     }
 
@@ -297,7 +306,8 @@ extension AppDelegate {
             return
         case .stop:
             stopEngine(.sourceAppQuit, detail: bundleID)
-            postNotice(text.sourceTerminated(name: name), subject: Notice.source)
+            postNotice(text.sourceTerminated(name: name), subject: Notice.source,
+                       shortName: text.sourceQuitNoticeName(name))
         case .switchToSystem:
             audioSource = .system
             updateNowPlayingTarget()
@@ -346,7 +356,7 @@ extension AppDelegate {
                 guard let self else { return }
                 // A failed start has its own "start" notice; this one still says which app quit.
                 postNotice(text.sourceSwitchedToSystem(name: name, started: started), subject: Notice.source,
-                           info: started)
+                           shortName: text.sourceQuitNoticeName(name), info: started)
                 pushModel()
             })
     }
@@ -439,7 +449,9 @@ extension AppDelegate {
                 clearNotices([Notice.capture])
                 return
             case .post(.waiting, let app):
-                postNotice(text.waitingForAudio(app), subject: Notice.capture)
+                let inDoubt = !engine.runHeard && CaptureCheck.provesPermission(audioSource)
+                postNotice(text.waitingForAudio(app, permissionInDoubt: inDoubt), subject: Notice.capture,
+                           shortName: text.waitingForAudioNoticeName)
             case .post(_, let app):
                 notify(text.captureNotWorking(app), origin: .automatic, subject: Notice.capture,
                        settings: Permission.needed(for: audioSource).pane)
@@ -466,6 +478,15 @@ extension AppDelegate {
     private func sourceDisplayName() -> String? {
         if case .app(let bundleID) = audioSource { return SourceApps.name(for: bundleID) }
         return nil
+    }
+
+    /// The chosen input device's name, also once it is unplugged.
+    func chosenInputName() -> String { chosenSourceName() ?? text.sourceInputDevice }
+
+    /// The source's name as the source picker shows it, an unplugged input's
+    /// plain name; none while the picker doesn't list the source.
+    func chosenSourceName() -> String? {
+        appModel.sources.first { $0.id == audioSource.defaultsValue }.map { $0.deviceName ?? $0.name }
     }
 
     /// Refresh everything that shows the streaming state: the window, the

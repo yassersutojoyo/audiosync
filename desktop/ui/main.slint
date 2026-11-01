@@ -336,7 +336,7 @@ component SpeakerSection inherits VerticalLayout {
         text: root.title;
     }
 
-    Card {
+    card := Card {
         inner-padding: 4px;
 
         rows := SpeakerRows {
@@ -421,7 +421,7 @@ component SpeakerSection inherits VerticalLayout {
                     padding: 12px;
                     SecondaryText {
                         text: root.note;
-                        font-size: Tokens.font-size-callout;
+                        font-size: Tokens.font-size-caption;
                     }
                 }
             }
@@ -738,8 +738,8 @@ component EqualizerCard inherits Rectangle {
 
     HorizontalLayout {
         padding: Fluent.card-padding;
-        padding-top: 14px;
-        padding-bottom: 14px;
+        padding-top: 10px;
+        padding-bottom: 10px;
         spacing: 12px;
 
         Glyph {
@@ -769,7 +769,7 @@ component EqualizerCard inherits Rectangle {
         Text {
             text: root.on ? root.curve : Strings.off;
             color: Tokens.secondary-text;
-            font-size: Tokens.font-size-callout;
+            font-size: Tokens.font-size-caption;
             overflow: elide;
             max-width: 160px;
             vertical-alignment: center;
@@ -843,7 +843,7 @@ component CalibrationCard inherits Card {
                 // After a zone run it runs that zone again.
                 text: root.running ? Strings.calibration-cancel : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
                 enabled: root.running || root.can-start;
-                accessible-label: root.running ? Strings.calibrate-all-cancel-label : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
+                accessible-label: root.running ? Strings.calibration-cancel : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
                 accessible-description: root.status;
                 clicked => {
                     if root.running {
@@ -1003,7 +1003,7 @@ component CalibrationCard inherits Card {
                     }
                     text: Strings.calibrate-all-undo;
                     enabled: root.can-undo && !root.running;
-                    accessible-label: Strings.calibrate-all-undo;
+                    accessible-label: Strings.calibrate-all-undo-label;
                     accessible-description: root.outcome != "" ? root.outcome + " " + Strings.calibrate-all-undo-help : Strings.calibrate-all-undo-help;
                     clicked => {
                         root.undo();
@@ -1058,8 +1058,8 @@ component NowPlayingCard inherits Card {
             spacing: 12px;
 
             Rectangle {
-                width: 56px;
-                height: 56px;
+                width: 48px;
+                height: 48px;
                 border-radius: Fluent.radius-card;
                 clip: true;
                 background: Tokens.text.with-alpha(0.06);
@@ -1098,7 +1098,7 @@ component NowPlayingCard inherits Card {
 
                 if root.subtitle != "": Text {
                     text: root.subtitle;
-                    font-size: Tokens.font-size-callout;
+                    font-size: Tokens.font-size-caption;
                     color: Tokens.secondary-text;
                     overflow: elide;
                 }
@@ -1437,15 +1437,19 @@ export component MainWindow inherits Window {
 
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
-    // Wide enough for a speaker row next to the left column, and
-    // short enough for a 1366 x 768 screen at 150 % (both columns scroll).
-    min-width: 860px;
+    // Wide enough for a zone's name beside its volume in the speaker list,
+    // and short enough for a 1366 x 768 screen at 150 % (both columns scroll).
+    min-width: 776px;
     min-height: 440px;
-    preferred-width: 980px;
+    preferred-width: 776px;
     preferred-height: 680px;
     background: Tokens.background;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
+
+    property <length> content-max-width: left-column.width + Fluent.gap + scroll.max-width;
+    // The Fluent scroll bar is 14 px wide and drawn over the speaker list's content.
+    property <length> scroll-gutter: 14px;
 
     // Rust sets these; a user's click or drag replaces the controls' bindings,
     // so each control's handler also sets it back to the state after its
@@ -1711,24 +1715,24 @@ export component MainWindow inherits Window {
     }
 
     VerticalLayout {
-        padding-left: Tokens.spacing-window-margin + 4px;
-        padding-right: Tokens.spacing-window-margin + 4px;
-        padding-top: 16px;
-        padding-bottom: Tokens.spacing-window-margin;
-        spacing: 20px;
+        padding: Fluent.window-margin;
+        spacing: Fluent.gap;
 
         // Header: the brand and the state on the left, the switch on the right.
+        // It and the notices end with the speaker cards.
         HorizontalLayout {
-            spacing: 12px;
-            min-height: 44px;
+            spacing: 10px;
+            min-height: 36px;
+            max-width: root.content-max-width;
+            padding-right: root.scroll-gutter;
             vertical-stretch: 0;
 
             VerticalLayout {
                 alignment: center;
                 BrandMark {
                     running: root.running;
-                    width: 34px;
-                    height: 34px;
+                    width: Fluent.mark;
+                    height: Fluent.mark;
                 }
             }
 
@@ -1736,7 +1740,9 @@ export component MainWindow inherits Window {
                 alignment: center;
                 spacing: 0px;
 
-                Wordmark { }
+                Wordmark {
+                    size: Fluent.wordmark;
+                }
 
                 SecondaryText {
                     text: root.status;
@@ -1769,6 +1775,8 @@ export component MainWindow inherits Window {
         }
 
         if root.notices.length > 0: NoticeStack {
+            max-width: root.content-max-width;
+            padding-right: root.scroll-gutter;
             notices: root.notices;
             focus-index <=> root.focus-notice-index;
             notice-focus-changed(id, focused) => {
@@ -1798,8 +1806,10 @@ export component MainWindow inherits Window {
         }
 
         HorizontalLayout {
-            spacing: Tokens.spacing-window-margin;
+            spacing: Fluent.gap;
             vertical-stretch: 1;
+            // Past the speaker list's widest, the extra width stays empty on the right.
+            alignment: start;
 
             // Left column: what plays and how loud, each in its own card. It
             // scrolls when the window is shorter than its cards (a small
@@ -1815,7 +1825,7 @@ export component MainWindow inherits Window {
 
                     Card {
                         VerticalLayout {
-                            spacing: 10px;
+                            spacing: 8px;
 
                             CardTitle {
                                 text: Strings.source-label;
@@ -2033,12 +2043,13 @@ export component MainWindow inherits Window {
             // every connected speaker in no zone by name.
             scroll := ScrollView {
                 horizontal-stretch: 1;
+                preferred-width: 644px;
+                max-width: 644px;
 
                 speaker-list := VerticalLayout {
-                    spacing: Tokens.spacing-section-gap;
+                    spacing: Fluent.gap;
                     padding-bottom: 4px;
-                    // The Fluent scroll bar is 14 px wide and drawn over the content.
-                    padding-right: 14px;
+                    padding-right: root.scroll-gutter;
                     // Rows keep their height when the list is shorter than the view.
                     alignment: start;
 
@@ -2046,7 +2057,7 @@ export component MainWindow inherits Window {
                         padding-left: 4px;
                         SecondaryText {
                             text: Strings.no-speaker-on;
-                            font-size: Tokens.font-size-callout;
+                            font-size: Tokens.font-size-caption;
                         }
                     }
 

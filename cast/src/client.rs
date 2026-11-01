@@ -8,6 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -110,10 +111,27 @@ pub enum FingerprintChange {
     },
 }
 
+/// What hears the book's first failed write.
+type SaveErrorReport = Box<dyn FnOnce(io::Error) + Send>;
+/// How the host replaces the book's file with new bytes.
+type BookWriter = Box<dyn FnMut(&Path, &[u8]) -> io::Result<()> + Send>;
+
 /// The fingerprints seen per device, for diagnostics only (C21).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct FingerprintBook {
     seen: HashMap<DeviceId, Fingerprint>,
+    /// Where the book is kept across launches; `None` keeps it in memory.
+    file: Option<(PathBuf, BookWriter)>,
+    report_save_error: Option<SaveErrorReport>,
+}
+
+impl fmt::Debug for FingerprintBook {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FingerprintBook")
+            .field("seen", &self.seen)
+            .field("file", &self.file.as_ref().map(|(path, _)| path))
+            .finish_non_exhaustive()
+    }
 }
 
 impl FingerprintBook {
@@ -121,13 +139,87 @@ impl FingerprintBook {
         FingerprintBook::default()
     }
 
+    /// The book kept at `path`, taken through `read`, which every new or
+    /// changed fingerprint rewrites whole through `write`. A file that is
+    /// there but can't be read starts an empty book, with the error for the
+    /// host's log; a missing one starts it with none.
+    pub fn open(
+        path: PathBuf,
+        read: impl FnOnce(&Path) -> io::Result<Vec<u8>>,
+        write: impl FnMut(&Path, &[u8]) -> io::Result<()> + Send + 'static,
+    ) -> (FingerprintBook, Option<io::Error>) {
+        let parsed = read(&path).and_then(|bytes| {
+            String::from_utf8(bytes)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+                .and_then(|text| parse_book(&text))
+        });
+        let (seen, error) = match parsed {
+            Ok(seen) => (seen, None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (HashMap::new(), None),
+            Err(error) => (HashMap::new(), Some(error)),
+        };
+        let book = FingerprintBook {
+            seen,
+            file: Some((path, Box::new(write))),
+            report_save_error: None,
+        };
+        (book, error)
+    }
+
+    /// Hands the first write that fails to `report`, for the host's log;
+    /// later ones go unreported, so a file that stays locked logs once.
+    pub fn on_save_error(mut self, report: impl FnOnce(io::Error) + Send + 'static) -> Self {
+        self.report_save_error = Some(Box::new(report));
+        self
+    }
+
     pub fn record(&mut self, id: DeviceId, fingerprint: Fingerprint) -> FingerprintChange {
-        match self.seen.insert(id, fingerprint) {
+        let change = match self.seen.insert(id, fingerprint) {
             None => FingerprintChange::First,
             Some(before) if before == fingerprint => FingerprintChange::Same,
             Some(before) => FingerprintChange::Changed { before },
+        };
+        if change == FingerprintChange::Same {
+            return change;
         }
+        // One `<id> <fingerprint>` line per device, as they are logged.
+        let text: String = (self.seen.iter())
+            .map(|(id, fingerprint)| format!("{id} {fingerprint}\n"))
+            .collect();
+        // Diagnostics only: a book that can't be written stays in memory.
+        if let Some((path, write)) = &mut self.file
+            && let Err(error) = write(path, text.as_bytes())
+            && let Some(report) = self.report_save_error.take()
+        {
+            report(error);
+        }
+        change
     }
+}
+
+fn parse_book(text: &str) -> io::Result<HashMap<DeviceId, Fingerprint>> {
+    // `lines` also takes CRLF endings, as an editor on Windows may save.
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (id, hex) = line.split_once(' ').unwrap_or((line, ""));
+            let bytes: Option<Vec<u8>> = hex
+                .split(':')
+                .map(|pair| u8::from_str_radix(pair, 16).ok())
+                .collect();
+            let fingerprint = bytes.and_then(|bytes| <[u8; 32]>::try_from(bytes).ok());
+            match (DeviceId::parse(id), fingerprint) {
+                (Some(id), Some(fingerprint)) => Ok((id, Fingerprint(fingerprint))),
+                _ => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "not a device and a fingerprint: {:?}",
+                        line.chars().take(80).collect::<String>()
+                    ),
+                )),
+            }
+        })
+        .collect()
 }
 
 /// The TLS client configuration of C20 and C21: TLS 1.2 or later, no
@@ -490,9 +582,9 @@ impl CastClient {
         self.channel.media_session_id()
     }
 
-    /// Sets the device volume level (C65, C67, C70).
-    pub fn set_volume(&mut self, level: f64) -> Result<(), VolumeError> {
-        let result = self.channel.set_volume(Instant::now(), level);
+    /// Sets the device volume level under `ask` (C65, C67, C70).
+    pub fn set_volume(&mut self, ask: u64, level: f64) -> Result<(), VolumeError> {
+        let result = self.channel.ask_volume(Instant::now(), ask, level);
         self.flush();
         result
     }
@@ -503,7 +595,7 @@ impl CastClient {
 
     /// The level still waiting for its interval or for its answer (C70),
     /// taken off the channel.
-    pub fn take_unanswered_volume(&mut self) -> Option<f64> {
+    pub fn take_unanswered_volume(&mut self) -> Option<(u64, f64)> {
         self.channel.take_unanswered_volume()
     }
 

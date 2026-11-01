@@ -1486,8 +1486,14 @@ fn closed(stream: &TcpStream) -> bool {
     if stream.set_read_timeout(Some(PROBE)).is_err() {
         return false;
     }
-    match stream.peek(&mut [0u8; 1]) {
-        Ok(count) => count == 0,
+    peek_says_closed(&stream.peek(&mut [0u8; 1]), cfg!(windows))
+}
+
+fn peek_says_closed(peek: &io::Result<usize>, windows: bool) -> bool {
+    match peek {
+        Ok(count) => *count == 0,
+        // A busy Windows PC can end a timed read with WSA_IO_PENDING instead of a timeout.
+        Err(error) if windows && error.raw_os_error() == Some(997) => false,
         Err(error) => !matches!(
             error.kind(),
             io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
@@ -1565,6 +1571,18 @@ fn send_events(mut stream: TcpStream, token: &str, cookies: &[String], id: u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pending_timed_peek_on_windows_is_not_a_closed_page() {
+        let pending = Err(io::Error::from_raw_os_error(997));
+        assert!(!peek_says_closed(&pending, true));
+        assert!(peek_says_closed(&pending, false));
+        assert!(peek_says_closed(&Ok(0), true));
+        assert!(peek_says_closed(
+            &Err(io::ErrorKind::ConnectionReset.into()),
+            true
+        ));
+    }
 
     fn held(peer: IpAddr, count: usize, reserved: bool, paired: bool) -> Vec<Slot> {
         vec![

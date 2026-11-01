@@ -1,0 +1,37 @@
+name: Advisories
+
+# RustSec advisories land without any change of ours, so this runs weekly and
+# on release tags rather than on every push. No README badge reads it.
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: advisories.yml-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  advisories:
+    name: Advisories (${{ matrix.crate }})
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: [airplay, cast, core, desktop, remote]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ matrix.crate }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the pinned cargo-deny
+        run: cargo install --locked cargo-deny --version 0.20.2
+
+      - name: No open RustSec advisory without a reason (${{ matrix.crate }}/deny.toml)
+        run: cargo deny --locked check advisories

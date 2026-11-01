@@ -664,10 +664,12 @@ pub enum SenderEvent {
     /// A line for the host's debug log: the sender remembered or forgot
     /// the AirPlay 1 outcome that moves a device to the AirPlay 2 path,
     /// with the outcome and the reason (P218). Sent whether or not the
-    /// host holds the speaker.
+    /// host holds the speaker; `remembered` is the outcome remembered, or
+    /// `None` for a forget, which a host's own copy follows.
     PathLog {
         key: DeviceKey,
         line: String,
+        remembered: Option<ErrorKind>,
     },
 }
 

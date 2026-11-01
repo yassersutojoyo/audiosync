@@ -165,6 +165,46 @@ enum CalibrationLeftOut: Equatable {
     case headphones, virtual
 }
 
+/// Whether the reference output's own volume and mute let the microphone
+/// hear it, read before a run so the window can warn up front.
+enum CalibrationReferenceLevel: Equatable {
+    case muted, quiet, ok, unknown
+
+    /// Quiet is the main window's low line (S196, 25 % or less), since no
+    /// measurement ties a volume to the core's too-quiet refusal.
+    init(_ reading: DeviceVolumeReading) {
+        let verdict = reading.verdict
+        switch verdict.decision {
+        case UInt32(ASC_DEVICE_VOLUME_MUTED), UInt32(ASC_DEVICE_VOLUME_MUTED_AND_LOW): self = .muted
+        case UInt32(ASC_DEVICE_VOLUME_LOW): self = .quiet
+        case UInt32(ASC_DEVICE_VOLUME_FINE) where verdict.percent != nil: self = .ok
+        default: self = .unknown
+        }
+    }
+}
+
+/// The reference's row under "Before you start": a warning with the main
+/// window's fix when it is muted or quiet, a check when it is fine; nil when
+/// the level is unknown, so nothing alarming shows.
+struct CalibrationVolumeCheck: Equatable {
+    let warning: DeviceVolumeHint?
+    /// The whole percent the meter shows; nil when the volume is unknown.
+    let percent: Int?
+
+    /// The core's low line as a whole percent, where the meter marks it.
+    static let lowPercent: Int = (0...100).last { n in
+        let reading = AscDeviceVolume(has_volume: true, volume: Double(n) / 100, has_mute: false, muted: false)
+        return asc_device_volume_decide(reading).decision == UInt32(ASC_DEVICE_VOLUME_LOW)
+    } ?? 0
+
+    init?(_ reading: DeviceVolumeReading) {
+        guard CalibrationReferenceLevel(reading) != .unknown else { return nil }
+        let verdict = reading.verdict
+        warning = verdict.hint
+        percent = verdict.percent
+    }
+}
+
 enum CalibrationFlow {
     /// Why calibration won't record from the default input, nil when it may:
     /// a Bluetooth hands-free input is refused before anything plays, for one

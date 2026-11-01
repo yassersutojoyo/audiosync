@@ -104,7 +104,7 @@ enum CastGroupMembers: Equatable {
 
 /// Where the session of the device that is on stands.
 enum CastStatus: Equatable {
-    case idle, connecting, playing, reconnecting
+    case idle, connecting, playing, reconnecting, paused
 }
 
 /// Why a Cast speaker went off, or stayed off, for its notice.
@@ -192,6 +192,8 @@ enum CastEvent: Equatable {
     /// The device plays the stream in `format`, an `ASC_CAST_FORMAT_` code.
     case started(attempt: UInt64, format: Int32)
     case playing(attempt: UInt64)
+    /// Someone paused the device itself; a playing event follows its next play (C113).
+    case paused(attempt: UInt64)
     /// `detail` here, in `recovering` and in `formatFallback` is the core's text for the debug log (C20).
     case connectFailed(attempt: UInt64, error: CastError?, retryMs: Int64, detail: String = "")
     case recovering(attempt: UInt64, detail: String = "")
@@ -218,7 +220,7 @@ enum CastEvent: Equatable {
 
     var attempt: UInt64? {
         switch self {
-        case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .connectFailed(let a, _, _, _),
+        case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .paused(let a), .connectFailed(let a, _, _, _),
              .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _, _), .commandFailed(let a, _),
              .volumeUnanswered(let a, _), .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
@@ -246,6 +248,7 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_PLAYING:
             underruns.forget(a)
             self = .playing(attempt: a)
+        case ASC_CAST_EVENT_PAUSED: self = .paused(attempt: a)
         case ASC_CAST_EVENT_CONNECT_FAILED:
             self = .connectFailed(attempt: a, error: error, retryMs: raw.retry_ms, detail: detail)
         case ASC_CAST_EVENT_RECOVERING: self = .recovering(attempt: a, detail: detail)
@@ -580,14 +583,16 @@ struct CastModel {
     /// A session runs or starts for `id`: its volume, Mute and Resync reach it.
     func isLive(_ id: String) -> Bool { status(of: id) != .idle }
 
-    /// The slider position, 0 to 100: the own level the user set until a
-    /// status answers it, else the one kept, else the reported level.
+    /// The slider position, 0 to 100: a fixed volume's reported level, else
+    /// the own level the user set until a status answers it, else the one
+    /// kept, else the reported level.
     func volume(of id: String) -> Double { knownVolume(of: id) ?? 100 }
 
     /// `volume(of:)`, nil while no status reported a level and the user set
     /// none; it may pass 100 (S415).
     func knownVolume(of id: String) -> Double? {
-        (ownLevel(of: id) ?? volumes[id]?.level).map { max(0, $0 * 100) }
+        let fixed = volumes[id].flatMap { $0.fixed ? $0.level : nil }
+        return (fixed ?? ownLevel(of: id) ?? volumes[id]?.level).map { max(0, $0 * 100) }
     }
 
     private func ownLevel(of id: String) -> Double? {
@@ -600,8 +605,11 @@ struct CastModel {
         asc_airplay_row_level(deviceLevel(of: id) * 100)
     }
 
-    /// A level held at zone 0, else zone × own, else the reported level, else 1.
+    /// A fixed volume's reported level, else a level held at zone 0, else
+    /// zone × own, else the reported level, else 1.
     private func deviceLevel(of id: String) -> Double {
+        // Nothing reaches a fixed volume (C68), so zone × own would be a guess.
+        if let reported = volumes[id], reported.fixed { return reported.level }
         if let held, held.id == id { return held.level }
         return ownLevel(of: id).map { asc_cast_zone_level(zone(of: id), $0) } ?? volumes[id]?.level ?? 1
     }
@@ -924,6 +932,8 @@ struct CastModel {
             return setStatus(.playing)
         case .recovering:
             return setStatus(.reconnecting)
+        case .paused:
+            return setStatus(.paused)
         case .connectFailed(_, let error, _, _):
             guard current.status == .connecting else { return setStatus(.reconnecting) }
             // A group with no address yet waits for its records (C81).
@@ -1431,20 +1441,24 @@ struct CastManualAddress: Hashable {
     }
 
     /// Four decimal parts from 0 to 255, without leading zeros, which the
-    /// core would not read.
+    /// core would not read; 0.0.0.0, broadcast and multicast name no device.
     static func isIPv4(_ text: String) -> Bool {
         let parts = text.split(separator: ".", omittingEmptySubsequences: false)
-        return parts.count == 4 && parts.allSatisfy { part in
+        let wellFormed = parts.count == 4 && parts.allSatisfy { part in
             (1...3).contains(part.count) && part.allSatisfy(\.isASCIIDigit)
                 && (part.count == 1 || part.first != "0") && Int(part).map { $0 <= 255 } == true
         }
+        return wellFormed && text != "0.0.0.0" && text != "255.255.255.255"
+            && Int(parts[0]).map { !(224...239).contains($0) } == true
     }
 
     /// Labels of letters, digits and hyphens (RFC 1123), 63 characters at
-    /// most and not starting or ending with a hyphen, 253 in all.
+    /// most and not starting or ending with a hyphen, 253 in all; a last
+    /// label of only digits is a malformed IPv4 address, not a name.
     static func isHostName(_ text: String) -> Bool {
-        guard (1...253).contains(text.count) else { return false }
-        return text.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
+        let labels = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...253).contains(text.count), labels.last?.allSatisfy(\.isASCIIDigit) == false else { return false }
+        return labels.allSatisfy { label in
             (1...63).contains(label.count) && label.first != "-" && label.last != "-"
                 && label.allSatisfy { $0 == "-" || $0.isASCIIDigit || ("a"..."z").contains($0) }
         }
@@ -1463,9 +1477,12 @@ enum CastAddProblem: Equatable {
 /// The addresses the user added, in the order added, one entry each; the
 /// app adds them to the sender again at every launch.
 struct CastManualList: Equatable {
+    static let maxAddresses = 64
+
     private(set) var addresses: [CastManualAddress] = []
 
-    /// From the stored strings; one that no longer reads, or repeats, is dropped.
+    /// From the stored strings; one that no longer reads, or repeats, is
+    /// dropped, and only the first `maxAddresses` are kept.
     init(stored: Any?) {
         for text in stored as? [String] ?? [] {
             if let address = CastManualAddress(text) { add(address) }
@@ -1474,10 +1491,10 @@ struct CastManualList: Equatable {
 
     var stored: [String] { addresses.map(\.text) }
 
-    /// False when it is listed already.
+    /// False when it is listed already or the list is full.
     @discardableResult
     mutating func add(_ address: CastManualAddress) -> Bool {
-        guard !addresses.contains(address) else { return false }
+        guard !addresses.contains(address), addresses.count < Self.maxAddresses else { return false }
         addresses.append(address)
         return true
     }

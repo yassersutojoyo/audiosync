@@ -371,6 +371,8 @@ pub enum CastState {
     Idle,
     Connecting,
     Playing,
+    /// Someone paused the device itself.
+    Paused,
     /// It played, and AudioSync is reaching it again.
     Reconnecting,
 }
@@ -408,7 +410,7 @@ pub enum CastProblem {
     Refused,
     /// It couldn't fetch the stream from this PC.
     Blocked,
-    /// Another app started casting to it.
+    /// The speaker ended the stream: another app cast to it, or its own controls stopped it.
     TakenOver,
     ConnectionLost,
     SearchStopped,
@@ -1308,34 +1310,7 @@ impl AppState {
     /// (spec S246), so a Cast member the click leaves off counts toward
     /// neither. Playing, it waits when each member it counts waits.
     pub fn zone_state(&self, zone: &Zone) -> SpeakerState {
-        let members: Vec<zones::Member> = self
-            .zone_members(zone)
-            .map(|s| zones::Member {
-                // The action tells only Cast members apart.
-                kind: if s.kind == SpeakerKind::Cast {
-                    MemberKind::Cast
-                } else {
-                    MemberKind::Local
-                },
-                listed: true,
-                on: s.enabled,
-                busy: s
-                    .cast
-                    .as_ref()
-                    .is_some_and(|cast| cast.offline || cast.taken_over),
-                needs_airplay2: false,
-                in_target: s.in_target.is_some(),
-            })
-            .collect();
-        let situation = Situation {
-            streaming: true,
-            cast_on_elsewhere: self
-                .speakers
-                .iter()
-                .any(|s| s.kind == SpeakerKind::Cast && s.enabled && !zone.members.contains(&s.id)),
-            ..Situation::default()
-        };
-        let on = zones::click_plan(&members, situation).action == ClickAction::TurnOff;
+        let on = self.zone_plan(zone, true, &[]).action == ClickAction::TurnOff;
         match SpeakerState::new(on, self.running) {
             SpeakerState::Playing => {
                 let waiting: Option<Vec<Waiting>> =
@@ -1346,6 +1321,39 @@ impl AppState {
             }
             state => state,
         }
+    }
+
+    /// The plan of a click on `zone`, one step per member `zone_members` lists;
+    /// the members in `keep_off` count as not found, as in the adapter.
+    fn zone_plan(&self, zone: &Zone, streaming: bool, keep_off: &[String]) -> zones::ClickPlan {
+        let members: Vec<zones::Member> = self
+            .zone_members(zone)
+            .map(|s| zones::Member {
+                // The action tells only Cast members apart.
+                kind: if s.kind == SpeakerKind::Cast {
+                    MemberKind::Cast
+                } else {
+                    MemberKind::Local
+                },
+                listed: !keep_off.contains(&s.id),
+                on: s.enabled,
+                busy: s
+                    .cast
+                    .as_ref()
+                    .is_some_and(|cast| cast.offline || cast.taken_over),
+                needs_airplay2: false,
+                in_target: s.in_target.is_some(),
+            })
+            .collect();
+        let situation = Situation {
+            streaming,
+            cast_on_elsewhere: self
+                .speakers
+                .iter()
+                .any(|s| s.kind == SpeakerKind::Cast && s.enabled && !zone.members.contains(&s.id)),
+            ..Situation::default()
+        };
+        zones::click_plan(&members, situation)
     }
 
     /// The members a playing zone waits on: every switched member but Cast,
@@ -2706,25 +2714,26 @@ impl Backend for MockBackend {
         let Some(zone) = self.state.zones.iter().find(|z| z.id == id).cloned() else {
             return;
         };
-        let turn_on = self.state.zone_state(&zone).click_turns_on();
-        let mut cast_on = false;
-        for member in &zone.members {
-            if keep_off.contains(member) {
-                continue;
-            }
-            let Some(speaker) = self.speaker_mut(member) else {
-                continue;
+        let plan = self.state.zone_plan(&zone, self.state.running, keep_off);
+        let turn_on = match plan.action {
+            ClickAction::Nothing => return,
+            ClickAction::TurnOn { .. } => true,
+            ClickAction::TurnOff => false,
+        };
+        let members: Vec<String> = self
+            .state
+            .zone_members(&zone)
+            .map(|s| s.id.clone())
+            .collect();
+        for (member, step) in members.iter().zip(&plan.steps) {
+            let on = match step {
+                zones::Step::On | zones::Step::Waiting => true,
+                zones::Step::Off | zones::Step::CastLeftOff(_) => false,
+                _ => continue,
             };
-            if speaker.in_target.is_some() {
-                continue;
+            if let Some(speaker) = self.speaker_mut(member) {
+                speaker.enabled = on;
             }
-            if turn_on && speaker.kind == SpeakerKind::Cast {
-                // One Google Cast speaker plays at a time.
-                speaker.enabled |= !cast_on;
-                cast_on = true;
-                continue;
-            }
-            speaker.enabled = turn_on;
         }
         if turn_on {
             self.state.running = true;
@@ -3532,6 +3541,44 @@ mod tests {
             .collect();
         assert_eq!(on, ["airplay:bedroom", "cc:attic"]);
         assert_eq!(state.zone_state(&state.zones[0]), SpeakerState::Playing);
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_click_passes_over_a_taken_over_cast_member_like_the_adapter() {
+        let mut backend = MockBackend::new();
+        for id in ["cc:attic", "cc:porch"] {
+            backend.add_speaker(Speaker {
+                id: id.into(),
+                kind: SpeakerKind::Cast,
+                enabled: false,
+                cast: Some(CastRow {
+                    state: CastState::Idle,
+                    muted: false,
+                    volume_fixed: false,
+                    volume_step: 1.0,
+                    group: None,
+                    added_by_address: false,
+                    offline: false,
+                    taken_over: id == "cc:attic",
+                }),
+                ..backend.snapshot().speakers[3].clone()
+            });
+        }
+        backend.add_zone(
+            "zone:a",
+            "Garden",
+            &["airplay:bedroom", "cc:attic", "cc:porch"],
+        );
+        backend.toggle_zone("zone:a");
+        let state = backend.snapshot();
+        let on: Vec<&str> = state
+            .speakers
+            .iter()
+            .filter(|s| s.enabled && state.zone_of(&s.id).is_some())
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(on, ["airplay:bedroom", "cc:porch"]);
     }
 
     // covers: S246

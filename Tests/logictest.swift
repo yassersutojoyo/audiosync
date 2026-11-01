@@ -1464,13 +1464,23 @@ check(SpeakerAvailability(.code(password: false), everyTime: true, on: true) == 
         && SpeakerAvailability(.code(password: false), everyTime: false, on: false) == .needsCode
         && SpeakerAvailability(.open, everyTime: false, on: false) == .open,
       "availability: asks for a code every time while it asks or is off; paired for this run and on, it is open")
+do {
+    let t = UIStrings()
+    let pairingTexts = [t.availabilityHelp(.needsCode) ?? "", t.airPlayTurnedOff(name: "Den", reason: .stillNeedsCode),
+                        t.nativeAirPlayPairingFailed(name: "Den"), t.nativeAirPlayReceiverUnverified(name: "Den"),
+                        t.nativePairPINMessage(name: "Den"), t.nativePairWrongPINMessage(name: "Den"),
+                        t.forgetPairingHelp, t.pairPINOnlyPlaceholder, t.pairPINFieldLabel(name: "Den"), t.helpText]
+    check(pairingTexts.allSatisfy { !$0.contains("PIN") }
+            && t.pairPINOnlyPlaceholder == "Code" && t.pairPINFieldLabel(name: "Den") == "Code for Den",
+          "pairing texts: the Mac asks for a code, never a PIN, as its rows do")
+}
 // covers: S356
 do {
     let pinOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPin)
     let passwordOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPassword)
-    check(pinOff.contains("PIN") && !pinOff.lowercased().contains("password"),
+    check(pinOff.contains("code") && !pinOff.lowercased().contains("password"),
           "airplay off: a speaker that needs a PIN says PIN, not password")
-    check(passwordOff.contains("password") && !passwordOff.contains("PIN"),
+    check(passwordOff.contains("password") && !passwordOff.contains("code"),
           "airplay off: a speaker that asks for a password says password, not PIN")
     let text = UIStrings()
     check(text.nativeAirPlayAsksForCode(name: "Den", reason: .needsCode, unasked: false) == pinOff,
@@ -2046,6 +2056,14 @@ do {
     check(UIStrings().waitingForAudio("Spotify") == "Waiting for audio from Spotify. Start playback there and it streams right away."
           && UIStrings().waitingForAudio(nil) == "Waiting for audio. Play something and it streams right away.",
           "capture notice: the waiting text names the app when one was found, and reads generic otherwise")
+    // covers: S350
+    check(UIStrings().waitingForAudio(nil, permissionInDoubt: true)
+            == "Waiting for audio. Play something and it streams right away. If it doesn't, turn on AudioSync in "
+                + "System Settings → Privacy & Security → Screen & System Audio Recording, under “System Audio Recording Only”."
+          && UIStrings().waitingForAudio("Spotify", permissionInDoubt: true)
+            .hasPrefix("Waiting for audio from Spotify. Start playback there and it streams right away. If it doesn't, ")
+          && !UIStrings().waitingForAudio(nil).contains("System Settings"),
+          "capture notice: until a tap in this app run has heard sound, the waiting text names the recording permission")
     // covers: S350
     check(CaptureNoticeGate.firstCheck == 3 && CaptureNoticeGate.recheck == 2,
           "capture notice: the first check comes 3 s after the start, then one every 2 s")
@@ -3814,7 +3832,7 @@ do {
                 == .turnOff("native:A9", .receiverUnverified)
             && UIStrings().nativeAirPlayReceiverUnverified(name: "Den TV")
                 == "Den TV didn't answer as the speaker you paired, so it's off. "
-                    + "If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
+                    + "If it's yours, use Forget Pairing and turn it on to pair again with its code.",
           "P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows")
     // covers: S346
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
@@ -3854,13 +3872,13 @@ do {
     check(pathsGone.reachedOverAirPlay2("H8"),
           "native airplay: a receiver reached over AirPlay 2 still names AirPlay 2 as its kind while it is off the network")
     // covers: S346
-    check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit PIN on its screen. Enter it to pair; "
-                                                              + "after that, it connects without a PIN.")
+    check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit code on its screen. Enter it to pair; "
+                                                              + "after that, it connects without a code.")
             && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
           "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
     // covers: S346
     check(kinds.nativePairPINMessage(name: "Loft", everyTime: true)
-            == "Loft shows a 4-digit PIN on its screen. Enter it to pair. Cancel turns the speaker off; turn it on again to retry.",
+            == "Loft shows a 4-digit code on its screen. Enter it to pair. Cancel turns the speaker off; turn it on again to retry.",
           "native airplay: the PIN prompt of a receiver that asks every time promises no lasting pairing")
     paths.apply(.appeared(NativeReceiver(id: "K1", name: "Attic", model: "", availability: .needsPin, reason: nil,
                                          hints: ["airplay", "airplay2", "pairing", "over-airplay2"], overAirPlay2: true)))
@@ -3919,6 +3937,13 @@ do {
         stops.retry()
         // covers: S101, S222
         check(stops.mayStart(at: t0) && !stops.stopped, "EC7 native airplay: Retry starts a new sender at once")
+        let stoppedNotice = Notice(subject: Notice.airplaySender, text: UIStrings().nativeAirPlayStopped, date: t0)
+        // covers: S222
+        check(stoppedNotice.retriesAirPlay && !Notice(subject: Notice.start, text: "", date: t0).retriesAirPlay
+                && stoppedNotice.text == "AirPlay stopped or couldn't start. Click Retry to try again. "
+                    + "If it keeps happening, restart AudioSync.",
+              "EC7 native airplay: the notice that it stopped or couldn't start offers Retry, in Windows' words",
+              stoppedNotice.text)
 
         var up = NativeSenderStarts()
         // covers: S154, S222
@@ -6097,6 +6122,47 @@ check(NowPlayingMonitor.scriptErrorLine(target: "com.apple.Music", code: -2753, 
       == "[AudioSync] AppleScript error: {NSAppleScriptErrorNumber = -2753;}",
       "AppleScript: another error (-2753) still logs the error dictionary")
 
+// MARK: Track info — a player's change notice reads the players without waiting for the poll
+// covers: S336
+do {
+    let noticePosts = NotificationCenter()
+    let noticeMonitor = NowPlayingMonitor(noticeCenter: noticePosts)
+    noticeMonitor.preferredBundleID = ""   // no player to read, so no Apple event leaves the test
+    var noticeReadings = 0
+    noticeMonitor.onReading = { _ in noticeReadings += 1 }
+    // Well before the 2 s poll's first tick, so a second reading can only come from the notice.
+    let noticePollDue = Date().addingTimeInterval(1.5)
+    func waitForNoticeReadings(_ count: Int) {
+        while noticeReadings < count && Date() < noticePollDue {
+            _ = RunLoop.main.run(mode: .default, before: noticePollDue)
+        }
+    }
+    noticeMonitor.startWatching()
+    waitForNoticeReadings(1)
+    noticePosts.post(name: Notification.Name("com.spotify.client.PlaybackStateChanged"), object: nil)
+    waitForNoticeReadings(2)
+    check(noticeReadings == 2, "now playing: a player's change notice reads the players at once, before the 2 s poll")
+    noticeMonitor.stopWatching()
+}
+
+// covers: S336
+do {
+    let againPosts = NotificationCenter()
+    let againMonitor = NowPlayingMonitor(noticeCenter: againPosts)
+    againMonitor.preferredBundleID = ""
+    var againReadings = 0
+    againMonitor.onReading = { _ in againReadings += 1 }
+    // startWatching's reading only lands once the main queue runs, so both notices arrive while it is under way.
+    againMonitor.startWatching()
+    againPosts.post(name: Notification.Name("com.apple.Music.playerInfo"), object: nil)
+    againPosts.post(name: Notification.Name("com.spotify.client.PlaybackStateChanged"), object: nil)
+    let againPollDue = Date().addingTimeInterval(1.5)
+    while Date() < againPollDue { _ = RunLoop.main.run(mode: .default, before: againPollDue) }
+    check(againReadings == 2,
+          "now playing: change notices during a reading read the players once more right after it, before the 2 s poll")
+    againMonitor.stopWatching()
+}
+
 // MARK: Track info — a paused player keeps its track on receivers until it stops or quits
 do {
     let spotify = NowPlayingMonitor.spotify
@@ -7132,8 +7198,8 @@ do {
           "capture: a saved source that is a hands-free input has its own reason", handsFreeStart)
 
     let zoneText = UIStrings()
-    func zoneCount(on: Int, waiting: Int = 0, present: Int, total: Int) -> String {
-        ZoneLayout.count(on: on, waiting: waiting, present: present, total: total, text: zoneText)
+    func zoneCount(on: Int, waiting: Int = 0, present: Int, total: Int, inPair: Int = 0) -> String {
+        ZoneLayout.count(on: on, waiting: waiting, present: present, total: total, inPair: inPair, text: zoneText)
     }
     // covers: S359
     check(zoneCount(on: 0, present: 0, total: 0) == "No speakers",
@@ -7141,6 +7207,10 @@ do {
     // covers: S340 (the Mac's zone header)
     check(zoneCount(on: 0, present: 0, total: 3) == "None of 3 found",
           "zones: a zone with no member listed says none of its members was found")
+    // covers: S247
+    check(zoneCount(on: 0, present: 0, total: 2, inPair: 2) == "2 playing in a pair",
+          "zones: a zone whose members play as a stereo pair says N playing in a pair",
+          zoneCount(on: 0, present: 0, total: 2, inPair: 2))
     // covers: S359
     check(zoneCount(on: 2, present: 3, total: 3) == "2 of 3 on",
           "zones: the header counts the members that are on out of every shown member")
@@ -7578,10 +7648,13 @@ do {
     // covers: S357
     check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
     // covers: S357
-    check(UIStrings().statusItemValue(running: false, notices: 0) == "Streaming off"
-            && UIStrings().statusItemValue(running: true, notices: 2) == "Streaming on, 2 notices",
-          "menu bar icon: VoiceOver hears streaming on/off, then the notice count",
-          UIStrings().statusItemValue(running: true, notices: 2))
+    check(UIStrings().statusItemValue(running: false, speakers: 0, notices: 0) == "Streaming off, no speaker on"
+            && UIStrings().statusItemValue(running: true, speakers: 1, notices: 1)
+                == "Streaming on, 1 speaker on, 1 notice"
+            && UIStrings().statusItemValue(running: true, speakers: 3, notices: 2)
+                == "Streaming on, 3 speakers on, 2 notices",
+          "menu bar icon: VoiceOver hears streaming on/off, the speakers on, then the notice count",
+          UIStrings().statusItemValue(running: true, speakers: 3, notices: 2))
     let addRow = CastAddRow.state
     // covers: S406
     check(addRow(true, .searching) == .reserved && addRow(true, .noneFound) == .shown,
@@ -11337,6 +11410,57 @@ do {
           "calibration: only the speaker being calibrated shows its progress")
 }
 
+// MARK: Calibration reference level: muted or quiet before a run (CalibrationFlow.swift)
+do {
+    func refLevel(_ volume: Double?, _ muted: Bool?) -> CalibrationReferenceLevel {
+        CalibrationReferenceLevel(DeviceVolumeReading(volume: volume, muted: muted))
+    }
+    check(refLevel(0.8, true) == .muted && refLevel(0.1, true) == .muted && refLevel(nil, true) == .muted,
+          "calibration reference: muted wins at any volume, known or not")
+    check(refLevel(0, false) == .quiet && refLevel(0.25, false) == .quiet && refLevel(0.254, false) == .quiet
+            && refLevel(0.2, nil) == .quiet,
+          "calibration reference: 25 % or less (whole percent) is quiet, the main window's low line")
+    check(refLevel(0.256, false) == .ok && refLevel(0.26, false) == .ok && refLevel(1, false) == .ok && refLevel(0.75, nil) == .ok,
+          "calibration reference: above 25 % and not muted is ok")
+    check(refLevel(nil, nil) == .unknown && refLevel(nil, false) == .unknown && refLevel(Double.nan, nil) == .unknown,
+          "calibration reference: no readable volume and not muted is unknown")
+}
+
+// MARK: Calibrate All: the volume row under "Before you start" (CalibrationFlow.swift)
+do {
+    let t = UIStrings()
+    func volumeRow(_ volume: Double?, _ muted: Bool?) -> CalibrationVolumeCheck? {
+        CalibrationVolumeCheck(DeviceVolumeReading(volume: volume, muted: muted))
+    }
+    check(t.calibrateBeforeStart == "Before you start" && t.calibrateMicrophoneCheck == "Microphone where you listen"
+            && t.calibrateMicrophoneCheckDetail == "Keep the room quiet. Nothing changes until you click Apply.",
+          "before you start: the microphone row says where it goes and that nothing changes before Apply")
+    let muted = volumeRow(0.4, true), mutedLow = volumeRow(0.12, true), mutedUnknown = volumeRow(nil, true)
+    check(muted?.warning == .muted && muted?.percent == 40 && mutedLow?.warning == .mutedAndLow(percent: 12)
+            && mutedUnknown?.warning == .muted && mutedUnknown?.percent == nil,
+          "before you start: muted warns at any volume, with the meter only when the volume is known")
+    let mutedWhy: String = "Calibration plays a sweep on the Mac's built-in speakers, "
+        + "and the microphone can't hear them while they're muted."
+    check(muted.map(t.calibrateVolumeTitle) == "Your Mac is muted" && mutedLow.map(t.calibrateVolumeTitle) == "Your Mac is muted"
+            && muted.map(t.calibrateVolumeDetail) == mutedWhy,
+          "before you start: the muted warning says why")
+    check((muted?.warning).map(t.deviceVolumeFix) == "Unmute" && (mutedLow?.warning).map(t.deviceVolumeFix) == "Unmute at 75%",
+          "before you start: the muted warning offers the main window's fix")
+    let quiet = volumeRow(0.12, false)
+    let quietWhy: String = "The microphone may barely hear the sweep on the built-in speakers. "
+        + "Turn it up before you calibrate."
+    check(quiet?.warning == .low(percent: 12) && quiet.map(t.calibrateVolumeTitle) == "Your Mac's volume is 12%"
+            && quiet.map(t.calibrateVolumeDetail) == quietWhy && (quiet?.warning).map(t.deviceVolumeFix) == "Set to 75%",
+          "before you start: 25 % or less warns with the percent and offers Set to 75%")
+    let fine = volumeRow(0.62, false)
+    check(fine?.warning == nil && fine?.percent == 62 && fine.map(t.calibrateVolumeTitle) == "Mac volume: 62%"
+            && fine.map(t.calibrateVolumeDetail) == "Loud enough for the microphone to hear the built-in speakers.",
+          "before you start: a fine volume shows a check with its percent, no warning")
+    check(volumeRow(nil, nil) == nil && volumeRow(nil, false) == nil && volumeRow(Double.nan, nil) == nil,
+          "before you start: an unknown volume shows no row")
+    check(CalibrationVolumeCheck.lowPercent == 25, "before you start: the meter marks the core's low line, 25 %")
+}
+
 // MARK: Calibrate All Speakers: the plan, the stops and the sheet (CalibrateAllFlow.swift, S235-S240)
 do {
     let t = UIStrings()
@@ -12623,6 +12747,9 @@ do {
     let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .searchStopped]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
+    // covers: C43
+    check(t.castProblem(.takenOver, name: "Den") == "Den stopped AudioSync's stream, so it's off.",
+          "cast: a stream the TV's own controls or another app stopped reads as stopped, naming no other app")
     let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
     // covers: S401
     check(bothNone.hasPrefix("No AirPlay or Google Cast speakers found yet.") && bothNone.contains("same network")
@@ -12671,11 +12798,38 @@ do {
     let retrying = t.rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, unannounced: false, target: nil)
     let away = t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: true, target: nil)
     let starting = t.rowNote(cast: joining, waitingForAirPlay2: false, unannounced: false, target: nil)
-    check(t.panelRowNote(retrying, cast: nil) == t.reconnecting
-            && t.panelRowNote(away, cast: nil) == t.notOnNetwork
-            && t.panelRowNote(starting, cast: joining) == "Connecting…"
-            && t.panelRowNote(t.waitingForAirPlay2, cast: nil) == nil,
-          "a panel row shows its Reconnecting, Not on network and Cast Connecting note")
+    check(t.panelRowNote(retrying) == t.reconnecting
+            && t.panelRowNote(away) == "Not on the network"
+            && t.panelRowNote(starting) == "Connecting…"
+            && t.panelRowNote(t.waitingForAirPlay2) == t.waitingForAirPlay2
+            && t.panelRowNote(t.waitingForPassword) == t.waitingForPassword
+            && t.panelRowNote(t.zoneMemberNotFound) == t.zoneMemberNotFound,
+          "a panel row shows every row note, as the main window does, Not on network in short")
+}
+
+do {
+    let t = UIStrings()
+    let kitchen = "0123456789abcdef0123456789abcdef"
+    var raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_PAUSED
+    raw.attempt = 4
+    var m = CastModel()
+    m.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil))
+    _ = m.turnOn(kitchen)
+    m.startSent(kitchen)
+    _ = m.started(kitchen, attempt: 4, refusal: ASC_CAST_REFUSED_NONE)
+    _ = m.apply(.started(attempt: 4, format: ASC_CAST_FORMAT_WAV))
+    // covers: C113
+    check(CastEvent(raw) == .paused(attempt: 4) && m.apply(.paused(attempt: 4)) == .changed
+            && m.status(of: kitchen) == .paused && m.apply(.playing(attempt: 4)) == .playing(kitchen)
+            && m.status(of: kitchen) == .playing,
+          "cast: a pause on the device shows as paused until the device plays again (C113)")
+    let paused = CastRow(status: .paused, muted: true, volumeFixed: false, group: .notReported)
+    // covers: C113
+    check(t.castNote(paused) == t.castPaused
+            && t.panelRowNote(t.rowNote(cast: paused, waitingForAirPlay2: false, unannounced: false, target: nil))
+                == t.castPaused,
+          "cast: a paused speaker's row says so, ahead of its mute and group, in the window and the panel (C113)")
 }
 
 // covers: C13 (the model name in the Mac's discovery line, left out when missing)
@@ -12953,6 +13107,18 @@ do {
     // covers: C68, C105
     check(quiet.apply(.volume(attempt: 7, reported(0.1, fixed: true))) != .setVolume(0.8),
           "cast master: a fixed volume is not set at the start (C68)")
+
+    var presetFixed = appeared()
+    _ = presetFixed.setVolume(tv, position: 50)
+    presetFixed = session(attempt: 14, from: presetFixed)
+    _ = presetFixed.setZones([tv: 50])
+    _ = presetFixed.apply(.volume(attempt: 14, reported(0.3, fixed: true)))
+    // covers: C68, S415
+    check(approx(presetFixed.rowVolume(of: tv), 30, 1e-9),
+          "cast row: a fixed volume shows what the device reports, whatever the zone and the own level kept")
+    // covers: C68
+    check(approx(presetFixed.knownVolume(of: tv) ?? 0, 30, 1e-9),
+          "cast master: a fixed volume's slider shows what the device reports, not the own level kept")
 
     var group = CastModel()
     group.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
@@ -13573,6 +13739,8 @@ do {
     check(guideWords.contains("the button with its zone's name goes to the zone")
             && !guideWords.contains("after its own goes to the zone"),
           "guide, zones: a zoned speaker's short row names the button that goes to its zone")
+    check(guideWords.contains("a preamp, preset curves and curves you save yourself"),
+          "guide, equalizer: the line names the curves you save yourself, as on Windows")
     // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
@@ -14268,6 +14436,20 @@ do {
     // covers: C18
     check(removed && !removedAgain && afterOne == [den] && stored.values[key] == nil,
           "cast address list: Remove drops one address, and the setting goes once none is left")
+    let namesNoDevice = ["0.0.0.0", "255.255.255.255", "224.0.0.1", "239.255.255.250", "speaker.123", "a.b.0"]
+    let takenAnyway = namesNoDevice.filter { CastManualAddress($0) != nil }
+    // covers: C18
+    check(takenAnyway.isEmpty && CastManualAddress("223.255.255.254") != nil && CastManualAddress("speaker.1a") != nil,
+          "cast address: 0.0.0.0, the broadcast address, a multicast address and a host name whose last label is all digits are refused",
+          "accepted: \(takenAnyway)")
+    var crammed = CastManualList(stored: nil)
+    for n in 1...64 { crammed.add(CastManualAddress("192.0.2.\(n)")!) }
+    let lastOver = crammed.add(CastManualAddress("192.0.2.65")!)
+    let overStored = (1...70).map { "192.0.2.\($0)" }
+    let readCapped = CastManualList(stored: overStored).stored
+    // covers: C18
+    check(crammed.addresses.count == 64 && !lastOver && readCapped == Array(overStored.prefix(64)),
+          "cast address list: it keeps at most 64 addresses; one more is not kept, and a longer stored list keeps its first 64")
 
     let id = "manual:192.0.2.7:8010"
     var m = CastModel()
@@ -15933,6 +16115,53 @@ do {
     // covers: S224
     check(NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_UNREADABLE),
           "pairings notice: a file that couldn't be read, which is left as it is, is told")
+    var pairingsWrites = PairingsWriteNotice()
+    let firstFailedWrite = pairingsWrites.written(false, openedUnsaved: false)
+    let secondFailedWrite = pairingsWrites.written(false, openedUnsaved: false)
+    // covers: S224
+    check(firstFailedWrite == .post && secondFailedWrite == nil,
+          "pairings notice: a write that fails posts it, once while the writes keep failing",
+          "\(String(describing: firstFailedWrite)) \(String(describing: secondFailedWrite))")
+    let workingWrite = pairingsWrites.written(true, openedUnsaved: false)
+    let nextWorkingWrite = pairingsWrites.written(true, openedUnsaved: false)
+    // covers: S224
+    check(workingWrite == .clear && nextWorkingWrite == nil,
+          "pairings notice: the next write that works clears it",
+          "\(String(describing: workingWrite)) \(String(describing: nextWorkingWrite))")
+    var unsavedStore = PairingsWriteNotice()
+    _ = unsavedStore.written(false, openedUnsaved: true)
+    let memoryOnlyWrite = unsavedStore.written(true, openedUnsaved: true)
+    // covers: S224
+    check(memoryOnlyWrite == nil,
+          "pairings notice: a write into a store opened as one that keeps nothing leaves the launch notice",
+          String(describing: memoryOnlyWrite))
+    var rawPairedEvent = AscAirPlayEvent()
+    rawPairedEvent.kind = ASC_AIRPLAY_EVENT_PAIRED
+    let pairedAndStored = NativeAirPlay.event(rawPairedEvent)
+    rawPairedEvent.error = ASC_AIRPLAY_PAIRED_FOR_SESSION
+    let pairedForSessionOnly = NativeAirPlay.event(rawPairedEvent)
+    var rawStoredEvent = AscAirPlayEvent()
+    rawStoredEvent.kind = ASC_AIRPLAY_EVENT_STORED
+    let storedUnverified = NativeAirPlay.event(rawStoredEvent)
+    // covers: S224
+    check(pairedAndStored == .paired(id: "", storeNote: "")
+            && pairedForSessionOnly == .paired(id: "", storeNote: "", forSession: true)
+            && storedUnverified == .stored(id: "", storeNote: ""),
+          "pairings notice: the core's paired, session-only paired and stored events read apart",
+          "\(String(describing: pairedAndStored)) \(String(describing: pairedForSessionOnly)) \(String(describing: storedUnverified))")
+    // covers: S224
+    check(NativeSpeakerEvent.paired(id: "B2", storeNote: "").pairingsSaved == true
+            && NativeSpeakerEvent.paired(id: "B2", storeNote: "disk full").pairingsSaved == false
+            && NativeSpeakerEvent.stored(id: "B2", storeNote: "").pairingsSaved == true
+            && NativeSpeakerEvent.stored(id: "B2", storeNote: "disk full").pairingsSaved == false
+            && NativeSpeakerEvent.paired(id: "B2", storeNote: "", forSession: true).pairingsSaved == nil,
+          "pairings notice: a pairing or a verify-failed pairing's credentials report their write, a session-only pairing none")
+    // covers: S224
+    check(NativeSpeakerEvent.paired(id: "B2", storeNote: "").logLine(name: { _ in nil })
+            == "[AudioSync] native AirPlay: B2: paired, credentials stored"
+            && NativeSpeakerEvent.paired(id: "B2", storeNote: "", forSession: true).logLine(name: { _ in nil })
+            == "[AudioSync] native AirPlay: B2: paired for this session, nothing stored (it asks for a code every time)",
+          "native pairing: a pairing for this session only logs that nothing was stored")
 }
 
 // MARK: Main window opens one sheet at a time (MainWindowSheet.mayOpen)
@@ -15956,6 +16185,50 @@ do {
     check(text.delayStepAccessibility(-100) == "−100 ms, decrease delay"
             && text.delayStepAccessibility(10) == "+10 ms, increase delay",
           "delay step: the label is the step, the unit, then what it does")
+}
+
+do {
+    check(UIStrings().dismissNotice("X") == "Dismiss: X",
+          "notices: a close button names the notice it dismisses, as on Windows")
+}
+
+do {
+    let words = UIStrings()
+    check(words.noSpeakerNoticeName == "no speaker on"
+            && words.speakerLostNoticeName("Den") == "Den disconnected"
+            && words.cantPlayNoticeName("Den") == "Den can't play"
+            && words.sourceStoppedNoticeName(.inputDisconnected, input: "Mic") == "Mic was disconnected, streaming stopped"
+            && words.streamingStartNoticeName(for: SourceCapture.CaptureError.inputHandsFree("buds:input"),
+                                              input: "Buds") == nil,
+          "notices: each short name is Windows' title for the same notice, none where Windows has no such notice")
+    var named = NoticeList()
+    named.post("Den was disconnected.", subject: "den", shortName: "Den disconnected")
+    check(named.newest?.shortName == "Den disconnected" && named.newest?.title == nil,
+          "notices: a short name is kept apart from the drawn title")
+    let at = Date(timeIntervalSince1970: 0)
+    let shortOnly = Notice(subject: "a", text: "x", date: at, shortName: "Den disconnected")
+    let titleOnly = Notice(subject: "b", text: "x", date: at, title: "Den waiting")
+    let unnamed = Notice(subject: "c", text: "x", date: at, title: "", shortName: "")
+    check(shortOnly.dismissLabel(words) == "Dismiss: Den disconnected"
+            && titleOnly.dismissLabel(words) == "Dismiss: Den waiting"
+            && unnamed.dismissLabel(words) == "Dismiss Notice",
+          "notices: the close button reads the short name, else the title, else the plain label")
+}
+
+// MARK: Guide: updates, and Tips that don't repeat More Controls
+do {
+    let guide = UIStrings()
+    let updatingGuide = UIStrings(updatesOn: true)
+    check(updatingGuide.helpText.contains("\(guide.menuCheckForUpdates) in the AudioSync menu")
+            && !guide.helpText.contains(guide.menuCheckForUpdates),
+          "guide: names Check for Updates… in the AudioSync menu only in a build that checks for updates")
+    let guideLines = guide.helpText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let tipsStart = guideLines.firstIndex(of: "Tips")
+    let tipsEnd = guideLines.firstIndex(of: "Volume")
+    let tips = tipsStart.flatMap { s in tipsEnd.map { e in s < e ? guideLines[s..<e].joined(separator: "\n") : "" } } ?? ""
+    check(!tips.isEmpty && !tips.contains(" ms") && !tips.contains("if it plays late, lower it")
+            && tips.contains("one by one") && tips.contains("hands-free microphone"),
+          "guide: Tips keep their advice without an unsourced delay range or More Controls' raise/lower rule", tips)
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

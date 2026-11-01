@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::audio::{AudioReader, Codec, StreamFormat};
-use crate::channel::{Event, PlaybackEnd};
+use crate::channel::{Event, PlaybackEnd, new_volume_ask};
 use crate::client::{CastClient, Fingerprint, FingerprintBook, FingerprintChange, QUIT_BUDGET};
 use crate::discovery::DeviceId;
 use crate::error::{Backoff, ConnectError, EndReason, LaunchError, ReconnectPacer};
@@ -141,6 +141,9 @@ pub enum SessionEvent {
     Diagnostics(Diagnostics),
     /// The receiver ran dry (C51).
     Rebuffering,
+    /// Someone paused the device itself; [`SessionEvent::Playing`] follows
+    /// once its next `PLAYING` loaded the stream again (C113).
+    Paused,
     /// The device's volume as its latest status reports it; the host moves
     /// its control there and sends nothing back (C69, C70). The flag says
     /// it is the first status since a mute was sent, so a level it repeats
@@ -150,6 +153,7 @@ pub enum SessionEvent {
     /// channel reports it.
     VolumeUnanswered {
         level: f64,
+        ask: u64,
     },
     /// A connect attempt failed; the next one follows after `retry_in`
     /// (C80).
@@ -310,6 +314,8 @@ pub struct CastSession {
     mute_asked: bool,
     last_media: Option<MediaStatus>,
     playing: bool,
+    /// The device reported `PAUSED` since the stream last played (C113).
+    paused: bool,
     load_sent_frames: u64,
     load_dropped_frames: u64,
     load_underrun_frames: u64,
@@ -479,6 +485,7 @@ impl CastSession {
             mute_asked: false,
             last_media: None,
             playing: false,
+            paused: false,
             load_sent_frames: 0,
             load_dropped_frames: 0,
             load_underrun_frames: 0,
@@ -556,7 +563,17 @@ impl CastSession {
     /// Sets the device level (C65, C67, C70); the stream's samples are
     /// never scaled (C71).
     pub fn set_volume(&mut self, level: f64) -> Result<(), VolumeError> {
-        self.client.set_volume(level)
+        self.ask_volume(new_volume_ask(), level)
+    }
+
+    /// [`CastSession::set_volume`] under the host's `ask`, which a report
+    /// that no status will answer it carries (C70).
+    pub fn ask_volume(&mut self, ask: u64, level: f64) -> Result<(), VolumeError> {
+        let result = self.client.set_volume(ask, level);
+        if result.is_err() {
+            self.report(SessionEvent::VolumeUnanswered { level, ask });
+        }
+        result
     }
 
     /// Replaces the C70 interval on the current channel only; a reconnect's
@@ -626,10 +643,11 @@ impl CastSession {
     }
 
     /// The user's Resync (C79): a new `LOAD` on the same app, which brings
-    /// the latency back to a fresh start at the cost of a short gap. Never
-    /// called by the sender itself. A failed Resync is recovered once with a
-    /// reload (C81); if that fails too, the session ends with its reason
-    /// (C83). The Resync's own error is returned either way.
+    /// the latency back to a fresh start at the cost of a short gap. The
+    /// sender calls it itself only after a pause on the device (C113). A
+    /// failed Resync is recovered once with a reload (C81); if that fails
+    /// too, the session ends with its reason (C83). The Resync's own error
+    /// is returned either way.
     pub fn resync(&mut self) -> Result<(), MediaError> {
         if self.ended {
             return Err(MediaError::NotRunning);
@@ -839,6 +857,7 @@ impl CastSession {
     fn started_playing(&mut self) {
         let stats = self.server.stats();
         self.playing = true;
+        self.paused = false;
         self.load_sent_frames = stats.frames_sent;
         self.load_dropped_frames = stats.frames_dropped;
         self.load_underrun_frames = stats.underrun_frames;
@@ -861,10 +880,24 @@ impl CastSession {
                     self.report(SessionEvent::Volume(status.volume, answers_mute));
                 }
             }
-            Event::VolumeUnanswered { level } => {
-                self.report(SessionEvent::VolumeUnanswered { level });
+            Event::VolumeUnanswered { level, ask } => {
+                self.report(SessionEvent::VolumeUnanswered { level, ask });
             }
-            Event::MediaStatus(status) => self.last_media = Some(status),
+            Event::MediaStatus(status) => {
+                let state = status.player_state.clone();
+                self.last_media = Some(status);
+                match state {
+                    PlayerState::Paused if self.playing && !self.paused => {
+                        self.paused = true;
+                        self.report(SessionEvent::Paused);
+                    }
+                    // Its own failures are recovered or end the session there.
+                    PlayerState::Playing if self.playing && self.paused => {
+                        let _ = self.resync();
+                    }
+                    _ => {}
+                }
+            }
             Event::Multizone(message) => self.on_multizone(message),
             Event::Rebuffering => {
                 self.rebuffers += 1;
@@ -1019,11 +1052,18 @@ impl CastSession {
             };
             match result {
                 Ok(relaunched) => {
-                    if let Some(level) = queued {
-                        let _ = self.client.set_volume(level);
+                    if let Some((ask, level)) = queued
+                        && self.client.set_volume(ask, level).is_err()
+                    {
+                        self.report(SessionEvent::VolumeUnanswered { level, ask });
                     }
                     self.pacer.connected(Instant::now());
-                    return self.report(SessionEvent::Recovered { relaunched });
+                    self.report(SessionEvent::Recovered { relaunched });
+                    // A reload cleared it; without one the device may still be paused.
+                    if self.paused {
+                        self.report(SessionEvent::Paused);
+                    }
+                    return;
                 }
                 Err(_) if !self.selected.load(Ordering::SeqCst) => {
                     return self.end(SessionEnd::Deselected);

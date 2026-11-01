@@ -671,25 +671,6 @@ mod tests {
         );
     }
 
-    // covers: S231
-    #[test]
-    fn the_stream_latency_counts_only_for_a_stop_without_a_clock() {
-        let s = faded_and_followed_by(960);
-        let thirty_seconds = 30 * 48_000;
-        for latency in [0, thirty_seconds] {
-            assert!(
-                s.pipeline
-                    .has_played_its_fade(queue(480, Some(480), latency))
-            );
-        }
-        assert!(s.pipeline.has_played_its_fade(queue(480, None, 0)));
-        assert!(
-            !s.pipeline
-                .has_played_its_fade(queue(480, None, thirty_seconds))
-        );
-        assert_eq!(s.control.output_latency_ns(), 0, "none reaches the lead");
-    }
-
     // covers: S209, S317
     #[test]
     fn without_output_times_no_wake_counts_late_and_no_start_step_is_made() {

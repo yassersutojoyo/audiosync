@@ -291,6 +291,11 @@ final class DeviceVolumes {
         refreshHints()
     }
 
+    /// One reading of `device`, followed or not; follows and writes nothing.
+    func read(_ device: AudioDeviceID) -> DeviceVolumeReading {
+        DeviceVolumeControls.find(on: device, access).read(device, access)
+    }
+
     /// The fix the user clicked under output `uid` (S197): reads the device
     /// again, since its volume may have changed after the row last did, so
     /// the fix never lowers it; writes what the core decides for that

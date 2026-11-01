@@ -84,7 +84,7 @@ use super::capture::{
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
 use super::clock_probe::{ClockQueue, describe_clock_queue};
-use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSource};
+use super::now_playing::{Follow, Mix, SharedLabels, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{
@@ -857,8 +857,10 @@ pub struct Controller<D: Driver> {
     listing_error: Option<BackendError>,
     sources_error: Option<BackendError>,
     /// Why the input devices couldn't be listed last time, if they couldn't:
-    /// the log tells once per failure, and the list goes on without them.
+    /// the log tells once per failure, and the list keeps the last inputs
+    /// listed, so the chosen one doesn't show as unplugged while it captures.
     inputs_error: Option<BackendError>,
+    inputs_listed: Vec<SourceInfo>,
     /// The name and kind of each input device listed in this run, and the
     /// endpoint IDs a device left when a capture followed it to another
     /// (S329).
@@ -991,6 +993,7 @@ impl<D: Driver> Controller<D> {
             listing_error: None,
             sources_error: None,
             inputs_error: None,
+            inputs_listed: Vec::new(),
             inputs_seen: BTreeMap::new(),
             inputs_left_behind: BTreeSet::new(),
             listing_notes: Vec::new(),
@@ -1374,10 +1377,19 @@ impl<D: Driver> Controller<D> {
             return Some(source.clone());
         }
         let source = match &id {
-            SourceId::WholeSystem | SourceId::Apps { .. } | SourceId::AppsExcept { .. } => {
+            SourceId::WholeSystem => TrackSource {
+                follow: Follow::AnyApp,
+                name: None,
+                mix: None,
+            },
+            SourceId::Apps { executables, .. } | SourceId::AppsExcept { executables } => {
                 TrackSource {
                     follow: Follow::AnyApp,
                     name: None,
+                    mix: Some(Mix {
+                        apps: executables.iter().map(|app| display_name(app)).collect(),
+                        except: matches!(id, SourceId::AppsExcept { .. }),
+                    }),
                 }
             }
             SourceId::App { root_pid } => {
@@ -1388,6 +1400,7 @@ impl<D: Driver> Controller<D> {
                             pid: Some(*root_pid),
                         },
                         name: None,
+                        mix: None,
                     });
                 };
                 let executable = processes
@@ -1400,6 +1413,7 @@ impl<D: Driver> Controller<D> {
                         executable,
                         pid: Some(*root_pid),
                     },
+                    mix: None,
                 }
             }
             // An input device has no media session; receivers get the
@@ -1411,6 +1425,7 @@ impl<D: Driver> Controller<D> {
                         pid: None,
                     },
                     name: None,
+                    mix: None,
                 };
                 // A failed listing isn't kept, so a later poll can still name it.
                 let Ok(readings) = self.driver.inputs() else {
@@ -1588,7 +1603,7 @@ impl<D: Driver> Controller<D> {
         let notified = self.driver.outputs_changed();
         if notified {
             self.log
-                .log(|| "Windows reported a change of the outputs".to_owned());
+                .log(|| format!("{AUDIO_SYSTEM} reported a change of the outputs"));
         }
         if force || notified || !self.listing_ok {
             let (changed, listed) = self.refresh_outputs();
@@ -3084,9 +3099,10 @@ impl<D: Driver> Controller<D> {
             });
         }
         self.log.log(|| {
-            "the capture was lost: Windows audio restarted or its device went away; it opens \
-             again in a moment while the outputs play on"
-                .to_owned()
+            format!(
+                "the capture was lost: {AUDIO_SYSTEM} audio restarted or its device went away; \
+                 it opens again in a moment while the outputs play on"
+            )
         });
     }
 
@@ -4004,17 +4020,20 @@ impl<D: Driver> Controller<D> {
                         .log(|| "listing the input devices works again".to_owned());
                 }
                 self.take_inputs(&readings);
-                sources.extend(input_sources(readings));
+                self.inputs_listed = input_sources(readings);
             }
             Err(error) => {
                 if self.inputs_error.as_ref() != Some(&error) {
                     self.log.log(|| {
-                        format!("listing the input devices failed, so none are offered: {error}")
+                        format!(
+                            "listing the input devices failed, so the last listing stays: {error}"
+                        )
                     });
                     self.inputs_error = Some(error);
                 }
             }
         }
+        sources.extend(self.inputs_listed.iter().cloned());
         Ok(sources)
     }
 }
@@ -4035,6 +4054,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.reap(true);
         self.stop_following_device_volumes();
         self.airplay = None;
+        self.starter = None;
+        self.airplay_restart_in = None;
         if let Some(cast) = cast {
             let clean = cast.join().unwrap_or(false);
             if !clean {
@@ -5068,9 +5089,9 @@ fn describe_listing(
             Some(Some(_)) => ' ',
         };
         let default = if endpoint.is_default {
-            ", Windows default"
+            format!(", {AUDIO_SYSTEM} default")
         } else {
-            ""
+            String::new()
         };
         let played = setups.get(&endpoint.id).map_or_else(String::new, |setup| {
             format!(
@@ -5122,7 +5143,7 @@ fn describe_routing(
         let endpoint = endpoints.iter().find(|e| e.id == path.endpoint_id);
         let why = match path.reason {
             DirectReason::DefaultEndpoint => {
-                "Windows' default output, and the whole system is captured".to_owned()
+                format!("the {AUDIO_SYSTEM} default output, and the whole system is captured")
             }
             DirectReason::Session => {
                 let pids: Vec<String> = endpoint
@@ -5158,6 +5179,7 @@ fn describe_routing(
             path.endpoint_name, path.endpoint_id
         ));
     }
+    let not_default = format!("not the {AUDIO_SYSTEM} default output anymore");
     for gone in previous.iter().filter(|gone| {
         !paths
             .iter()
@@ -5173,7 +5195,7 @@ fn describe_routing(
                     "a software device AudioSync doesn't play to"
                 }
                 _ if gone.reason == DirectReason::DefaultEndpoint && !endpoint.is_default => {
-                    "not Windows' default output anymore"
+                    not_default.as_str()
                 }
                 _ => "the source doesn't play there anymore",
             },
@@ -5225,11 +5247,18 @@ fn describe_source(source: &SourceId) -> String {
             executables.join(", ")
         ),
         SourceId::AppsExcept { executables } => {
-            format!("All apps except {}", executables.join(", "))
+            format!("All Apps Except {}", executables.join(", "))
         }
         SourceId::Input { endpoint_id } => format!("the input device {endpoint_id}"),
     }
 }
+
+/// The audio system the debug log names for the host's outputs and capture.
+const AUDIO_SYSTEM: &str = if cfg!(target_os = "linux") {
+    "PipeWire"
+} else {
+    "Windows"
+};
 
 /// The audio system that converts between AudioSync's float samples and a
 /// device's format.
@@ -9724,7 +9753,7 @@ mod tests {
 
     // covers: S355
     #[test]
-    fn a_failed_input_listing_leaves_the_inputs_out_and_keeps_the_apps() {
+    fn a_failed_input_listing_keeps_the_apps_and_the_inputs_listed_before() {
         let mut backend = backend();
         backend.connect_input("mic", "Microphone", "USB");
         backend.fail_input_listing(Some(BackendError::System {
@@ -9748,7 +9777,10 @@ mod tests {
         assert_eq!(ids(&mut backend), apps);
         assert_eq!(ids(&mut backend), apps, "every refresh");
         backend.fail_input_listing(None);
-        assert_eq!(ids(&mut backend).len(), 3, "the input is back");
+        let listed = ids(&mut backend);
+        assert_eq!(listed.len(), 3, "the input is back");
+        backend.fail_input_listing(Some(BackendError::NotResponding));
+        assert_eq!(ids(&mut backend), listed, "the input stays listed");
     }
 
     // covers: S355
@@ -10463,7 +10495,12 @@ mod tests {
     #[test]
     fn a_bth_enumerator_makes_a_bluetooth_output_whose_start_lead_is_a_block_longer() {
         let mut backend = backend();
-        for (index, id, enumerator) in [(2, "a2dp", "BTHENUM"), (3, "le", "BTHLEDevice")] {
+        let bluetooth = [
+            (2, "a2dp", "BTHENUM"),
+            (3, "le", "BTHLEDevice"),
+            (4, "ble", "BTHLE"),
+        ];
+        for (index, id, enumerator) in bluetooth {
             backend.enumerate_endpoint(EndpointReading {
                 index,
                 id: Ok(id.to_owned()),
@@ -10478,20 +10515,20 @@ mod tests {
         }
         backend.poll();
         let listed = backend.list_outputs().unwrap();
-        for id in ["a2dp", "le"] {
+        for (_, id, _) in bluetooth {
             let output = listed.iter().find(|o| o.id == id).expect("listed");
             assert_eq!(output.kind, OutputKind::Bluetooth, "{id}");
+            backend.set_output_enabled(id, true).unwrap();
         }
-
-        backend.connect_output_as("buds", "Buds", OutputKind::Bluetooth);
-        backend.set_output_enabled("buds", true).unwrap();
         backend.start(&SourceId::WholeSystem).unwrap();
         let extra = |id: &str| {
             let session = backend.session.as_ref().expect("a session");
             session.outputs[id].control.extra_lead_frames()
         };
         let block = audiosync_core::render::BLUETOOTH_LEAD_FRAMES as i64;
-        assert_eq!(extra("buds"), block);
+        for (_, id, _) in bluetooth {
+            assert_eq!(extra(id), block, "{id}");
+        }
         assert_eq!((extra(SPEAKERS), extra(HEADPHONES)), (0, 0));
     }
 
@@ -10540,22 +10577,23 @@ mod tests {
         backend.poll();
         backend.poll();
         let messages = logged(&log, &dir);
+        let changed = &format!("{AUDIO_SYSTEM} reported a change of the outputs");
         assert_in_order(
             &messages,
             &[
                 "output \"Headphones\" (headphones) stopped by itself",
-                "Windows reported a change of the outputs",
+                changed,
                 "outputs listed: 1",
                 "    \"Speakers\" (speakers): Other, last played at 48000 Hz, 2 ch",
                 "  - \"Headphones\" (headphones): gone",
                 "event: the outputs changed",
                 "event: output \"Headphones\" (headphones) lost",
-                "Windows reported a change of the outputs",
+                changed,
                 "outputs listed: 2",
                 "    \"Speakers\" (speakers): Other",
-                "  + \"TV\" (tv): Hdmi, Windows default",
+                &format!("  + \"TV\" (tv): Hdmi, {AUDIO_SYSTEM} default"),
                 "event: the outputs changed",
-                "Windows reported a change of the outputs",
+                changed,
                 "listing the outputs failed: \
                  IMMDeviceEnumerator::EnumAudioEndpoints failed (0x80004005).",
                 "outputs listed: 1",
@@ -10603,10 +10641,11 @@ mod tests {
                           a Bluetooth hands-free endpoint, for calls only";
         let no_id = "render endpoint 3 left out: it couldn't be read \
                      (IMMDevice::GetId failed (0x80070490))";
+        let changed = &format!("{AUDIO_SYSTEM} reported a change of the outputs");
         assert_in_order(
             &messages,
             &[
-                "Windows reported a change of the outputs",
+                changed,
                 "outputs listed again, no change (2)",
                 hands_free,
                 no_id,
@@ -11813,11 +11852,10 @@ mod tests {
         backend.poll();
         assert!(now_playing_sent(&fake).is_empty(), "nothing changed");
 
-        for _ in 1..DROP_AFTER {
-            reader.read(None);
-            backend.poll();
-            assert!(now_playing_sent(&fake).is_empty(), "the paused track stays");
-        }
+        reader.read(None);
+        backend.poll();
+        assert!(now_playing_sent(&fake).is_empty(), "the paused track stays");
+        thread::sleep(DROP_AFTER);
         reader.read(None);
         backend.poll();
         let sent = now_playing_sent(&fake);
@@ -11841,6 +11879,56 @@ mod tests {
             now_playing_sent(&fake),
             [NowPlaying::default()],
             "a receiver that starts later gets no track from before"
+        );
+    }
+
+    // covers: S218
+    #[test]
+    fn a_mix_shows_only_a_playing_track_and_otherwise_its_picker_name() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_receiver_labels(shared_labels());
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        let mix_artist = |reader: &FakeReader, backend: &mut MockBackend, track| {
+            reader.read(track);
+            backend.poll();
+            now_playing_sent(&fake)
+                .last()
+                .and_then(|sent| sent.track.as_ref())
+                .map(|track| track.artist.clone())
+        };
+
+        backend
+            .start(&SourceId::AppsExcept {
+                executables: vec!["chat.exe".to_owned(), "game.exe".to_owned()],
+            })
+            .unwrap();
+        backend.poll();
+        let playing = Some(track("Spotify.exe", "Song", true, Some(b"cover")));
+        assert_eq!(
+            mix_artist(&reader, &mut backend, playing).as_deref(),
+            Some("Song artist")
+        );
+        let paused = Some(track("Spotify.exe", "Song", false, Some(b"cover")));
+        assert_eq!(
+            mix_artist(&reader, &mut backend, paused).as_deref(),
+            Some("Every app but Chat + Game"),
+            "the app that played last keeps no paused track in a mix, as on the Mac"
+        );
+
+        backend.stop();
+        backend.poll();
+        backend
+            .start(&SourceId::Apps {
+                root_pids: Vec::new(),
+                executables: vec!["player.exe".to_owned(), "chat.exe".to_owned()],
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(
+            mix_artist(&reader, &mut backend, None).as_deref(),
+            Some("Player + Chat")
         );
     }
 
@@ -12278,6 +12366,18 @@ mod tests {
             "the restart the failure planned is dropped"
         );
         assert!(backend.airplay_browsing());
+    }
+
+    #[test]
+    fn a_retry_after_the_shut_down_starts_no_airplay_sender() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let (starter, starts) = counted_starter(&fake, 2);
+        backend.start_airplay(starter, PairingStore::in_memory());
+        backend.shut_down();
+        backend.retry_airplay();
+        assert_eq!(starts.get(), 1);
+        assert!(!backend.airplay_browsing());
     }
 
     // covers: S101

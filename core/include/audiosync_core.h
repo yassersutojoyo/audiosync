@@ -131,12 +131,16 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_PIN_NEEDED 6      /* a pairing's Apple TV shows a PIN: ask the user, then asc_airplay_submit_pin */
 #define ASC_AIRPLAY_EVENT_PASSWORD_NEEDED 7 /* a pairing needs the password (.error PASSWORD_REQUIRED) or got a wrong one (WRONG_PASSWORD, forgotten) */
 #define ASC_AIRPLAY_EVENT_PAIRING_FAILED 8  /* a pairing ended without credentials: .error (WRONG_PIN, NOT_RESPONDING, ...) */
-#define ASC_AIRPLAY_EVENT_PAIRED 9          /* paired, credentials stored; .detail "" or why they last this run only */
+#define ASC_AIRPLAY_EVENT_PAIRED 9          /* paired, credentials stored; .detail "" or why they last this run only; with .error ASC_AIRPLAY_PAIRED_FOR_SESSION paired for this session only, nothing stored */
 #define ASC_AIRPLAY_EVENT_VOLUME 10         /* its volume was changed on the speaker itself: .volume, the slider position that plays at it */
 #define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
 #define ASC_AIRPLAY_EVENT_TRACE 12          /* a debug log line about a speaker's session (.detail), only with AUDIOSYNC_DEBUG=1 */
 #define ASC_AIRPLAY_EVENT_REMOTE 13         /* a speaker's remote asked for .remote: send it through the now-playing control */
 #define ASC_AIRPLAY_EVENT_LATENCY_HELD 14   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
+#define ASC_AIRPLAY_EVENT_STORED 15         /* a PIN pairing whose verify failed stored its credentials; the PAIRING_FAILED that follows ends it: .detail "" or why they last this run only */
+
+/* A PAIRED event's .error. */
+#define ASC_AIRPLAY_PAIRED_FOR_SESSION 1 /* paired for this session only: nothing stored or written, it asks for a code every time */
 
 /* AscAirPlayEvent.remote: the transport control a speaker's remote asked for */
 #define ASC_AIRPLAY_REMOTE_PLAY_PAUSE 1
@@ -253,6 +257,7 @@ extern "C" {
 #define ASC_CAST_EVENT_GROUP_LOG 18        /* a line about a Cast group for the debug log in .detail */
 #define ASC_CAST_EVENT_CERTIFICATE_CHANGED 19 /* the device's certificate changed since its last connect: "<before> to <after>" in .detail, for the debug log */
 #define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level */
+#define ASC_CAST_EVENT_PAUSED 21           /* someone paused the device itself; PLAYING follows once its next play loaded the stream again */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
 #define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */
@@ -2035,7 +2040,8 @@ void asc_airplay_cancel_pairing(AscAirPlay *airplay, const char *id);
  * (asc_airplay_add_speaker adds or restarts one) and pairings, until the
  * handle is destroyed; NULL or "" forgets it. Kept in memory only and wiped
  * when dropped, never stored or logged, and forgotten when the receiver turns
- * it down. Returns false when the handle or id is NULL.
+ * it down. Returns false when the handle or id is NULL, or when password is
+ * not UTF-8, which keeps the stored one.
  */
 bool asc_airplay_set_password(AscAirPlay *airplay, const char *id, const char *password);
 
@@ -2130,7 +2136,7 @@ typedef struct AscCastInput AscCastInput;
 typedef struct AscCastDevice {
     int32_t event;     /* ASC_CAST_APPEARED, _CHANGED or _GONE */
     const char *id;    /* 32 hex digits, or "manual:<ip:port>" */
-    const char *name;  /* the name it announces, "" when none */
+    const char *name;  /* the name it announces, else its full service name; "" when none */
     const char *model; /* its model, "" when none */
     uint32_t flags;    /* ASC_CAST_FLAG_* bits */
     const char *former; /* on the APPEARED of a device a browse found that was added by address:

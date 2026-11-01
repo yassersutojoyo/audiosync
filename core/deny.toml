@@ -35,3 +35,9 @@ unused-allowed-license = "allow"
 
 [licenses.private]
 ignore = false
+
+# Checked weekly by .github/workflows/advisories.yml; every ignore says why.
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "warn"

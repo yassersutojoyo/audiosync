@@ -6,12 +6,12 @@ mod common;
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
-use audiosync_cast::client::Fingerprint;
+use audiosync_cast::client::{Fingerprint, FingerprintBook, FingerprintChange};
 use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, DeviceMemory, HostEvent, MAX_HOST_EVENTS, MAX_MEMORY_DEVICES,
@@ -1096,4 +1096,112 @@ fn a_device_back_with_a_new_certificate_is_logged_once_and_still_plays() {
     );
     assert!(host.shutdown());
     device.join();
+}
+
+// covers: C21
+#[test]
+fn a_certificate_changed_across_a_relaunch_is_logged() {
+    let device = FakeDevice::start(Behavior {
+        new_certificate_each_connection: true,
+        ..Behavior::default()
+    });
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("cast-fingerprints-{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let mut events = Vec::new();
+    for _ in 0..2 {
+        let (book, error) = open_book(&path);
+        assert!(error.is_none(), "{error:?}");
+        let mut host = CastHost::with_fingerprints(DeviceMemory::default(), book).expect("worker");
+        let (_feed, reader) = ring();
+        host.start(target(A, &device), 48_000, Metadata::default(), reader)
+            .expect("starts");
+        events.extend(wait_for(&host, Duration::from_secs(10), started(A)));
+        host.stop();
+        events.extend(wait_for(&host, Duration::from_secs(15), ended(A)));
+        assert!(host.shutdown());
+    }
+    let certificates = device.certificates.lock().expect("certificates").clone();
+    assert_eq!(
+        certificate_changes(&events),
+        [(
+            Fingerprint::of(&certificates[0]),
+            Fingerprint::of(&certificates[1])
+        )],
+        "the second launch knows the first one's certificate: {events:?}"
+    );
+    let _ = std::fs::remove_file(&path);
+    device.join();
+}
+
+// covers: C21
+#[test]
+fn a_certificates_file_that_cant_be_read_starts_an_empty_book_with_its_error() {
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "cast-fingerprints-unread-{}.txt",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let (_, missing) = open_book(&path);
+    assert!(missing.is_none(), "a first launch has no file: {missing:?}");
+    std::fs::write(&path, "x".repeat(200)).expect("writes");
+    let (mut book, unread) = open_book(&path);
+    let unread = unread.expect("an error").to_string();
+    assert!(unread.contains(&"x".repeat(80)), "{unread}");
+    assert!(
+        !unread.contains(&"x".repeat(81)),
+        "the line is cut: {unread}"
+    );
+    let fingerprint = Fingerprint([7; 32]);
+    assert_eq!(book.record(A, fingerprint), FingerprintChange::First);
+    let (mut reopened, error) = open_book(&path);
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(reopened.record(A, fingerprint), FingerprintChange::Same);
+    let _ = std::fs::remove_file(&path);
+}
+
+// covers: C21
+#[test]
+fn a_certificates_file_with_crlf_endings_and_blank_lines_reads() {
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("cast-fingerprints-crlf-{}.txt", std::process::id()));
+    let fingerprint = Fingerprint([9; 32]);
+    std::fs::write(&path, format!("\r\n{A} {fingerprint}\r\n  \r\n")).expect("writes");
+    let (mut book, error) = open_book(&path);
+    assert!(error.is_none(), "{error:?}");
+    assert_eq!(book.record(A, fingerprint), FingerprintChange::Same);
+    let _ = std::fs::remove_file(&path);
+}
+
+// covers: C21
+#[test]
+fn a_certificates_file_that_cant_be_written_is_reported_once() {
+    let reports = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&reports);
+    let (book, _) = FingerprintBook::open(
+        "cast-certificates.txt".into(),
+        |_| Err(std::io::ErrorKind::NotFound.into()),
+        |_, _| Err(std::io::Error::other("locked")),
+    );
+    let mut book = book.on_save_error(move |_| {
+        counted.fetch_add(1, Ordering::SeqCst);
+    });
+    assert_eq!(
+        book.record(A, Fingerprint([1; 32])),
+        FingerprintChange::First
+    );
+    let before = Fingerprint([1; 32]);
+    assert_eq!(
+        book.record(A, Fingerprint([2; 32])),
+        FingerprintChange::Changed { before }
+    );
+    assert_eq!(reports.load(Ordering::SeqCst), 1);
+}
+
+fn open_book(path: &std::path::Path) -> (FingerprintBook, Option<std::io::Error>) {
+    FingerprintBook::open(
+        path.to_path_buf(),
+        |path| std::fs::read(path),
+        |path, bytes| std::fs::write(path, bytes),
+    )
 }

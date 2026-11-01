@@ -79,7 +79,7 @@ Zones of speakers that turn on and off together, with their own volume
 Presets for which speakers are on, their volumes and the equalizer curve, with Ctrl+1 to Ctrl+9
 10-band equalizer with your own saved curves
 Web Remote: a phone on your home network turns speakers on and off and sets volumes and delays
-Asks for an AirPlay speaker's PIN or password when it needs one
+Asks for an AirPlay speaker's code or password when it needs one
 ```
 
 ### Keywords
@@ -165,7 +165,7 @@ The images in `docs/images` show the Mac app (rendered from mock data by `script
 
 1. PLACEHOLDER: main window, light theme, with a few speakers on at different delays. Caption: "Each speaker has its own delay and volume."
 2. PLACEHOLDER: main window, dark theme, with a zone open. Caption: "Zones turn several speakers on and off together."
-3. PLACEHOLDER: tray flyout open over the taskbar. Caption: "Source, master volume and speakers from the notification area."
+3. PLACEHOLDER: tray panel open over the taskbar. Caption: "Source, master volume and speakers from the notification area."
 4. PLACEHOLDER: Equalizer window with a curve picked. Caption: "A 10-band equalizer for every speaker at once."
 5. PLACEHOLDER: Calibrate All Speakers results. Caption: "Calibrate All Speakers measures each speaker with a microphone."
 6. PLACEHOLDER: Web Remote dialog. Caption: "Web Remote: turn speakers on and off from a phone on your home network."

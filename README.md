@@ -57,7 +57,7 @@ The Windows parts are in the Windows preview, out since 0.7.1.
 - The Web Remote can switch the source, zones and presets too.
 - On the Mac, a Bluetooth headset's call microphone isn't offered as a source anymore, since using it drops the headset to call quality.
 - Calibrate with Microphone works on Windows too.
-- Master Volume turns Google Cast speakers and groups down too, inside AudioSync, without touching the TV's own volume.
+- Master Volume turns Google Cast speakers and groups down too.
 - A Cast speaker that doesn't show up can be added by its IP address or host name, with Add by Address… under Connected Speakers on the Mac or in the Speakers menu on Windows.
 - Cast speakers show the track that's playing, with the title, artist, album and cover.
 - On Windows you can rename a speaker too, with a double-click on its name.
@@ -72,7 +72,7 @@ The Windows parts are in the Windows preview, out since 0.7.1.
 - If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
 - Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
 - Diagrams in the Guide.
-- AirPlay 2 is in there, but experimental and off. See below.
+- AirPlay 2 is in there, still experimental. See below.
 
 The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
@@ -106,7 +106,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 - The window doesn't open at login. Click the Dock icon.
 - Speaker plays too early? Raise its delay. Too late? Lower it, below zero if needed. Bluetooth usually ends up around −150 to −300 ms.
 - Mac plays before the HomePod? Raise the AirPlay delay. After? Lower it.
-- Speakers that want a PIN or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
+- Speakers that want a code or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
 - More in the AudioSync Guide, in the gear menu.
 
 ## What doesn't work (yet)

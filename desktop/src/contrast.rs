@@ -1003,7 +1003,7 @@ fn linux_texts_name_no_windows_places() {
             "Volume mixer",
             "Start menu",
             "notification area",
-            "quick settings",
+            "tray panel",
         ] {
             assert!(!text.contains(windows_only), "{windows_only} in: {text}");
         }
@@ -1023,6 +1023,16 @@ fn windows_texts_with_a_linux_twin_are_unchanged() {
             strings.contains(&format!("@tr(\"{text}\"")),
             "a Windows text changed: {text}"
         );
+    }
+}
+
+/// Pairing texts ask for the code a speaker shows, the word its row uses,
+/// never a PIN, as on the Mac.
+#[test]
+fn no_text_asks_for_a_pin() {
+    let strings = include_str!("../ui/strings.slint");
+    for line in strings.lines().filter(|line| line.contains("@tr(")) {
+        assert!(!line.contains("PIN"), "strings.slint: `{}`", line.trim());
     }
 }
 
@@ -1537,8 +1547,8 @@ fn only_a_zone_headers_badge_switches_the_zone() {
     assert!(header[badge..].find("root.toggled();").unwrap() < 800);
     assert_eq!(
         header.matches("TouchArea {").count(),
-        3,
-        "the box, the name and the arrow"
+        4,
+        "the box, the name, the count line and the arrow"
     );
     // A FocusScope that takes the focus on click accepts the press (Slint
     // 1.18), so the box's TouchArea would never see a click on the name.
@@ -1600,4 +1610,20 @@ fn an_equalizer_turned_off_fades_only_the_sliders() {
         sliders,
         "nothing but the sliders fades in equalizer.slint"
     );
+}
+
+/// Narrator calls the calibration results' Undo button "Undo the new
+/// delays", the label VoiceOver reads on the Mac; the button still shows
+/// Undo.
+#[test]
+fn the_calibration_undo_button_is_labeled_as_on_the_mac() {
+    let strings = include_str!("../ui/strings.slint");
+    assert!(strings.contains(r#"calibrate-all-undo-label: @tr("Undo the new delays");"#));
+    let main = include_str!("../ui/main.slint");
+    let start = main
+        .find("undo-button := Button {")
+        .expect("the Undo button");
+    let button = &main[start..start + 400];
+    assert!(button.contains("text: Strings.calibrate-all-undo;"));
+    assert!(button.contains("accessible-label: Strings.calibrate-all-undo-label;"));
 }
