@@ -569,7 +569,11 @@ impl CastSession {
     /// [`CastSession::set_volume`] under the host's `ask`, which a report
     /// that no status will answer it carries (C70).
     pub fn ask_volume(&mut self, ask: u64, level: f64) -> Result<(), VolumeError> {
-        self.client.set_volume(ask, level)
+        let result = self.client.set_volume(ask, level);
+        if result.is_err() {
+            self.report(SessionEvent::VolumeUnanswered { level, ask });
+        }
+        result
     }
 
     /// Replaces the C70 interval on the current channel only; a reconnect's

@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::error::{ConnectError, ReconnectPacer};
 use audiosync_cast::group::GroupRecords;
-use audiosync_cast::media::{IdleReason, MediaError, Metadata};
+use audiosync_cast::media::{IdleReason, MediaError, Metadata, VolumeError};
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{
     CastSession, Diagnostics, SessionConfig, SessionEnd, SessionError, SessionEvent,
@@ -1265,6 +1265,29 @@ fn a_waiting_level_the_reconnected_device_refuses_is_reported_unanswered() {
             SessionEvent::VolumeUnanswered { level, .. } if (*level - 0.5).abs() < 1e-9
         )),
         "{seen:?}"
+    );
+    session.stop();
+    device.join();
+}
+
+// covers: C68, C70
+#[test]
+fn a_level_a_fixed_volume_refuses_is_reported_unanswered_under_its_ask() {
+    let device = FakeDevice::start(Behavior {
+        volume: json!({"level": 0.5, "controlType": "fixed"}),
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    assert_eq!(session.ask_volume(7, 0.5), Err(VolumeError::Fixed));
+    let reports: Vec<_> = std::iter::from_fn(|| session.poll_event())
+        .filter(|event| matches!(event, SessionEvent::VolumeUnanswered { .. }))
+        .collect();
+    assert!(
+        matches!(
+            reports[..],
+            [SessionEvent::VolumeUnanswered { ask: 7, level }] if level == 0.5
+        ),
+        "{reports:?}"
     );
     session.stop();
     device.join();
