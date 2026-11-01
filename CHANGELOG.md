@@ -61,6 +61,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the Guide says how updates work: Help > Check for Updates… looks for a newer version, File > Check for Updates Automatically looks at most once a day, and nothing downloads until you select Download and Install. Builds without the updater leave this out, as on the Mac.
 - On the Mac, the Guide says that Check for Updates… in the AudioSync menu looks for a newer version, and its Tips no longer repeat the delay rule from More Controls or quote a typical Bluetooth delay.
 - On the Mac, Now Playing shows a track change, pause or play in Music or Spotify as soon as the app announces it, instead of at the next 2-second check.
+- On Windows, Now Playing in the main window and on a TV playing through AirPlay shows a track change, pause or play as soon as the app reports it, instead of at the next 2-second check.
 - On the Mac, Add by Address refuses 0.0.0.0, 255.255.255.255, a multicast address and a host name whose last part is all digits, and keeps at most 64 addresses, as on Windows.
 - On the Mac, the Guide's equalizer line mentions the curves you save yourself, as the Windows Guide does.
 
@@ -387,6 +388,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a USB speaker you only renamed, or only saved in a preset, keeps its name and its place in the preset when you plug it into another USB port. Before, it came back under its system name and the preset still pointed at the old port.
 - On the Mac, a zone whose speakers all play as part of a stereo pair now says "2 playing in a pair" instead of "None of 2 found".
 - On Windows and in the Linux preview, a Bluetooth headset's hands-free input saved as your source counts as not connected at start, as on the Mac, instead of being opened and dropping the headset to call quality.
+- On Windows, an older Apple TV that turns its stored pairing down when you turn it on asks for a new code right away, as an AirPlay 2 speaker does. If no pairing can start, it goes off with the notice that it needs a code.
+- In the Linux preview, Calibrate All leaves out headphones, headsets and virtual or network outputs, as its Guide says, and Include Anyway puts one in. A Bluetooth or USB speaker takes part.
+- In the Linux preview, a saved input that isn't plugged in at start counts as not connected, and AudioSync waits for it, as on Windows.
+- On Windows, the web remote no longer drops a phone's live updates when the PC is busy.
+- On Windows and in the Linux preview, a Google Cast speaker's volume slider no longer jumps back during a quick drag while the TV is still catching up with your earlier steps, and it follows the TV again after the TV refuses a level you set.
+- On the Mac, an AirPlay speaker muted for a calibration stays muted when AudioSync connects it again while the calibration runs.
 
 ## [0.7.1] - 2026-10-27
 
