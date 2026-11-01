@@ -47,6 +47,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, when AudioSync can't open its AirPlay pairings file, or a newer version wrote it, a notice says pairings you add or forget won't be kept after AudioSync quits, as on Windows. Before, a speaker asked for its PIN again with no reason given.
 - On the Mac, a stereo pair or home theater group whose speakers all ask for a PIN or can't play from AudioSync no longer shows as a speaker you can turn on, and auto-connect leaves it alone, as on Windows. Before, it could be turned on and then went off again with a notice.
 - On the Mac, a Bluetooth headset's microphone saved as the source, such as AirPods, now stays in the source picker under its name, greyed out, and the menu bar panel and the web remote name it. Before, the panel said "All System Audio" while nothing played.
 - After a source switch fails, picking the source that still plays on the web remote, while it still shows "Switching to …", now clears the "Couldn't start …" notice, as picking it in the window does. Before, the phone's pick changed nothing and the notice stayed. On the Mac and on Windows.

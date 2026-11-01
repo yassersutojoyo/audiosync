@@ -54,6 +54,9 @@ final class NativeAirPlay {
     private var explicitPause = ExplicitPause()
     /// While paused, checks whether the capture carries sound again (main queue).
     private var soundWatch: Timer?
+    /// The store this sender opened keeps pairings only until it goes
+    /// (main queue, set before `start` completes).
+    private(set) var pairingsNotSaved = false
     /// The hold-back last asked for (main queue), and the one the sender
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
@@ -389,7 +392,7 @@ final class NativeAirPlay {
     /// Whether pairings made while the store opened with `loaded` is in use
     /// are lost when AudioSync quits.
     static func pairingsNotSaved(_ loaded: Int32) -> Bool {
-        false
+        loaded == ASC_AIRPLAY_PAIRINGS_FAILED || loaded == ASC_AIRPLAY_PAIRINGS_NEWER
     }
 
     /// How private the core found a pairing file, for the debug log; nil
@@ -556,6 +559,7 @@ final class NativeAirPlay {
                 DebugTrace.log("[AudioSync] native AirPlay: " + line)
             }
             DebugTrace.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
+            self.pairingsNotSaved = Self.pairingsNotSaved(loaded)
             if let airPlay2, airPlay2 != 0 {
                 DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: "
                     + (airPlay2 > 0 ? "\(airPlay2) paired receiver(s)" : "ignored or left as it is (code \(airPlay2))"))
