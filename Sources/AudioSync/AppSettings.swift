@@ -291,7 +291,11 @@ struct AppSettings: Equatable {
                                          log: (String) -> Void = { DebugTrace.log($0) }) -> [T] {
         let decoder = JSONDecoder()
         decoder.userInfo[StoredTrace.settingsKey] = key
-        guard let data, let list = try? decoder.decode([LossyDecoded<T>].self, from: data) else { return [] }
+        guard let data else { return [] }
+        guard let list = try? decoder.decode([LossyDecoded<T>].self, from: data) else {
+            log("[AudioSync] settings: \(key) unreadable, nothing kept")
+            return []
+        }
         return list.compactMap(\.value)
     }
 }
