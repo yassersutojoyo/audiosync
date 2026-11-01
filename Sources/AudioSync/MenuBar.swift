@@ -2513,7 +2513,7 @@ struct NoticeBanner<Footer: View>: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .accessibilityLabel(text.dismissNotice)
+            .accessibilityLabel(notice.dismissLabel(text))
             .help(text.dismissNotice)
         }
         .padding(10)

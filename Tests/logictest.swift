@@ -15958,5 +15958,33 @@ do {
           "delay step: the label is the step, the unit, then what it does")
 }
 
+do {
+    check(UIStrings().dismissNotice("X") == "Dismiss: X",
+          "notices: a close button names the notice it dismisses, as on Windows")
+}
+
+do {
+    let words = UIStrings()
+    check(words.noSpeakerNoticeName == "no speaker on"
+            && words.speakerLostNoticeName("Den") == "Den disconnected"
+            && words.cantPlayNoticeName("Den") == "Den can't play"
+            && words.sourceStoppedNoticeName(.inputDisconnected, input: "Mic") == "Mic was disconnected, streaming stopped"
+            && words.streamingStartNoticeName(for: SourceCapture.CaptureError.inputHandsFree("buds:input"),
+                                              input: "Buds") == nil,
+          "notices: each short name is Windows' title for the same notice, none where Windows has no such notice")
+    var named = NoticeList()
+    named.post("Den was disconnected.", subject: "den", shortName: "Den disconnected")
+    check(named.newest?.shortName == "Den disconnected" && named.newest?.title == nil,
+          "notices: a short name is kept apart from the drawn title")
+    let at = Date(timeIntervalSince1970: 0)
+    let shortOnly = Notice(subject: "a", text: "x", date: at, shortName: "Den disconnected")
+    let titleOnly = Notice(subject: "b", text: "x", date: at, title: "Den waiting")
+    let unnamed = Notice(subject: "c", text: "x", date: at, title: "", shortName: "")
+    check(shortOnly.dismissLabel(words) == "Dismiss: Den disconnected"
+            && titleOnly.dismissLabel(words) == "Dismiss: Den waiting"
+            && unnamed.dismissLabel(words) == "Dismiss Notice",
+          "notices: the close button reads the short name, else the title, else the plain label")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

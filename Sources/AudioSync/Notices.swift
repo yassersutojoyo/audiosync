@@ -11,12 +11,24 @@ struct Notice: Identifiable, Equatable {
     let date: Date
     /// A few words above the text, for a notice about a state that lasts.
     var title: String? = nil
+    /// Never drawn: the few words VoiceOver reads after "Dismiss:" on its
+    /// close button, Windows' title for the same notice.
+    var shortName: String? = nil
     /// The System Settings pane that fixes the problem, offered as a button.
     var settings: PrivacyPane? = nil
     /// It reports a change AudioSync made rather than a problem, so it shows
     /// the info glyph instead of the warning triangle.
     var info = false
     var id: String { subject }
+
+    /// Its close button's VoiceOver label. A notice with neither name keeps the
+    /// plain label, so the button doesn't read the whole notice again.
+    func dismissLabel(_ text: UIStrings) -> String {
+        guard let name = [shortName, title].compactMap({ $0 }).first(where: { !$0.isEmpty }) else {
+            return text.dismissNotice
+        }
+        return text.dismissNotice(name)
+    }
 
     /// Subjects that aren't a speaker.
     static let source = "source"        // the audio source stopped or quit
@@ -80,9 +92,10 @@ struct NoticeList: Equatable {
     /// Adds `text` about `subject`, replacing an older notice about it. The
     /// oldest notice drops off past `capacity`. `settings`: the pane that fixes it.
     mutating func post(_ text: String, subject: String, at date: Date = Date(), title: String? = nil,
-                       settings: PrivacyPane? = nil, info: Bool = false) {
+                       shortName: String? = nil, settings: PrivacyPane? = nil, info: Bool = false) {
         items.removeAll { $0.subject == subject }
-        items.insert(Notice(subject: subject, text: text, date: date, title: title, settings: settings, info: info),
+        items.insert(Notice(subject: subject, text: text, date: date, title: title, shortName: shortName,
+                            settings: settings, info: info),
                      at: 0)
         if items.count > Self.capacity { items.removeLast(items.count - Self.capacity) }
     }

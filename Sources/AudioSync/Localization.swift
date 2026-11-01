@@ -58,6 +58,54 @@ struct UIStrings {
     /// VoiceOver hint of the gear, a plain button that opens an AppKit menu.
     let moreOptionsHint = "Opens a menu of options"
     let dismissNotice = "Dismiss Notice"
+    /// VoiceOver name of a notice's close button: several notices can show at once.
+    func dismissNotice(_ title: String) -> String { "Dismiss: \(title)" }
+    /// A notice's `shortName`: Windows' words for the same notice, with the
+    /// Mac's names for its settings.
+    let noSpeakerNoticeName = "no speaker on"
+    func sourceQuitNoticeName(_ app: String) -> String { "\(app) quit" }
+    func switchFailedNoticeName(_ new: String) -> String { "\(new) didn't start" }
+    let microphoneNoticeName = "microphone access blocked"
+    let waitingForAudioNoticeName = "waiting for audio"
+    func speakerFailedNoticeName(_ speaker: String) -> String { "\(speaker) didn't start, turned off" }
+    func speakerLostNoticeName(_ speaker: String) -> String { "\(speaker) disconnected" }
+    func speakerStrugglingNoticeName(_ speaker: String) -> String { "\(speaker) is struggling" }
+    func pairFirstNoticeName(_ speaker: String) -> String { "\(speaker) stayed off" }
+    /// An AirPlay or Google Cast speaker that is off.
+    func cantPlayNoticeName(_ speaker: String) -> String { "\(speaker) can't play" }
+    let airPlayStoppedNoticeName = "AirPlay stopped"
+    let ptpPortsNoticeName = "PTP ports in use"
+    let pairingsNotSavedNoticeName = "pairings not saved"
+    func airPlayAheadNoticeName(_ castSpeaker: String) -> String { "AirPlay ahead of \(castSpeaker)" }
+    let groupsBecameZonesNoticeName = "groups became zones"
+    let presetLeftOffNoticeName = "some speakers stayed off"
+    func launchAtLoginNoticeName(turningOn on: Bool) -> String {
+        on ? "launch at login failed" : "launch at login still on"
+    }
+    let loginItemOffNoticeName = "login item turned off"
+    /// `streamingStartMessage(for:)`'s; `input` names the input device.
+    /// Nil where Windows has no such notice.
+    func streamingStartNoticeName(for error: Error, input: String) -> String? {
+        guard let reason = error as? SourceCapture.CaptureError else {
+            return error is StreamEngine.StartError ? nil : captureFailedNoticeName
+        }
+        switch reason {
+        case .appNotRunning(let bundleID): return "\(SourceApps.name(for: bundleID)) not running"
+        case .inputNotFound, .inputDisconnected: return "\(input) not connected"
+        case .inputHandsFree: return nil
+        default: return captureFailedNoticeName
+        }
+    }
+    /// `sourceStopped(_:)`'s, the same way.
+    func sourceStoppedNoticeName(_ error: SourceCapture.CaptureError, input: String) -> String? {
+        switch error {
+        case .inputDisconnected, .inputNotFound: return "\(input) was disconnected, streaming stopped"
+        case .inputHandsFree: return nil
+        case .appNotRunning(let bundleID): return sourceQuitNoticeName(SourceApps.name(for: bundleID))
+        default: return "capture stopped"
+        }
+    }
+    private let captureFailedNoticeName = "capture didn't start"
     let dismissAllNotices = "Dismiss All"
     let previousTrack = "Previous Track"
     let nextTrack = "Next Track"
