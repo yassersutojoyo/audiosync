@@ -17126,6 +17126,33 @@ mod tests {
         );
     }
 
+    // covers: S252
+    #[test]
+    fn an_output_a_recall_switches_on_starts_at_its_preset_volume() {
+        let mut adapter = adapter();
+        adapter.restore(Settings {
+            speaker_presets: vec![SavedPreset {
+                gains_db: [0.0; audiosync_core::eq::BAND_COUNT],
+                ..saved_preset(&[(key(SPEAKERS), None), (key(HEADPHONES), Some(20.0))])
+            }],
+            ..Settings::default()
+        });
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_volume(&key(HEADPHONES), 90.0);
+
+        adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        let preset_gain = adapter
+            .audio
+            .playing_params(HEADPHONES)
+            .expect("playing")
+            .gain;
+        let first_gain = adapter.audio.driver().start_gains().last().cloned();
+        assert_eq!(first_gain, Some((HEADPHONES.to_owned(), preset_gain)));
+    }
+
     // covers: S252, S253
     #[test]
     fn a_recalled_preset_is_current() {
