@@ -16,6 +16,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, while streaming is on and nothing has played yet, a notice in the main window and the tray panel says "Waiting for audio", naming the app when you capture one, as on the Mac. It goes away once sound arrives.
 - On the Mac, a playing speaker on this Mac whose device is unplugged, or that keeps refusing to start for 30 s, gets the notice "<name> was disconnected. It plays again as soon as it's back.", as on Windows. It goes away once the speaker plays again, you switch it off or streaming stops.
 - An AirPlay speaker you turn on stays on while it asks for its password or PIN, and Cancel turns it off. While other speakers play, its row says "Waiting for the password" or "Enter the code shown on" followed by its name. Before, Windows left it off until you typed the code and the Mac row said nothing. On the Mac and on Windows.
+- With the debug log on, each playing speaker on this computer logs its peak and RMS level every 10 seconds, after volume and equalizer, and every volume or master change logs the gain it plays at. On the Mac and on Windows.
 
 ### Changed
 

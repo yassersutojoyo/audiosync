@@ -106,6 +106,9 @@ mod log_lines_tests;
 /// How often the debug log gets a status line while a session runs.
 const STATUS_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How often the debug log gets each playing output's level.
+const LEVEL_INTERVAL: Duration = Duration::from_secs(10);
+
 /// How often a running session checks whether the source is heard twice
 /// ([`routing`](super::routing)).
 const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
@@ -854,6 +857,8 @@ pub struct Controller<D: Driver> {
     listing_notes: Vec<ListingNote>,
     /// When the log last got a status line, and the frames captured then.
     last_status: Option<(Instant, u64)>,
+    /// When the log last got the outputs' levels.
+    last_levels: Option<Instant>,
     /// The double-audio check of the running session.
     routing: RoutingState,
     /// The AirPlay side, once there is a sender.
@@ -978,6 +983,7 @@ impl<D: Driver> Controller<D> {
             inputs_left_behind: BTreeSet::new(),
             listing_notes: Vec::new(),
             last_status: None,
+            last_levels: None,
             routing: RoutingState::default(),
             airplay: None,
             feed: None,
@@ -2313,6 +2319,7 @@ impl<D: Driver> Controller<D> {
             since: Instant::now(),
         });
         self.last_status = None;
+        self.last_levels = None;
         self.reap(false);
         // Without a session, nothing is heard twice.
         let routing = std::mem::take(&mut self.routing);
@@ -2465,6 +2472,35 @@ impl<D: Driver> Controller<D> {
                 now,
             ) {
                 self.log.log(|| line);
+            }
+        }
+    }
+
+    /// Logs each playing output's peak and RMS every [`LEVEL_INTERVAL`],
+    /// read from the atomics its renderer keeps.
+    fn log_levels_if_due(&mut self, now: Instant) {
+        if !self.log.enabled() || self.session.is_none() {
+            return;
+        }
+        match self.last_levels {
+            Some(at) if now.saturating_duration_since(at) < LEVEL_INTERVAL => return,
+            None => {
+                self.last_levels = Some(now);
+                return;
+            }
+            Some(_) => self.last_levels = Some(now),
+        }
+        let Some(session) = &self.session else {
+            return;
+        };
+        for (id, playing) in &session.outputs {
+            if let Some((peak, rms)) = playing.control.take_level() {
+                self.log.log(|| {
+                    format!(
+                        "output {} level: peak {peak:.1} dBFS, RMS {rms:.1} dBFS",
+                        label(&self.names, id)
+                    )
+                });
             }
         }
     }
@@ -4236,6 +4272,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
             let after = self.policy.master();
             if after != before {
                 self.log.log(|| format!("master volume: {after}"));
+                let now = Instant::now();
+                for id in self.playing_ids() {
+                    self.volume_moves.insert(VolumeMove::Output(id), now);
+                }
             }
         }
     }
@@ -4876,6 +4916,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.check_routing_if_due(now);
         self.follow_mix_apps(now);
         self.log_status_if_due(now);
+        self.log_levels_if_due(now);
         self.log_drift(now);
         self.power.awake = Some((self.driver.wall_clock(), self.driver.awake_clock()));
         let events = std::mem::take(&mut self.pending);

@@ -388,6 +388,7 @@ fn audio_path_modules_use_only_atomics() {
         ("volume.rs", "none"),
         ("fade.rs", "none"),
         ("render.rs", "none"),
+        ("meter.rs", "none"),
         ("eq.rs", "yield"),
         ("clock.rs", "origin"),
     ];

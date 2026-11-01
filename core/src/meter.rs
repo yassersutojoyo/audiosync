@@ -66,18 +66,39 @@ pub struct OutputLevel {
 
 impl OutputLevel {
     /// Audio thread: adds a callback's interleaved samples.
-    pub fn add(&self, _samples: &[f32]) {}
+    pub fn add(&self, samples: &[f32]) {
+        let mut peak = 0.0f32;
+        let mut squares = 0.0f64;
+        for &sample in samples {
+            peak = peak.max(sample.abs());
+            squares += f64::from(sample) * f64::from(sample);
+        }
+        self.peak_bits.fetch_max(peak.to_bits(), Ordering::Relaxed);
+        let mut old = self.squares_bits.load(Ordering::Relaxed);
+        // No wait: the only other writer is a take's swap, every 10 s.
+        while let Err(now) = self.squares_bits.compare_exchange_weak(
+            old,
+            (f64::from_bits(old) + squares).to_bits(),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            old = now;
+        }
+        self.samples
+            .fetch_add(samples.len() as u64, Ordering::Relaxed);
+    }
 
     /// Peak and RMS in dBFS since the last take, `None` when no sample came
     /// in; silence reads as negative infinity.
     pub fn take(&self) -> Option<(f64, f64)> {
-        let _ = (
-            &self.peak_bits,
-            &self.squares_bits,
-            &self.samples,
-            Ordering::Relaxed,
-        );
-        None
+        let samples = self.samples.swap(0, Ordering::Relaxed);
+        let squares = f64::from_bits(self.squares_bits.swap(0, Ordering::Relaxed));
+        let peak = f32::from_bits(self.peak_bits.swap(0, Ordering::Relaxed));
+        if samples == 0 {
+            return None;
+        }
+        let rms = (squares / samples as f64).sqrt();
+        Some((20.0 * f64::from(peak).log10(), 20.0 * rms.log10()))
     }
 }
 

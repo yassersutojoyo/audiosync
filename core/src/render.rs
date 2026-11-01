@@ -1449,6 +1449,7 @@ impl Renderer {
         }
         // A trailing partial frame is never played; keep it silent.
         out[frames * channels..].fill(0.0);
+        self.shared.level.add(out);
         // A stale or missing stamp means the capture isn't writing, which
         // starves every output alike.
         self.count_starved(frames, starved && capture.is_some());

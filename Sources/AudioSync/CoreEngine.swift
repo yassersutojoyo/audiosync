@@ -393,6 +393,14 @@ final class CoreRenderer {
     var lateMaxMs: Double { Double(asc_renderer_late_max_ns(handle)) / 1_000_000 }
     var lateCallbacks: Int64 { Int64(clamping: asc_renderer_late_callbacks(handle)) }
 
+    /// Control thread: the peak and RMS in dBFS the device got since the last
+    /// take, after every gain and the equalizer; nil when nothing was rendered.
+    func takeLevel() -> (peakDb: Double, rmsDb: Double)? {
+        var peak = 0.0
+        var rms = 0.0
+        return asc_renderer_take_level(handle, &peak, &rms) ? (peak, rms) : nil
+    }
+
     /// Any thread: the device frames the converter couldn't produce and that
     /// played as silence, in all; 0 unless the core's read sizing is wrong.
     var shortfallFrames: Int64 { Int64(clamping: asc_renderer_shortfall_frames(handle)) }

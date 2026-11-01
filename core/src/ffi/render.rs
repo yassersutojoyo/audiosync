@@ -845,6 +845,36 @@ pub unsafe extern "C" fn asc_renderer_late_callbacks(renderer: *const AscRendere
     unsafe { control_side(renderer) }.map_or(0, RendererControl::late_callbacks)
 }
 
+/// Control thread: [`RendererControl::take_level`] into `peak_db` and
+/// `rms_db`; false, writing nothing, when nothing was rendered since the last
+/// take or a pointer is null.
+///
+/// # Safety
+///
+/// `renderer` is null or a live renderer; `peak_db` and `rms_db` are null or
+/// writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_renderer_take_level(
+    renderer: *const AscRenderer,
+    peak_db: *mut f64,
+    rms_db: *mut f64,
+) -> bool {
+    if peak_db.is_null() || rms_db.is_null() {
+        return false;
+    }
+    // SAFETY: by the caller's contract the handle is null or live.
+    let Some((peak, rms)) = unsafe { control_side(renderer) }.and_then(RendererControl::take_level)
+    else {
+        return false;
+    };
+    // SAFETY: both pointers are non-null and writable by the caller's contract.
+    unsafe {
+        *peak_db = peak;
+        *rms_db = rms;
+    }
+    true
+}
+
 /// Any thread: the device frames the converter couldn't produce and that
 /// were played as silence, in all; 0 for a null handle and, unless the read
 /// sizing is wrong, always.
