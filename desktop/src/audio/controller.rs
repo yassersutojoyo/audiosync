@@ -489,6 +489,9 @@ fn solo_gain(solo: Option<&str>, id: &str, gain: f32) -> f32 {
 /// A running session.
 struct Session<D: Driver> {
     source: SourceId,
+    /// The executable a single app ran as the session started: a lost
+    /// capture opens again only on a process still running it (S380).
+    app_executable: Option<String>,
     /// What the capture takes in.
     target: CaptureTarget,
     ring: Arc<Ring>,
@@ -2680,7 +2683,7 @@ impl<D: Driver> Controller<D> {
         if !self.last_session_fading() {
             return self.start_session(source);
         }
-        self.capture_target(source)?;
+        self.capture_target(source, None)?;
         self.log
             .log(|| "the capture starts once the last session's outputs have faded out".to_owned());
         self.next_start = Some(source.clone());
@@ -3123,14 +3126,15 @@ impl<D: Driver> Controller<D> {
         let busy_since = reopen.busy_since;
         let away = reopen.away;
         let source = session.source.clone();
+        let app_executable = session.app_executable.clone();
         let ring = Arc::clone(&session.ring);
         let started_as = session.started_as;
         // The lost capture's thread, let go while Windows audio hangs, may
         // still hold the ring's writer: that try fails as one Windows audio
         // didn't answer, and the next may work.
         let mut writer_held = false;
-        let opened = match self.capture_target(&source) {
-            Ok(target) => match ring.writer() {
+        let opened = match self.capture_target(&source, app_executable.as_deref()) {
+            Ok((target, _)) => match ring.writer() {
                 Some(writer) => self
                     .open_capture(&target, writer)
                     .map(|opened| (target, opened)),
@@ -3503,15 +3507,31 @@ impl<D: Driver> Controller<D> {
 
     /// What capturing `source` opens, from the running processes where it
     /// names apps, and for "all except" from the apps with audio sessions.
-    fn capture_target(&mut self, source: &SourceId) -> Result<CaptureTarget, BackendError> {
+    /// A single app's top process must run `app_executable` when one is
+    /// given, and the executable it runs comes back with the capture.
+    fn capture_target(
+        &mut self,
+        source: &SourceId,
+        app_executable: Option<&str>,
+    ) -> Result<(CaptureTarget, Option<String>), BackendError> {
         let own_pid = self.driver.own_pid();
-        match source {
+        let target = match source {
             SourceId::WholeSystem | SourceId::Input { .. } => {
                 decide_capture(source, own_pid, &ProcessTable::default(), &self.input_pairs)
             }
-            SourceId::App { .. } => {
+            SourceId::App { root_pid } => {
                 let processes = self.driver.processes()?;
-                decide_capture(source, own_pid, &processes, &self.input_pairs)
+                let runs = processes
+                    .get(*root_pid)
+                    .map(|entry| entry.executable.clone());
+                // The app's process ID may have gone to another app since.
+                if let (Some(expected), Some(executable)) = (app_executable, &runs)
+                    && !expected.eq_ignore_ascii_case(executable)
+                {
+                    return Err(BackendError::SourceGone);
+                }
+                return decide_capture(source, own_pid, &processes, &self.input_pairs)
+                    .map(|target| (target, runs));
             }
             SourceId::Apps {
                 root_pids,
@@ -3532,7 +3552,8 @@ impl<D: Driver> Controller<D> {
                     executables,
                 ))
             }
-        }
+        };
+        target.map(|target| (target, None))
     }
 
     /// The capture a mix's follow moves to. A mix whose top processes all
@@ -3544,7 +3565,7 @@ impl<D: Driver> Controller<D> {
             executables,
         } = source
         else {
-            return self.capture_target(source);
+            return self.capture_target(source, None).map(|(target, _)| target);
         };
         let processes = self.driver.processes()?;
         let sessions = self.driver.session_pids();
@@ -3568,7 +3589,7 @@ impl<D: Driver> Controller<D> {
         {
             self.note_inputs(&listed_inputs(&readings));
         }
-        let target = self.capture_target(source)?;
+        let (target, app_executable) = self.capture_target(source, None)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         let (capture, equalizer, waits_for_feed) = self.open_capture(&target, writer)?;
@@ -3577,6 +3598,7 @@ impl<D: Driver> Controller<D> {
         self.policy.end_brief_losses();
         self.session = Some(Session {
             source: source.clone(),
+            app_executable,
             target,
             ring,
             started_as: capture.setup(),
@@ -5868,6 +5890,56 @@ mod tests {
         assert_eq!(
             backend.driver().capture_target(),
             Some(included(&[PLAYER_PID + 1]))
+        );
+    }
+
+    // covers: S380
+    #[test]
+    fn an_only_these_mix_leaves_out_another_app_that_took_a_quit_apps_process_id() {
+        const BROWSER_PID: u32 = PLAYER_PID + 10;
+        let mut backend = backend();
+        backend.add_app(BROWSER_PID, "browser.exe");
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID, BROWSER_PID],
+                executables: vec!["player.exe".to_owned(), "browser.exe".to_owned()],
+            })
+            .unwrap();
+        backend.quit_app(BROWSER_PID);
+        backend.add_app(BROWSER_PID, "chat.exe");
+        backend.mix_checked = None;
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_target(),
+            Some(included(&[PLAYER_PID]))
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn an_only_these_mix_quits_when_only_another_app_on_its_apps_process_id_runs() {
+        let mut backend = backend();
+        backend.refuse_watch(PLAYER_PID);
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID],
+                executables: vec!["PLAYER.exe".to_owned()],
+            })
+            .unwrap();
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "chat.exe");
+        backend.mix_checked = None;
+        let mut events = backend.poll();
+        backend.mix_checked = None;
+        events.extend(backend.poll());
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                BackendEvent::Stopped {
+                    reason: StopReason::SourceQuit
+                }
+            )),
+            "{events:?}"
         );
     }
 
@@ -9814,6 +9886,29 @@ mod tests {
             }]
         );
         assert_eq!(backend.running_source(), None);
+    }
+
+    // covers: S380
+    #[test]
+    fn a_lost_app_capture_is_not_opened_again_on_another_app_that_took_its_process_id() {
+        let mut backend = backend();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "chat.exe");
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        assert_eq!(backend.driver().captures_started().len(), 1);
     }
 
     // covers: S329
