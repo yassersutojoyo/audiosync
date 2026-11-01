@@ -876,6 +876,9 @@ fn a_pause_on_the_device_loads_nothing_and_its_play_starts_at_the_newest_audio()
         "PAUSED",
         None,
     )));
+    run_until(&mut session, Duration::from_secs(3), |event| {
+        matches!(event, SessionEvent::Paused)
+    });
     session.run_for(Duration::from_millis(500));
     while session.poll_event().is_some() {}
     assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1, "a pause loads nothing");

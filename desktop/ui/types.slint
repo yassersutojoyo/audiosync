@@ -25,7 +25,7 @@ export enum SpeakerKind { airplay, airplay2, cast, built-in, headphones, bluetoo
 export enum SpeakerGroup { none, stereo-pair, home-theater }
 
 // Where a Google Cast speaker that is on is: idle while streaming is off.
-export enum CastState { idle, connecting, playing, reconnecting }
+export enum CastState { idle, connecting, playing, paused, reconnecting }
 
 // What went wrong with a Google Cast speaker, for its notice.
 export enum CastProblem { busy, not-responding, refused, blocked, taken-over, connection-lost, search-stopped }

@@ -1954,6 +1954,10 @@ impl CastSpeakers {
                 self.set_codec(to);
             }
             SessionEvent::Rebuffering => self.log.log(|| "Cast: the device ran dry".to_owned()),
+            SessionEvent::Paused => {
+                self.log.log(|| "Cast: the device was paused".to_owned());
+                self.set_status(CastStatus::Paused);
+            }
             SessionEvent::Stream(event) => self.log.log(|| format!("Cast stream: {event:?}")),
             SessionEvent::GroupMessage(kind) => self.log.log(|| format!("Cast group: {kind}")),
             SessionEvent::CertificateChanged { before, after } => self.log.log(|| {

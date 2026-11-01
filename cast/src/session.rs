@@ -141,6 +141,9 @@ pub enum SessionEvent {
     Diagnostics(Diagnostics),
     /// The receiver ran dry (C51).
     Rebuffering,
+    /// Someone paused the device itself; [`SessionEvent::Playing`] follows
+    /// once its next `PLAYING` loaded the stream again (C113).
+    Paused,
     /// The device's volume as its latest status reports it; the host moves
     /// its control there and sends nothing back (C69, C70). The flag says
     /// it is the first status since a mute was sent, so a level it repeats
@@ -310,6 +313,8 @@ pub struct CastSession {
     mute_asked: bool,
     last_media: Option<MediaStatus>,
     playing: bool,
+    /// The device reported `PAUSED` since the stream last played (C113).
+    paused: bool,
     load_sent_frames: u64,
     load_dropped_frames: u64,
     load_underrun_frames: u64,
@@ -479,6 +484,7 @@ impl CastSession {
             mute_asked: false,
             last_media: None,
             playing: false,
+            paused: false,
             load_sent_frames: 0,
             load_dropped_frames: 0,
             load_underrun_frames: 0,
@@ -626,10 +632,11 @@ impl CastSession {
     }
 
     /// The user's Resync (C79): a new `LOAD` on the same app, which brings
-    /// the latency back to a fresh start at the cost of a short gap. Never
-    /// called by the sender itself. A failed Resync is recovered once with a
-    /// reload (C81); if that fails too, the session ends with its reason
-    /// (C83). The Resync's own error is returned either way.
+    /// the latency back to a fresh start at the cost of a short gap. The
+    /// sender calls it itself only after a pause on the device (C113). A
+    /// failed Resync is recovered once with a reload (C81); if that fails
+    /// too, the session ends with its reason (C83). The Resync's own error
+    /// is returned either way.
     pub fn resync(&mut self) -> Result<(), MediaError> {
         if self.ended {
             return Err(MediaError::NotRunning);
@@ -839,6 +846,7 @@ impl CastSession {
     fn started_playing(&mut self) {
         let stats = self.server.stats();
         self.playing = true;
+        self.paused = false;
         self.load_sent_frames = stats.frames_sent;
         self.load_dropped_frames = stats.frames_dropped;
         self.load_underrun_frames = stats.underrun_frames;
@@ -864,7 +872,21 @@ impl CastSession {
             Event::VolumeUnanswered { level } => {
                 self.report(SessionEvent::VolumeUnanswered { level });
             }
-            Event::MediaStatus(status) => self.last_media = Some(status),
+            Event::MediaStatus(status) => {
+                let state = status.player_state.clone();
+                self.last_media = Some(status);
+                match state {
+                    PlayerState::Paused if self.playing && !self.paused => {
+                        self.paused = true;
+                        self.report(SessionEvent::Paused);
+                    }
+                    // Its own failures are recovered or end the session there.
+                    PlayerState::Playing if self.playing && self.paused => {
+                        let _ = self.resync();
+                    }
+                    _ => {}
+                }
+            }
             Event::Multizone(message) => self.on_multizone(message),
             Event::Rebuffering => {
                 self.rebuffers += 1;

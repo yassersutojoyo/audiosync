@@ -147,6 +147,9 @@ pub const CAST_EVENT_CERTIFICATE_CHANGED: i32 = 19;
 /// A level asked for that no status will answer, in `level`, once per ask
 /// (C70, C104).
 pub const CAST_EVENT_VOLUME_UNANSWERED: i32 = 20;
+/// Someone paused the device itself; [`CAST_EVENT_PLAYING`] follows once
+/// its next `PLAYING` loaded the stream again (C113).
+pub const CAST_EVENT_PAUSED: i32 = 21;
 
 /// How an attempt ended ([`AscCastEvent::reason`]): the sender's own
 /// teardown (C87).
@@ -1077,6 +1080,7 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending
         }
         SessionEvent::Rebuffering => Pending::new(CAST_EVENT_REBUFFERING),
+        SessionEvent::Paused => Pending::new(CAST_EVENT_PAUSED),
         SessionEvent::Volume(volume, answers_mute) => {
             let mut pending = Pending::new(CAST_EVENT_VOLUME);
             pending.level = volume.level;

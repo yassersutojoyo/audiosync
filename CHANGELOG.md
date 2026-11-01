@@ -48,6 +48,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- A Google Cast speaker you pause on the device itself, with its remote, the Google Home app or your voice, now plays in time again when you press play there. Before, it went on playing late by up to a few seconds until you chose Resync. On Windows its row also says "Paused on the device" while it's paused, where it used to show it as playing.
 - On Windows, the web remote's speaker notes now match the main window: "Waiting for the password" while you type a password, "Enter the code shown on <speaker>" during a PIN pairing, and "Asks for a code every time" for a speaker set that way. Before, the phone said "Asks for a code" or "Pairing…" instead.
 - On Windows, a Google Cast speaker you added by address now says "Added by address" on the web remote, as in the main window and on the Mac. Before, the phone showed no note for it.
 - On the Mac, a delay step button's name for Voice Control and VoiceOver starts with what it shows, such as "−100 ms, decrease delay", so saying "click −100" finds it.

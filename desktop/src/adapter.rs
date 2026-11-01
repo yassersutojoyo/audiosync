@@ -2844,6 +2844,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     CastStatus::Idle => CastState::Idle,
                     CastStatus::Connecting => CastState::Connecting,
                     CastStatus::Playing => CastState::Playing,
+                    CastStatus::Paused => CastState::Paused,
                     CastStatus::Reconnecting => CastState::Reconnecting,
                 },
                 muted: speaker.muted,

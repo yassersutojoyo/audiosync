@@ -1320,6 +1320,9 @@ export global Strings {
         if state == CastState.reconnecting {
             return root.reconnecting;
         }
+        if state == CastState.paused {
+            return @tr("Paused on the device");
+        }
         if state == CastState.playing && muted && group-note != "" {
             return @tr("Muted on the group");
         }

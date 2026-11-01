@@ -4745,6 +4745,7 @@ fn cast_state(state: ui_model::CastState) -> CastState {
         S::Idle => CastState::Idle,
         S::Connecting => CastState::Connecting,
         S::Playing => CastState::Playing,
+        S::Paused => CastState::Paused,
         S::Reconnecting => CastState::Reconnecting,
     }
 }
