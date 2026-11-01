@@ -6948,8 +6948,9 @@ do {
           "\(headsetList(.system).map(\.id))")
     check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id) + ["input:buds:input"]
             && headsetList(.input(uid: "buds:input")).last == SourceList.Entry(id: "input:buds:input", name: "Example Buds",
-                                                                              isInput: true, connected: false),
-          "sources: a saved source that is a hands-free input still plugged in is listed last under its name, disabled",
+                                                                              isInput: true),
+          "sources: a saved source that is a hands-free input still plugged in is listed last under its name, "
+            + "disabled but not marked unplugged",
           "\(headsetList(.input(uid: "buds:input")))")
     check(AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetooth)
             && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetoothLE)
