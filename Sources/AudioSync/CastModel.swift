@@ -445,6 +445,9 @@ struct CastModel {
 
     /// The connect failures before a first connect that turn the device off (C80).
     static let failuresBeforeOff = 3
+    /// From the Mac's will-sleep notice to its wake: a connect failure doesn't
+    /// count toward turning the device off (S412).
+    var asleep = false
 
     var discovery = Discovery.off
     private(set) var devices: [String: CastDevice] = [:]
@@ -920,7 +923,7 @@ struct CastModel {
         case .connectFailed(_, let error, _, _):
             guard current.status == .connecting else { return setStatus(.reconnecting) }
             // A group with no address yet waits for its records (C81).
-            guard error != .noAddress else { return nil }
+            guard error != .noAddress, !asleep else { return nil }
             attempt?.connectFailures += 1
             guard attempt?.connectFailures == Self.failuresBeforeOff else { return nil }
             enabled = nil

@@ -2958,6 +2958,9 @@ impl<D: Driver> Controller<D> {
                     if let Some(airplay) = self.airplay.as_mut() {
                         airplay.sleeping();
                     }
+                    if let Some(cast) = self.cast.as_mut() {
+                        cast.set_asleep(true);
+                    }
                     self.log.log(|| {
                         "the PC is going to sleep: a capture lost now is opened again once it \
                          wakes"
@@ -3029,6 +3032,9 @@ impl<D: Driver> Controller<D> {
         self.cancel_fresh_restarts_for_sleep();
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.woke();
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_asleep(false);
         }
         for appeared in self.appeared.values_mut() {
             *appeared = self.polls;
@@ -9042,6 +9048,42 @@ mod tests {
         assert!(!trouble(backend.poll()));
         fake.fail(&kitchen, ErrorKind::Unreachable);
         assert!(trouble(backend.poll()));
+    }
+
+    // covers: S412
+    #[test]
+    fn a_cast_speakers_connect_failures_while_the_pc_sleeps_count_nothing_toward_turning_it_off() {
+        use audiosync_cast::error::ConnectError;
+
+        use crate::audio::cast::tests::{FakeCast, KITCHEN, connect_failed};
+        let off = |events: Vec<BackendEvent>| {
+            events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::CastFailed { .. }))
+        };
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        assert!(!off(backend.poll()));
+        backend.notify_power(PowerNotice::Suspend);
+        backend.poll();
+        for _ in 0..3 {
+            cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        }
+        assert!(!off(backend.poll()), "no failure counts while asleep");
+        backend.pass_wall_time(Duration::from_secs(2 * 3600));
+        backend.notify_power(PowerNotice::Resume);
+        backend.poll();
+        // The failure before the sleep still counts.
+        cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        assert!(!off(backend.poll()));
+        cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        assert!(off(backend.poll()));
     }
 
     // covers: S325, S332

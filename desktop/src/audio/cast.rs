@@ -685,6 +685,9 @@ pub struct CastSpeakers {
     /// Each group's members as its latest session listed them (C94).
     members: BTreeMap<DeviceId, Vec<GroupMember>>,
     streaming: bool,
+    /// From the PC's suspend notice to its resume: a connect failure
+    /// doesn't count toward turning the device off (S412).
+    asleep: bool,
     /// The playing track; `None` while it is being read, which holds a
     /// start back so the first `LOAD` names it (C54).
     track: Option<CastTrack>,
@@ -723,6 +726,7 @@ impl CastSpeakers {
             records: None,
             members: BTreeMap::new(),
             streaming: false,
+            asleep: false,
             track: Some(CastTrack::default()),
             sent: None,
             log,
@@ -1335,6 +1339,11 @@ impl CastSpeakers {
             .log(|| format!("Cast: {} switched on", self.name(device)));
         self.sync();
         Ok(())
+    }
+
+    /// The PC is going to sleep, or it woke (S412).
+    pub fn set_asleep(&mut self, asleep: bool) {
+        self.asleep = asleep;
     }
 
     /// Streaming started or stopped: the device that is on joins or leaves.
@@ -1993,7 +2002,7 @@ impl CastSpeakers {
                     return;
                 }
                 // A group with no address yet waits for its records (C81).
-                if matches!(error, ConnectError::NoAddress) {
+                if matches!(error, ConnectError::NoAddress) || self.asleep {
                     return;
                 }
                 attempt.connect_failures += 1;
@@ -2538,7 +2547,7 @@ pub mod tests {
         assert_eq!(fake.state().started.len(), 1, "no retry once off");
     }
 
-    fn connect_failed(attempt: u64, device: &str, error: ConnectError) -> HostEvent {
+    pub fn connect_failed(attempt: u64, device: &str, error: ConnectError) -> HostEvent {
         HostEvent::Session {
             attempt: AttemptId(attempt),
             device: id(device),
