@@ -60,8 +60,9 @@ use audiosync_cast::status::{
     ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_volume, device_level, own_level,
     row_own_level, start_own_level,
 };
+use audiosync_core::delay_line::DelayLine;
 use audiosync_core::eq::{self, EqSettings};
-use audiosync_core::fade::{Fade, InputFade};
+use audiosync_core::fade::InputFade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 use audiosync_core::volume::gain_for_position;
 
@@ -83,9 +84,6 @@ const HANDOFF: usize = 8;
 
 /// The longest hold-back of the Cast feed, in frames: the ceiling of L.
 const MAX_HOLD_BACK_FRAMES: usize = MAX_HOLD_BACK_MS as usize * SESSION_RATE as usize / 1000;
-
-/// The smallest page size Windows maps memory in.
-const PAGE_BYTES: usize = 4096;
 
 /// The volume step of a device that reports none, 0 to 100.
 const DEFAULT_VOLUME_STEP: f64 = 1.0;
@@ -121,105 +119,6 @@ pub fn volume_step(volume: Option<&DeviceVolume>) -> f64 {
         .map_or(DEFAULT_VOLUME_STEP, |step| (step * 100.0).round().max(1.0))
 }
 
-/// Interleaved stereo frames held back by a delay that may change while it
-/// runs: a change fades out, moves the read point and fades in, so it
-/// never clicks.
-struct DelayLine {
-    buffer: Box<[f32]>,
-    /// The frame written next.
-    write: usize,
-    /// Frames written since the last reset, at most the capacity: older ones
-    /// read as silence.
-    filled: usize,
-    /// The delay in frames; `None` until the first frame after a reset, which
-    /// takes the target at once since only silence is behind it.
-    delay: Option<usize>,
-    /// [`DelayLine::close`] ran: the output fades out and stays silent.
-    closing: bool,
-    fade: Fade,
-}
-
-impl DelayLine {
-    /// Allocates; on the UI thread only.
-    fn new(max_frames: usize) -> DelayLine {
-        let mut buffer = vec![0.0_f32; (max_frames + 1) * 2].into_boxed_slice();
-        // Zeroed memory is mapped on first touch: touch each page here so the
-        // capture thread never takes the page fault.
-        let last = buffer.len() - 1;
-        let stride = PAGE_BYTES / size_of::<f32>();
-        for index in (0..last).step_by(stride).chain([last]) {
-            // SAFETY: `index` is in bounds, so the pointer is valid and aligned.
-            unsafe { std::ptr::write_volatile(&raw mut buffer[index], 0.0) };
-        }
-        DelayLine {
-            buffer,
-            write: 0,
-            filled: 0,
-            delay: None,
-            closing: false,
-            fade: Fade::opened(SESSION_RATE),
-        }
-    }
-
-    /// Forgets the audio taken in, so a new capture never replays the end
-    /// of the old one, and opens a closed line. Never allocates.
-    fn reset(&mut self) {
-        self.filled = 0;
-        self.delay = None;
-        self.closing = false;
-        self.fade.open();
-    }
-
-    /// Fades the output out and keeps it silent until [`DelayLine::reset`],
-    /// so the audio it still holds doesn't end the stream with a cut.
-    fn close(&mut self) {
-        self.closing = true;
-    }
-
-    /// Takes in the whole frames of `input` and hands as many frames, held
-    /// back by `target` frames, to `out`. Never allocates.
-    fn process(&mut self, input: &[f32], target: usize, mut out: impl FnMut(&[f32])) {
-        let capacity = self.buffer.len() / 2;
-        let target = target.min(capacity - 1);
-        let mut chunk = [0.0_f32; 512];
-        for piece in input.chunks(chunk.len()) {
-            let frames = piece.len() / 2;
-            for (frame, held) in piece
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .zip(chunk.as_chunks_mut::<2>().0)
-            {
-                let delay = *self.delay.get_or_insert(target);
-                if self.closing {
-                    self.fade.fade_out();
-                } else if delay == target {
-                    self.fade.fade_in();
-                } else if self.fade.is_closed() {
-                    self.delay = Some(target);
-                    self.fade.fade_in();
-                } else {
-                    self.fade.fade_out();
-                }
-                let delay = self.delay.unwrap_or(target);
-                let write = self.write * 2;
-                self.buffer[write..write + 2].copy_from_slice(frame.as_slice());
-                self.filled = (self.filled + 1).min(capacity);
-                let gain = self.fade.next_gain();
-                if delay < self.filled {
-                    let read = (self.write + capacity - delay) % capacity * 2;
-                    held[0] = self.buffer[read] * gain;
-                    held[1] = self.buffer[read + 1] * gain;
-                } else {
-                    held.fill(0.0);
-                }
-                self.write = (self.write + 1) % capacity;
-            }
-            out(&chunk[..frames * 2]);
-        }
-    }
-}
-
 /// A Cast session's writer behind its delay line; built and freed on the
 /// UI thread only.
 struct CastWriter {
@@ -231,7 +130,7 @@ impl CastWriter {
     fn new(audio: AudioWriter) -> CastWriter {
         CastWriter {
             audio,
-            delay: DelayLine::new(MAX_HOLD_BACK_FRAMES),
+            delay: DelayLine::new(MAX_HOLD_BACK_FRAMES, SESSION_RATE),
         }
     }
 }
@@ -3592,18 +3491,21 @@ pub mod tests {
     #[test]
     fn the_delay_line_passes_audio_on_unchanged_or_late_by_its_hold_back() {
         let ramp: Vec<f32> = (0..2000).map(|i| i as f32 / 4000.0).collect();
-        assert_eq!(delayed(&mut DelayLine::new(4800), &ramp, 0), ramp);
-        let out = delayed(&mut DelayLine::new(4800), &ramp, 100);
+        assert_eq!(
+            delayed(&mut DelayLine::new(4800, SESSION_RATE), &ramp, 0),
+            ramp
+        );
+        let out = delayed(&mut DelayLine::new(4800, SESSION_RATE), &ramp, 100);
         assert!(out[..200].iter().all(|sample| *sample == 0.0));
         assert_eq!(out[200..], ramp[..1800]);
-        let out = delayed(&mut DelayLine::new(50), &ramp, 100);
+        let out = delayed(&mut DelayLine::new(50, SESSION_RATE), &ramp, 100);
         assert_eq!(out[100..], ramp[..1900], "held back at most its length");
 
         let long: Vec<f32> = (0..(MAX_HOLD_BACK_FRAMES + 1000) * 2)
             .map(|i| (i % 4000) as f32 / 4000.0)
             .collect();
         let out = delayed(
-            &mut DelayLine::new(MAX_HOLD_BACK_FRAMES),
+            &mut DelayLine::new(MAX_HOLD_BACK_FRAMES, SESSION_RATE),
             &long,
             MAX_HOLD_BACK_FRAMES,
         );
@@ -3628,7 +3530,7 @@ pub mod tests {
                 [sample, sample]
             })
             .collect();
-        let mut line = DelayLine::new(48_000);
+        let mut line = DelayLine::new(48_000, SESSION_RATE);
         let mut out = delayed(&mut line, &sine[..9600], 0);
         out.extend(delayed(&mut line, &sine[9600..], 12_000));
         let largest = out
