@@ -6467,6 +6467,29 @@ mod tests {
         );
     }
 
+    /// The speaker list opens slim, grows one for one with the window and
+    /// stops at the 644 px it had in the old 980 px default window.
+    #[test]
+    fn the_speaker_list_grows_with_the_window_up_to_its_old_width() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        let list_width = |window_width: f32| {
+            app.main
+                .window()
+                .set_size(slint::LogicalSize::new(window_width, 680.0));
+            // No draw_frames: it sets every headless window to 1000 x 720.
+            ElementHandle::find_by_element_id(&app.main, "MainWindow::scroll")
+                .next()
+                .expect("the speaker list")
+                .size()
+                .width
+        };
+        assert_eq!(list_width(776.0), 440.0, "the default window");
+        assert_eq!(list_width(876.0), 540.0, "a wider window");
+        assert_eq!(list_width(1400.0), 644.0, "a wide window");
+    }
+
     #[test]
     fn the_main_window_keeps_a_virtual_output_listed_after_it_is_turned_off() {
         let mut backend = MockBackend::new();
