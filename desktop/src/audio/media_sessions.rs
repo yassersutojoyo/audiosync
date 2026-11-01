@@ -15,7 +15,8 @@
 //! track carries its session's timeline. A card button goes to the session
 //! that counts when the thread takes it, and the sessions are read again
 //! [`AFTER_COMMAND`] later, so the card shows the new state without waiting
-//! for the next poll. Nothing else waits on the thread: the readers meet it
+//! for the next poll. A change the system reports ([`SessionList::watch`])
+//! has them read at once too. Nothing else waits on the thread: the readers meet it
 //! only under a lock held for a copy. Errors are logged once until reading
 //! works again, and count as no track.
 
@@ -276,18 +277,19 @@ where
 }
 
 fn run<L: SessionList>(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     make: impl FnOnce() -> Result<L, String>,
     poll: Duration,
     log: &DebugLog,
 ) {
-    let sessions = match make() {
+    let mut sessions = match make() {
         Ok(sessions) => sessions,
         Err(error) => {
             log.log(|| format!("now playing: {error}"));
             return;
         }
     };
+    sessions.watch(Changed(Arc::downgrade(shared)));
     shared.lock().icon = sessions.icon(log);
     let mut reader = Reader::new(sessions);
     loop {
@@ -301,6 +303,7 @@ fn run<L: SessionList>(
             if state.readers == 0 {
                 return;
             }
+            state.changed = false;
             let commands = std::mem::take(&mut state.commands);
             let remote = std::mem::take(&mut state.remote);
             (
@@ -357,6 +360,7 @@ fn run<L: SessionList>(
                     && state.card_generation == card_generation
                     && state.commands.is_empty()
                     && state.remote.is_empty()
+                    && !state.changed
                     && state.readers > 0
             })
             .unwrap_or_else(PoisonError::into_inner);
