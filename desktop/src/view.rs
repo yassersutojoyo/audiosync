@@ -4363,7 +4363,7 @@ impl App {
         let reading = self.network_watch.borrow().as_ref().and_then(Watch::latest);
         if let Some(Some(connected)) = reading {
             self.strings()
-                .set_public_network(network_profile::names_firewall(&connected));
+                .set_public_network(network_profile::suggests_private(&connected));
         }
     }
 
@@ -7484,11 +7484,12 @@ mod tests {
         );
     }
 
-    /// The notes that no speaker was found name Windows Firewall only once
-    /// Windows reports a Public network; until then they name the network.
+    /// On Windows the notes that no speaker was found always name Windows
+    /// Firewall, and suggest a Private network only once Windows reports a
+    /// Public one; the Guide names the firewall for any network.
     // covers: S391
     #[test]
-    fn the_none_found_notes_leave_the_firewall_out_off_a_public_network() {
+    fn the_none_found_notes_suggest_private_only_on_a_public_network() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         for note in [
@@ -7496,13 +7497,26 @@ mod tests {
             strings.get_network_none_found(),
             strings.invoke_cast_list(CastList::NoneFound),
         ] {
-            assert!(!note.contains("Windows Firewall"), "{note}");
+            assert!(!note.contains("Private"), "{note}");
+            assert!(
+                !cfg!(windows) || note.contains("Windows Firewall allows AudioSync"),
+                "{note}"
+            );
+        }
+        for guide in [
+            strings.get_help_airplay(),
+            strings.get_help_airplay_prefer(),
+        ] {
+            assert!(
+                guide.contains("Windows Firewall allows AudioSync"),
+                "{guide}"
+            );
         }
         strings.set_public_network(true);
         assert!(
             strings
                 .get_airplay_none_found()
-                .contains("Windows Firewall")
+                .contains("set the network to Private")
         );
     }
 
