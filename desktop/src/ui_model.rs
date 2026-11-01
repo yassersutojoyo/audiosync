@@ -919,11 +919,17 @@ pub fn show_presets(state: &mut AppState, presets: &[Preset]) {
 }
 
 /// The next N for a `<prefix>N` ID: above `last`, the highest given out, and
-/// above every ID in `ids`, so a deleted ID never comes back.
+/// above every ID in `ids`, so a deleted ID never comes back. Past
+/// `u64::MAX` (an edited settings file) it is the lowest N no ID in `ids` has.
 pub fn next_id<'a>(prefix: &str, ids: impl Iterator<Item = &'a str>, last: u64) -> u64 {
-    ids.filter_map(|id| id.strip_prefix(prefix)?.parse::<u64>().ok())
-        .fold(last, u64::max)
-        .saturating_add(1)
+    let taken: Vec<u64> = ids
+        .filter_map(|id| id.strip_prefix(prefix)?.parse::<u64>().ok())
+        .collect();
+    let highest = taken.iter().copied().fold(last, u64::max);
+    highest
+        .checked_add(1)
+        .or_else(|| (1..).find(|n| !taken.contains(n)))
+        .unwrap_or(highest)
 }
 
 /// The preset notice after a recall of `preset` (spec S265); `None` when

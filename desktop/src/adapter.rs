@@ -17274,6 +17274,43 @@ mod tests {
         assert_eq!(adapter.presets[2].id, "preset:7");
     }
 
+    // covers: S245, S251
+    #[test]
+    fn id_counters_at_their_largest_still_give_new_zones_and_presets_distinct_ids() {
+        let edited = Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS)])],
+            last_zone_id: u64::MAX,
+            last_preset_id: u64::MAX,
+            ..Settings::default()
+        };
+        let reopen = |text: &str| {
+            let mut adapter = preset_adapter(Vec::new());
+            adapter.restore(Settings::from_json(text).unwrap().0);
+            turn_on(&mut adapter, HEADPHONES);
+            adapter
+        };
+        let mut adapter = reopen(&edited.to_json());
+        adapter.new_zone_with(&key(HEADPHONES), "Den");
+        adapter.new_zone_with(&key(HEADPHONES), "Porch");
+        Backend::save_preset(&mut adapter, "Night").expect("saved");
+        Backend::save_preset(&mut adapter, "Late").expect("saved");
+
+        let adapter = reopen(&adapter.current_settings().to_json());
+        let zones: Vec<_> = adapter
+            .snapshot()
+            .zones
+            .iter()
+            .map(|zone| zone.name.clone())
+            .collect();
+        assert_eq!(zones, ["Downstairs", "Den", "Porch"]);
+        let presets: Vec<_> = adapter
+            .presets
+            .iter()
+            .map(|preset| preset.name.as_str())
+            .collect();
+        assert_eq!(presets, ["Night", "Late"]);
+    }
+
     // covers: S251, S265
     #[test]
     fn a_hidden_speaker_is_never_saved_and_a_recall_names_it_hidden() {
