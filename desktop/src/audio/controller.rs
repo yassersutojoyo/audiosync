@@ -8492,6 +8492,32 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    // covers: S330 (a new channel mask or a mix format that turns integer reopens alone)
+    #[test]
+    fn a_format_notice_that_changes_only_the_mask_or_the_conversion_reopens_in_the_same_poll() {
+        let base = crate::audio::mock::MOCK_STREAM.format;
+        let masked = RenderFormat {
+            channel_mask: 0x603,
+            ..base
+        };
+        let converted = RenderFormat {
+            convert: true,
+            ..base
+        };
+        for (format, name) in [(masked, "channel mask"), (converted, "conversion")] {
+            let mut backend = backend();
+            backend.start(&SourceId::WholeSystem).unwrap();
+            backend.change_output_format(HEADPHONES, format);
+            assert!(backend.poll().is_empty(), "{name}: no notice");
+            assert_eq!(
+                backend.driver().renderers_started(),
+                [HEADPHONES, SPEAKERS, HEADPHONES],
+                "{name}"
+            );
+            assert_eq!(backend.playing_format(HEADPHONES), Some(format), "{name}");
+        }
+    }
+
     // covers: S330, S177
     #[test]
     fn a_format_reopen_never_moves_another_outputs_hold_back() {
@@ -11014,6 +11040,51 @@ mod tests {
         backend.set_cast_offset(KITCHEN, 1000.0);
         assert_eq!(held(&backend), [Some(1750), Some(1900), Some(1500)]);
         assert_eq!(fake.take_calls(), [Call::Delay(id, Duration::ZERO)]);
+    }
+
+    // covers: S401, S394, P99
+    #[test]
+    fn how_far_airplay_plays_ahead_follows_e_a_receiver_offset_and_a_removed_speaker() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        use audiosync_airplay::latency::LatencySources;
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        let den = device(2, "Den", OPEN_TXT);
+        fake.appear(&den);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        for speaker in [&kitchen, &den] {
+            backend.set_airplay_enabled(&id_of(speaker), true).unwrap();
+            backend.set_airplay_delay(&id_of(speaker), 3000.0);
+        }
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.set_cast_offset(KITCHEN, 20_000.0);
+        let report = |backend: &mut MockBackend, speaker: &Device, ms: u64| {
+            fake.report_latency(speaker, ms * 1000, LatencySources::AUDIO_LATENCY);
+            backend.poll();
+        };
+        report(&mut backend, &kitchen, 250);
+        report(&mut backend, &den, 250);
+        // E = 250 ms, L = 2000 ms: both want 3000 + 18 000 ms.
+        assert_eq!(backend.airplay_ahead_ms(), 1000.0);
+        report(&mut backend, &kitchen, 450);
+        // A new E holds them back 200 ms less and gives Den E − e_s = 200:
+        // a stale hold-back would say 1200, a stale offset 800.
+        assert_eq!(
+            backend.airplay_ahead_ms(),
+            1000.0,
+            "Den: 3000 + 200 + 17 800"
+        );
+        report(&mut backend, &den, 50);
+        assert_eq!(
+            backend.airplay_ahead_ms(),
+            1200.0,
+            "Den's offset alone: 400"
+        );
+        backend.set_airplay_enabled(&id_of(&den), false).unwrap();
+        assert_eq!(backend.airplay_ahead_ms(), 800.0, "Kitchen: 3000 + 17 800");
     }
 
     // covers: C104
