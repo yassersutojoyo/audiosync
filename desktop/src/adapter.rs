@@ -15811,6 +15811,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S286
+    #[test]
+    fn a_cast_speaker_listed_under_its_address_that_leaves_its_zone_is_named_alike_in_row_and_notices()
+     {
+        let dir = test_dir("adapter-cast-zone-left-name");
+        let path = dir.join(settings::FILE_NAME);
+        let (mut adapter, fake) = cast_launch(&path, &[], false);
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        fake.announce_at(
+            DEN,
+            "Living TV",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        adapter.poll();
+        adapter.new_zone_with(&cc(DEN), "Lounge");
+        adapter.poll();
+        fake.withdraw(DEN, "Living TV");
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        adapter.poll();
+        adapter.remove_from_zone(&cc(DEN));
+        adapter.poll();
+        assert_eq!(speaker_of(&adapter, &cc(DEN)).name, "192.0.2.31");
+        adapter.set_speaker_enabled(&cc(DEN), true);
+        assert!(
+            messages(&adapter).contains(&cast_cant_play("192.0.2.31", UiCastProblem::Busy)),
+            "{:?}",
+            messages(&adapter)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The UI's ID of a Google Cast speaker.
     fn cc(id: &str) -> String {
         format!("cc:{id}")
