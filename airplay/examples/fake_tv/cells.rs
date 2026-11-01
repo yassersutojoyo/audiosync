@@ -552,7 +552,7 @@ pub fn manual() -> Vec<Cell> {
         ("W3", "real TV: the paused cover stays 11 min"),
         (
             "W4",
-            "real TV: TV 80 by its remote at master 63, master to 64: TV and row 81; master 100 then back to 63: 100, then 80 again",
+            "real TV: TV 80 by its remote at master 63, master to 64, to 100 and back to 63: TV and row stay 80, only the loudness changes",
         ),
         (
             "W5",
