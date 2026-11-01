@@ -812,7 +812,14 @@ struct NativeAirPlayModel {
     }
 
     /// What the row of the receiver or target `id` waits for, if anything.
-    func codeWait(_ id: String) -> NativeCodeWait? { nil }
+    func codeWait(_ id: String) -> NativeCodeWait? {
+        if promptTargets.values.contains(id) { return .password }
+        switch stages[id] {
+        case .askingPassword?: return .password
+        case .pairing?, .askingPin?, .checkingPin?: return .pin
+        case nil: return nil
+        }
+    }
 
     /// A PIN as the sender takes it: ASCII digits, at least one.
     static func isPin(_ code: String) -> Bool {

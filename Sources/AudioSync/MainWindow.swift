@@ -892,6 +892,7 @@ private struct ZoneMemberCompactRow: View {
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                            waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                           codeWait: speaker.codeWait, name: speaker.name,
                            unannounced: speaker.unannounced, target: speaker.airPlayTarget)
             ?? zone.members.first { $0.key == speaker.key }?.note
     }
@@ -1272,6 +1273,7 @@ struct SpeakerRow: View {
     private var note: String? {
         model.text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                            waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                           codeWait: speaker.codeWait, name: speaker.name,
                            unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? zoneNote
     }
 
