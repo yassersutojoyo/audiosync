@@ -12519,7 +12519,7 @@ mod tests {
             },
         );
         let named = strings.invoke_source_all_except("Spotify and Chrome".into());
-        assert_eq!(named, "All apps except Spotify and Chrome");
+        assert_eq!(named, "All Apps Except Spotify and Chrome");
         assert!(text.contains(named.as_str()), "{text}");
         let guide = Guide {
             source: Some(source.clone()),
