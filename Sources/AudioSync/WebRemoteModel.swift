@@ -86,6 +86,8 @@ extension RemoteRow {
         /// A stereo pair or home theater whose member asks for a password
         /// this run hasn't had: turning it on prompts for that member (P176).
         var memberAsksPassword = false
+        /// Turned off for refusing a pairing: only a switch on the Mac turns it on again.
+        var refusedForCode = false
         /// What the window writes under the name, if anything.
         var note: String?
         var key = ""
