@@ -48,7 +48,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
-- On the Mac, with the equalizer on, sound no longer starts with a short thump when AudioSync opens the capture again, after you switch outputs or when a paused app plays again.
+- On the Mac, with the equalizer on, sound could start with a short thump when AudioSync reopened the capture after it stopped, or rebuilt an app's tap. Now it starts clean.
 - On Windows, the web remote's speaker notes now match the main window: "Waiting for the password" while you type a password, "Enter the code shown on <speaker>" during a PIN pairing, and "Asks for a code every time" for a speaker set that way. Before, the phone said "Asks for a code" or "Pairing…" instead.
 - On Windows, a Google Cast speaker you added by address now says "Added by address" on the web remote, as in the main window and on the Mac. Before, the phone showed no note for it.
 - On the Mac, an arrow key pressed on a Google Cast speaker's slider right after a drag now steps the TV from where the drag ended, and the slider follows the TV when you later set it with its remote to where the drag was heading. Before, the step started from an older level and the slider could stay on a number the TV no longer played.
