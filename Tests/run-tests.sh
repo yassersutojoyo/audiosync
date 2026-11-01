@@ -252,6 +252,16 @@ else
   echo "PASSED"
 fi
 
+echo "▶ the phone row's note shows the PIN or password wait the window shows"
+# covers: S223 (the logic suite proves rowNote's text for a code wait; this proves WebRemote passes the wait)
+remote_rows=$(awk '/^    private func rows\(\)/ { f = 1 } f { print } f && /^    }$/ { exit }' "$SRC/WebRemote.swift")
+if ! grep -q 'codeWait: s\.codeWait, name: s\.name' <<< "$remote_rows"; then
+  echo "FAIL: WebRemote's rows() calls rowNote without the speaker's codeWait and name"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ the whole system's switch marks its early stop as a rebuild"
 # covers: S223 (the logic suite proves a stop marked so ends the stream; this proves switchToSystem marks it)
 switch_system=$(awk '/^    private func switchToSystem/ { f = 1 } f { print } f && /^    }$/ { exit }' \
