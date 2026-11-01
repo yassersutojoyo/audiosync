@@ -982,6 +982,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | native airplay: the failure's log line | S170, S222 |
 | native airplay: the failure's log line says where the panic happened (S205) | S205, S222 |
 | native pairing: a PIN is ASCII digits only | S223 |
+| native pairing: a PIN has exactly four digits | S223 |
 | native pairing: a click on a receiver able to play just joins | S223 |
 | native pairing: a click on an Apple TV asking for a PIN pairs | S223 |
 | native pairing: a click on a receiver with a password asks for it | S223 |

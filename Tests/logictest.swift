@@ -3933,6 +3933,9 @@ do {
                 && !NativeAirPlayModel.isPin("12a4") && !NativeAirPlayModel.isPin("12 34")
                 && !NativeAirPlayModel.isPin("\u{FF11}\u{FF12}"),
               "native pairing: a PIN is ASCII digits only")
+        // covers: S223
+        check(!NativeAirPlayModel.isPin("123") && !NativeAirPlayModel.isPin("12345"),
+              "native pairing: a PIN has exactly four digits")
 
         var m = listed([("A1", .available), ("B2", .needsPin), ("C3", .needsPassword)])
         // covers: S223
