@@ -1090,6 +1090,18 @@ struct NativeAirPlayModel {
         return plan
     }
 
+    /// The plan a reconcile carries out: none from the sleep notice until
+    /// the wake, whose reconcile starts what waited (S412).
+    func reconcilePlan(streaming: Bool, enabled: Set<String>) -> NativeAirPlayPlan {
+        asleep ? NativeAirPlayPlan() : plan(streaming: streaming, enabled: enabled)
+    }
+
+    /// The own volume of AirPlay speaker `appID`: its stored one, else the
+    /// 60 a local output starts at (S399).
+    static func ownVolume(_ appID: String, stored: [String: Double]) -> Double {
+        stored[appID] ?? AppSettings.defaultVolume
+    }
+
     /// The app added a speaker to the sender.
     mutating func added(_ id: String) { states[id] = .connecting }
 

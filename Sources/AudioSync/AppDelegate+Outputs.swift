@@ -16,8 +16,8 @@ extension AppDelegate {
 
     /// Zone `id`'s volume (0 to 100, S245); its playing members hear it at once (S249).
     func setZoneVolume(_ id: String, _ position: Double) {
-        guard position.isFinite, let index = zones.firstIndex(where: { $0.id == id }) else { return }
-        zones[index].volume = max(0, min(100, position))
+        guard let v = VolumeCurve.accepted(position), let index = zones.firstIndex(where: { $0.id == id }) else { return }
+        zones[index].volume = v
         pushModel()
     }
 
