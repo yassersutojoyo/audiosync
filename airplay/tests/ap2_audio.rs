@@ -582,6 +582,11 @@ struct Recorder {
 impl Recorder {
     fn bind() -> Recorder {
         let socket = UdpSocket::bind("127.0.0.1:0").expect("a socket");
+        // About 20 s of audio for a reader that load holds up; the default
+        // on Windows, 64 KiB, lasts a third of a second.
+        socket2::SockRef::from(&socket)
+            .set_recv_buffer_size(4 << 20)
+            .expect("a receive buffer");
         let reader = socket.try_clone().expect("a clone");
         let got = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
