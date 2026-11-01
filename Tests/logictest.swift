@@ -7049,6 +7049,11 @@ do {
     check(zoneCount(on: 0, present: 0, total: 2, inPair: 2) == "2 playing in a pair",
           "zones: a zone whose members play as a stereo pair says N playing in a pair",
           zoneCount(on: 0, present: 0, total: 2, inPair: 2))
+    // covers: S247
+    check(ZoneLayout.playsInPair("pair:4E2A") && !ZoneLayout.playsInPair("theater:9F00") && !ZoneLayout.playsInPair(nil)
+            && zoneCount(on: 0, present: 0, total: 2, inPair: ZoneLayout.playsInPair("theater:9F00") ? 2 : 0)
+                == "None of 2 found",
+          "zones: a zone whose members play in a home theater group still says none of them was found")
     // covers: S359
     check(zoneCount(on: 2, present: 3, total: 3) == "2 of 3 on",
           "zones: the header counts the members that are on out of every shown member")

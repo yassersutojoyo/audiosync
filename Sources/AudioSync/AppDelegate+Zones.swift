@@ -194,7 +194,7 @@ extension AppDelegate {
                     if member.facts.on { shown.on += 1 }
                     if member.facts.on && member.waiting { shown.waiting += 1 }
                 }
-                if member.facts.inTarget { shown.inPair += 1 }
+                if ZoneLayout.playsInPair(member.target) { shown.inPair += 1 }
                 shown.members.append(zoneMember(member, zoneOn: anyOn))
             }
             return shown

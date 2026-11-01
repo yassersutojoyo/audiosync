@@ -393,6 +393,12 @@ enum ZoneLayout {
         return text.zoneCount(on: on, of: total) + (waiting > 0 ? text.zoneWaiting(waiting) : "")
     }
 
+    /// Whether a member held by `target` counts in `count`'s `inPair`: a
+    /// home theater group isn't a pair.
+    static func playsInPair(_ target: String?) -> Bool {
+        target.flatMap(NativeTarget.kind) == .stereoPair
+    }
+
     /// The menu bar panel's rows for `zones`: a header each, plus the members
     /// of every zone not in `collapsed`.
     static func panelRows<Z>(_ zones: [Z], id: (Z) -> String, members: (Z) -> Int,
