@@ -73,12 +73,12 @@ pub enum Event {
     Multizone(MultizoneMessage),
     /// A message the sender dropped, for the log (C26 to C28, C31).
     Dropped(Dropped),
-    /// A level sent that no status will answer (C70, C104): `repeated` when
-    /// the level sent before it is the same and still unanswered, else the
-    /// device already reports it.
+    /// A level asked for that no status will answer, once per ask (C70,
+    /// C104): replaced or dropped before it went out, or sent while the
+    /// device already reports it or while the same level sent before it
+    /// still waits.
     VolumeUnanswered {
         level: f64,
-        repeated: bool,
     },
     /// The channel is over; nothing more will be sent (sections 4 and 8).
     Ended(EndReason),
@@ -421,7 +421,12 @@ impl Channel {
         }
         let level = level.clamp(0.0, 1.0);
         match self.volume_sent {
-            Some(sent) if now < sent + self.volume_interval => self.volume_queued = Some(level),
+            Some(sent) if now < sent + self.volume_interval => {
+                if let Some(replaced) = self.volume_queued.replace(level) {
+                    self.events
+                        .push_back(Event::VolumeUnanswered { level: replaced });
+                }
+            }
             _ => self.send_level(now, level),
         }
         Ok(())
@@ -503,8 +508,7 @@ impl Channel {
             .volume_unconfirmed
             .is_some_and(|(_, sent)| sent == level);
         if repeated || (reported && self.volume_unconfirmed.is_none()) {
-            self.events
-                .push_back(Event::VolumeUnanswered { level, repeated });
+            self.events.push_back(Event::VolumeUnanswered { level });
         }
         self.volume_unconfirmed = (!reported).then_some((id, level));
     }
@@ -941,7 +945,9 @@ impl Channel {
         if status.volume.control_type == ControlType::Fixed {
             // A drag value still waiting for its interval must not reach a
             // control that turned fixed meanwhile (C68).
-            self.volume_queued = None;
+            if let Some(level) = self.volume_queued.take() {
+                self.events.push_back(Event::VolumeUnanswered { level });
+            }
         }
         // The answer to an older level leaves the newer one unanswered (C70); a
         // device that rounds to its step may answer without the request id.

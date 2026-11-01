@@ -199,9 +199,8 @@ enum CastEvent: Equatable {
     case reloaded(attempt: UInt64)
     /// `answersMute`: the first status since a mute was sent (C70).
     case volume(attempt: UInt64, CastVolume, answersMute: Bool = false)
-    /// A level sent that no status will answer; `repeated` when it repeats the
-    /// level sent before it, still unanswered (C70).
-    case volumeUnanswered(attempt: UInt64, level: Double, repeated: Bool)
+    /// A level asked for that no status will answer, once per ask (C70).
+    case volumeUnanswered(attempt: UInt64, level: Double)
     case commandFailed(attempt: UInt64, error: CastError?)
     case ended(attempt: UInt64, CastEnd)
     /// The device refused WAV; `format` is loaded instead (C84).
@@ -221,7 +220,7 @@ enum CastEvent: Equatable {
         switch self {
         case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .connectFailed(let a, _, _, _),
              .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _, _), .commandFailed(let a, _),
-             .volumeUnanswered(let a, _, _), .ended(let a, _), .note(let a, _), .members(let a, _):
+             .volumeUnanswered(let a, _), .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
         case .groupLog, .memoryChanged, .discoveryStopped, .failed:
             return nil
@@ -256,7 +255,7 @@ enum CastEvent: Equatable {
             self = .volume(attempt: a, CastVolume(level: raw.level, muted: raw.muted, fixed: raw.volume_fixed,
                                                   step: raw.step), answersMute: raw.answers_mute)
         case ASC_CAST_EVENT_VOLUME_UNANSWERED:
-            self = .volumeUnanswered(attempt: a, level: raw.level, repeated: detail == "repeated")
+            self = .volumeUnanswered(attempt: a, level: raw.level)
         case ASC_CAST_EVENT_COMMAND_FAILED: self = .commandFailed(attempt: a, error: error)
         case ASC_CAST_EVENT_ENDED:
             let end: CastEnd
@@ -933,8 +932,8 @@ struct CastModel {
         case .volume(_, let volume, let answersMute):
             attempt?.reportedMute = nil
             return volumeReported(id, volume, answersMute: answersMute)
-        case .volumeUnanswered(_, let level, let repeated):
-            volumeUnanswered(id, level, repeated: repeated)
+        case .volumeUnanswered(_, let level):
+            volumeUnanswered(id, level)
             return nil
         case .members(_, let list):
             guard devices[id]?.group == true, members != list else { return nil }
@@ -1044,13 +1043,12 @@ struct CastModel {
         return level
     }
 
-    /// The sender sent `level`, the latest asked for, with no answer to come
-    /// (C70, C104): when `repeated`, the levels asked for since its latest earlier
-    /// copy stop waiting; else the device already reports it, and every level does.
-    private mutating func volumeUnanswered(_ id: String, _ level: Double, repeated: Bool) {
-        guard unanswered.last == level else { return }
-        let kept = repeated ? unanswered.dropLast().lastIndex(of: level).map { $0 + 1 } ?? unanswered.count : 0
-        unanswered.removeSubrange(kept...)
+    /// The sender will get no answer to one ask for `level` (C70, C104), so
+    /// the latest copy still awaited stops waiting, as the sender reports an
+    /// ask the moment it replaces or sends it.
+    private mutating func volumeUnanswered(_ id: String, _ level: Double) {
+        guard let index = unanswered.lastIndex(of: level) else { return }
+        unanswered.remove(at: index)
         if unanswered.isEmpty, let requested, requested.id == id {
             levels[id] = requested.level
             self.requested = nil

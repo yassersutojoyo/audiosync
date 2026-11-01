@@ -1661,21 +1661,14 @@ impl CastSpeakers {
         }
     }
 
-    /// The sender sent `level`, the latest asked for, with no answer to come
-    /// (C70, C104): when `repeated`, the levels asked for since its latest earlier
-    /// copy stop waiting; else the device already reports it, and every level
-    /// does.
-    fn volume_unanswered(&mut self, device: DeviceId, level: f64, repeated: bool) {
-        if self.unanswered.last() != Some(&level) {
+    /// The sender will get no answer to one ask for `level` (C70, C104), so
+    /// the latest copy still awaited stops waiting, as the sender reports an
+    /// ask the moment it replaces or sends it.
+    fn volume_unanswered(&mut self, device: DeviceId, level: f64) {
+        let Some(index) = self.unanswered.iter().rposition(|&sent| sent == level) else {
             return;
-        }
-        let earlier = &self.unanswered[..self.unanswered.len() - 1];
-        let kept = match earlier.iter().rposition(|&sent| sent == level) {
-            Some(copy) if repeated => copy + 1,
-            None if repeated => self.unanswered.len(),
-            _ => 0,
         };
-        self.unanswered.truncate(kept);
+        self.unanswered.remove(index);
         if self.unanswered.is_empty()
             && let Some((requested, own)) = self.requested
             && requested == device
@@ -2041,8 +2034,8 @@ impl CastSpeakers {
                 }
                 self.volume_reported(device, volume, answers_mute)
             }
-            SessionEvent::VolumeUnanswered { level, repeated } => {
-                self.volume_unanswered(device, level, repeated);
+            SessionEvent::VolumeUnanswered { level } => {
+                self.volume_unanswered(device, level);
             }
             SessionEvent::Diagnostics(diagnostics) => {
                 self.log
