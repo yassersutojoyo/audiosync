@@ -6097,6 +6097,30 @@ check(NowPlayingMonitor.scriptErrorLine(target: "com.apple.Music", code: -2753, 
       == "[AudioSync] AppleScript error: {NSAppleScriptErrorNumber = -2753;}",
       "AppleScript: another error (-2753) still logs the error dictionary")
 
+// MARK: Track info — a player's change notice reads the players without waiting for the poll
+// covers: S336
+do {
+    let noticePosts = NotificationCenter()
+    let noticeMonitor = NowPlayingMonitor()
+    noticeMonitor.noticeCenter = noticePosts
+    noticeMonitor.preferredBundleID = ""   // no player to read, so no Apple event leaves the test
+    var noticeReadings = 0
+    noticeMonitor.onReading = { _ in noticeReadings += 1 }
+    // Well before the 2 s poll's first tick, so a second reading can only come from the notice.
+    let noticePollDue = Date().addingTimeInterval(1.5)
+    func waitForNoticeReadings(_ count: Int) {
+        while noticeReadings < count && Date() < noticePollDue {
+            _ = RunLoop.main.run(mode: .default, before: noticePollDue)
+        }
+    }
+    noticeMonitor.startWatching()
+    waitForNoticeReadings(1)
+    noticePosts.post(name: Notification.Name("com.spotify.client.PlaybackStateChanged"), object: nil)
+    waitForNoticeReadings(2)
+    check(noticeReadings == 2, "now playing: a player's change notice reads the players at once, before the 2 s poll")
+    noticeMonitor.stopWatching()
+}
+
 // MARK: Track info — a paused player keeps its track on receivers until it stops or quits
 do {
     let spotify = NowPlayingMonitor.spotify
