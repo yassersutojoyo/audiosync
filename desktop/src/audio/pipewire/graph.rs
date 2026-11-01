@@ -901,7 +901,7 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_hands_free_input_is_refused_as_not_connected() {
+    fn a_saved_input_that_is_hands_free_or_missing_is_refused_as_not_connected() {
         let mut graph = Graph::default();
         graph.add(
             1,
@@ -924,7 +924,7 @@ mod tests {
         );
         assert_eq!(
             graph.capture_input("gone").err(),
-            Some(BackendError::DeviceGone)
+            Some(BackendError::InputGone)
         );
     }
 
