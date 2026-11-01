@@ -2074,17 +2074,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Writes the Cast speakers' offsets and formats to their file when they
     /// changed since the last write. One that can't be written gets the
-    /// settings' notice: the change lasts until AudioSync quits.
-    fn save_cast_memory(&mut self) {
+    /// settings' notice: the change lasts until AudioSync quits. Returns
+    /// false only when the file couldn't be kept aside or written.
+    fn save_cast_memory(&mut self) -> bool {
         if self.auto_connect_skipped {
-            return;
+            return true;
         }
         let (Some(path), Some(mut json)) = (self.cast_file.as_ref(), self.audio.cast_memory_json())
         else {
-            return;
+            return true;
         };
         if self.cast_saved.as_ref() == Some(&json) {
-            return;
+            return true;
         }
         if !self.cast_file_checked {
             match keep_unread_cast_file_aside(path, self.cast_unread_at_launch) {
@@ -2110,16 +2111,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.log
                         .log(|| format!("Cast: the speakers' file couldn't be kept: {error}"));
                     self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
-                    return;
+                    return false;
                 }
             }
         }
         match data_folder::write_atomically(path, json.as_bytes()) {
-            Ok(()) => self.cast_saved = Some(json),
+            Ok(()) => {
+                self.cast_saved = Some(json);
+                // The notice stays while the settings file is the one that can't be saved.
+                if self.unsaved.is_none() {
+                    self.notices.clear(&[NoticeSubject::SettingsFile]);
+                }
+                true
+            }
             Err(error) => {
                 self.log
                     .log(|| format!("Cast: the speakers' file couldn't be written: {error}"));
                 self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                false
             }
         }
     }
@@ -4123,7 +4132,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.note_speakers();
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
-            BackendEvent::CastMemoryChanged => self.save_cast_memory(),
+            BackendEvent::CastMemoryChanged => {
+                self.save_cast_memory();
+            }
             BackendEvent::AirPlayWaitOver { id } => {
                 self.reconnecting.remove(&id);
                 self.clear_if(airplay_subject(&id), |message| {
@@ -5730,9 +5741,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let _ = self.persist();
         // Before the backend drops and the Cast host shuts down, so the last
         // offset change is kept even when its event was never polled.
-        self.save_cast_memory();
+        let cast_saved = self.save_cast_memory();
         // A run that writes nothing (no file, delays to migrate, no auto-connect) keeps changes unsaved.
-        self.settings_file.path().is_some() && self.current_settings() == self.saved
+        cast_saved && self.settings_file.path().is_some() && self.current_settings() == self.saved
     }
 
     fn shut_down(&mut self) {
