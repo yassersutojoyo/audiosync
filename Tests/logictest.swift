@@ -6126,8 +6126,7 @@ check(NowPlayingMonitor.scriptErrorLine(target: "com.apple.Music", code: -2753, 
 // covers: S336
 do {
     let noticePosts = NotificationCenter()
-    let noticeMonitor = NowPlayingMonitor()
-    noticeMonitor.noticeCenter = noticePosts
+    let noticeMonitor = NowPlayingMonitor(noticeCenter: noticePosts)
     noticeMonitor.preferredBundleID = ""   // no player to read, so no Apple event leaves the test
     var noticeReadings = 0
     noticeMonitor.onReading = { _ in noticeReadings += 1 }
@@ -6144,6 +6143,24 @@ do {
     waitForNoticeReadings(2)
     check(noticeReadings == 2, "now playing: a player's change notice reads the players at once, before the 2 s poll")
     noticeMonitor.stopWatching()
+}
+
+// covers: S336
+do {
+    let againPosts = NotificationCenter()
+    let againMonitor = NowPlayingMonitor(noticeCenter: againPosts)
+    againMonitor.preferredBundleID = ""
+    var againReadings = 0
+    againMonitor.onReading = { _ in againReadings += 1 }
+    // startWatching's reading only lands once the main queue runs, so both notices arrive while it is under way.
+    againMonitor.startWatching()
+    againPosts.post(name: Notification.Name("com.apple.Music.playerInfo"), object: nil)
+    againPosts.post(name: Notification.Name("com.spotify.client.PlaybackStateChanged"), object: nil)
+    let againPollDue = Date().addingTimeInterval(1.5)
+    while Date() < againPollDue { _ = RunLoop.main.run(mode: .default, before: againPollDue) }
+    check(againReadings == 2,
+          "now playing: change notices during a reading read the players once more right after it, before the 2 s poll")
+    againMonitor.stopWatching()
 }
 
 // MARK: Track info — a paused player keeps its track on receivers until it stops or quits

@@ -2008,6 +2008,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | AppleScript: Automation refused (-1743) logs one line naming the player, not the error dictionary | S336 |
 | AppleScript: another error (-2753) still logs the error dictionary | S336 |
 | now playing: a player's change notice reads the players at once, before the 2 s poll | S336 |
+| now playing: change notices during a reading read the players once more right after it, before the 2 s poll | S336 |
 | native airplay: of the warnings, only a PTP port clash becomes a notice | S358 |
 | ptp notice: shows once the ports are reported taken, until a speaker plays while no row needs PTP timing | S358 |
 | ptp notice: a speaker off for PTP timing with no port clash reported says nothing about ports | S358 |

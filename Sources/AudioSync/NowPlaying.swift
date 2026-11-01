@@ -278,7 +278,12 @@ final class NowPlayingMonitor {
     var preferredBundleID: String?
 
     /// Where the players post their change notices; a test hands in its own.
-    var noticeCenter: NotificationCenter = DistributedNotificationCenter.default()
+    let noticeCenter: NotificationCenter
+
+    init(noticeCenter: NotificationCenter = DistributedNotificationCenter.default()) {
+        self.noticeCenter = noticeCenter
+    }
+
     /// Posted by Music and Spotify when their track or play state changes.
     static let changeNotices = [Notification.Name("com.apple.Music.playerInfo"),
                                 Notification.Name("com.spotify.client.PlaybackStateChanged")]
