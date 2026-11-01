@@ -1045,7 +1045,12 @@ impl CastSession {
                         let _ = self.client.set_volume(level);
                     }
                     self.pacer.connected(Instant::now());
-                    return self.report(SessionEvent::Recovered { relaunched });
+                    self.report(SessionEvent::Recovered { relaunched });
+                    // A reload cleared it; without one the device may still be paused.
+                    if self.paused {
+                        self.report(SessionEvent::Paused);
+                    }
+                    return;
                 }
                 Err(_) if !self.selected.load(Ordering::SeqCst) => {
                     return self.end(SessionEnd::Deselected);

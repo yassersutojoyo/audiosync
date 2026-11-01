@@ -937,11 +937,19 @@ fn a_reconnect_while_the_device_stays_paused_reports_the_pause_again() {
     assert!(
         matches!(
             after[..],
-            [SessionEvent::Recovered { relaunched: false }, SessionEvent::Paused, ..]
+            [
+                SessionEvent::Recovered { relaunched: false },
+                SessionEvent::Paused,
+                ..
+            ]
         ),
         "{seen:?}"
     );
-    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1, "still paused, no reload");
+    assert_eq!(
+        count(&device, NS_MEDIA, "LOAD"),
+        1,
+        "still paused, no reload"
+    );
     session.stop();
     device.join();
 }
