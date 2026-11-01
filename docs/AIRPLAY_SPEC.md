@@ -470,6 +470,7 @@ The crate's tests run against a fake receiver in the same process: an RTSP serve
 | sync_latency_and_times | P95, P97, P98 | bytes 16–19 minus 4–7 equals Lf; bytes 8–15 equal the model time; default and range of Lf |
 | the_host_reads_latency_and_first_sound_and_restarts_the_timeline | P98 | the latency is 1.75 s by default |
 | per_speaker_delay | P4, P84, P96, P99, P102 | two speakers with 0 and 13 000 ms: stated times differ by exactly 13 000 ms for every frame, latency field equal, packets leave 13 s later |
+| a_delay_past_20_s_sends_packets_20_s_late, every_payload_at_the_20_s_delay_decodes_to_its_host_frames | P84, P99, P111 | a requested 25 s delay sends each packet 20 s after the undelayed speaker's, not 25 s; at exactly 20 s every ALAC and PCM payload decodes to the host frames it names |
 | delay_change_flushes_one_speaker | P100 | a change flushes only that speaker; changes 100 ms apart become one flush |
 | a_delay_change_behind_artwork_sends_nothing_new_before_its_flush | P100 | a delay change made while artwork is in flight sends no packet under the new delay before its FLUSH |
 | pause_flushes_and_resumes | P213, P34, P85 | a host pause sends every session one FLUSH naming the first packet not sent and stops audio and sync packets while the session stays up; resume sends no request, continues at that seq and rtptime with the first flag and the marker, and plays in step; a silent input or an underrun never sends a FLUSH |

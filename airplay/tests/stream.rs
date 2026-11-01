@@ -642,6 +642,54 @@ fn per_speaker_delay() {
     assert!(matched > 400, "{matched}");
 }
 
+// covers: P84, P99
+#[test]
+fn a_delay_past_20_s_sends_packets_20_s_late() {
+    let mut rig = Rig::with_host();
+    let near = rig.add(speaker(1, Codec::Alac));
+    let mut config = speaker(2, Codec::Alac);
+    config.delay = Duration::from_secs(25);
+    let capped = rig.add(config);
+    rig.run_for(Duration::from_secs(24));
+
+    let near_audio = rig.audio(near);
+    let mut matched = 0;
+    for packet in rig.audio(capped) {
+        let j = packet_of(&rig, capped, packet.header.timestamp);
+        assert!((packet.at - due(&rig, j, packet.margin, 20.0)).abs() <= 0.005);
+        if let Some(same) = near_audio
+            .iter()
+            .find(|a| packet_of(&rig, near, a.header.timestamp) == j)
+        {
+            assert!((packet.at - same.at - 20.0).abs() <= 0.005, "packet {j}");
+            matched += 1;
+        }
+    }
+    assert!(matched > 400, "{matched}");
+}
+
+// covers: P99, P111
+#[test]
+fn every_payload_at_the_20_s_delay_decodes_to_its_host_frames() {
+    for codec in [Codec::Alac, Codec::Pcm] {
+        let mut rig = Rig::with_host();
+        let mut config = speaker(1, codec);
+        config.delay = MAX_DELAY;
+        let id = rig.add(config);
+        rig.run_for(Duration::from_secs(23));
+        let audio = rig.audio(id);
+        assert!(audio.len() > 300, "{codec:?}");
+        for packet in &audio {
+            let n = rig.frame_of(id, packet.header.timestamp) as u64;
+            let frames = decode(codec, &packet.payload);
+            assert_eq!(frames.len(), FRAMES_PER_PACKET);
+            for (i, frame) in frames.into_iter().enumerate() {
+                assert_eq!(frame, host_frame(n + i as u64), "{codec:?} frame {n}+{i}");
+            }
+        }
+    }
+}
+
 // covers: P100
 #[test]
 fn delay_change_flushes_one_speaker() {
