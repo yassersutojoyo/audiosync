@@ -146,20 +146,21 @@ one, with a notice that names it.
 | Arrow keys | Move the focused slider (volume in steps of 1, or a Google Cast speaker's own step; equalizer in 0.5 dB) |
 | Menu key, Shift+F10 | Open the focused row's context menu |
 | Ctrl+S | Apply every typed delay |
-| Ctrl+N | New zone from the speakers that are on |
-| F5 | Refresh devices |
+| Ctrl+N | New zone from the speakers that are on, also from the equalizer, either Guide or Web Remote |
+| F5 | Refresh devices, also from the equalizer, either Guide or Web Remote |
 | Ctrl+E | Equalizer |
-| Ctrl+1 to Ctrl+9 | Recall the first nine presets, in the order View > Presets lists them |
+| Ctrl+1 to Ctrl+9 | Recall the first nine presets, in the order View > Presets lists them, also from the equalizer, either Guide, Web Remote or the tray flyout |
 | F2 | Rename the focused preset, speaker or zone |
 | Ctrl+W | Close the window (AudioSync stays in the tray); in the equalizer, the AudioSync Guide, the double-audio guide, Web Remote or About, close that window; in a dialog, cancel it as Escape does |
 | Ctrl+Q | Exit AudioSync, from the main window, the equalizer, either Guide, Web Remote or About |
-| F1 | AudioSync Guide |
-| Escape | Close the flyout, the equalizer, the AudioSync Guide, the double-audio guide, Web Remote or a dialog |
+| F1 | AudioSync Guide, also from the equalizer, either Guide or Web Remote |
+| Escape | Close the flyout, the equalizer, the AudioSync Guide, the double-audio guide, Web Remote, About or a dialog |
 
 Each Mac menu shortcut has its Windows key, with Ctrl for Command: Command-S,
 -W, -Q, -N and Option-Command-E become Ctrl+S, Ctrl+W, Ctrl+Q, Ctrl+N and
 Ctrl+E, Command-R becomes F5 and Command-? F1, as Windows apps use them. The
-menu items show them. The Mac's Hide and Hide Others have none, since Windows
+menu items show them. Outside the main window, a Ctrl or F-key shortcut does nothing with an
+extra modifier held (Ctrl+Shift+W, Shift+F5, Ctrl+Windows key+1). The Mac's Hide and Hide Others have none, since Windows
 doesn't hide apps; Minimize is the title bar's button (or Windows+Down), and
 Command-0 brings up the main window, which on Windows is where the menu bar is.
 
