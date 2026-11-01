@@ -2870,6 +2870,9 @@ impl App {
         self.follow_frame(|app| app.equalizer.window(), "equalizer");
         let eq_window = &self.equalizer;
         let weak = Rc::downgrade(self);
+        eq_window
+            .global::<NameField>()
+            .set_double_click(crate::platform::double_click_ms());
 
         let w = weak.clone();
         eq_window.on_enabled_toggled(move |on| {
@@ -11316,6 +11319,120 @@ mod tests {
             );
             assert_eq!(app.main.get_equalizer_curve(), "Mine");
         }
+    }
+
+    fn first_band_gain(app: &App) -> f64 {
+        app.snapshot().equalizer.gains_db[0]
+    }
+
+    #[test]
+    fn an_equalizer_band_moves_with_the_left_and_right_arrow_keys() {
+        let app = app_over(MockBackend::new());
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_take_focus();
+        draw_frames();
+        let window = app.equalizer.window();
+        // The switch, the curve picker, the preamp, then the first band.
+        tab(window, 4);
+        press(window, Key::UpArrow);
+        assert_eq!(first_band_gain(&app), 0.5, "the first band has the focus");
+
+        press(window, Key::RightArrow);
+        assert_eq!(first_band_gain(&app), 1.0, "Right moves it up");
+        press(window, Key::LeftArrow);
+        press(window, Key::LeftArrow);
+        assert_eq!(first_band_gain(&app), 0.0, "Left moves it down");
+    }
+
+    #[test]
+    fn an_equalizer_band_ignores_the_left_and_right_arrows_with_a_modifier() {
+        let app = app_over(MockBackend::new());
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_take_focus();
+        draw_frames();
+        let window = app.equalizer.window();
+        tab(window, 4);
+        press(window, Key::UpArrow);
+        for modifier in [Key::Control, Key::Shift, Key::Alt] {
+            window.dispatch_event(WindowEvent::KeyPressed {
+                text: modifier.into(),
+            });
+            press(window, Key::RightArrow);
+            press(window, Key::LeftArrow);
+            press(window, Key::LeftArrow);
+            window.dispatch_event(WindowEvent::KeyReleased {
+                text: modifier.into(),
+            });
+            assert_eq!(first_band_gain(&app), 0.5, "{modifier:?}");
+        }
+    }
+
+    /// Shows the equalizer and finds where a click above the middle of the
+    /// first band's track raises it; the double-click time has run out after.
+    fn first_band_point(app: &App) -> (f32, f32) {
+        app.equalizer.show().expect("the equalizer shows headless");
+        draw_frames();
+        let window = app.equalizer.window();
+        let y = 250.0;
+        let x = (0..1000)
+            .step_by(8)
+            .map(|x| x as f32)
+            .find(|&x| {
+                click(window, x, y);
+                advance_clock(Duration::from_secs(1));
+                draw_frames();
+                first_band_gain(app) > 0.0
+            })
+            .expect("a click raises the first band");
+        (x, y)
+    }
+
+    #[test]
+    fn a_double_click_on_an_equalizer_band_sets_it_to_0_db() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        let (x, y) = first_band_point(&app);
+        let window = app.equalizer.window();
+        click(window, x, y);
+        click(window, x, y);
+        assert_eq!(first_band_gain(&app), 0.0);
+    }
+
+    #[test]
+    fn two_slow_clicks_or_a_drag_and_a_click_leave_an_equalizer_band_where_it_is() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        let (x, y) = first_band_point(&app);
+        let window = app.equalizer.window();
+        let raised = first_band_gain(&app);
+        click(window, x, y);
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        click(window, x, y);
+        assert_eq!(first_band_gain(&app), raised, "two slow clicks");
+
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        let button = PointerEventButton::Left;
+        let from = slint::LogicalPosition::new(x, y);
+        let to = slint::LogicalPosition::new(x, y + 60.0);
+        window.dispatch_event(WindowEvent::PointerMoved { position: from });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: from,
+            button,
+        });
+        for step in [20.0, 40.0, 60.0] {
+            let position = slint::LogicalPosition::new(x, y + step);
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+        }
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position: to,
+            button,
+        });
+        draw_frames();
+        assert!(first_band_gain(&app) < raised, "the drag lowers it");
+        click(window, x, y);
+        assert_eq!(first_band_gain(&app), raised, "a drag and a click");
     }
 
     #[test]

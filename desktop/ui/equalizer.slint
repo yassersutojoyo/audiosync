@@ -6,7 +6,7 @@
 import { Button, ComboBox, Slider } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Card, Fluent, QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
+import { Card, Fluent, NameField, QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -16,6 +16,10 @@ component Band inherits VerticalLayout {
     in property <float> max-gain;
     in property <bool> faded;
     callback changed(float);
+    // Where the press put the band (its first change since the last
+    // release): a release at another gain ends a drag, not a click.
+    property <float> press-gain;
+    property <bool> press-gain-set;
 
     spacing: 8px;
     // A drag replaces the slider's binding; keep it in step with the model.
@@ -29,24 +33,69 @@ component Band inherits VerticalLayout {
         wrap: no-wrap;
     }
 
-    HorizontalLayout {
+    // Left and Right move the band as Up and Down do, as on the Mac.
+    FocusScope {
         vertical-stretch: 1;
-        alignment: center;
-        slider := Slider {
-            orientation: vertical;
-            min-height: 140px;
-            vertical-stretch: 1;
-            minimum: -root.max-gain;
-            maximum: root.max-gain;
-            step: 0.5;
-            value: root.gain;
-            opacity: root.faded ? Tokens.disabled-opacity : 1;
-            animate opacity { duration: Fluent.normal; }
-            accessible-label: root.name;
-            accessible-value: Strings.equalizer-gain-value(self.value);
-            changed(value) => {
-                // The keyboard and the pointer both land on 0.5 dB steps.
-                root.changed(round(value * 2) / 2);
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if event.modifiers.control || event.modifiers.alt || event.modifiers.shift || event.modifiers.meta
+                || (event.text != Key.LeftArrow && event.text != Key.RightArrow) {
+                return reject;
+            }
+            slider.value = clamp(slider.value + (event.text == Key.RightArrow ? 0.5 : -0.5), -root.max-gain, root.max-gain);
+            root.changed(round(slider.value * 2) / 2);
+            accept
+        }
+        // Key releases stop here, so the slider's `released` means a click.
+        capture-key-released(event) => {
+            root.press-gain-set = false;
+            accept
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            slider := Slider {
+                orientation: vertical;
+                min-height: 140px;
+                vertical-stretch: 1;
+                minimum: -root.max-gain;
+                maximum: root.max-gain;
+                step: 0.5;
+                value: root.gain;
+                opacity: root.faded ? Tokens.disabled-opacity : 1;
+                animate opacity { duration: Fluent.normal; }
+                accessible-label: root.name;
+                accessible-value: Strings.equalizer-gain-value(self.value);
+                changed(value) => {
+                    if !root.press-gain-set {
+                        root.press-gain-set = true;
+                        root.press-gain = round(value * 2) / 2;
+                    }
+                    // The keyboard and the pointer both land on 0.5 dB steps.
+                    root.changed(round(value * 2) / 2);
+                }
+                // Two clicks within the system's double-click time set 0 dB, as on the Mac.
+                released => {
+                    if root.press-gain-set && round(self.value * 2) / 2 != root.press-gain {
+                        second-click.running = false;
+                    } else if second-click.running {
+                        second-click.running = false;
+                        self.value = 0;
+                        root.changed(0);
+                    } else {
+                        second-click.running = true;
+                    }
+                    root.press-gain-set = false;
+                }
+            }
+        }
+
+        second-click := Timer {
+            interval: NameField.double-click;
+            running: false;
+            triggered => {
+                self.running = false;
             }
         }
     }
