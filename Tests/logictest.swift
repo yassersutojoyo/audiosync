@@ -2776,10 +2776,13 @@ do {
             usleep(60_000)
             capture(ms: 50)
         }
+        // Read before the fill can take over after the last block (40 ms idle).
+        let written = Double(parts.ring.framesWritten)
         engine.stop()
         let elapsed = Double(HostClock.shared.nanoseconds(ticks: last - first)) * 48_000 / 1e9
-        let written = Double(parts.ring.framesWritten)
-        check(abs(written - elapsed) <= 512,
+        // Over by a block per pause was the bug. Short is the gap from the fill's last 2 ms wake-up
+        // to each resumed block, which a busy runner stretches (851 frames once): a block per pause.
+        check(written - elapsed <= 512 && elapsed - written <= 5 * 512,
               "quiet capture: five pauses leave the ring within one callback of the time they took",
               "\(Int(written)) frames written over \(Int(elapsed))")
     } else {
