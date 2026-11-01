@@ -1579,8 +1579,7 @@ impl CastSpeakers {
             {
                 self.requested = None;
             }
-        } else if self.unanswered.last() != Some(&level) {
-            // The same level sent twice in a row gets one answer.
+        } else {
             if self.unanswered.len() == MAX_UNANSWERED {
                 self.unanswered.remove(0);
             }
@@ -3635,7 +3634,7 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 40.0);
     }
 
-    // covers: C70, C105 (the device echoes a level sent twice in a row once)
+    // covers: C70, C105 (the sender reports the second of two levels sent in a row unanswered)
     #[test]
     fn a_level_resent_at_the_first_status_never_swallows_a_later_change_to_it() {
         let (fake, mut cast) = listed();
@@ -3644,6 +3643,7 @@ pub mod tests {
         cast.set_volume(KITCHEN, 30.0);
         report(&fake, &mut cast, 0.8);
         assert_eq!(sent(&fake), [0.3, 0.3], "re-sent at the first status");
+        unanswered(&fake, &mut cast, &[0.3]);
         report(&fake, &mut cast, 0.3);
         report(&fake, &mut cast, 0.7);
         assert_eq!(shown(&cast, KITCHEN), 70.0);

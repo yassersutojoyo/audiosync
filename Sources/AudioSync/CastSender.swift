@@ -16,8 +16,6 @@ import AppKit
 /// written on the queue, whenever it changes.
 final class CastSender {
     static let pollInterval: DispatchTimeInterval = .milliseconds(250)
-    /// While a slider drags, at most one volume request per this long.
-    static let volumeSpacing: TimeInterval = 0.1
     /// How long the quit waits for the destroy: its 3.5 s, with room.
     static let shutdownWait: TimeInterval = 3.7
     /// A cover's largest side: C53 allows 1280 by 720, so a square one fits at 720.
@@ -47,8 +45,6 @@ final class CastSender {
     private var handle: OpaquePointer?
     private var input: OpaquePointer?
     private var timer: DispatchSourceTimer?
-    private var lastVolumeSent: Date?
-    private var pendingVolume: Double?
     /// The track and cover given last, also for a handle created later.
     private var track: TrackMetadata.Fields?
     private var artwork: Data?
@@ -114,36 +110,23 @@ final class CastSender {
     func stopSession() {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
-            self.pendingVolume = nil
             asc_cast_stop(handle)
         }
     }
 
-    /// The device's own volume, 0 to 1, spaced out while a slider drags.
+    /// The device's own volume, 0 to 1. Every level goes to the sender,
+    /// which paces a drag and reports each level it won't get an answer for (C70).
     func setVolume(_ level: Double) {
         queue.async { [weak self] in
-            guard let self else { return }
-            let waiting = self.pendingVolume != nil
-            self.pendingVolume = level
-            guard !waiting else { return }
-            let wait = self.lastVolumeSent.map { Self.volumeSpacing - Date().timeIntervalSince($0) } ?? 0
-            self.queue.asyncAfter(deadline: .now() + max(0, wait)) { [weak self] in self?.sendVolume() }
+            guard let handle = self?.handle else { return }
+            _ = asc_cast_set_volume(handle, level)
         }
     }
 
-    private func sendVolume() {
-        guard let level = pendingVolume else { return }
-        pendingVolume = nil
-        lastVolumeSent = Date()
-        if let handle { _ = asc_cast_set_volume(handle, level) }
-    }
-
-    /// One of the device's own volume steps (C69); a level a slider left
-    /// waiting is dropped, so it can't undo the step.
+    /// One of the device's own volume steps (C69).
     func stepVolume(up: Bool) {
         queue.async { [weak self] in
-            guard let self, let handle = self.handle else { return }
-            self.pendingVolume = nil
+            guard let handle = self?.handle else { return }
             _ = asc_cast_step_volume(handle, up)
         }
     }

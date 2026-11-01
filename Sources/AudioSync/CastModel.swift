@@ -1035,8 +1035,7 @@ struct CastModel {
             unanswered = []
             levels[id] = own
             if requested?.id == id { requested = nil }
-        } else if unanswered.last != level {
-            // The same level sent twice in a row gets one answer.
+        } else {
             if unanswered.count == Self.maxUnanswered { unanswered.removeFirst() }
             unanswered.append(level)
         }
