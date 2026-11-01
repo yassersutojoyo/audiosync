@@ -813,11 +813,12 @@ impl Events {
                 Ok(count) => self
                     .data
                     .push_str(&String::from_utf8_lossy(&buffer[..count])),
+                // A WinSock read that times out on a busy runner can end in WSA_IO_PENDING (997) instead.
                 Err(error)
                     if matches!(
                         error.kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) => {}
+                    ) || (cfg!(windows) && error.raw_os_error() == Some(997)) => {}
                 Err(_) => return false,
             }
         }
