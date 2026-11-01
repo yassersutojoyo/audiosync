@@ -2671,6 +2671,19 @@ impl App {
         let w = weak.clone();
         self.guide
             .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
+        macro_rules! forward_menu_keys {
+            ($($window:expr),+) => {$(
+                let w = weak.clone();
+                $window.on_help_requested(move || with_app(&w, App::show_help));
+                let w = weak.clone();
+                $window.on_new_zone_requested(move || with_app(&w, App::ask_new_zone));
+                let w = weak.clone();
+                $window.on_refresh_devices(move || {
+                    with_app(&w, |app| app.update(|b| b.refresh_devices()))
+                });
+            )+};
+        }
+        forward_menu_keys!(self.equalizer, self.help, self.remote_window, self.guide);
         let w = weak.clone();
         main.on_speaker_move_to_zone_requested(move |id, zone| {
             with_app(&w, |app| app.move_to_zone(&id, &zone))
@@ -12394,7 +12407,8 @@ mod tests {
         let backend = MockBackend::new();
         let refreshes = backend.refreshes.clone();
         let app = app_over(backend);
-        let windows: [(&str, fn(&App) -> &slint::Window); 4] = [
+        type Open = fn(&App) -> &slint::Window;
+        let windows: [(&str, Open); 4] = [
             ("equalizer", |app| {
                 app.show_equalizer();
                 app.equalizer.window()
