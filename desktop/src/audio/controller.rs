@@ -11063,7 +11063,7 @@ mod tests {
         fake.report_latency(&kitchen, 1_000_000, LatencySources::AUDIO_LATENCY);
         fake.report_latency(&den, 0, LatencySources::AUDIO_LATENCY);
         backend.poll();
-        // L = L_s = 2750: Den wants 1000 + 17 250, within the limit.
+        // L = L_s + E = 1750 + 1000: Den wants 1000 + 17 250, within the limit.
         assert_eq!(backend.airplay_ahead_ms(), 0.0);
         backend.set_airplay_adjustment(-2000.0);
         // L = 750: Den wants 1000 + 19 250.
