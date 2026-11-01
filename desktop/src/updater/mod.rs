@@ -445,7 +445,15 @@ impl Updater {
                 Action::Nothing
             }
             UpdaterButton::SkipThisVersion => {
-                if let Some(update) = &self.offered {
+                // A record for this version or a higher one already quiets the
+                // launch check, and keeps its reason for the manual one.
+                let stored = self
+                    .record
+                    .as_ref()
+                    .and_then(|r| Version::parse(&r.version));
+                if let Some(update) = &self.offered
+                    && stored.is_none_or(|stored| stored < update.version)
+                {
                     self.keep_record(
                         Some(UpdateRecord {
                             version: update.version_text.clone(),
@@ -1266,6 +1274,36 @@ pub mod tests {
                 last: None,
             })
         );
+    }
+
+    // covers: S297, S316
+    #[test]
+    fn skipping_keeps_a_record_for_the_same_or_a_higher_version() {
+        use UpdateRecordReason::{Blocked, FailedStart};
+        for (stored, reason) in [
+            ("0.9.0", Blocked),
+            ("0.9.0", FailedStart),
+            ("0.9.1", Blocked),
+        ] {
+            let (mut updater, _) = updater(&format!("skip-keeps-{stored}-{reason:?}"));
+            updater.set_record(record(stored, reason));
+            updater.check(Trigger::Manual);
+            updater.wait();
+            updater.press(UpdaterButton::SkipThisVersion);
+            assert_eq!(updater.record(), record(stored, reason).as_ref());
+            let same = stored == "0.9.0";
+            updater.check(Trigger::Launch);
+            updater.wait();
+            // A record for a higher version leaves this one to S316's rule.
+            assert_eq!(updater.notice().is_none(), same, "{stored} at launch");
+            updater.check(Trigger::Manual);
+            updater.wait();
+            let last = same.then_some(reason);
+            assert!(
+                matches!(updater.notice(), Some(UpdaterNotice::Available { last: l, .. }) if *l == last),
+                "{stored} {reason:?}: the manual check keeps the warning"
+            );
+        }
     }
 
     // covers: S305

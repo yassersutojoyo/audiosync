@@ -9985,6 +9985,56 @@ mod tests {
         assert!(height <= bottom + 16.5, "no room left under the buttons");
     }
 
+    /// The update notice's three buttons fit on one row in the 340 px
+    /// flyout: they end within the notice's text column, measured on a
+    /// one-button notice whose text fills that column.
+    // covers: S308
+    #[test]
+    #[ignore = "measured 2026-11-01: the row needs 380 px, the column has 214 px; the layout waits for the maintainer"]
+    fn the_flyout_fits_the_update_notice_buttons() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        app.flyout.show().expect("the flyout shows headless");
+        let edges = |notice: ui_model::UpdaterNotice, label: &str| {
+            let item = notice_item(
+                &strings,
+                &ui_model::Notice {
+                    id: UPDATER_NOTICE_ID,
+                    subject: "update".to_owned(),
+                    message: NoticeMessage::Update(notice),
+                    time: String::new(),
+                },
+            );
+            app.flyout
+                .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![item]))));
+            draw_frames();
+            let element = ElementHandle::find_by_accessible_label(&app.flyout, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label} is in the flyout"));
+            let x = element.absolute_position().x;
+            (x, x + element.size().width)
+        };
+        let installed = ui_model::UpdaterNotice::Installed {
+            version: "0.9.0".to_owned(),
+        };
+        let text = strings.invoke_notice_update_installed("0.9.0".into());
+        let column = edges(installed, &text);
+        let available = || ui_model::UpdaterNotice::Available {
+            new: "0.9.0".to_owned(),
+            running: "0.8.0".to_owned(),
+            last: None,
+        };
+        let download = edges(available(), "Download and Install");
+        let skip = edges(available(), "Skip This Version");
+        assert!(
+            skip.1 <= column.1,
+            "the buttons need {} px, the column has {} px",
+            skip.1 - download.0,
+            column.1 - column.0
+        );
+    }
+
     /// On a screen too short for the whole flyout, the list scrolls and the
     /// buttons still show.
     #[test]

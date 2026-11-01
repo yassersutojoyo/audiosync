@@ -4343,6 +4343,8 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | a_check_after_a_swap_without_a_restart_shows_restart_now_and_touches_no_file (manual and launch check) | S297, S303, S305, S306 |
 | not_now_comes_back_at_a_manual_check_and_a_newer_update_replaces_the_notice | S297 |
 | a_skipped_version_is_quiet_at_launch_offered_on_a_manual_check_and_a_newer_one_is_offered | S297, S316 |
+| skipping_keeps_a_record_for_the_same_or_a_higher_version (a blocked or failed-start record keeps its warning) | S297, S316 |
+| the_flyout_fits_the_update_notice_buttons (ignored: the three buttons need 380 px, the flyout's notice column has 214 px) | S308 |
 | a_leftover_new_is_deleted_before_the_exclusive_create | S301, S302 |
 | a_failed_relaunch_restores_the_bak (the exe and the notices pair) | S303 |
 | a_failed_restore_lists_every_bak_with_its_name_the_exe_first (a refused move back leaves the new exe in place) | S302 |
