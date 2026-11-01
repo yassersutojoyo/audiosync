@@ -13456,6 +13456,19 @@ do {
           "guide: the Calibration topic says headphones and virtual outputs are left out and Bluetooth speakers stay in")
 }
 
+// MARK: Voice Control: a button's VoiceOver name starts with its visible title
+do {
+    let t = UIStrings()
+    let pairs: [(String, String)] = [(t.calibrateWithMicrophone, t.calibrateLabel(of: "Den")),
+                 (t.measureAgain, t.measureAgainLabel(of: "Den")),
+                 (t.leaveOut, t.leaveOutLabel(of: "Den")),
+                 (t.includeAnyway, t.includeAnywayLabel(of: "Den"))]
+        + Permission.allCases.map { (t.openSettings, t.setupOpenSettings($0)) }
+    check(pairs.allSatisfy { $0.1.hasPrefix($0.0) },
+          "a11y: each labeled button's name starts with the words it shows, so Voice Control finds it",
+          pairs.filter { !$0.1.hasPrefix($0.0) }.map { $0.1 }.joined(separator: ", "))
+}
+
 // MARK: Web remote: the snapshot the page gets, and what a phone's change does
 do {
     let t = UIStrings()
