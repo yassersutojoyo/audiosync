@@ -2533,6 +2533,7 @@ impl AirPlaySpeakers {
                 return Err(AirPlayProblem::Unsupported);
             };
             self.queue_password_ask(&member, false, false, Some(id));
+            self.entry(id).enabled = true;
             return Ok(());
         }
         if !self.listed.contains_key(id) {
@@ -3510,15 +3511,15 @@ impl AirPlaySpeakers {
         if !self.streaming {
             return false;
         }
+        let waiting = self.waiting_for_user();
         let uninvited: Vec<(String, AirPlayAvailability)> = self
             .settings
             .iter()
             .filter(|(id, settings)| {
                 settings.enabled
                     && !self.added.contains_key(*id)
-                    && !self.pairings.contains_key(*id)
+                    && !waiting.contains(*id)
                     && !self.password_attempts.contains(*id)
-                    && !self.password_asks.contains_key(*id)
                     && !self.paired_by_user.contains(*id)
                     && !self.held_by_target(id)
             })
