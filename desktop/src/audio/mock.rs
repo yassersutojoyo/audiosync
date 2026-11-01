@@ -1384,6 +1384,17 @@ impl Controller<MockDriver> {
         writer.write(&block, frames);
         block
     }
+
+    /// Hands `frames` stereo frames whose every sample is `level` to the
+    /// running capture's Cast tap, as a real capture does after its ring.
+    pub fn feed_cast(&mut self, frames: usize, level: f32) {
+        let Some(link) = &self.driver().capture else {
+            return;
+        };
+        if let Some(cast) = lock(link).feeds.cast.as_mut() {
+            cast.push(&vec![level; frames * 2], frames);
+        }
+    }
 }
 
 #[cfg(test)]

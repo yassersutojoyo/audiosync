@@ -56,6 +56,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
+use audiosync_core::fade::FADE_MS;
 use audiosync_core::lead::HeldLead;
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::source::AudioSource;
@@ -789,7 +790,15 @@ struct Retiring<D: Driver> {
     session: Option<(Option<D::Capture>, Arc<Ring>)>,
     /// When the fade-outs were asked for.
     since: Instant,
+    /// The capture feeds a network sender, whose input fades out only on
+    /// the audio pushed after the request: the capture runs on for
+    /// [`FEED_FADE`], or until an output has played its fade, which takes
+    /// at least as long in real time.
+    feeds: bool,
 }
+
+/// F plus one 10 ms capture packet (S189).
+pub(crate) const FEED_FADE: Duration = Duration::from_millis(FADE_MS as u64 + 10);
 
 /// The double-audio check of the running session.
 #[derive(Default)]
@@ -1750,6 +1759,7 @@ impl<D: Driver> Controller<D> {
                 outputs: switched_off,
                 session: None,
                 since: Instant::now(),
+                feeds: false,
             });
         }
 
@@ -2239,6 +2249,7 @@ impl<D: Driver> Controller<D> {
                 outputs: vec![playing],
                 session: None,
                 since,
+                feeds: false,
             });
         }
         self.log.log(|| {
@@ -2257,8 +2268,8 @@ impl<D: Driver> Controller<D> {
         );
     }
 
-    /// Ends the session (S186): every output and the AirPlay sender's input
-    /// fade out at once while the capture runs on, and once the outputs'
+    /// Ends the session (S186): every output, the AirPlay sender's input and
+    /// the Cast tap fade out at once while the capture runs on, and once the outputs'
     /// devices have played their fades (or [`STOP_FADE_CAP`] passed), the
     /// outputs stop, then the capture. The UI thread doesn't wait: a poll, a
     /// new start or the drop finishes it.
@@ -2307,10 +2318,16 @@ impl<D: Driver> Controller<D> {
         if let Some(feed) = &self.feed {
             feed.request_fade_out();
         }
+        if let Some(cast) = &self.cast {
+            cast.request_fade_out();
+        }
+        let feeds = self.feed.as_ref().is_some_and(|feed| !feed.is_free())
+            || self.cast.as_ref().is_some_and(|cast| !cast.is_free());
         self.retiring.push(Retiring {
             outputs,
             session: Some((capture, ring)),
             since: Instant::now(),
+            feeds,
         });
         self.last_status = None;
         self.reap(false);
@@ -2334,11 +2351,16 @@ impl<D: Driver> Controller<D> {
             let mut index = 0;
             while index < self.retiring.len() {
                 let entry = &self.retiring[index];
+                let waited = now.saturating_duration_since(entry.since);
                 let faded = entry
                     .outputs
                     .iter()
-                    .all(|playing| playing.handle.is_faded() || playing.handle.has_ended());
-                let waited = now.saturating_duration_since(entry.since);
+                    .all(|playing| playing.handle.is_faded() || playing.handle.has_ended())
+                    && (!entry.feeds
+                        || waited >= FEED_FADE
+                        || entry.outputs.iter().any(|playing| {
+                            playing.handle.is_faded() && !playing.handle.has_ended()
+                        }));
                 if faded || waited >= STOP_FADE_CAP {
                     let entry = self.retiring.remove(index);
                     self.retire(entry, faded, waited);
@@ -6269,6 +6291,157 @@ mod tests {
         );
     }
 
+    // covers: S186, S189
+    #[test]
+    fn with_only_a_cast_speaker_a_source_change_keeps_the_old_capture_until_its_tap_faded() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the old capture feeds the fade-out"
+        );
+        assert!(backend.driver().capture_feeds_cast());
+        thread::sleep(FEED_FADE);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_feeds_cast());
+    }
+
+    // covers: S186, S189
+    #[test]
+    fn a_source_change_after_every_output_ended_keeps_the_old_capture_until_the_cast_tap_faded() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.end_renderer(HEADPHONES);
+        backend.end_renderer(SPEAKERS);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "an ended output plays no fade the tap could ride on"
+        );
+        thread::sleep(FEED_FADE);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+    }
+
+    // covers: S186, S189
+    #[test]
+    fn with_only_an_airplay_speaker_a_source_change_keeps_the_old_capture_until_its_feed_faded() {
+        let mut backend = backend();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the old capture feeds the fade-out"
+        );
+        assert!(feed.fading_out() && !feed.is_free());
+        thread::sleep(FEED_FADE);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_feeds_airplay());
+    }
+
+    // covers: S189
+    #[test]
+    fn a_source_change_fades_the_cast_tap_out_on_the_old_capture_and_in_on_the_new() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let heard = |backend: &mut MockBackend| -> Vec<i16> {
+            backend.feed_cast(2 * fade, 0.5);
+            let mut bytes = Vec::new();
+            cast.state().readers[0].read_into(&mut bytes, 2 * fade);
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|frame| i16::from_le_bytes([frame[0], frame[1]]))
+                .collect()
+        };
+        let largest_step = |samples: &[i16]| {
+            samples
+                .windows(2)
+                .map(|pair| (i32::from(pair[1]) - i32::from(pair[0])).abs())
+                .max()
+                .unwrap_or(0)
+        };
+        let first = heard(&mut backend);
+        let full = i32::from(first[2 * fade - 1]);
+        assert!(full > 10_000, "{full}");
+        // S191 (b): no step above A × g × π / (2F), plus rounding.
+        let bound = full as f64 * std::f64::consts::PI / (2.0 * fade as f64) + 2.0;
+        assert_eq!(first[0], 0, "the first capture fades in from silence");
+        assert!(f64::from(largest_step(&first)) <= bound);
+
+        backend.driver().hold_fades(true);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        let last = heard(&mut backend);
+        assert!(
+            last[fade..].iter().all(|sample| *sample == 0),
+            "the old capture fades out to silence"
+        );
+        assert!(f64::from(largest_step(&last)) <= bound);
+
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert!(backend.driver().capture_feeds_cast());
+        let next = heard(&mut backend);
+        assert_eq!(next[0], 0, "the new capture fades in from silence");
+        assert!(i32::from(next[2 * fade - 1]) > 10_000, "up to full level");
+        assert!(f64::from(largest_step(&next)) <= bound);
+    }
+
     // covers: S186
     #[test]
     fn a_source_change_starts_the_new_capture_at_a_poll_once_the_old_outputs_faded() {
@@ -6487,6 +6660,10 @@ mod tests {
         let mut lease = cast.lease().expect("the tap");
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
+        // Past the lease's fade-in (S189).
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        lease.push(&vec![0.5; 2 * fade], fade);
+        fake.state().readers[0].read_into(&mut Vec::new(), fade);
         let returned = level(&fake, &mut lease);
         backend.set_equalizer(off);
         level(&fake, &mut lease);
