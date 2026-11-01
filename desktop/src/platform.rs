@@ -165,6 +165,13 @@ pub fn linux_summary(
     format!("{name}, {kernel}, {arch}, local time {local_time}")
 }
 
+/// The computer's name from the kernel's hostname file, else `$HOSTNAME`,
+/// which an app started from the menu or at login doesn't get.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn computer_name_from(_hostname_file: Option<&str>, env: Option<String>) -> Option<String> {
+    env
+}
+
 /// The host's name as the debug log's first line gives it, from Rust's
 /// name for the OS.
 pub fn host_name(os: &str) -> &str {
@@ -1182,6 +1189,20 @@ mod tests {
     fn the_log_names_the_host_it_runs_on() {
         assert_eq!(host_name("linux"), "Linux");
         assert_eq!(host_name("windows"), "Windows");
+    }
+
+    #[test]
+    fn the_computer_name_comes_from_the_hostname_file_without_the_variable() {
+        assert_eq!(
+            computer_name_from(Some("studio-pc\n"), None).as_deref(),
+            Some("studio-pc")
+        );
+        assert_eq!(
+            computer_name_from(Some("  \n"), Some("from-env".to_owned())).as_deref(),
+            Some("from-env")
+        );
+        assert_eq!(computer_name_from(Some(""), None), None);
+        assert_eq!(computer_name_from(None, None), None);
     }
 
     // covers: S170
