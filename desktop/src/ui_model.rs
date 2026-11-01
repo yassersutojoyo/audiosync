@@ -1968,6 +1968,8 @@ pub struct MockBackend {
     /// While `Some`, an input device is captured, and it counts the level
     /// meter's reads of its peak.
     pub input_peak_reads: std::rc::Rc<std::cell::Cell<Option<u32>>>,
+    /// How many times Refresh Devices ran.
+    pub refreshes: std::rc::Rc<std::cell::Cell<u32>>,
     /// Runs at each save, to look at the app as the save happens.
     pub on_save: std::rc::Rc<std::cell::OnceCell<Box<dyn Fn()>>>,
     view_restored: bool,
@@ -2152,6 +2154,7 @@ impl MockBackend {
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
             input_peak_reads: std::rc::Rc::default(),
+            refreshes: std::rc::Rc::default(),
             on_save: std::rc::Rc::default(),
             view_restored: false,
             password_on: None,
@@ -2975,7 +2978,9 @@ impl Backend for MockBackend {
         self.state.notices.clear();
     }
 
-    fn refresh_devices(&mut self) {}
+    fn refresh_devices(&mut self) {
+        self.refreshes.set(self.refreshes.get() + 1);
+    }
 
     /// As Windows would report it once the fix is written.
     fn fix_device_volume(&mut self, id: &str) {
