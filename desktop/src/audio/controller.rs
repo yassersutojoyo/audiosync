@@ -6310,6 +6310,34 @@ mod tests {
 
     // covers: S186, S189
     #[test]
+    fn a_source_change_after_every_output_ended_keeps_the_old_capture_until_the_cast_tap_faded() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.end_renderer(HEADPHONES);
+        backend.end_renderer(SPEAKERS);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "an ended output plays no fade the tap could ride on"
+        );
+        thread::sleep(FEED_FADE);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+    }
+
+    // covers: S186, S189
+    #[test]
     fn with_only_an_airplay_speaker_a_source_change_keeps_the_old_capture_until_its_feed_faded() {
         let mut backend = backend();
         backend.set_output_enabled(SPEAKERS, false).unwrap();
