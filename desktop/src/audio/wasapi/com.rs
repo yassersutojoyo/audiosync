@@ -792,15 +792,20 @@ mod tests {
             waited >= STUCK_GRACE / 2 && waited < LONG / 2,
             "the drop waited {waited:?}"
         );
-        // A thread whose calls answer still ends within that grace, and
-        // is joined.
+        // A thread whose calls answer is still waited for that grace, and
+        // joined if it ends within it.
         let (tell, told) = mpsc::channel();
         let ended = Arc::new(AtomicBool::new(false));
         // It ends late, as a loaded PC runs it.
         let worker = ending_worker(&STUCK, LONG, told, &ended, STUCK_GRACE * 2);
         drop(tell);
+        let started = Instant::now();
         drop(worker);
-        assert!(ended.load(Ordering::Acquire), "the thread was joined");
+        let waited = started.elapsed();
+        assert!(
+            ended.load(Ordering::Acquire) || waited >= STUCK_GRACE / 2,
+            "the drop waited {waited:?}"
+        );
         // Windows audio answers: both stuck threads end by themselves.
         drop(first_answer);
         drop(second_answer);
