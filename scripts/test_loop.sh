@@ -32,6 +32,7 @@ failed=target/test-loop.failed
 mkdir -p target
 : > "$log"
 : > "$failed"
+rm -f target/test-loop-*.fail
 loops=()
 trap '[ ${#loops[@]} -eq 0 ] || kill "${loops[@]}" 2> /dev/null' EXIT
 for _ in $(seq "$busy"); do
@@ -48,6 +49,7 @@ for p in $(seq "$procs"); do
             tests=$(sed -n 's/^test \(.*\) \.\.\. FAILED$/\1/p' "$out")
             echo "process $p run $r: exit $code ${tests:-(no test reported FAILED)}" | paste -sd ' ' - >> "$log"
             [ -z "$tests" ] || echo "$tests" >> "$failed"
+            cp "$out" "target/test-loop-$p-$r.fail"
         done
         rm -f "$out"
     ) &
