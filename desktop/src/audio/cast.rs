@@ -3309,13 +3309,15 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 52.0);
     }
 
-    fn unanswered(fake: &FakeCast, cast: &mut CastSpeakers, level: f64, repeated: bool) {
-        fake.report(HostEvent::Session {
-            attempt: AttemptId(1),
-            device: id(KITCHEN),
-            event: SessionEvent::VolumeUnanswered { level, repeated },
-        });
-        cast.poll();
+    fn unanswered(fake: &FakeCast, cast: &mut CastSpeakers, levels: &[f64]) {
+        for &level in levels {
+            fake.report(HostEvent::Session {
+                attempt: AttemptId(1),
+                device: id(KITCHEN),
+                event: SessionEvent::VolumeUnanswered { level },
+            });
+            cast.poll();
+        }
     }
 
     // covers: C70, C104 (the TV answered 0.55 before the sender sent it again)
@@ -3328,8 +3330,9 @@ pub mod tests {
         for position in [55.0, 60.0, 55.0] {
             cast.set_volume(KITCHEN, position);
         }
+        unanswered(&fake, &mut cast, &[0.6]);
         report(&fake, &mut cast, 0.55);
-        unanswered(&fake, &mut cast, 0.55, false);
+        unanswered(&fake, &mut cast, &[0.55]);
         report(&fake, &mut cast, 0.6);
         assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
     }
@@ -3344,7 +3347,23 @@ pub mod tests {
         for position in [55.0, 60.0, 55.0] {
             cast.set_volume(KITCHEN, position);
         }
-        unanswered(&fake, &mut cast, 0.55, true);
+        unanswered(&fake, &mut cast, &[0.6, 0.55]);
+        report(&fake, &mut cast, 0.55);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70, C104 (0.55 went out, the next three waited and were replaced, then 0.55 went out again)
+    #[test]
+    fn levels_a_drag_replaced_before_sending_never_hold_the_slider() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, &[0.6, 0.55, 0.6, 0.55]);
         report(&fake, &mut cast, 0.55);
         report(&fake, &mut cast, 0.6);
         assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
@@ -3360,7 +3379,7 @@ pub mod tests {
         for position in [55.0, 60.0, 55.0, 60.0, 55.0] {
             cast.set_volume(KITCHEN, position);
         }
-        unanswered(&fake, &mut cast, 0.55, true);
+        unanswered(&fake, &mut cast, &[0.6, 0.55]);
         for answer in [0.55, 0.6, 0.55] {
             report(&fake, &mut cast, answer);
             assert_eq!(shown(&cast, KITCHEN).round(), 55.0, "after {answer}");

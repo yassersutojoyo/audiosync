@@ -695,22 +695,21 @@ fn a_level_sent_that_no_status_will_answer_is_reported() {
             channel.set_volume(start, level).expect("sent or waiting");
         }
     };
-    let unanswered = |channel: &mut Channel, repeated: bool| {
+    let unanswered = |channel: &mut Channel| {
         channel.tick(later);
         let seen = events(channel);
-        assert!(
-            seen.contains(&Event::VolumeUnanswered {
-                level: 0.55,
-                repeated
-            }),
-            "{seen:?}"
-        );
+        for level in [0.6, 0.55] {
+            assert!(
+                seen.contains(&Event::VolumeUnanswered { level }),
+                "{level}: {seen:?}"
+            );
+        }
     };
 
     // 0.6 never went out, so the device answers 0.55 once.
     let mut channel = running(start);
     drag(&mut channel);
-    unanswered(&mut channel, true);
+    unanswered(&mut channel);
 
     let mut channel = running(start);
     drag(&mut channel);
@@ -723,7 +722,70 @@ fn a_level_sent_that_no_status_will_answer_is_reported() {
             json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"volume": {"level": 0.55}}}),
         ),
     );
-    unanswered(&mut channel, false);
+    unanswered(&mut channel);
+}
+
+/// The levels `asks` put on the wire and those reported unanswered, with
+/// each ask at its offset in ms after `start` and the device at 0.5.
+fn volume_outcomes(asks: &[(u64, f64)], fixed_at: Option<u64>) -> (Vec<f64>, Vec<f64>) {
+    let start = Instant::now();
+    let mut channel = running(start);
+    let volume = |control: &str| {
+        json_message(
+            PLATFORM,
+            SENDER,
+            NS_RECEIVER,
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"volume": {"level": 0.5, "controlType": control}}}),
+        )
+    };
+    channel.handle(start, volume("attenuation"));
+    for &(ms, level) in asks {
+        let now = start + Duration::from_millis(ms);
+        channel.tick(now);
+        channel.set_volume(now, level).expect("sent or waiting");
+    }
+    let last = asks.last().map_or(0, |&(ms, _)| ms);
+    if let Some(ms) = fixed_at {
+        channel.handle(start + Duration::from_millis(ms), volume("fixed"));
+    }
+    channel.tick(start + Duration::from_millis(last) + VOLUME_INTERVAL);
+    let wire = sent(&mut channel)
+        .iter()
+        .filter(|(_, _, payload)| payload["type"] == "SET_VOLUME")
+        .filter_map(|(_, _, payload)| payload["volume"]["level"].as_f64())
+        .collect();
+    let unanswered = events(&mut channel)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::VolumeUnanswered { level } => Some(level),
+            _ => None,
+        })
+        .collect();
+    (wire, unanswered)
+}
+
+// covers: C70, C104
+#[test]
+fn every_level_asked_for_is_awaited_or_reported_unanswered_exactly_once() {
+    // The middle three wait in one interval, each replacing the one before.
+    let replaced = [(0, 0.55), (10, 0.6), (20, 0.55), (30, 0.6), (40, 0.55)];
+    assert_eq!(
+        volume_outcomes(&replaced, None),
+        (vec![0.55, 0.55], vec![0.6, 0.55, 0.6, 0.55]),
+        "0.55 is awaited once"
+    );
+    // 0.55, 0.6 and 0.55 go out; then 0.6 is replaced and 0.55 repeats.
+    let wobble = [(0, 0.55), (100, 0.6), (200, 0.55), (250, 0.6), (280, 0.55)];
+    assert_eq!(
+        volume_outcomes(&wobble, None),
+        (vec![0.55, 0.6, 0.55, 0.55], vec![0.6, 0.55]),
+        "the first three are awaited"
+    );
+    // A level waiting when the volume turns fixed never goes out (C68).
+    assert_eq!(
+        volume_outcomes(&[(0, 0.55), (10, 0.6)], Some(20)),
+        (vec![0.55], vec![0.6])
+    );
 }
 
 // covers: C44

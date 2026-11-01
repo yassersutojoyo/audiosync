@@ -12887,8 +12887,9 @@ do {
     var resent = session(attempt: 8)
     _ = resent.apply(.volume(attempt: 8, reported(0.5)))
     for position in [55.0, 60.0, 55.0] { _ = resent.setVolume(tv, position: position) }
+    _ = resent.apply(.volumeUnanswered(attempt: 8, level: 0.6))
     _ = resent.apply(.volume(attempt: 8, reported(0.55)))
-    _ = resent.apply(.volumeUnanswered(attempt: 8, level: 0.55, repeated: false))
+    _ = resent.apply(.volumeUnanswered(attempt: 8, level: 0.55))
     _ = resent.apply(.volume(attempt: 8, reported(0.6)))
     check(approx(resent.volume(of: tv), 60, 1e-9),
           "cast master: after a drag back to the level the TV reports, the TV's remote moves the slider")
@@ -12897,7 +12898,7 @@ do {
     var twice = session(attempt: 9)
     _ = twice.apply(.volume(attempt: 9, reported(0.5)))
     for position in [55.0, 60.0, 55.0] { _ = twice.setVolume(tv, position: position) }
-    _ = twice.apply(.volumeUnanswered(attempt: 9, level: 0.55, repeated: true))
+    for level in [0.6, 0.55] { _ = twice.apply(.volumeUnanswered(attempt: 9, level: level)) }
     _ = twice.apply(.volume(attempt: 9, reported(0.55)))
     _ = twice.apply(.volume(attempt: 9, reported(0.6)))
     check(approx(twice.volume(of: tv), 60, 1e-9),
@@ -12907,7 +12908,7 @@ do {
     var wobble = session(attempt: 10)
     _ = wobble.apply(.volume(attempt: 10, reported(0.5)))
     for position in [55.0, 60.0, 55.0, 60.0, 55.0] { _ = wobble.setVolume(tv, position: position) }
-    _ = wobble.apply(.volumeUnanswered(attempt: 10, level: 0.55, repeated: true))
+    for level in [0.6, 0.55] { _ = wobble.apply(.volumeUnanswered(attempt: 10, level: level)) }
     var wobbleShown: [Double] = []
     for answer in [0.55, 0.6, 0.55] {
         _ = wobble.apply(.volume(attempt: 10, reported(answer)))
@@ -12915,6 +12916,16 @@ do {
     }
     check(wobbleShown == [55, 55, 55],
           "cast master: a repeat after a wobble still awaits the levels sent before it, so their late answers never move the slider")
+
+    // covers: C70, C104 (0.55 went out, the next three waited and were replaced, then 0.55 went out again)
+    var replaced = session(attempt: 11)
+    _ = replaced.apply(.volume(attempt: 11, reported(0.5)))
+    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { _ = replaced.setVolume(tv, position: position) }
+    for level in [0.6, 0.55, 0.6, 0.55] { _ = replaced.apply(.volumeUnanswered(attempt: 11, level: level)) }
+    _ = replaced.apply(.volume(attempt: 11, reported(0.55)))
+    _ = replaced.apply(.volume(attempt: 11, reported(0.6)))
+    check(approx(replaced.volume(of: tv), 60, 1e-9),
+          "cast master: levels a drag replaced before sending never hold the slider, so the TV's remote moves it")
 
     // covers: S415
     var row = session(attempt: 11)
