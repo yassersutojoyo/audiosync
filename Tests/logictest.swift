@@ -758,7 +758,7 @@ do {
     store.save(presets: edited)
     check(store.load().presets == edited, "presets: presets round-trip through the user defaults, a fixed Cast volume included")
     let messy = [SpeakerPreset(id: "p1", name: "A",
-                               members: [.init(key: "lc:a", volume: 140), .init(key: "lc:a", volume: 10), .init(key: "cc:x", volume: nil),
+                               members: [.init(key: "lc:a", volume: 140), .init(key: "lc:a", volume: 10), .init(key: "cc:x", volume: 125),
                                          .init(key: "cc:y", volume: 20), .init(key: "zz:b", volume: 5),
                                          .init(key: "ap:c", volume: 140)],
                                zones: [.init(id: "z1", volume: -3), .init(id: "z1", volume: 50)], master: 130,
@@ -767,11 +767,11 @@ do {
                  SpeakerPreset(id: "p2", name: "Short", members: [], zones: [], master: 50, gains: [0, 0])]
     store.save(presets: messy)
     check(store.load().presets == [SpeakerPreset(id: "p1", name: "A",
-                                                 members: [.init(key: "lc:a", volume: 100), .init(key: "cc:x", volume: nil),
+                                                 members: [.init(key: "lc:a", volume: 100), .init(key: "cc:x", volume: 125),
                                                            .init(key: "ap:c", volume: 140)],
                                                  zones: [.init(id: "z1", volume: 0)], master: 100,
                                                  gains: [0.5, 12, -12, 0, 0, 0, 0, 0, 0, 0])],
-          "presets: stored presets keep one Cast key, one preset per ID, levels within range (an AirPlay own volume may pass 100)",
+          "presets: stored presets keep one Cast key, one preset per ID, levels within range (an AirPlay or Cast own volume may pass 100)",
           "\(store.load().presets)")
 
     // covers: S251 (an own volume that isn't a number is none, a master that isn't one is 100, a preset without ten gains is dropped alone)
@@ -12553,77 +12553,66 @@ do {
           "cast group: the measured offset is stored under the group's id, the members' stay as they were")
 }
 
-// MARK: Google Cast and the master volume (C104)
+// MARK: Google Cast and the master volume (C104, S415)
 do {
     let tv = "00112233445566778899aabbccddeeff"
     func reported(_ level: Double, fixed: Bool = false) -> CastVolume {
         CastVolume(level: level, muted: false, fixed: fixed)
     }
     func near(_ level: Double?, _ expected: Double) -> Bool { level.map { approx($0, expected, 1e-9) } == true }
-    func session(master: Double, attempt: UInt64) -> CastModel {
+    func appeared() -> CastModel {
         var m = CastModel()
         m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
-        // covers: C104
-        check(m.setMaster(master) == nil, "cast master: nothing is sent while no session runs")
+        return m
+    }
+    func session(attempt: UInt64, from start: CastModel? = nil) -> CastModel {
+        var m = start ?? appeared()
         _ = m.turnOn(tv)
         m.startSent(tv)
         _ = m.started(tv, attempt: attempt, refusal: ASC_CAST_REFUSED_NONE)
         return m
     }
 
-    var m = session(master: 50, attempt: 1)
+    var m = session(attempt: 1)
+    // covers: C104, S415
+    check(near(m.setVolume(tv, position: 80), 0.8) && approx(m.rowVolume(of: tv), 80, 1e-9),
+          "cast master: the speaker at 80 sends level 0.8 and its row shows 80, whatever the master")
+    _ = m.apply(.volume(attempt: 1, reported(0.8)))
     // covers: C104
-    check(near(m.setVolume(tv, position: 80), 0.4) && approx(m.volume(of: tv), 80, 1e-9),
-          "cast master: master 50 with the speaker at 80 sends level 0.4 and the slider shows 80")
-    // covers: C104
-    check(m.setMaster(0) == 0 && approx(m.volume(of: tv), 80, 1e-9),
-          "cast master: master 0 sends level 0, the speaker keeps 80")
-    _ = m.apply(.volume(attempt: 1, reported(0)))
-    // covers: C104
-    check(approx(m.volume(of: tv), 80, 1e-9), "cast master: the device answering level 0 leaves the speaker at 80")
-    // covers: C104
-    check(near(m.setMaster(50), 0.4), "cast master: a master change resends master × speaker")
-    _ = m.apply(.volume(attempt: 1, reported(0.4)))
-    // covers: C104
-    check(m.apply(.volume(attempt: 1, reported(0.2))) == .changed && approx(m.volume(of: tv), 40, 1e-9),
-          "cast master: level 0.2 set elsewhere at master 50 moves the speaker to 40, nothing sent back")
-    _ = m.setMaster(0)
-    _ = m.apply(.volume(attempt: 1, reported(0)))
-    // covers: C104
-    check(m.apply(.volume(attempt: 1, reported(0.3))) != .setVolume(0) && approx(m.volume(of: tv), 40, 1e-9),
-          "cast master: at master 0 a level set elsewhere leaves the speaker's level and isn't fought")
-    // covers: C104
-    check(m.stepVolume(tv, up: true) == .level(0), "cast master: a step at master 0 sends level 0")
+    check(m.apply(.volume(attempt: 1, reported(0.2))) == .changed && approx(m.rowVolume(of: tv), 20, 1e-9),
+          "cast master: level 0.2 set elsewhere moves the row to 20, nothing sent back")
 
-    var off = session(master: 0, attempt: 2)
+    var kept = appeared()
+    _ = kept.setVolume(tv, position: 0)
+    var off = session(attempt: 2, from: kept)
     // covers: C105
-    check(off.apply(.volume(attempt: 2, reported(0.7))) == .setVolume(0) && approx(off.volume(of: tv), 70, 1e-9),
-          "cast master: a speaker turned on at master 0 is sent level 0 at its first status")
+    check(off.apply(.volume(attempt: 2, reported(0.7))) == .setVolume(0) && approx(off.rowVolume(of: tv), 0, 1e-9),
+          "cast master: a speaker kept at 0 is sent level 0 at its first status")
     _ = off.apply(.volume(attempt: 2, reported(0)))
     // covers: C105
     check(off.apply(.volume(attempt: 2, reported(0.5))) != .setVolume(0),
           "cast master: only the first status of a session is answered")
 
-    var loud = session(master: 50, attempt: 3)
-    // covers: C105
-    check(loud.apply(.volume(attempt: 3, reported(0.8))) == .setVolume(0.5) && approx(loud.volume(of: tv), 100, 1e-9),
-          "cast master: a device louder than the master allows comes down once at the start")
+    var loud = session(attempt: 3)
+    // covers: C105, S415
+    check(loud.apply(.volume(attempt: 3, reported(0.8))) == .changed && approx(loud.rowVolume(of: tv), 80, 1e-9),
+          "cast master: a session with no level kept starts from the device's own, never brought down by the master")
     _ = loud.apply(.volume(attempt: 3, reported(0.5, fixed: true)))
     // covers: C68, C104
-    check(loud.setMaster(20) == nil, "cast master: a fixed volume gets nothing (C68)")
+    check(loud.setVolume(tv, position: 20) == nil, "cast master: a fixed volume gets nothing (C68)")
 
-    var still = session(master: 100, attempt: 8)
+    var still = session(attempt: 8)
     _ = still.apply(.volume(attempt: 8, reported(0.5)))
     _ = still.setVolume(tv, position: 0)
     _ = still.apply(.volume(attempt: 8, reported(0)))
-    for position in [60.0, 50, 40] { _ = still.setMaster(position) }
+    _ = still.setVolume(tv, position: 0)
     _ = still.apply(.volume(attempt: 8, reported(0.3)))
     _ = still.apply(.volume(attempt: 8, reported(0)))
     // covers: C70, C104
-    check(still.volume(of: tv) == 0 && still.setMaster(100) == 0,
-          "cast master: a level the device already has is not waited for, so its buttons' 0 is read back and a muted speaker stays silent")
+    check(still.volume(of: tv) == 0 && still.rowVolume(of: tv) == 0,
+          "cast master: a level the device already has is not waited for, so its buttons' 0 is read back")
 
-    var starting = session(master: 100, attempt: 9)
+    var starting = session(attempt: 9)
     _ = starting.setVolume(tv, position: 30)
     _ = starting.setVolume(tv, position: 40)
     for level in [0.8, 0.3, 0.4] { _ = starting.apply(.volume(attempt: 9, reported(level))) }
@@ -12631,7 +12620,7 @@ do {
     check(approx(starting.volume(of: tv), 40, 1e-9),
           "cast master: two levels set while the speaker starts are both sent, so their echoes leave it at the second")
 
-    var back = session(master: 100, attempt: 9)
+    var back = session(attempt: 9)
     _ = back.apply(.volume(attempt: 9, reported(0.1)))
     for position in [30.0, 50, 30] { _ = back.setVolume(tv, position: position) }
     _ = back.apply(.volume(attempt: 9, reported(0.3)))
@@ -12640,7 +12629,7 @@ do {
     check(approx(back.volume(of: tv), 30, 1e-9),
           "cast master: a status answers the oldest level it matches, so 30, 50, 30 sent never jumps the slider to 50 (C70)")
 
-    var resent = session(master: 100, attempt: 10)
+    var resent = session(attempt: 10)
     _ = resent.setVolume(tv, position: 30)
     // covers: C105
     check(resent.apply(.volume(attempt: 10, reported(0.8))) == .setVolume(0.3),
@@ -12650,7 +12639,7 @@ do {
     check(approx(resent.volume(of: tv), 30, 1e-9),
           "cast master: a level re-sent at the first status is answered once, so a later change to it from elsewhere moves the speaker")
 
-    var quiet = session(master: 100, attempt: 5)
+    var quiet = session(attempt: 5)
     _ = quiet.apply(.volume(attempt: 5, reported(0.5)))
     _ = quiet.setVolume(tv, position: 80)
     _ = quiet.apply(.volume(attempt: 5, reported(0.8)))
@@ -12659,7 +12648,7 @@ do {
     _ = quiet.started(tv, attempt: 6, refusal: ASC_CAST_REFUSED_NONE)
     // covers: C105
     check(quiet.apply(.volume(attempt: 6, reported(0.1))) == .setVolume(0.8) && approx(quiet.volume(of: tv), 80, 1e-9),
-          "cast master: a session starts at master × own level when the device is quieter, not read back (C105)")
+          "cast master: a session starts at the own level when the device is quieter, not read back (C105)")
     quiet.stopSent()
     quiet.startSent(tv)
     _ = quiet.started(tv, attempt: 7, refusal: ASC_CAST_REFUSED_NONE)
@@ -12669,24 +12658,24 @@ do {
 
     var group = CastModel()
     group.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
-    _ = group.setMaster(50)
     _ = group.turnOn("group1")
     group.startSent("group1")
     _ = group.started("group1", attempt: 4, refusal: ASC_CAST_REFUSED_NONE)
     // covers: C104
-    check(near(group.setVolume("group1", position: 80), 0.4) && near(group.setMaster(100), 0.8),
-          "cast master: a group follows the master like a device")
+    check(near(group.setVolume("group1", position: 80), 0.8), "cast master: a group gets its own level like a device")
 
     // covers: C70, C104, C105
-    check(approx(asc_cast_device_level(0.5, 0.8), 0.4, 1e-12) && asc_cast_device_level(0, 0.8) == 0
-            && approx(asc_cast_own_level(0.2, 0.5, 0.9), 0.4, 1e-12) && asc_cast_own_level(0.2, 0, 0.7) == 0.7
-            && asc_cast_start_own_level(1, true, 0.8, 0.1) == 0.8 && approx(asc_cast_start_own_level(0.5, false, 0, 0.2), 0.4, 1e-12)
+    check(approx(asc_cast_zone_level(0.5, 0.8), 0.4, 1e-12) && asc_cast_zone_level(0, 0.8) == 0
+            && asc_cast_zone_level(1, 1.25) == 1
+            && approx(asc_cast_zone_own_level(0.2, 0.5, 0.9), 0.4, 1e-12) && asc_cast_zone_own_level(0.2, 0, 0.7) == 0.7
+            && asc_cast_zone_start_own_level(1, true, 0.8, 0.1) == 0.8
+            && approx(asc_cast_zone_start_own_level(0.5, false, 0, 0.2), 0.4, 1e-12)
             && asc_cast_level_answers(0.4, 0.404) && !asc_cast_level_answers(0.4, 0.41),
           "cast master: the core's arithmetic")
 
     // covers: C70, C104 (a device that rounds to its 0.05 step)
     func stepped(_ level: Double) -> CastVolume { CastVolume(level: level, muted: false, fixed: false, step: 0.05) }
-    var rounding = session(master: 100, attempt: 5)
+    var rounding = session(attempt: 5)
     _ = rounding.apply(.volume(attempt: 5, stepped(0.5)))
     _ = rounding.setVolume(tv, position: 33)
     _ = rounding.apply(.volume(attempt: 5, stepped(0.35)))
@@ -12699,16 +12688,17 @@ do {
     // covers: C70, C104
     check(approx(rounding.volume(of: tv), 35, 1e-9),
           "cast master: 0.36 rounds to the 0.35 it has, so 0.35 after 0.4 is a change from elsewhere")
-    var scaled = session(master: 60, attempt: 6)
+    var scaled = session(attempt: 6)
+    _ = scaled.setZones([tv: 60])
     _ = scaled.apply(.volume(attempt: 6, stepped(0.5)))
     _ = scaled.setVolume(tv, position: 53)
     _ = scaled.apply(.volume(attempt: 6, stepped(0.3)))
     // covers: C70, C104
     check(approx(scaled.volume(of: tv), 53, 1e-9),
-          "cast master: at master 60 the device's 0.30 answers the 0.318 sent and the slider stays at 53")
+          "cast master: in a zone at 60 the device's 0.30 answers the 0.318 sent and the slider stays at 53")
 
     // covers: C70, C104 (the sender paces a drag after the model recorded it)
-    var dragged = session(master: 100, attempt: 7)
+    var dragged = session(attempt: 7)
     _ = dragged.apply(.volume(attempt: 7, reported(1)))
     for position in stride(from: 99, through: 40, by: -1) {
         _ = dragged.setVolume(tv, position: Double(position))
@@ -12718,6 +12708,28 @@ do {
     // covers: C70, C104
     check(approx(dragged.volume(of: tv), 40, 1e-9),
           "cast master: the answer to the first level of a 60-level drag is not read as a change")
+
+    // covers: S415
+    var row = session(attempt: 11)
+    _ = row.apply(.volume(attempt: 11, reported(0.4)))
+    _ = row.setZones([tv: 50])
+    _ = row.apply(.volume(attempt: 11, reported(0.2)))
+    check(near(row.moveRow(tv, row: 30), 0.3) && approx(row.volume(of: tv), 60, 1e-9) && approx(row.rowVolume(of: tv), 30, 1e-9),
+          "cast row: a row move sends the row and stores row ÷ zone")
+    _ = row.apply(.volume(attempt: 11, reported(0.3)))
+    // covers: S415
+    check(near(row.moveRow(tv, row: 100), 1) && approx(row.knownVolume(of: tv) ?? 0, 200, 1e-9),
+          "cast row: the own level passes 100, so a zone is never a ceiling")
+    _ = row.apply(.volume(attempt: 11, reported(1)))
+    _ = row.setZones([tv: 0])
+    _ = row.apply(.volume(attempt: 11, reported(0)))
+    _ = row.apply(.volume(attempt: 11, reported(0.3)))
+    // covers: S415
+    check(approx(row.rowVolume(of: tv), 30, 1e-9) && row.moveRow(tv, row: 50) == nil && approx(row.rowVolume(of: tv), 30, 1e-9),
+          "cast row: a level set on the TV while the zone is 0 shows on the row, and a row move there sends nothing")
+    // covers: S415
+    check(near(row.setZones([:]), 1) && approx(row.rowVolume(of: tv), 100, 1e-9),
+          "cast row: out of the zone the own level kept plays again")
 }
 
 // MARK: Zone volumes (S71, S249, S250, C104, C105)
@@ -12739,8 +12751,6 @@ do {
         for master in stride(from: 0.0, through: 100, by: 12.5) {
             identical = identical
                 && asc_zone_output_gain(own, 100, master).bitPattern == asc_output_gain(own, master).bitPattern
-                && asc_cast_zone_level(master / 100, 1, own / 100).bitPattern
-                    == asc_cast_device_level(master / 100, own / 100).bitPattern
         }
     }
     // covers: S71, S249
@@ -12764,14 +12774,14 @@ do {
     var m = session(zone: 50, attempt: 1)
     // covers: S249, C104
     check(near(m.setVolume(tv, position: 80), 0.4) && approx(m.volume(of: tv), 80, 1e-9),
-          "zones: the Cast level is master × zone × own")
+          "zones: the Cast level is zone × own")
     // covers: S249, C104
     check(near(m.setZones([tv: 25]), 0.2) && m.setZones([tv: 25]) == nil,
           "zones: a zone volume change gives the Cast speaker in a session its new level, once")
     _ = m.apply(.volume(attempt: 1, reported(0.2)))
     // covers: S250
     check(m.apply(.volume(attempt: 1, reported(0.1))) == .changed && approx(m.volume(of: tv), 40, 1e-9),
-          "zones: a Cast report in a zone moves the own level by master times zone")
+          "zones: a Cast report in a zone moves the own level by the zone")
     _ = m.setZones([tv: 0])
     _ = m.apply(.volume(attempt: 1, reported(0)))
     _ = m.apply(.volume(attempt: 1, reported(0.3)))
@@ -12781,7 +12791,7 @@ do {
     var fresh = session(zone: 50, attempt: 2)
     // covers: S250, C105
     check(fresh.apply(.volume(attempt: 2, reported(0.2))) != .setVolume(0.2) && approx(fresh.volume(of: tv), 40, 1e-9),
-          "zones: a Cast session's first status divides by master times zone (C105)")
+          "zones: a Cast session's first status divides by the zone (C105)")
 }
 
 // MARK: Google Cast track info and volume steps (C53, C54, C69)
@@ -14090,14 +14100,17 @@ do {
             && otherZone.zoneLevels == [realID: 0.8],
           "cast model: a playing speaker added by address that a browse finds plays as loud as before when its id "
             + "has another zone volume")
-    // Played at 0.4 in no zone; the id's 25 zone reaches 0.25 at most.
-    var cappedZone = rekeyedModel(zones: [realID: 25])
-    let capped = cappedZone.takeLevelDue()
+    // Played at 0.4 in no zone: own 1.6 in the id's 25 zone (S415).
+    var quieterZone = rekeyedModel(zones: [realID: 25])
     // covers: S341
-    check(cappedZone.volume(of: realID) == 100 && capped.map { abs($0 - 0.25) < 1e-9 } == true
-            && cappedZone.takeLevelDue() == nil,
-          "cast model: a playing speaker added by address whose loudness its id's zone can't reach gets the nearest "
-            + "level sent once")
+    check(abs(quieterZone.volume(of: realID) - 160) < 1e-9 && quieterZone.takeLevelDue() == nil,
+          "cast model: a playing speaker added by address keeps its loudness in its id's quieter zone, the own level "
+            + "passing 100")
+    var silentZone = rekeyedModel(zones: [realID: 0])
+    let silent = silentZone.takeLevelDue()
+    // covers: S341
+    check(silent == 0 && silentZone.takeLevelDue() == nil,
+          "cast model: a playing speaker added by address whose id's zone is at 0 gets level 0 sent once")
     var idle = rekeyedModel(zones: [manualID: 50, realID: 80], playing: false)
     check(idle.takeLevelDue() == nil && idle.zoneLevels == [realID: 0.8],
           "cast model: a speaker added by address that a browse finds with no session gets no level sent")

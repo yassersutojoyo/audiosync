@@ -354,7 +354,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         super.init()
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
-        _ = castModel.setMaster(saved.master)
         _ = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast))
         castModel.savedOn = saved.castOnAtLaunch
     }

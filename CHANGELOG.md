@@ -37,6 +37,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, an update's signature is checked before the update is unpacked.
 - On the Mac, the update prompt no longer offers to install updates automatically. Every update waits for your click.
 - On Windows, an AirPlay speaker's own delay saved by an older version is no longer applied, as on the Mac, since no window shows it or lets you reset it. Such a speaker now plays by the AirPlay delay alone.
+- The master volume turns a Google Cast speaker down inside AudioSync, as it does for local and Bluetooth speakers, and no longer changes the TV's own volume or its row. The row shows the volume the TV plays at. On the Mac and on Windows.
 
 ### Fixed
 
