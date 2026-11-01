@@ -1508,14 +1508,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .zip(&kept.members)
             .any(|(row, m)| match row.state {
                 RowState::Reference => reference.as_deref() != Some(m.id.as_str()),
-                // Against the L_s the run read, so a new L_s alone is no
-                // change, and a sender that stopped still compares.
-                _ if m.class == Class::AirPlay => !holds(
-                    m.offset_ms.map(|_| {
-                        native_airplay_latency_ms(m.sender_ms, self.audio.airplay_adjustment())
-                    }),
-                    m.offset_ms,
-                ),
+                // A, not L: a new L_s alone is no change, a sender that
+                // stopped still compares, and a change L clamps away still counts.
+                _ if m.class == Class::AirPlay => {
+                    !holds(Some(self.audio.airplay_adjustment()), Some(m.adjustment_ms))
+                }
                 _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
             });
         if !moved {
@@ -1678,6 +1675,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     offset_ms,
                     latency_ms: 0.0,
                     sender_ms,
+                    adjustment_ms: self.audio.airplay_adjustment(),
                 })
             })
             .collect();
@@ -13672,11 +13670,15 @@ mod tests {
     }
 
     /// Keeps a run's results, its reference row's output made the reference
-    /// of S174 (built in), since a run starts only with one.
+    /// of S174 (built in), since a run starts only with one, read with the
+    /// AirPlay adjustment set now.
     fn keep(
         adapter: &mut AudioAdapter<MockBackend>,
-        (sheet, members, rate): (Sheet, Vec<Member>, u32),
+        (sheet, mut members, rate): (Sheet, Vec<Member>, u32),
     ) {
+        for member in &mut members {
+            member.adjustment_ms = adapter.audio.airplay_adjustment();
+        }
         let reference = members[0].id.clone();
         let name = adapter.output_name(&reference);
         adapter
