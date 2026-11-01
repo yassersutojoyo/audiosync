@@ -224,7 +224,10 @@ same thing (an AirPlay speaker that keeps retrying is said once). Windows
 only exposes a window that is showing, so with every window closed nothing
 is said; for that case the tray icon's tooltip names the newest notice on a
 second line, the same way, which Narrator reads when the tray icon gets the
-focus (Windows+B), and drops it once no notice is left.
+focus (Windows+B), and drops it once no notice is left. Its first line holds
+what VoiceOver reads on the Mac's menu bar icon: AudioSync, whether streaming
+is on, how many speakers are on and, while there are notices, how many
+("AudioSync – Streaming on, 2 speakers on, 1 notice").
 The tooltip is cut to the 127 characters Windows shows. If Windows refuses
 the tooltip while Explorer restarts, AudioSync sets it again once the taskbar
 is back. AudioSync shows no
