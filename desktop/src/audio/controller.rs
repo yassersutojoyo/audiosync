@@ -6259,6 +6259,63 @@ mod tests {
         );
     }
 
+    // covers: S189
+    #[test]
+    fn a_source_change_fades_the_cast_tap_out_on_the_old_capture_and_in_on_the_new() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let heard = |backend: &mut MockBackend| -> Vec<i16> {
+            backend.feed_cast(2 * fade, 0.5);
+            let mut bytes = Vec::new();
+            cast.state().readers[0].read_into(&mut bytes, 2 * fade);
+            bytes
+                .chunks_exact(4)
+                .map(|frame| i16::from_le_bytes([frame[0], frame[1]]))
+                .collect()
+        };
+        let largest_step = |samples: &[i16]| {
+            samples
+                .windows(2)
+                .map(|pair| (i32::from(pair[1]) - i32::from(pair[0])).abs())
+                .max()
+                .unwrap_or(0)
+        };
+        let first = heard(&mut backend);
+        let full = i32::from(first[2 * fade - 1]);
+        assert!(full > 10_000, "{full}");
+        // S191 (b): no step above A × g × π / (2F), plus rounding.
+        let bound = full as f64 * std::f64::consts::PI / (2.0 * fade as f64) + 2.0;
+        assert_eq!(first[0], 0, "the first capture fades in from silence");
+        assert!(f64::from(largest_step(&first)) <= bound);
+
+        backend.driver().hold_fades(true);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        let last = heard(&mut backend);
+        assert!(
+            last[fade..].iter().all(|sample| *sample == 0),
+            "the old capture fades out to silence"
+        );
+        assert!(f64::from(largest_step(&last)) <= bound);
+
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert!(backend.driver().capture_feeds_cast());
+        let next = heard(&mut backend);
+        assert_eq!(next[0], 0, "the new capture fades in from silence");
+        assert!(f64::from(largest_step(&next)) <= bound);
+    }
+
     // covers: S186
     #[test]
     fn a_source_change_starts_the_new_capture_at_a_poll_once_the_old_outputs_faded() {
