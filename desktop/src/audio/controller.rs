@@ -5212,7 +5212,11 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
     let buffer_ms = f64::from(setup.buffer_frames) * 1_000.0 / f64::from(format.rate.max(1));
     format!(
         "{}, {samples}; buffer {} frames ({buffer_ms:.1} ms)",
-        describe_format(Some(format)),
+        // Its samples part already says whether it converts.
+        describe_format(Some(RenderFormat {
+            convert: false,
+            ..format
+        })),
         setup.buffer_frames
     )
 }
@@ -5221,8 +5225,15 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
 fn describe_format(format: Option<RenderFormat>) -> String {
     match format {
         Some(format) => format!(
-            "{} Hz, {} ch (mask 0x{:x})",
-            format.rate, format.channels, format.channel_mask
+            "{} Hz, {} ch (mask 0x{:x}){}",
+            format.rate,
+            format.channels,
+            format.channel_mask,
+            if format.convert {
+                format!(", converted by {CONVERTER}")
+            } else {
+                String::new()
+            }
         ),
         None => "a format not known".to_owned(),
     }

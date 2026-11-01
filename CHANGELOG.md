@@ -47,6 +47,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows and Linux, the debug log line for an output that opens again in a new format now says whether the new format is converted. Before, a change in conversion alone read as a change from a format to the same one.
 - On the Mac, a Google Cast group that never answers now goes off after its third failed connect with a notice that it isn't responding, as on Windows. Before, AudioSync kept trying it with no notice. A group that lists no address yet still keeps trying until it does.
 - On Windows, when a newer version of AudioSync wrote your settings and an older one opens them, the older one now tells you it's using the default settings and names the copy of your file it kept. Before, it said nothing.
 - On Linux, AudioSync started from the app menu or at login now knows the computer's name, so the web remote shows it and offers the computer's .local address. Before, only a start from a terminal had it.
