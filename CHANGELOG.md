@@ -49,6 +49,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- The libraries behind AirPlay pairing's cryptography and the reading of AirPlay property lists are updated to versions that fix published security advisories (RUSTSEC-2026-0385, RUSTSEC-2026-0387, RUSTSEC-2026-0194 and RUSTSEC-2026-0195).
 - On the Mac, with the equalizer on, sound could start with a short thump when AudioSync reopened the capture after it stopped, or rebuilt an app's tap. Now it starts clean.
 - On Windows, the Up and Down arrow keys move a volume slider, as on the Mac: Up raises it and Down lowers it by the same step as Right and Left. Before, they did nothing.
 - On Windows, the web remote's speaker notes now match the main window: "Waiting for the password" while you type a password, "Enter the code shown on <speaker>" during a PIN pairing, and "Asks for a code every time" for a speaker set that way. Before, the phone said "Asks for a code" or "Pairing…" instead.
