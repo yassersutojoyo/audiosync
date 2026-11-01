@@ -18,6 +18,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay speaker you turn on stays on while it asks for its password or code, and Cancel turns it off. While other speakers play, its row says "Waiting for the password" or "Enter the code shown on" followed by its name. Before, Windows left it off until you typed the code and the Mac row said nothing. On the Mac and on Windows.
 - With the debug log on, each playing speaker on this computer logs its peak and RMS level every 10 seconds, after volume and equalizer, and every volume or master change logs the gain it plays at. On the Mac and on Windows.
 - On the Mac, Calibrate All Speakers opens with a "Before you start" list: the microphone where you listen, the Mac's own volume, with an Unmute or Set to button when it's muted or quiet, and the outputs it leaves out. Each result shows as a card with the new delay, the one it replaces and whether it was measured clearly.
+- The source menu keeps your last mix of several apps after you switch to another source or quit and reopen AudioSync, and lists it as one entry under the name it plays with, so you can pick it again, from the web remote too. On the Mac it sits right after the whole system, on Windows after the apps. Picking it captures the apps in it that are running and skips the rest. On the Mac and on Windows.
 
 ### Changed
 
@@ -64,6 +65,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, Now Playing in the main window and on a TV playing through AirPlay shows a track change, pause or play as soon as the app reports it, instead of at the next 2-second check.
 - On the Mac, Add by Address refuses 0.0.0.0, 255.255.255.255, a multicast address and a host name whose last part is all digits, and keeps at most 64 addresses, as on Windows.
 - On the Mac, the Guide's equalizer line mentions the curves you save yourself, as the Windows Guide does.
+- On the Mac, when every speaker that's on in a zone waits, such as for too many AirPlay 2 speakers or for AirPlay 2 speakers on another network, the zone's header in the main window and the menu bar panel shows the first one's reason and an outlined icon, and VoiceOver reads the reason, as on Windows.
 
 ### Fixed
 
@@ -392,8 +394,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - In the Linux preview, Calibrate All leaves out headphones, headsets and virtual or network outputs, as its Guide says, and Include Anyway puts one in. A Bluetooth or USB speaker takes part.
 - In the Linux preview, a saved input that isn't plugged in at start counts as not connected, and AudioSync waits for it, as on Windows.
 - On Windows, the web remote no longer drops a phone's live updates when the PC is busy.
-- On Windows and in the Linux preview, a Google Cast speaker's volume slider no longer jumps back during a quick drag while the TV is still catching up with your earlier steps, and it follows the TV again after the TV refuses a level you set.
+- On the Mac, on Windows and in the Linux preview, a Google Cast speaker's volume slider no longer jumps back during a quick drag while the TV is still catching up with your earlier steps, and it follows the TV again after the TV refuses a level you set.
 - On the Mac, an AirPlay speaker muted for a calibration stays muted when AudioSync connects it again while the calibration runs.
+- On Windows, a zone name, zone count, zone member name or stereo pair member line that ends in an ellipsis in the half-width speaker list shows its full text in a tooltip.
+- On the Mac, when AudioSync can't save your AirPlay pairings, a speaker you pair or forget stays that way until you quit, also after Retry or an automatic retry, as on Windows. The notice that pairings aren't saved stays as it was, dismissed or not. Before, the retry read the old file again and cleared the notice.
 
 ## [0.7.1] - 2026-10-27
 

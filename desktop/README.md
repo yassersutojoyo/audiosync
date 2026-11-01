@@ -5,7 +5,7 @@ with a [Slint](https://slint.dev) interface. The audio work comes from
 `audiosync-core` in [`../core`](../core), the crate the macOS app links too.
 
 **Status: in development, ready for a first try on a real PC.** It has the Mac
-app's screens (the main window, the equalizer, a tray icon with a flyout, the
+app's screens (the main window, the equalizer, a tray icon with a tray panel, the
 About dialog), and on Windows they drive the real audio backend: it captures
 one app, everything the PC plays except AudioSync itself, or an input device
 such as a microphone or line in, and plays it on
@@ -273,7 +273,7 @@ cargo check --target aarch64-pc-windows-msvc
 - `src/view.rs`: fills the windows from the backend, turns user actions into
   backend calls, and polls the backend twice a second for what happens on its
   own (a device unplugged, a source that quit)
-- `src/tray.rs`: the notification-area icon, its menu and the flyout's placement
+- `src/tray.rs`: the notification-area icon, its menu and the tray panel's placement
   (`src/placement.rs`, unit-tested)
 - `src/os_version.rs`: which Windows versions the app runs on (unit-tested)
 - `src/platform.rs`: the Windows calls (`RtlGetVersion`, the message box, the
