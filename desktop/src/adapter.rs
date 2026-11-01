@@ -280,7 +280,7 @@ impl Chosen {
             Chosen::Mix {
                 mode: MixMode::AllExcept,
                 apps,
-            } => format!("All apps except {}", mix_names(apps).join(", ")),
+            } => format!("All Apps Except {}", mix_names(apps).join(", ")),
         }
     }
 

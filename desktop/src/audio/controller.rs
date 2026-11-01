@@ -5241,7 +5241,7 @@ fn describe_source(source: &SourceId) -> String {
             executables.join(", ")
         ),
         SourceId::AppsExcept { executables } => {
-            format!("All apps except {}", executables.join(", "))
+            format!("All Apps Except {}", executables.join(", "))
         }
         SourceId::Input { endpoint_id } => format!("the input device {endpoint_id}"),
     }
