@@ -1464,13 +1464,23 @@ check(SpeakerAvailability(.code(password: false), everyTime: true, on: true) == 
         && SpeakerAvailability(.code(password: false), everyTime: false, on: false) == .needsCode
         && SpeakerAvailability(.open, everyTime: false, on: false) == .open,
       "availability: asks for a code every time while it asks or is off; paired for this run and on, it is open")
+do {
+    let t = UIStrings()
+    let pairingTexts = [t.availabilityHelp(.needsCode) ?? "", t.airPlayTurnedOff(name: "Den", reason: .stillNeedsCode),
+                        t.nativeAirPlayPairingFailed(name: "Den"), t.nativeAirPlayReceiverUnverified(name: "Den"),
+                        t.nativePairPINMessage(name: "Den"), t.nativePairWrongPINMessage(name: "Den"),
+                        t.forgetPairingHelp, t.pairPINOnlyPlaceholder, t.pairPINFieldLabel(name: "Den"), t.helpText]
+    check(pairingTexts.allSatisfy { !$0.contains("PIN") }
+            && t.pairPINOnlyPlaceholder == "Code" && t.pairPINFieldLabel(name: "Den") == "Code for Den",
+          "pairing texts: the Mac asks for a code, never a PIN, as its rows do")
+}
 // covers: S356
 do {
     let pinOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPin)
     let passwordOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPassword)
-    check(pinOff.contains("PIN") && !pinOff.lowercased().contains("password"),
+    check(pinOff.contains("code") && !pinOff.lowercased().contains("password"),
           "airplay off: a speaker that needs a PIN says PIN, not password")
-    check(passwordOff.contains("password") && !passwordOff.contains("PIN"),
+    check(passwordOff.contains("password") && !passwordOff.contains("code"),
           "airplay off: a speaker that asks for a password says password, not PIN")
     let text = UIStrings()
     check(text.nativeAirPlayAsksForCode(name: "Den", reason: .needsCode, unasked: false) == pinOff,
@@ -3814,7 +3824,7 @@ do {
                 == .turnOff("native:A9", .receiverUnverified)
             && UIStrings().nativeAirPlayReceiverUnverified(name: "Den TV")
                 == "Den TV didn't answer as the speaker you paired, so it's off. "
-                    + "If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
+                    + "If it's yours, use Forget Pairing and turn it on to pair again with its code.",
           "P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows")
     // covers: S346
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
@@ -3854,13 +3864,13 @@ do {
     check(pathsGone.reachedOverAirPlay2("H8"),
           "native airplay: a receiver reached over AirPlay 2 still names AirPlay 2 as its kind while it is off the network")
     // covers: S346
-    check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit PIN on its screen. Enter it to pair; "
-                                                              + "after that, it connects without a PIN.")
+    check(kinds.nativePairPINMessage(name: "Loft").hasPrefix("Loft shows a 4-digit code on its screen. Enter it to pair; "
+                                                              + "after that, it connects without a code.")
             && !kinds.nativePairWrongPINMessage(name: "Loft").contains("TV"),
           "native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike")
     // covers: S346
     check(kinds.nativePairPINMessage(name: "Loft", everyTime: true)
-            == "Loft shows a 4-digit PIN on its screen. Enter it to pair. Cancel turns the speaker off; turn it on again to retry.",
+            == "Loft shows a 4-digit code on its screen. Enter it to pair. Cancel turns the speaker off; turn it on again to retry.",
           "native airplay: the PIN prompt of a receiver that asks every time promises no lasting pairing")
     paths.apply(.appeared(NativeReceiver(id: "K1", name: "Attic", model: "", availability: .needsPin, reason: nil,
                                          hints: ["airplay", "airplay2", "pairing", "over-airplay2"], overAirPlay2: true)))

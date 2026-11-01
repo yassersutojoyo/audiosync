@@ -211,7 +211,7 @@ struct UIStrings {
         switch a {
         case .open: return nil
         case .needsCode:
-            return "This speaker asks for a PIN or password. AudioSync asks you for it when you turn the speaker on."
+            return "This speaker asks for a code or password. AudioSync asks you for it when you turn the speaker on."
         case .codeEveryTime:
             return "This speaker asks for a code each time it connects, so auto-connect leaves it off. AudioSync asks you for the code when you turn the speaker on."
         }
@@ -729,13 +729,13 @@ struct UIStrings {
             return "\(name) couldn't be reached, so it's off. "
                 + "Check that the speaker is on and on the same network, then turn it on again."
         case .needsPin:
-            return "\(name) needs pairing with a PIN, so it's off. Turn it on again\(place) to pair."
+            return "\(name) needs pairing with a code, so it's off. Turn it on again\(place) to pair."
         case .needsPassword:
             return "\(name) asks for a password, so it's off. Turn it on again\(place) to enter it. "
                 + "To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) "
                 + "to “Anyone on the Same Network” and turn off Require Password."
         case .stillNeedsCode:
-            return "\(name) still asks for a PIN or password after pairing, so it's off. "
+            return "\(name) still asks for a code or password after pairing, so it's off. "
                 + "On the speaker (or in the Home app), check that Allow Speaker & TV Access is set to "
                 + "“Anyone on the Same Network”, then turn \(name) on again in AudioSync."
         }
@@ -775,7 +775,7 @@ struct UIStrings {
     /// PIN (which asks again).
     func nativeAirPlayPairingFailed(name: String) -> String {
         "Pairing with \(name) didn't finish, so it's off. "
-            + "To try again, turn it on and enter the PIN it shows."
+            + "To try again, turn it on and enter the code it shows."
     }
 
     /// AudioSync's own AirPlay sender couldn't start (or browse the network
@@ -803,7 +803,7 @@ struct UIStrings {
     /// A paired receiver's pair-verify signature didn't check out (P56).
     func nativeAirPlayReceiverUnverified(name: String) -> String {
         "\(name) didn't answer as the speaker you paired, so it's off. "
-            + "If it's yours, use Forget Pairing and turn it on to pair again with its PIN."
+            + "If it's yours, use Forget Pairing and turn it on to pair again with its code."
     }
 
     /// PTP port 319 or 320 couldn't be bound (P158): the AirPlay 2 speakers
@@ -916,28 +916,28 @@ struct UIStrings {
     /// an Apple TV, or a receiver reached over AirPlay 2. A receiver that asks
     /// for a code every time keeps no pairing, so its prompt doesn't promise one.
     func nativePairPINMessage(name: String, everyTime: Bool = false) -> String {
-        let pair = everyTime ? "Enter it to pair. " : "Enter it to pair; after that, it connects without a PIN. "
-        return "\(name) shows a 4-digit PIN on its screen. " + pair
+        let pair = everyTime ? "Enter it to pair. " : "Enter it to pair; after that, it connects without a code. "
+        return "\(name) shows a 4-digit code on its screen. " + pair
             + "Cancel turns the speaker off; turn it on again to retry."
     }
 
     /// The native PIN prompt again, after a PIN that didn't work (the
     /// receiver shows a code again, a new one or the same).
     func nativePairWrongPINMessage(name: String) -> String {
-        "That PIN didn't work. Enter the PIN \(name) shows now. "
+        "That code didn't work. Enter the code \(name) shows now. "
             + "Cancel turns the speaker off; turn it on again to retry."
     }
 
     /// In an AirPlay speaker's menu while AudioSync keeps its PIN pairing.
     let forgetPairing = "Forget Pairing"
-    let forgetPairingHelp = "Removes the pairing AudioSync keeps, so the speaker asks for a PIN the next time you turn it on"
+    let forgetPairingHelp = "Removes the pairing AudioSync keeps, so the speaker asks for a code the next time you turn it on"
     /// In an AirPlay speaker's menu while AudioSync holds the password typed
     /// for it, until AudioSync quits.
     let forgetPassword = "Forget Password"
     let forgetPasswordHelp = "Removes the password AudioSync holds, so the speaker asks for it the next time you turn it on"
-    let pairPINOnlyPlaceholder = "PIN"
+    let pairPINOnlyPlaceholder = "Code"
     let pairPasswordPlaceholder = "Password"
-    func pairPINFieldLabel(name: String) -> String { "PIN for \(name)" }
+    func pairPINFieldLabel(name: String) -> String { "Code for \(name)" }
     func pairPasswordFieldLabel(name: String) -> String { "Password for \(name)" }
     let pair = "Pair"
 
@@ -1983,14 +1983,14 @@ struct UIStrings {
     /// The Guide's note on “Asks for a code”.
     private var guideCodeNote: String {
         let asks = """
-            - “Asks for a code”: the speaker wants a PIN or password. AudioSync asks
+            - “Asks for a code”: the speaker wants a code or password. AudioSync asks
               for it only when you turn the speaker on yourself. If it was turned on
               automatically (auto-connect, or at launch), it is switched off with a
               notice instead.
             """
         return asks + """
              An Apple TV, or a speaker reached over AirPlay 2,
-              pairs once, with the PIN it shows; Forget Pairing in the speaker's
+              pairs once, with the code it shows; Forget Pairing in the speaker's
               menu removes that pairing. A password is asked for once each time
               AudioSync starts. If a
               code doesn't work, AudioSync asks again; if you cancel, the speaker

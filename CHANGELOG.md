@@ -15,7 +15,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A Google Cast speaker you turned on is on again after you quit and reopen AudioSync, once it shows up on the network, as AirPlay and local speakers already were. A hidden speaker stays off. On the Mac and on Windows.
 - On Windows, while streaming is on and nothing has played yet, a notice in the main window and the tray panel says "Waiting for audio", naming the app when you capture one, as on the Mac. It goes away once sound arrives.
 - On the Mac, a playing speaker on this Mac whose device is unplugged, or that keeps refusing to start for 30 s, gets the notice "<name> was disconnected. It plays again as soon as it's back.", as on Windows. It goes away once the speaker plays again, you switch it off or streaming stops.
-- An AirPlay speaker you turn on stays on while it asks for its password or PIN, and Cancel turns it off. While other speakers play, its row says "Waiting for the password" or "Enter the code shown on" followed by its name. Before, Windows left it off until you typed the code and the Mac row said nothing. On the Mac and on Windows.
+- An AirPlay speaker you turn on stays on while it asks for its password or code, and Cancel turns it off. While other speakers play, its row says "Waiting for the password" or "Enter the code shown on" followed by its name. Before, Windows left it off until you typed the code and the Mac row said nothing. On the Mac and on Windows.
 - With the debug log on, each playing speaker on this computer logs its peak and RMS level every 10 seconds, after volume and equalizer, and every volume or master change logs the gain it plays at. On the Mac and on Windows.
 
 ### Changed
@@ -47,6 +47,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the Pair button in an AirPlay PIN prompt stays off until four digits are typed, and in a password prompt until something is typed. Cancelling the prompt turns the speaker off without a notice.
 - On Windows, the notice that a picked source couldn't start, so the one before it plays on, now also says to pick that source again to retry, as on the Mac.
 - On the Mac, VoiceOver reads a notice's close button as "Dismiss:" followed by a few words that name the notice, the same words as on Windows, with the Mac's names for its settings. The AirPlay notices for a speaker that waits or reconnects read their title. A notice Windows doesn't have keeps "Dismiss Notice".
+- On the Mac, the pairing prompt, its notices and the Guide ask for the code an Apple TV or AirPlay 2 speaker shows, the word its speaker row already uses, instead of a PIN.
 
 ### Fixed
 
