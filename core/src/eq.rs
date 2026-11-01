@@ -587,17 +587,21 @@ impl EqControl {
 
     /// Sets the design rate, called only while capture is stopped (S30, S114):
     /// the coefficients are recomputed and the processor zeroes all filter state
-    /// before its next block. The same rate again is a no-op. Returns false (and
-    /// changes nothing) for a rate that is not finite and positive.
+    /// before its next block. The same rate again, as a capture reopened at
+    /// that rate or a tap rebuilt for an app sets it (S335, S13), keeps the
+    /// coefficients and zeroes the state alone. Returns false (and changes
+    /// nothing) for a rate that is not finite and positive.
     pub fn set_sample_rate(&mut self, sample_rate: f64) -> bool {
         if !(sample_rate.is_finite() && sample_rate > 0.0) {
             return false;
         }
+        self.epoch += 1;
         if sample_rate == self.sample_rate {
+            let snapshot = Snapshot::design(&self.settings, sample_rate, self.epoch);
+            self.publish_snapshot(&snapshot);
             return true;
         }
         self.sample_rate = sample_rate;
-        self.epoch += 1;
         self.publish(true);
         true
     }
