@@ -3652,6 +3652,12 @@ do {
     check(whileAsleep.isEmpty && afterWake.add == ["R5"],
           "native airplay: a reconcile while the Mac sleeps starts no session, the one at the wake starts it",
           "\(whileAsleep) \(afterWake)")
+    dozing.asleep = true
+    let switchedOnAsleep = dozing.plan(streaming: true, enabled: ["native:R5"])
+    // covers: S412
+    check(switchedOnAsleep.add.isEmpty,
+          "native airplay: a speaker switched on or found while the Mac sleeps starts no session",
+          "\(switchedOnAsleep)")
 
     // P169, S285: a 17th AirPlay 2 speaker waits for a place, switched on,
     // and the sender starts it once one of the others stops.

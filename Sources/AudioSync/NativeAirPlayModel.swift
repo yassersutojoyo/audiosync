@@ -1070,6 +1070,8 @@ struct NativeAirPlayModel {
     /// unable to play in another way (which can be a moment's flicker
     /// while its records lapse), waits, and so does one that just
     /// paired while the sender's new listing of it is still on its way.
+    /// While the Mac sleeps speakers only leave; the wake's reconcile starts
+    /// what waited (S412).
     func plan(streaming: Bool, enabled: Set<String>) -> NativeAirPlayPlan {
         let wanted = Set(enabled.compactMap(NativeAirPlayID.receiver))
         var plan = NativeAirPlayPlan()
@@ -1078,7 +1080,7 @@ struct NativeAirPlayModel {
         }
         plan.release = released.sorted()
         plan.remove = states.keys.filter { !streaming || !wanted.contains($0) || released.contains($0) }.sorted()
-        guard streaming else { return plan }
+        guard streaming, !asleep else { return plan }
         for id in wanted.sorted() where states[id] == nil && !released.contains(id) {
             // A target waits while a member's password prompt is open.
             if promptTargets.values.contains(id) { continue }

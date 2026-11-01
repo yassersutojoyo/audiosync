@@ -292,6 +292,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, AudioSync keeps trying to capture for up to a minute after a wake, as on Windows, also when the session is rebuilt.
 - On Windows, no AirPlay speaker starts while the PC sleeps, and failures then don't count toward the Reconnecting… notice.
 - On the Mac, an AirPlay error AudioSync retries while the Mac sleeps no longer counts toward the Reconnecting… notice, as on Windows.
+- On the Mac, an AirPlay speaker turned on or found while the Mac sleeps now starts playing at the wake, as on Windows. Before, it could start while the Mac slept.
 - On the Mac, the notice that AirPlay plays ahead of a Google Cast speaker counts each AirPlay speaker's own receiver delay, as on Windows.
 - On Windows, a web remote command with one bad part still applies the rest, and its volumes and delays are clamped to their range, as on the Mac.
 - On the Mac, opening AudioSync a second time shows the running copy's window only once that launch has finished, and a launch at login leaves the window as it is.
