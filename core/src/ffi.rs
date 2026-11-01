@@ -1600,6 +1600,10 @@ mod tests {
             ("ASC_CAST_ERROR_ARTWORK", CAST_ERROR_ARTWORK.to_string()),
             ("ASC_CAST_ERROR_GROUP", CAST_ERROR_GROUP.to_string()),
             ("ASC_CAST_ERROR_INTERNAL", CAST_ERROR_INTERNAL.to_string()),
+            (
+                "ASC_CAST_ERROR_NO_ADDRESS",
+                CAST_ERROR_NO_ADDRESS.to_string(),
+            ),
             ("ASC_CAST_FORMAT_WAV", CAST_FORMAT_WAV.to_string()),
             ("ASC_CAST_FORMAT_FLAC", CAST_FORMAT_FLAC.to_string()),
             ("ASC_REMOTE_DEFAULT_PORT", REMOTE_DEFAULT_PORT.to_string()),

@@ -180,6 +180,9 @@ pub const CAST_ERROR_ARTWORK: i32 = 9;
 pub const CAST_ERROR_GROUP: i32 = 10;
 /// A fault inside the sender ended the attempt; the next start runs (C107).
 pub const CAST_ERROR_INTERNAL: i32 = 11;
+/// A connect failure with no address to try: a group whose records list
+/// none yet (C80, C81).
+pub const CAST_ERROR_NO_ADDRESS: i32 = 12;
 
 /// A stream's format ([`AscCastEvent::format`]): live WAV.
 pub const CAST_FORMAT_WAV: i32 = 1;
@@ -623,8 +626,11 @@ fn stream_code(error: &StreamError) -> i32 {
     }
 }
 
-fn connect_code(_: &ConnectError) -> i32 {
-    CAST_ERROR_CONNECT
+fn connect_code(error: &ConnectError) -> i32 {
+    match error {
+        ConnectError::NoAddress => CAST_ERROR_NO_ADDRESS,
+        _ => CAST_ERROR_CONNECT,
+    }
 }
 
 fn session_code(error: &SessionError) -> i32 {
@@ -2564,6 +2570,17 @@ mod tests {
         assert_eq!(pending.kind, CAST_EVENT_CERTIFICATE_CHANGED);
         assert_eq!(pending.detail, format!("{before} to {after}"));
         assert!(pending.detail.starts_with("AB:AB:") && pending.detail.ends_with(":CD:CD"));
+    }
+
+    // CAST_SPEC: C80, C81
+    #[test]
+    fn a_connect_failure_with_no_address_has_its_own_code() {
+        let code = |error| {
+            let retry_in = Duration::from_secs(1);
+            session_event(SessionEvent::ConnectFailed { error, retry_in }, |_| {}).error
+        };
+        assert_eq!(code(ConnectError::NoAddress), CAST_ERROR_NO_ADDRESS);
+        assert_eq!(code(ConnectError::NoStatus), CAST_ERROR_CONNECT);
     }
 
     #[test]

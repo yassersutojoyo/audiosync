@@ -119,7 +119,7 @@ enum CastProblem: Equatable {
 }
 
 enum CastError: Equatable {
-    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, `internal`
+    case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, `internal`, noAddress
     case other(Int32)
 
     init?(_ code: Int32) {
@@ -135,6 +135,7 @@ enum CastError: Equatable {
         case ASC_CAST_ERROR_VOLUME: self = .volume
         case ASC_CAST_ERROR_ARTWORK: self = .artwork
         case ASC_CAST_ERROR_INTERNAL: self = .internal
+        case ASC_CAST_ERROR_NO_ADDRESS: self = .noAddress
         default: self = .other(code)
         }
     }
@@ -913,10 +914,10 @@ struct CastModel {
             return setStatus(.playing)
         case .recovering:
             return setStatus(.reconnecting)
-        case .connectFailed:
+        case .connectFailed(_, let error, _, _):
             guard current.status == .connecting else { return setStatus(.reconnecting) }
-            // The core reports a group with no address yet as a plain connect failure, and C81 keeps it trying.
-            guard devices[id]?.group != true else { return nil }
+            // A group with no address yet waits for its records (C81).
+            guard error != .noAddress else { return nil }
             attempt?.connectFailures += 1
             guard attempt?.connectFailures == Self.failuresBeforeOff else { return nil }
             enabled = nil
