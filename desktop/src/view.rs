@@ -6516,9 +6516,35 @@ mod tests {
                 .size()
                 .width
         };
-        assert_eq!(list_width(776.0), 440.0, "the default window");
-        assert_eq!(list_width(876.0), 540.0, "a wider window");
+        assert_eq!(list_width(776.0), 464.0, "the default window");
+        assert_eq!(list_width(876.0), 564.0, "a wider window");
         assert_eq!(list_width(1400.0), 644.0, "a wide window");
+    }
+
+    /// The header's switch ends with the speaker cards, also past the
+    /// speaker list's widest instead of at the far side of a wide window.
+    #[test]
+    fn the_header_ends_where_the_speaker_list_stops_growing() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        let right_edge = |id: &str| {
+            let element = ElementHandle::find_by_element_id(&app.main, id)
+                .next()
+                .unwrap_or_else(|| panic!("{id}"));
+            element.absolute_position().x + element.size().width
+        };
+        for width in [776.0, 1400.0] {
+            app.main
+                .window()
+                .set_size(slint::LogicalSize::new(width, 680.0));
+            let switch = right_edge("MainWindow::power");
+            let card = right_edge("SpeakerSection::card");
+            assert!(
+                (switch - card).abs() < 1.0,
+                "at {width} px the switch ends at {switch}, the speaker cards at {card}"
+            );
+        }
     }
 
     #[test]
@@ -7487,7 +7513,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 600.0, 516.0);
+        click(window, 600.0, 466.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -7500,7 +7526,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 600.0, 516.0);
+        click(window, 600.0, 466.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -7510,10 +7536,10 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 600.0, 516.0);
+        click(window, 600.0, 466.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
-        click(window, 600.0, 190.0);
+        click(window, 600.0, 162.0);
         assert_eq!(delay_of(&app, "local:desk"), Some(300.0));
         assert!(open(&app).is_empty());
     }
@@ -7600,7 +7626,7 @@ mod tests {
     #[test]
     fn a_click_on_the_no_airplay_note_under_a_list_works_like_one_on_the_last_row() {
         let app = app_with_the_no_airplay_note(true);
-        click(app.main.window(), 600.0, 525.0);
+        click(app.main.window(), 600.0, 470.0);
         assert!(
             app.ui.borrow().sync_open.contains("local:desk"),
             "the desk's controls opened"
@@ -7608,9 +7634,9 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         // The open controls push the note below the list's bottom edge;
-        // scrolled to the end, it sits at y 522 to 540.
+        // scrolled to the end, it sits at y 549 to 580.
         scroll(app.main.window(), 640.0, 600.0, -300.0);
-        click(app.main.window(), 420.0, 530.0);
+        click(app.main.window(), 420.0, 557.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -7805,7 +7831,7 @@ mod tests {
     fn a_click_on_the_no_airplay_note_alone_is_outside_every_row() {
         let app = app_with_the_no_airplay_note(false);
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(app.main.window(), 420.0, 465.0);
+        click(app.main.window(), 420.0, 388.0);
         assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0), "it applied");
         assert!(app.ui.borrow().sync_open.is_empty(), "and opened nothing");
     }
@@ -7813,14 +7839,53 @@ mod tests {
     // covers: S221
     #[test]
     fn a_click_on_the_blank_space_of_open_sync_controls_closes_them_and_applies_the_typing() {
+        use i_slint_backend_testing::ElementHandle;
         let app = app_with_the_no_airplay_note(true);
-        // The open controls fill the desk's row from y 600 to 680: right of
-        // the steps, then right of the line under them.
-        for (x, y, ms) in [(900.0, 619.0, 400.0), (600.0, 649.0, 300.0)] {
+        let strings = app.strings();
+        let name = app.snapshot().speaker("local:desk").unwrap().name.clone();
+        let field_label = strings.invoke_delay_of(name.into());
+        let step_label = strings.invoke_delay_step_accessibility(100);
+        // Taken from the laid-out controls, as fonts differ between hosts:
+        // right of the steps on the field's line, then in the layout's gap
+        // under the field.
+        let points = || {
+            let bounds = |label: &str| -> Vec<_> {
+                ElementHandle::find_by_accessible_label(&app.main, label)
+                    .map(|e| (e.absolute_position(), e.size()))
+                    .collect()
+            };
+            let steps = bounds(&step_label);
+            let on_its_line = |middle: f32| {
+                steps
+                    .iter()
+                    .find(|(top, size)| top.y < middle && middle < top.y + size.height)
+                    .map(|(top, size)| top.x + size.width)
+            };
+            // The row's delay button has the field's label too; the field is
+            // the one with a +100 step on its line.
+            let (at, size, steps_end) = bounds(&field_label)
+                .into_iter()
+                .find_map(|(at, size)| {
+                    on_its_line(at.y + size.height / 2.0).map(|end| (at, size, end))
+                })
+                .expect("the open controls' field and +100 step");
+            let middle = at.y + size.height / 2.0;
+            let list = ElementHandle::find_by_element_id(&app.main, "MainWindow::scroll")
+                .next()
+                .expect("the speaker list");
+            let x = steps_end + 16.0;
+            assert!(x < list.absolute_position().x + list.size().width);
+            [
+                (x, middle),
+                (at.x + size.width / 2.0, at.y + size.height + 3.0),
+            ]
+        };
+        for (point, ms) in [(0, 400.0), (1, 300.0)] {
             app.main.invoke_sync_toggled("local:desk".into());
             draw_frames();
             app.main
                 .invoke_delay_edited("local:desk".into(), format!("{ms}").into());
+            let (x, y) = points()[point];
             click(app.main.window(), x, y);
             assert!(
                 app.ui.borrow().sync_open.is_empty(),
@@ -7975,8 +8040,8 @@ mod tests {
         for (x, y) in [
             (500.0, 60.0),
             (100.0, 700.0),
-            (420.0, 190.0),
-            (420.0, 470.0),
+            (600.0, 162.0),
+            (600.0, 389.0),
         ] {
             let app = app_over(MockBackend::new());
             draw_frames();
@@ -8483,7 +8548,7 @@ mod tests {
         app.main
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         draw_frames();
-        click(app.main.window(), 600.0, 516.0);
+        click(app.main.window(), 600.0, 466.0);
         assert_eq!(name_of(&app, "local:desk"), "Desk");
         assert!(app.ui.borrow().rename.is_none());
         assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
@@ -8933,7 +8998,7 @@ mod tests {
         rename("Desk");
         // The master volume's slider, in the left column, below the source
         // card's level meter row.
-        click(window, 150.0, 310.0);
+        click(window, 150.0, 279.0);
         assert_eq!(
             app.main_focus.borrow().control,
             Some(MainControl::MasterVolume)
