@@ -215,7 +215,7 @@ pub struct AscCastDevice {
     pub event: i32,
     /// 32 hex digits, or `manual:<address>`.
     pub id: *const c_char,
-    /// The `fn` TXT value, else the instance name (C13); "" for a gone
+    /// The `fn` TXT value, else the full service name (C13); "" for a gone
     /// device or an address no browse found.
     pub name: *const c_char,
     /// The `md` TXT value; "" when it has none.
