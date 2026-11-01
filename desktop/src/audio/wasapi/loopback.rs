@@ -68,8 +68,8 @@ use crate::audio::capture::{
 };
 use crate::audio::controller::{CaptureHandle, CaptureState};
 use crate::audio::mix::{LaneInput, LaneStream, MixLanes, MixPlan, Opened, as_bytes};
-use crate::audio::outputs::HNS_PER_MS;
 use crate::audio::outputs::RenderFormat;
+use crate::audio::outputs::{HNS_PER_MS, is_hands_free};
 
 /// The buffer a capture stream asks for, 100 ms: room for the capture thread
 /// to be late without losing packets.
@@ -543,7 +543,9 @@ fn activate_input(endpoint_id: &str) -> Result<IAudioClient, BackendError> {
 /// Why a capture endpoint in `state`, listed by device enumerator
 /// `enumerator`, can't be opened as the input source, if it can't.
 fn input_refusal(state: DEVICE_STATE, enumerator: Option<&str>) -> Option<BackendError> {
-    (state != DEVICE_STATE_ACTIVE).then_some(BackendError::InputGone)
+    // The listing leaves a hands-free endpoint out, so one saved anyway counts as not connected.
+    (state != DEVICE_STATE_ACTIVE || is_hands_free(enumerator.unwrap_or_default()))
+        .then_some(BackendError::InputGone)
 }
 
 /// The activation parameters and the PROPVARIANT that carries them, kept
