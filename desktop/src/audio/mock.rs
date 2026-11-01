@@ -355,6 +355,7 @@ pub struct MockDriver {
     hold_fades: Arc<AtomicBool>,
     captures_started: Vec<CaptureTarget>,
     renderers_started: Vec<String>,
+    start_gains: Vec<(String, f32)>,
     /// Every capture start asked for, refused ones included.
     capture_attempts: usize,
     /// Windows' suspend and resume notices not yet taken.
@@ -426,6 +427,7 @@ impl MockDriver {
             hold_fades: Arc::new(AtomicBool::new(false)),
             captures_started: Vec::new(),
             renderers_started: Vec::new(),
+            start_gains: Vec::new(),
             capture_attempts: 0,
             renderer_attempts: Vec::new(),
             power_notices: Vec::new(),
@@ -476,6 +478,12 @@ impl MockDriver {
     /// The endpoint ID of every output started, in order.
     pub fn renderers_started(&self) -> &[String] {
         &self.renderers_started
+    }
+
+    /// The endpoint ID and gain of every output started, in order: a real
+    /// render thread plays its first period at that gain.
+    pub fn start_gains(&self) -> &[(String, f32)] {
+        &self.start_gains
     }
 
     /// How many capture starts were asked for, refused ones included.
@@ -829,6 +837,7 @@ impl Driver for MockDriver {
         let invalidated = Arc::new(AtomicBool::new(false));
         let format = self.device_format(&endpoint.id);
         let ring = Arc::clone(reader.ring());
+        self.start_gains.push((endpoint.id.clone(), gain.get()));
         let unstarted = match self.periods.remove(&endpoint.id) {
             Some(period) => {
                 let channels = usize::from(format.channels);

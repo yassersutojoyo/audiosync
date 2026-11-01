@@ -17093,6 +17093,38 @@ mod tests {
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
+    // covers: S252
+    #[test]
+    fn an_output_a_recall_switches_on_starts_at_the_preset_master() {
+        let mut adapter = adapter();
+        adapter.restore(Settings {
+            master_volume: 30.0,
+            speaker_presets: vec![SavedPreset {
+                gains_db: [0.0; audiosync_core::eq::BAND_COUNT],
+                ..saved_preset(&[(key(SPEAKERS), None), (key(HEADPHONES), None)])
+            }],
+            ..Settings::default()
+        });
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+
+        adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        let preset_gain = adapter
+            .audio
+            .playing_params(HEADPHONES)
+            .expect("playing")
+            .gain;
+        let started = adapter.audio.driver().start_gains();
+        assert_eq!(
+            started.last(),
+            Some(&(HEADPHONES.to_owned(), preset_gain)),
+            "{started:?}"
+        );
+    }
+
     // covers: S252, S253
     #[test]
     fn a_recalled_preset_is_current() {
