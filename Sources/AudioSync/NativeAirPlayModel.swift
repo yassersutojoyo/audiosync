@@ -442,6 +442,10 @@ struct NativePrompt: Equatable {
     let wrong: Bool
 }
 
+/// What a speaker's row waits for while the user's attempt runs: its PIN
+/// pairing, or its password prompt, queued or open (S223).
+enum NativeCodeWait: Equatable { case pin, password }
+
 /// What the app does with the user's answer to a `NativePrompt`.
 enum NativePromptAnswer: Equatable {
     /// Hand the PIN to the pairing.
@@ -806,6 +810,9 @@ struct NativeAirPlayModel {
         Set(stages.keys.filter { promptTargets[$0] == nil }.map(NativeAirPlayID.app))
             .union(promptTargets.values.map(NativeAirPlayID.app))
     }
+
+    /// What the row of the receiver or target `id` waits for, if anything.
+    func codeWait(_ id: String) -> NativeCodeWait? { nil }
 
     /// A PIN as the sender takes it: ASCII digits, at least one.
     static func isPin(_ code: String) -> Bool {

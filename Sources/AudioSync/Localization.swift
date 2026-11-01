@@ -1314,6 +1314,7 @@ struct UIStrings {
     /// AirPlay speaker is off the network, or what a stereo pair or home
     /// theater group is made of.
     func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false, reconnecting: Bool = false,
+                 codeWait: NativeCodeWait? = nil, name: String = "",
                  unannounced: Bool, target: AirPlayTargetRow?) -> String? {
         if let cast { return castNote(cast) }
         if waitingForPtp { return self.waitingForPtp }

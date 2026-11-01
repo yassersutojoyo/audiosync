@@ -3944,6 +3944,15 @@ do {
         // covers: S223
         check(m.plan(streaming: true, enabled: ["native:B2", "native:C3"]).isEmpty,
               "native pairing: while pairing or prompting, the speaker waits instead of going off")
+        func rowWait(_ id: String, _ name: String) -> String? {
+            UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, codeWait: m.codeWait(id), name: name,
+                                unannounced: false, target: nil)
+        }
+        // covers: S223
+        check(rowWait("B2", "Den") == "Enter the code shown on Den" && rowWait("C3", "Kitchen") == "Waiting for the password"
+                && rowWait("A1", "Hall") == nil,
+              "native pairing: while its PIN pairing or password prompt runs, the row says what it waits for, by the speaker's name",
+              "\(String(describing: rowWait("B2", "Den"))) \(String(describing: rowWait("C3", "Kitchen")))")
 
         // The PIN: shown on the TV, typed, checked.
         // covers: S223
