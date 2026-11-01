@@ -1639,7 +1639,7 @@ struct UIStrings {
 
         First Steps
         1. Open AudioSync. Its window holds every control. The AudioSync icon in
-           the menu bar gives quick access to the power switch, the source, the
+           the menu bar gives quick access to the Streaming switch, the source, the
            volume and the speakers. Closing the window keeps AudioSync running in
            the menu bar, and streaming continues.
         2. Pick a source under Audio Source: All System Audio, a specific app,
@@ -1667,8 +1667,8 @@ struct UIStrings {
           as Bluetooth. While an AirPlay
           speaker is on, every local speaker also waits the AirPlay Delay
           under Connected Speakers for it.
-        - Zones: turn on the speakers you want, then choose 'New Zone from Active
-          Speakers' in the gear menu. A speaker is in one zone at a time. It
+        - Zones: turn on the speakers you want, then choose “New Zone from Active
+          Speakers” in the gear menu. A speaker is in one zone at a time. It
           shows under its zone and keeps a short row under This Mac or
           Connected Speakers: its round button there turns only that speaker
           on or off, and the button with its zone's name goes to the zone. Click the
@@ -1693,8 +1693,8 @@ struct UIStrings {
         - Rename: double-click a speaker's name, or choose Rename… from its
           ⋯ button, type a name and press Return. Leave it empty to go back to
           the device's own name, which its tooltip keeps showing.
-        - Hide: to keep a speaker you never use out of the lists, choose 'Hide
-          Speaker' from its ⋯ button. A speaker that is on turns off first.
+        - Hide: to keep a speaker you never use out of the lists, choose “Hide
+          Speaker” from its ⋯ button. A speaker that is on turns off first.
           Hidden Speakers in the gear menu lists what you hid; choose one to
           show it again, off, with its volume and delay as you left them.
         - Equalizer: click Equalizer in the window for 10 bands, a preamp and
@@ -1711,9 +1711,9 @@ struct UIStrings {
           doesn't open at login; click the Dock icon to bring it back.
         - Appearance: in the gear menu, or in the AudioSync menu. Match System
           follows macOS; Light or Dark keeps AudioSync's windows that way.
-        - When the source app quits, AudioSync switches to all system audio and
-          keeps playing. To stop streaming instead, turn off 'Switch to All
-          System Audio When the Source App Quits' in the gear menu or the
+        - When the source app quits, AudioSync switches to All System Audio and
+          keeps playing. To stop streaming instead, turn off “Switch to All
+          System Audio When the Source App Quits” in the gear menu or the
           AudioSync menu.
 
         Calibration
@@ -1792,7 +1792,7 @@ struct UIStrings {
         off or a source that quit, a notice appears at the top of the window and
         of the menu bar panel, and a dot appears next to the menu bar icon.
         Several can wait at once. Click × to dismiss one, or Dismiss All
-        when there is more than one. A notice also clears itself once its
+        when there is more than one. Many notices also clear themselves once the
         cause is gone.
 
         Web Remote
@@ -1898,7 +1898,7 @@ struct UIStrings {
               AudioSync starts. If a
               code doesn't work, AudioSync asks again; if you cancel, the speaker
               turns off. Turn it on again to retry.
-            - 'Asks for a code every time': the speaker is set to ask for a code
+            - “Asks for a code every time”: the speaker is set to ask for a code
               every time. Auto-connect leaves it off, also at launch; AudioSync
               asks for the code each time you turn it on.
             """
