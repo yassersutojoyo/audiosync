@@ -543,8 +543,8 @@ struct NativeAirPlayModel {
     /// A speaker of the stream reached its first-sound time, as the last
     /// poll found.
     var sounding = false
-    /// From the Mac's sleep notice until its wake, a retried error doesn't
-    /// count toward reconnecting (S412).
+    /// From the Mac's sleep notice until its wake, a reconcile starts nothing
+    /// and a retried error doesn't count toward reconnecting (S412).
     var asleep = false
 
     /// The sessions a row in the sender plays: a target's members as last
@@ -1102,6 +1102,18 @@ struct NativeAirPlayModel {
             }
         }
         return plan
+    }
+
+    /// The plan a reconcile carries out: none from the sleep notice until
+    /// the wake, whose reconcile starts what waited (S412).
+    func reconcilePlan(streaming: Bool, enabled: Set<String>) -> NativeAirPlayPlan {
+        asleep ? NativeAirPlayPlan() : plan(streaming: streaming, enabled: enabled)
+    }
+
+    /// The own volume of AirPlay speaker `appID`: its stored one, else the
+    /// 60 a local output starts at (S399).
+    static func ownVolume(_ appID: String, stored: [String: Double]) -> Double {
+        stored[appID] ?? AppSettings.defaultVolume
     }
 
     /// The app added a speaker to the sender.

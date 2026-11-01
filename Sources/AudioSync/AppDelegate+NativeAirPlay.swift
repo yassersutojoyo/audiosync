@@ -31,7 +31,7 @@ extension AppDelegate {
             if nativeStarts.mayStart(at: Date()) { startNativeAirPlay() }
             return
         }
-        syncNativeSpeakers()
+        syncNativeSpeakers(reconcile: true)
         pushModel()
     }
 
@@ -421,10 +421,12 @@ extension AppDelegate {
     }
 
     /// Makes the sender's speakers match the switches while streaming, and
-    /// removes them all when streaming stops (`NativeAirPlayModel.plan`).
-    func syncNativeSpeakers() {
+    /// removes them all when streaming stops (`NativeAirPlayModel.plan`,
+    /// `reconcilePlan` for a reconcile).
+    func syncNativeSpeakers(reconcile: Bool = false) {
         guard let native = nativeAirPlay else { return }
-        let plan = native.model.plan(streaming: engine.isRunning, enabled: enabledAirPlay)
+        let plan = reconcile ? native.model.reconcilePlan(streaming: engine.isRunning, enabled: enabledAirPlay)
+                             : native.model.plan(streaming: engine.isRunning, enabled: enabledAirPlay)
         guard !plan.isEmpty else { return }
         for id in plan.release {
             enabledAirPlay.remove(NativeAirPlayID.app(id))
@@ -442,7 +444,7 @@ extension AppDelegate {
         // The plan's own streaming input: stopEngine stops the engine before it syncs.
         let appeared = plan.changesRows ? adoptNativeRows(native.model, stopped: !engine.isRunning) : nil
         for id in plan.add {
-            let volume = airplayVolume[NativeAirPlayID.app(id)] ?? defaultVolume
+            let volume = NativeAirPlayModel.ownVolume(NativeAirPlayID.app(id), stored: airplayVolume)
             // It starts at the level its row shows, one its remote set included, as on Windows.
             native.add(id, volume: volume)
             let level = sendNativeRowLevel(NativeAirPlayID.app(id))
@@ -565,7 +567,7 @@ extension AppDelegate {
     /// it joins or gets its volume back after Calibrate All Speakers; returns it.
     @discardableResult
     func sendNativeRowLevel(_ id: String, afterCalibration: Bool = false) -> Double {
-        let own = airplayVolume[id] ?? defaultVolume
+        let own = NativeAirPlayModel.ownVolume(id, stored: airplayVolume)
         let (level, held) = AirPlayDeviceLevel.restored(own: own, zone: airPlayZoneVolume(id),
                                                         held: airplayHeldLevel[id], afterCalibration: afterCalibration)
         airplayHeldLevel[id] = held
@@ -582,7 +584,7 @@ extension AppDelegate {
 
     /// The whole number AirPlay speaker `id`'s row shows (S290).
     func airPlayRowLevel(_ id: String) -> Double {
-        AirPlayDeviceLevel.row(own: airplayVolume[id] ?? defaultVolume, zone: airPlayZoneVolume(id),
+        AirPlayDeviceLevel.row(own: NativeAirPlayModel.ownVolume(id, stored: airplayVolume), zone: airPlayZoneVolume(id),
                                held: airplayHeldLevel[id])
     }
 
