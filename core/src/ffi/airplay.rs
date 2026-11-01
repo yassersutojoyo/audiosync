@@ -378,9 +378,8 @@ pub const AIRPLAY_ERROR_RECEIVER_UNVERIFIED: i32 = 11;
 /// What [`asc_airplay_open_pairings`] returns when it can't open a store:
 /// a null or dead handle, or a path that isn't UTF-8.
 pub const AIRPLAY_PAIRINGS_FAILED: i32 = -1;
-/// The pairings file can't be read or isn't in the expected format: it is
-/// ignored; a file in the wrong format is replaced by the next pairing, an
-/// unreadable one is left as it is.
+/// The pairings file isn't in the expected format: it is ignored and
+/// replaced by the next pairing.
 pub const AIRPLAY_PAIRINGS_IGNORED: i32 = -2;
 
 /// The largest hold-back [`asc_airplay_set_hold_back`] applies, in ms: the
@@ -389,6 +388,9 @@ pub const AIRPLAY_MAX_DELAY_MS: i32 = MAX_DELAY.as_millis() as i32;
 /// A newer AudioSync wrote the pairings file: it is ignored and left as it
 /// is, and pairings made now last until the handle is destroyed.
 pub const AIRPLAY_PAIRINGS_NEWER: i32 = -3;
+/// The pairings file can't be read: it is ignored and left as it is, and
+/// pairings made now last until the handle is destroyed.
+pub const AIRPLAY_PAIRINGS_UNREADABLE: i32 = -4;
 
 /// What [`asc_airplay_pairings_access`] and
 /// [`asc_airplay_airplay2_identity_access`] return for a null or dead
@@ -3676,7 +3678,8 @@ fn moved_on(progress: Progress, since: Duration) -> Progress {
 /// pairings it drops; meant for once, before discovery starts. Listed
 /// receivers are reported again, as changed, with their availability under
 /// the new store. Returns how many receivers it holds credentials for, or
-/// [`AIRPLAY_PAIRINGS_IGNORED`] or [`AIRPLAY_PAIRINGS_NEWER`] for a file it
+/// [`AIRPLAY_PAIRINGS_IGNORED`], [`AIRPLAY_PAIRINGS_NEWER`] or
+/// [`AIRPLAY_PAIRINGS_UNREADABLE`] for a file it
 /// ignored (the store is then empty), or [`AIRPLAY_PAIRINGS_FAILED`] for a
 /// null or dead handle or a null or non-UTF-8 `path`, leaving the store
 /// as it was.
@@ -3714,6 +3717,7 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
                 Loaded::Receivers(count) => i32::try_from(count).unwrap_or(i32::MAX),
                 Loaded::Ignored(_) => AIRPLAY_PAIRINGS_IGNORED,
                 Loaded::Newer(_) => AIRPLAY_PAIRINGS_NEWER,
+                Loaded::Unreadable(_) => AIRPLAY_PAIRINGS_UNREADABLE,
             }
         })
     }
@@ -3729,8 +3733,8 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
 /// [`asc_airplay_forget_pairing`] opens the file, to drop the receiver from
 /// it. Returns
 /// how many receivers it holds credentials for, or
-/// [`AIRPLAY_PAIRINGS_IGNORED`] or [`AIRPLAY_PAIRINGS_NEWER`] for a file
-/// it ignored, or [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or
+/// [`AIRPLAY_PAIRINGS_IGNORED`], [`AIRPLAY_PAIRINGS_NEWER`] or
+/// [`AIRPLAY_PAIRINGS_UNREADABLE`] for a file it ignored, or [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or
 /// a null, empty or non-UTF-8 `path`, leaving the identity as it was.
 ///
 /// # Safety
@@ -3768,6 +3772,7 @@ pub unsafe extern "C" fn asc_airplay_open_airplay2_identity(
                 Loaded::Receivers(count) => i32::try_from(count).unwrap_or(i32::MAX),
                 Loaded::Ignored(_) => AIRPLAY_PAIRINGS_IGNORED,
                 Loaded::Newer(_) => AIRPLAY_PAIRINGS_NEWER,
+                Loaded::Unreadable(_) => AIRPLAY_PAIRINGS_UNREADABLE,
             }
         })
     }
@@ -10290,9 +10295,9 @@ mod tests {
         let mut handle = asc_airplay_create();
         // SAFETY: a live handle, used by this thread only; a local C string.
         unsafe {
-            assert_ne!(
+            assert_eq!(
                 asc_airplay_open_pairings(handle, c_path.as_ptr()),
-                AIRPLAY_PAIRINGS_IGNORED
+                AIRPLAY_PAIRINGS_UNREADABLE
             );
             asc_airplay_destroy(&mut handle);
         }

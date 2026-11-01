@@ -1295,6 +1295,10 @@ mod tests {
                 "ASC_AIRPLAY_PAIRINGS_NEWER",
                 AIRPLAY_PAIRINGS_NEWER.to_string(),
             ),
+            (
+                "ASC_AIRPLAY_PAIRINGS_UNREADABLE",
+                AIRPLAY_PAIRINGS_UNREADABLE.to_string(),
+            ),
             ("ASC_AIRPLAY_FILE_UNREAD", AIRPLAY_FILE_UNREAD.to_string()),
             ("ASC_AIRPLAY_FILE_PRIVATE", AIRPLAY_FILE_PRIVATE.to_string()),
             (
