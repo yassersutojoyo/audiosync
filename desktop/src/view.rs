@@ -2953,6 +2953,10 @@ impl App {
         let w = weak.clone();
         eq_window.on_delete_curve(move || {
             with_app(&w, |app| {
+                // A disabled button that kept the keyboard focus still clicks.
+                if app.dialog_already_open() {
+                    return;
+                }
                 let state = app.snapshot();
                 if let Some(CurveMatch::User(index)) = app.shown_curve(&state) {
                     let mut curves = state.equalizer_curves;
@@ -2986,10 +2990,12 @@ impl App {
         self.zone_dialog
             .on_confirmed(move |name| with_app(&w, |app| app.confirm_dialog(&name)));
         let w = weak.clone();
-        self.zone_dialog.on_cancelled(move || {
-            with_app(&w, |app| {
-                let _ = app.zone_dialog.hide();
-            })
+        self.zone_dialog
+            .on_cancelled(move || with_app(&w, App::hide_dialog));
+        let w = weak.clone();
+        self.zone_dialog.window().on_close_requested(move || {
+            with_app(&w, |app| app.equalizer.set_name_dialog_open(false));
+            slint::CloseRequestResponse::HideWindow
         });
 
         self.follow_dialog_frame(|app| app.pin_dialog.window(), "PIN dialog");
@@ -4292,12 +4298,18 @@ impl App {
             return;
         }
         self.zone_dialog.invoke_prepare();
+        self.equalizer.set_name_dialog_open(true);
         crate::platform::bring_to_front(self.zone_dialog.window());
+    }
+
+    fn hide_dialog(&self) {
+        let _ = self.zone_dialog.hide();
+        self.equalizer.set_name_dialog_open(false);
     }
 
     fn confirm_dialog(&self, name: &str) {
         let purpose = self.dialog_purpose.borrow().clone();
-        let _ = self.zone_dialog.hide();
+        self.hide_dialog();
         match purpose {
             DialogPurpose::NewZone => {
                 let name = self.new_zone_name(name);
@@ -11468,6 +11480,54 @@ mod tests {
 
     // covers: S270
     #[test]
+    fn the_curve_buttons_are_disabled_while_the_name_dialog_is_open() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Bass".into());
+        let buttons = ["Save curve", "Rename curve", "Delete curve"];
+        let assert_enabled = |enabled: bool, after: &str| {
+            for label in buttons {
+                let button = ElementHandle::find_by_accessible_label(eq_window, label)
+                    .next()
+                    .unwrap_or_else(|| panic!("nothing is labeled {label}"));
+                assert_eq!(
+                    button.accessible_enabled(),
+                    Some(enabled),
+                    "{label} {after}"
+                );
+            }
+        };
+        assert_enabled(true, "with no dialog open");
+
+        eq_window.invoke_rename_curve();
+        assert_enabled(false, "while the name dialog is open");
+        // A button that kept the keyboard focus still reaches the handler.
+        eq_window.invoke_delete_curve();
+        app.zone_dialog.invoke_confirmed("Low end".into());
+        assert_eq!(app.snapshot().equalizer_curves[0].name, "Low end");
+        assert_enabled(true, "after Rename");
+
+        eq_window.invoke_rename_curve();
+        app.zone_dialog.invoke_cancelled();
+        assert_enabled(true, "after Cancel");
+
+        eq_window.invoke_rename_curve();
+        press(app.zone_dialog.window(), Key::Escape);
+        assert!(!app.zone_dialog.window().is_visible());
+        assert_enabled(true, "after Escape");
+
+        eq_window.invoke_rename_curve();
+        app.zone_dialog
+            .window()
+            .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        assert!(!app.zone_dialog.window().is_visible());
+        assert_enabled(true, "after the dialog's close button");
+    }
+
+    // covers: S270
+    #[test]
     fn a_saved_curve_with_a_presets_gains_can_be_picked_renamed_and_deleted() {
         let app = app_over(MockBackend::new());
         let eq_window = &app.equalizer;
@@ -11718,7 +11778,7 @@ mod tests {
     }
 
     #[test]
-    fn a_curve_deleted_while_its_rename_is_open_renames_no_other_curve() {
+    fn a_delete_while_a_rename_is_open_keeps_the_curve_being_renamed() {
         let app = app_over(MockBackend::new());
         let eq_window = &app.equalizer;
         let presets = eq::PRESETS.len();
@@ -11739,7 +11799,7 @@ mod tests {
             .into_iter()
             .map(|curve| curve.name)
             .collect();
-        assert_eq!(names, ["A", "C"]);
+        assert_eq!(names, ["A", "X", "C"]);
     }
 
     #[test]

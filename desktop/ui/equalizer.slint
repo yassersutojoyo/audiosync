@@ -120,6 +120,9 @@ export component EqualizerWindow inherits Window {
     in property <int> preset-index;
     // Whether the picker shows a saved curve, which Rename and Delete act on.
     in property <bool> saved-curve-shown;
+    // The curve name dialog doesn't block this window, so its buttons wait
+    // for it.
+    in property <bool> name-dialog-open;
     // The entry the picker shows (tests read it).
     out property <int> picker-shown-index: presets.current-index;
     callback enabled-toggled(bool);
@@ -295,6 +298,7 @@ export component EqualizerWindow inherits Window {
                 Button {
                     text: Strings.equalizer-save-curve;
                     accessible-label: Strings.equalizer-save-curve-accessibility;
+                    enabled: !root.name-dialog-open;
                     clicked => {
                         root.save-curve();
                     }
@@ -303,7 +307,7 @@ export component EqualizerWindow inherits Window {
                 Button {
                     text: Strings.equalizer-rename-curve;
                     accessible-label: Strings.equalizer-rename-curve-accessibility;
-                    enabled: root.saved-curve-shown;
+                    enabled: root.saved-curve-shown && !root.name-dialog-open;
                     clicked => {
                         root.rename-curve();
                     }
@@ -312,7 +316,7 @@ export component EqualizerWindow inherits Window {
                 Button {
                     text: Strings.equalizer-delete-curve;
                     accessible-label: Strings.equalizer-delete-curve-accessibility;
-                    enabled: root.saved-curve-shown;
+                    enabled: root.saved-curve-shown && !root.name-dialog-open;
                     clicked => {
                         root.delete-curve();
                     }
