@@ -7609,7 +7609,7 @@ do {
     // covers: S405
     check(!bar.contains("panel resize layers") && openBody.contains("ownShadow(window)")
             && (openBody.range(of: "ownShadow(window)")?.lowerBound ?? openBody.endIndex)
-                < (openBody.range(of: "grow(layer")?.lowerBound ?? openBody.startIndex),
+                < (openBody.range(of: "growInSteps(layer")?.lowerBound ?? openBody.startIndex),
           "menu bar panel source: the panel grows only once its background can scale with it; otherwise it fades in at full size")
 
     // The open panel moved by AppKit (another display, a status item shifting).
@@ -7826,13 +7826,24 @@ do {
             && abs(revealSteps[12] - 1) < abs(revealSteps[6] - 1),
           "menu bar panel: the reveal follows the open's spring, one step per 120 Hz frame, from 0.92 to exactly 1",
           "\(revealSteps.count) \(revealSteps.first ?? 0) \(revealSteps.last ?? 0)")
+    let growBodies = revealSteps.map { PanelReveal.body(revealBody, scale: $0, about: revealTip, pixel: 0.5) }
+    let growLaid = growBodies.allSatisfy { step in
+        let laid = revealBody.applying(PanelReveal.stretch(revealBody, onto: step))
+        return [laid.minX - step.minX, laid.minY - step.minY, laid.maxX - step.maxX, laid.maxY - step.maxY]
+            .allSatisfy { abs($0) < 1e-9 }
+    }
+    // covers: S405
+    check(growLaid && growBodies.first != revealBody
+            && PanelReveal.stretch(revealBody, onto: growBodies.last ?? .zero) == .identity,
+          "menu bar panel: each step of the open lays the whole body's outer edges exactly on its pixel-aligned step and ends with no transform")
     let revealSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let revealOpen = revealSource.components(separatedBy: "private func animateOpen(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
     // covers: S405
-    check(revealOpen.contains("reveal(") && revealOpen.contains("if PanelSwitches.scaleContent")
+    check(revealOpen.contains("growInSteps(") && revealOpen.contains("if PanelSwitches.revealContent")
+            && revealSource.contains("shadow.add(steps(")
             && revealSource.contains("calculationMode = .discrete") && !revealSource.contains("shouldRasterize"),
-          "menu bar panel source: the open reveals the content at its own size instead of scaling it, so its hairlines stay on the pixel grid")
+          "menu bar panel source: the open scales the whole panel and its own shadow on the same discrete steps, never through a rasterized copy, so its outer edges stay on the pixel grid")
 }
 
 // MARK: The panel's stand-in on the first open after launch (MenuBar.swift, WindowRules.swift)

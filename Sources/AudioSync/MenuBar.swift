@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import CoreAudio
 import Combine
+import ImageIO
 
 /// State the main window and the menu bar panel render. AppDelegate owns the
 /// real state and the engine; it pushes snapshots in here and receives user
@@ -631,9 +632,9 @@ enum PanelSwitches {
     static let standInBehindWindow = DebugTrace.enabled
         && UserDefaults.standard.bool(forKey: "PanelStandInBehindWindow")
 
-    /// `PanelScaleContent` scales the whole panel as it grows in, as before
-    /// `PanelReveal`, to compare the two.
-    static let scaleContent = DebugTrace.enabled && UserDefaults.standard.bool(forKey: "PanelScaleContent")
+    /// `PanelRevealContent` keeps the content at its own size under a growing
+    /// mask as the panel opens, as before, to compare the two.
+    static let revealContent = DebugTrace.enabled && UserDefaults.standard.bool(forKey: "PanelRevealContent")
 
     /// The own shadow's values, or with the debug log on, those set with
     /// `defaults write <bundle ID> PanelShadowRadius|PanelShadowOpacity|PanelShadowOffsetY -float <n>`.
@@ -847,6 +848,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Closes the panel at once, as before an alert it would cover.
     func close() {
         guard presented || popover.isShown else { return }
+        DebugTrace.log("[AudioSync] panel close: 0.0 ms, at once")
         finishClose(lasting: 0)
         closing += 1
         popover.animates = false   // a resize may have left it on
@@ -868,6 +870,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         finishClose(lasting: motion.duration)
         closing += 1
         let ticket = closing
+        let began = Self.uptime
         var shadow: PanelShadowWindow?
         // Without its own shadow and background the panel would shrink inside a full-size box: it only fades.
         if motion.grows, case let (layer, anchor)? = panelLayer(window), case let (own, tip, _)? = ownShadow(window) {
@@ -897,6 +900,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             shadow?.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             MainActor.assumeIsolated {
+                DebugTrace.log(String(format: "[AudioSync] panel close: %.1f ms, planned %.0f ms",
+                                      (Self.uptime - began) * 1000, motion.duration * 1000))
                 guard let self, self.closing == ticket else { return }
                 self.popover.animates = false   // a resize may have left it on
                 self.popover.close()
@@ -950,8 +955,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         return transform
     }
 
-    /// Fades the panel in and grows it out of the menu bar icon. The window
-    /// is already at its final size; only a mask over its layer moves.
+    /// Fades the panel in and grows it, content included, out of the menu bar
+    /// icon. The window is already at its final size; only its layer scales.
     private func animateOpen(_ motion: PanelMotion) {
         guard let window = host.view.window else { return }
         let target = panelLayer(window)
@@ -960,7 +965,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         window.alphaValue = 0
         var shadow: PanelShadowWindow?
         // Without its own shadow and background the panel would grow inside a full-size box: it only fades in.
-        if motion.grows, case let (layer, anchor)? = target, case let (own, tip, body)? = ownShadow(window) {
+        if motion.grows, case let (layer, _)? = target, case let (own, tip, body)? = ownShadow(window) {
             func grow(_ layer: CALayer, about anchor: CGPoint) {
                 let grow = CASpringAnimation(keyPath: "transform")
                 grow.mass = PanelMotion.mass
@@ -971,13 +976,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 grow.duration = motion.settles
                 layer.add(grow, forKey: Self.motionKey)
             }
-            if PanelSwitches.scaleContent {
-                grow(layer, about: anchor)
-            } else {
+            if PanelSwitches.revealContent {
                 reveal(layer, in: window, body: body, tip: tip, motion: motion)
+                grow(own.panel, about: tip)
+            } else {
+                growInSteps(layer, shadow: own.panel, in: window, body: body, tip: tip, motion: motion)
             }
             shadow = own
-            grow(own.panel, about: tip)
             let ticket = closing
             DispatchQueue.main.asyncAfter(deadline: .now() + motion.settles) { [weak self, weak window] in
                 guard let self, let window, self.closing == ticket else { return }
@@ -1035,6 +1040,85 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// The time per step of the open's reveal: a frame at 120 Hz, which a
     /// 60 Hz display shows every other one of.
     private static let revealStep: TimeInterval = 1.0 / 120
+
+    /// Scales `layer` and the own shadow's `shadow` out of the menu bar icon on
+    /// the same discrete steps, one per frame, each laying the body's outer
+    /// edges onto the pixel grid; `body` and `tip` are in the window's coordinates.
+    private func growInSteps(_ layer: CALayer, shadow: CALayer, in window: NSWindow, body: CGRect, tip: CGPoint,
+                             motion: PanelMotion) {
+        guard let frame = window.contentView?.superview else { return }
+        let bounds = layer.bounds
+        let pivot = CGPoint(x: bounds.minX + layer.anchorPoint.x * bounds.width,
+                            y: bounds.minY + layer.anchorPoint.y * bounds.height)
+        // A layer's transform acts about its anchor point.
+        func toLayer(_ rect: CGRect) -> CGRect {
+            frame.convertToLayer(frame.convert(rect, from: nil)).offsetBy(dx: -pivot.x, dy: -pivot.y)
+        }
+        let pixel = 1 / max(window.backingScaleFactor, 1)
+        let scales = PanelReveal.scales(motion, step: Self.revealStep)
+        let bodies = scales.map { PanelReveal.body(body, scale: $0, about: tip, pixel: pixel) }
+        func steps(_ maps: [CGAffineTransform]) -> CAKeyframeAnimation {
+            let steps = CAKeyframeAnimation(keyPath: "transform")
+            steps.values = maps.map { NSValue(caTransform3D: CATransform3DMakeAffineTransform($0)) }
+            steps.calculationMode = .discrete
+            steps.duration = Double(maps.count) * Self.revealStep
+            return steps
+        }
+        let start = toLayer(body)
+        layer.add(steps(bodies.map { PanelReveal.stretch(start, onto: toLayer($0)) }), forKey: Self.motionKey)
+        // The shadow's panel layer has the window's coordinates, its anchor at their origin.
+        shadow.add(steps(bodies.map { PanelReveal.stretch(body, onto: $0) }), forKey: Self.motionKey)
+        if DebugTrace.enabled { traceSteps(of: frame, scales: scales, bodies: bodies, body: body) }
+    }
+
+    /// Debug log only: a line per open step as it falls due and, once the open
+    /// is over, each step drawn offscreen from the panel at rest into
+    /// /tmp/audiosync-popover-frames/<step>.png, never from a screen capture.
+    private func traceSteps(of frame: NSView, scales: [Double], bodies: [CGRect], body: CGRect) {
+        let began = Self.uptime, ticket = closing
+        for (index, scale) in scales.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * Self.revealStep) { [weak self] in
+                guard let self, self.closing == ticket else { return }
+                DebugTrace.log(String(format: "[AudioSync] panel open step: %.1f ms, step %ld of %ld, scale %.4f, body %@",
+                                      (Self.uptime - began) * 1000, index, scales.count - 1, scale,
+                                      NSStringFromRect(bodies[index])))
+            }
+        }
+        // After the stand-in's hand-back fade, so the picture is the panel at rest.
+        let settled = Double(scales.count) * Self.revealStep + 0.3
+        DispatchQueue.main.asyncAfter(deadline: .now() + settled) { [weak self, weak frame] in
+            guard let self, let frame, self.closing == ticket,
+                  let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+            frame.cacheDisplay(in: frame.bounds, to: rep)
+            guard let picture = rep.cgImage else { return }
+            let size = frame.bounds.size, scale = frame.window?.backingScaleFactor ?? 2
+            let maps = bodies.map { PanelReveal.stretch(body, onto: $0) }
+            DispatchQueue.global(qos: .utility).async { Self.writeSteps(picture, size: size, scale: scale, maps: maps) }
+        }
+    }
+
+    nonisolated private static func writeSteps(_ picture: CGImage, size: CGSize, scale: CGFloat,
+                                               maps: [CGAffineTransform]) {
+        let folder = URL(fileURLWithPath: "/tmp/audiosync-popover-frames", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let width = Int((size.width * scale).rounded()), height = Int((size.height * scale).rounded())
+        let space = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        var written = 0
+        for (index, map) in maps.enumerated() {
+            guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                          space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { continue }
+            context.scaleBy(x: scale, y: scale)
+            context.concatenate(map)
+            context.draw(picture, in: CGRect(origin: .zero, size: size))
+            let url = folder.appendingPathComponent("\(index).png") as CFURL
+            guard let image = context.makeImage(),
+                  let file = CGImageDestinationCreateWithURL(url, "public.png" as CFString, 1, nil) else { continue }
+            CGImageDestinationAddImage(file, image, nil)
+            if CGImageDestinationFinalize(file) { written += 1 }
+        }
+        DebugTrace.log("[AudioSync] panel open frames: \(written) of \(maps.count) PNGs in \(folder.path)")
+    }
 
     /// Grows a mask shaped like the panel over `layer` out of the menu bar
     /// icon (`PanelReveal`); `body` and `tip` are in the window's coordinates.

@@ -162,9 +162,9 @@ enum CastAddRow: Equatable {
 
 /// How the menu bar panel opens and closes: it grows out of the menu bar icon
 /// on a spring too damped to bounce, and shrinks back quickly as it fades.
-/// With Reduce Motion it only fades. The open grows a mask over the panel
-/// (`PanelReveal`) and the close scales its layer; the window keeps its
-/// final size, so nothing is laid out again per frame.
+/// With Reduce Motion it only fades. The open scales the panel's layer in
+/// pixel-aligned steps (`PanelReveal`) and the close scales it smoothly; the
+/// window keeps its final size, so nothing is laid out again per frame.
 struct PanelMotion: Equatable {
     /// Where an open starts, or where a close ends; 1 is a plain fade.
     var scale: Double
@@ -296,8 +296,8 @@ struct PanelRest: Equatable {
     }
 }
 
-/// The panel grows in under a pixel-aligned mask, its content at its own size:
-/// a scaled layer is resampled, so its hairlines blur until the scale ends.
+/// The open's steps, each with the panel's edges on the pixel grid: a layer
+/// scaled freely is resampled at sub-pixel offsets, so its hairlines blur.
 enum PanelReveal {
     /// The panel's body scaled by `scale` about the arrow's tip, its edges
     /// rounded to the nearest `pixel`.
@@ -308,6 +308,13 @@ enum PanelReveal {
         let minX = scaled(body.minX, tip.x), maxX = scaled(body.maxX, tip.x)
         let minY = scaled(body.minY, tip.y), maxY = scaled(body.maxY, tip.y)
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// The scale and shift that lay `body` exactly onto `step`; none when they match.
+    static func stretch(_ body: CGRect, onto step: CGRect) -> CGAffineTransform {
+        guard body.width > 0, body.height > 0 else { return .identity }
+        let sx = step.width / body.width, sy = step.height / body.height
+        return CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: step.minX - body.minX * sx, ty: step.minY - body.minY * sy)
     }
 
     /// The open's spring, one scale per `step` from `motion.scale` to exactly 1
