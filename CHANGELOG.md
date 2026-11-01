@@ -20,6 +20,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
+- On Windows, a source that captures every app but some reads "All Apps Except" followed by their names in the source menu, the main window, the notices and the web remote, as on the Mac.
 - On Windows, a speaker row whose device another app holds says "In use by another app", the tray flyout is called the AudioSync tray panel, and a window that fails to open says so in a plain sentence, with the system's reason in the debug log.
 - On the Mac, the main window opens narrower: the speaker column on the right starts at about two thirds of its old width and widens with the window up to its old width, which is also as wide as the window goes. The window opens at the new size once, centered, even if it was moved or resized before.
 - On the Mac, when AirPlay stops after an internal error or can't start, a notice says "AirPlay stopped or couldn't start. Select Retry to try again." and has a Retry button, as on Windows. Before, a failed start said AudioSync keeps trying, with no button, and an internal error showed no notice.
