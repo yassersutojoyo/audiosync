@@ -1294,6 +1294,8 @@ export component MainWindow inherits Window {
     callback equalizer-requested();
     // A Now Playing button: 0 Previous, 1 Play or Pause, 2 Next.
     callback now-playing-transport(int);
+    // The media sessions made a reading for the card.
+    callback now-playing-read();
     callback speaker-toggled(string);
     callback speaker-volume-changed(string, float);
     callback speaker-volume-editing(string, bool);

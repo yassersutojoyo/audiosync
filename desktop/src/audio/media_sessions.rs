@@ -145,6 +145,8 @@ struct State {
     card: Option<CardSource>,
     card_generation: u64,
     card_reading: Option<Option<CardTrack>>,
+    /// Told whenever a card reading is ready.
+    card_wake: Option<Arc<dyn Fn() + Send + Sync>>,
     commands: Vec<Transport>,
     /// Controls a speaker's remote asked for, sent to the session that
     /// counts for `track`.
@@ -236,6 +238,10 @@ impl MediaControls for MediaCardReader {
 
     fn take_reading(&mut self) -> Option<Option<CardTrack>> {
         self.shared.lock().card_reading.take()
+    }
+
+    fn on_reading(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        self.shared.lock().card_wake = Some(wake);
     }
 
     fn send(&mut self, command: Transport) {
@@ -351,9 +357,17 @@ fn run<L: SessionList>(
         }
         if let Some(follow) = &card {
             let card = reader.card(&mut listing, follow, log);
-            let mut state = shared.lock();
-            if state.card_generation == card_generation {
-                state.card_reading = Some(card);
+            let wake = {
+                let mut state = shared.lock();
+                if state.card_generation == card_generation {
+                    state.card_reading = Some(card);
+                    state.card_wake.clone()
+                } else {
+                    None
+                }
+            };
+            if let Some(wake) = wake {
+                wake();
             }
         }
         let state = shared.lock();
