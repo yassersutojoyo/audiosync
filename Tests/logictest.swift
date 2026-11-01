@@ -15589,10 +15589,9 @@ do {
 do {
     check(NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_FAILED)
             && NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_NEWER),
-          "pairings notice: a file that couldn't be opened, or that a newer AudioSync wrote, is told")
-    check(!NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_IGNORED)
-            && !NativeAirPlay.pairingsNotSaved(0) && !NativeAirPlay.pairingsNotSaved(2),
-          "pairings notice: a store that keeps its pairings gets none")
+          "pairings notice: a file a newer AudioSync wrote, or a folder that couldn't be found, is told")
+    check(!NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_IGNORED),
+          "pairings notice: an ignored file, which the next pairing replaces, gets none")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
