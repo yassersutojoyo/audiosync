@@ -12248,11 +12248,12 @@ do {
     lidClosed.startSent(den)
     _ = lidClosed.started(den, attempt: 6, refusal: ASC_CAST_REFUSED_NONE)
     let asleepFailed = CastEvent.connectFailed(attempt: 6, error: .connect, retryMs: 1000)
+    let beforeSleep = lidClosed.apply(asleepFailed) == nil
     lidClosed.asleep = true
     let whileAsleep = (1...3).allSatisfy { _ in lidClosed.apply(asleepFailed) == nil } && lidClosed.enabled == den
     lidClosed.asleep = false
     // covers: S412
-    check(whileAsleep && lidClosed.apply(asleepFailed) == nil && lidClosed.apply(asleepFailed) == nil
+    check(beforeSleep && whileAsleep && lidClosed.apply(asleepFailed) == nil
             && lidClosed.apply(asleepFailed) == .turnedOff(den, problem: .notResponding),
           "cast: a connect failure while the Mac sleeps counts nothing toward turning the speaker off (S412)")
 

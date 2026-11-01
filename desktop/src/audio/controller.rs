@@ -8801,6 +8801,8 @@ mod tests {
         backend.poll();
         backend.start(&SourceId::WholeSystem).unwrap();
         backend.set_cast_enabled(KITCHEN, true).unwrap();
+        cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        assert!(!off(backend.poll()));
         backend.notify_power(PowerNotice::Suspend);
         backend.poll();
         for _ in 0..3 {
@@ -8810,10 +8812,8 @@ mod tests {
         backend.pass_wall_time(Duration::from_secs(2 * 3600));
         backend.notify_power(PowerNotice::Resume);
         backend.poll();
-        // The failures after the wake count from the first.
-        for _ in 0..2 {
-            cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
-        }
+        // The failure before the sleep still counts.
+        cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
         assert!(!off(backend.poll()));
         cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
         assert!(off(backend.poll()));
