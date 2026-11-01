@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -61,7 +61,7 @@ use audiosync_cast::status::{
     row_own_level, start_own_level,
 };
 use audiosync_core::eq::{self, EqSettings};
-use audiosync_core::fade::Fade;
+use audiosync_core::fade::{Fade, InputFade};
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 use audiosync_core::volume::gain_for_position;
 
@@ -70,6 +70,7 @@ use super::backend::{
     BackendEvent, CastDiscovery, CastGroup, CastInfo, CastMember, CastMembers, CastProblem,
     CastStatus,
 };
+use super::capture::CONVERT_CHUNK;
 use super::cast_address::{self, CastAddress};
 use crate::debug_log::DebugLog;
 
@@ -127,9 +128,14 @@ struct DelayLine {
     buffer: Box<[f32]>,
     /// The frame written next.
     write: usize,
-    /// The delay in frames; `None` until the first frame, which takes the
-    /// target at once since only silence is behind it.
+    /// Frames written since the last reset, at most the capacity: older ones
+    /// read as silence.
+    filled: usize,
+    /// The delay in frames; `None` until the first frame after a reset, which
+    /// takes the target at once since only silence is behind it.
     delay: Option<usize>,
+    /// [`DelayLine::close`] ran: the output fades out and stays silent.
+    closing: bool,
     fade: Fade,
 }
 
@@ -148,9 +154,26 @@ impl DelayLine {
         DelayLine {
             buffer,
             write: 0,
+            filled: 0,
             delay: None,
+            closing: false,
             fade: Fade::opened(SESSION_RATE),
         }
+    }
+
+    /// Forgets the audio taken in, so a new capture never replays the end
+    /// of the old one, and opens a closed line. Never allocates.
+    fn reset(&mut self) {
+        self.filled = 0;
+        self.delay = None;
+        self.closing = false;
+        self.fade.open();
+    }
+
+    /// Fades the output out and keeps it silent until [`DelayLine::reset`],
+    /// so the audio it still holds doesn't end the stream with a cut.
+    fn close(&mut self) {
+        self.closing = true;
     }
 
     /// Takes in the whole frames of `input` and hands as many frames, held
@@ -168,7 +191,9 @@ impl DelayLine {
                 .zip(chunk.as_chunks_mut::<2>().0)
             {
                 let delay = *self.delay.get_or_insert(target);
-                if delay == target {
+                if self.closing {
+                    self.fade.fade_out();
+                } else if delay == target {
                     self.fade.fade_in();
                 } else if self.fade.is_closed() {
                     self.delay = Some(target);
@@ -179,10 +204,15 @@ impl DelayLine {
                 let delay = self.delay.unwrap_or(target);
                 let write = self.write * 2;
                 self.buffer[write..write + 2].copy_from_slice(frame.as_slice());
-                let read = (self.write + capacity - delay) % capacity * 2;
+                self.filled = (self.filled + 1).min(capacity);
                 let gain = self.fade.next_gain();
-                held[0] = self.buffer[read] * gain;
-                held[1] = self.buffer[read + 1] * gain;
+                if delay < self.filled {
+                    let read = (self.write + capacity - delay) % capacity * 2;
+                    held[0] = self.buffer[read] * gain;
+                    held[1] = self.buffer[read + 1] * gain;
+                } else {
+                    held.fill(0.0);
+                }
                 self.write = (self.write + 1) % capacity;
             }
             out(&chunk[..frames * 2]);
@@ -215,21 +245,26 @@ pub struct CastTap {
     retired: Option<CastWriter>,
     /// How many frames the feed is held back (C77), set by the UI thread.
     hold_back: Arc<AtomicUsize>,
+    /// In at each lease (S189); the delay line fades out.
+    fade: InputFade,
 }
 
 impl CastTap {
     /// Takes the newest writer the UI thread handed over, then writes the
-    /// first `frames` frames of interleaved stereo `block` through it, held
-    /// back as the UI thread asks. Never allocates, frees, locks or blocks
-    /// (C8).
+    /// first `frames` frames of interleaved stereo `block` through it, faded
+    /// (S189) and held back as the UI thread asks. Never allocates, frees,
+    /// locks or blocks (C8).
     pub fn push(&mut self, block: &[f32], frames: usize) {
         self.take_handoffs();
         let target = self.hold_back.load(Ordering::Relaxed);
-        if let Some(CastWriter { audio, delay }) = self.writer.as_mut() {
-            delay.process(&block[..(frames * 2).min(block.len())], target, |held| {
-                audio.write_f32(held);
-            });
-        }
+        let CastTap { writer, fade, .. } = self;
+        fade.process(&block[..(frames * 2).min(block.len())], |piece| {
+            if let Some(CastWriter { audio, delay }) = writer.as_mut() {
+                delay.process(piece, target, |held| {
+                    audio.write_f32(held);
+                });
+            }
+        });
     }
 
     /// Every old writer goes back to the UI thread to be freed there; while
@@ -263,20 +298,36 @@ impl CastTap {
 #[derive(Clone)]
 pub struct CastFeedSlot {
     tap: Arc<Mutex<Option<CastTap>>>,
+    /// A stop asked the capture's tap to fade out (S186, S189); cleared by
+    /// the next lease.
+    closing: Arc<AtomicBool>,
 }
 
 impl CastFeedSlot {
-    /// Lends the tap to a capture; `None` while another capture holds it.
+    /// Lends the tap to a capture, starting its fade-in from silence; `None`
+    /// while another capture holds it.
     pub fn lease(&self) -> Option<CastLease> {
-        let tap = self
+        let mut tap = self
             .tap
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()?;
+        tap.fade.restart(SESSION_RATE);
+        if let Some(writer) = tap.writer.as_mut() {
+            writer.delay.reset();
+        }
+        self.closing.store(false, Ordering::Release);
         Some(CastLease {
             tap: Some(tap),
             slot: Arc::clone(&self.tap),
+            closing: Arc::clone(&self.closing),
         })
+    }
+
+    /// Asks the capture's tap to fade out over the next 20 ms it pushes and
+    /// to write zeros after that, until the capture ends (S186, S189).
+    pub fn request_fade_out(&self) {
+        self.closing.store(true, Ordering::Release);
     }
 
     /// Whether the tap is in the slot, lent to no capture.
@@ -292,12 +343,20 @@ impl CastFeedSlot {
 pub struct CastLease {
     tap: Option<CastTap>,
     slot: Arc<Mutex<Option<CastTap>>>,
+    closing: Arc<AtomicBool>,
 }
 
 impl CastLease {
-    /// See [`CastTap::push`].
+    /// See [`CastTap::push`]; after a stop request the tap fades out.
     pub fn push(&mut self, block: &[f32], frames: usize) {
         if let Some(tap) = self.tap.as_mut() {
+            // Only the line's output fades out: fading its input as well
+            // would multiply the two curves into a steeper one (S191).
+            if self.closing.load(Ordering::Acquire)
+                && let Some(writer) = tap.writer.as_mut()
+            {
+                writer.delay.close();
+            }
             tap.push(block, frames);
         }
     }
@@ -337,12 +396,14 @@ impl CastFeed {
             writer: None,
             retired: None,
             hold_back: Arc::clone(&hold_back),
+            fade: InputFade::new(SESSION_RATE, CONVERT_CHUNK),
         };
         CastFeed {
             to_tap,
             from_tap,
             slot: CastFeedSlot {
                 tap: Arc::new(Mutex::new(Some(tap))),
+                closing: Arc::new(AtomicBool::new(false)),
             },
             waiting: None,
             hold_back,
@@ -974,6 +1035,11 @@ impl CastSpeakers {
     /// Whether the tap is free for a capture that starts.
     pub fn is_free(&self) -> bool {
         self.feed.slot().is_free()
+    }
+
+    /// See [`CastFeedSlot::request_fade_out`].
+    pub fn request_fade_out(&self) {
+        self.feed.slot().request_fade_out();
     }
 
     pub fn discovery(&self) -> CastDiscovery {
@@ -3374,6 +3440,51 @@ pub mod tests {
         assert!(heard.iter().any(|byte| *byte != 0));
     }
 
+    // covers: S189
+    #[test]
+    fn a_fade_out_silences_the_held_back_audio_and_a_new_lease_plays_none_of_it() {
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        let (fake, mut cast) = listed();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_hold_back(100.0);
+        let frames = 10_000;
+        let heard = |fake: &FakeCast| -> Vec<u8> {
+            let mut bytes = Vec::new();
+            fake.state().readers[0].read_into(&mut bytes, frames);
+            bytes
+        };
+        lease.push(&vec![0.5; 2 * frames], frames);
+        assert!(heard(&fake).iter().any(|byte| *byte != 0));
+
+        cast.request_fade_out();
+        lease.push(&vec![0.5; 2 * frames], frames);
+        let last = heard(&fake);
+        assert!(
+            last[fade * 4..].iter().all(|byte| *byte == 0),
+            "silent after the fade, though 100 ms were held back"
+        );
+
+        drop(lease);
+        let mut lease = cast.lease().expect("the tap");
+        lease.push(&vec![0.5; 2 * frames], frames);
+        let next = heard(&fake);
+        let (held, next) = next.split_at(4800 * 4);
+        assert!(
+            held.iter().all(|byte| *byte == 0),
+            "the next capture plays none of the old audio"
+        );
+        assert!(
+            next[fade * 4..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .all(|sample| i16::from_le_bytes(*sample) > 10_000),
+            "and its own after the 100 ms"
+        );
+    }
+
     fn delayed(line: &mut DelayLine, input: &[f32], target: usize) -> Vec<f32> {
         let mut out = Vec::new();
         line.process(input, target, |held| out.extend_from_slice(held));
@@ -4500,6 +4611,10 @@ pub mod tests {
             fake.state().readers[0].read_into(&mut bytes, 32);
             f64::from(i16::from_le_bytes([bytes[0], bytes[1]]))
         };
+        // Past the lease's fade-in (S189).
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        lease.push(&vec![0.5; 2 * fade], fade);
+        fake.state().readers[0].read_into(&mut Vec::new(), fade);
         lease.push(&[0.5; 64], 32);
         let whole = first_sample(&fake);
         let before = sent(&fake);
