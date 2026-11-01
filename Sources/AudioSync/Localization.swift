@@ -719,6 +719,10 @@ struct UIStrings {
     let nativeAirPlayPtpPortsTaken = "Another app is using port 319 or 320, so AirPlay speakers that need "
         + "PTP timing can't play. Close that app, then turn the speaker on again."
 
+    /// A newer AudioSync wrote the pairings file, or its folder couldn't be found.
+    let nativeAirPlayPairingsNotSaved = "AudioSync couldn't save your AirPlay pairings, so pairings you add or "
+        + "forget now won't be kept after AudioSync quits."
+
     /// Every AirPlay 2 place is taken: this one stays on and starts once
     /// one of them stops (P169, S285).
     func nativeAirPlayTooManyAirPlay2(name: String) -> String {

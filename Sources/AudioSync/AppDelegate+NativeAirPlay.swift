@@ -69,6 +69,11 @@ extension AppDelegate {
         if started {
             clearNotices([Notice.airplaySender, Notice.airplayPtp])   // a new sender binds PTP anew
             ptpPortNotice = PtpPortNotice()
+            if !native.pairingsNotSaved {
+                clearNotices([Notice.pairings])
+            } else if !appModel.notices.items.contains(where: { $0.subject == Notice.pairings }) {
+                postNotice(text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings)
+            }
             resendTrackInfo()   // a new sender knows nothing of what plays
             // Its discovery raised the Local Network prompt, if any: the
             // probe may ask now, and an empty list counts from here.

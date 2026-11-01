@@ -15618,5 +15618,14 @@ do {
     check(card >= 120, "panel chrome: the permission card's room is kept", "\(card)")
 }
 
+// MARK: Pairings the sender can't save get a notice (NativeAirPlay.pairingsNotSaved)
+do {
+    check(NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_FAILED)
+            && NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_NEWER),
+          "pairings notice: a file a newer AudioSync wrote, or a folder that couldn't be found, is told")
+    check(!NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_IGNORED),
+          "pairings notice: an ignored file, which the next pairing replaces, gets none")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
