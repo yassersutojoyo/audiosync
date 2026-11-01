@@ -2206,9 +2206,20 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .any(|zone| zone.members.iter().any(|member| member == key))
     }
 
-    /// The name a Cast speaker shows: the user's, else the one last listed.
+    /// The name a Cast speaker shows: the user's, else its row's own name
+    /// while listed, else the one last listed.
     fn cast_name(&self, id: &str) -> String {
-        let system = self.cast_names.get(id).map_or(id, String::as_str);
+        // Its row's name can change with no list change: leaving its zone drops the kept name (S286).
+        let listed = self
+            .audio
+            .cast_speakers()
+            .into_iter()
+            .find(|speaker| speaker.id == id);
+        let own = listed.map(|speaker| self.cast_own_name(&speaker));
+        let system = own
+            .as_deref()
+            .or(self.cast_names.get(id).map(String::as_str))
+            .unwrap_or(id);
         self.custom_names.shown(&cast_key(id), system)
     }
 
