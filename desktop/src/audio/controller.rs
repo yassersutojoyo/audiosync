@@ -6262,6 +6262,69 @@ mod tests {
         );
     }
 
+    // covers: S186, S189
+    #[test]
+    fn with_only_a_cast_speaker_a_source_change_keeps_the_old_capture_until_its_tap_faded() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the old capture feeds the fade-out"
+        );
+        assert!(backend.driver().capture_feeds_cast());
+        thread::sleep(STOP_FADE_CAP);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_feeds_cast());
+    }
+
+    // covers: S186, S189
+    #[test]
+    fn with_only_an_airplay_speaker_a_source_change_keeps_the_old_capture_until_its_feed_faded() {
+        let mut backend = backend();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the old capture feeds the fade-out"
+        );
+        assert!(feed.fading_out() && !feed.is_free());
+        thread::sleep(STOP_FADE_CAP);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_feeds_airplay());
+    }
+
     // covers: S189
     #[test]
     fn a_source_change_fades_the_cast_tap_out_on_the_old_capture_and_in_on_the_new() {
