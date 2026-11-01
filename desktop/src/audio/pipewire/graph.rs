@@ -110,8 +110,8 @@ pub fn positions(value: &str) -> Vec<&str> {
 }
 
 /// What calibration needs of a sink, in the Windows terms [`DeviceTraits`]
-/// holds: a worn form factor as its Windows value, and a sink with no device
-/// behind it under the `ROOT` enumerator Windows gives virtual devices.
+/// holds: a worn form factor as its Windows value, and a sink [`sink_kind`]
+/// calls virtual under the `ROOT` enumerator Windows gives virtual devices.
 pub fn sink_traits(node: &Node) -> DeviceTraits {
     let form_factor = match node.prop("device.form-factor") {
         Some("headphone") => Some(form_factor::HEADPHONES),
@@ -119,7 +119,7 @@ pub fn sink_traits(node: &Node) -> DeviceTraits {
         Some("handset") => Some(form_factor::HANDSET),
         _ => None,
     };
-    let enumerator = if node.virtual_device() {
+    let enumerator = if sink_kind(node) == OutputKind::Virtual {
         Some("ROOT")
     } else {
         node.prop("device.api")
@@ -683,6 +683,16 @@ mod tests {
             ],
         );
         sink(&mut graph, 4, &[("node.name", "d-null-sink")]);
+        sink(
+            &mut graph,
+            5,
+            &[("node.name", "e-bt-speaker"), ("device.api", "bluez5")],
+        );
+        sink(
+            &mut graph,
+            6,
+            &[("node.name", "f-usb-speaker"), ("device.bus", "usb")],
+        );
         let kinds: Vec<MicKind> = graph
             .listing()
             .endpoints
@@ -695,7 +705,9 @@ mod tests {
                 MicKind::Speaker,
                 MicKind::Headphones,
                 MicKind::Headphones,
-                MicKind::Virtual
+                MicKind::Virtual,
+                MicKind::Speaker,
+                MicKind::Speaker
             ]
         );
     }
