@@ -7,6 +7,7 @@
 
 #![allow(dead_code)]
 
+mod crash_dump;
 pub mod http;
 
 use std::io::{self, Read, Write};

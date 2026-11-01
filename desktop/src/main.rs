@@ -43,6 +43,9 @@ mod audio;
 mod backdrop;
 #[cfg(test)]
 mod contrast;
+#[cfg(all(test, windows))]
+#[path = "../../cast/tests/common/crash_dump.rs"]
+mod crash_dump;
 mod data_folder;
 mod debug_log;
 mod guide;
@@ -369,6 +372,16 @@ fn session_ending(
 
 #[cfg(test)]
 mod tests {
+    /// Run on purpose with `cargo test deliberate_crash -- --ignored`: the
+    /// process dies of an access violation and leaves a dump in
+    /// target/crash-dumps.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "crashes the test process on purpose"]
+    fn deliberate_crash_writes_a_minidump() {
+        unsafe { std::ptr::null_mut::<u8>().write_volatile(1) };
+    }
+
     /// The Wayland app id, the .desktop file's window class and name, and
     /// the AppStream id and launchable must agree, or the desktop shows the
     /// window without its icon and name.

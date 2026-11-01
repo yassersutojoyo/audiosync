@@ -42,6 +42,20 @@ rustls = { version = "0.23.31", default-features = false, features = ["ring", "s
 rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
 rsa = { version = "0.9.8", default-features = false, features = ["std", "u64_digit"] }
 
+# The test binaries' crash handler (tests/common/crash_dump.rs): a minidump
+# when one dies in the PC's repeated test loops. Test-only; MIT OR
+# Apache-2.0, already in the graph.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
+
 # RSA key generation runs for seconds unoptimized; this keeps the tests quick.
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
