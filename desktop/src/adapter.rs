@@ -17452,6 +17452,45 @@ mod tests {
         assert!(messages(&adapter).is_empty());
     }
 
+    // covers: S223, P176
+    #[test]
+    fn a_stereo_pair_waiting_on_its_member_password_prompt_goes_off_with_one_notice_when_the_sender_stops()
+     {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.poll();
+        let id = "ap:pair:5f0c";
+        adapter.set_speaker_enabled(id, true);
+        fake.fail(&right, ErrorKind::PasswordRequired);
+        adapter.poll();
+        assert_eq!(
+            format!("{:?}", state_of(&adapter, id)),
+            "Waiting(ForPassword)"
+        );
+
+        fake.stop_running();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(state.password_prompt, None);
+        assert!(!state.speaker(id).is_some_and(|row| row.enabled));
+        assert_eq!(
+            messages(&adapter),
+            [
+                NoticeMessage::AirPlayStopped,
+                NoticeMessage::AirPlayCantPlay {
+                    speaker: "Living Room".to_owned(),
+                    problem: ui_model::AirPlayProblem::NeedsPassword,
+                },
+            ]
+        );
+    }
+
     // covers: S228
     #[test]
     fn the_airplay_ahead_notice_names_a_renamed_cast_speaker_by_its_new_name() {
