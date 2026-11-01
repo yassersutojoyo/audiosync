@@ -100,6 +100,7 @@ use super::{host_slice, stereo_samples};
 use crate::airplay_pairings::{Access, Loaded, PairingStore};
 use crate::airplay2_identity::IdentityStore;
 use crate::airplay2_timing::{self, TimingStore};
+use crate::eq::{self, BAND_COUNT, EqSettings};
 use crate::fade::InputFade;
 use crate::policy::remote::{
     Action, App, Command, Control, Event as RemoteEvent, MUTED_DB, OwnVolume, Playback, Remote,
@@ -726,6 +727,11 @@ pub struct AscAirPlay {
     /// The zone position, 0 to 100, of each speaker ID in a zone
     /// ([`asc_airplay_set_zone_volume`]); one not here is in no zone.
     zones: HashMap<String, f64>,
+    /// The master position ([`asc_airplay_set_master`]).
+    master: f64,
+    /// The equalizer's headroom cut in dB, given back under the master
+    /// ([`asc_airplay_set_equalizer`], S26).
+    eq_cut_db: f64,
     /// Every speaker's delay d_s ([`asc_airplay_set_hold_back`]).
     hold_back: Duration,
     /// What is playing as the sender was last given it, so new progress
@@ -1022,6 +1028,12 @@ unsafe fn host_text<'a>(text: *const c_char) -> Option<&'a str> {
 }
 
 impl AscAirPlay {
+    /// The master's gain with the equalizer's headroom cut given back as far
+    /// as unity allows (S26, S413).
+    fn master_gain(&self) -> f64 {
+        eq::returned(gain_for_position(self.master), self.eq_cut_db).0
+    }
+
     /// Moves every event the sender reported into the host's queues
     /// ([`AscAirPlay::take_in`]).
     fn pump(&mut self) {
@@ -2502,6 +2514,8 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 ending: HashMap::new(),
                 forgotten_while_ending: HashSet::new(),
                 zones: HashMap::new(),
+                master: 100.0,
+                eq_cut_db: 0.0,
                 hold_back: Duration::ZERO,
                 now_playing: NowPlaying::default(),
                 now_playing_at: Instant::now(),
@@ -3100,7 +3114,46 @@ pub unsafe extern "C" fn asc_airplay_set_master(airplay: *mut AscAirPlay, master
     // call uses now.
     unsafe {
         live(airplay, (), |airplay| {
-            airplay.sender.set_master_gain(gain_for_position(master));
+            airplay.master = master;
+            airplay.sender.set_master_gain(airplay.master_gain());
+        })
+    }
+}
+
+/// Takes the headroom cut the equalizer makes with `enabled` and `gains_db`
+/// at 48 kHz, which the stream's gain gives back under the master as far as
+/// unity allows (S26, S413). Returns false when `airplay` or `gains_db` is
+/// null.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading contract;
+/// `gains_db` is null or points to 10 aligned, readable doubles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_set_equalizer(
+    airplay: *mut AscAirPlay,
+    enabled: bool,
+    gains_db: *const f64,
+) -> bool {
+    // SAFETY: by the caller's contract null or BAND_COUNT readable doubles.
+    let Some(gains) = (unsafe { host_slice(gains_db, BAND_COUNT) }) else {
+        return false;
+    };
+    let mut settings = EqSettings {
+        enabled,
+        ..EqSettings::default()
+    };
+    settings.gains_db.copy_from_slice(gains);
+    let cut = eq::headroom_cut_db(&settings, 48_000.0);
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            if cut != airplay.eq_cut_db {
+                airplay.eq_cut_db = cut;
+                airplay.sender.set_master_gain(airplay.master_gain());
+            }
+            true
         })
     }
 }
@@ -5301,6 +5354,33 @@ mod tests {
         assert!(receiver.methods().contains(&Method::Teardown));
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S26, S413
+    #[test]
+    fn the_stream_gain_gives_the_equalizer_cut_back_under_the_master() {
+        let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let back = 10f64.powf(eq::cascade_peak_db(&gains, 48_000.0) / 20.0);
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only; 10 doubles.
+        let gain = |enabled: bool, master: f64| unsafe {
+            asc_airplay_set_master(handle, master);
+            assert!(asc_airplay_set_equalizer(handle, enabled, gains.as_ptr()));
+            (*handle).master_gain()
+        };
+        assert!((gain(true, 50.0) - 0.125 * back).abs() < 1e-9);
+        assert_eq!(gain(false, 50.0), 0.125);
+        assert_eq!(gain(true, 100.0), 1.0, "unity keeps the cut");
+        // SAFETY: null pointers are part of the contract; destroyed once.
+        unsafe {
+            assert!(!asc_airplay_set_equalizer(handle, true, ptr::null()));
+            assert!(!asc_airplay_set_equalizer(
+                ptr::null_mut(),
+                true,
+                gains.as_ptr()
+            ));
+            asc_airplay_destroy(&mut handle);
+        }
     }
 
     // covers: S413

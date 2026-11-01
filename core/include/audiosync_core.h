@@ -271,6 +271,7 @@ extern "C" {
 #define ASC_CAST_ERROR_ARTWORK 9      /* artwork that is not PNG or JPEG, or over 1280 by 720 */
 #define ASC_CAST_ERROR_GROUP 10       /* no longer reported: a Cast group plays like a device */
 #define ASC_CAST_ERROR_INTERNAL 11    /* a fault inside the sender; the next start runs (C107) */
+#define ASC_CAST_ERROR_NO_ADDRESS 12  /* no address to try: a group whose records list none yet (C81) */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1
@@ -1799,6 +1800,13 @@ void asc_airplay_read_volumes(AscAirPlay *airplay);
 void asc_airplay_set_master(AscAirPlay *airplay, double master);
 
 /*
+ * Takes the equalizer's headroom cut (gains_db holds ASC_EQ_BANDS values, at
+ * 48 kHz), which the stream's gain gives back under the master as far as
+ * unity allows (S26, S413). Returns false when airplay or gains_db is NULL.
+ */
+bool asc_airplay_set_equalizer(AscAirPlay *airplay, bool enabled, const double *gains_db);
+
+/*
  * Holds every speaker back by hold_back_ms on top of L, live, and every
  * speaker added later, so they meet an output that plays later than L, such
  * as a Google Cast speaker with a longer offset. The sender caps a speaker's
@@ -2299,6 +2307,13 @@ bool asc_cast_step_volume(AscCast *cast, bool up);
  * no device is sent a volume (S415). A master that isn't finite is ignored.
  */
 void asc_cast_set_master(AscCast *cast, double master);
+
+/*
+ * Takes the equalizer's headroom cut (gains_db holds ASC_EQ_BANDS values, at
+ * 48 kHz), which the master's gain gives back as far as unity allows (S26,
+ * S415). Returns false when cast or gains_db is NULL.
+ */
+bool asc_cast_set_equalizer(AscCast *cast, bool enabled, const double *gains_db);
 
 /*
  * The speaker's zone level (0 to 1, 1 outside a zone) on a Cast speaker's

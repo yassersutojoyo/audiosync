@@ -69,6 +69,8 @@ extension AppDelegate {
     private func equalizerChanged(_ settings: Equalizer.Settings) {
         engine.updateEqualizer(settings)
         reapplyLocalGains()   // the headroom cut given back changes with the curve (S26)
+        nativeAirPlay?.setEqualizer(settings)
+        castSender?.setEqualizer(settings)
         if let data = StoredEqualizer.encode(settings) {
             store.write(data, Keys.equalizer)
         }

@@ -1185,6 +1185,7 @@ impl<D: Driver> Controller<D> {
     ) {
         let mut airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
         airplay.set_zones(self.zone_volumes.airplay.clone());
+        airplay.set_equalizer(&self.equalizer);
         self.log.log(|| {
             format!(
                 "AirPlay: the sender runs, L = {} ms; local outputs line up with each other \
@@ -1208,6 +1209,7 @@ impl<D: Driver> Controller<D> {
     pub fn set_cast(&mut self, link: Box<dyn CastLink>) {
         let mut cast = CastSpeakers::new(link, self.log.clone());
         cast.set_master(self.policy.master());
+        cast.set_equalizer(&self.equalizer);
         cast.set_zones(self.zone_volumes.cast.clone());
         cast.set_streaming(self.session.is_some());
         self.cast = Some(cast);
@@ -4297,6 +4299,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         if let Some(session) = self.session.as_mut() {
             session.equalizer.set_settings(settings);
         }
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_equalizer(&settings);
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_equalizer(&settings);
+        }
         for id in self.playing_ids() {
             self.apply_gain(&id);
         }
@@ -5554,8 +5562,10 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }
-        BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
-            format!("AirPlay target ({id}) turned off: its member {member} asks for a password")
+        BackendEvent::AirPlayMemberNeedsPassword { id, member_id } => {
+            format!(
+                "AirPlay target ({id}) turned off: its member ({member_id}) asks for a password"
+            )
         }
         BackendEvent::AirPlayPaired { id } => format!("AirPlay speaker ({id}) paired and on"),
         BackendEvent::AirPlayStopped => {
@@ -6581,6 +6591,95 @@ mod tests {
             ..on
         });
         assert_eq!(gain(&backend, SPEAKERS), 0.125);
+    }
+
+    // covers: S26, S413
+    #[test]
+    fn the_airplay_stream_gets_the_equalizer_cut_back_under_the_master() {
+        let mut backend = backend();
+        let gains_db = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let on = EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db,
+        };
+        backend.set_equalizer(on);
+        backend.set_master_volume(50.0);
+        let fake = FakeAirPlay::new();
+        backend.set_airplay(fake.link(), None);
+        let last_gain = |fake: &FakeAirPlay| {
+            let calls = fake.take_calls();
+            calls.iter().rev().find_map(|call| match call {
+                Call::MasterGain(gain) => Some(*gain),
+                _ => None,
+            })
+        };
+        let back = 10f64.powf(eq::cascade_peak_db(&gains_db, 48_000.0) / 20.0);
+        let returned = last_gain(&fake).expect("a new sender gets the gain");
+        assert!((returned - 0.125 * back).abs() < 1e-9, "{returned}");
+        backend.set_equalizer(EqSettings {
+            enabled: false,
+            ..on
+        });
+        assert_eq!(last_gain(&fake), Some(0.125));
+        backend.set_equalizer(on);
+        backend.set_master_volume(100.0);
+        assert_eq!(last_gain(&fake), Some(1.0), "unity keeps the cut");
+    }
+
+    // covers: S26, S415
+    #[test]
+    fn the_cast_stream_gets_the_equalizer_cut_back_under_the_master() {
+        use crate::audio::cast::CastLease;
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        /// The first sample of a block read after a block of 0.5 went in.
+        fn level(fake: &FakeCast, lease: &mut CastLease) -> f64 {
+            lease.push(&[0.5; 64], 32);
+            let mut bytes = Vec::new();
+            fake.state().readers[0].read_into(&mut bytes, 32);
+            f64::from(i16::from_le_bytes([bytes[0], bytes[1]]))
+        }
+        let mut backend = backend();
+        let gains_db = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let on = EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db,
+        };
+        let off = EqSettings {
+            enabled: false,
+            ..on
+        };
+        backend.set_equalizer(on);
+        backend.set_master_volume(50.0);
+        let fake = FakeCast::default();
+        fake.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(fake.link());
+        let cast = backend.cast.as_mut().expect("the Cast speakers");
+        cast.poll();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        // Past the lease's fade-in (S189).
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        lease.push(&vec![0.5; 2 * fade], fade);
+        fake.state().readers[0].read_into(&mut Vec::new(), fade);
+        let returned = level(&fake, &mut lease);
+        backend.set_equalizer(off);
+        level(&fake, &mut lease);
+        let plain = level(&fake, &mut lease);
+        let back = 10f64.powf(eq::cascade_peak_db(&gains_db, 48_000.0) / 20.0);
+        assert!(
+            (returned / plain - back).abs() < 0.01,
+            "{returned} with the cut given back, {plain} without"
+        );
+        backend.set_equalizer(on);
+        backend.set_master_volume(100.0);
+        level(&fake, &mut lease);
+        let full = level(&fake, &mut lease);
+        backend.set_equalizer(off);
+        level(&fake, &mut lease);
+        assert_eq!(level(&fake, &mut lease), full, "unity keeps the cut");
     }
 
     // covers: S232

@@ -5897,6 +5897,15 @@ do {
           "EC8 all off: streaming stops when the last speaker is switched off")
     check(!StreamingPolicy.isIdle(streaming: true, enabledAirPlay: ["a"], enabledLocal: []),
           "EC8 all off: one AirPlay speaker still on keeps streaming")
+    var castOn = CastModel()
+    castOn.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
+    _ = castOn.turnOn("K1")
+    _ = castOn.started("K1", attempt: 1, refusal: 0)
+    let castCounted = CastID.switchedOn(castOn.enabled)
+    // covers: S162
+    check(castCounted == [CastID.app("K1")] && CastID.switchedOn(nil).isEmpty
+            && !StreamingPolicy.isIdle(streaming: true, enabledAirPlay: castCounted, enabledLocal: []),
+          "EC8 all off: one Cast speaker still on, connecting, keeps streaming", "\(castCounted)")
     check(!StreamingPolicy.isIdle(streaming: false, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: nothing to stop while stopped")
     check(StreamingPolicy.startsStreaming(turnedOn: true, streaming: false),
@@ -12207,7 +12216,7 @@ do {
             && refused.enabled == nil && refused.status(of: den) == .idle,
           "cast: attempt 0 means refused, and the speaker goes off")
 
-    // covers: C80 (the third failure turns a speaker off; on the Mac no group counts)
+    // covers: C80 (the third failure turns a speaker off; a group with no address yet doesn't count)
     var tvOff = CastModel()
     tvOff.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
     tvOff.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
@@ -12224,10 +12233,15 @@ do {
     _ = tvOff.turnOn("group1")
     tvOff.startSent("group1")
     _ = tvOff.started("group1", attempt: 5, refusal: ASC_CAST_REFUSED_NONE)
-    let groupFailed = CastEvent.connectFailed(attempt: 5, error: .connect, retryMs: 1000)
+    let noAddress = CastEvent.connectFailed(attempt: 5, error: CastError(ASC_CAST_ERROR_NO_ADDRESS), retryMs: 1000)
     // covers: C80, C81
-    check((1...4).allSatisfy { _ in tvOff.apply(groupFailed) == nil } && tvOff.enabled == "group1",
-          "cast: a group keeps trying while connecting, as one with no address yet must (C80, C81)")
+    check((1...4).allSatisfy { _ in tvOff.apply(noAddress) == nil } && tvOff.enabled == "group1",
+          "cast: a group with no address yet keeps trying while connecting (C80, C81)")
+    let groupFailed = CastEvent.connectFailed(attempt: 5, error: .connect, retryMs: 1000)
+    // covers: C80
+    check(tvOff.apply(groupFailed) == nil && tvOff.apply(groupFailed) == nil
+            && tvOff.apply(groupFailed) == .turnedOff("group1", problem: .notResponding) && tvOff.enabled == nil,
+          "cast: a group that never answers goes off at its third connect failure, as on Windows (C80)")
 
     // covers: C56, C80, C83
     check(CastEnd.failed(.connect).problem == .notResponding && CastEnd.failed(.launch).problem == .refused
@@ -13595,6 +13609,21 @@ do {
     // covers: S175 (a local output's offset is clamped)
     check(toLocal && toCast && toAirPlay && noDelay && unchanged,
           "web remote: each delay goes to its own control, clamped like the window's field; the reference has none")
+    let castFixed = RemoteRow(Facts(id: "fixed", name: "Bar", kind: "Google Cast", on: false, volume: 50,
+                                    castVolumeFixed: true, offsetMs: 300), text: t)
+    let atFloor = RemoteRow(Facts(id: "floor", name: "Den", kind: "USB", on: true, volume: 40, offsetMs: -2000), text: t)
+    func partPlan(_ id: String, on: Bool? = nil, volume: Double? = nil, delayMs: Double? = nil) -> [RemoteAction] {
+        RemoteAction.plan(.speaker(id: id, on: on, volume: volume, delayMs: delayMs), rows: rows + [castFixed, atFloor])
+    }
+    // covers: S257 (a command applies the parts the host can, each clamped to its control's range)
+    check(partPlan("builtin", on: false, volume: 150, delayMs: 100)
+            == [.setEnabled(id: "builtin", on: false), .setVolume(id: "builtin", position: 100)]
+            && partPlan("fixed", on: true, volume: 70, delayMs: 25000)
+            == [.setEnabled(id: "fixed", on: true), .setCastOffset(id: "fixed", ms: 20000)],
+          "web remote: a speaker's switch and volume apply with no delay field, its switch and delay with a fixed volume")
+    // covers: S257
+    check(partPlan("floor", delayMs: -5000).isEmpty && partPlan("hp", delayMs: 1750.4).isEmpty,
+          "web remote: a phone's delay that, clamped, equals the speaker's own changes nothing")
     let leftAlone = ["tv", "gone"].allSatisfy { plan("{\"type\":\"speaker\",\"id\":\"\($0)\",\"on\":true}").isEmpty }
     let pairedOn = plan("{\"type\":\"speaker\",\"id\":\"tv2\",\"on\":true}") == [.setEnabled(id: "tv2", on: true)]
     let groupOn = plan("{\"type\":\"speaker\",\"id\":\"group\",\"on\":true}") == [.setEnabled(id: "group", on: true)]
@@ -13717,6 +13746,10 @@ do {
             && codePlan(.preset(id: "p3")) == [.recallPreset(id: "p3", keepOff: ["ap:tv"])]
             && codePlan(.zone(id: "z4", toggle: true, volume: nil)).isEmpty,
           "web remote: a zone or preset from the phone keeps a member that asks for a code off; with no other member it doesn't flip")
+    // covers: S257 (a zone's volume applies when its toggle can't)
+    check(zonePlan("{\"type\":\"zone\",\"id\":\"z2\",\"toggle\":true,\"volume\":150}") == [.setZoneVolume(id: "z2", position: 100)]
+            && codePlan(.zone(id: "z4", toggle: true, volume: 40)) == [.setZoneVolume(id: "z4", position: 40)],
+          "web remote: a zone's volume applies, clamped, when its toggle finds no member that can play")
     let loungeRow = RemoteRow(Facts(id: "lounge", name: "Lounge", kind: "AirPlay 2", on: false, volume: 50,
                                     isAirPlay: true, paired: true, memberAsksPassword: true, note: "Stereo pair",
                                     key: "ap:lounge"), text: t)

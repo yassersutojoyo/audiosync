@@ -41,6 +41,9 @@ final class CastSender {
     private var queuedHoldBackMs = 0.0
     /// The master the sender gets, also when it is created later.
     private var queuedMaster = 100.0
+    /// The equalizer, whose headroom cut the sender gives back under the
+    /// master, also when it is created later (S26, S415).
+    private var equalizer = Equalizer.Settings()
     private var handle: OpaquePointer?
     private var input: OpaquePointer?
     private var timer: DispatchSourceTimer?
@@ -71,6 +74,7 @@ final class CastSender {
             self.handle = created
             _ = asc_cast_set_hold_back(created, self.queuedHoldBackMs)
             asc_cast_set_master(created, self.queuedMaster)
+            Self.sendEqualizer(self.equalizer, to: created)
             self.sendTrack()
             if let taken = asc_cast_take_input(created) {
                 self.input = taken
@@ -220,6 +224,22 @@ final class CastSender {
             self.queuedMaster = master
             if let handle = self.handle { asc_cast_set_master(handle, master) }
         }
+    }
+
+    /// The equalizer settings, live: the master's gain gives their headroom
+    /// cut back (S26, S415). Main queue.
+    func setEqualizer(_ settings: Equalizer.Settings) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.equalizer = settings
+            if let handle = self.handle { Self.sendEqualizer(settings, to: handle) }
+        }
+    }
+
+    private static func sendEqualizer(_ settings: Equalizer.Settings, to handle: OpaquePointer) {
+        var gains = [Double](repeating: 0, count: Int(ASC_EQ_BANDS))
+        for band in 0..<min(gains.count, settings.gains.count) { gains[band] = settings.gains[band] }
+        _ = asc_cast_set_equalizer(handle, settings.enabled, &gains)
     }
 
     /// Names the device the user selected, or none with nil (C108).

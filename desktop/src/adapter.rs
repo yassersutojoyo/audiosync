@@ -1099,7 +1099,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         };
         match kept {
             Ok(Some(Retried::Read(read))) => self.restore_read_late(*read),
-            Ok(Some(Retried::KeptAside(kept))) => self.tell_kept_aside(&kept, ""),
+            Ok(Some(Retried::KeptAside(kept))) => {
+                self.tell_kept_aside(&kept, "");
+                true
+            }
             Ok(None) => false,
             Err(error) => {
                 if !due {
@@ -1165,10 +1168,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Logs that the settings file was kept aside (`when`, for the log),
-    /// and, for a file ignored at launch, tells the user once with the
-    /// copy's name: their settings were replaced by the defaults. Returns
-    /// whether a notice was posted.
-    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) -> bool {
+    /// and tells the user once with the copy's name: their settings were
+    /// replaced by the defaults.
+    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) {
         let file = kept.file_name();
         self.log.log(|| match kept {
             KeptAside::Newer(_) => {
@@ -1178,14 +1180,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 format!("settings: the file ignored at launch was kept as {file}{when}")
             }
         });
-        if let KeptAside::Ignored(_) = kept {
-            self.post(
-                NoticeSubject::SettingsKeptAside,
-                NoticeMessage::SettingsKeptAside { file },
-            );
-            return true;
-        }
-        false
+        self.post(
+            NoticeSubject::SettingsKeptAside,
+            NoticeMessage::SettingsKeptAside { file },
+        );
     }
 
     /// Writes the settings file if anything changed since it was last read
@@ -1228,7 +1226,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if let Some(Retried::KeptAside(kept)) = kept {
-                    notices_changed |= self.tell_kept_aside(&kept, " before saving over it");
+                    self.tell_kept_aside(&kept, " before saving over it");
+                    notices_changed = true;
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
@@ -4197,11 +4196,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     );
                 }
             }
-            BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
+            BackendEvent::AirPlayMemberNeedsPassword { id, member_id } => {
                 self.reconnecting.remove(&id);
+                let system = self.audio.airplay_listed_name(&member_id);
                 let message = NoticeMessage::AirPlayMemberNeedsPassword {
                     target: self.airplay_name(&id),
-                    member,
+                    member: self.custom_names.shown(
+                        &airplay_key(&member_id),
+                        system.as_deref().unwrap_or(&member_id),
+                    ),
                 };
                 self.airplay_off(&id, AirPlayProblem::NeedsPassword, message);
             }
@@ -14909,6 +14912,34 @@ mod tests {
 
     // covers: S385
     #[test]
+    fn a_newer_settings_file_gets_its_notice_once_the_first_save_keeps_it_aside() {
+        let dir = test_dir("adapter-settings-newer-kept-aside");
+        let path = dir.join(settings::FILE_NAME);
+        let newer = r#"{"version": 5000000000, "master_volume": 40}"#;
+        std::fs::write(&path, newer).expect("written");
+        let mut adapter = launch(launch_audio(), &path);
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("settings.newer-"), "{file}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            newer
+        );
+        // Told once: dismissed, it stays away at the next saves.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S385
+    #[test]
     fn settings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
         let dir = test_dir("adapter-settings-kept-aside-unchanged");
@@ -17346,6 +17377,36 @@ mod tests {
         assert_eq!(
             row.in_target.map(|target| target.name),
             Some("Living Room".to_owned())
+        );
+    }
+
+    // covers: S228
+    #[test]
+    fn the_member_password_notice_names_a_renamed_member_by_its_new_name() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear(&right);
+        adapter.poll();
+        adapter.rename_speaker(&ap(&right), "Bedroom");
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.set_speaker_enabled("ap:pair:5f0c", true);
+        fake.fail(&right, ErrorKind::PasswordRequired);
+        adapter.poll();
+        adapter.submit_password(&ap(&right), "hunter2");
+        fake.state(&left, AirPlayState::Playing);
+        adapter.poll();
+
+        fake.fail(&right, ErrorKind::WrongPassword);
+        adapter.poll();
+        let notices = messages(&adapter);
+        assert!(
+            matches!(&notices[..], [NoticeMessage::AirPlayMemberNeedsPassword { member, .. }] if member == "Bedroom"),
+            "{notices:?}"
         );
     }
 

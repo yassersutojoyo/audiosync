@@ -19,10 +19,11 @@ pub enum Category {
     Domain,
 }
 
-/// Whether the notes that no speaker was found name Windows Firewall: only
-/// while a connected network is Public, where a firewall that allows
-/// AudioSync on Private networks alone keeps the speakers' answers out.
-pub fn names_firewall(connected: &[Category]) -> bool {
+/// Whether the notes that no speaker was found also suggest setting the
+/// network to Private: only while a connected network is Public, where a
+/// firewall that allows AudioSync on Private networks alone keeps the
+/// speakers' answers out.
+pub fn suggests_private(connected: &[Category]) -> bool {
     connected.contains(&Category::Public)
 }
 
@@ -232,10 +233,10 @@ mod tests {
 
     // covers: S391
     #[test]
-    fn only_a_public_network_names_the_firewall() {
-        assert!(names_firewall(&[Private, Public]));
-        assert!(!names_firewall(&[Private, Domain]));
-        assert!(!names_firewall(&[]));
+    fn only_a_public_network_suggests_private() {
+        assert!(suggests_private(&[Private, Public]));
+        assert!(!suggests_private(&[Private, Domain]));
+        assert!(!suggests_private(&[]));
     }
 
     // covers: S390

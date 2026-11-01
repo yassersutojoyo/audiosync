@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
-use audiosync_cast::error::ConnectError;
+use audiosync_cast::error::{ConnectError, ReconnectPacer};
 use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::{IdleReason, MediaError, Metadata};
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
@@ -409,6 +409,38 @@ fn every_unrequested_finished_reloads_unless_the_previous_one_was_within_the_win
         thread::sleep(window * 2);
     }
     assert_eq!(count(&device, NS_MEDIA, "LOAD"), 3);
+    assert!(!session.is_ended());
+    session.stop();
+    device.join();
+}
+
+// covers: C86
+#[test]
+fn an_error_after_a_minute_of_play_since_the_last_recovery_recovers_again() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    let clock = fake_clock(&mut session);
+    for media_session_id in [1, 2] {
+        device.send(Command::Send(media_status(
+            "transport-1",
+            0,
+            media_session_id,
+            "IDLE",
+            Some("ERROR"),
+        )));
+        let seen = run_until(&mut session, Duration::from_secs(15), |event| {
+            matches!(
+                event,
+                SessionEvent::Recovered { .. } | SessionEvent::Ended(_)
+            )
+        });
+        assert!(
+            seen.iter()
+                .any(|event| matches!(event, SessionEvent::Recovered { .. })),
+            "{seen:?}"
+        );
+        *clock.lock().expect("clock") += ReconnectPacer::HEALTHY;
+    }
     assert!(!session.is_ended());
     session.stop();
     device.join();

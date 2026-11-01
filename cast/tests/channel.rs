@@ -9,7 +9,7 @@ use audiosync_cast::channel::{
     Channel, DEAD_AFTER, Dropped, Event, LAUNCH_TIMEOUT, PING_INTERVAL, STATUS_TIMEOUT,
     STOP_STEP_TIMEOUT,
 };
-use audiosync_cast::error::{EndReason, LaunchError};
+use audiosync_cast::error::{EndReason, LaunchError, ReconnectPacer};
 use audiosync_cast::ids::RequestIds;
 use audiosync_cast::media::MAX_DEVICE_TEXT_CHARS;
 use audiosync_cast::message::{
@@ -771,6 +771,38 @@ fn a_close_from_the_app_checks_the_status_and_reconnects_once() {
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::AppClosed)));
 }
 
+// covers: C82
+#[test]
+fn a_close_after_a_minute_of_play_since_the_reconnect_reconnects_again() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    let close = json_message("t-1", SENDER, NS_CONNECTION, json!({"type": "CLOSE"}));
+    let mut now = start;
+    for _ in 0..2 {
+        channel.handle(now, close.clone());
+        let out = sent(&mut channel);
+        assert_eq!(out[0].2["type"], "GET_STATUS", "{out:?}");
+        let id = out[0].2["requestId"].as_u64().expect("id") as u32;
+        channel.handle(
+            now,
+            status(id, vec![app(DEFAULT_MEDIA_RECEIVER, "s-1", "t-1")]),
+        );
+        sent(&mut channel);
+        assert!(events(&mut channel).contains(&Event::AppReconnected));
+        let healthy = now + ReconnectPacer::HEALTHY;
+        while now < healthy {
+            now += PING_INTERVAL;
+            channel.handle(
+                now,
+                json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PONG"})),
+            );
+            channel.tick(now);
+            sent(&mut channel);
+        }
+    }
+    assert!(!channel.is_ended());
+}
+
 // covers: C32
 #[test]
 fn a_close_from_the_platform_ends_the_channel() {
@@ -1014,6 +1046,22 @@ fn a_close_from_the_app_ends_as_taken_over_when_the_status_lacks_it() {
     assert!(channel.is_ended());
     assert!(events(&mut channel).contains(&Event::Ended(EndReason::TakenOver)));
     assert!(sent(&mut channel).is_empty(), "no CONNECT, no relaunch");
+}
+
+// covers: C82
+#[test]
+fn a_close_from_the_app_with_no_status_answer_ends_as_silent() {
+    let start = Instant::now();
+    let mut channel = running(start);
+    channel.handle(
+        start,
+        json_message("t-1", SENDER, NS_CONNECTION, json!({"type": "CLOSE"})),
+    );
+    assert_eq!(sent(&mut channel)[0].2["type"], "GET_STATUS");
+    channel.tick(start + Duration::from_secs(5));
+    assert!(channel.is_ended());
+    let seen = events(&mut channel);
+    assert!(seen.contains(&Event::Ended(EndReason::Silent)), "{seen:?}");
 }
 
 // covers: C87

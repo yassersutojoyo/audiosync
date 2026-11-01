@@ -8,9 +8,7 @@ import AppKit
 
 extension AppDelegate {
 
-    /// The Cast speaker that is on, by app ID (`CastID`): it starts streaming
-    /// and keeps it going like any other speaker.
-    var castSwitchedOn: Set<String> { castModel.enabled.map { [CastID.app($0)] } ?? [] }
+    var castSwitchedOn: Set<String> { CastID.switchedOn(castModel.enabled) }
 
     /// From every speaker reconcile: the first one starts the sender. A
     /// sender that couldn't start or stopped working stays off until
@@ -22,6 +20,7 @@ extension AppDelegate {
                                 onEvents: { [weak self] events in self?.castEventsArrived(events) })
         castSender = sender
         sender.setMaster(masterVolume)
+        if let settings = equalizerModel?.settings { sender.setEqualizer(settings) }
         castModel.foundIDs = store.castFoundIDs
         sender.start { [weak self] running, discovering in
             self?.castSenderStarted(sender, running: running, discovering: discovering)

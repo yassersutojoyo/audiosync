@@ -90,6 +90,7 @@ use audiosync_airplay::stream::{
 };
 use audiosync_airplay::targets::{Target, TargetChange, TargetId, TargetKind};
 use audiosync_airplay::volume::{MUTED_DB, Volume};
+use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::fade::InputFade;
 use audiosync_core::ffi::airplay::{latest_panic_since, panic_mark};
 use audiosync_core::policy::remote::{
@@ -1210,6 +1211,8 @@ pub struct AirPlaySpeakers {
     session_paths: BTreeMap<String, ProtocolPath>,
     streaming: bool,
     master: f64,
+    /// The equalizer's headroom cut in dB, given back under the master (S26).
+    eq_cut_db: f64,
     /// The zone volume of each speaker ID in a zone (S249); one not here is
     /// in no zone.
     zones: BTreeMap<String, f64>,
@@ -1320,6 +1323,7 @@ impl AirPlaySpeakers {
             session_paths: BTreeMap::new(),
             streaming: false,
             master,
+            eq_cut_db: 0.0,
             zones: BTreeMap::new(),
             latency,
             reported_us: BTreeMap::new(),
@@ -1354,8 +1358,14 @@ impl AirPlaySpeakers {
     /// Gives a new sender the master's gain; at 100 it has it already.
     fn send_master_gain(&mut self) {
         if self.master != 100.0 {
-            self.link.set_master_gain(gain_for_position(self.master));
+            self.link.set_master_gain(self.master_gain());
         }
+    }
+
+    /// The master's gain with the equalizer's headroom cut given back as far
+    /// as unity allows (S26, S413).
+    fn master_gain(&self) -> f64 {
+        eq::returned(gain_for_position(self.master), self.eq_cut_db).0
     }
 
     /// Hands a sender with the hidden AirPlay 2 switch on the stored device
@@ -2785,7 +2795,17 @@ impl AirPlaySpeakers {
     pub fn set_master(&mut self, master: f64) {
         if master != self.master {
             self.master = master;
-            self.link.set_master_gain(gain_for_position(master));
+            self.link.set_master_gain(self.master_gain());
+        }
+    }
+
+    /// Takes the headroom cut `settings` make at the session rate, which the
+    /// stream's gain gives back under the master (S26, S413).
+    pub fn set_equalizer(&mut self, settings: &EqSettings) {
+        let cut = eq::headroom_cut_db(settings, f64::from(SESSION_RATE));
+        if cut != self.eq_cut_db {
+            self.eq_cut_db = cut;
+            self.link.set_master_gain(self.master_gain());
         }
     }
 
@@ -4350,11 +4370,7 @@ impl AirPlaySpeakers {
             self.reconcile();
             events.push(BackendEvent::AirPlayMemberNeedsPassword {
                 id: target.to_owned(),
-                member: self
-                    .names
-                    .get(member)
-                    .cloned()
-                    .unwrap_or_else(|| member.to_owned()),
+                member_id: member.to_owned(),
             });
         }
         true
@@ -10635,7 +10651,7 @@ pub mod tests {
         let events = airplay.poll();
         assert!(events.contains(&BackendEvent::AirPlayMemberNeedsPassword {
             id: PAIR.to_owned(),
-            member: "Right".to_owned(),
+            member_id: id_of(&right),
         }));
         assert_eq!(
             airplay.set_enabled(PAIR, true),
@@ -10672,7 +10688,7 @@ pub mod tests {
         );
         assert!(events.contains(&BackendEvent::AirPlayMemberNeedsPassword {
             id: PAIR.to_owned(),
-            member: "Right".to_owned(),
+            member_id: id_of(&right),
         }));
         assert!(!airplay.submit_password(&id_of(&right), "hunter2"));
         assert!(airplay.enabled_ids().is_empty());
@@ -10731,7 +10747,7 @@ pub mod tests {
         let events = airplay.poll();
         assert!(events.contains(&BackendEvent::AirPlayMemberNeedsPassword {
             id: PAIR.to_owned(),
-            member: "Right".to_owned(),
+            member_id: id_of(&right),
         }));
         assert!(airplay.enabled_ids().is_empty());
         assert_eq!(airplay.password_prompt(), None);

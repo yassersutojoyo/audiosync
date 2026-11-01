@@ -21,7 +21,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - AirPlay 2 speakers, stereo pairs and home theater groups play without turning on AirPlay 2 (Experimental) first. A speaker that plays both AirPlay 1 and AirPlay 2 still uses AirPlay 1 unless that setting is on. On the Mac and on Windows.
 - On Windows, the tray panel slides up and fades in as it opens, as Windows 11's own panels do.
-- On Windows, the note that no speakers were found names Windows Firewall only while Windows counts a connected network as Public. On a Private network it asks only that this PC is on the same network as the speakers.
+- On Windows, the note that no speakers were found suggests setting the network to Private only while Windows counts a connected network as Public.
 - A Google Cast speaker that ends the stream on its own gets it again, unless it already ended it in the 10 minutes before, which ends the session. Before, the second end in a session always ended it. On the Mac and on Windows.
 - When several AirPlay speakers start together, they connect one after another, half a second apart, and a pairing's key exchange no longer holds up the sound of a speaker that's already playing. On the Mac and on Windows.
 - On Windows, the main window and the tray panel look more like the Mac app. A speaker's name, kind and note share one line, with the kind as a small icon after the name and the device name in the name's tooltip. Card titles are small grey capitals, a zone's arrow sits at the left with its speakers in one tinted box, the AirPlay delay sits in the Connected Speakers card, and Several Apps sits right under the source. The tray panel lists this PC's speakers under the volume, then zones, then connected speakers.
@@ -48,8 +48,13 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On Windows, switching the source or channel pair while a Google Cast speaker plays now fades the old source out and the new one in on that speaker, as on the Mac. Before, the sound jumped from one to the other, which could click.
+- On the Mac, a Google Cast group that never answers now goes off after its third failed connect with a notice that it isn't responding, as on Windows. Before, AudioSync kept trying it with no notice. A group that lists no address yet still keeps trying until it does.
+- On Windows, when a newer version of AudioSync wrote your settings and an older one opens them, the older one now tells you it's using the default settings and names the copy of your file it kept. Before, it said nothing.
+- On Linux, AudioSync started from the app menu or at login now knows the computer's name, so the web remote shows it and offers the computer's .local address. Before, only a start from a terminal had it.
 - On the Mac, a stereo pair or home theater group whose speakers all ask for a PIN or can't play from AudioSync no longer shows as a speaker you can turn on, and auto-connect leaves it alone, as on Windows. Before, it could be turned on and then went off again with a notice.
 - On the Mac, a Bluetooth headset's microphone saved as the source, such as AirPods, now stays in the source picker under its name, greyed out, and the menu bar panel and the web remote name it. Before, the panel said "All System Audio" while nothing played.
+- On Windows, the note that no AirPlay or Google Cast speaker was found now always says that Windows Firewall must allow AudioSync, and the Guide says so too. Before, on a Private network the note asked only that the PC be on the speakers' network, so after Cancel on the first Windows Firewall prompt nothing pointed to the firewall.
+- On Windows, with a mix of apps as the source, the main window and the web remote now show the track that plays, as with the whole system. Before, both showed no track.
 - After a source switch fails, picking the source that still plays on the web remote, while it still shows "Switching to …", now clears the "Couldn't start …" notice, as picking it in the window does. Before, the phone's pick changed nothing and the notice stayed. On the Mac and on Windows.
 - On the Mac, recalling a preset where no speaker can play now shows only "Nothing changed: …" with the list, no longer under the "Some speakers stayed off" title, and VoiceOver reads it that way too.
 - On the Mac, an AirPlay speaker whose pairing ends while its PIN prompt is open now goes off with a notice and the prompt closes. Before, AudioSync handled no speaker or network change while the prompt was open, and the PIN typed into it went nowhere.
@@ -94,7 +99,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the debug log says when saved speaker groups, zones or presets can't be read at all and none were kept. Before, they were dropped without a line.
 - On the Mac, a speaker whose system name changes in macOS, a Bluetooth one included, shows the new name in AudioSync at once, as on Windows. Before, its row could keep the old name for up to 30 seconds. A name you gave the speaker in AudioSync stays.
 - On the Mac, after you pause and resume the app AudioSync captures, a speaker on this computer that waits for the AirPlay speakers plays the new audio together with them. Before, it first played the audio from just before the pause, which the AirPlay speakers had already played.
-- With the equalizer on, a speaker on this computer set below full volume gets back as much of the level the equalizer takes off as fits under full volume, starting with the first audio played with the new curve. At full volume the cut stays. AirPlay and Google Cast speakers are unchanged. Before, such a speaker played the curve quieter. On the Mac and on Windows.
+- With the equalizer on, a speaker on this computer set below full volume gets back as much of the level the equalizer takes off as fits under full volume, starting with the first audio played with the new curve. AirPlay and Google Cast speakers get it back the same way while the master volume is below full. At full volume the cut stays. On the Mac and on Windows.
 - On Windows, Ctrl+C or Ctrl+Break in the console AudioSync was started from ends it the way Quit does, so the outputs fade out instead of being cut. A second one ends it at once.
 - On the Mac, when macOS doesn't let AudioSync stop launching at login, a notice says so and points to Login Items & Extensions in System Settings. Before, nothing showed.
 - On the Mac, the arrow keys on a Google Cast speaker's volume slider in the web remote move it by the speaker's own step, or by 5 when the speaker reports none, as on the Mac's own slider. Before, they moved it by 1.
@@ -114,6 +119,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, after a start that AudioSync made by itself failed, for example because the saved source app wasn't running, picking another source or input channel pair lets a speaker you set to connect automatically start streaming again, as on the Mac.
 - On the Mac, the web remote keeps a volume you set for a speaker that is off, a Google Cast speaker included, and uses it once the speaker plays, as on Windows. Before, the slider jumped back a second later.
 - On Windows, a renamed stereo pair, home theater or Google Cast speaker shows by its new name in the notice that AirPlay plays ahead of Cast, in the note and notice of a pair member, and in the member list of a Cast group.
+- On Windows, the notice that a member of a stereo pair or home theater asks for a password names that member by the name you gave it, as on the Mac. Before, it showed the member's network name.
 - On Windows, after Remove from Zone on an In zones row, the keyboard focus moves to the next row there, or the one before it, or to the speaker list once none is left, instead of getting lost.
 - A Google Cast speaker whose connection drops again while it reconnects keeps trying instead of turning off with an error, and when another app takes it over while its stream restarts, AudioSync says so instead of showing an error. A Google Cast speaker that ignores a mute now shows its real state again. On the Mac and on Windows.
 - A speaker whose device takes sound faster than AudioSync can send it, so it plays in bursts while the other speakers play fine, is now restarted once on its own. If that happens again within 30 seconds, it keeps playing and a notice says its link is struggling and to turn the speaker off and on again. On the Mac and on Windows.
@@ -304,6 +310,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, any line break in a speaker or zone name you type now becomes a space, the Unicode line and paragraph separators included, as on the Mac. Before, only a Return did.
 - On the Mac, a USB output that macOS lists under a new ID after you plug it into another port keeps its settings while AudioSync runs, as on Windows: its switch, volume, delay, name, zones, presets and hidden mark follow it.
 - A PTP time that isn't a number no longer stops AudioSync's AirPlay 2 sending. Before, the AirPlay 2 speakers could go silent. On the Mac and on Windows.
+- A Google Cast TV that closes AudioSync's stream as it powers down and then stops answering now reconnects like any speaker that drops its connection. Before, it turned off as if it had declined the stream. On the Mac and on Windows.
+- A Google Cast speaker that closes the stream or reports a playback error a second time now recovers again when it has played for a minute since the first. Before, a second one hours later turned it off. On the Mac and on Windows.
 
 ## [0.7.1] - 2026-10-27
 
