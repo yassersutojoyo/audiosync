@@ -6397,6 +6397,7 @@ mod tests {
         assert!(backend.driver().capture_feeds_cast());
         let next = heard(&mut backend);
         assert_eq!(next[0], 0, "the new capture fades in from silence");
+        assert!(i32::from(next[2 * fade - 1]) > 10_000, "up to full level");
         assert!(f64::from(largest_step(&next)) <= bound);
     }
 

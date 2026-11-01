@@ -3448,10 +3448,20 @@ pub mod tests {
 
         drop(lease);
         let mut lease = cast.lease().expect("the tap");
-        lease.push(&vec![0.0; 2 * frames], frames);
+        lease.push(&vec![0.5; 2 * frames], frames);
+        let next = heard(&fake);
+        let (held, next) = next.split_at(4800 * 4);
         assert!(
-            heard(&fake).iter().all(|byte| *byte == 0),
+            held.iter().all(|byte| *byte == 0),
             "the next capture plays none of the old audio"
+        );
+        assert!(
+            next[fade * 4..]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .all(|sample| i16::from_le_bytes(*sample) > 10_000),
+            "and its own after the 100 ms"
         );
     }
 
