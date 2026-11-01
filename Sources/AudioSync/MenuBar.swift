@@ -127,7 +127,11 @@ final class AppModel: ObservableObject {
         var connected = true
         /// The plain device name while the chosen input is unplugged.
         var deviceName: String? = nil
-        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs && a.connected == b.connected }
+        /// False for the chosen input device while it is unplugged or a hands-free input.
+        var available = true
+        static func == (a: Source, b: Source) -> Bool {
+            a.id == b.id && a.name == b.name && a.pairs == b.pairs && a.connected == b.connected && a.available == b.available
+        }
     }
 
     struct Actions {
@@ -2134,7 +2138,7 @@ struct SourcePicker: View {
                     if let icon = source.icon { Image(nsImage: icon) }
                     Text(source.name)
                 }
-                .disabled(!source.connected)
+                .disabled(!source.available)
                 if source.id.isEmpty { Divider() }
             }
             Divider()
