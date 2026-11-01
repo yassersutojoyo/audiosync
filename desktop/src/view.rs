@@ -7068,12 +7068,12 @@ mod tests {
             row("phones", "Headphones"),
             row("cable", "Cable Input"),
         ];
-        click("Include Cable Input anyway");
+        click("Include Anyway, Cable Input");
         assert_eq!(*includes.borrow(), vec![("cable".to_owned(), true)]);
 
         // Unplugged before the card redraws: the click does nothing.
         *left_out.borrow_mut() = vec![row("usb", "USB Headset"), row("cable", "Cable Input")];
-        click("Include Headphones anyway");
+        click("Include Anyway, Headphones");
         assert_eq!(includes.borrow().len(), 1);
     }
 
