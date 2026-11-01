@@ -7976,6 +7976,15 @@ do {
                           SpeakerGroup(id: "g3", name: "C", members: ["lc:c"])],
           "settings: a stored group value that can't be read loses only that member, or its group, never the others",
           "\(oneBadGroup)")
+    // covers: S212 (a stored list that isn't one is dropped with one debug line; nothing stored logs nothing)
+    var listLines: [String] = []
+    let notAList = AppSettings.decodeList(SpeakerZone.self, Data(#"{"id":"z1"}"#.utf8), key: Keys.zones) { listLines.append($0) }
+    let garbage = AppSettings.decodeList(SpeakerZone.self, Data([0xFF, 0x00, 0x7B]), key: Keys.zones) { listLines.append($0) }
+    let missing = AppSettings.decodeList(SpeakerZone.self, nil, key: Keys.zones) { listLines.append($0) }
+    check(notAList.isEmpty && garbage.isEmpty && missing.isEmpty
+            && listLines == Array(repeating: "[AudioSync] settings: speakerZones unreadable, nothing kept", count: 2),
+          "settings: zones that can't be read as a list are dropped with one debug line naming the key, and missing zones log nothing",
+          "\(listLines)")
     // covers: S212 (the Mac debug log's path for a value that didn't read)
     do {
         struct PathKey: CodingKey {
