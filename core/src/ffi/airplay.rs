@@ -9182,6 +9182,7 @@ mod tests {
         assert_eq!(again.get(&id), None, "gone from the file too");
     }
 
+    // covers: P154, S223
     #[test]
     fn a_receiver_that_asks_every_time_with_credentials_turned_down_never_reads_as_paired() {
         let mut handle = create_with(quiet);
@@ -9237,6 +9238,12 @@ mod tests {
             Some(&credentials),
             "an answer during the pairing proves nothing about them"
         );
+        // Playing proves nothing either: a PIN session runs no pair-verify.
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::State(SpeakerState::Playing),
+        });
+        assert!(inside(handle).credentials_turned_down.contains(&id));
         inside(handle).take_in(SenderEvent::Speaker {
             key,
             event: SpeakerEvent::Error(SpeakerError {

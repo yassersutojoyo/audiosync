@@ -7465,6 +7465,35 @@ pub mod tests {
         assert!(!airplay.credentials_turned_down.contains(&id));
     }
 
+    // A PIN typed for this session ran no pair-verify, so its playing proves
+    // nothing about the stored credentials.
+    // covers: P154, S223
+    #[test]
+    fn a_session_paired_with_a_pin_that_plays_leaves_turned_down_credentials_marked() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_every_time_tv(9, "Den");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        airplay
+            .store
+            .insert_homekit(&id, homekit(0x5A))
+            .expect("saved");
+        airplay.credentials_turned_down.insert(id.clone());
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, PairingEvent::PairedForSession);
+        airplay.poll();
+
+        fake.state(&tv, SpeakerState::Playing);
+        airplay.poll();
+        assert!(airplay.credentials_turned_down.contains(&id));
+        assert!(!airplay.speakers()[0].paired);
+    }
+
     // An impostor plays on legacy credentials without the receiver's key,
     // which skip the signature check (P56). AirPlay 2 credentials pin the
     // speaker to AirPlay 2, whose pair-verify proves them, so playing there
