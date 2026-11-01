@@ -2475,6 +2475,12 @@ struct NoticeBanner<Footer: View>: View {
     let dismiss: () -> Void
     @ViewBuilder let footer: () -> Footer
 
+    /// An untitled notice keeps the plain label, so the button doesn't read the whole notice again.
+    private var dismissLabel: String {
+        if let title = notice.title, !title.isEmpty { return text.dismissNotice(title) }
+        return text.dismissNotice
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: notice.info ? "info.circle.fill" : "exclamationmark.triangle.fill")
@@ -2513,7 +2519,7 @@ struct NoticeBanner<Footer: View>: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .accessibilityLabel(text.dismissNotice(notice.title ?? notice.text))
+            .accessibilityLabel(dismissLabel)
             .help(text.dismissNotice)
         }
         .padding(10)
