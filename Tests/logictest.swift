@@ -7217,6 +7217,15 @@ do {
     // covers: S246
     check(zoneCount(on: 2, waiting: 1, present: 2, total: 3) == "2 of 3 on, 1 waiting",
           "zones: a member waiting for the AirPlay 2 place counts as on and is named as waiting")
+    let airPlay2Wait = zoneText.waitingForAirPlay2
+    // covers: S246
+    check(ZoneLayout.waitNote(state: .playing, on: 2, waiting: 2, note: airPlay2Wait) == airPlay2Wait,
+          "zones: a playing zone whose members that are on all wait shows its first waiting member's note")
+    // covers: S246
+    check(ZoneLayout.waitNote(state: .playing, on: 2, waiting: 1, note: airPlay2Wait) == nil
+            && ZoneLayout.waitNote(state: .willPlay, on: 2, waiting: 2, note: airPlay2Wait) == nil
+            && ZoneLayout.waitNote(state: .playing, on: 0, waiting: 0, note: nil) == nil,
+          "zones: a zone with a member still playing, with streaming off or with no member on shows no wait")
 
     let zoned: Set<String> = ["lc:usb", "ap:native:den"]
     // covers: S404

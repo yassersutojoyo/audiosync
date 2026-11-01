@@ -1192,6 +1192,8 @@ struct UIStrings {
     /// A zone header's count; `zoneWaiting` follows it when a member waits.
     func zoneCount(on: Int, of total: Int) -> String { "\(on) of \(total) on" }
     func zoneWaiting(_ n: Int) -> String { ", \(n) waiting" }
+    /// Ends the count of a zone whose members that are on all wait: " · Waiting: …".
+    func zoneWaitNote(_ note: String) -> String { " · \(note)" }
     /// A zone none of whose members is here.
     func zoneNoneHere(_ total: Int) -> String { "None of \(total) found" }
     /// A zone none of whose members is here because they all play as a stereo pair.

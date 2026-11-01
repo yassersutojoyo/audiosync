@@ -393,6 +393,13 @@ enum ZoneLayout {
         return text.zoneCount(on: on, of: total) + (waiting > 0 ? text.zoneWaiting(waiting) : "")
     }
 
+    /// The note a zone header shows while it plays and every present member
+    /// that is on waits: `note`, its first waiting member's row note; nil
+    /// while one of them still plays (S246).
+    static func waitNote(state: SpeakerState, on: Int, waiting: Int, note: String?) -> String? {
+        state == .playing && on > 0 && waiting == on ? note : nil
+    }
+
     /// The menu bar panel's rows for `zones`: a header each, plus the members
     /// of every zone not in `collapsed`.
     static func panelRows<Z>(_ zones: [Z], id: (Z) -> String, members: (Z) -> Int,
