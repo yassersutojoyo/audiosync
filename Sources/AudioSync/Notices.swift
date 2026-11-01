@@ -41,6 +41,15 @@ struct Notice: Identifiable, Equatable {
     }
     /// Now Playing may not control this player.
     static func automation(_ bundleID: String) -> String { "automation:" + bundleID }
+    /// What the `login` notice says when macOS refuses to turn Launch at Login on or off (S388).
+    static func loginRefused(turningOn on: Bool, _ text: UIStrings) -> String {
+        on ? text.launchAtLoginFailed : text.launchAtLoginOffFailed
+    }
+    /// Whether the `login` notice in `list` is done now that macOS reports the item `enabled` (S388).
+    static func loginSettled(in list: NoticeList, enabled: Bool, _ text: UIStrings) -> Bool {
+        guard let notice = list.items.first(where: { $0.subject == login }) else { return false }
+        return (notice.text == text.launchAtLoginOffFailed) != enabled
+    }
 }
 
 /// A Privacy & Security pane in System Settings.

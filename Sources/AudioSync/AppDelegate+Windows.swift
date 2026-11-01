@@ -467,7 +467,9 @@ extension AppDelegate {
     /// through the menu bar icon.
     private func rereadExternalState() {
         launchAtLogin = SMAppService.mainApp.status == .enabled
-        if launchAtLogin { clearNotices([Notice.login]) }   // approved meanwhile
+        if Notice.loginSettled(in: appModel.notices, enabled: launchAtLogin, text) {
+            clearNotices([Notice.login])   // changed in System Settings meanwhile
+        }
         recheckLocalNetwork()
         pushSources()
         pushModel()

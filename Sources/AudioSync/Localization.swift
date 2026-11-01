@@ -1195,6 +1195,7 @@ struct UIStrings {
     let autoConnect = "Auto-Connect When Available"
     let launchAtLogin = "Launch at Login"
     let launchAtLoginFailed = "macOS did not allow AudioSync to launch at login. You can add it in System Settings → General → Login Items & Extensions."
+    let launchAtLoginOffFailed = "macOS did not allow AudioSync to stop launching at login. You can remove it in System Settings → General → Login Items & Extensions."
     func automationDenied(_ app: String) -> String {
         "AudioSync isn't allowed to control \(app), so Now Playing can't show its track or controls, and AirPlay speakers with a screen can't show it either. Turn on \(app) under AudioSync in System Settings → Privacy & Security → Automation."
     }

@@ -15319,6 +15319,27 @@ do {
           "about: the license credits and the copyright come through unchanged")
 }
 
+// MARK: A Launch at Login change macOS refuses posts a notice either way (Notice.loginRefused)
+// covers: S388 (Mac host: a refused removal has its own notice)
+do {
+    let loginText = UIStrings()
+    check(Notice.loginRefused(turningOn: true, loginText) == loginText.launchAtLoginFailed,
+          "launch at login: a refused registration posts its notice")
+    let removal: String? = Notice.loginRefused(turningOn: false, loginText)
+    check(removal != nil && removal != loginText.launchAtLoginFailed,
+          "launch at login: a refused removal posts its own notice", removal ?? "none")
+    var loginNotices = NoticeList()
+    loginNotices.post(loginText.launchAtLoginOffFailed, subject: Notice.login)
+    check(!Notice.loginSettled(in: loginNotices, enabled: true, loginText),
+          "launch at login: the refused removal's notice stays while the item reads on")
+    check(Notice.loginSettled(in: loginNotices, enabled: false, loginText),
+          "launch at login: the refused removal's notice goes once the item reads off")
+    loginNotices.post(loginText.launchAtLoginNeedsApproval, subject: Notice.login)
+    check(Notice.loginSettled(in: loginNotices, enabled: true, loginText)
+            && !Notice.loginSettled(in: loginNotices, enabled: false, loginText),
+          "launch at login: the approval notice goes once the item reads on")
+}
+
 // MARK: Panel status counts only the AirPlay speakers it shows (StreamingPolicy.activeSpeakers)
 // covers: S360
 do {
