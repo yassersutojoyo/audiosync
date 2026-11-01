@@ -15857,5 +15857,15 @@ do {
           "main window sheets: a run starts in the calibration sheet already shown")
 }
 
+do {
+    // Voice Control matches a button by the start of its name, so the name opens with the visible text.
+    let text = UIStrings()
+    check([-100, -10, 10, 100].allSatisfy { text.delayStepAccessibility($0).hasPrefix(text.delayStep($0) + " ") },
+          "delay step: each button's accessibility label starts with its visible text")
+    check(text.delayStepAccessibility(-100) == "−100 ms, decrease delay"
+            && text.delayStepAccessibility(10) == "+10 ms, increase delay",
+          "delay step: the label is the step, the unit, then what it does")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

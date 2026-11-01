@@ -188,9 +188,9 @@ struct UIStrings {
     func showDelayControls(_ label: String) -> String { "Show controls for \(label)" }
     func hideDelayControls(_ label: String) -> String { "Hide controls for \(label)" }
     func delayStep(_ delta: Int) -> String { delta < 0 ? "−\(-delta)" : "+\(delta)" }
+    /// Opens with the visible text, so Voice Control's "click −100" finds the button.
     func delayStepAccessibility(_ delta: Int) -> String {
-        delta < 0 ? "Decrease delay by \(-delta) \(millisecondsUnit)"
-                  : "Increase delay by \(delta) \(millisecondsUnit)"
+        "\(delayStep(delta)) \(millisecondsUnit), \(delta < 0 ? "decrease" : "increase") delay"
     }
 
     // MARK: Microphone calibration (S232)
