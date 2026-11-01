@@ -49,6 +49,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, a delay step button's name for Voice Control and VoiceOver starts with what it shows, such as "−100 ms, decrease delay", so saying "click −100" finds it.
 - On the Mac, an arrow key pressed on a Google Cast speaker's slider right after a drag now steps the TV from where the drag ended, and the slider follows the TV when you later set it with its remote to where the drag was heading. Before, the step started from an older level and the slider could stay on a number the TV no longer played.
 - On Windows, a Google Cast speaker's volume follows the TV again after a quick drag that ends on a level the slider passed a moment before. Before, a later change with the TV's remote to a level from that drag could leave the slider on the old value for good.
 - On Windows, a Google Cast speaker with a fixed volume in a zone shows the level the speaker reports. Before, its dimmed slider moved with the zone volume although the speaker's own volume never changed.
