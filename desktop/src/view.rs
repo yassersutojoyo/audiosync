@@ -11626,6 +11626,111 @@ mod tests {
         assert_eq!(first_band_gain(&app), 0.0, "Left moves it down");
     }
 
+    fn speaker_volume(app: &App, id: &str) -> f64 {
+        app.snapshot().speaker(id).unwrap().volume
+    }
+
+    /// Shows the main window with the keyboard focus on `id`'s volume.
+    fn focus_speaker_volume(app: &App, id: &str) {
+        app.main.show().unwrap();
+        draw_frames();
+        app.main.set_focus_speaker_part(RowPart::Volume);
+        app.main.set_focus_speaker_id(id.into());
+        draw_frames();
+    }
+
+    #[test]
+    fn a_volume_slider_moves_with_the_up_and_down_arrow_keys() {
+        let backend = MockBackend::new();
+        let editing = backend.volume_editing.clone();
+        let app = app_over(backend);
+        // Off, its volume is not there to take the focus.
+        app.toggle_speaker("local:desk");
+        focus_speaker_volume(&app, "local:desk");
+        let window = app.main.window();
+        let start = speaker_volume(&app, "local:desk");
+
+        press(window, Key::RightArrow);
+        let right = speaker_volume(&app, "local:desk");
+        assert_ne!(right, start, "the volume has the focus");
+        press(window, Key::LeftArrow);
+        assert_eq!(speaker_volume(&app, "local:desk"), start);
+
+        press(window, Key::UpArrow);
+        assert_eq!(
+            speaker_volume(&app, "local:desk"),
+            right,
+            "Up moves it like Right"
+        );
+        press(window, Key::DownArrow);
+        assert_eq!(
+            speaker_volume(&app, "local:desk"),
+            start,
+            "Down moves it like Left"
+        );
+        assert_eq!(
+            editing.borrow().last(),
+            Some(&("local:desk".to_owned(), false)),
+            "releasing Down ends the move"
+        );
+
+        // The master volume's slider, as in the name field test above.
+        click(window, 150.0, 310.0);
+        let master = app.snapshot().master_volume;
+        press(window, Key::UpArrow);
+        assert_ne!(
+            app.snapshot().master_volume,
+            master,
+            "Up moves the master volume"
+        );
+        press(window, Key::DownArrow);
+        assert_eq!(app.snapshot().master_volume, master);
+    }
+
+    #[test]
+    fn up_on_a_cast_volume_sends_the_same_step_as_right() {
+        let mut backend = MockBackend::new();
+        let mut speaker = backend.snapshot().speaker("local:desk").unwrap().clone();
+        speaker.id = "cc:attic".into();
+        speaker.name = "Attic".into();
+        speaker.system_name = "Attic".into();
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        speaker.enabled = true;
+        speaker.cast = Some(ui_model::CastRow {
+            state: ui_model::CastState::Playing,
+            muted: false,
+            volume_fixed: false,
+            volume_step: 5.0,
+            group: None,
+            added_by_address: false,
+            offline: false,
+            taken_over: false,
+        });
+        backend.add_speaker(speaker);
+        let app = app_over(backend);
+        focus_speaker_volume(&app, "cc:attic");
+        let window = app.main.window();
+        let start = speaker_volume(&app, "cc:attic");
+
+        press(window, Key::RightArrow);
+        let right = speaker_volume(&app, "cc:attic");
+        assert_ne!(right, start, "the Cast volume has the focus");
+        press(window, Key::LeftArrow);
+        assert_eq!(speaker_volume(&app, "cc:attic"), start);
+        press(window, Key::UpArrow);
+        assert_eq!(
+            speaker_volume(&app, "cc:attic"),
+            right,
+            "Up sends what Right sends"
+        );
+        press(window, Key::DownArrow);
+        assert_eq!(
+            speaker_volume(&app, "cc:attic"),
+            start,
+            "Down sends what Left sends"
+        );
+    }
+
     #[test]
     fn an_equalizer_band_ignores_the_left_and_right_arrows_with_a_modifier() {
         let app = app_over(MockBackend::new());
