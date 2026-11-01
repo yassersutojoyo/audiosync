@@ -675,7 +675,13 @@ function rangeControl(input, output, read, write, onFail) {
     output.value = TEXT.percent(value);
     input.setAttribute("aria-valuetext", TEXT.percent(value));
   };
-  const send = sender(write, (problem, settled) => {
+  // A snapshot can trail this phone's own sends, so a level it set earlier says nothing about a later failure.
+  const delivered = [];
+  const send = sender((value) => write(value).then((reply) => {
+    delivered.push(value);
+    if (delivered.length > 8) { delivered.shift(); }
+    return reply;
+  }), (problem, settled) => {
     if (problem) { onFail(problem.message); }
     if (settled && !held) { control.show(read()); }
   }, () => {
@@ -683,6 +689,7 @@ function rangeControl(input, output, read, write, onFail) {
   });
   const control = {
     held: (reported) => held || send.busy(Math.round(reported)),
+    sentHere: (reported) => delivered.includes(Math.round(reported)),
     show(value) {
       input.value = String(Math.round(value));
       showPercent(Math.round(value));
@@ -856,7 +863,7 @@ function showDelay(row, value) {
 function updateRow(row, speaker) {
   // A change made elsewhere settles whatever this phone's last change failed at.
   const was = row.speaker;
-  if (speaker.on !== was.on || speaker.volume !== was.volume || speaker.delay_ms !== was.delay_ms) { showError(row.error, ""); }
+  if (speaker.on !== was.on || (speaker.volume !== was.volume && !row.volumeControl.sentHere(speaker.volume)) || speaker.delay_ms !== was.delay_ms) { showError(row.error, ""); }
   row.speaker = speaker;
   row.name.textContent = speaker.name;
   row.kind.textContent = speaker.kind;
@@ -980,7 +987,7 @@ function makeZone(zone) {
 }
 
 function updateZone(row, zone, speakers) {
-  if (zone.volume !== row.zone.volume || zone.counts.on !== row.zone.counts.on) { showError(row.error, ""); }
+  if ((zone.volume !== row.zone.volume && !row.volumeControl.sentHere(zone.volume)) || zone.counts.on !== row.zone.counts.on) { showError(row.error, ""); }
   row.zone = zone;
   row.name.textContent = zone.name;
   const counts = zone.counts;
