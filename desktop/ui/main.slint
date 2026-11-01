@@ -336,7 +336,7 @@ component SpeakerSection inherits VerticalLayout {
         text: root.title;
     }
 
-    Card {
+    card := Card {
         inner-padding: 4px;
 
         rows := SpeakerRows {
@@ -1448,6 +1448,8 @@ export component MainWindow inherits Window {
     default-font-size: Tokens.font-size-body;
 
     property <length> content-max-width: left-column.width + Fluent.gap + scroll.max-width;
+    // The Fluent scroll bar is 14 px wide and drawn over the speaker list's content.
+    property <length> scroll-gutter: 14px;
 
     // Rust sets these; a user's click or drag replaces the controls' bindings,
     // so each control's handler also sets it back to the state after its
@@ -1717,7 +1719,7 @@ export component MainWindow inherits Window {
         spacing: Fluent.gap;
 
         // Header: the brand and the state on the left, the switch on the right.
-        // It and the notices end where the speaker list stops growing.
+        // It and the notices end with the speaker cards.
         HorizontalLayout {
             spacing: 10px;
             min-height: 36px;
@@ -2045,8 +2047,7 @@ export component MainWindow inherits Window {
                 speaker-list := VerticalLayout {
                     spacing: Fluent.gap;
                     padding-bottom: 4px;
-                    // The Fluent scroll bar is 14 px wide and drawn over the content.
-                    padding-right: 14px;
+                    padding-right: root.scroll-gutter;
                     // Rows keep their height when the list is shorter than the view.
                     alignment: start;
 

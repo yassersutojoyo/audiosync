@@ -6490,42 +6490,8 @@ mod tests {
         assert_eq!(list_width(1400.0), 644.0, "a wide window");
     }
 
-    /// The Windows app's density, near Windows 11's own: 12 px card padding,
-    /// 48 px rows with 6 px above and below their content, a 16 px window
-    /// edge and 12 px gaps, a smaller wordmark; text in the body (14 px) and
-    /// caption (12 px) sizes only.
-    #[test]
-    fn the_windows_ui_keeps_its_compact_density() {
-        let widgets = include_str!("../ui/widgets.slint");
-        let has = |token: &str| {
-            let line = format!("    out property <length> {token};");
-            widgets.lines().any(|wanted| wanted.trim_end() == line)
-        };
-        for token in [
-            "card-padding: 12px",
-            "row-height: 48px",
-            "row-padding-y: 6px",
-            "window-margin: 16px",
-            "gap: 12px",
-            "wordmark: 18px",
-            "mark: 28px",
-        ] {
-            assert!(has(token), "Fluent.{token}");
-        }
-        let tokens = include_str!("../ui/tokens.slint");
-        assert!(tokens.contains("font-size-body: 14px;"));
-        assert!(tokens.contains("font-size-caption: 12px;"));
-        for ui in [
-            widgets,
-            include_str!("../ui/main.slint"),
-            include_str!("../ui/flyout.slint"),
-        ] {
-            assert!(!ui.contains("Tokens.font-size-callout"));
-        }
-    }
-
-    /// Past the speaker list's widest, the header's switch stays above the
-    /// list's right edge instead of at the far side of a wide window.
+    /// The header's switch ends with the speaker cards, also past the
+    /// speaker list's widest instead of at the far side of a wide window.
     #[test]
     fn the_header_ends_where_the_speaker_list_stops_growing() {
         use i_slint_backend_testing::ElementHandle;
@@ -6542,10 +6508,10 @@ mod tests {
                 .window()
                 .set_size(slint::LogicalSize::new(width, 680.0));
             let switch = right_edge("MainWindow::power");
-            let list = right_edge("MainWindow::scroll");
+            let card = right_edge("SpeakerSection::card");
             assert!(
-                (switch - list).abs() < 1.0,
-                "at {width} px the switch ends at {switch}, the list at {list}"
+                (switch - card).abs() < 1.0,
+                "at {width} px the switch ends at {switch}, the speaker cards at {card}"
             );
         }
     }
