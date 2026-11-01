@@ -11441,6 +11441,34 @@ mod tests {
         }
     }
 
+    /// The longer help behind a code note shows on hover only; Narrator
+    /// hears it after the note on the row's toggle.
+    #[test]
+    fn a_code_notes_hover_help_is_read_on_the_rows_toggle() {
+        use i_slint_backend_testing::ElementQuery;
+        let mut backend = MockBackend::new();
+        backend.set_code_every_time("airplay:bedroom");
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        let name = app
+            .snapshot()
+            .speaker("airplay:bedroom")
+            .expect("listed")
+            .name
+            .clone();
+        let read = !ElementQuery::from_root(&app.main)
+            .match_predicate(move |e| {
+                e.accessible_label().unwrap_or_default().starts_with(name.as_str())
+                    && e.accessible_description().unwrap_or_default().contains(
+                        "Asks for a code every time. This speaker asks for a code each time it connects",
+                    )
+            })
+            .find_all()
+            .is_empty();
+        assert!(read, "the note, then its help");
+    }
+
     #[test]
     fn escape_on_the_zone_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());
