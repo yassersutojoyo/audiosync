@@ -14907,6 +14907,34 @@ mod tests {
 
     // covers: S385
     #[test]
+    fn a_newer_settings_file_gets_its_notice_once_the_first_save_keeps_it_aside() {
+        let dir = test_dir("adapter-settings-newer-kept-aside");
+        let path = dir.join(settings::FILE_NAME);
+        let newer = r#"{"version": 5000000000, "master_volume": 40}"#;
+        std::fs::write(&path, newer).expect("written");
+        let mut adapter = launch(launch_audio(), &path);
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("settings.newer-"), "{file}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            newer
+        );
+        // Told once: dismissed, it stays away at the next saves.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S385
+    #[test]
     fn settings_unreadable_at_launch_get_their_notice_once_they_can_be_kept_aside_unchanged() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
         let dir = test_dir("adapter-settings-kept-aside-unchanged");
