@@ -931,26 +931,53 @@ export component VolumeSlider inherits HorizontalLayout {
 
     out property <bool> slider-focused: slider.has-focus;
 
-    slider := Slider {
-        minimum: 0;
-        maximum: 100;
-        step: root.step;
-        value: root.volume;
-        enabled: root.enabled;
-        accessible-label: root.label;
-        accessible-description: root.description;
-        accessible-value: Strings.volume-value(self.value);
-        changed(value) => {
-            if !root.is-editing {
-                root.is-editing = true;
-                root.editing(true);
+    // Up and Down move it as Right and Left do, as on the Mac.
+    FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if !root.enabled || root.step <= 0 || event.modifiers.control || event.modifiers.alt || event.modifiers.shift || event.modifiers.meta
+                || (event.text != Key.UpArrow && event.text != Key.DownArrow) {
+                return reject;
             }
-            root.changed(value);
+            let value = clamp(slider.value + (event.text == Key.UpArrow ? root.step : -root.step), 0, 100);
+            if value != slider.value {
+                slider.value = value;
+                slider.changed(value);
+            }
+            accept
         }
-        released => {
-            if root.is-editing {
-                root.is-editing = false;
-                root.editing(false);
+        // The slider takes every key release, so its own ends only Right and Left.
+        capture-key-released(event) => {
+            if event.text == Key.UpArrow || event.text == Key.DownArrow {
+                slider.released(slider.value);
+            }
+            reject
+        }
+
+        HorizontalLayout {
+            slider := Slider {
+                minimum: 0;
+                maximum: 100;
+                step: root.step;
+                value: root.volume;
+                enabled: root.enabled;
+                accessible-label: root.label;
+                accessible-description: root.description;
+                accessible-value: Strings.volume-value(self.value);
+                changed(value) => {
+                    if !root.is-editing {
+                        root.is-editing = true;
+                        root.editing(true);
+                    }
+                    root.changed(value);
+                }
+                released => {
+                    if root.is-editing {
+                        root.is-editing = false;
+                        root.editing(false);
+                    }
+                }
             }
         }
     }
