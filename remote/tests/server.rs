@@ -1798,7 +1798,7 @@ fn a_foreign_host_is_refused_first_even_with_a_matching_origin_and_a_token() {
     assert_eq!(exchange(port, lower.as_bytes()).status, 200);
 }
 
-// covers: S373
+// covers: S373, S378
 #[test]
 fn a_foreign_host_in_a_reserved_slot_gets_403_not_busy() {
     let remote = start_with(Config {

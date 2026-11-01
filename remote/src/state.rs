@@ -972,7 +972,7 @@ mod tests {
         )
     }
 
-    // covers: S353
+    // covers: S353, S343
     #[test]
     fn the_mix_apps_keep_their_order_and_whether_they_run_and_none_without_the_field() {
         let apps = json!([
