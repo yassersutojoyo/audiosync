@@ -11042,6 +11042,34 @@ mod tests {
         assert_eq!(fake.take_calls(), [Call::Delay(id, Duration::ZERO)]);
     }
 
+    // covers: S401, S394
+    #[test]
+    fn with_d_s_at_0_airplay_plays_ahead_of_a_cast_speaker_only_at_a_negative_airplay_delay() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        use audiosync_airplay::latency::LatencySources;
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        let den = device(2, "Den", OPEN_TXT);
+        fake.appear(&den);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        for speaker in [&kitchen, &den] {
+            backend.set_airplay_enabled(&id_of(speaker), true).unwrap();
+        }
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.set_cast_offset(KITCHEN, 20_000.0);
+        fake.report_latency(&kitchen, 1_000_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(&den, 0, LatencySources::AUDIO_LATENCY);
+        backend.poll();
+        // L = L_s = 2750: Den wants 1000 + 17 250, within the limit.
+        assert_eq!(backend.airplay_ahead_ms(), 0.0);
+        backend.set_airplay_adjustment(-2000.0);
+        // L = 750: Den wants 1000 + 19 250.
+        assert_eq!(backend.airplay_ahead_ms(), 250.0);
+    }
+
     // covers: S401, S394, S283, P99
     #[test]
     fn how_far_airplay_plays_ahead_follows_e_a_receiver_offset_and_a_removed_speaker() {
