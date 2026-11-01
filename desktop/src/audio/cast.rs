@@ -599,7 +599,7 @@ pub struct CastSpeakers {
     /// the zone scales (C104).
     levels: BTreeMap<DeviceId, f64>,
     /// A level set on the device while its zone is 0, which its row shows
-    /// until its own level or zone moves (S415).
+    /// until its own level or zone moves or the session ends (S415).
     held: Option<(DeviceId, f64)>,
     /// The master's gain, which every session's audio is scaled by (S415).
     master: MasterGain,
@@ -1355,6 +1355,7 @@ impl CastSpeakers {
         };
         self.records = None;
         self.requested = None;
+        self.held = None;
         self.unanswered.clear();
         if let Some(link) = self.link.as_mut() {
             link.stop();
@@ -1439,6 +1440,11 @@ impl CastSpeakers {
             .collect();
         let live = self.attempt.map(|attempt| attempt.device);
         let before = live.map(|device| self.zone_of(device));
+        if let Some((device, _)) = self.held
+            && zones.get(&device) != self.zones.get(&device)
+        {
+            self.held = None;
+        }
         self.zones = zones;
         if let Some(device) = live
             && before != Some(self.zone_of(device))
@@ -1841,6 +1847,7 @@ impl CastSpeakers {
                 self.records = None;
                 self.sent = None;
                 self.requested = None;
+                self.held = None;
                 self.unanswered.clear();
                 self.feed.hand(None);
                 self.list.set_in_session(key, false);

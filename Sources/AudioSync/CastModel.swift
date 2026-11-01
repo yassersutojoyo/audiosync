@@ -463,7 +463,7 @@ struct CastModel {
     /// zone scales (C104).
     private(set) var levels: [String: Double] = [:]
     /// A level set on the device while its zone is 0, which its row shows
-    /// until its own level or zone moves (S415).
+    /// until its own level or zone moves or the session ends (S415).
     private var held: (id: String, level: Double)?
     /// The zone level, 0 to 1, of each device in a zone (S249); one not here
     /// is in no zone.
@@ -828,6 +828,7 @@ struct CastModel {
     mutating func stopSent() {
         attempt = nil
         requested = nil
+        held = nil
         unanswered = []
         members = nil
     }
@@ -930,6 +931,7 @@ struct CastModel {
         case .ended(_, let end):
             attempt = nil
             requested = nil
+            held = nil
             unanswered = []
             members = nil
             if enabled == id { enabled = nil }
@@ -1000,6 +1002,7 @@ struct CastModel {
         }
         let live = attempt?.device
         let before = live.map { zone(of: $0) }
+        if let held, new[held.id] != zoneLevels[held.id] { self.held = nil }
         zoneLevels = new
         guard let id = live, before != zone(of: id), let own = ownLevel(of: id) else { return nil }
         return levelToSend(id, own: own)
@@ -1011,9 +1014,9 @@ struct CastModel {
     /// Zone × `own`, kept to recognize the device's answer; nil for a fixed
     /// volume (C68).
     private mutating func levelToSend(_ id: String, own: Double) -> Double? {
+        held = nil
         guard volumes[id]?.fixed != true else { return nil }
         attempt?.reportedMute = nil
-        held = nil
         let level = asc_cast_zone_level(zone(of: id), own)
         if let current = volumes[id], asc_cast_volume_answers(level, current.level, current.step) {
             // The device reports only changes, so this level gets no answer; it

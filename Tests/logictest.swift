@@ -12730,6 +12730,31 @@ do {
     // covers: S415
     check(near(row.setZones([:]), 1) && approx(row.rowVolume(of: tv), 100, 1e-9),
           "cast row: out of the zone the own level kept plays again")
+
+    var step = session(attempt: 12)
+    _ = step.apply(.volume(attempt: 12, reported(0.4)))
+    _ = step.setZones([tv: 50])
+    _ = step.apply(.volume(attempt: 12, reported(0.2)))
+    let size = CastModel.fallbackVolumeStep
+    var stepped: Double?
+    if case .level(let level)? = step.stepVolume(tv, up: true) { stepped = level }
+    // covers: S415, C69
+    check(near(stepped, 0.2 + size) && approx(step.volume(of: tv), (0.2 + size) / 0.5 * 100, 1e-9),
+          "cast row: a step in a zone at 50 sends the row plus the step and stores row ÷ zone")
+    _ = step.apply(.volume(attempt: 12, reported(0.2 + size)))
+    _ = step.setZones([tv: 0])
+    // covers: S415
+    check(step.stepVolume(tv, up: true) == nil, "cast row: a step at zone 0 sends nothing")
+    _ = step.apply(.volume(attempt: 12, reported(0)))
+    _ = step.apply(.volume(attempt: 12, reported(0.3)))
+    let heldRow = step.rowVolume(of: tv)
+    step.stopSent()
+    let endedRow = step.rowVolume(of: tv)
+    _ = step.setZones([tv: 50])
+    // covers: S415
+    check(approx(heldRow, 30, 1e-9) && approx(endedRow, 0, 1e-9)
+          && approx(step.rowVolume(of: tv), asc_airplay_row_level((0.2 + size) * 100), 1e-9),
+          "cast row: a level held at zone 0 goes once the session ends or the zone moves")
 }
 
 // MARK: Zone volumes (S71, S249, S250, C104, C105)
