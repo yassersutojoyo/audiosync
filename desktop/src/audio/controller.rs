@@ -5793,6 +5793,56 @@ mod tests {
 
     // covers: S380
     #[test]
+    fn an_only_these_mix_leaves_out_another_app_that_took_a_quit_apps_process_id() {
+        const BROWSER_PID: u32 = PLAYER_PID + 10;
+        let mut backend = backend();
+        backend.add_app(BROWSER_PID, "browser.exe");
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID, BROWSER_PID],
+                executables: vec!["player.exe".to_owned(), "browser.exe".to_owned()],
+            })
+            .unwrap();
+        backend.quit_app(BROWSER_PID);
+        backend.add_app(BROWSER_PID, "chat.exe");
+        backend.mix_checked = None;
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_target(),
+            Some(included(&[PLAYER_PID]))
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn an_only_these_mix_quits_when_only_another_app_on_its_apps_process_id_runs() {
+        let mut backend = backend();
+        backend.refuse_watch(PLAYER_PID);
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID],
+                executables: vec!["PLAYER.exe".to_owned()],
+            })
+            .unwrap();
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "chat.exe");
+        backend.mix_checked = None;
+        let mut events = backend.poll();
+        backend.mix_checked = None;
+        events.extend(backend.poll());
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                BackendEvent::Stopped {
+                    reason: StopReason::SourceQuit
+                }
+            )),
+            "{events:?}"
+        );
+    }
+
+    // covers: S380
+    #[test]
     fn audiosync_itself_is_never_captured() {
         let mut backend = backend();
         let result = backend.start(&SourceId::App {
@@ -9507,6 +9557,29 @@ mod tests {
             }]
         );
         assert_eq!(backend.running_source(), None);
+    }
+
+    // covers: S380
+    #[test]
+    fn a_lost_app_capture_is_not_opened_again_on_another_app_that_took_its_process_id() {
+        let mut backend = backend();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "chat.exe");
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        assert_eq!(backend.driver().captures_started().len(), 1);
     }
 
     // covers: S329
