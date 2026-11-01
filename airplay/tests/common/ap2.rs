@@ -29,8 +29,9 @@ use super::{RECEIVER, SENDER, connection, ids};
 pub const AIRPLAY_PORT: u16 = 7000;
 pub const EVENT_PORT: u16 = 50_001;
 pub const RECEIVER_TIMING_PORT: u16 = 50_002;
-pub const DATA_PORT: u16 = 50_003;
-pub const RECEIVER_CONTROL_PORT: u16 = 50_004;
+// Below every ephemeral range: Ap2Server rebinds a stream port equal to one.
+pub const DATA_PORT: u16 = 6_003;
+pub const RECEIVER_CONTROL_PORT: u16 = 6_004;
 pub const STREAM_ID: i64 = 77;
 
 /// A deterministic random source for the session: xorshift from a seed.
