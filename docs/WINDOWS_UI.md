@@ -143,7 +143,7 @@ one, with a notice that names it.
 |---|---|
 | Tab, Shift+Tab | Move through the controls in reading order: header, notices, the left column's cards, then each speaker row |
 | Space, Enter | Turn the focused speaker or zone on or off, or press the focused button |
-| Arrow keys | Move the focused slider (volume in steps of 1, equalizer in 0.5 dB) |
+| Arrow keys | Move the focused slider (volume in steps of 1, or a Google Cast speaker's own step; equalizer in 0.5 dB) |
 | Menu key, Shift+F10 | Open the focused row's context menu |
 | Ctrl+S | Apply every typed delay |
 | Ctrl+N | New zone from the speakers that are on |
