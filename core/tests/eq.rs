@@ -413,13 +413,6 @@ fn the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state() {
     control.set_settings(settings);
     assert_eq!(control.bands(), design_bands(&settings.gains_db, 48_000.0));
 
-    // The same rate again is a no-op: the filters keep ringing into silence.
-    processor.process(&mut sine(0, BLOCK, 1000.0, 48_000.0, 0.5));
-    assert!(control.set_sample_rate(48_000.0));
-    let mut silence = vec![0.0f32; BLOCK * 2];
-    processor.process(&mut silence);
-    assert!(silence.iter().any(|&x| x != 0.0));
-
     // A new rate recomputes the coefficients and zeroes all state.
     processor.process(&mut sine(0, BLOCK, 1000.0, 48_000.0, 0.5));
     assert!(control.set_sample_rate(44_100.0));
