@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -144,6 +144,8 @@ pub struct CastTap {
     retired: Option<CastWriter>,
     /// How many frames the feed is held back (C77), set by the UI thread.
     hold_back: Arc<AtomicUsize>,
+    /// The equalizer's headroom cut as a linear factor, set by the UI thread.
+    give_back: Arc<AtomicU64>,
     /// In at each lease (S189); the delay line fades out.
     fade: InputFade,
 }
@@ -156,7 +158,11 @@ impl CastTap {
     pub fn push(&mut self, block: &[f32], frames: usize) {
         self.take_handoffs();
         let target = self.hold_back.load(Ordering::Relaxed);
+        let back = f64::from_bits(self.give_back.load(Ordering::Relaxed));
         let CastTap { writer, fade, .. } = self;
+        if let Some(CastWriter { audio, .. }) = writer.as_ref() {
+            audio.give_back(back, target);
+        }
         fade.process(&block[..(frames * 2).min(block.len())], |piece| {
             if let Some(CastWriter { audio, delay }) = writer.as_mut() {
                 delay.process(piece, target, |held| {
@@ -278,6 +284,7 @@ pub struct CastFeed {
     waiting: Option<Option<CastWriter>>,
     /// The tap's hold-back, in frames.
     hold_back: Arc<AtomicUsize>,
+    give_back: Arc<AtomicU64>,
 }
 
 impl CastFeed {
@@ -289,12 +296,14 @@ impl CastFeed {
         let (to_tap, inbox) = mpsc::sync_channel(handoff);
         let (outbox, from_tap) = mpsc::sync_channel(handoff);
         let hold_back = Arc::new(AtomicUsize::new(0));
+        let give_back = Arc::new(AtomicU64::new(1.0f64.to_bits()));
         let tap = CastTap {
             inbox,
             outbox,
             writer: None,
             retired: None,
             hold_back: Arc::clone(&hold_back),
+            give_back: Arc::clone(&give_back),
             fade: InputFade::new(SESSION_RATE, CONVERT_CHUNK),
         };
         CastFeed {
@@ -306,7 +315,16 @@ impl CastFeed {
             },
             waiting: None,
             hold_back,
+            give_back,
         }
+    }
+
+    /// The equalizer's headroom cut in dB, which the session gives back
+    /// under the master from the first frame the capture equalizes with it
+    /// (S26, S415).
+    fn set_give_back(&self, cut_db: f64) {
+        self.give_back
+            .store(10f64.powf(cut_db / 20.0).to_bits(), Ordering::Relaxed);
     }
 
     /// Holds the feed back by `frames` from now on, up to the ceiling of L;
@@ -566,8 +584,6 @@ pub struct CastSpeakers {
     master: MasterGain,
     /// The master position, 0 to 100.
     master_position: f64,
-    /// The equalizer's headroom cut in dB, given back under the master (S26).
-    eq_cut_db: f64,
     /// The zone level, 0.0 to 1.0, of each device in a zone (S249); one not
     /// here is in no zone.
     zones: BTreeMap<DeviceId, f64>,
@@ -617,7 +633,6 @@ impl CastSpeakers {
             held: None,
             master: MasterGain::default(),
             master_position: 100.0,
-            eq_cut_db: 0.0,
             zones: BTreeMap::new(),
             unanswered: Vec::new(),
             attempt: None,
@@ -1417,15 +1432,15 @@ impl CastSpeakers {
     }
 
     /// Takes the headroom cut `settings` make at the session rate, which the
-    /// master's gain gives back as far as unity allows (S26, S415).
+    /// session gives back under the master as far as unity allows, from the
+    /// first frame equalized with it (S26, S415).
     pub fn set_equalizer(&mut self, settings: &EqSettings) {
-        self.eq_cut_db = eq::headroom_cut_db(settings, f64::from(SESSION_RATE));
-        self.send_master_gain();
+        self.feed
+            .set_give_back(eq::headroom_cut_db(settings, f64::from(SESSION_RATE)));
     }
 
     fn send_master_gain(&self) {
-        let gain = gain_for_position(self.master_position);
-        self.master.set(eq::returned(gain, self.eq_cut_db).0);
+        self.master.set(gain_for_position(self.master_position));
     }
 
     /// The zone volume, 0 to 100, of every Cast device ID in a zone (S249),
@@ -3587,6 +3602,56 @@ pub mod tests {
         let (held, heard) = bytes.split_at(48 * 4);
         assert!(held.iter().all(|byte| *byte == 0), "1 ms of silence first");
         assert!(heard.iter().any(|byte| *byte != 0));
+    }
+
+    // covers: S415, S71
+    #[test]
+    fn the_tap_gives_a_new_cut_back_from_the_first_frame_equalized_with_it() {
+        let curve = |gains_db| EqSettings {
+            enabled: true,
+            gains_db,
+            ..EqSettings::default()
+        };
+        let bass = curve(eq::PRESETS[1].gains_db);
+        let back = 10f32.powf(eq::headroom_cut_db(&bass, f64::from(SESSION_RATE)) as f32 / 20.0);
+        assert!(back > 1.5, "Bass Boost cuts {back}");
+        let (fake, mut cast) = listed();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_master(50.0);
+        cast.set_equalizer(&curve([0.0; 10]));
+        cast.set_hold_back(2000.0);
+        let mut left = Vec::new();
+        // The capture's output for a tone the curve leaves at 0 dB: the cut
+        // alone lowers it.
+        let mut feed = |lease: &mut CastLease, level: f32, blocks: usize| {
+            for _ in 0..blocks {
+                lease.push(&[level; 480 * 2], 480);
+                let mut bytes = Vec::new();
+                fake.state().readers[0].read_into(&mut bytes, 4800);
+                left.extend(
+                    bytes
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|frame| f64::from(i16::from_le_bytes([frame[0], frame[1]]))),
+                );
+            }
+        };
+        feed(&mut lease, 0.25, 300);
+        cast.set_equalizer(&bass);
+        feed(&mut lease, 0.25 / back, 250);
+        let before = left[120_000..140_000].iter().sum::<f64>() / 20_000.0;
+        for (span, what) in [
+            (150_000..190_000, "held back from before the change"),
+            (245_000..264_000, "equalized with the new curve"),
+        ] {
+            for frame in span {
+                let db = 20.0 * (left[frame] / before).log10();
+                assert!(db.abs() < 0.5, "frame {frame}, {what}: {db} dB");
+            }
+        }
     }
 
     // covers: S189

@@ -399,6 +399,9 @@ struct Shared {
     /// How many frames the input holds its audio back
     /// ([`asc_cast_set_hold_back`]).
     hold_back: AtomicUsize,
+    /// The equalizer's headroom cut as a linear factor
+    /// ([`asc_cast_set_equalizer`]).
+    give_back: AtomicU64,
 }
 
 /// A writer from `Box::into_raw` that [`Shared::attach`] swapped out.
@@ -421,6 +424,7 @@ impl Shared {
             dead: AtomicBool::new(false),
             at: OnceLock::new(),
             hold_back: AtomicUsize::new(0),
+            give_back: AtomicU64::new(1.0f64.to_bits()),
         }
     }
 
@@ -461,6 +465,17 @@ impl Shared {
         unsafe { &*writer }.write_f32(samples)
     }
 
+    /// Capture thread, inside a write: the running session gives the cut
+    /// back from the frame `delay` frames after its next one (S26, S415).
+    fn give_back(&self, delay: usize) {
+        let writer = self.writer.load(Ordering::SeqCst);
+        if !writer.is_null() {
+            let back = f64::from_bits(self.give_back.load(Ordering::Relaxed));
+            // SAFETY: as in `write`.
+            unsafe { &*writer }.give_back(back, delay);
+        }
+    }
+
     /// A call on this thread caught a panic: the handle is dead, and the
     /// location the panic hook noted for it is kept.
     fn panicked(&self) {
@@ -499,9 +514,6 @@ pub struct AscCast {
     master: MasterGain,
     /// The master position ([`asc_cast_set_master`]).
     master_position: f64,
-    /// The equalizer's headroom cut in dB, given back under the master
-    /// ([`asc_cast_set_equalizer`], S26).
-    eq_cut_db: f64,
     input_taken: bool,
     list: DeviceList,
     announcements: Announcements,
@@ -666,11 +678,9 @@ fn attempt_number(attempt: AttemptId) -> u64 {
 }
 
 impl AscCast {
-    /// Gives every session the master's gain with the equalizer's headroom
-    /// cut given back as far as unity allows (S26, S415).
+    /// Gives every session the master's gain (S415).
     fn send_master_gain(&self) {
-        let gain = gain_for_position(self.master_position);
-        self.master.set(eq::returned(gain, self.eq_cut_db).0);
+        self.master.set(gain_for_position(self.master_position));
     }
 
     /// A call panicked, or the worker thread ended.
@@ -1239,7 +1249,6 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
             shared: Arc::new(Shared::new()),
             master: MasterGain::default(),
             master_position: 100.0,
-            eq_cut_db: 0.0,
             input_taken: false,
             list: DeviceList::new(),
             announcements: Announcements::default(),
@@ -1650,8 +1659,9 @@ pub unsafe extern "C" fn asc_cast_set_master(cast: *mut AscCast, master: f64) {
 }
 
 /// Takes the headroom cut the equalizer makes with `enabled` and `gains_db`
-/// at [`CAST_RATE`], which the master's gain gives back as far as unity
-/// allows (S26, S415). Returns false when `cast` or `gains_db` is null.
+/// at [`CAST_RATE`], which each session gives back under the master as far
+/// as unity allows, from the first frame equalized with it (S26, S415).
+/// Returns false when `cast` or `gains_db` is null.
 ///
 /// # Safety
 ///
@@ -1676,8 +1686,10 @@ pub unsafe extern "C" fn asc_cast_set_equalizer(
     // SAFETY: as the caller's.
     unsafe {
         live(cast, false, |cast| {
-            cast.eq_cut_db = cut;
-            cast.send_master_gain();
+            let back = 10f64.powf(cut / 20.0);
+            cast.shared
+                .give_back
+                .store(back.to_bits(), Ordering::Relaxed);
             true
         })
     }
@@ -2048,6 +2060,7 @@ impl Feed {
         }
         let mut taken = 0;
         let target = shared.hold_back.load(Ordering::Relaxed);
+        shared.give_back(target);
         let (resampler, resampled, delay) =
             (&mut self.resampler, &mut self.resampled, &mut self.delay);
         self.fade.process(block, |piece| {
@@ -2313,7 +2326,7 @@ mod tests {
 
     // covers: S26, S415
     #[test]
-    fn the_master_gain_gives_the_equalizer_cut_back_under_the_master() {
+    fn the_master_sets_the_gain_and_the_equalizer_the_give_back() {
         let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
         let back = 10f64.powf(eq::cascade_peak_db(&gains, 48_000.0) / 20.0);
         let mut handle = create();
@@ -2321,11 +2334,14 @@ mod tests {
         let gain = |enabled: bool, master: f64| unsafe {
             asc_cast_set_master(handle, master);
             assert!(asc_cast_set_equalizer(handle, enabled, gains.as_ptr()));
-            inside(handle).master.get()
+            let given = inside(handle).shared.give_back.load(Ordering::Relaxed);
+            (inside(handle).master.get(), f64::from_bits(given))
         };
-        assert!((gain(true, 50.0) - 0.125 * back).abs() < 1e-9);
-        assert_eq!(gain(false, 50.0), 0.125);
-        assert_eq!(gain(true, 100.0), 1.0, "unity keeps the cut");
+        let (master, given) = gain(true, 50.0);
+        assert_eq!(master, 0.125);
+        assert!((given - back).abs() < 1e-9);
+        assert_eq!(gain(false, 50.0), (0.125, 1.0));
+        assert_eq!(gain(true, 100.0).0, 1.0, "unity keeps the cut");
         // SAFETY: null pointers are part of the contract; destroyed once.
         unsafe {
             assert!(!asc_cast_set_equalizer(handle, true, ptr::null()));
@@ -2334,6 +2350,74 @@ mod tests {
                 true,
                 gains.as_ptr()
             ));
+            asc_cast_destroy(&mut handle);
+        }
+    }
+
+    // covers: S415, S71
+    #[test]
+    fn a_curve_change_gives_the_cut_back_from_the_first_frame_equalized_with_it() {
+        let flat = [0.0; BAND_COUNT];
+        let bass = eq::PRESETS[1].gains_db;
+        let settings = EqSettings {
+            enabled: true,
+            gains_db: bass,
+            ..EqSettings::default()
+        };
+        let back = 10f32.powf(eq::headroom_cut_db(&settings, f64::from(CAST_RATE)) as f32 / 20.0);
+        assert!(back > 1.5, "Bass Boost cuts {back}");
+        let mut handle = create();
+        // SAFETY: a live handle, used by this thread only.
+        let mut input = unsafe { asc_cast_take_input(handle) };
+        let (writer, reader) = audio_ring(RING_FRAMES);
+        inside(handle).shared.attach(Some(writer));
+        let mut reader = reader.with_master(inside(handle).master.clone());
+        // SAFETY: a live handle and input, used by this thread only; 10 doubles.
+        unsafe {
+            asc_cast_set_master(handle, 50.0);
+            assert!(asc_cast_set_equalizer(handle, true, flat.as_ptr()));
+            asc_cast_set_hold_back(handle, 2000.0);
+            assert!(asc_cast_input_set_rate(input, 48_000.0));
+        }
+        let mut left = Vec::new();
+        // The capture's output for a tone the curve leaves at 0 dB: the cut
+        // alone lowers it.
+        let mut feed = |level: f32, blocks: usize| {
+            let block = vec![level; 480 * 2];
+            for _ in 0..blocks {
+                // SAFETY: a live input; `block` holds 480 stereo frames.
+                unsafe { asc_cast_input_write(input, block.as_ptr(), 480) };
+                let mut bytes = Vec::new();
+                reader.read_into(&mut bytes, RING_FRAMES);
+                left.extend(
+                    bytes
+                        .chunks_exact(4)
+                        .map(|frame| f64::from(i16::from_le_bytes([frame[0], frame[1]]))),
+                );
+            }
+        };
+        feed(0.25, 300);
+        // SAFETY: a live handle; 10 doubles.
+        assert!(unsafe { asc_cast_set_equalizer(handle, true, bass.as_ptr()) });
+        feed(0.25 / back, 250);
+        let before = left[120_000..140_000].iter().sum::<f64>() / 20_000.0;
+        let db = |sample: f64| 20.0 * (sample / before).log10();
+        for (span, what) in [
+            (150_000..190_000, "held back from before the change"),
+            (245_000..264_000, "equalized with the new curve"),
+        ] {
+            for frame in span {
+                assert!(
+                    db(left[frame]).abs() < 0.5,
+                    "frame {frame}, {what}: {} dB",
+                    db(left[frame])
+                );
+            }
+        }
+        inside(handle).shared.attach(None);
+        // SAFETY: destroyed once, by this thread.
+        unsafe {
+            asc_cast_input_destroy(&mut input);
             asc_cast_destroy(&mut handle);
         }
     }
