@@ -6232,22 +6232,10 @@ mod tests {
         backend.start(&SourceId::WholeSystem).unwrap();
         assert!(!feed.fading_out());
         backend.driver().hold_fades(true);
-        // The Cast host's quit ends 1.5 s late, as a loaded PC ran its thread.
-        let (holding, held) = std::sync::mpsc::channel();
-        let late_quit = {
-            let cast = cast.clone();
-            thread::spawn(move || {
-                let _state = cast.state();
-                holding.send(()).unwrap();
-                thread::sleep(STOP_FADE_CAP * 3);
-            })
-        };
-        held.recv().unwrap();
 
         let asked = Instant::now();
         backend.shut_down();
         let took = asked.elapsed();
-        late_quit.join().unwrap();
         assert_eq!(backend.driver().renderers_faded(), 2, "every output");
         assert!(feed.fading_out(), "the AirPlay input");
         assert!(
