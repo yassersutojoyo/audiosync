@@ -6806,6 +6806,16 @@ do {
     check(count(started, "resendTrackInfo()") == 1,
           "track info call site: a native sender that started gets the track info again through resendTrackInfo",
           started.isEmpty ? "the started branch of nativeStartFinished not found" : "no resendTrackInfo() in it")
+    let finishedFirst = body(native, after: "func nativeStartFinished(").components(separatedBy: "\n")
+        .dropFirst().first?.trimmingCharacters(in: .whitespaces)
+    let finishedGuard = (finishedFirst?.hasPrefix("guard ") == true) ? finishedFirst ?? "" : ""
+    check(finishedGuard.contains("nativeAirPlay === native"),
+          "native start: a start that finishes after its sender was replaced changes nothing",
+          "first line of nativeStartFinished: \(finishedFirst ?? "not found")")
+    // A quit only shuts the sender down and keeps nativeAirPlay, so the identity check alone lets it through.
+    check(finishedGuard.contains("!Self.exiting.load(ordering: .relaxed)"),
+          "native start: a start that finishes during a quit changes nothing",
+          "first line of nativeStartFinished: \(finishedFirst ?? "not found")")
     check(!app.isEmpty && count(app, "extension AppDelegate: TrackInfoHost") == 1
             && count(app, "func nowPlayingChanged(") == 0 && count(app, "func resendTrackInfo(") == 0
             && count(app, "func sendTrackInfo(") == 0 && count(app, "func trackInfoModelUpdated(") == 0
