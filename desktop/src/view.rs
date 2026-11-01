@@ -11371,7 +11371,6 @@ mod tests {
         app.ask_cast_address();
         drop(held);
         settle_cast_check(&app);
-        std::thread::sleep(Duration::from_millis(200));
         draw_frames();
         assert!(window.is_visible(), "the reopened dialog stays open");
         assert!(app.snapshot().speaker("cc:speaker.held").is_none());
