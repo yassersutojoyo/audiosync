@@ -857,8 +857,10 @@ pub struct Controller<D: Driver> {
     listing_error: Option<BackendError>,
     sources_error: Option<BackendError>,
     /// Why the input devices couldn't be listed last time, if they couldn't:
-    /// the log tells once per failure, and the list goes on without them.
+    /// the log tells once per failure, and the list keeps the last inputs
+    /// listed, so the chosen one doesn't show as unplugged while it captures.
     inputs_error: Option<BackendError>,
+    inputs_listed: Vec<SourceInfo>,
     /// The name and kind of each input device listed in this run, and the
     /// endpoint IDs a device left when a capture followed it to another
     /// (S329).
@@ -991,6 +993,7 @@ impl<D: Driver> Controller<D> {
             listing_error: None,
             sources_error: None,
             inputs_error: None,
+            inputs_listed: Vec::new(),
             inputs_seen: BTreeMap::new(),
             inputs_left_behind: BTreeSet::new(),
             listing_notes: Vec::new(),
@@ -4017,17 +4020,20 @@ impl<D: Driver> Controller<D> {
                         .log(|| "listing the input devices works again".to_owned());
                 }
                 self.take_inputs(&readings);
-                sources.extend(input_sources(readings));
+                self.inputs_listed = input_sources(readings);
             }
             Err(error) => {
                 if self.inputs_error.as_ref() != Some(&error) {
                     self.log.log(|| {
-                        format!("listing the input devices failed, so none are offered: {error}")
+                        format!(
+                            "listing the input devices failed, so the last listing stays: {error}"
+                        )
                     });
                     self.inputs_error = Some(error);
                 }
             }
         }
+        sources.extend(self.inputs_listed.iter().cloned());
         Ok(sources)
     }
 }
@@ -9747,7 +9753,7 @@ mod tests {
 
     // covers: S355
     #[test]
-    fn a_failed_input_listing_leaves_the_inputs_out_and_keeps_the_apps() {
+    fn a_failed_input_listing_keeps_the_apps_and_the_inputs_listed_before() {
         let mut backend = backend();
         backend.connect_input("mic", "Microphone", "USB");
         backend.fail_input_listing(Some(BackendError::System {
@@ -9771,7 +9777,10 @@ mod tests {
         assert_eq!(ids(&mut backend), apps);
         assert_eq!(ids(&mut backend), apps, "every refresh");
         backend.fail_input_listing(None);
-        assert_eq!(ids(&mut backend).len(), 3, "the input is back");
+        let listed = ids(&mut backend);
+        assert_eq!(listed.len(), 3, "the input is back");
+        backend.fail_input_listing(Some(BackendError::NotResponding));
+        assert_eq!(ids(&mut backend), listed, "the input stays listed");
     }
 
     // covers: S355
@@ -10486,7 +10495,12 @@ mod tests {
     #[test]
     fn a_bth_enumerator_makes_a_bluetooth_output_whose_start_lead_is_a_block_longer() {
         let mut backend = backend();
-        for (index, id, enumerator) in [(2, "a2dp", "BTHENUM"), (3, "le", "BTHLEDevice")] {
+        let bluetooth = [
+            (2, "a2dp", "BTHENUM"),
+            (3, "le", "BTHLEDevice"),
+            (4, "ble", "BTHLE"),
+        ];
+        for (index, id, enumerator) in bluetooth {
             backend.enumerate_endpoint(EndpointReading {
                 index,
                 id: Ok(id.to_owned()),
@@ -10501,20 +10515,20 @@ mod tests {
         }
         backend.poll();
         let listed = backend.list_outputs().unwrap();
-        for id in ["a2dp", "le"] {
+        for (_, id, _) in bluetooth {
             let output = listed.iter().find(|o| o.id == id).expect("listed");
             assert_eq!(output.kind, OutputKind::Bluetooth, "{id}");
+            backend.set_output_enabled(id, true).unwrap();
         }
-
-        backend.connect_output_as("buds", "Buds", OutputKind::Bluetooth);
-        backend.set_output_enabled("buds", true).unwrap();
         backend.start(&SourceId::WholeSystem).unwrap();
         let extra = |id: &str| {
             let session = backend.session.as_ref().expect("a session");
             session.outputs[id].control.extra_lead_frames()
         };
         let block = audiosync_core::render::BLUETOOTH_LEAD_FRAMES as i64;
-        assert_eq!(extra("buds"), block);
+        for (_, id, _) in bluetooth {
+            assert_eq!(extra(id), block, "{id}");
+        }
         assert_eq!((extra(SPEAKERS), extra(HEADPHONES)), (0, 0));
     }
 
