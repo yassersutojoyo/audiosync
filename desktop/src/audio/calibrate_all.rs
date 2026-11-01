@@ -47,6 +47,9 @@ pub struct Member {
     /// The AirPlay sender latency L_s read with `offset_ms` (S238); only an
     /// AirPlay member's is used.
     pub sender_ms: f64,
+    /// The AirPlay adjustment A read with `offset_ms`, which tells whether
+    /// the AirPlay delay changed since even where L clamps (S238).
+    pub adjustment_ms: f64,
 }
 
 impl Member {
@@ -303,6 +306,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
                 .map(|output| output.delay_ms),
             latency_ms: finite_ms(engine.hold_backs_ms.get(id).copied()) + allowance_ms,
             sender_ms: 0.0,
+            adjustment_ms: 0.0,
         })
         .collect();
     locals.sort_by(|a, b| {
@@ -321,6 +325,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
                 id: cast.id,
                 class: Class::Cast,
                 sender_ms: 0.0,
+                adjustment_ms: 0.0,
             }
         })
         .collect();
@@ -346,6 +351,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
             class: Class::AirPlay,
             offset_ms: Some(shown_ms),
             sender_ms: base_ms,
+            adjustment_ms: audio.airplay_adjustment(),
         })
         .collect();
     let reference_off = outputs
@@ -1376,6 +1382,7 @@ pub(crate) mod tests {
             offset_ms,
             latency_ms,
             sender_ms: 0.0,
+            adjustment_ms: 0.0,
         }
     }
 

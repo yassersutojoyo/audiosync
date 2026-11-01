@@ -6802,6 +6802,7 @@ mod tests {
                         offset_ms: Some(0.0),
                         latency_ms: 2500.0,
                         sender_ms: 0.0,
+                        adjustment_ms: 0.0,
                     })
                     .collect(),
                 ..Default::default()

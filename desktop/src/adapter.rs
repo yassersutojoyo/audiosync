@@ -1508,14 +1508,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .zip(&kept.members)
             .any(|(row, m)| match row.state {
                 RowState::Reference => reference.as_deref() != Some(m.id.as_str()),
-                // Against the L_s the run read, so a new L_s alone is no
-                // change, and a sender that stopped still compares.
-                _ if m.class == Class::AirPlay => !holds(
-                    m.offset_ms.map(|_| {
-                        native_airplay_latency_ms(m.sender_ms, self.audio.airplay_adjustment())
-                    }),
-                    m.offset_ms,
-                ),
+                // A, not L: a new L_s alone is no change, a sender that
+                // stopped still compares, and a change L clamps away still counts.
+                _ if m.class == Class::AirPlay => {
+                    !holds(Some(self.audio.airplay_adjustment()), Some(m.adjustment_ms))
+                }
                 _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
             });
         if !moved {
@@ -1678,6 +1675,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     offset_ms,
                     latency_ms: 0.0,
                     sender_ms,
+                    adjustment_ms: self.audio.airplay_adjustment(),
                 })
             })
             .collect();
@@ -13672,11 +13670,15 @@ mod tests {
     }
 
     /// Keeps a run's results, its reference row's output made the reference
-    /// of S174 (built in), since a run starts only with one.
+    /// of S174 (built in), since a run starts only with one, read with the
+    /// AirPlay adjustment set now.
     fn keep(
         adapter: &mut AudioAdapter<MockBackend>,
-        (sheet, members, rate): (Sheet, Vec<Member>, u32),
+        (sheet, mut members, rate): (Sheet, Vec<Member>, u32),
     ) {
+        for member in &mut members {
+            member.adjustment_ms = adapter.audio.airplay_adjustment();
+        }
         let reference = members[0].id.clone();
         let name = adapter.output_name(&reference);
         adapter
@@ -13812,6 +13814,42 @@ mod tests {
             "Apply would undo the new AirPlay delay"
         );
         assert_eq!(adapter.audio.airplay_adjustment(), 120.0);
+    }
+
+    // covers: S238, S395
+    #[test]
+    fn an_airplay_adjustment_changed_under_the_20000_ms_clamp_refuses_apply() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        let fake = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(fake.link(), None);
+        fake.set_latency(std::time::Duration::from_millis(2000));
+        adapter.poll();
+        adapter.audio.set_airplay_adjustment(18_500.0);
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(20_000.0));
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(20_000.0), 20_050.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, 2000.0);
+
+        fake.set_latency(std::time::Duration::from_millis(1750));
+        adapter.poll();
+        // A becomes 18 150 ms; against the run's L_s it still clamps to 20 000.
+        adapter.set_airplay_delay(19_900.0);
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
+        assert_eq!(
+            state.phase,
+            AllPhase::Stale,
+            "Apply would undo the new AirPlay delay"
+        );
+        assert_eq!(adapter.audio.airplay_adjustment(), 18_150.0);
     }
 
     /// Applies an AirPlay row against a sender's L_s of 2000 ms, then a
