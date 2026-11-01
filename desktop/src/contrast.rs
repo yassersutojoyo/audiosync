@@ -1547,8 +1547,8 @@ fn only_a_zone_headers_badge_switches_the_zone() {
     assert!(header[badge..].find("root.toggled();").unwrap() < 800);
     assert_eq!(
         header.matches("TouchArea {").count(),
-        3,
-        "the box, the name and the arrow"
+        4,
+        "the box, the name, the count line and the arrow"
     );
     // A FocusScope that takes the focus on click accepts the press (Slint
     // 1.18), so the box's TouchArea would never see a click on the name.

@@ -8872,6 +8872,130 @@ mod tests {
         );
     }
 
+    /// The first element `id` names in the main window.
+    fn element(app: &App, id: &str) -> Option<i_slint_backend_testing::ElementHandle> {
+        i_slint_backend_testing::ElementHandle::find_by_element_id(&app.main, id).next()
+    }
+
+    /// Rests the pointer on the middle of the element `label` names and
+    /// returns where, and the tip `tip` names once it had time to show.
+    fn rest_on(
+        app: &App,
+        label: &str,
+        tip: &str,
+    ) -> (
+        slint::LogicalPosition,
+        Option<i_slint_backend_testing::ElementHandle>,
+    ) {
+        let label = element(app, label).unwrap_or_else(|| panic!("{label}"));
+        let (at, size) = (label.absolute_position(), label.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        app.main
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_secs(2));
+        slint::platform::update_timers_and_animations();
+        (position, element(app, tip))
+    }
+
+    /// Checks that the tip on `label` holds more than `label` shows. The
+    /// tip's Text has no accessible label to compare (Narrator reads the
+    /// row). Its font is no larger than the label's yet it needs more width
+    /// than the label has: the label is cut and the tip is not.
+    fn shows_in_full(app: &App, label: &str, tip: &str) {
+        let width = element(app, label).map_or(0.0, |label| label.size().width);
+        let (_, shown) = rest_on(app, label, tip);
+        let shown = shown.unwrap_or_else(|| panic!("a tooltip on {label}"));
+        assert!(
+            shown.size().width > width,
+            "{label}: tip {} wide, label {width}",
+            shown.size().width
+        );
+    }
+
+    /// The main window over `backend` at its narrowest, 776 px, where the
+    /// speaker list takes 464 px. draw_frames sets 1000 px again.
+    fn narrow_app(backend: MockBackend) -> Rc<App> {
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        hold_clock();
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        app
+    }
+
+    /// A long-named copy of the mock's Kitchen speaker.
+    fn long_named_speaker(backend: &MockBackend, id: &str) -> ui_model::Speaker {
+        let mut speaker = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        speaker.id = id.into();
+        speaker.name = "The long living room television by the window and the bookshelf".into();
+        speaker
+    }
+
+    /// A zone name or zone count line cut to "…" in the half-width speaker
+    /// list shows in full in a tooltip while the pointer rests on it, and a
+    /// press hides the tip until the pointer leaves.
+    #[test]
+    fn a_long_zone_name_shows_in_full_in_its_tooltip() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut tv = long_named_speaker(&backend, "airplay:tv");
+        tv.enabled = true;
+        tv.waiting = Some(ui_model::Waiting::ForPin);
+        backend.add_speaker(tv);
+        let name = "The long living room zone by the window and the bookshelf";
+        backend.add_zone("zone:long", name, &["airplay:tv"]);
+        let app = narrow_app(backend);
+        shows_in_full(&app, "ZoneHeader::name-text", "ZoneHeader::name-tip");
+        shows_in_full(&app, "ZoneHeader::count-text", "ZoneHeader::count-tip");
+
+        let window = app.main.window();
+        let (position, _) = rest_on(&app, "ZoneHeader::count-text", "ZoneHeader::count-tip");
+        let button = PointerEventButton::Left;
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+        let nudged = slint::LogicalPosition::new(position.x + 1.0, position.y);
+        window.dispatch_event(WindowEvent::PointerMoved { position: nudged });
+        advance_clock(Duration::from_secs(2));
+        slint::platform::update_timers_and_animations();
+        assert!(
+            element(&app, "ZoneHeader::count-tip").is_none(),
+            "a press hides the count line's tip"
+        );
+    }
+
+    /// A speaker name cut to "…" in its In zones row shows in full in a
+    /// tooltip.
+    #[test]
+    fn a_long_in_zones_name_shows_in_full_in_its_tooltip() {
+        let mut backend = MockBackend::new();
+        let den = long_named_speaker(&backend, "airplay:den");
+        backend.add_speaker(den);
+        // A short zone name, so the "In Den" link leaves the name room.
+        backend.add_zone("zone:den", "Den", &["airplay:den"]);
+        let app = narrow_app(backend);
+        // The In zones rows sit at the end of the list.
+        let list = element(&app, "MainWindow::scroll").expect("the speaker list");
+        let (at, size) = (list.absolute_position(), list.size());
+        scroll(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+            -3000.0,
+        );
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        shows_in_full(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
+    }
+
     // covers: S228
     #[test]
     fn a_renamed_row_shows_its_device_name_in_the_name_tooltip() {
