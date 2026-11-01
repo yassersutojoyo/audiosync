@@ -3384,6 +3384,41 @@ pub mod tests {
         assert!(heard.iter().any(|byte| *byte != 0));
     }
 
+    // covers: S189
+    #[test]
+    fn a_fade_out_silences_the_held_back_audio_and_a_new_lease_plays_none_of_it() {
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        let (fake, mut cast) = listed();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_hold_back(100.0);
+        let frames = 10_000;
+        let heard = |fake: &FakeCast| -> Vec<u8> {
+            let mut bytes = Vec::new();
+            fake.state().readers[0].read_into(&mut bytes, frames);
+            bytes
+        };
+        lease.push(&vec![0.5; 2 * frames], frames);
+        assert!(heard(&fake).iter().any(|byte| *byte != 0));
+
+        cast.request_fade_out();
+        lease.push(&vec![0.5; 2 * frames], frames);
+        let last = heard(&fake);
+        assert!(
+            last[fade * 4..].iter().all(|byte| *byte == 0),
+            "silent after the fade, though 100 ms were held back"
+        );
+
+        drop(lease);
+        let mut lease = cast.lease().expect("the tap");
+        lease.push(&vec![0.0; 2 * frames], frames);
+        assert!(
+            heard(&fake).iter().all(|byte| *byte == 0),
+            "the next capture plays none of the old audio"
+        );
+    }
+
     fn delayed(line: &mut DelayLine, input: &[f32], target: usize) -> Vec<f32> {
         let mut out = Vec::new();
         line.process(input, target, |held| out.extend_from_slice(held));
