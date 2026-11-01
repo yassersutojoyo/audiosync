@@ -21,6 +21,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Changed
 
 - AirPlay 2 speakers, stereo pairs and home theater groups play without turning on AirPlay 2 (Experimental) first. A speaker that plays both AirPlay 1 and AirPlay 2 still uses AirPlay 1 unless that setting is on. On the Mac and on Windows.
+- On the Mac, a speaker row in the menu bar panel shows "Reconnecting…", "Connecting…" for a Google Cast speaker, or "Not on the network right now, plays once it's back", as the main window does. Before, only VoiceOver read them.
 - On Windows, the tray panel slides up and fades in as it opens, as Windows 11's own panels do.
 - On Windows, the note that no speakers were found suggests setting the network to Private only while Windows counts a connected network as Public.
 - A Google Cast speaker that ends the stream on its own gets it again, unless it already ended it in the 10 minutes before, which ends the session. Before, the second end in a session always ended it. On the Mac and on Windows.

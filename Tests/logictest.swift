@@ -12652,6 +12652,19 @@ do {
           "cast: a fixed-volume row offers no Mute")
 }
 
+do {
+    let t = UIStrings()
+    let joining = CastRow(status: .connecting, muted: false, volumeFixed: false, group: nil)
+    let retrying = t.rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, unannounced: false, target: nil)
+    let away = t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: true, target: nil)
+    let starting = t.rowNote(cast: joining, waitingForAirPlay2: false, unannounced: false, target: nil)
+    check(t.panelRowNote(retrying, cast: nil) == t.reconnecting
+            && t.panelRowNote(away, cast: nil) == t.notOnNetwork
+            && t.panelRowNote(starting, cast: joining) == "Connecting…"
+            && t.panelRowNote(t.waitingForAirPlay2, cast: nil) == nil,
+          "a panel row shows its Reconnecting, Not on network and Cast Connecting note")
+}
+
 // covers: C13 (the model name in the Mac's discovery line, left out when missing)
 do {
     let audio = CastDeviceChange.changed(CastDevice(id: "K1", name: "Kitchen", model: "Chromecast Audio"), offsetMs: nil)
