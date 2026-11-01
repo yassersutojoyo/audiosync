@@ -70,6 +70,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, when Windows fails to list the input devices for a moment, the source menu keeps the ones it listed last. Before, the input you capture from showed as not connected, and the phone remote refused to pick it.
 - In the web remote, when a speaker or zone volume change you drag fails, the error stays under the slider. Before, a late update from an earlier step of the same drag could hide it at once. On the Mac and on Windows.
 - On Windows, Narrator reads the button that stops a calibration run as "Cancel", as VoiceOver does on the Mac. Before, it read "Cancel calibrating all speakers", also while calibrating a zone.
+- On Windows, Narrator reads the Undo button in the calibration results as "Undo the new delays", as VoiceOver does on the Mac. Before, it read only "Undo".
 - In the Linux preview, the notice about saved settings or AirPlay pairings that couldn't be read says the old file is in ~/.local/share/audiosync. Before, it said to type %LOCALAPPDATA% in File Explorer.
 - On Windows, a Google Cast speaker you added by address and then took out of its zone has the same name in its notices as in its row. Before, its notices could still use the name the zone kept for it, and renaming it to the name its row showed kept that as a name of your own.
 - On Windows, the speaker list no longer says AudioSync can't look for Google Cast speakers while a Cast speaker you added by address or one that's connected or connecting is listed, as on the Mac.
