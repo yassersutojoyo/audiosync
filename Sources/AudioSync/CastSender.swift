@@ -39,6 +39,8 @@ final class CastSender {
     // On the queue only.
     /// The hold-back the sender gets, also when it is created later.
     private var queuedHoldBackMs = 0.0
+    /// The master the sender gets, also when it is created later.
+    private var queuedMaster = 100.0
     private var handle: OpaquePointer?
     private var input: OpaquePointer?
     private var timer: DispatchSourceTimer?
@@ -68,6 +70,7 @@ final class CastSender {
             }
             self.handle = created
             _ = asc_cast_set_hold_back(created, self.queuedHoldBackMs)
+            asc_cast_set_master(created, self.queuedMaster)
             self.sendTrack()
             if let taken = asc_cast_take_input(created) {
                 self.input = taken
@@ -207,6 +210,16 @@ final class CastSender {
             if let handle = self.handle { _ = asc_cast_set_hold_back(handle, ms) }
         }
         return true
+    }
+
+    /// The master position (0 to 100), live: it scales the audio, never the
+    /// device's volume (S415).
+    func setMaster(_ master: Double) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.queuedMaster = master
+            if let handle = self.handle { asc_cast_set_master(handle, master) }
+        }
     }
 
     /// Names the device the user selected, or none with nil (C108).

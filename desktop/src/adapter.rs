@@ -2729,11 +2729,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// What plays now as preset `id` named `name`.
-    /// A preset member's stored volume: an AirPlay speaker's own volume s,
-    /// which plays at s × zone × master (S290), any other row's volume.
+    /// A preset member's stored volume: an AirPlay or Cast speaker's own
+    /// volume s, which its device gets times its zone (S290, S415), any
+    /// other row's volume.
     fn set_preset_volume(&mut self, key: &SpeakerKey, volume: f64) {
         match key {
             SpeakerKey::AirPlay(airplay_id) => self.audio.set_airplay_volume(airplay_id, volume),
+            SpeakerKey::Cast(cast_id) => self.audio.set_cast_volume(cast_id, volume),
             _ => self.set_speaker_volume(&key.to_string(), volume),
         }
     }
@@ -2777,7 +2779,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             id,
             kind: SpeakerKind::Cast,
             enabled: speaker.enabled,
-            volume: speaker.volume,
+            volume: row_level(speaker.device_level),
             delay_ms: Some(speaker.offset_ms),
             auto_connect: false,
             availability: Availability::Open,
@@ -4906,7 +4908,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             Some(SpeakerKey::AirPlay(airplay_id)) => {
                 self.audio.move_airplay_row(&airplay_id, position);
             }
-            Some(SpeakerKey::Cast(cast_id)) => self.audio.set_cast_volume(&cast_id, position),
+            Some(SpeakerKey::Cast(cast_id)) => self.audio.move_cast_row(&cast_id, position),
             None => {}
         }
     }
@@ -15968,9 +15970,8 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
 
         cast_first_status(&mut adapter, &fake, 0.8);
-        // Master × own: 0.7 × 0.3.
         let level = *fake.state().volumes.last().expect("a Cast volume");
-        assert!((level - 0.21).abs() < 1e-9, "{level}");
+        assert!((level - 0.3).abs() < 1e-9, "{level}");
         assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
     }
 
@@ -15992,6 +15993,36 @@ mod tests {
 
         cast_first_status(&mut adapter, &fake, 0.8);
         assert!(kitchen(&adapter).is_some());
+    }
+
+    // covers: S251, S415
+    #[test]
+    fn a_cast_own_level_above_100_is_saved_and_recalled_whole() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![cc(CAST_KITCHEN)])],
+            speaker_presets: vec![saved_preset(&[(cc(CAST_KITCHEN), Some(125.0))])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        cast_first_status(&mut adapter, &fake, 0.4);
+        let last = |fake: &FakeCast| *fake.state().volumes.last().expect("a Cast volume");
+        // The row at 100 in a zone at 80: own 1.25.
+        adapter.set_speaker_volume(&cc(CAST_KITCHEN), 100.0);
+        assert!((last(&fake) - 1.0).abs() < 1e-9, "{}", last(&fake));
+        let preset = adapter.capture_preset("preset:2", "Loud").unwrap();
+        let volume = preset
+            .members
+            .iter()
+            .find(|member| member.key == cc(CAST_KITCHEN))
+            .and_then(|member| member.volume)
+            .expect("saved");
+        assert!((volume - 125.0).abs() < 1e-9, "saved {volume}");
+
+        // Own 1.25 × zone 0.45.
+        adapter.recall_preset("preset:1");
+        assert!((last(&fake) - 0.5625).abs() < 1e-9, "{}", last(&fake));
     }
 
     fn cast_first_status(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast, level: f64) {
@@ -16453,15 +16484,17 @@ mod tests {
             output_gain(DEFAULT_LOCAL_POSITION, 50.0) as f32,
             "in no zone: the gain of before"
         );
-        // Master × zone × own: 1 × 0.8 × 0.5, then the master at 0.5.
-        assert_eq!(fake.state().volumes, [0.4, 0.2]);
+        // The row at 50 in the zone at 80; the master sends nothing (S415).
+        assert_eq!(fake.state().volumes, [0.5]);
 
         adapter.set_zone_volume("zone:1", 25.0);
         assert_eq!(
             gain(&adapter, SPEAKERS),
             zoned_output_gain(30.0, 25.0, 50.0) as f32
         );
-        assert_eq!(fake.state().volumes, [0.4, 0.2, 0.0625]);
+        let volumes = fake.state().volumes.clone();
+        assert_eq!(volumes.len(), 2);
+        assert!((volumes[1] - 0.25 * 0.625).abs() < 1e-9, "{volumes:?}");
         assert_eq!(adapter.snapshot().zones[0].volume, 25.0);
         let state = adapter.snapshot();
         assert_eq!(
@@ -16472,7 +16505,7 @@ mod tests {
         assert_eq!(state.master_volume, 50.0, "the master stays");
 
         adapter.set_zone_volume("zone:9", 10.0);
-        assert_eq!(fake.state().volumes.len(), 3, "no such zone: nothing");
+        assert_eq!(fake.state().volumes.len(), 2, "no such zone: nothing");
     }
 
     // covers: S246
@@ -16837,9 +16870,9 @@ mod tests {
                 .gain,
             zoned_output_gain(30.0, 45.0, 70.0) as f32
         );
-        // Master × zone × own: 0.7 × 0.45 × 0.5.
+        // Zone × own: 0.45 × 0.5.
         let cast = *fake.state().volumes.last().expect("a Cast volume");
-        assert!((cast - 0.1575).abs() < 1e-9, "{cast}");
+        assert!((cast - 0.225).abs() < 1e-9, "{cast}");
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 

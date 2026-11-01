@@ -286,11 +286,16 @@ struct AppSettings: Equatable {
 
     /// The stored list without the elements that can't be read as `T`; none
     /// when the data is missing or isn't a list. The debug log names what
-    /// didn't read under `key`.
-    static func decodeList<T: Decodable>(_ type: T.Type, _ data: Data?, key: String) -> [T] {
+    /// didn't read under `key`; `log` takes the line for a list that didn't.
+    static func decodeList<T: Decodable>(_ type: T.Type, _ data: Data?, key: String,
+                                         log: (String) -> Void = { DebugTrace.log($0) }) -> [T] {
         let decoder = JSONDecoder()
         decoder.userInfo[StoredTrace.settingsKey] = key
-        guard let data, let list = try? decoder.decode([LossyDecoded<T>].self, from: data) else { return [] }
+        guard let data else { return [] }
+        guard let list = try? decoder.decode([LossyDecoded<T>].self, from: data) else {
+            log("[AudioSync] settings: \(key) unreadable, nothing kept")
+            return []
+        }
         return list.compactMap(\.value)
     }
 }

@@ -93,13 +93,13 @@ extension AppDelegate {
 
     /// The master scales every speaker AudioSync plays: a local speaker's
     /// gain, each AirPlay speaker's volume, which AudioSync's own sender
-    /// scales by it, and the Cast speaker's device volume (C104).
+    /// scales by it, and the audio the Cast speaker gets (S415).
     func setMasterVolume(_ position: Double) {
         guard let v = VolumeCurve.accepted(position) else { return }
         masterVolume = v
         LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
         nativeAirPlay?.setMaster(masterVolume)
-        if let level = castModel.setMaster(masterVolume) { castSender?.setVolume(level) }
+        castSender?.setMaster(masterVolume)
         pushModel()
     }
 

@@ -21,6 +21,7 @@ extension AppDelegate {
                                 onChanges: { [weak self] changes in self?.castDevicesChanged(changes) },
                                 onEvents: { [weak self] events in self?.castEventsArrived(events) })
         castSender = sender
+        sender.setMaster(masterVolume)
         castModel.foundIDs = store.castFoundIDs
         sender.start { [weak self] running, discovering in
             self?.castSenderStarted(sender, running: running, discovering: discovering)
@@ -226,9 +227,16 @@ extension AppDelegate {
         castFollow()
     }
 
-    /// The device's own level (slider position 0 to 100); the device gets it
-    /// times the master (C104).
+    /// The row moved to `position`, 0 to 100: the level the device gets (S415).
     func setCastVolume(_ appID: String, _ position: Double) {
+        guard let id = CastID.device(appID) else { return }
+        if let level = castModel.moveRow(id, row: position) { castSender?.setVolume(level) }
+        pushModel()
+    }
+
+    /// The device's own level, as a preset keeps it; the device gets it
+    /// times the zone (C104, S415).
+    func setCastOwnVolume(_ appID: String, _ position: Double) {
         guard let id = CastID.device(appID) else { return }
         if let level = castModel.setVolume(id, position: position) { castSender?.setVolume(level) }
         pushModel()
@@ -369,7 +377,7 @@ extension AppDelegate {
             let volume = castModel.volumes[id]
             return AppModel.Speaker(id: CastID.app(id), name: castName(id), tag: .cast,
                                     enabled: castModel.enabled == id,
-                                    volume: castModel.volume(of: id),
+                                    volume: castModel.rowVolume(of: id),
                                     offsetMs: castModel.offset(of: id),
                                     systemName: text.deviceName(device.name),
                                     cast: CastRow(status: castModel.status(of: id), muted: volume?.muted ?? false,

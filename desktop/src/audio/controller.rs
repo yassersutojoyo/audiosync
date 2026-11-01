@@ -4520,6 +4520,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn move_cast_row(&mut self, id: &str, row: f64) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.move_row(id, row);
+        }
+    }
+
     fn set_cast_muted(&mut self, id: &str, muted: bool) {
         if let Some(cast) = self.cast.as_mut() {
             cast.set_muted(id, muted);
@@ -10955,7 +10961,7 @@ mod tests {
 
     // covers: C104
     #[test]
-    fn the_master_reaches_the_cast_speaker_as_its_device_volume() {
+    fn the_master_never_reaches_the_cast_speakers_device_volume() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
         let (mut backend, _fake, _kitchen) = local_delay_with_airplay();
         backend.set_master_volume(50.0);
@@ -10966,9 +10972,9 @@ mod tests {
         backend.start(&SourceId::WholeSystem).unwrap();
         backend.set_cast_enabled(KITCHEN, true).unwrap();
         backend.set_cast_volume(KITCHEN, 80.0);
-        assert_eq!(cast.state().volumes, [0.4]);
+        assert_eq!(cast.state().volumes, [0.8]);
         backend.set_master_volume(0.0);
-        assert_eq!(cast.state().volumes, [0.4, 0.0]);
+        assert_eq!(cast.state().volumes, [0.8]);
         assert!(cast.state().mutes.is_empty());
     }
 
