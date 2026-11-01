@@ -247,6 +247,24 @@ do {
           "airplay volume event: once every set reached the core, a report moves the row again")
 }
 
+// covers: S290 (a level set on the speaker while a zone move is on its way holds nothing)
+do {
+    var events = AirPlayVolumeEvents()
+    let first = events.sendingZones(["tv": 40])
+    events.reachedZones(first)
+    let moved = events.sendingZones(["tv": 0])
+    // The remote set 30 against zone 40 before the move to 0 reached the core, which then mutes the speaker.
+    let held = events.held("tv", level: 30, zone: 0)
+    let row = AirPlayDeviceLevel.row(own: 75, zone: 0, held: held)
+    check(first == ["tv"] && moved == ["tv"] && events.applies("tv") && row == 0,
+          "airplay level: a level set on the speaker while a zone move to 0 is on its way leaves the row at the muted 0",
+          "held \(String(describing: held)), row \(row)")
+    events.reachedZones(moved)
+    // covers: S290
+    check(events.held("tv", level: 30, zone: 0) == 30 && events.sendingZones(["tv": 0]).isEmpty,
+          "airplay level: once the zone move reached the core, a level set on the speaker at zone 0 is held again")
+}
+
 // MARK: Audio source persistence
 // covers: S12 (the stored form)
 for src in [AudioSource.system, .app(bundleID: "com.spotify.client"), .input(uid: "BuiltInMicrophoneDevice")] {

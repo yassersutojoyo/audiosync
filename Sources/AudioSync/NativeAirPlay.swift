@@ -296,14 +296,15 @@ final class NativeAirPlay {
     /// The zone position (0 to 100) of every receiver in a zone, live; the
     /// rest are in no zone (S249). Main queue.
     func setZones(_ zones: [String: Double]) {
+        let moved = volumeEvents.sendingZones(zones)
         queue.async { [weak self] in
             guard let self else { return }
-            let old = self.zoneVolumes
             self.zoneVolumes = zones
-            guard let handle = self.handle else { return }
-            for id in Set(old.keys).union(zones.keys) where old[id] != zones[id] {
-                _ = asc_airplay_set_zone_volume(handle, id, zones[id] ?? SpeakerZone.noZoneVolume)
+            if let handle = self.handle {
+                for id in moved { _ = asc_airplay_set_zone_volume(handle, id, zones[id] ?? SpeakerZone.noZoneVolume) }
             }
+            // Behind every report polled before the move, as in setVolume.
+            DispatchQueue.main.async { [weak self] in self?.volumeEvents.reachedZones(moved) }
         }
     }
 

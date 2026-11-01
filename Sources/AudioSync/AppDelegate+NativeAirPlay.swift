@@ -176,7 +176,7 @@ extension AppDelegate {
             guard let receiver = NativeAirPlayID.receiver(id),
                   nativeAirPlay?.volumeEvents.applies(receiver) == true else { return }
             airplayVolume[id] = position
-            airplayHeldLevel[id] = AirPlayDeviceLevel.held(level: level, zone: airPlayZoneVolume(id))
+            airplayHeldLevel[id] = nativeAirPlay?.volumeEvents.held(receiver, level: level, zone: airPlayZoneVolume(id))
             pushModel()
         case .ptpPortsTaken:
             updatePtpPortNotice { $0.reported() }
