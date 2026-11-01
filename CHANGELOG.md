@@ -30,6 +30,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The pairing prompt, its notices and the Guide ask for the code an Apple TV or AirPlay 2 speaker shows, the word its speaker row already uses, instead of a PIN. On the Mac and on Windows.
 - AirPlay 2 speakers, stereo pairs and home theater groups play without turning on AirPlay 2 (Experimental) first. A speaker that plays both AirPlay 1 and AirPlay 2 still uses AirPlay 1 unless that setting is on. On the Mac and on Windows.
 - On Windows, the main window opens narrower: the speaker list starts at 464 px instead of 644 px and grows as you widen the window, up to its old width. A window you resized before opens at the new width once, in the same place and height.
+- On Windows, a zone name, zone count, zone member name or stereo pair member line that ends in an ellipsis in the half-width speaker list shows its full text in a tooltip.
 - On Windows, the main window, the tray panel and the equalizer are more compact: less padding in cards and rows, smaller gaps and notes in the caption size, and a smaller logo in the header. In a wide window the header and notices end where the speaker list does.
 - On the Mac, a speaker row in the menu bar panel shows its note, such as "Reconnecting…", "Waiting for the password", "Not on the network" or why a zone member doesn't play, as the main window does. Before, only VoiceOver read most of them.
 - On Windows, the tray panel slides up and fades in as it opens, as Windows 11's own panels do.
