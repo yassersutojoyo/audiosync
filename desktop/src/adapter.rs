@@ -16441,6 +16441,29 @@ mod tests {
         assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
     }
 
+    // covers: S393
+    #[test]
+    fn the_cast_list_says_the_search_failed_only_while_it_lists_none() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = FakeCast::default();
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        audio.set_cast(fake.link());
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        fake.state().discovery_stopped = true;
+        adapter.poll();
+        assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let empty = FakeCast::default();
+        empty.state().discovery_stopped = true;
+        audio.set_cast(empty.link());
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        assert_eq!(adapter.snapshot().cast_list, CastList::Failed);
+    }
+
     // covers: S394, S401 (the amount counts the AirPlay speaker's own receiver offset)
     #[test]
     fn airplay_speakers_at_the_sender_delay_limit_say_they_play_ahead_of_the_cast_speaker() {
