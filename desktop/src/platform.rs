@@ -168,8 +168,12 @@ pub fn linux_summary(
 /// The computer's name from the kernel's hostname file, else `$HOSTNAME`,
 /// which an app started from the menu or at login doesn't get.
 #[cfg_attr(windows, allow(dead_code))]
-pub fn computer_name_from(_hostname_file: Option<&str>, env: Option<String>) -> Option<String> {
-    env
+pub fn computer_name_from(hostname_file: Option<&str>, env: Option<String>) -> Option<String> {
+    hostname_file
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .or(env)
 }
 
 /// The host's name as the debug log's first line gives it, from Rust's
