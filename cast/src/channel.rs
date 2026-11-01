@@ -182,6 +182,7 @@ pub struct Channel {
     events: VecDeque<Event>,
     media: Option<Media>,
     volume_sent: Option<Instant>,
+    volume_interval: Duration,
     /// The level a drag asked for inside [`VOLUME_INTERVAL`]; the latest
     /// wins (C70).
     volume_queued: Option<f64>,
@@ -213,6 +214,7 @@ impl Channel {
             events: VecDeque::new(),
             media: None,
             volume_sent: None,
+            volume_interval: VOLUME_INTERVAL,
             volume_queued: None,
             volume_unconfirmed: None,
             assumed_volume: None,
@@ -412,7 +414,7 @@ impl Channel {
         }
         let level = level.clamp(0.0, 1.0);
         match self.volume_sent {
-            Some(sent) if now < sent + VOLUME_INTERVAL => self.volume_queued = Some(level),
+            Some(sent) if now < sent + self.volume_interval => self.volume_queued = Some(level),
             _ => self.send_level(now, level),
         }
         Ok(())
@@ -453,6 +455,12 @@ impl Channel {
     /// its volume or level out (C37, C81).
     pub fn assume_volume(&mut self, volume: Option<DeviceVolume>) {
         self.assumed_volume = volume;
+    }
+
+    /// Replaces [`VOLUME_INTERVAL`] on this channel, so a test can hold a
+    /// level waiting at a moment of its choosing.
+    pub(crate) fn set_volume_interval(&mut self, interval: Duration) {
+        self.volume_interval = interval;
     }
 
     /// Takes the level still waiting for its interval, or else the one sent
@@ -646,7 +654,7 @@ impl Channel {
             return;
         }
         if let (Some(level), Some(sent)) = (self.volume_queued, self.volume_sent)
-            && now >= sent + VOLUME_INTERVAL
+            && now >= sent + self.volume_interval
             && matches!(self.phase, Phase::Ready | Phase::Running)
         {
             self.send_level(now, level);
@@ -702,7 +710,7 @@ impl Channel {
             next = next.min(pending.deadline);
         }
         if let (Some(_), Some(sent)) = (self.volume_queued, self.volume_sent) {
-            next = next.min(sent + VOLUME_INTERVAL);
+            next = next.min(sent + self.volume_interval);
         }
         next
     }

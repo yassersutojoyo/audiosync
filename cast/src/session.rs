@@ -554,6 +554,13 @@ impl CastSession {
         self.client.set_volume(level)
     }
 
+    /// Replaces the C70 interval on the current channel only; a reconnect's
+    /// channel keeps the default. For tests.
+    #[doc(hidden)]
+    pub fn set_volume_interval(&mut self, interval: Duration) {
+        self.client.set_volume_interval(interval);
+    }
+
     pub fn set_muted(&mut self, muted: bool) -> Result<(), VolumeError> {
         self.client.set_muted(muted)?;
         self.mute_asked = true;

@@ -1120,41 +1120,32 @@ fn device_volume_changes_never_touch_the_samples() {
 fn a_level_waiting_for_its_interval_reaches_the_device_after_a_reconnect() {
     let device = FakeDevice::start(Behavior::default());
     let (mut session, _feed) = start(&device);
-    let mut landed = false;
-    for (attempt, last) in [0.3, 0.5, 0.7].into_iter().enumerate() {
-        let first = Instant::now();
-        session.set_volume(last - 0.1).expect("sent");
-        session.set_volume(last).expect("waits for the interval");
-        device.send(Command::DropConnection);
-        assert!(device.wait_for_hangup(HANG_GUARD));
-        // Past the interval the old channel sends the level itself before it reads the drop.
-        let in_time = first.elapsed() < Duration::from_millis(80);
-        run_until(&mut session, Duration::from_secs(10), |event| {
-            matches!(event, SessionEvent::Recovered { .. })
-        });
-        if !in_time {
-            continue;
-        }
-        let last_sent = |device: &FakeDevice| {
-            device
-                .payloads(NS_RECEIVER, "SET_VOLUME")
-                .last()
-                .map(|payload| payload["volume"]["level"].clone())
-        };
-        let until = Instant::now() + Duration::from_secs(3);
-        while last_sent(&device) != Some(json!(last)) {
-            assert!(
-                Instant::now() < until,
-                "the level waiting at the drop never reached the device: {:?}",
-                device.payloads(NS_RECEIVER, "SET_VOLUME")
-            );
-            session.run_for(Duration::from_millis(50));
-        }
-        assert_eq!(device.connection_count() as usize, attempt + 2);
-        landed = true;
-        break;
+    // An interval that outlasts the drop holds the last level waiting on any runner.
+    session.set_volume_interval(Duration::from_secs(60));
+    session.set_volume(0.4).expect("sent");
+    session.set_volume(0.5).expect("waits for the interval");
+    device.send(Command::DropConnection);
+    assert!(device.wait_for_hangup(HANG_GUARD));
+    let last_sent = |device: &FakeDevice| {
+        device
+            .payloads(NS_RECEIVER, "SET_VOLUME")
+            .last()
+            .map(|payload| payload["volume"]["level"].clone())
+    };
+    assert_ne!(last_sent(&device), Some(json!(0.5)), "sent before the drop");
+    run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    let until = Instant::now() + Duration::from_secs(3);
+    while last_sent(&device) != Some(json!(0.5)) {
+        assert!(
+            Instant::now() < until,
+            "the level waiting at the drop never reached the device: {:?}",
+            device.payloads(NS_RECEIVER, "SET_VOLUME")
+        );
+        session.run_for(Duration::from_millis(50));
     }
-    assert!(landed, "no drop landed inside the 100 ms interval");
+    assert_eq!(device.connection_count(), 2);
     session.stop();
     device.join();
 }
