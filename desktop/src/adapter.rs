@@ -12635,6 +12635,13 @@ mod tests {
 
         phone_mix(&mut adapter, &["chat.exe"]);
         assert_eq!(page(&adapter).source_id.as_deref(), Some("app:chat.exe"));
+        let started = captures(&adapter).len();
+        phone_mix(&mut adapter, &["chat.exe"]);
+        assert_eq!(
+            captures(&adapter).len(),
+            started,
+            "the app in use: no restart"
+        );
     }
 
     // covers: S163

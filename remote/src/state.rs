@@ -326,6 +326,7 @@ fn sources_field(root: &Map<String, Value>) -> Result<Vec<Source>, StateError> {
 
 fn mix_apps_field(root: &Map<String, Value>) -> Result<Vec<MixApp>, StateError> {
     let mut apps = Vec::new();
+    let mut ids = HashSet::new();
     for (index, item) in optional_list(root, "mix_apps")?.iter().enumerate() {
         let at = format!("mix_apps[{index}].");
         let object = item
@@ -338,6 +339,9 @@ fn mix_apps_field(root: &Map<String, Value>) -> Result<Vec<MixApp>, StateError> 
         };
         if app.id.is_empty() {
             return Err(invalid(format!("{at}id is empty")));
+        }
+        if !ids.insert(app.id.clone()) {
+            return Err(invalid(format!("{at}id is used twice")));
         }
         apps.push(app);
     }
@@ -986,6 +990,7 @@ mod tests {
             r#"[{"id": "a.exe", "name": "A", "running": 1}]"#,
             r#"[{"id": "", "name": "A", "running": true}]"#,
             r#"[{"id": "a.exe", "running": true}]"#,
+            r#"[{"id": "a.exe", "name": "A", "running": true}, {"id": "a.exe", "name": "B", "running": false}]"#,
         ] {
             assert!(State::from_json(&with_mix_apps(bad)).is_err(), "{bad}");
         }
