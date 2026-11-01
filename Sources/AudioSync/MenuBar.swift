@@ -1993,7 +1993,7 @@ private struct CompactRow: View {
                         .font(.caption)
                         .foregroundStyle(Brand.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
-                        .help(shownNote)
+                        .help(hint ?? shownNote)
                         // Read in the row's hint, or its value when off the network.
                         .accessibilityHidden(true)
                         .layoutPriority(1)

@@ -12700,12 +12700,12 @@ do {
     let away = t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: true, target: nil)
     let starting = t.rowNote(cast: joining, waitingForAirPlay2: false, unannounced: false, target: nil)
     check(t.panelRowNote(retrying) == t.reconnecting
-            && t.panelRowNote(away) == t.notOnNetwork
+            && t.panelRowNote(away) == "Not on the network"
             && t.panelRowNote(starting) == "Connecting…"
             && t.panelRowNote(t.waitingForAirPlay2) == t.waitingForAirPlay2
             && t.panelRowNote(t.waitingForPassword) == t.waitingForPassword
             && t.panelRowNote(t.zoneMemberNotFound) == t.zoneMemberNotFound,
-          "a panel row shows every row note, as the main window does")
+          "a panel row shows every row note, as the main window does, Not on network in short")
 }
 
 // covers: C13 (the model name in the Mac's discovery line, left out when missing)

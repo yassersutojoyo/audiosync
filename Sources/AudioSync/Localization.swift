@@ -810,6 +810,9 @@ struct UIStrings {
     /// Under the name of an AirPlay speaker that is not announced on the
     /// network right now; it starts by itself once it is again (P215).
     let notOnNetwork = "Not on the network right now, plays once it's back"
+    /// `notOnNetwork` in a menu bar panel row, where the full text is cut;
+    /// the row's tooltip and VoiceOver keep the full text.
+    let notOnNetworkShort = "Not on the network"
     /// An Apple TV whose home theater group AudioSync plays to (P177).
     func nativeAirPlayPlaysThroughSpeakers(name: String) -> String {
         "\(name) plays through its home theater speakers, and AudioSync already plays to them, so it's off. "
@@ -1389,7 +1392,7 @@ struct UIStrings {
     }
     /// The `rowNote` a menu bar panel row shows next to the name.
     func panelRowNote(_ note: String?) -> String? {
-        note
+        note == notOnNetwork ? notOnNetworkShort : note
     }
     /// A stereo pair or home theater group: its kind and members, or the
     /// members that are missing (P176, P181).
