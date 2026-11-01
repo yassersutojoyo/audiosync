@@ -1087,7 +1087,10 @@ struct CastModel {
         let size = deviceStep > 0 ? deviceStep : Self.fallbackVolumeStep
         // A step moves the row (S415); at zone 0 it sends nothing.
         var own = 0.0
-        guard asc_cast_row_move((deviceLevel(of: id) + (up ? size : -size)) * 100, zone(of: id), &own)
+        // Unrounded, 0.4 + 0.02 lands past 0.42, and a status of 0.43, exactly
+        // half a step away, would answer the level sent (C70).
+        let row = ((deviceLevel(of: id) + (up ? size : -size)) * 1e8).rounded() / 1e6
+        guard asc_cast_row_move(row, zone(of: id), &own)
         else { return nil }
         requested = (id, own)
         attempt?.reportedMute = nil
