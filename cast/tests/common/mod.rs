@@ -71,6 +71,8 @@ pub enum OnLoad {
 pub enum OnMediaStatus {
     /// One `PLAYING` entry for the current media session.
     Playing,
+    /// One `PAUSED` entry for the current media session.
+    Paused,
     /// A `MEDIA_STATUS` with an empty `status` list.
     Empty,
     Ignore,
@@ -612,11 +614,15 @@ impl Device {
                 )]
             }
             (NS_MEDIA, "GET_STATUS") => match self.behavior.on_media_status {
-                OnMediaStatus::Playing => vec![media_status(
+                OnMediaStatus::Playing | OnMediaStatus::Paused => vec![media_status(
                     &message.destination_id,
                     id,
                     self.media_session,
-                    "PLAYING",
+                    if self.behavior.on_media_status == OnMediaStatus::Paused {
+                        "PAUSED"
+                    } else {
+                        "PLAYING"
+                    },
                     None,
                 )],
                 OnMediaStatus::Empty => vec![json_message(
