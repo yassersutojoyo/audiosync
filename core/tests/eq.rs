@@ -441,6 +441,20 @@ fn the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state() {
     }
 }
 
+// covers: S30
+#[test]
+fn a_capture_reopened_at_the_same_rate_starts_from_zeroed_state_with_the_same_curve() {
+    let settings = enabled(with_band(0, 12.0), 0.0);
+    let (mut control, mut processor) = configured(48_000.0, settings);
+    processor.process(&mut sine(0, BLOCK, 40.0, 48_000.0, 0.9));
+    assert!(control.set_sample_rate(48_000.0));
+    let mut silence = vec![0.0f32; BLOCK * 2];
+    processor.process(&mut silence);
+    assert!(silence.iter().all(|&x| x == 0.0));
+    assert_eq!(control.settings(), settings);
+    assert_eq!(control.bands(), design_bands(&settings.gains_db, 48_000.0));
+}
+
 // covers: S16
 #[test]
 fn every_capture_rate_from_8_to_384_khz_gives_stable_filters() {

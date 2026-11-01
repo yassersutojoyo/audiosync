@@ -2882,6 +2882,7 @@ The checks for the delay reader (S41 to S59, S158, S159), in `core/src/reader.rs
 | disabled_leaves_the_buffer_untouched (`core/tests/eq.rs`) | S27, S123 |
 | a_non_finite_cascade_output_resets_that_channel_and_silence_stays_silent (`core/tests/eq.rs`) | S29, S123, S131 |
 | the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state (`core/tests/eq.rs`) | S30, S140 |
+| a_capture_reopened_at_the_same_rate_starts_from_zeroed_state_with_the_same_curve (`core/tests/eq.rs`) | S30, S335 |
 | a_block_is_equalized_once_in_place_and_both_consumers_get_the_same_samples (`core/tests/eq.rs`) | S7, S34 |
 | output_is_always_finite_and_within_full_scale (`core/tests/eq.rs`) | S123, S125 |
 | bass_boost_on_a_full_scale_33_hz_sine_never_reaches_the_clamp (`core/tests/eq.rs`) | S26 |
