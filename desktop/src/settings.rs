@@ -113,7 +113,7 @@ pub const MAX_TEXT: usize = 1024;
 
 /// The main window's smallest size in logical pixels, as `ui/main.slint`
 /// sets it.
-pub const MIN_WINDOW: (f64, f64) = (860.0, 440.0);
+pub const MIN_WINDOW: (f64, f64) = (776.0, 440.0);
 
 /// The main window's largest size kept, in logical pixels.
 pub const MAX_WINDOW: (f64, f64) = (16_384.0, 16_384.0);
@@ -785,6 +785,10 @@ pub struct Settings {
     /// unreadable one gives the default place and size.
     #[serde(deserialize_with = "or_default")]
     pub window: Option<WindowFrame>,
+    /// The saved window's width was set to the slim default once, after the
+    /// speaker list stopped filling the width. A file without it has not.
+    #[serde(default, deserialize_with = "bool_or_true")]
+    pub slim_window_applied: bool,
     /// The AirPlay delay adjustment A in milliseconds, −2000 to +20 000: the
     /// AirPlay speakers are taken to sound L = L_s + A after a frame reaches
     /// the sender (spec S178).
@@ -960,6 +964,7 @@ impl Default for Settings {
             show_virtual_devices: false,
             appearance: Appearance::System,
             window: None,
+            slim_window_applied: true,
             airplay_adjustment_ms: 0.0,
             when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
             remote: RemoteSettings::default(),
@@ -1234,6 +1239,7 @@ impl Settings {
             show_virtual_devices: self.show_virtual_devices,
             appearance: self.appearance,
             window: self.window.and_then(clamp_window),
+            slim_window_applied: self.slim_window_applied,
             airplay_adjustment_ms: sanitize_airplay_adjustment_ms(self.airplay_adjustment_ms)
                 .unwrap_or(0.0),
             when_source_quits: WhenSourceQuits::from_stored(Some(&self.when_source_quits))
@@ -1333,6 +1339,23 @@ impl Settings {
         }
     }
 
+    /// The one-time narrowing of a window saved while the speaker list
+    /// filled the width: the width becomes the default, the place and
+    /// height stay, and the mark is set.
+    pub fn with_slim_window(self) -> Settings {
+        if self.slim_window_applied {
+            return self;
+        }
+        Settings {
+            window: self.window.map(|frame| WindowFrame {
+                width: MIN_WINDOW.0,
+                ..frame
+            }),
+            slim_window_applied: true,
+            ..self
+        }
+    }
+
     /// The file's contents.
     pub fn to_json(&self) -> String {
         // Serializing these types can't fail: every map key is a string and
@@ -1370,7 +1393,10 @@ impl Settings {
                 ..read
             };
         Ok((
-            clamped.with_zones_migrated().with_presets_migrated(),
+            clamped
+                .with_zones_migrated()
+                .with_presets_migrated()
+                .with_slim_window(),
             Loaded::Read {
                 version,
                 adjusted,
@@ -1844,6 +1870,7 @@ mod tests {
             show_virtual_devices: sample.show_virtual_devices,
             appearance: sample.appearance,
             window: sample.window,
+            slim_window_applied: true,
             airplay_adjustment_ms: 120.0,
             when_source_quits: WhenSourceQuits::SwitchToSystem.stored().to_owned(),
             remote: sample.remote,
@@ -2326,6 +2353,7 @@ mod tests {
             show_virtual_devices,
             appearance,
             window,
+            slim_window_applied: _,
             airplay_adjustment_ms,
             when_source_quits,
             remote,
@@ -2485,6 +2513,7 @@ mod tests {
             "version",
             "speaker_zones_migrated",
             "speaker_presets_migrated",
+            "slim_window_applied",
         ];
         for name in stored.keys().filter(|name| !marks.contains(&name.as_str())) {
             let named = ["\"x\"", "7.5"].iter().any(|wrong| {
@@ -3131,7 +3160,9 @@ mod tests {
     #[test]
     fn a_maximized_window_is_kept_with_its_last_normal_frame() {
         let window = r#""window": {"x": 10, "y": 20, "width": 1000.0, "height": 700.0"#;
-        let text = format!(r#"{{"version": 1, {window}, "maximized": true}}}}"#);
+        let text = format!(
+            r#"{{"version": 1, "slim_window_applied": true, {window}, "maximized": true}}}}"#
+        );
         let (read, _) = Settings::from_json(&text).expect("read");
         let written = read.to_json();
         assert!(written.contains(r#""maximized": true"#), "{written}");
@@ -3140,6 +3171,34 @@ mod tests {
         let text = format!(r#"{{"version": 1, {window}}}}}"#);
         let (read, _) = Settings::from_json(&text).expect("read");
         assert!(read.to_json().contains(r#""maximized": false"#));
+    }
+
+    #[test]
+    fn a_window_saved_before_the_slim_speaker_list_opens_at_the_default_width_once() {
+        let text =
+            r#"{"version": 3, "window": {"x": 10, "y": 20, "width": 980.0, "height": 700.0}}"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        let slim = WindowFrame {
+            x: 10,
+            y: 20,
+            width: MIN_WINDOW.0,
+            height: 700.0,
+            maximized: false,
+        };
+        assert_eq!(read.window, Some(slim), "only the width changes");
+        let widened = Settings {
+            window: Some(WindowFrame {
+                width: 980.0,
+                ..slim
+            }),
+            ..read
+        };
+        let (again, _) = Settings::from_json(&widened.to_json()).expect("read");
+        assert_eq!(
+            again.window.map(|frame| frame.width),
+            Some(980.0),
+            "a width saved after that is kept"
+        );
     }
 
     // covers: S385

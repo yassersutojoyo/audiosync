@@ -1437,11 +1437,11 @@ export component MainWindow inherits Window {
 
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
-    // Wide enough for a speaker row next to the left column, and
-    // short enough for a 1366 x 768 screen at 150 % (both columns scroll).
-    min-width: 860px;
+    // Wide enough for a zone's name beside its volume in the speaker list,
+    // and short enough for a 1366 x 768 screen at 150 % (both columns scroll).
+    min-width: 776px;
     min-height: 440px;
-    preferred-width: 980px;
+    preferred-width: 776px;
     preferred-height: 680px;
     background: Tokens.background;
     default-font-family: Fluent.font;
@@ -1800,6 +1800,8 @@ export component MainWindow inherits Window {
         HorizontalLayout {
             spacing: Tokens.spacing-window-margin;
             vertical-stretch: 1;
+            // Past the speaker list's widest, the extra width stays empty on the right.
+            alignment: start;
 
             // Left column: what plays and how loud, each in its own card. It
             // scrolls when the window is shorter than its cards (a small
@@ -2033,6 +2035,8 @@ export component MainWindow inherits Window {
             // every connected speaker in no zone by name.
             scroll := ScrollView {
                 horizontal-stretch: 1;
+                preferred-width: 644px;
+                max-width: 644px;
 
                 speaker-list := VerticalLayout {
                     spacing: Tokens.spacing-section-gap;
