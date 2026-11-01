@@ -1176,6 +1176,7 @@ impl<D: Driver> Controller<D> {
     ) {
         let mut airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
         airplay.set_zones(self.zone_volumes.airplay.clone());
+        airplay.set_equalizer(&self.equalizer);
         self.log.log(|| {
             format!(
                 "AirPlay: the sender runs, L = {} ms; local outputs line up with each other \
@@ -4275,6 +4276,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
         if let Some(session) = self.session.as_mut() {
             session.equalizer.set_settings(settings);
         }
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_equalizer(&settings);
+        }
         for id in self.playing_ids() {
             self.apply_gain(&id);
         }
@@ -6408,6 +6412,40 @@ mod tests {
             ..on
         });
         assert_eq!(gain(&backend, SPEAKERS), 0.125);
+    }
+
+    // covers: S26, S413
+    #[test]
+    fn the_airplay_stream_gets_the_equalizer_cut_back_under_the_master() {
+        let mut backend = backend();
+        let gains_db = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let on = EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db,
+        };
+        backend.set_equalizer(on);
+        backend.set_master_volume(50.0);
+        let fake = FakeAirPlay::new();
+        backend.set_airplay(fake.link(), None);
+        let last_gain = |fake: &FakeAirPlay| {
+            let calls = fake.take_calls();
+            calls.iter().rev().find_map(|call| match call {
+                Call::MasterGain(gain) => Some(*gain),
+                _ => None,
+            })
+        };
+        let back = 10f64.powf(eq::cascade_peak_db(&gains_db, 48_000.0) / 20.0);
+        let returned = last_gain(&fake).expect("a new sender gets the gain");
+        assert!((returned - 0.125 * back).abs() < 1e-9, "{returned}");
+        backend.set_equalizer(EqSettings {
+            enabled: false,
+            ..on
+        });
+        assert_eq!(last_gain(&fake), Some(0.125));
+        backend.set_equalizer(on);
+        backend.set_master_volume(100.0);
+        assert_eq!(last_gain(&fake), Some(1.0), "unity keeps the cut");
     }
 
     // covers: S232

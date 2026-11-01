@@ -44,6 +44,7 @@ extension AppDelegate {
         nativeAirPlay = native   // reconciles meanwhile don't start a second one
         sendPlayback()
         native.setZones(nativeZoneVolumes())
+        if let settings = equalizerModel?.settings { native.setEqualizer(settings) }
         let airPlay2On = AppSettings.airPlay2On(setting: airPlay2AtLaunch,
                                                 environment: ProcessInfo.processInfo.environment)
         // Under the AirPlay 2 flag the path is on and the switch only prefers it (S312).
