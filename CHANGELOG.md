@@ -345,6 +345,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A PTP time that isn't a number no longer stops AudioSync's AirPlay 2 sending. Before, the AirPlay 2 speakers could go silent. On the Mac and on Windows.
 - A Google Cast TV that closes AudioSync's stream as it powers down and then stops answering now reconnects like any speaker that drops its connection. Before, it turned off as if it had declined the stream. On the Mac and on Windows.
 - A Google Cast speaker that closes the stream or reports a playback error a second time now recovers again when it has played for a minute since the first. Before, a second one hours later turned it off. On the Mac and on Windows.
+- On Windows, Refresh Devices (F5) starts AirPlay again after it stopped because of an error, as the notice's Retry does. Before, once that notice was dismissed, AirPlay stayed off until you quit AudioSync.
 
 ## [0.7.1] - 2026-10-27
 

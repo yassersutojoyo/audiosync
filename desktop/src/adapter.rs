@@ -2047,6 +2047,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
+    fn start_airplay_again(&mut self) {
+        // A new sender binds the PTP ports anew and reports a clash itself.
+        self.ptp_taken = None;
+        self.ptp_off.clear();
+        self.ptp_played = false;
+        self.notices
+            .clear(&[NoticeSubject::AirPlay, NoticeSubject::AirPlayPtp]);
+        self.audio.retry_airplay();
+        self.take_events();
+    }
+
     /// Whether AirPlay discovery has run for 20 seconds without finding a
     /// speaker. Never while it is dead: the AirPlay notice and its Retry
     /// say so then.
@@ -5402,6 +5413,19 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.log
             .log(|| "the user asked to list the devices again".to_owned());
         self.list_devices();
+        // A sender that stopped by itself starts again only through its
+        // notice's Retry, which may have been dismissed.
+        if !self.audio.airplay_browsing() {
+            self.log
+                .log(|| "AirPlay is stopped: Refresh Devices starts it again".to_owned());
+            let shown = self.notices.get(&NoticeSubject::AirPlay).is_some();
+            self.start_airplay_again();
+            if !shown {
+                self.clear_if(NoticeSubject::AirPlay, |message| {
+                    matches!(message, NoticeMessage::AirPlayStopped)
+                });
+            }
+        }
     }
 
     /// Only a local output has a device volume to fix; the audio backend
@@ -5421,14 +5445,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn retry_airplay(&mut self) {
         self.log
             .log(|| "the user asked to start AirPlay again (Retry)".to_owned());
-        // A new sender binds the PTP ports anew and reports a clash itself.
-        self.ptp_taken = None;
-        self.ptp_off.clear();
-        self.ptp_played = false;
-        self.notices
-            .clear(&[NoticeSubject::AirPlay, NoticeSubject::AirPlayPtp]);
-        self.audio.retry_airplay();
-        self.take_events();
+        self.start_airplay_again();
     }
 
     /// The PIN itself is never logged.
@@ -12181,6 +12198,50 @@ mod tests {
         fake.stop_running();
         poll_times(&mut adapter, 3 * POLLS_IN_20_S);
         assert!(!none_found_hint(&adapter), "the sender stopped");
+    }
+
+    /// No 10 s timer restarts a sender that stopped by itself: once its
+    /// notice is dismissed, Refresh Devices (F5) is the way back to AirPlay.
+    // covers: S396
+    #[test]
+    fn refresh_devices_starts_a_stopped_airplay_sender_again_once_its_notice_is_dismissed() {
+        let (mut adapter, fake, _, _) = airplay_adapter();
+        let next = FakeAirPlay::new();
+        let started = next.clone();
+        let refreshes = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = refreshes.clone();
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            counted.set(counted.get() + 1);
+            (counted.get() > 1).then(|| StartedSender::browsing(started.link(), None))
+        }));
+        fake.stop_running();
+        adapter.poll();
+        adapter.dismiss_all_notices();
+        adapter.refresh_devices();
+        assert_eq!(refreshes.get(), 1);
+        assert!(
+            messages(&adapter).is_empty(),
+            "a refresh whose sender can't start leaves the notice dismissed"
+        );
+        adapter.refresh_devices();
+        let den = device(3, "Den", OPEN_TXT);
+        next.appear(&den);
+        adapter.poll();
+        assert!(adapter.snapshot().speaker(&ap(&den)).is_some());
+    }
+
+    // covers: S396
+    #[test]
+    fn refresh_devices_leaves_a_running_airplay_sender_alone() {
+        let (mut adapter, _fake, _, _) = airplay_adapter();
+        let starts = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = starts.clone();
+        adapter.audio.set_airplay_starter(Box::new(move || {
+            counted.set(counted.get() + 1);
+            None
+        }));
+        adapter.refresh_devices();
+        assert_eq!(starts.get(), 0);
     }
 
     // covers: S396, S222
