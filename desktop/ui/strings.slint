@@ -1763,9 +1763,10 @@ export global Strings {
     out property <string> calibrate-all-undone: @tr("The delays are back to what they were.");
     out property <string> calibrate-all-stale: @tr("A delay changed after the measurement, so nothing was applied. Calibrate again.");
     out property <string> calibrate-all-ended-cancelled: @tr("Calibration cancelled.");
-    out property <string> calibrate-all-ended-speakers: @tr("The speakers or their delays changed during the measurement.");
+    out property <string> calibrate-all-ended-speakers: @tr("The speakers changed during the measurement.");
     out property <string> calibrate-all-ended-off: @tr("A speaker was turned off during the measurement.");
-    out property <string> calibrate-all-ended-source: @tr("Streaming stopped or the source changed during the measurement.");
+    out property <string> calibrate-all-ended-source: @tr("The source was switched during the measurement.");
+    out property <string> calibrate-all-ended-delays: @tr("A delay changed during the measurement.");
 
     public pure function calibrate-all-hint(reference: string) -> string {
         if reference == "" {

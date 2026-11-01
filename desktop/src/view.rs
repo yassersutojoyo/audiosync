@@ -5313,6 +5313,7 @@ fn ended_text(strings: &Strings<'_>, reason: EndReason) -> SharedString {
         EndReason::SpeakersChanged => strings.get_calibrate_all_ended_speakers(),
         EndReason::SpeakerTurnedOff => strings.get_calibrate_all_ended_off(),
         EndReason::SourceChanged => strings.get_calibrate_all_ended_source(),
+        EndReason::DelaysChanged => strings.get_calibrate_all_ended_delays(),
     }
 }
 
@@ -7212,6 +7213,25 @@ mod tests {
             card.said.to_lowercase().contains("privacy"),
             "{}",
             card.said
+        );
+    }
+
+    // covers: S240
+    #[test]
+    fn a_delay_edit_and_a_source_switch_end_with_the_macs_lines() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(
+            ended_text(&strings, EndReason::DelaysChanged),
+            "A delay changed during the measurement."
+        );
+        assert_eq!(
+            ended_text(&strings, EndReason::SourceChanged),
+            "The source was switched during the measurement."
+        );
+        assert_eq!(
+            ended_text(&strings, EndReason::SpeakersChanged),
+            "The speakers changed during the measurement."
         );
     }
 

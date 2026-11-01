@@ -149,6 +149,8 @@ fn end_code(reason: Option<EndReason>) -> u32 {
         Some(EndReason::SpeakersChanged) => CALIBRATION_END_SPEAKERS_CHANGED,
         Some(EndReason::SpeakerTurnedOff) => CALIBRATION_END_SPEAKER_OFF,
         Some(EndReason::SourceChanged) => CALIBRATION_END_SOURCE_CHANGED,
+        // Only Windows ends a run with it; the Mac keeps its delays reason in Swift.
+        Some(EndReason::DelaysChanged) => CALIBRATION_END_SPEAKERS_CHANGED,
     }
 }
 

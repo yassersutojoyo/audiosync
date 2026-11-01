@@ -24,7 +24,7 @@ use audiosync_core::calibrate_all::{
 use audiosync_core::policy::delay::{MAX_HOLD_BACK_MS, native_airplay_latency_ms};
 use audiosync_core::policy::speakers::SpeakerKey;
 
-use super::backend::{AudioBackend, CastStatus};
+use super::backend::{AudioBackend, CastStatus, SourceId};
 use super::calibration::{
     CalibrationTap, Failure, LATENCY_ALLOWANCE_S, Microphone, MicrophoneError, MicrophoneId,
     Missing, Route, SIGNAL_WAIT_S, STALL_S, WARM_UP_LIMIT_S, WARM_UP_S, ns, trim_start,
@@ -108,6 +108,8 @@ pub struct Lineup {
     /// No session runs because a source switch waits to start, not
     /// because streaming stopped.
     pub switching: bool,
+    /// The source being captured, or the one a waiting switch starts.
+    pub source: Option<SourceId>,
     /// The reference output, by endpoint ID.
     pub reference: Option<String>,
     /// Every speaker that plays: the reference first, the other local
@@ -388,6 +390,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
     Lineup {
         session: engine.session,
         switching: engine.session.is_none() && audio.running_source().is_some(),
+        source: audio.running_source(),
         reference: engine.reference,
         members: locals.into_iter().chain(airplay).chain(casts).collect(),
         hold_backs_ms: engine.hold_backs_ms,
@@ -499,6 +502,7 @@ pub struct AllRun {
     stage: Stage,
     tap: Arc<CalibrationTap>,
     session: u64,
+    source: Option<SourceId>,
     /// The hold-backs of the local outputs taking part, at the start.
     hold_backs_ms: BTreeMap<String, f64>,
     /// The input of the first recording, or the sheet's for a Measure
@@ -797,6 +801,7 @@ impl AllRun {
             },
             tap,
             session,
+            source: lineup.source.clone(),
             hold_backs_ms,
             first_microphone,
             clear_ns: 0,
@@ -1024,8 +1029,10 @@ impl AllRun {
             let stopped = lineup.session.is_none() && !lineup.switching;
             return Some(if stopped {
                 EndReason::SpeakerTurnedOff
-            } else {
+            } else if lineup.source != self.source {
                 EndReason::SourceChanged
+            } else {
+                EndReason::SpeakersChanged
             });
         }
         if lineup.reference.as_deref() != Some(self.reference.as_str()) {
@@ -1036,7 +1043,7 @@ impl AllRun {
             match lineup.members.iter().find(|now| now.same(member)) {
                 None => return Some(EndReason::SpeakerTurnedOff),
                 Some(now) if member.delay_changed(now) || now.offset_ms != *started_ms => {
-                    return Some(EndReason::SpeakersChanged);
+                    return Some(EndReason::DelaysChanged);
                 }
                 Some(_) => {}
             }
@@ -1054,10 +1061,11 @@ impl AllRun {
             return Some(EndReason::SpeakersChanged);
         }
         let moved = self
-            .hold_backs_ms
+            .taking_part
             .iter()
-            .any(|(id, ms)| lineup.hold_backs_ms.get(id) != Some(ms));
-        moved.then_some(EndReason::SpeakersChanged)
+            .map(|row| &self.members[*row].id)
+            .any(|id| lineup.hold_backs_ms.get(id) != self.hold_backs_ms.get(id));
+        moved.then_some(EndReason::DelaysChanged)
     }
 
     fn next_step(&mut self, rig: &mut dyn AllRig, now_ns: u64) {
@@ -1419,6 +1427,7 @@ pub(crate) mod tests {
                 lineup: Lineup {
                     session: Some(1),
                     switching: false,
+                    source: Some(SourceId::WholeSystem),
                     reference: Some("builtin".to_owned()),
                     members: vec![
                         member(Class::Local, "builtin", Some(0.0), 2500.0),
@@ -1831,11 +1840,18 @@ pub(crate) mod tests {
     // covers: S240
     #[test]
     fn a_source_switch_a_new_speaker_or_a_delay_edit_ends_the_run_with_its_reason() {
-        let switch: fn(&mut FakeRig) = |rig| rig.lineup.session = Some(2);
+        let switch: fn(&mut FakeRig) = |rig| {
+            rig.lineup.session = Some(2);
+            rig.lineup.source = Some(SourceId::App { root_pid: 7 });
+        };
         let waiting_switch: fn(&mut FakeRig) = |rig| {
             rig.lineup.session = None;
             rig.lineup.switching = true;
+            rig.lineup.source = Some(SourceId::App { root_pid: 7 });
         };
+        // The sender restarting or a hung capture recovering starts a new
+        // session of the same source: the user switched nothing.
+        let restart: fn(&mut FakeRig) = |rig| rig.lineup.session = Some(2);
         let turn_on: fn(&mut FakeRig) = |rig| {
             rig.lineup
                 .members
@@ -1848,12 +1864,31 @@ pub(crate) mod tests {
             kitchen.offset_ms = Some(2400.0);
             kitchen.sender_ms = 400.0;
         };
+        let hold_back_moves: fn(&mut FakeRig) = |rig| {
+            rig.lineup.hold_backs_ms.insert("usb".to_owned(), 2300.0);
+        };
+        // A hold-back the output started without counts as a move too.
+        let mut rig = FakeRig::new();
+        rig.lineup.hold_backs_ms.remove("usb");
+        let mut run = start(&mut rig);
+        let finished = run_to_end(&mut rig, &mut run, |rig, run| {
+            if let Progress::Measuring { row: 1, .. } = run.progress() {
+                hold_back_moves(rig);
+            }
+        });
+        assert_eq!(
+            finished.sheet.unwrap().ended(),
+            Some(EndReason::DelaysChanged)
+        );
+        given_back(&rig);
         for (meddle, reason) in [
             (switch, EndReason::SourceChanged),
             (waiting_switch, EndReason::SourceChanged),
+            (restart, EndReason::SpeakersChanged),
             (turn_on, EndReason::SpeakersChanged),
-            (edit, EndReason::SpeakersChanged),
-            (sender_moves, EndReason::SpeakersChanged),
+            (edit, EndReason::DelaysChanged),
+            (sender_moves, EndReason::DelaysChanged),
+            (hold_back_moves, EndReason::DelaysChanged),
         ] {
             let mut rig = FakeRig::new();
             let mut run = start(&mut rig);
