@@ -7,10 +7,12 @@ window controls, and light or dark as Windows is set unless View > Appearance
 says otherwise. The wording follows the
 Mac app's `UIStrings`; all of it lives in `desktop/ui/strings.slint`.
 
-Colors, the wordmark typeface, font sizes and the window margins come from the
-shared design tokens (`brand/tokens.json`, see `brand/README.md`). The rest
-follows Windows 11 and lives only in the Windows app (the `Fluent` values in
-`desktop/ui/widgets.slint`): text in Segoe UI Variable, 8 px corners on cards,
+Colors, the wordmark typeface and the font sizes come from the shared design
+tokens (`brand/tokens.json`, see `brand/README.md`). The rest follows Windows
+11 and lives only in the Windows app (the `Fluent` values in
+`desktop/ui/widgets.slint`): text in Segoe UI Variable, 14 px for body text and
+12 px for notes and captions, an 18 px wordmark, 12 px card padding, 48 px
+speaker rows, a 16 px window edge and 12 px gaps, 8 px corners on cards,
 notices and the flyout and 4 px on buttons and rows, 1 px card edges, hover and
 pressed fills, and short state changes (83 ms). Every titled window (main,
 equalizer, both guides, Web Remote, About, the zone dialog, the Apple TV code and password dialogs and the Cast address dialog) asks Windows for Mica in its
@@ -42,11 +44,11 @@ the name with its kind as a small icon after it and the availability note, when
 there is one, on the same line (the device name is in the name's tooltip), the
 delay and the "…" options button, and the volume slider with its value under
 that line, so a long name isn't cut short by the slider. The delay lines up
-across the sections. The window opens 776 px wide, with a 440 px speaker list,
+across the sections. The window opens 776 px wide, with a 464 px speaker list,
 and can't be made narrower than that or shorter than 440 px, which fits a
 1366 x 768 screen at 150 %; it holds that size when another program resizes
-it. A wider window widens the speaker list up to 644 px and leaves the rest
-empty on the right. Both columns scroll when the window is too
+it. A wider window widens the speaker list up to 644 px; the header and the
+notices end where the list does, and the rest stays empty on the right. Both columns scroll when the window is too
 short for them, and the speaker list keeps room for its scroll bar.
 
 A speaker row shows one of four states. Off: a grey toggle. On while
