@@ -9112,7 +9112,7 @@ mod tests {
         );
         // Never below the window's smallest size, never above the saved one.
         let tiny = crate::placement::Bounds {
-            width: 800.0,
+            width: 700.0,
             height: 500.0,
             ..laptop
         };
