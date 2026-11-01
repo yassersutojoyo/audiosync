@@ -2033,7 +2033,8 @@ impl Feed {
             return 0;
         }
         if closing {
-            self.fade.fade_out();
+            // Only the line's output fades out: fading its input as well
+            // would multiply the two curves into a steeper one (S191).
             self.delay.close();
         }
         let mut taken = 0;
