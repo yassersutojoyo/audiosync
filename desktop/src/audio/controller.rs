@@ -1600,7 +1600,7 @@ impl<D: Driver> Controller<D> {
         let notified = self.driver.outputs_changed();
         if notified {
             self.log
-                .log(|| "Windows reported a change of the outputs".to_owned());
+                .log(|| format!("{AUDIO_SYSTEM} reported a change of the outputs"));
         }
         if force || notified || !self.listing_ok {
             let (changed, listed) = self.refresh_outputs();
@@ -3096,9 +3096,10 @@ impl<D: Driver> Controller<D> {
             });
         }
         self.log.log(|| {
-            "the capture was lost: Windows audio restarted or its device went away; it opens \
-             again in a moment while the outputs play on"
-                .to_owned()
+            format!(
+                "the capture was lost: {AUDIO_SYSTEM} audio restarted or its device went away; \
+                 it opens again in a moment while the outputs play on"
+            )
         });
     }
 
@@ -4047,6 +4048,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.reap(true);
         self.stop_following_device_volumes();
         self.airplay = None;
+        self.starter = None;
+        self.airplay_restart_in = None;
         if let Some(cast) = cast {
             let clean = cast.join().unwrap_or(false);
             if !clean {
@@ -5080,9 +5083,9 @@ fn describe_listing(
             Some(Some(_)) => ' ',
         };
         let default = if endpoint.is_default {
-            ", Windows default"
+            format!(", {AUDIO_SYSTEM} default")
         } else {
-            ""
+            String::new()
         };
         let played = setups.get(&endpoint.id).map_or_else(String::new, |setup| {
             format!(
@@ -5134,7 +5137,7 @@ fn describe_routing(
         let endpoint = endpoints.iter().find(|e| e.id == path.endpoint_id);
         let why = match path.reason {
             DirectReason::DefaultEndpoint => {
-                "Windows' default output, and the whole system is captured".to_owned()
+                format!("the {AUDIO_SYSTEM} default output, and the whole system is captured")
             }
             DirectReason::Session => {
                 let pids: Vec<String> = endpoint
@@ -5170,6 +5173,7 @@ fn describe_routing(
             path.endpoint_name, path.endpoint_id
         ));
     }
+    let not_default = format!("not the {AUDIO_SYSTEM} default output anymore");
     for gone in previous.iter().filter(|gone| {
         !paths
             .iter()
@@ -5185,7 +5189,7 @@ fn describe_routing(
                     "a software device AudioSync doesn't play to"
                 }
                 _ if gone.reason == DirectReason::DefaultEndpoint && !endpoint.is_default => {
-                    "not Windows' default output anymore"
+                    not_default.as_str()
                 }
                 _ => "the source doesn't play there anymore",
             },
@@ -5242,6 +5246,13 @@ fn describe_source(source: &SourceId) -> String {
         SourceId::Input { endpoint_id } => format!("the input device {endpoint_id}"),
     }
 }
+
+/// The audio system the debug log names for the host's outputs and capture.
+const AUDIO_SYSTEM: &str = if cfg!(target_os = "linux") {
+    "PipeWire"
+} else {
+    "Windows"
+};
 
 /// The audio system that converts between AudioSync's float samples and a
 /// device's format.
@@ -10552,22 +10563,23 @@ mod tests {
         backend.poll();
         backend.poll();
         let messages = logged(&log, &dir);
+        let changed = &format!("{AUDIO_SYSTEM} reported a change of the outputs");
         assert_in_order(
             &messages,
             &[
                 "output \"Headphones\" (headphones) stopped by itself",
-                "Windows reported a change of the outputs",
+                changed,
                 "outputs listed: 1",
                 "    \"Speakers\" (speakers): Other, last played at 48000 Hz, 2 ch",
                 "  - \"Headphones\" (headphones): gone",
                 "event: the outputs changed",
                 "event: output \"Headphones\" (headphones) lost",
-                "Windows reported a change of the outputs",
+                changed,
                 "outputs listed: 2",
                 "    \"Speakers\" (speakers): Other",
-                "  + \"TV\" (tv): Hdmi, Windows default",
+                &format!("  + \"TV\" (tv): Hdmi, {AUDIO_SYSTEM} default"),
                 "event: the outputs changed",
-                "Windows reported a change of the outputs",
+                changed,
                 "listing the outputs failed: \
                  IMMDeviceEnumerator::EnumAudioEndpoints failed (0x80004005).",
                 "outputs listed: 1",
@@ -10615,10 +10627,11 @@ mod tests {
                           a Bluetooth hands-free endpoint, for calls only";
         let no_id = "render endpoint 3 left out: it couldn't be read \
                      (IMMDevice::GetId failed (0x80070490))";
+        let changed = &format!("{AUDIO_SYSTEM} reported a change of the outputs");
         assert_in_order(
             &messages,
             &[
-                "Windows reported a change of the outputs",
+                changed,
                 "outputs listed again, no change (2)",
                 hands_free,
                 no_id,
@@ -12340,6 +12353,18 @@ mod tests {
             "the restart the failure planned is dropped"
         );
         assert!(backend.airplay_browsing());
+    }
+
+    #[test]
+    fn a_retry_after_the_shut_down_starts_no_airplay_sender() {
+        let mut backend = backend();
+        let fake = FakeAirPlay::new();
+        let (starter, starts) = counted_starter(&fake, 2);
+        backend.start_airplay(starter, PairingStore::in_memory());
+        backend.shut_down();
+        backend.retry_airplay();
+        assert_eq!(starts.get(), 1);
+        assert!(!backend.airplay_browsing());
     }
 
     // covers: S101
