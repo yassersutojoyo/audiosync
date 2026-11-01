@@ -297,9 +297,18 @@ fn a_level_set_on_the_tv_shows_within_a_second_of_reads_and_none_go_once_stopped
     let mut tv = play(&server);
     tv.run(Duration::from_secs(2), true);
     let reads = count(&server, "GET_PARAMETER");
+    let opened = Instant::now();
     tv.run(Duration::from_secs(5), true);
-    let in_five = count(&server, "GET_PARAMETER") - reads;
-    assert!((4..=6).contains(&in_five), "{in_five} reads in 5 s");
+    let window = opened.elapsed();
+    let in_window = count(&server, "GET_PARAMETER") - reads;
+    // A busy host asks late and stretches the window: each ask but the last is
+    // read by its end, and ticks 1 s apart allow whole seconds plus two.
+    let asked = tv.asks.iter().filter(|at| **at >= opened).count();
+    let most = window.as_secs() as usize + 2;
+    assert!(
+        (asked.saturating_sub(1)..=most).contains(&in_window),
+        "{in_window} reads for {asked} asks in {window:?}"
+    );
 
     // Three presses of the remote, each between two of the host's asks.
     for (step, db) in [-25.2, -24.6, -30.0].into_iter().enumerate() {
