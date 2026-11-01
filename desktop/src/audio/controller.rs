@@ -8777,6 +8777,42 @@ mod tests {
         assert!(trouble(backend.poll()));
     }
 
+    // covers: S412
+    #[test]
+    fn a_cast_speakers_connect_failures_while_the_pc_sleeps_count_nothing_toward_turning_it_off() {
+        use audiosync_cast::error::ConnectError;
+
+        use crate::audio::cast::tests::{FakeCast, KITCHEN, connect_failed};
+        let off = |events: Vec<BackendEvent>| {
+            events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::CastFailed { .. }))
+        };
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.notify_power(PowerNotice::Suspend);
+        backend.poll();
+        for _ in 0..3 {
+            cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        }
+        assert!(!off(backend.poll()), "no failure counts while asleep");
+        backend.pass_wall_time(Duration::from_secs(2 * 3600));
+        backend.notify_power(PowerNotice::Resume);
+        backend.poll();
+        // The failures after the wake count from the first.
+        for _ in 0..2 {
+            cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        }
+        assert!(!off(backend.poll()));
+        cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        assert!(off(backend.poll()));
+    }
+
     // covers: S325, S332
     #[test]
     fn a_sleep_cancels_a_fresh_link_restart_and_the_output_plays_on() {

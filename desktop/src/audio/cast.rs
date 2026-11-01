@@ -2472,7 +2472,7 @@ pub mod tests {
         assert_eq!(fake.state().started.len(), 1, "no retry once off");
     }
 
-    fn connect_failed(attempt: u64, device: &str, error: ConnectError) -> HostEvent {
+    pub fn connect_failed(attempt: u64, device: &str, error: ConnectError) -> HostEvent {
         HostEvent::Session {
             attempt: AttemptId(attempt),
             device: id(device),
