@@ -47,6 +47,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- An AirPlay TV you set to ask for its code every time, after AudioSync had paired with it before, no longer reads as paired once you play to it with a code typed for that session. Before, it stayed on and silent after the stream ended and auto-connect turned it on again. On the Mac and on Windows.
 - On the Mac, a Google Cast group that never answers now goes off after its third failed connect with a notice that it isn't responding, as on Windows. Before, AudioSync kept trying it with no notice. A group that lists no address yet still keeps trying until it does.
 - On Windows, when a newer version of AudioSync wrote your settings and an older one opens them, the older one now tells you it's using the default settings and names the copy of your file it kept. Before, it said nothing.
 - On Linux, AudioSync started from the app menu or at login now knows the computer's name, so the web remote shows it and offers the computer's .local address. Before, only a start from a terminal had it.
