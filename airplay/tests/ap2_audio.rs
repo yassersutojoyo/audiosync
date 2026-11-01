@@ -985,6 +985,11 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
         }
     );
 
+    // Another stream's packets can reach this port (below), so only those
+    // that open with this session's key are counted.
+    let shk = stream_key(&server.fake()).expect("shk");
+    let ours = |(_, _, bytes): &Datagram| open_packet(&shk, bytes).is_some();
+
     // Paused for a while: no audio, the feedback goes on.
     server
         .fake()
@@ -1008,7 +1013,7 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     // The FLUSH names the first packet held back. Packets before it left
     // before the sender took the pause, however late a busy runner stamps
     // them; nothing else arrives.
-    let datagrams = udp.data.take();
+    let datagrams: Vec<Datagram> = udp.data.take().into_iter().filter(ours).collect();
     let late = tail_before(&datagrams, paused, seq).len();
     assert_eq!(
         datagrams.iter().filter(|(at, _, _)| *at > paused).count(),
@@ -1016,7 +1021,7 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     );
     assert_eq!(count(&server, "FLUSHBUFFERED"), 0);
     sender.resume();
-    let (_, _, bytes) = udp.data.wait_for(|_| true).expect("audio after the resume");
+    let (_, _, bytes) = udp.data.wait_for(ours).expect("audio after the resume");
     assert_eq!(seq_of(&bytes), seq);
     assert_eq!(bytes[1], 0xE0);
     assert_eq!(u32_at(&bytes, 4), rtptime);
@@ -1038,7 +1043,7 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     let held = rtp_info(&server).0;
     let (at, _, bytes) = udp
         .data
-        .wait_for(|(_, _, bytes)| !before(seq_of(bytes), held))
+        .wait_for(|datagram| ours(datagram) && !before(seq_of(&datagram.2), held))
         .expect("audio after the resume");
     assert!(
         at >= paused + ANSWER + ANSWER / 2,
@@ -1048,7 +1053,8 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     assert_eq!(seq_of(&bytes), held);
     assert_eq!(rtp_info(&server).0, held);
     assert_eq!(bytes[1], 0xE0);
-    tail_before(&udp.data.take(), paused, held);
+    let datagrams: Vec<Datagram> = udp.data.take().into_iter().filter(ours).collect();
+    tail_before(&datagrams, paused, held);
     sender.shutdown();
 }
 
