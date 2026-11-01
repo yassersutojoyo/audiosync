@@ -11460,6 +11460,37 @@ mod tests {
         }
     }
 
+    /// The longer help behind a code note shows on hover only; Narrator
+    /// hears it after the note on the row's toggle.
+    #[test]
+    fn a_code_notes_hover_help_is_read_on_the_rows_toggle() {
+        use i_slint_backend_testing::ElementQuery;
+        let mut backend = MockBackend::new();
+        backend.set_code_every_time("airplay:bedroom");
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        let name = app
+            .snapshot()
+            .speaker("airplay:bedroom")
+            .expect("listed")
+            .name
+            .clone();
+        let read = !ElementQuery::from_root(&app.main)
+            .match_predicate(move |e| {
+                e.accessible_label()
+                    .unwrap_or_default()
+                    .starts_with(name.as_str())
+                    && e.accessible_description().unwrap_or_default()
+                        == "Asks for a code every time. This speaker asks for a code each time it \
+                            connects, so auto-connect leaves it off. AudioSync asks you for the \
+                            code when you turn the speaker on."
+            })
+            .find_all()
+            .is_empty();
+        assert!(read, "the note, then its help");
+    }
+
     #[test]
     fn escape_on_the_zone_dialog_buttons_cancels() {
         let app = app_over(MockBackend::new());
@@ -13009,6 +13040,24 @@ mod tests {
         assert!(app.zone_dialog.window().is_visible(), "Ctrl+Shift+W");
         ctrl(app.zone_dialog.window(), "w");
         assert!(!app.zone_dialog.window().is_visible(), "Ctrl+W");
+    }
+
+    #[test]
+    fn ctrl_shift_w_and_ctrl_shift_q_do_nothing_in_the_about_dialog() {
+        let app = app_over(MockBackend::new());
+        let exits = Rc::new(Cell::new(0));
+        let counted = exits.clone();
+        app.about
+            .on_exit_requested(move || counted.set(counted.get() + 1));
+        let window = app.about.window();
+        app.main.invoke_about_requested();
+        draw_frames();
+        held(window, &[Key::Control, Key::Shift], "w");
+        assert!(window.is_visible(), "Ctrl+Shift+W");
+        held(window, &[Key::Control, Key::Shift], "q");
+        assert_eq!(exits.get(), 0, "Ctrl+Shift+Q");
+        ctrl(window, "q");
+        assert_eq!(exits.get(), 1, "Ctrl+Q");
     }
 
     // covers: S260, S266

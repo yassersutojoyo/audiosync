@@ -628,8 +628,8 @@ export global Strings {
         return @tr("Notice: {}", title);
     }
 
-    // A notice and a delay field's range line that arrive together: Narrator
-    // says both, in turn.
+    // Narrator says both, in turn: a notice and a delay field's range line
+    // that arrive together, or a speaker's note and its hover help.
     public pure function announcements(first: string, second: string) -> string {
         return @tr("{}. {}", first, second);
     }
