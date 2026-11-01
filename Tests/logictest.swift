@@ -12807,6 +12807,31 @@ do {
           "a panel row shows every row note, as the main window does, Not on network in short")
 }
 
+do {
+    let t = UIStrings()
+    let kitchen = "0123456789abcdef0123456789abcdef"
+    var raw = AscCastEvent()
+    raw.kind = ASC_CAST_EVENT_PAUSED
+    raw.attempt = 4
+    var m = CastModel()
+    m.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil))
+    _ = m.turnOn(kitchen)
+    m.startSent(kitchen)
+    _ = m.started(kitchen, attempt: 4, refusal: ASC_CAST_REFUSED_NONE)
+    _ = m.apply(.started(attempt: 4, format: ASC_CAST_FORMAT_WAV))
+    // covers: C113
+    check(CastEvent(raw) == .paused(attempt: 4) && m.apply(.paused(attempt: 4)) == .changed
+            && m.status(of: kitchen) == .paused && m.apply(.playing(attempt: 4)) == .playing(kitchen)
+            && m.status(of: kitchen) == .playing,
+          "cast: a pause on the device shows as paused until the device plays again (C113)")
+    let paused = CastRow(status: .paused, muted: true, volumeFixed: false, group: .notReported)
+    // covers: C113
+    check(t.castNote(paused) == t.castPaused
+            && t.panelRowNote(t.rowNote(cast: paused, waitingForAirPlay2: false, unannounced: false, target: nil))
+                == t.castPaused,
+          "cast: a paused speaker's row says so, ahead of its mute and group, in the window and the panel (C113)")
+}
+
 // covers: C13 (the model name in the Mac's discovery line, left out when missing)
 do {
     let audio = CastDeviceChange.changed(CastDevice(id: "K1", name: "Kitchen", model: "Chromecast Audio"), offsetMs: nil)

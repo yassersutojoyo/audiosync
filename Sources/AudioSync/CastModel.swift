@@ -104,7 +104,7 @@ enum CastGroupMembers: Equatable {
 
 /// Where the session of the device that is on stands.
 enum CastStatus: Equatable {
-    case idle, connecting, playing, reconnecting
+    case idle, connecting, playing, reconnecting, paused
 }
 
 /// Why a Cast speaker went off, or stayed off, for its notice.
@@ -192,6 +192,8 @@ enum CastEvent: Equatable {
     /// The device plays the stream in `format`, an `ASC_CAST_FORMAT_` code.
     case started(attempt: UInt64, format: Int32)
     case playing(attempt: UInt64)
+    /// Someone paused the device itself; a playing event follows its next play (C113).
+    case paused(attempt: UInt64)
     /// `detail` here, in `recovering` and in `formatFallback` is the core's text for the debug log (C20).
     case connectFailed(attempt: UInt64, error: CastError?, retryMs: Int64, detail: String = "")
     case recovering(attempt: UInt64, detail: String = "")
@@ -218,7 +220,7 @@ enum CastEvent: Equatable {
 
     var attempt: UInt64? {
         switch self {
-        case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .connectFailed(let a, _, _, _),
+        case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .paused(let a), .connectFailed(let a, _, _, _),
              .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _, _), .commandFailed(let a, _),
              .volumeUnanswered(let a, _), .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
@@ -246,6 +248,7 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_PLAYING:
             underruns.forget(a)
             self = .playing(attempt: a)
+        case ASC_CAST_EVENT_PAUSED: self = .paused(attempt: a)
         case ASC_CAST_EVENT_CONNECT_FAILED:
             self = .connectFailed(attempt: a, error: error, retryMs: raw.retry_ms, detail: detail)
         case ASC_CAST_EVENT_RECOVERING: self = .recovering(attempt: a, detail: detail)
@@ -929,6 +932,8 @@ struct CastModel {
             return setStatus(.playing)
         case .recovering:
             return setStatus(.reconnecting)
+        case .paused:
+            return setStatus(.paused)
         case .connectFailed(_, let error, _, _):
             guard current.status == .connecting else { return setStatus(.reconnecting) }
             // A group with no address yet waits for its records (C81).

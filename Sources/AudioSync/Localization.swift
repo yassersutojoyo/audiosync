@@ -1462,10 +1462,12 @@ struct UIStrings {
         switch row.status {
         case .connecting: return "Connecting…"
         case .reconnecting: return "Reconnecting…"
+        case .paused: return castPaused
         case .playing where row.muted: return row.group == nil ? "Muted on the speaker" : "Muted on the group"
         case .playing, .idle: return row.group.map(castGroupNote) ?? (row.manual ? castAddedByAddress : nil)
         }
     }
+    let castPaused = "Paused on the speaker"
     func castGroupNote(_ members: CastGroupMembers) -> String {
         switch members {
         case .notReported: return "Google Cast group"

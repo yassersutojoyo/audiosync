@@ -419,6 +419,7 @@ extension AppDelegate {
         case .formatFallback(let a, let format, let detail):
             return "attempt \(a): WAV refused (\(detail)), format \(format) instead"
         case .playing(let a): return "attempt \(a): the device reports playing"
+        case .paused(let a): return "attempt \(a): the device was paused"
         case .connectFailed(let a, _, let retry, let detail):
             return "attempt \(a): connecting failed (\(detail)), again in \(retry) ms"
         case .recovering(let a, let detail): return "attempt \(a): reconnecting (\(detail))"
