@@ -12791,6 +12791,8 @@ mod tests {
             held(window, &[Key::Shift], Key::F1);
             held(window, &[Key::Control, Key::Shift], "n");
             held(window, &[Key::Shift], Key::F5);
+            held(window, &[Key::Control, Key::Shift], "w");
+            assert!(window.is_visible(), "Ctrl+Shift+W in the {name}");
             assert_eq!(
                 app.help.window().is_visible(),
                 name == "Guide",
