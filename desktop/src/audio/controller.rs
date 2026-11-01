@@ -6448,6 +6448,57 @@ mod tests {
         assert_eq!(last_gain(&fake), Some(1.0), "unity keeps the cut");
     }
 
+    // covers: S26, S415
+    #[test]
+    fn the_cast_stream_gets_the_equalizer_cut_back_under_the_master() {
+        use crate::audio::cast::CastLease;
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        /// The first sample of a block read after a block of 0.5 went in.
+        fn level(fake: &FakeCast, lease: &mut CastLease) -> f64 {
+            lease.push(&[0.5; 64], 32);
+            let mut bytes = Vec::new();
+            fake.state().readers[0].read_into(&mut bytes, 32);
+            f64::from(i16::from_le_bytes([bytes[0], bytes[1]]))
+        }
+        let mut backend = backend();
+        let gains_db = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let on = EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db,
+        };
+        let off = EqSettings {
+            enabled: false,
+            ..on
+        };
+        backend.set_equalizer(on);
+        backend.set_master_volume(50.0);
+        let fake = FakeCast::default();
+        fake.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(fake.link());
+        let cast = backend.cast.as_mut().expect("the Cast speakers");
+        cast.poll();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        let returned = level(&fake, &mut lease);
+        backend.set_equalizer(off);
+        level(&fake, &mut lease);
+        let plain = level(&fake, &mut lease);
+        let back = 10f64.powf(eq::cascade_peak_db(&gains_db, 48_000.0) / 20.0);
+        assert!(
+            (returned / plain - back).abs() < 0.01,
+            "{returned} with the cut given back, {plain} without"
+        );
+        backend.set_equalizer(on);
+        backend.set_master_volume(100.0);
+        level(&fake, &mut lease);
+        let full = level(&fake, &mut lease);
+        backend.set_equalizer(off);
+        level(&fake, &mut lease);
+        assert_eq!(level(&fake, &mut lease), full, "unity keeps the cut");
+    }
+
     // covers: S232
     #[test]
     fn a_calibration_lets_one_output_be_heard_and_then_all_again() {
