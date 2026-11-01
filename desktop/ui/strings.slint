@@ -1863,11 +1863,12 @@ export global Strings {
         return delta < 0 ? "−" + (-delta) : "+" + delta;
     }
 
+    // Starts with the visible label, so Voice Access finds the button by it.
     public pure function delay-step-accessibility(delta: int) -> string {
         if delta < 0 {
-            return @tr("Decrease delay by {} {}", -delta, root.milliseconds-unit);
+            return @tr("{} {}, decrease delay", root.delay-step(delta), root.milliseconds-unit);
         }
-        return @tr("Increase delay by {} {}", delta, root.milliseconds-unit);
+        return @tr("{} {}, increase delay", root.delay-step(delta), root.milliseconds-unit);
     }
 
     // Under a zone's name: how many of its members are on, and how many of

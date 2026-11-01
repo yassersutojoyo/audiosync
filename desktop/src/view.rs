@@ -6585,6 +6585,20 @@ mod tests {
             .expect("the desk has a row")
     }
 
+    /// Voice Access finds a button by the words it shows, so each delay
+    /// step's Narrator name starts with its visible text.
+    #[test]
+    fn a_delay_steps_accessible_name_starts_with_its_visible_text() {
+        let app = app_over(MockBackend::new());
+        let strings = app.main.global::<Strings>();
+        for delta in [-100, -10, 10, 100] {
+            let shown = strings.invoke_delay_step(delta);
+            let name = strings.invoke_delay_step_accessibility(delta);
+            assert!(name.starts_with(shown.as_str()), "{name:?} / {shown:?}");
+            assert!(name.contains("delay"), "{name:?} says what it changes");
+        }
+    }
+
     // covers: S220
     #[test]
     fn a_draft_is_typed_text_other_than_the_applied_value() {
