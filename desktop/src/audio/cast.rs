@@ -1058,6 +1058,7 @@ impl CastSpeakers {
             offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
             volume: (level.unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
+            device_level: (level.unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
             volume_known: level.is_some(),
             muted: reported.is_some_and(|volume| volume.muted),
             volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
@@ -1384,6 +1385,11 @@ impl CastSpeakers {
         }
         self.requested = Some((device, own));
         self.send_level(device, own);
+    }
+
+    /// The speaker's row moved to `row`, 0 to 100 (S413).
+    pub fn move_row(&mut self, id: &str, row: f64) {
+        self.set_volume(id, row);
     }
 
     /// The master position, 0 to 100 (C104): a change reaches the device in
@@ -4354,6 +4360,74 @@ pub mod tests {
         cast.set_zones(BTreeMap::new());
         assert_eq!(sent(&fake), [0.2, 0.0, 0.4], "out of the zone");
         assert_eq!(shown(&cast, KITCHEN), 80.0);
+    }
+
+    /// The whole number the row shows (S413).
+    fn row(cast: &CastSpeakers) -> f64 {
+        cast.speakers()
+            .into_iter()
+            .find(|info| info.id == KITCHEN)
+            .map(|info| audiosync_core::volume::row_level(info.device_level))
+            .expect("listed")
+    }
+
+    fn last_sent(fake: &FakeCast) -> f64 {
+        *sent(fake).last().expect("a level sent")
+    }
+
+    // covers: S413
+    #[test]
+    fn a_cast_row_shows_the_level_the_tv_gets_after_a_row_master_and_zone_move() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.4);
+        assert_eq!(row(&cast), 40.0, "the first status");
+
+        cast.move_row(KITCHEN, 80.0);
+        assert!((last_sent(&fake) - 0.8).abs() < 1e-9, "the row itself");
+        report(&fake, &mut cast, 0.8);
+        assert_eq!(row(&cast), 80.0, "a row move");
+
+        cast.set_master(100.0);
+        assert!((last_sent(&fake) - 1.0).abs() < 1e-9);
+        report(&fake, &mut cast, 1.0);
+        assert_eq!(row(&cast), 100.0, "a master move");
+        cast.set_master(50.0);
+        assert!(
+            (last_sent(&fake) - 0.8).abs() < 1e-9,
+            "the cap kept nothing"
+        );
+        report(&fake, &mut cast, 0.8);
+        assert_eq!(row(&cast), 80.0, "the master back");
+
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        assert!((last_sent(&fake) - 0.4).abs() < 1e-9);
+        report(&fake, &mut cast, 0.4);
+        assert_eq!(row(&cast), 40.0, "a zone move");
+        report(&fake, &mut cast, 0.3);
+        assert_eq!(row(&cast), 30.0, "a level set on the TV");
+        cast.set_zones(BTreeMap::new());
+        assert!((last_sent(&fake) - 0.6).abs() < 1e-9);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(row(&cast), 60.0, "out of the zone");
+
+        cast.set_master(0.0);
+        report(&fake, &mut cast, 0.0);
+        let count = sent(&fake).len();
+        cast.move_row(KITCHEN, 50.0);
+        assert_eq!(
+            sent(&fake).len(),
+            count,
+            "at master 0 a row move sends nothing"
+        );
+        assert_eq!(row(&cast), 0.0);
+        cast.set_master(50.0);
+        assert!(
+            (last_sent(&fake) - 0.6).abs() < 1e-9,
+            "the own level stayed"
+        );
     }
 
     // covers: C104, C105

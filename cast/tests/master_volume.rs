@@ -140,3 +140,15 @@ fn a_reported_level_answers_a_sent_one_within_half_a_percent() {
     assert!(!answers_level(0.4, 0.41));
     assert!(!answers_level(0.4, f64::NAN));
 }
+
+/// The master and the zone are multipliers, never a ceiling (S413 in
+/// `docs/ENGINE_SPEC.md`): the own level passes 1.0 where they are below 1.
+#[test]
+fn the_own_level_passes_1_so_the_master_and_the_zone_cap_nothing() {
+    assert!(close(own_level(0.8, 0.5, NO_ZONE, 0.9), 1.6));
+    assert!(close(own_level(0.3, 0.5, 0.5, 0.9), 1.2));
+    assert!(close(device_level(0.5, NO_ZONE, 1.6), 0.8));
+    assert_eq!(device_level(1.0, NO_ZONE, 1.6), 1.0, "capped at 1");
+    assert!(close(start_own_level(0.5, NO_ZONE, None, 0.8), 1.6));
+    assert_eq!(start_own_level(0.5, NO_ZONE, Some(1.6), 0.1), 1.6);
+}
