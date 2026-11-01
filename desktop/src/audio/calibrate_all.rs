@@ -58,6 +58,15 @@ impl Member {
         member_key(self.class, &self.id)
     }
 
+    /// Whether its stored delay differs in `now`. AirPlay compares the
+    /// setting A, since L also moves with the sender latency (S239).
+    fn delay_changed(&self, now: &Member) -> bool {
+        match self.class {
+            Class::AirPlay => now.adjustment_ms != self.adjustment_ms,
+            _ => now.offset_ms != self.offset_ms,
+        }
+    }
+
     /// Its speaker key (S149), as a zone holds it.
     pub fn speaker_key(&self) -> String {
         let id = self.id.clone();
@@ -685,7 +694,7 @@ impl AllRun {
         // An off row was read while it didn't play: it starts from its values now (S255).
         let run = if off {
             sheet.measure_again_off(row, now.offset_ms, now.latency_ms)
-        } else if now.offset_ms != measured.offset_ms {
+        } else if measured.delay_changed(now) {
             return refuse(Failure::DelayChanged);
         } else {
             sheet.measure_again(row)
@@ -1011,7 +1020,7 @@ impl AllRun {
             let member = &self.members[*row];
             match lineup.members.iter().find(|now| now.same(member)) {
                 None => return Some(EndReason::SpeakerTurnedOff),
-                Some(now) if now.offset_ms != member.offset_ms => {
+                Some(now) if member.delay_changed(now) => {
                     return Some(EndReason::SpeakersChanged);
                 }
                 Some(_) => {}

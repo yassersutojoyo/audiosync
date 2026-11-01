@@ -3586,6 +3586,7 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | streaming_stopping_mid_run_ends_it_as_a_speaker_turned_off (`desktop/src/audio/calibrate_all.rs`) | S240 |
 | a_speaker_turned_on_in_measure_again_or_headphones_in_a_run_end_it_as_a_change (`desktop/src/audio/calibrate_all.rs`) | S239, S240 |
 | measure_again_of_a_row_whose_delay_changed_since_says_so (`desktop/src/audio/calibrate_all.rs`) | S239 |
+| measure_again_of_an_airplay_row_whose_sender_latency_moved_still_measures (`desktop/src/audio/calibrate_all.rs`) | S239 |
 | measure_again_with_another_microphone_at_the_same_rate_is_refused (`desktop/src/audio/calibrate_all.rs`) | S239 |
 | a_run_records_with_the_input_of_its_first_recording (`desktop/src/audio/calibrate_all.rs`) | S232 |
 | a_whole_run_cancelled_before_any_row_drops_the_table_and_says_why (`desktop/src/adapter.rs`) | S240 |
