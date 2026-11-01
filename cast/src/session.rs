@@ -146,6 +146,12 @@ pub enum SessionEvent {
     /// it is the first status since a mute was sent, so a level it repeats
     /// leaves a level the host still awaits awaited.
     Volume(DeviceVolume, bool),
+    /// A level sent that no status will answer (C70, C104), as the channel
+    /// reports it.
+    VolumeUnanswered {
+        level: f64,
+        repeated: bool,
+    },
     /// A connect attempt failed; the next one follows after `retry_in`
     /// (C80).
     ConnectFailed {

@@ -1578,6 +1578,10 @@ mod tests {
                 "ASC_CAST_EVENT_CERTIFICATE_CHANGED",
                 CAST_EVENT_CERTIFICATE_CHANGED.to_string(),
             ),
+            (
+                "ASC_CAST_EVENT_VOLUME_UNANSWERED",
+                CAST_EVENT_VOLUME_UNANSWERED.to_string(),
+            ),
             ("ASC_CAST_END_STOPPED", CAST_END_STOPPED.to_string()),
             ("ASC_CAST_END_TAKEN_OVER", CAST_END_TAKEN_OVER.to_string()),
             ("ASC_CAST_END_DESELECTED", CAST_END_DESELECTED.to_string()),

@@ -2011,6 +2011,7 @@ impl CastSpeakers {
                 }
                 self.volume_reported(device, volume, answers_mute)
             }
+            SessionEvent::VolumeUnanswered { .. } => {}
             SessionEvent::Diagnostics(diagnostics) => {
                 self.log
                     .log(|| format!("Cast diagnostics: {diagnostics:?}"));
@@ -3274,6 +3275,63 @@ pub mod tests {
             report(&fake, &mut cast, answer);
         }
         assert_eq!(shown(&cast, KITCHEN), 52.0);
+    }
+
+    fn unanswered(fake: &FakeCast, cast: &mut CastSpeakers, level: f64, repeated: bool) {
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::VolumeUnanswered { level, repeated },
+        });
+        cast.poll();
+    }
+
+    // covers: C70, C104 (the TV answered 0.55 before the sender sent it again)
+    #[test]
+    fn a_drag_back_to_the_level_the_tv_reports_awaits_nothing_more() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        report(&fake, &mut cast, 0.55);
+        unanswered(&fake, &mut cast, 0.55, false);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70, C104 (the sender sent 0.55 twice, 0.6 never went out)
+    #[test]
+    fn a_level_sent_twice_while_unanswered_awaits_one_answer() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, 0.55, true);
+        report(&fake, &mut cast, 0.55);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70 (0.55, 0.6 and 0.55 all went out)
+    #[test]
+    fn late_answers_to_a_drag_back_to_its_first_level_never_move_the_slider() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        for answer in [0.55, 0.6, 0.55] {
+            report(&fake, &mut cast, answer);
+            assert_eq!(shown(&cast, KITCHEN).round(), 55.0, "after {answer}");
+        }
     }
 
     // covers: C70, C104 (a drag of 60 levels, 100 ms pacing, 400 ms echoes)
@@ -4827,5 +4885,19 @@ pub mod tests {
         fake.report(report(ControlType::Attenuation));
         cast.poll();
         assert!(!volume_fixed(&cast, KITCHEN));
+    }
+
+    // covers: C68, C104
+    #[test]
+    fn a_fixed_volume_row_shows_what_the_device_reports_whatever_the_zone() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        fake.report(reported(KITCHEN, 1.0, ControlType::Fixed));
+        cast.poll();
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 40.0)]));
+        assert_eq!(row(&cast), 100.0);
+        assert_eq!(shown(&cast, KITCHEN), 100.0);
     }
 }

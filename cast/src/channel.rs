@@ -73,6 +73,13 @@ pub enum Event {
     Multizone(MultizoneMessage),
     /// A message the sender dropped, for the log (C26 to C28, C31).
     Dropped(Dropped),
+    /// A level sent that no status will answer (C70, C104): `repeated` when
+    /// the level sent before it is the same and still unanswered, else the
+    /// device already reports it.
+    VolumeUnanswered {
+        level: f64,
+        repeated: bool,
+    },
     /// The channel is over; nothing more will be sent (sections 4 and 8).
     Ended(EndReason),
 }
