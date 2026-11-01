@@ -11552,7 +11552,7 @@ mod tests {
         app.main.invoke_about_requested();
         assert!(window.is_visible());
         press(window, Key::Return);
-        assert!(!window.is_visible());
+        assert!(!window.is_visible(), "Enter right after it opened");
     }
 
     #[test]
@@ -11566,7 +11566,7 @@ mod tests {
         assert!(window.is_visible());
         assert!(!app.zone_dialog.get_show_field());
         press(window, Key::Return);
-        assert!(!window.is_visible());
+        assert!(!window.is_visible(), "Enter on the message closed it");
     }
 
     #[test]
