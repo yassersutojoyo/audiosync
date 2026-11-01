@@ -21,6 +21,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Changed
 
 - AirPlay 2 speakers, stereo pairs and home theater groups play without turning on AirPlay 2 (Experimental) first. A speaker that plays both AirPlay 1 and AirPlay 2 still uses AirPlay 1 unless that setting is on. On the Mac and on Windows.
+- On Windows, the main window opens narrower: the speaker list starts at 440 px instead of 644 px and grows as you widen the window, up to its old width.
 - On the Mac, a speaker row in the menu bar panel shows its note, such as "Reconnecting…", "Waiting for the password", "Not on the network" or why a zone member doesn't play, as the main window does. Before, only VoiceOver read most of them.
 - On Windows, the tray panel slides up and fades in as it opens, as Windows 11's own panels do.
 - A Google Cast speaker that ends the stream on its own gets it again, unless it already ended it in the 10 minutes before, which ends the session. Before, the second end in a session always ended it. On the Mac and on Windows.

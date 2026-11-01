@@ -42,9 +42,11 @@ the name with its kind as a small icon after it and the availability note, when
 there is one, on the same line (the device name is in the name's tooltip), the
 delay and the "…" options button, and the volume slider with its value under
 that line, so a long name isn't cut short by the slider. The delay lines up
-across the sections. The window can't be made narrower than 860 px or shorter
-than 440 px, which fits a 1366 x 768 screen at 150 %, and it holds that size
-when another program resizes it. Both columns scroll when the window is too
+across the sections. The window opens 776 px wide, with a 440 px speaker list,
+and can't be made narrower than that or shorter than 440 px, which fits a
+1366 x 768 screen at 150 %; it holds that size when another program resizes
+it. A wider window widens the speaker list up to 644 px and leaves the rest
+empty on the right. Both columns scroll when the window is too
 short for them, and the speaker list keeps room for its scroll bar.
 
 A speaker row shows one of four states. Off: a grey toggle. On while
