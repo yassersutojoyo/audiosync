@@ -13814,6 +13814,42 @@ mod tests {
         assert_eq!(adapter.audio.airplay_adjustment(), 120.0);
     }
 
+    // covers: S238, S395
+    #[test]
+    fn an_airplay_adjustment_changed_under_the_20000_ms_clamp_refuses_apply() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        let fake = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(fake.link(), None);
+        fake.set_latency(std::time::Duration::from_millis(2000));
+        adapter.poll();
+        adapter.audio.set_airplay_adjustment(18_500.0);
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(20_000.0));
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(20_000.0), 20_050.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, 2000.0);
+
+        fake.set_latency(std::time::Duration::from_millis(1750));
+        adapter.poll();
+        // A becomes 18 150 ms; against the run's L_s it still clamps to 20 000.
+        adapter.set_airplay_delay(19_900.0);
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
+        assert_eq!(
+            state.phase,
+            AllPhase::Stale,
+            "Apply would undo the new AirPlay delay"
+        );
+        assert_eq!(adapter.audio.airplay_adjustment(), 18_150.0);
+    }
+
     /// Applies an AirPlay row against a sender's L_s of 2000 ms, then a
     /// new sender, as after Retry, starts at 1750 ms.
     fn applied_before_a_new_sender() -> (AudioAdapter<MockBackend>, FakeAirPlay, f64) {

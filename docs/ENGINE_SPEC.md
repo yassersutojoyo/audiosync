@@ -4870,6 +4870,7 @@ The release side:
 | a_calibrations_line_goes_once_its_speaker_is_turned_off (`desktop/src/adapter.rs`) | S395 |
 | a_measured_delay_changed_before_apply_keeps_the_results_and_apply_writes_nothing (`desktop/src/adapter.rs`) | S238, S395 |
 | an_airplay_delay_changed_while_no_sender_runs_keeps_the_results_and_apply_writes_nothing (`desktop/src/adapter.rs`) | S238, S395 |
+| an_airplay_adjustment_changed_under_the_20000_ms_clamp_refuses_apply (`desktop/src/adapter.rs`) | S238, S395 |
 
 ### The none-found note, the pairings notice at launch and the loopback gap fill: Windows (`cargo test` in `desktop/`)
 
