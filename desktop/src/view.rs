@@ -12985,6 +12985,32 @@ mod tests {
         assert_eq!(app.zone_dialog.get_heading(), heading);
     }
 
+    #[test]
+    fn ctrl_win_and_a_digit_recalls_nothing_and_ctrl_shift_w_leaves_a_dialog_open() {
+        let app = app_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+
+        app.equalizer.show().expect("the equalizer shows headless");
+        draw_frames();
+        held(app.equalizer.window(), &[Key::Control, Key::Meta], "1");
+        assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the equalizer");
+
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        app.flyout.invoke_take_focus();
+        draw_frames();
+        held(app.flyout.window(), &[Key::Control, Key::Meta], "1");
+        assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the flyout");
+
+        app.ask_save_preset();
+        draw_frames();
+        held(app.zone_dialog.window(), &[Key::Control, Key::Shift], "w");
+        assert!(app.zone_dialog.window().is_visible(), "Ctrl+Shift+W");
+        ctrl(app.zone_dialog.window(), "w");
+        assert!(!app.zone_dialog.window().is_visible(), "Ctrl+W");
+    }
+
     // covers: S260, S266
     #[test]
     fn a_recall_from_the_flyout_opens_nothing_and_leaves_the_flyout_as_it_is() {

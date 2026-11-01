@@ -63,7 +63,7 @@ export component GuideWindow inherits Window {
                 root.refresh-devices();
                 return accept;
             }
-            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && event.text.character-count == 1 && event.text.is-float() && event.text.to-float() >= 1 {
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.character-count == 1 && event.text.is-float() && event.text.to-float() >= 1 {
                 root.preset-shortcut(event.text.to-float());
                 return accept;
             }
