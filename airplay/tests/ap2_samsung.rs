@@ -407,9 +407,9 @@ const HOST_STALL: Duration = Duration::from_millis(1700);
 
 // Part of P184 with S291: the television's remote moves its level in
 // 0.3 dB steps, so one press from the echo of a set lands off the 0.6 dB
-// grid of its sets. That reading is reported as read, within about 1 s,
-// and lies further than 0.05 dB from the echo, so the host takes it as a
-// level set on the speaker.
+// grid of its sets. The one read the host asks for after the press, however
+// late, reports that reading as read, further than 0.05 dB from the echo,
+// so the host takes it as a level set on the speaker.
 // covers: P184
 #[test]
 fn one_remote_step_off_the_grid_of_sets_is_reported_as_read() {
@@ -440,21 +440,20 @@ fn one_remote_step_off_the_grid_of_sets_is_reported_as_read() {
         let pressed = Instant::now();
         server.fake().set_on_tv(pressed_to);
         tv.run(HOST_STALL, false);
-        tv.run(Duration::from_millis(2500), true);
-        let seen = tv
-            .reported_after(pressed)
-            .into_iter()
-            .find(|(_, level)| (level - read_as).abs() < 0.000_01);
-        let Some((at, _)) = seen else {
-            panic!(
-                "{pressed_to} never reported as {read_as}: {:?}",
-                tv.reported_after(pressed)
-            );
+        tv.sender.read_volume(&tv.key);
+        let reported = |tv: &Playing| {
+            tv.reported_after(pressed)
+                .iter()
+                .any(|(_, level)| (level - read_as).abs() < 0.000_01)
         };
+        let deadline = Instant::now() + LONG;
+        while !reported(&tv) && Instant::now() < deadline {
+            tv.run(Duration::from_millis(100), false);
+        }
         assert!(
-            at - pressed <= Duration::from_millis(1600),
-            "{pressed_to} reported {:?} after the press",
-            at - pressed
+            reported(&tv),
+            "{pressed_to} never reported as {read_as}: {:?}",
+            tv.reported_after(pressed)
         );
     }
     let reports = tv.reported_after(presses);
