@@ -281,6 +281,148 @@ The sender's tests run against a fake receiver in the same process: a TLS server
 | manual receiver check, no test function | C89 to C103 | *hardware*: G1 |
 | a_cast_speaker_on_at_quit_turns_on_again_once_listed_after_a_relaunch, a_cast_speaker_saved_as_on_stays_off_when_hidden_and_stays_saved_without_a_cast_sender, a_speaker_added_by_address_on_at_quit_turns_on_when_a_browse_finds_it_first, a_session_runs_only_while_on_and_streaming, a_failed_session_turns_its_speaker_off_with_the_reason | C112 | the target that is on is saved by `id`; after a relaunch it turns on once listed and nothing streams before; a hidden one stays off and stays saved; one added by address turns on when a browse finds it (these three in `desktop/src/adapter.rs`); a session runs only while the speaker is on and streaming, and a failed session turns its speaker off with the reason; the Mac's logic suite checks the same in its "cast: … (C112)" checks |
 
+### Mac (the logic suite, `Tests/logictest.swift`)
+
+| Check | Clauses |
+|---|---|
+| cast: rows by name, offsets from the device memory | C77 |
+| cast: a group turns on and off like any speaker | C3 |
+| cast: a second speaker stays off while one is on | C2 |
+| cast: the device's volume and mute follow its status | C70 |
+| cast: a mute toggle shows at once and the device's next status wins | C70 |
+| cast: a fixed volume can't be muted, so a mute never shows (C68) | C68 |
+| cast: a mute the device refuses is undone | C70 |
+| cast: an unmute the device refuses is undone | C70 |
+| cast: a refusal from an earlier attempt leaves the mute shown | C70 |
+| cast: a level the device refuses after a mute leaves the mute shown | C70 |
+| cast: a mute's answer that repeats the known level leaves a level still awaited on the slider | C70 |
+| cast: the slider sets the device's level only while its session runs | C69, C104 |
+| cast: a lost channel reconnects and plays again | C81 |
+| cast: a speaker in a session stays listed and playing after its records expire (C17) | C17 |
+| cast: a reloaded stream keeps playing with no new session (C86) | C86 |
+| cast: another app casting turns the speaker off with a notice | C43 |
+| cast: turning it on with its own switch tries it again | C40 |
+| cast: attempt 0 means refused, and the speaker goes off | C2 |
+| cast: a speaker that never answers goes off at its third connect failure while connecting (C80) | C80 |
+| cast: a group with no address yet keeps trying while connecting (C80, C81) | C80, C81 |
+| cast: a group that never answers goes off at its third connect failure, as on Windows (C80) | C80 |
+| cast: each way a session ends maps to its notice, or none | C56, C80, C83 |
+| cast: a fault inside the sender reads as a lost connection, as on Windows (C107) | C107 |
+| cast: the speaker that is on is saved for the next launch, unless auto-connect is skipped (C112) | C112 |
+| cast: the speaker saved as on streams nothing before it is found (C112) | C112 |
+| cast: the speaker saved as on turns on once it is found (C112) | C112 |
+| cast: a speaker the user switched first wins over the one saved as on (C112) | C112 |
+| cast: a hidden speaker saved as on stays off after a launch (C112) | C112 |
+| cast: a speaker that stops on its own is saved as off (C112) | C112 |
+| cast: a speaker saved as on by its address turns on when a browse finds its ID (C112) | C112 |
+| cast: a speaker saved as on stays off while listed offline, and one the user switches on meanwhile wins (C112) | C112 |
+| cast: a speaker saved as on turns on once it comes online (C112) | C112 |
+| cast: the selection is named to the sender once at start and again only when it changes (C108) | C108 |
+| cast: a device's first announcement seeds the offset its memory holds | C77 |
+| cast: an ended event copies its reason and error | C83 |
+| cast: a volume event copies level, mute and fixed | C68, C70 |
+| cast: a format fallback event copies the format | C84 |
+| cast diagnostics: the first line shows the underrun silence counted so far | C78 |
+| cast diagnostics: later lines show only the new underrun silence | C78 |
+| cast diagnostics: each attempt keeps its own count | C78 |
+| cast diagnostics: a new LOAD (playing again) counts from 0 | C78 |
+| cast diagnostics: a count that went down was restarted, so all of it is new | C78 |
+| cast diagnostics: an ended attempt's count is dropped | C78 |
+| cast: a discovery report copies its strings, flags and stored offset | C13, C14, C77 |
+| cast: a fixed-volume row offers no Mute | C68 |
+| cast discovery: the debug line names the device's model | C13 |
+| cast discovery: a device without a model gets no model in its debug line | C13 |
+| cast group: listed as one row with its own stored offset, members not reported while off | C89, C101 |
+| cast group: turns on and starts like a device | C93 |
+| cast group: a member stays its own row and waits while the group plays | C2 |
+| cast group: no member note while it connects | C94 |
+| cast group: playing without a member list says the members are unknown | C94 |
+| cast group: an empty member list stays unknown | C94 |
+| cast group: members of an older attempt are dropped | C94 |
+| cast group: a member list changes the row once | C94 |
+| cast group: members by their row's name, an unlisted one by the group's name for it | C95 |
+| cast group: a group log line changes nothing shown | C96 |
+| cast group: one volume for the group, none sent to a member | C100 |
+| cast group: the offset is stored under the group's id, never a member's, and local outputs wait for it | C101 |
+| cast group: another sender casting to a member ends it as taken over and forgets the members | C99 |
+| cast group: once it is off, a member can play | C99 |
+| cast group: a members event copies the list the sender reads | C94 |
+| cast group: a group log event carries its line for the debug log | C96 |
+| cast: a changed certificate becomes a debug log line of its attempt | C21 |
+| cast: a connect failure keeps the core's detail for the debug log | C80 |
+| cast: … keeps the core's detail for the debug log | C81, C83, C84 |
+| cast group: the retired group refusal and error map to nothing group-specific | C80 |
+| cast group: the playing group is the Cast speaker a calibration run measures | C101 |
+| cast group: Calibrate All lists the playing group as one Cast row with its own offset | C101 |
+| cast group: the measured offset is stored under the group's id, the members' stay as they were | C101, C102 |
+| cast master: the speaker at 80 sends level 0.8 and its row shows 80, whatever the master | C104 |
+| cast master: level 0.2 set elsewhere moves the row to 20, nothing sent back | C104 |
+| cast master: a speaker kept at 0 is sent level 0 at its first status | C105 |
+| cast master: only the first status of a session is answered | C105 |
+| cast master: a session with no level kept starts from the device's own, never brought down by the master | C105 |
+| cast master: a fixed volume gets nothing (C68) | C68, C104 |
+| cast master: a level the device already has is not waited for, so its buttons' 0 is read back | C70, C104 |
+| cast master: two levels set while the speaker starts are both sent, so their echoes leave it at the second | C70, C105 |
+| cast master: a status answers the oldest level it matches, so 30, 50, 30 sent never jumps the slider to 50 (C70) | C70 |
+| cast master: the level set while starting goes again at the first status | C105 |
+| cast master: the sender reports a level re-sent at the first status unanswered, so a later change to it from elsewhere moves the speaker | C70, C105 |
+| cast master: a session starts at the own level when the device is quieter, not read back (C105) | C105 |
+| cast master: a fixed volume is not set at the start (C68) | C68, C105 |
+| cast master: a group gets its own level like a device | C104 |
+| cast master: the core's arithmetic | C70, C104, C105 |
+| cast master: a device that rounds to its step answers within half a step | C70, C104 |
+| cast master: 0.36 rounds to the 0.35 it has, so 0.35 after 0.4 is a change from elsewhere | C70, C104 |
+| cast master: in a zone at 60 the device's 0.30 answers the 0.318 sent and the slider stays at 53 | C70, C104 |
+| cast master: the answer to the first level of a 60-level drag is not read as a change | C70, C104 |
+| cast master: after a drag back to the level the TV reports, the TV's remote moves the slider | C70, C104 |
+| cast master: a level sent twice while unanswered awaits one answer, so the TV's remote moves the slider | C70, C104 |
+| cast master: a repeat after a wobble still awaits the levels sent before it, so their late answers never move the slider | C70, C104 |
+| cast master: levels a drag replaced before sending never hold the slider, so the TV's remote moves it | C70, C104 |
+| cast master: a level asked again while it waits is awaited again, so the slider follows the TV to 90 | C70, C104 |
+| cast master: a repeat of a level sent earlier never strands the slider on another level | C70, C104 |
+| cast row: a step in a zone at 50 sends the row plus the step and stores row ÷ zone | C69 |
+| zones: nothing is sent to a Cast speaker while no session runs | C104 |
+| zones: the Cast level is zone × own | C104 |
+| zones: a zone volume change gives the Cast speaker in a session its new level, once | C104 |
+| zones: a Cast session's first status divides by the zone (C105) | C105 |
+| cast step: an arrow key does nothing while no session runs | C69 |
+| cast step: a device that reports no step moves by the fallback step, shown at once | C69 |
+| cast step: the fallback step goes down too | C69 |
+| cast step: once the device reports its step, the key sends a step and the slider shows the level it should reach | C69 |
+| cast step: a second step before the device answers goes on from the level shown | C69 |
+| cast step: the device's volume event replaces the level the step should reach | C69 |
+| cast step: down by the device's step | C69 |
+| cast step: a fixed volume takes no step | C68 |
+| cast step: the fallback step stops at full volume | C67, C69 |
+| cast step: the answer to a drag level sent before a step keeps the slider on the step's level | C69, C70 |
+| cast step: the TV's remote setting a level a drag left unsent before a step moves the slider to it | C69, C70 |
+| cast step: a step the sender reports unanswered at its own unrounded level stops waiting, so the TV's remote moves the slider | C69, C70 |
+| cast step: a volume event copies the device's step | C69 |
+| cast track info: a track change goes to the sender, kept for the next load | C54 |
+| cast: of 266 browse changes one poll takes 256 and the next poll the rest (C106) | C106 |
+| cast track info: with no track known, the fields are blank, not AudioSync's labels | C53 |
+| cast track info: with no track known, the device gets blank fields and no cover | C53 |
+| cast track info: a large cover is scaled to fit 1280 by 720 and the byte cap | C53 |
+| cast+airplay: AirPlay, Cast and local outputs are heard together either way | C77 |
+| cast+airplay: nothing waits unless both are chosen | C77 |
+| web remote: a Cast speaker's arrow keys on the phone move by its own step, else by the Mac's fallback step | C69 |
+| cast address: an IPv4 address or a host name alone gets port 8009; a host name is lowercased and trimmed | C18 |
+| cast address: host:port keeps the port; the text leaves out 8009 only | C18 |
+| cast address: empty text, a bad port, a bad IPv4 address, a bad host name and IPv6 are refused | C18 |
+| cast address list: adds keep their order, the same address twice is stored once, and it reads back | C18 |
+| cast address list: a damaged or repeated stored entry is dropped | C18 |
+| cast address list: Remove drops one address, and the setting goes once none is left | C18 |
+| cast model: a removed manual device stays off the list until it is added again; only a manual one is removed | C18 |
+| cast model: a manual device a browse finds keeps its address under the new id, and Remove there forgets only the address | C18 |
+| cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender does: over none or a cleared one, never over one the id already had | C18 |
+| cast: the id a browse found for an address is saved, lists the address under it after a relaunch before any browse, gives way to another speaker a browse finds there, which is listed as a new one while the saved one stays off until listed, and goes with the address | C18 |
+| cast: removing an address listed under a saved id forgets the id, and a change the sender queued before the removal doesn't bring the row back | C18 |
+| presets: a recall that swaps the Cast speaker while streaming gives the new one the preset's volume | C105 |
+| cast: a level set while the speaker is off goes at its first status | C105 |
+| cast model: a speaker that is on with no session leaves the list, says so in a notice and no longer blocks another | C2 |
+| cast address: a name that doesn't resolve or an address where nothing answers is not found, with its own text | C18 |
+| volume: a fixed Cast volume keeps its own reason | C68 |
+
 ## Sources
 
 Every clause rests on the sources below or is marked as AudioSync's design. Google's Cast documentation pages are published under the Creative Commons Attribution 4.0 License (code samples under Apache-2.0); facts were taken from them in our own words. Open-source projects were read for behavior only; their licenses are named because they were read, and no code or text from any of them is in AudioSync. Issue threads and the community write-up carry no license; only the facts they report were used.

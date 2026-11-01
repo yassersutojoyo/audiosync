@@ -176,14 +176,10 @@ fn d1_once_passes_against_a_television_that_asks_for_a_pin_once() {
         instance: "AudioSync Test TV".to_owned(),
         host: format!("{}.local", television::HOST_LABEL),
         port: server.address.port(),
-        txt: television::txt(
-            Pin::Once,
-            television::FEATURES_METADATA,
-            television::DEVICE_ID,
-        )
-        .into_iter()
-        .map(|(key, value)| format!("{key}={value}").into_bytes())
-        .collect(),
+        txt: television::txt(Pin::Once, television::DEVICE_ID)
+            .into_iter()
+            .map(|(key, value)| format!("{key}={value}").into_bytes())
+            .collect(),
         addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
     };
     let key = DeviceKey::Id(DeviceId(television::DEVICE_ID));

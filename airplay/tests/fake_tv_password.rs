@@ -43,14 +43,10 @@ fn device(server: &Ap2Server) -> Device {
         instance: "AudioSync Test TV".to_owned(),
         host: format!("{}.local", television::HOST_LABEL),
         port: server.address.port(),
-        txt: television::txt(
-            Pin::Password,
-            television::FEATURES_METADATA,
-            television::DEVICE_ID,
-        )
-        .into_iter()
-        .map(|(key, value)| format!("{key}={value}").into_bytes())
-        .collect(),
+        txt: television::txt(Pin::Password, television::DEVICE_ID)
+            .into_iter()
+            .map(|(key, value)| format!("{key}={value}").into_bytes())
+            .collect(),
         addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
     };
     let key = DeviceKey::Id(DeviceId(television::DEVICE_ID));
@@ -114,7 +110,7 @@ fn the_password_profile_advertises_bit_7_and_reads_as_needing_a_password() {
         .get("statusFlags")
         .and_then(plist::Value::as_signed_integer);
     assert_eq!(flags, Some(0x84));
-    let txt = television::txt(Pin::Password, 0, television::DEVICE_ID);
+    let txt = television::txt(Pin::Password, television::DEVICE_ID);
     assert!(txt.contains(&("flags", "0x84".to_owned())), "{txt:?}");
     assert!(
         txt.iter().all(|(key, _)| *key != "pw"),

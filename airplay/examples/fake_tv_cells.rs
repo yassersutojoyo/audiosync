@@ -163,11 +163,7 @@ impl Tv {
     }
 
     fn device(&self) -> Device {
-        let mut txt = television::txt(
-            self.pin,
-            television::FEATURES_METADATA,
-            television::DEVICE_ID,
-        );
+        let mut txt = television::txt(self.pin, television::DEVICE_ID);
         if self.ptp_only {
             txt = television::ptp_only_txt(txt);
         }

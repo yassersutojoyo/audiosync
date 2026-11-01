@@ -40,7 +40,7 @@ fn device(server: &Ap2Server) -> Device {
         instance: "AudioSync Test TV".to_owned(),
         host: format!("{}.local", television::HOST_LABEL),
         port: server.address.port(),
-        txt: television::txt(Pin::None, 0, television::DEVICE_ID)
+        txt: television::txt(Pin::None, television::DEVICE_ID)
             .into_iter()
             .map(|(key, value)| format!("{key}={value}").into_bytes())
             .collect(),

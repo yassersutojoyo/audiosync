@@ -735,6 +735,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | volume: 10 ≈ −60 dB | S70 |
 | volume: position↔gain round-trip | S70 |
 | volume: legacy 3.49% migrates to ≈33 | S75 |
+| volume: a local or master volume is clamped to 0 to 100; one that isn't a number is ignored | S76 |
+| volume: a local, master or zone volume set on the Mac goes through that clamp | S76 |
 | volume: strictly increasing | S70 |
 | volume: a local speaker with no stored volume plays at 60, in no zone at zone volume 100 (S399) | S71, S399 |
 | source: round-trip system | S12 |
@@ -813,6 +815,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | presets: the migrated mark is written last | S254 |
 | presets: a migration cut short before its mark runs again to the same presets | S254 |
 | presets: migrating presets twice changes nothing: once marked, a launch writes nothing | S254 |
+| presets: a migrated mark that isn't a bool counts as set, so the presets stay as they are | S254 |
 | presets: presets round-trip through the user defaults, a fixed Cast volume included | S251 |
 | presets: stored presets keep one Cast key, one preset per ID, levels within range (an AirPlay or Cast own volume may pass 100) | S251, S415 |
 | presets: a preset keeps a deleted zone's ID and volume across a save and reload (the stored side of S245) | S245 |
@@ -908,6 +911,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | layout: AirPlay and local speakers share one list | S152 |
 | layout: no speakers, empty lists | S152 |
 | volume drag: an AirPlay row's slider drag reaches the dragging hook with its id at the first move and at release | S271 |
+| volume drag: a phone's pause after its last step ends no window drag on the same AirPlay row, in either order | S291 |
 | eq: every preset has 10 bands | S33 |
 | eq: one preset per id, in menu order | S33 |
 | eq: the app names every preset the core has | S33 |
@@ -931,6 +935,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | eq curves: stored curves are read leniently and cleaned | S270 |
 | eq curves: saved curves come back unchanged | S270 |
 | eq curves: the picker names the shown curve, or Custom when none matches | S270 |
+| eq curves: a stored true or false band reads as 0 dB | S270 |
 | notices: start empty | S153 |
 | notices: newest first, both kept | S153 |
 | notices: same subject replaces the old one and moves to the top | S153 |
@@ -1287,8 +1292,11 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | pairing store: an older file moves into the folder, unchanged and still for its owner only | S224 |
 | pairing store: once moved, the next launch moves nothing | S224 |
 | pairing store: with both files the one in the folder is kept and the older one is left alone | S224 |
+| pairings notice: a file that couldn't be read, which is left as it is, is told | S224 |
 | EC1 unplug: a playing speaker that is still present is left alone | S117, S161 |
 | EC1 unplug: a lost speaker stays on and waits while its device is missing | S68, S137, S161 |
+| EC1 unplug: a speaker whose device left the list gets the disconnected notice once; one listed again or switched off gets none | S68 |
+| EC1 unplug: the disconnected notice ends when the speaker is switched off or streaming stops; one that played again keeps none | S68, S331 |
 | EC1 unplug: streaming keeps running while the only speaker is unplugged | S137, S162 |
 | EC1 replug: the speaker is attached again once its device is listed | S68, S137, S161 |
 | EC1 switch off: a speaker turned off is detached | S117, S161 |
@@ -1385,6 +1393,9 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | output format: a device that moves to another rate while its output starts reopens it once the watch listens | S325 |
 | output format: a start check reopens an output once, then keeps it until its device leaves or it is switched off | S325 |
 | output format: a stall reopen or a restart on a new device ID lets the next start check reopen once more | S325, S330 |
+| output format: a device rate outside the core's range is filled at the capture rate | S62 |
+| output format: a unit that refuses the device's 6 channels gets plain stereo | S62 |
+| output format: a unit that refuses stereo fails the start as a refused format | S62 |
 | EC4 rate: a new capture rate rebuilds the session | S20, S140, S157 |
 | EC4 rate: a higher capture rate rebuilds the session | S20, S140, S157 |
 | EC4 rate: the same rate keeps playing | S157 |
@@ -1468,6 +1479,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | EC8 all off: turning a speaker on again starts streaming | S119, S144, S162 |
 | EC8 all off: only a switch-on while stopped starts streaming | S119, S162 |
 | EC8 all off: an automatic start with no speaker on asks for one first | S116, S136, S162 |
+| EC8 all off: one Cast speaker still on, connecting, keeps streaming | S162 |
 | EC8 all off: the saved delays and volumes survive a reload into a fresh session's outputs | S144 |
 | EC10 many speakers: sixteen speakers all listed, in name order | S146, S152, S165 |
 | EC10 many speakers: eight local speakers are attached together | S146, S161, S165 |
@@ -1624,6 +1636,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | migration: runs once and leaves the old values in place | S179 |
 | settings: offsets are kept in −2000…20 000 ms and the AirPlay delay in its range (S175, S178) | S175, S178 |
 | settings: a stored group value that can't be read loses only that member, or its group, never the others | S212 |
+| settings: zones that can't be read as a list are dropped with one debug line naming the key, and missing zones log nothing | S212 |
+| settings: the debug log's path to a value that didn't read masks a map's key, keeps indices and field names | S212 |
 | start error: the audio core failing to set up asks to reopen the app | S121, S215 |
 | start failure helpers: the origin raises an alert only for a click at the Mac (the helper, not `failStart`) | S121 |
 | start failure helpers: the stop's plan and the stream's end turn no chosen AirPlay speaker off (the helpers, not `failStart`) | S121 |
@@ -1710,6 +1724,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | launch: macOS opening AudioSync at login is a login-item launch | S215 |
 | launch: any other launch is not a login-item launch | S215 |
 | launch: the main window opens at launch, but not at login | S120, S215 |
+| launch at login: a refused registration posts its notice | S388 |
 | quit: the first exit signal runs the quit steps (the fade-out), then exits with its status (S111) | S111 |
 | quit: an exit signal while the quit steps run exits at once with its own status (S111) | S111 |
 | quit: the Cast teardown's wait fits under a signal's limit and outlasts the fades (S111, S186) | S111, S186 |
@@ -1792,6 +1807,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | local delay: a lost output's start lead counts until its new renderer publishes one, 10 s at most | S328 |
 | local delay: a restarted output's held start lead is checked until it publishes, 10 s at most | S328 |
 | speaker names: a system name over 60 scalars typed again stores no name | S228 |
+| speaker names: U+0085, U+2028 and U+2029 inside a name become spaces, the same set on both hosts | S228 |
 | observer: before the core's warm-up the least slack reads n/a | S229 |
 | observer: a latency report the window rejected shows with the value used instead | S229 |
 | observer: the Wi-Fi line gives band, channel and RSSI | S229 |
@@ -1840,6 +1856,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast master: the answer to the first level of a 60-level drag is not read as a change | C70, C104 |
 | web remote: a Cast speaker's arrow keys on the phone move by its own step, else by the Mac's fallback step | C69 |
 | web remote: a local volume dragged on the phone is logged once, after its last step | S348 |
+| web remote: a phone's volume step writes no line per command; a switch or a refused command does | S348 |
 | web remote: one speaker's calibration and Calibrate All, also while a cut-off sweep plays out, count as calibrating | S258 |
 | cast: the id a browse found for an address is saved, lists the address under it after a relaunch before any browse, gives way to another speaker a browse finds there, which is listed as a new one while the saved one stays off until listed, and goes with the address | C18 |
 | cast: removing an address listed under a saved id forgets the id, and a change the sender queued before the removal doesn't bring the row back | C18 |
@@ -1851,6 +1868,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast: two saved addresses a browse found for one device list it after a relaunch through the later one; the earlier stays saved but stranded, and Remove takes both back | S341 |
 | cast model: a browse that finds an address of a device playing under its id keeps the volume its session reported | S341 |
 | cast model: a speaker on with no session that leaves the list when discovery stops goes off with a notice | S339 |
+| cast model: a speaker on whose typed address can't be listed again after a browse lost it goes off as not responding | S339 |
 | followed rate: back at 1000 ppm or less, the 10 s start over and the same rate logs again | S207 |
 | P169 native airplay: a waiting speaker that then can't get PTP timing goes off and no longer waits | P169 |
 | P169 native airplay: switched off or streaming stopped, it no longer waits | P169 |
@@ -1954,6 +1972,14 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | web remote: a speaker the phone switched on, by itself or by a recall, that needs a PIN says to turn it on again on this Mac | S356 |
 | web remote: a speaker the Mac switched on, a recall in the app or auto-connect included, gets the PIN notice without this Mac | S356 |
 | web remote: a click at the Mac or a switch-off ends the phone's mark | S356 |
+| web remote: quit stops the remote before the outputs fade and the AirPlay sender tears down | S379 |
+| web remote: a speaker that will play shows off, and the phone's switch-on turns it on as the window's button does | S343, S345, S376 |
+| web remote: a speaker that will play but would ask for a code can't be turned on from the phone | S257, S345 |
+| web remote: a speaker's switch and volume apply with no delay field, its switch and delay with a fixed volume | S257 |
+| web remote: a phone's delay that, clamped, equals the speaker's own changes nothing | S257 |
+| web remote: a phone's on equal to the row's switch leaves the switch alone | S376 |
+| web remote: a zone's volume applies, clamped, when its toggle finds no member that can play | S257 |
+| web remote: a chosen hands-free input goes out greyed under its own name, with no not-connected note | S211, S344 |
 | native off: other reasons keep their own notice | S356 |
 | native off: a busy speaker names the other device and a refusing one says it declined, neither sends the user to the network | S356 |
 | microphone: a start behind an open prompt sends no second request | S15 |
@@ -2149,6 +2175,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | updates: neither key nor flag keeps the updater off | S365 |
 | updates: Info.plist points SUFeedURL at the latest release's appcast.xml | S365 |
 | updates: the source Info.plist never carries the release flag (only ./build.sh --release adds it to the bundle) | S365 |
+| updates: Info.plist turns off Sparkle's automatic download and install | S306, S411 |
 | permissions: a click that needs an unasked permission explains it first | S363 |
 | permissions: an automatic use never raises a modal, it offers the explanation in the window | S363 |
 | permissions: an allowed permission goes on without any explanation | S363 |
@@ -2310,6 +2337,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast+airplay: AirPlay, Cast and local outputs are heard together either way | C77 |
 | cast+airplay: the sender holds AirPlay back up to 20 000 ms and past that plays ahead by the rest | P99 |
 | cast model: a playing speaker added by address that a browse finds stays on and playing under its id, and Off still stops it | S341 |
+| cast model: a speaker added by address that a browse found stays on, listed under its id again, when the browse loses it | S341 |
+| cast: another speaker at a saved id's address keeps an offset only the sender's memory held, even one equal to the saved one's, when the sender says its re-key moved none | S341 |
 | P176 native airplay: a target's ID says its kind; a receiver's never does | P176 |
 | P176 native airplay: a member's log line names its target | S222 |
 | P176 native airplay: a member that names its target is held before the target is listed, so auto-connect never takes it alone | P176 |
@@ -2352,9 +2381,14 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | no speaker on: only a click at the Mac may raise a modal alert | S153 |
 | no speaker on: after that start the switch stays on and the list says no speaker is on | S162 |
 | native pairing: an AirPlay 2 receiver that turns the PIN down asks again in the same pairing | S223 |
+| native pairing: while its password prompt runs, the row says so; a pairing before its PIN shows says nothing | S223 |
+| native pairing: while its PIN prompt runs, the row asks for the code shown on the speaker, by its name | S223 |
+| native pairing: Forget Pairing or Forget Password drops that speaker's notices only | S223 |
+| native pairing: while its PIN is checked, the row says nothing of a code | S223 |
 | native airplay: a volume from a speaker the app didn't add moves no slider | S291 |
 | native airplay: a volume changed on the speaker moves its slider | S291 |
 | native airplay: volume and warning log lines | S222 |
+| S222 native airplay: a waiting speaker's error line says it waits, as on Windows | S222 |
 | P176 native airplay: a member playing by itself leaves the sender when its pair is switched on | P176 |
 | P176 native airplay: a member of a listed pair can't be turned on by itself | P176 |
 | P176 native airplay: a member left on by itself before its pair was listed keeps playing and keeps its row | P176 |
@@ -2476,6 +2510,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | panel chrome: the permission card's room is kept | S406 |
 | zones: groups moved to zones leave the notice due for the next window | S248 |
 | zones: the groups-became-zones notice shows once | S248 |
+| zones: a migrated mark that isn't a bool, a number 0 included, counts as set | S248 |
 | channel pairs: four channels offer 1-2 and 3-4 | S14 |
 | channel pairs: an odd last channel is a pair of its own | S14 |
 | channel pairs: nothing saved reads channels 1-2, on a mono device too | S14 |
@@ -2689,6 +2724,8 @@ Removed on 2026-10-19 with the Swift engine (`Tests/paritytest.swift`): with one
 | \<device\>: stop fades out before the output stops | S185, S186, S191 |
 | \<device\>: no callback runs once the output has stopped | S134 (IO stopped when halt returns) |
 | \<device\>: stop returns once the fade has played, within 500 ms | S185, S186 |
+| \<device\>: delay change fades out and in without restarting the output | S187 |
+| \<device\>: 44.1 kHz output at hold-back 0 never starves after start | S206 |
 | default output change leaves a running output alone | S145 |
 
 ### pipe start (`--hardware`, `Tests/pipestart.swift`)

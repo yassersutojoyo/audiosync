@@ -58,7 +58,7 @@ fn the_ptp_only_flag_takes_no_value() {
 
 #[test]
 fn the_ptp_only_television_announces_bit_41_and_refuses_ntp() {
-    let plain = television::txt(Pin::None, 0, television::DEVICE_ID);
+    let plain = television::txt(Pin::None, television::DEVICE_ID);
     let txt = television::ptp_only_txt(plain.clone());
     fn features_of<'a>(entries: &'a [(&'static str, String)]) -> Option<&'a str> {
         entries
@@ -112,7 +112,7 @@ fn the_sender_plays_the_ptp_only_television_on_one_ptp_retry() {
         instance: "AudioSync Test TV".to_owned(),
         host: format!("{}.local", television::HOST_LABEL),
         port: server.address.port(),
-        txt: television::ptp_only_txt(television::txt(Pin::None, 0, television::DEVICE_ID))
+        txt: television::ptp_only_txt(television::txt(Pin::None, television::DEVICE_ID))
             .into_iter()
             .map(|(key, value)| format!("{key}={value}").into_bytes())
             .collect(),

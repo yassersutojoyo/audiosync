@@ -11371,7 +11371,6 @@ mod tests {
         app.ask_cast_address();
         drop(held);
         settle_cast_check(&app);
-        std::thread::sleep(Duration::from_millis(200));
         draw_frames();
         assert!(window.is_visible(), "the reopened dialog stays open");
         assert!(app.snapshot().speaker("cc:speaker.held").is_none());
@@ -12844,6 +12843,21 @@ mod tests {
         });
     }
 
+    /// Presses `key` in `window` while `modifiers` are held.
+    fn held(window: &slint::Window, modifiers: &[Key], key: impl Into<SharedString>) {
+        for &modifier in modifiers {
+            window.dispatch_event(WindowEvent::KeyPressed {
+                text: modifier.into(),
+            });
+        }
+        press(window, key);
+        for &modifier in modifiers.iter().rev() {
+            window.dispatch_event(WindowEvent::KeyReleased {
+                text: modifier.into(),
+            });
+        }
+    }
+
     // covers: S259, S260, S263, S264
     #[test]
     fn the_presets_card_and_the_flyout_list_the_presets_and_mark_the_current_one() {
@@ -12907,7 +12921,7 @@ mod tests {
     }
 
     #[test]
-    fn f1_ctrl_n_and_f5_work_in_the_equalizer_the_guides_and_the_web_remote() {
+    fn f1_ctrl_n_and_f5_alone_work_in_the_equalizer_the_guides_and_the_web_remote() {
         let backend = MockBackend::new();
         let refreshes = backend.refreshes.clone();
         let app = app_over(backend);
@@ -12935,6 +12949,22 @@ mod tests {
             let _ = app.help.hide();
             let window = open(&app);
             draw_frames();
+            let before = refreshes.get();
+            held(window, &[Key::Shift], Key::F1);
+            held(window, &[Key::Control, Key::Shift], "n");
+            held(window, &[Key::Shift], Key::F5);
+            held(window, &[Key::Control, Key::Shift], "w");
+            assert!(window.is_visible(), "Ctrl+Shift+W in the {name}");
+            assert_eq!(
+                app.help.window().is_visible(),
+                name == "Guide",
+                "Shift+F1 in the {name}"
+            );
+            assert!(
+                !app.zone_dialog.window().is_visible(),
+                "Ctrl+Shift+N in the {name}"
+            );
+            assert_eq!(refreshes.get(), before, "Shift+F5 in the {name}");
             press(window, Key::F1);
             assert!(app.help.window().is_visible(), "F1 in the {name}");
             ctrl(window, "n");
@@ -12953,6 +12983,32 @@ mod tests {
         let heading = app.zone_dialog.get_heading();
         ctrl(app.equalizer.window(), "n");
         assert_eq!(app.zone_dialog.get_heading(), heading);
+    }
+
+    #[test]
+    fn ctrl_win_and_a_digit_recalls_nothing_and_ctrl_shift_w_leaves_a_dialog_open() {
+        let app = app_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+
+        app.equalizer.show().expect("the equalizer shows headless");
+        draw_frames();
+        held(app.equalizer.window(), &[Key::Control, Key::Meta], "1");
+        assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the equalizer");
+
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        app.flyout.invoke_take_focus();
+        draw_frames();
+        held(app.flyout.window(), &[Key::Control, Key::Meta], "1");
+        assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the flyout");
+
+        app.ask_save_preset();
+        draw_frames();
+        held(app.zone_dialog.window(), &[Key::Control, Key::Shift], "w");
+        assert!(app.zone_dialog.window().is_visible(), "Ctrl+Shift+W");
+        ctrl(app.zone_dialog.window(), "w");
+        assert!(!app.zone_dialog.window().is_visible(), "Ctrl+W");
     }
 
     // covers: S260, S266
