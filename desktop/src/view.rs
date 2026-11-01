@@ -8872,6 +8872,47 @@ mod tests {
         );
     }
 
+    /// A zone name cut to "…" in the half-width speaker list shows in full
+    /// in a tooltip while the pointer rests on it.
+    #[test]
+    fn a_long_zone_name_shows_in_full_in_its_tooltip() {
+        use i_slint_backend_testing::ElementHandle;
+        let name = "The long living room zone by the window and the bookshelf";
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:long", name, &["local:desk"]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        hold_clock();
+        // The narrowest window; no draw_frames from here, it sets 1000 px.
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        let label = ElementHandle::find_by_element_id(&app.main, "ZoneHeader::name-text")
+            .next()
+            .expect("the zone's name");
+        let (at, size) = (label.absolute_position(), label.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        app.main
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_secs(2));
+        slint::platform::update_timers_and_animations();
+        let tip = ElementHandle::find_by_element_id(&app.main, "ZoneHeader::name-tip")
+            .next()
+            .expect("a tooltip on the zone's name");
+        // The tip's Text has no accessible label to compare (Narrator reads
+        // the header). Its smaller font still needs more width than the
+        // label has: the label is cut and the tip is not.
+        assert!(
+            tip.size().width > size.width,
+            "tip {} wide, label {}",
+            tip.size().width,
+            size.width
+        );
+    }
+
     // covers: S228
     #[test]
     fn a_renamed_row_shows_its_device_name_in_the_name_tooltip() {
