@@ -26,9 +26,18 @@ export global Fluent {
     out property <length> radius-card: 8px;
     // Buttons, chips and the rows inside a card (control radius).
     out property <length> radius-control: 4px;
-    out property <length> card-padding: 16px;
+    out property <length> card-padding: 12px;
     // The minimum height of a speaker or group row.
-    out property <length> row-height: 56px;
+    out property <length> row-height: 48px;
+    // Above and below a speaker row's or a zone header's content.
+    out property <length> row-padding-y: 6px;
+    // The main window's edge, and the gap between its header, notices,
+    // columns and the speaker list's sections.
+    out property <length> window-margin: 16px;
+    out property <length> gap: 12px;
+    // The main window's wordmark and mark, smaller than the Mac's.
+    out property <length> wordmark: 18px;
+    out property <length> mark: 28px;
     // Where a row's name starts: its padding, the 32 px toggle and the gap.
     out property <length> name-inset: 56px;
     // The delay column every speaker row lines up on.
@@ -1912,9 +1921,9 @@ export component SpeakerRow inherits Rectangle {
             VerticalLayout {
                 padding-left: 12px;
                 padding-right: 8px;
-                padding-top: 8px;
-                padding-bottom: 8px;
-                spacing: 6px;
+                padding-top: Fluent.row-padding-y;
+                padding-bottom: Fluent.row-padding-y;
+                spacing: 4px;
 
                 HorizontalLayout {
                     spacing: 8px;
@@ -1949,7 +1958,7 @@ export component SpeakerRow inherits Rectangle {
                     // so a long name keeps the width the slider took.
                     VerticalLayout {
                         alignment: center;
-                        spacing: 4px;
+                        spacing: 2px;
                         horizontal-stretch: 1;
 
                         HorizontalLayout {
@@ -2209,7 +2218,7 @@ export component SpeakerRow inherits Rectangle {
 
                                         Text {
                                             text: Strings.delay-value(root.item.delay-ms);
-                                            font-size: Tokens.font-size-callout;
+                                            font-size: Tokens.font-size-caption;
                                             color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
                                             vertical-alignment: center;
                                             accessible-role: none;
@@ -2253,7 +2262,7 @@ export component SpeakerRow inherits Rectangle {
                             // Moved left by the slider's own inset, so its track
                             // starts under the name, as on the Mac.
                             Rectangle {
-                                min-height: max(28px, volume-slider.min-height);
+                                min-height: max(24px, volume-slider.min-height);
 
                                 volume-slider := VolumeSlider {
                                     x: -Fluent.slider-inset;
@@ -2805,8 +2814,8 @@ export component ZoneHeader inherits Rectangle {
                 HorizontalLayout {
                     padding-left: 4px;
                     padding-right: 4px;
-                    padding-top: 8px;
-                    padding-bottom: 8px;
+                    padding-top: Fluent.row-padding-y;
+                    padding-bottom: Fluent.row-padding-y;
                     spacing: 8px;
                     min-height: Fluent.row-height;
 
@@ -3136,7 +3145,7 @@ export component NoticeStack inherits VerticalLayout {
                     Text {
                         text: notice.message;
                         color: Tokens.text;
-                        font-size: Tokens.font-size-callout;
+                        font-size: Tokens.font-size-caption;
                         wrap: word-wrap;
                         accessible-role: none;
                     }
