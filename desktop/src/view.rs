@@ -11459,10 +11459,13 @@ mod tests {
             .clone();
         let read = !ElementQuery::from_root(&app.main)
             .match_predicate(move |e| {
-                e.accessible_label().unwrap_or_default().starts_with(name.as_str())
-                    && e.accessible_description().unwrap_or_default().contains(
-                        "Asks for a code every time. This speaker asks for a code each time it connects",
-                    )
+                e.accessible_label()
+                    .unwrap_or_default()
+                    .starts_with(name.as_str())
+                    && e.accessible_description().unwrap_or_default()
+                        == "Asks for a code every time. This speaker asks for a code each time it \
+                            connects, so auto-connect leaves it off. AudioSync asks you for the \
+                            code when you turn the speaker on."
             })
             .find_all()
             .is_empty();
