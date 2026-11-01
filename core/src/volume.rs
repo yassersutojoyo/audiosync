@@ -109,18 +109,17 @@ const DEVICE_FLOOR_DB: f64 = -30.0;
 /// Slack for float error when a device level is rounded down for its row (S290).
 const ROW_SLACK: f64 = 0.01;
 
-/// k of S290: zone × master, each `position / 100` clamped to 0…1.
-fn stage_scale(zone_position: f64, master_position: f64) -> f64 {
+/// k of S290: the zone's `position / 100` clamped to 0…1. The master is a
+/// gain on the stream and never part of it (S413).
+fn stage_scale(zone_position: f64) -> f64 {
     (zone_position / MAX_POSITION).clamp(0.0, 1.0)
-        * (master_position / MAX_POSITION).clamp(0.0, 1.0)
 }
 
 /// An AirPlay speaker's device level D, 0…100, for its own volume through
-/// the zone and the master: min(100, s × k) (S290). The own volume may pass
-/// 100: the zone and the master are multipliers, never a ceiling. 0 when a
-/// value isn't finite.
-pub fn device_level(own_position: f64, zone_position: f64, master_position: f64) -> f64 {
-    let level = sanitize_own(own_position) * stage_scale(zone_position, master_position);
+/// the zone: min(100, s × k) (S290, S413). The own volume may pass 100: the
+/// zone is a multiplier, never a ceiling. 0 when a value isn't finite.
+pub fn device_level(own_position: f64, zone_position: f64) -> f64 {
+    let level = sanitize_own(own_position) * stage_scale(zone_position);
     if level.is_finite() {
         level.min(MAX_POSITION)
     } else {
@@ -182,12 +181,12 @@ pub struct RowMove {
 
 /// An AirPlay row moved to `row` (rounded to a whole number, S290): the
 /// device level sent is the row itself, and the own volume stored is
-/// row ÷ k, unrounded, past 100 when the zone and the master are below 100.
-/// None when k is 0, where the move sends nothing, or `row` isn't finite.
-pub fn row_move(row: f64, zone_position: f64, master_position: f64) -> Option<RowMove> {
+/// row ÷ k, unrounded, past 100 when the zone is below 100. None when k is
+/// 0, where the move sends nothing, or `row` isn't finite.
+pub fn row_move(row: f64, zone_position: f64) -> Option<RowMove> {
     let row = row.round().clamp(MIN_POSITION, MAX_POSITION);
     Some(RowMove {
-        own_position: own_for_device_level(row, zone_position, master_position)?,
+        own_position: own_for_device_level(row, zone_position)?,
         device_level: row,
     })
 }
@@ -195,8 +194,8 @@ pub fn row_move(row: f64, zone_position: f64, master_position: f64) -> Option<Ro
 /// The own volume a device level reported by the speaker leads to (S290):
 /// D ÷ k, unrounded, with D clamped to 0…100. None when k is 0, where s
 /// stays, or `level` isn't finite.
-pub fn own_for_device_level(level: f64, zone_position: f64, master_position: f64) -> Option<f64> {
-    let scale = stage_scale(zone_position, master_position);
+pub fn own_for_device_level(level: f64, zone_position: f64) -> Option<f64> {
+    let scale = stage_scale(zone_position);
     if scale.is_nan() || scale <= 0.0 || !level.is_finite() {
         return None;
     }
@@ -212,14 +211,8 @@ pub fn level_set_on_speaker(
     own_position: f64,
     shown_level: f64,
     zone_position: f64,
-    master_position: f64,
 ) -> Option<RowMove> {
-    let moved = level_on_speaker(
-        device_level_for_db(db)?,
-        own_position,
-        zone_position,
-        master_position,
-    );
+    let moved = level_on_speaker(device_level_for_db(db)?, own_position, zone_position);
     let unchanged = moved.own_position == own_position
         && row_level(moved.device_level) == row_level(shown_level);
     (!unchanged).then_some(moved)
@@ -228,20 +221,14 @@ pub fn level_set_on_speaker(
 /// A change made on the speaker to device level `level` (S290): a reading
 /// (S291) or a DACP DeviceVolume (S276). The row gets `level` and the own
 /// volume becomes D ÷ k, unclamped, or stays `own_position` with k at 0.
-pub fn level_on_speaker(
-    level: f64,
-    own_position: f64,
-    zone_position: f64,
-    master_position: f64,
-) -> RowMove {
+pub fn level_on_speaker(level: f64, own_position: f64, zone_position: f64) -> RowMove {
     let level = if level.is_finite() {
         level.clamp(MIN_POSITION, MAX_POSITION)
     } else {
         MIN_POSITION
     };
     RowMove {
-        own_position: own_for_device_level(level, zone_position, master_position)
-            .unwrap_or(own_position),
+        own_position: own_for_device_level(level, zone_position).unwrap_or(own_position),
         device_level: level,
     }
 }

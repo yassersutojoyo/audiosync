@@ -1025,6 +1025,12 @@ impl Sender {
         self.command(Command::SetLatency(frames));
     }
 
+    /// Scales every packet cut from now on by the linear `gain`, once for
+    /// all speakers (P80): the host's master (S413).
+    pub fn set_master_gain(&self, gain: f64) {
+        self.command(Command::SetMasterGain(gain));
+    }
+
     /// Starts the timeline over now, as a hole longer than L does (P143):
     /// every speaker is flushed and the new mapping comes as a
     /// [`SenderEvent::Timeline`]. Hosts never call it: a capture switch is an

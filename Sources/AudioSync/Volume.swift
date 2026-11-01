@@ -36,48 +36,48 @@ enum LocalOutputGain {
 }
 
 /// An AirPlay speaker's device level, decided by the core from the stored
-/// own volume, the zone and the master (S290).
+/// own volume and the zone; the master scales the stream instead (S290, S413).
 enum AirPlayDeviceLevel {
     /// The whole number an AirPlay row shows: `level` rounded down (S290).
-    static func row(own: Double, zone: Double, master: Double, held: Double?) -> Double {
-        asc_airplay_row_level(level(own: own, zone: zone, master: master, held: held))
+    static func row(own: Double, zone: Double, held: Double?) -> Double {
+        asc_airplay_row_level(level(own: own, zone: zone, held: held))
     }
 
     /// The device level an AirPlay speaker has: `sent`, or with k at 0 the
     /// level `held` from a change on the speaker (S290).
-    static func level(own: Double, zone: Double, master: Double, held: Double?) -> Double {
-        let level = sent(own: own, zone: zone, master: master)
+    static func level(own: Double, zone: Double, held: Double?) -> Double {
+        let level = sent(own: own, zone: zone)
         if level == 0, let held = held { return held }
         return level
     }
 
     /// The device level an AirPlay speaker gets, as it joins: min(100, own × k) (S290, S291).
-    static func sent(own: Double, zone: Double, master: Double) -> Double {
-        asc_airplay_device_level(own, zone, master)
+    static func sent(own: Double, zone: Double) -> Double {
+        asc_airplay_device_level(own, zone)
     }
 
     /// The device level an AirPlay speaker gets back and the level it holds
     /// after: a join gets `sent` and holds nothing, the end of a calibration
     /// gives a level held at k = 0 back and keeps it held (S290).
-    static func restored(own: Double, zone: Double, master: Double, held: Double?,
+    static func restored(own: Double, zone: Double, held: Double?,
                          afterCalibration: Bool) -> (level: Double, held: Double?) {
-        guard afterCalibration else { return (level: sent(own: own, zone: zone, master: master), held: nil) }
-        return (level: level(own: own, zone: zone, master: master, held: held), held: held)
+        guard afterCalibration else { return (level: sent(own: own, zone: zone), held: nil) }
+        return (level: level(own: own, zone: zone, held: held), held: held)
     }
 
     /// The level a change on the speaker leaves held: `level` while k is 0,
     /// where the own volume can't carry it, else nil (S290).
-    static func held(level: Double, zone: Double, master: Double) -> Double? {
+    static func held(level: Double, zone: Double) -> Double? {
         // The core's row_move refuses exactly when k is 0.
-        move(row: level, zone: zone, master: master) == nil ? level : nil
+        move(row: level, zone: zone) == nil ? level : nil
     }
 
     /// A row moved to `row`: the own volume to store and the device level to
-    /// send; nil when zone × master is 0, where the move sends nothing (S290).
-    static func move(row: Double, zone: Double, master: Double) -> (own: Double, level: Double)? {
+    /// send; nil when the zone is 0, where the move sends nothing (S290).
+    static func move(row: Double, zone: Double) -> (own: Double, level: Double)? {
         var own = 0.0
         var level = 0.0
-        guard asc_airplay_row_move(row, zone, master, &own, &level) else { return nil }
+        guard asc_airplay_row_move(row, zone, &own, &level) else { return nil }
         return (own: own, level: level)
     }
 }

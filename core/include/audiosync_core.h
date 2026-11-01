@@ -415,19 +415,18 @@ double asc_output_gain(double local_position, double master_position);
 double asc_zone_output_gain(double local_position, double zone_position, double master_position);
 
 /* An AirPlay speaker's device level D, 0 to 100: min(100, own x k), with
- * k = zone x master as fractions (zone 100 outside a zone). The own volume
- * is stored unrounded and may pass 100 (S290). */
-double asc_airplay_device_level(double own_position, double zone_position, double master_position);
+ * k = zone as a fraction (zone 100 outside a zone); the master never enters
+ * it (S413). The own volume is stored unrounded and may pass 100 (S290). */
+double asc_airplay_device_level(double own_position, double zone_position);
 
 /* The whole number an AirPlay row shows for device level D: D rounded down. */
 double asc_airplay_row_level(double device_level);
 
 /* An AirPlay row moved to `row`: writes the own volume to store, row / k
  * unrounded and possibly above 100, and the device level to send, the row
- * itself. False, writing nothing, when zone x master is 0,
+ * itself. False, writing nothing, when the zone is 0,
  * row isn't finite or a pointer is NULL. */
-bool asc_airplay_row_move(double row, double zone_position, double master_position,
-                          double *own_position, double *device_level);
+bool asc_airplay_row_move(double row, double zone_position, double *own_position, double *device_level);
 
 /*
  * Multiplies frames x 2 interleaved samples by gain, in place. Gain 0 (or a
@@ -1756,9 +1755,9 @@ bool asc_airplay_set_silenced(AscAirPlay *airplay, const char *id, bool silenced
 
 /*
  * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it
- * plays at its own position times the zone's times the master, live once
- * added and from its start when added later, and a level read back from it
- * moves its own position by the zone and the master. Returns false, changing
+ * plays at its own position times the zone's, live once added and from its
+ * start when added later, and a level read back from it moves its own
+ * position by the zone. Returns false, changing
  * nothing, when the handle or id is NULL or zone isn't finite.
  */
 bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zone);
@@ -1778,10 +1777,9 @@ bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zon
 void asc_airplay_read_volumes(AscAirPlay *airplay);
 
 /*
- * Sets the master position (0 to 100), which scales every speaker's volume,
- * live, and that of every speaker added later; a master that isn't finite is
- * ignored. A speaker plays at the product of both positions, spread evenly
- * over -30 to 0 dB, and muted at 0.
+ * Sets the master position (0 to 100), a gain on the stream every speaker
+ * hears, never a speaker's volume (S413); a master that isn't finite is
+ * ignored.
  */
 void asc_airplay_set_master(AscAirPlay *airplay, double master);
 
