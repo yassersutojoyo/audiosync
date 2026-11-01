@@ -469,6 +469,19 @@ fn the_fake_default_stream_ports_lie_below_every_ephemeral_range() {
     }
 }
 
+#[test]
+fn a_stream_port_the_test_sets_to_a_fake_default_is_kept() {
+    let mut fake = FakeAp2::new();
+    fake.data_port = Some(DATA_PORT);
+    fake.control_port = Some(RECEIVER_CONTROL_PORT);
+    let server = Ap2Server::start(fake);
+    let fake = server.fake();
+    assert_eq!(
+        (fake.data_port, fake.control_port),
+        (Some(DATA_PORT), Some(RECEIVER_CONTROL_PORT))
+    );
+}
+
 /// A data port that keeps the RTP header of every audio datagram.
 fn data_port() -> (UdpSocket, Arc<Mutex<Vec<Datagram>>>) {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a UDP socket");
@@ -543,7 +556,7 @@ fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues()
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
@@ -684,7 +697,7 @@ fn capture_switch_without_flush() {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 250));
@@ -770,7 +783,7 @@ fn timeline_restart_waits_for_flush() {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
@@ -824,7 +837,7 @@ fn w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second() {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
@@ -1034,7 +1047,7 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
-    fake.data_port = socket.local_addr().expect("address").port();
+    fake.data_port = Some(socket.local_addr().expect("address").port());
     fake.info_body = samsung_info(PROGRESS_BIT, None);
     let server = Ap2Server::start(fake);
     let mut tv = play_listed(

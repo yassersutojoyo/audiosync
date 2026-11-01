@@ -691,8 +691,8 @@ impl Udp {
     }
 
     fn fake(&self, mut fake: FakeAp2) -> FakeAp2 {
-        fake.data_port = self.data.port();
-        fake.control_port = self.control.port();
+        fake.data_port = Some(self.data.port());
+        fake.control_port = Some(self.control.port());
         fake
     }
 }
