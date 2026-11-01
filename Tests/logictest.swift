@@ -13226,6 +13226,7 @@ do {
     // 60 still waits for its 100 ms when the step comes, so the sender steps from 60 and never sends 60.
     _ = dropped.setVolume(tv, position: 60)
     _ = dropped.stepVolume(tv, up: true)
+    _ = dropped.apply(.volumeUnanswered(attempt: 1, level: 0.6))
     _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.5, muted: false, fixed: false, step: 0.02)))
     // covers: C69, C70
     check(approx(dropped.volume(of: tv), 62, 1e-9),
@@ -13235,6 +13236,24 @@ do {
     // covers: C69, C70
     check(approx(dropped.volume(of: tv), 60, 1e-9),
           "cast step: the TV's remote setting a level a drag left unsent before a step moves the slider to it")
+
+    var stepBack = CastModel()
+    stepBack.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
+    _ = stepBack.turnOn(tv)
+    stepBack.startSent(tv)
+    _ = stepBack.started(tv, attempt: 1, refusal: ASC_CAST_REFUSED_NONE)
+    _ = stepBack.apply(.volume(attempt: 1, CastVolume(level: 0.3, muted: false, fixed: false, step: 0.02)))
+    _ = stepBack.setVolume(tv, position: 40)
+    _ = stepBack.stepVolume(tv, up: true)
+    _ = stepBack.setVolume(tv, position: 40)
+    // The sender steps from 0.4 unrounded, replaces that step with the drag back to 40, and sends 40 again.
+    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4 + 0.02))
+    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4))
+    _ = stepBack.apply(.volume(attempt: 1, CastVolume(level: 0.4, muted: false, fixed: false, step: 0.02)))
+    _ = stepBack.apply(.volume(attempt: 1, CastVolume(level: 0.42, muted: false, fixed: false, step: 0.02)))
+    // covers: C69, C70
+    check(approx(stepBack.volume(of: tv), 42, 1e-9),
+          "cast step: a step the sender reports unanswered at its own unrounded level stops waiting, so the TV's remote moves the slider")
 
     var raw = AscCastEvent()
     raw.kind = ASC_CAST_EVENT_VOLUME
