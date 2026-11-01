@@ -89,7 +89,8 @@ impl OutputLevel {
     }
 
     /// Peak and RMS in dBFS since the last take, `None` when no sample came
-    /// in; silence reads as negative infinity.
+    /// in; silence reads as negative infinity. The three swaps aren't atomic
+    /// together, so a callback can land across two takes, a negligible error.
     pub fn take(&self) -> Option<(f64, f64)> {
         let samples = self.samples.swap(0, Ordering::Relaxed);
         let squares = f64::from_bits(self.squares_bits.swap(0, Ordering::Relaxed));

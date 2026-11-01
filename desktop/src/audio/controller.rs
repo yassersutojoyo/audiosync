@@ -2479,9 +2479,12 @@ impl<D: Driver> Controller<D> {
     /// Logs each playing output's peak and RMS every [`LEVEL_INTERVAL`],
     /// read from the atomics its renderer keeps.
     fn log_levels_if_due(&mut self, now: Instant) {
-        if !self.log.enabled() || self.session.is_none() {
+        if !self.log.enabled() {
             return;
         }
+        let Some(session) = &self.session else {
+            return;
+        };
         match self.last_levels {
             Some(at) if now.saturating_duration_since(at) < LEVEL_INTERVAL => return,
             None => {
@@ -2490,9 +2493,6 @@ impl<D: Driver> Controller<D> {
             }
             Some(_) => self.last_levels = Some(now),
         }
-        let Some(session) = &self.session else {
-            return;
-        };
         for (id, playing) in &session.outputs {
             if let Some((peak, rms)) = playing.control.take_level() {
                 self.log.log(|| {
@@ -10305,6 +10305,41 @@ mod tests {
             .collect();
         assert_eq!(gains, expected.iter().collect::<Vec<_>>(), "{messages:?}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn each_rendered_outputs_level_is_logged_once_per_ten_seconds() {
+        let (mut logging, log, dir) = logged_backend("controller-levels");
+        logging.start(&SourceId::WholeSystem).unwrap();
+        let start = Instant::now();
+        // The first check only starts the window.
+        logging.log_levels_if_due(start);
+        logging.render_output(HEADPHONES, 480);
+        logging.log_levels_if_due(start + LEVEL_INTERVAL - Duration::from_secs(1));
+        logging.log_levels_if_due(start + LEVEL_INTERVAL);
+        logging.log_levels_if_due(start + LEVEL_INTERVAL + Duration::from_secs(1));
+        let levels: Vec<String> = logged(&log, &dir)
+            .into_iter()
+            .filter(|m| m.contains(" level: "))
+            .collect();
+        // The ring holds no audio, so Headphones rendered silence; Speakers rendered nothing.
+        assert_eq!(
+            levels,
+            ["output \"Headphones\" (headphones) level: peak -inf dBFS, RMS -inf dBFS"]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+
+        let mut quiet = backend();
+        quiet.start(&SourceId::WholeSystem).unwrap();
+        quiet.log_levels_if_due(start);
+        quiet.render_output(HEADPHONES, 480);
+        quiet.log_levels_if_due(start + LEVEL_INTERVAL);
+        assert_eq!(quiet.last_levels, None, "no window without the debug log");
+        let outputs = &quiet.session.as_ref().unwrap().outputs;
+        assert!(
+            outputs[HEADPHONES].control.take_level().is_some(),
+            "the level is left untaken"
+        );
     }
 
     // covers: S291

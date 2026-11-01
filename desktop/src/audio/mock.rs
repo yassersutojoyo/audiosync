@@ -254,6 +254,10 @@ struct RendererLink {
     id: String,
     /// The ring its reader reads.
     ring: Arc<Ring>,
+    /// What its renderer is made of until [`MockBackend::render_output`]
+    /// first renders it.
+    unstarted: Option<(Reader, RendererControl, Arc<SharedGain>)>,
+    renderer: Option<Renderer>,
     ended: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
     stall: Arc<StallSlot>,
@@ -825,15 +829,21 @@ impl Driver for MockDriver {
         let invalidated = Arc::new(AtomicBool::new(false));
         let format = self.device_format(&endpoint.id);
         let ring = Arc::clone(reader.ring());
-        if let Some(period) = self.periods.remove(&endpoint.id) {
-            let channels = usize::from(format.channels);
-            Renderer::new(reader, &control, gain, SESSION_RATE, format.rate, channels)
-                .expect("a mock format renders")
-                .set_period_frames(period);
-        }
+        let unstarted = match self.periods.remove(&endpoint.id) {
+            Some(period) => {
+                let channels = usize::from(format.channels);
+                Renderer::new(reader, &control, gain, SESSION_RATE, format.rate, channels)
+                    .expect("a mock format renders")
+                    .set_period_frames(period);
+                None
+            }
+            None => Some((reader, control, gain)),
+        };
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
             ring,
+            unstarted,
+            renderer: None,
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
             stall: Arc::clone(&stall),
@@ -1135,6 +1145,32 @@ impl Controller<MockDriver> {
     /// device stays connected (as after a change of its format).
     pub fn end_renderer(&mut self, id: &str) {
         self.driver_mut().end_renderers_of(id);
+    }
+
+    /// Renders `frames` frames of the output playing on `id` as its render
+    /// thread would.
+    pub fn render_output(&mut self, id: &str, frames: usize) {
+        for link in &mut self.driver_mut().renderers {
+            if link.id != id || !link.plays() {
+                continue;
+            }
+            if let Some((reader, control, gain)) = link.unstarted.take() {
+                let channels = usize::from(link.format.channels);
+                link.renderer = Renderer::new(
+                    reader,
+                    &control,
+                    gain,
+                    SESSION_RATE,
+                    link.format.rate,
+                    channels,
+                )
+                .ok();
+            }
+            if let Some(renderer) = link.renderer.as_mut() {
+                let mut out = vec![0.0; frames * renderer.channels()];
+                renderer.render(&mut out);
+            }
+        }
     }
 
     /// Ends the output playing on `id` as a render thread ends a stream
