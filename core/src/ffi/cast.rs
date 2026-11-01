@@ -215,7 +215,8 @@ pub struct AscCastDevice {
     pub event: i32,
     /// 32 hex digits, or `manual:<address>`.
     pub id: *const c_char,
-    /// The `fn` TXT value; "" when it has none.
+    /// The `fn` TXT value, else the instance name (C13); "" for a gone
+    /// device or an address no browse found.
     pub name: *const c_char,
     /// The `md` TXT value; "" when it has none.
     pub model: *const c_char,
@@ -712,7 +713,10 @@ impl AscCast {
         };
         if let Some(entry) = entry {
             if let Some(device) = &entry.device {
-                change.name = device.name.clone().unwrap_or_default();
+                change.name = device
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| device.instance.clone());
                 change.model = device.model.clone().unwrap_or_default();
                 if device.kind == DeviceKind::Group {
                     change.flags |= CAST_FLAG_GROUP;
