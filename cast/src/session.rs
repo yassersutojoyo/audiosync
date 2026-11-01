@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::audio::{AudioReader, Codec, StreamFormat};
-use crate::channel::{Event, PlaybackEnd};
+use crate::channel::{Event, PlaybackEnd, new_volume_ask};
 use crate::client::{CastClient, Fingerprint, FingerprintBook, FingerprintChange, QUIT_BUDGET};
 use crate::discovery::DeviceId;
 use crate::error::{Backoff, ConnectError, EndReason, LaunchError, ReconnectPacer};
@@ -153,6 +153,7 @@ pub enum SessionEvent {
     /// channel reports it.
     VolumeUnanswered {
         level: f64,
+        ask: u64,
     },
     /// A connect attempt failed; the next one follows after `retry_in`
     /// (C80).
@@ -562,7 +563,13 @@ impl CastSession {
     /// Sets the device level (C65, C67, C70); the stream's samples are
     /// never scaled (C71).
     pub fn set_volume(&mut self, level: f64) -> Result<(), VolumeError> {
-        self.client.set_volume(level)
+        self.ask_volume(new_volume_ask(), level)
+    }
+
+    /// [`CastSession::set_volume`] under the host's `ask`, which a report
+    /// that no status will answer it carries (C70).
+    pub fn ask_volume(&mut self, ask: u64, level: f64) -> Result<(), VolumeError> {
+        self.client.set_volume(ask, level)
     }
 
     /// Replaces the C70 interval on the current channel only; a reconnect's
@@ -869,8 +876,8 @@ impl CastSession {
                     self.report(SessionEvent::Volume(status.volume, answers_mute));
                 }
             }
-            Event::VolumeUnanswered { level } => {
-                self.report(SessionEvent::VolumeUnanswered { level });
+            Event::VolumeUnanswered { level, ask } => {
+                self.report(SessionEvent::VolumeUnanswered { level, ask });
             }
             Event::MediaStatus(status) => {
                 let state = status.player_state.clone();
@@ -1041,8 +1048,10 @@ impl CastSession {
             };
             match result {
                 Ok(relaunched) => {
-                    if let Some(level) = queued {
-                        let _ = self.client.set_volume(level);
+                    if let Some((ask, level)) = queued
+                        && self.client.set_volume(ask, level).is_err()
+                    {
+                        self.report(SessionEvent::VolumeUnanswered { level, ask });
                     }
                     self.pacer.connected(Instant::now());
                     self.report(SessionEvent::Recovered { relaunched });

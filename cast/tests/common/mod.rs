@@ -218,6 +218,8 @@ pub enum Command {
     ClearApps,
     /// Leave `level` out of the volume of every later status.
     ForgetLevel,
+    /// Report a fixed volume control in every later status.
+    FixVolume,
     /// Replace the running apps without telling anyone, as an app opened
     /// on the device while the sender is cut off.
     SetApps(Vec<Value>),
@@ -868,6 +870,9 @@ fn serve(
                     if let Some(volume) = device.behavior.volume.as_object_mut() {
                         volume.remove("level");
                     }
+                }
+                Ok(Command::FixVolume) => {
+                    device.behavior.volume["controlType"] = json!("fixed");
                 }
                 Ok(Command::SetApps(apps)) => device.apps = apps,
                 Ok(Command::Stall) => stalled = true,

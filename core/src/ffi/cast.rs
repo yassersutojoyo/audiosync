@@ -1105,7 +1105,7 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending.step = volume.step_interval.unwrap_or(0.0);
             pending
         }
-        SessionEvent::VolumeUnanswered { level } => {
+        SessionEvent::VolumeUnanswered { level, .. } => {
             let mut pending = Pending::new(CAST_EVENT_VOLUME_UNANSWERED);
             pending.level = level;
             pending
@@ -1618,7 +1618,11 @@ pub unsafe extern "C" fn asc_cast_set_volume(cast: *mut AscCast, level: f64) -> 
         return false;
     }
     // SAFETY: as the caller's.
-    unsafe { with_session(cast, |host| host.set_volume(level.clamp(0.0, 1.0))) }
+    unsafe {
+        with_session(cast, |host| {
+            host.set_volume(level.clamp(0.0, 1.0));
+        })
+    }
 }
 
 /// Mutes or unmutes the device, apart from its level (C65). False, sending

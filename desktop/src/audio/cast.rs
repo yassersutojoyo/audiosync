@@ -382,8 +382,8 @@ pub trait CastLink: Send {
         reader: AudioReader,
     ) -> Result<AttemptId, StartRefused>;
     fn stop(&mut self);
-    /// 0.0 to 1.0.
-    fn set_volume(&mut self, level: f64);
+    /// 0.0 to 1.0; returns the ask id that a report on this ask carries.
+    fn set_volume(&mut self, level: f64) -> u64;
     fn set_muted(&mut self, muted: bool);
     /// Kept for the next `LOAD`; the playing stream is not reloaded (C54).
     fn set_track(&mut self, track: CastTrack);
@@ -446,8 +446,8 @@ impl CastLink for HostLink {
         self.host.stop();
     }
 
-    fn set_volume(&mut self, level: f64) {
-        self.host.set_volume(level);
+    fn set_volume(&mut self, level: f64) -> u64 {
+        self.host.set_volume(level)
     }
 
     fn set_muted(&mut self, muted: bool) {
@@ -587,10 +587,10 @@ pub struct CastSpeakers {
     /// The zone level, 0.0 to 1.0, of each device in a zone (S249); one not
     /// here is in no zone.
     zones: BTreeMap<DeviceId, f64>,
-    /// The levels sent in this session that no status has answered yet,
-    /// oldest first, the latest [`MAX_UNANSWERED`]; the sender paces a drag
-    /// later (C70) and may send any of them.
-    unanswered: Vec<f64>,
+    /// The ask ids and levels sent in this session that no status has
+    /// answered yet, oldest first, the latest [`MAX_UNANSWERED`]; the sender
+    /// paces a drag later (C70) and may send any of them.
+    unanswered: Vec<(u64, f64)>,
     attempt: Option<Attempt>,
     /// How long the feed waits for L, in ms (C77).
     hold_back_ms: f64,
@@ -1491,10 +1491,12 @@ impl CastSpeakers {
         if reported.is_some_and(|volume| volume.control_type == ControlType::Fixed) {
             return;
         }
-        if reported.is_some_and(|volume| answers_volume(level, volume)) {
-            // The device reports only changes, so this level gets no answer,
-            // and the latest level sent replaces whatever was still in flight.
-            self.unanswered.clear();
+        let ask = self.link.as_mut().map_or(0, |link| link.set_volume(level));
+        if self.unanswered.is_empty()
+            && reported.is_some_and(|volume| answers_volume(level, volume))
+        {
+            // The device reports only changes, so with nothing in flight this
+            // level gets no answer.
             self.levels.insert(device, own);
             if self
                 .requested
@@ -1506,13 +1508,10 @@ impl CastSpeakers {
             if self.unanswered.len() == MAX_UNANSWERED {
                 self.unanswered.remove(0);
             }
-            self.unanswered.push(level);
+            self.unanswered.push((ask, level));
         }
         if let Some(attempt) = self.attempt.as_mut() {
             attempt.reported_mute = None;
-        }
-        if let Some(link) = self.link.as_mut() {
-            link.set_volume(level);
         }
     }
 
@@ -1533,7 +1532,7 @@ impl CastSpeakers {
         let answered = self
             .unanswered
             .iter()
-            .position(|&sent| answers_volume(sent, &volume));
+            .position(|&(_, sent)| answers_volume(sent, &volume));
         if let Some(index) = answered {
             self.unanswered.drain(..=index);
         }
@@ -1583,11 +1582,10 @@ impl CastSpeakers {
         }
     }
 
-    /// The sender will get no answer to one ask for `level` (C70, C104), so
-    /// the latest copy still awaited stops waiting, as the sender reports an
-    /// ask the moment it replaces or sends it.
-    fn volume_unanswered(&mut self, device: DeviceId, level: f64) {
-        let Some(index) = self.unanswered.iter().rposition(|&sent| sent == level) else {
+    /// The sender will get no answer to `ask` (C70, C104), so it stops
+    /// waiting.
+    fn volume_unanswered(&mut self, device: DeviceId, ask: u64) {
+        let Some(index) = self.unanswered.iter().position(|&(id, _)| id == ask) else {
             return;
         };
         self.unanswered.remove(index);
@@ -1956,8 +1954,8 @@ impl CastSpeakers {
                 }
                 self.volume_reported(device, volume, answers_mute)
             }
-            SessionEvent::VolumeUnanswered { level } => {
-                self.volume_unanswered(device, level);
+            SessionEvent::VolumeUnanswered { ask, .. } => {
+                self.volume_unanswered(device, ask);
             }
             SessionEvent::Diagnostics(diagnostics) => {
                 self.log
@@ -2187,8 +2185,10 @@ pub mod tests {
             self.state().stops += 1;
         }
 
-        fn set_volume(&mut self, level: f64) {
-            self.state().volumes.push(level);
+        fn set_volume(&mut self, level: f64) -> u64 {
+            let mut state = self.state();
+            state.volumes.push(level);
+            state.volumes.len() as u64
         }
 
         fn set_muted(&mut self, muted: bool) {
@@ -3249,15 +3249,26 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 52.0);
     }
 
+    /// Reports each level's latest ask still awaited unanswered, as the
+    /// sender does the moment it replaces or sends that ask.
     fn unanswered(fake: &FakeCast, cast: &mut CastSpeakers, levels: &[f64]) {
         for &level in levels {
-            fake.report(HostEvent::Session {
-                attempt: AttemptId(1),
-                device: id(KITCHEN),
-                event: SessionEvent::VolumeUnanswered { level },
-            });
-            cast.poll();
+            let latest = cast
+                .unanswered
+                .iter()
+                .rev()
+                .find(|&&(_, sent)| sent == level);
+            unanswered_ask(fake, cast, latest.map_or(0, |&(ask, _)| ask), level);
         }
+    }
+
+    fn unanswered_ask(fake: &FakeCast, cast: &mut CastSpeakers, ask: u64, level: f64) {
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::VolumeUnanswered { level, ask },
+        });
+        cast.poll();
     }
 
     // covers: C70, C104 (the TV answered 0.55 before the sender sent it again)
@@ -3328,9 +3339,9 @@ pub mod tests {
 
     /// Runs the host's volume asks through the sender's own channel (C70):
     /// each ask reaches the channel at its moment in ms, what the channel
-    /// reports unanswered reaches the host, and the device, at 0.5, answers
+    /// reports unanswered reaches the host, and the device, at `from`, answers
     /// each level sent that changes its own. Returns the row after each answer.
-    fn through_the_channel(asks: &[(u64, f64)]) -> (FakeCast, CastSpeakers, Vec<f64>) {
+    fn through_the_channel(from: f64, asks: &[(u64, f64)]) -> (FakeCast, CastSpeakers, Vec<f64>) {
         use audiosync_cast::channel::{Channel, Event, VOLUME_INTERVAL};
         use audiosync_cast::ids::RequestIds;
         use audiosync_cast::message::{CastMessage, Namespace, PLATFORM, SENDER};
@@ -3346,8 +3357,8 @@ pub mod tests {
         }
         fn forward(channel: &mut Channel, fake: &FakeCast, cast: &mut CastSpeakers) {
             while let Some(event) = channel.poll_event() {
-                if let Event::VolumeUnanswered { level } = event {
-                    unanswered(fake, cast, &[level]);
+                if let Event::VolumeUnanswered { level, ask } = event {
+                    unanswered_ask(fake, cast, ask, level);
                 }
             }
         }
@@ -3367,10 +3378,10 @@ pub mod tests {
         let (fake, mut cast) = listed();
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
-        report(&fake, &mut cast, 0.5);
+        report(&fake, &mut cast, from);
         let start = Instant::now();
         let mut channel = Channel::open(start, RequestIds::starting_at(100));
-        channel.handle(start, status(100, 0.5));
+        channel.handle(start, status(100, from));
         assert!(channel.is_ready());
         let mut forwarded = sent(&fake).len();
         let mut wire = Vec::new();
@@ -3379,8 +3390,8 @@ pub mod tests {
             last = start + Duration::from_millis(ms);
             channel.tick(last);
             cast.set_volume(KITCHEN, position);
-            for level in sent(&fake)[forwarded..].to_vec() {
-                channel.set_volume(last, level).expect("ready");
+            for (ask, level) in (1..).zip(sent(&fake)).skip(forwarded) {
+                channel.ask_volume(last, ask, level).expect("ready");
             }
             forwarded = sent(&fake).len();
             forward(&mut channel, &fake, &mut cast);
@@ -3390,7 +3401,7 @@ pub mod tests {
         channel.tick(end);
         forward(&mut channel, &fake, &mut cast);
         wire.extend(set_volumes(&mut channel));
-        let mut device = 0.5;
+        let mut device = from;
         let mut rows = Vec::new();
         for (id, level) in wire {
             if level != device {
@@ -3408,7 +3419,7 @@ pub mod tests {
     #[test]
     fn a_level_asked_again_while_it_waits_is_awaited_again() {
         let asks = [(0, 98.0), (100, 100.0), (150, 100.0), (180, 90.0)];
-        let (_, cast, rows) = through_the_channel(&asks);
+        let (_, cast, rows) = through_the_channel(0.5, &asks);
         assert_eq!(rows.last(), Some(&90.0), "{rows:?}");
         assert_eq!(shown(&cast, KITCHEN).round(), 90.0);
     }
@@ -3423,12 +3434,54 @@ pub mod tests {
             (250, 60.0),
             (280, 55.0),
         ];
-        assert_eq!(through_the_channel(&wobble).2, [55.0, 55.0, 55.0]);
+        assert_eq!(through_the_channel(0.5, &wobble).2, [55.0, 55.0, 55.0]);
         let one_interval = [(0, 55.0), (10, 60.0), (20, 55.0), (30, 60.0), (40, 55.0)];
-        let (fake, mut cast, rows) = through_the_channel(&one_interval);
+        let (fake, mut cast, rows) = through_the_channel(0.5, &one_interval);
         assert_eq!(rows, [55.0]);
         report(&fake, &mut cast, 0.6);
         assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70, C104 (the TV reports 0.55; 0.7, 0.55, 0.8 and 0.55 go out before any echo)
+    #[test]
+    fn a_drag_away_and_back_to_the_reported_level_never_shows_a_level_it_passed() {
+        let drag = [
+            (0, 55.0),
+            (100, 70.0),
+            (200, 55.0),
+            (300, 80.0),
+            (400, 55.0),
+        ];
+        let (_, cast, rows) = through_the_channel(0.55, &drag);
+        assert_eq!(rows, [55.0; 4]);
+        assert_eq!(shown(&cast, KITCHEN).round(), 55.0);
+    }
+
+    // covers: C70, C104 (the TV answered 0.6, then 0.55 and 0.6 go out before any echo)
+    #[test]
+    fn asking_the_reported_level_again_keeps_the_level_in_flight_awaited() {
+        let (_, cast, rows) = through_the_channel(0.6, &[(0, 55.0), (100, 60.0)]);
+        assert_eq!(rows, [60.0, 60.0]);
+        assert_eq!(shown(&cast, KITCHEN), 60.0);
+    }
+
+    // covers: C70, C104 (0.6 goes out, 0.7 replaces the waiting 0.55, then 0.55 and 0.8 go out; the
+    // report on the replaced 0.55 arrives after the second 0.55 was asked)
+    #[test]
+    fn a_late_report_on_a_replaced_level_leaves_a_newer_ask_of_that_level_awaited() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        let replaced = sent(&fake).len() as u64 + 2;
+        for position in [60.0, 55.0, 70.0, 55.0, 80.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered_ask(&fake, &mut cast, replaced, 0.55);
+        for answer in [0.6, 0.7, 0.55, 0.8] {
+            report(&fake, &mut cast, answer);
+        }
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
     }
 
     // covers: C70, C104 (0.3, 0.6 and 0.3 went out, 0.35 was replaced, then 0.3 went out again)

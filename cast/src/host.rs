@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::audio::{AudioReader, Codec, StreamFormat};
+use crate::channel::new_volume_ask;
 use crate::client::{FingerprintBook, QUIT_BUDGET};
 use crate::discovery::DeviceId;
 use crate::group::GroupRecords;
@@ -321,7 +322,7 @@ enum Command {
         announced: Arc<AtomicBool>,
     },
     Stop,
-    SetVolume(f64),
+    SetVolume(f64, u64),
     SetMuted(bool),
     StepVolume(bool),
     SetMetadata(Metadata),
@@ -574,9 +575,12 @@ impl CastHost {
         }
     }
 
-    /// The device level, 0.0 to 1.0 (C65, C67, C70).
-    pub fn set_volume(&self, level: f64) {
-        let _ = self.commands.send(Command::SetVolume(level));
+    /// The device level, 0.0 to 1.0 (C65, C67, C70); returns the ask id
+    /// that a report on this ask carries.
+    pub fn set_volume(&self, level: f64) -> u64 {
+        let ask = new_volume_ask();
+        let _ = self.commands.send(Command::SetVolume(level, ask));
+        ask
     }
 
     pub fn set_muted(&self, muted: bool) {
@@ -843,9 +847,9 @@ impl Worker {
                 (selected, announced),
             ),
             Command::Stop => self.stop_running(),
-            Command::SetVolume(level) => {
-                self.with_session(|session| session.set_volume(level).map_err(CommandError::Volume))
-            }
+            Command::SetVolume(level, ask) => self.with_session(|session| {
+                session.ask_volume(ask, level).map_err(CommandError::Volume)
+            }),
             Command::SetMuted(muted) => {
                 self.with_session(|session| session.set_muted(muted).map_err(CommandError::Volume))
             }

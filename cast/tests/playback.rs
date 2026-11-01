@@ -1240,6 +1240,36 @@ fn a_level_waiting_for_its_interval_reaches_the_device_after_a_reconnect() {
     device.join();
 }
 
+// covers: C68, C70, C81
+#[test]
+fn a_waiting_level_the_reconnected_device_refuses_is_reported_unanswered() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    session.set_volume_interval(Duration::from_secs(60));
+    session.set_volume(0.3).expect("sent");
+    run_until(
+        &mut session,
+        Duration::from_secs(3),
+        |event| matches!(event, SessionEvent::Volume(volume, _) if (volume.level - 0.3).abs() < 1e-9),
+    );
+    session.set_volume(0.5).expect("waits for the interval");
+    device.send(Command::FixVolume);
+    device.send(Command::DropConnection);
+    assert!(device.wait_for_hangup(HANG_GUARD));
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    assert!(
+        seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::VolumeUnanswered { level, .. } if (*level - 0.5).abs() < 1e-9
+        )),
+        "{seen:?}"
+    );
+    session.stop();
+    device.join();
+}
+
 // covers: C37, C81
 #[test]
 fn a_reconnect_whose_first_status_has_no_level_keeps_the_known_level() {

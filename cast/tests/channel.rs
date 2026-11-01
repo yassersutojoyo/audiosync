@@ -642,12 +642,12 @@ fn a_level_sent_but_unanswered_goes_to_the_next_channel() {
     let mut channel = running(start);
     channel.set_volume(start, 0.3).expect("sent");
     channel
-        .set_volume(start, 0.5)
+        .ask_volume(start, 7, 0.5)
         .expect("waits for the interval");
     channel.tick(start + Duration::from_millis(100));
     // Sent into a channel that then went silent, with no status to answer it.
     channel.end(EndReason::Silent);
-    assert_eq!(channel.take_unanswered_volume(), Some(0.5));
+    assert_eq!(channel.take_unanswered_volume(), Some((7, 0.5)));
 }
 
 // covers: C69, C70
@@ -700,7 +700,10 @@ fn a_level_sent_that_no_status_will_answer_is_reported() {
         let seen = events(channel);
         for level in [0.6, 0.55] {
             assert!(
-                seen.contains(&Event::VolumeUnanswered { level }),
+                seen.iter().any(|event| matches!(
+                    event,
+                    Event::VolumeUnanswered { level: reported, .. } if *reported == level
+                )),
                 "{level}: {seen:?}"
             );
         }
@@ -757,7 +760,7 @@ fn volume_outcomes(asks: &[(u64, f64)], fixed_at: Option<u64>) -> (Vec<f64>, Vec
     let unanswered = events(&mut channel)
         .into_iter()
         .filter_map(|event| match event {
-            Event::VolumeUnanswered { level } => Some(level),
+            Event::VolumeUnanswered { level, .. } => Some(level),
             _ => None,
         })
         .collect();
@@ -791,7 +794,10 @@ fn every_level_asked_for_is_awaited_or_reported_unanswered_exactly_once() {
     }
     let seen = events(&mut channel);
     assert!(
-        seen.contains(&Event::VolumeUnanswered { level: 0.6 }),
+        seen.iter().any(|event| matches!(
+            event,
+            Event::VolumeUnanswered { level, .. } if *level == 0.6
+        )),
         "{seen:?}"
     );
     // A level waiting when the volume turns fixed never goes out (C68).

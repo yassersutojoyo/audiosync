@@ -490,9 +490,9 @@ impl CastClient {
         self.channel.media_session_id()
     }
 
-    /// Sets the device volume level (C65, C67, C70).
-    pub fn set_volume(&mut self, level: f64) -> Result<(), VolumeError> {
-        let result = self.channel.set_volume(Instant::now(), level);
+    /// Sets the device volume level under `ask` (C65, C67, C70).
+    pub fn set_volume(&mut self, ask: u64, level: f64) -> Result<(), VolumeError> {
+        let result = self.channel.ask_volume(Instant::now(), ask, level);
         self.flush();
         result
     }
@@ -503,7 +503,7 @@ impl CastClient {
 
     /// The level still waiting for its interval or for its answer (C70),
     /// taken off the channel.
-    pub fn take_unanswered_volume(&mut self) -> Option<f64> {
+    pub fn take_unanswered_volume(&mut self) -> Option<(u64, f64)> {
         self.channel.take_unanswered_volume()
     }
 
