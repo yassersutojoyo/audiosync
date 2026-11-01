@@ -3039,13 +3039,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Whether the user set anything for output `endpoint_id`: settings, an
-    /// auto-connect mark, a group, a zone or Hide Speaker.
+    /// auto-connect mark, a name, a group, a zone, a preset or Hide Speaker.
     fn has_choices(&self, endpoint_id: &str) -> bool {
         let key = speaker_key(endpoint_id);
         self.audio.has_output_settings(endpoint_id)
             || self.auto_connect.contains(&key)
+            || self.custom_names.contains(&key)
             || self.groups.iter().any(|group| group.members.contains(&key))
             || self.zones.zone_of(&key).is_some()
+            || self
+                .presets
+                .iter()
+                .any(|preset| preset.members.iter().any(|member| member.key == key))
             || self.is_hidden(&key)
     }
 
