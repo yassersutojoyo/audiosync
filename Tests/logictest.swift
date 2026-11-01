@@ -34,6 +34,15 @@ check(VolumeCurve.accepted(.nan) == nil && VolumeCurve.accepted(.infinity) == ni
         && VolumeCurve.accepted(-.infinity) == nil && VolumeCurve.accepted(-5) == 0
         && VolumeCurve.accepted(150) == 100 && VolumeCurve.accepted(37.5) == 37.5,
       "volume: a local or master volume is clamped to 0 to 100; one that isn't a number is ignored")
+do {
+    let outputs = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Outputs.swift", encoding: .utf8)) ?? ""
+    let unclamped = ["func setLocalVolume(", "func setMasterVolume(", "func setZoneVolume("].filter { setter in
+        outputs.components(separatedBy: setter).dropFirst().first?.components(separatedBy: "\n    }\n").first?
+            .contains("VolumeCurve.accepted(position)") != true
+    }
+    // covers: S76
+    check(unclamped.isEmpty, "volume: a local, master or zone volume set on the Mac goes through that clamp", "\(unclamped)")
+}
 var mono = true
 for p in stride(from: 0.0, to: 100, by: 1) where VolumeCurve.gain(position: p + 1) <= VolumeCurve.gain(position: p) { mono = false }
 check(mono, "volume: strictly increasing")
@@ -52,6 +61,15 @@ do {
     // covers: S232
     check(gain("usb", solo: "bt") == 0 && gain("new", solo: "") == 0 && approx(gain("usb", solo: "usb"), g(80) * g(50), 1e-12),
           "volume: a calibration playing through one output silences every other local speaker")
+}
+
+do {
+    let own = NativeAirPlayModel.ownVolume("native:new", stored: ["native:den": 80])
+    // covers: S399
+    check(own == 60 && NativeAirPlayModel.ownVolume("native:den", stored: ["native:den": 80]) == 80
+            && AirPlayDeviceLevel.sent(own: own, zone: 100, master: 100) == 60,
+          "airplay level: a speaker with no stored volume starts at 60 and joins at level 60 with the zone and the master at 100",
+          "\(own)")
 }
 
 // covers: S290, S291 (a level set on the speaker is kept for its next session)
@@ -3626,6 +3644,16 @@ do {
             && slept.isReconnecting("R4"),
           "native airplay: a retried error while the Mac sleeps counts nothing toward reconnecting",
           "\(asleepFails) \(wokeFails)")
+    var dozing = NativeAirPlayModel()
+    dozing.apply(.appeared(receiver("R5", "Attic", .available)))
+    dozing.asleep = true
+    let whileAsleep = dozing.reconcilePlan(streaming: true, enabled: ["native:R5"])
+    dozing.asleep = false
+    let afterWake = dozing.reconcilePlan(streaming: true, enabled: ["native:R5"])
+    // covers: S412
+    check(whileAsleep.isEmpty && afterWake.add == ["R5"],
+          "native airplay: a reconcile while the Mac sleeps starts no session, the one at the wake starts it",
+          "\(whileAsleep) \(afterWake)")
 
     // P169, S285: a 17th AirPlay 2 speaker waits for a place, switched on,
     // and the sender starts it once one of the others stops.
@@ -8265,6 +8293,10 @@ do {
     check(accented == String(repeating: "a", count: 59) + "e" && accented.unicodeScalars.count == 60,
           "speaker names: a name is cut at 60 Unicode scalars, the same count on both hosts",
           "cut: \(accented.unicodeScalars.count) scalars")
+    let unicodeBreaks = SpeakerNames.clean("Desk\u{85}left\u{2028}right\u{2029}rear")
+    // covers: S228
+    check(unicodeBreaks == "Desk left right rear",
+          "speaker names: U+0085, U+2028 and U+2029 inside a name become spaces, the same set on both hosts", unicodeBreaks)
     let longSystem = String(repeating: "a", count: 59) + "e\u{301}"
     var untouched = SpeakerNames()
     // covers: S228
@@ -14596,6 +14628,36 @@ do {
     plainRepick.repicked(source: .system, pair: 0)
     check(otherPick.switching == toInput && plainRepick.answer() == .user,
           "microphone: a pick of a capture the switch doesn't leave, or with no switch waiting, changes nothing")
+}
+
+// MARK: The format a local output's render callback fills (OutputRenderer.clientFormat)
+do {
+    func refusing(_ refused: Set<Int>) -> (Double, Int) -> OSStatus {
+        { _, channels in refused.contains(channels) ? OSStatus(kAudioUnitErr_FormatNotSupported) : noErr }
+    }
+    let fast = try? OutputRenderer.clientFormat(deviceRate: 768_000, deviceChannels: 2, captureRate: 48_000,
+                                                set: refusing([]))
+    // covers: S62
+    check(fast?.rate == 48_000 && fast?.channels == 2,
+          "output format: a device rate outside the core's range is filled at the capture rate", "\(String(describing: fast))")
+    let surround = try? OutputRenderer.clientFormat(deviceRate: 44_100, deviceChannels: 6, captureRate: 48_000,
+                                                    set: refusing([6]))
+    // covers: S62
+    check(surround?.rate == 44_100 && surround?.channels == 2,
+          "output format: a unit that refuses the device's 6 channels gets plain stereo", "\(String(describing: surround))")
+    var refusal: Error?
+    do {
+        _ = try OutputRenderer.clientFormat(deviceRate: 48_000, deviceChannels: 2, captureRate: 48_000, set: refusing([2]))
+    } catch {
+        refusal = error
+    }
+    var refusedFormat = false
+    if case .formatRefused(let status)? = refusal as? OutputRenderer.StartFailure {
+        refusedFormat = status == OSStatus(kAudioUnitErr_FormatNotSupported)
+    }
+    // covers: S62
+    check(refusedFormat, "output format: a unit that refuses stereo fails the start as a refused format",
+          "\(String(describing: refusal))")
 }
 
 // MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)
