@@ -2985,7 +2985,7 @@ pub mod tests {
         assert_eq!(cast.anchor(), None);
     }
 
-    // covers: C105
+    // covers: C105, C79 (the Resync control reaches only a session)
     #[test]
     fn volume_mute_and_resync_reach_only_the_speaker_in_a_session() {
         let (fake, mut cast) = listed();

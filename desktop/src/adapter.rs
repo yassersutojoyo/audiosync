@@ -17797,7 +17797,7 @@ mod tests {
         );
     }
 
-    // covers: S246, S252, S266
+    // covers: S246, S252, S266, C43
     #[test]
     fn a_takeover_after_a_recall_keeps_its_notice_so_the_next_recall_sees_it_busy() {
         let (mut adapter, fake) = cast_adapter();

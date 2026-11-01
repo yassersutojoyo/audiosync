@@ -12179,6 +12179,17 @@ do {
             && CastModel.networkWaitMs(airPlay: 100, cast: 250) == 250
             && CastModel.networkWaitMs(airPlay: nil, cast: nil) == nil,
           "cast: local outputs wait the longer of the AirPlay delay and the Cast offset")
+    var expired = m
+    // covers: C17
+    check(expired.apply(.changed(CastDevice(id: kitchen, name: "Kitchen", offline: true), offsetMs: 250)) == .changed
+            && expired.rows.contains(kitchen) && expired.status(of: kitchen) == .playing
+            && expired.enabled == kitchen && expired.plan(streaming: true) == .none,
+          "cast: a speaker in a session stays listed and playing after its records expire (C17)")
+    var reloaded = m
+    // covers: C86
+    check(reloaded.apply(.reloaded(attempt: 3)) == nil && reloaded.status(of: kitchen) == .playing
+            && reloaded.enabled == kitchen && reloaded.plan(streaming: true) == .none,
+          "cast: a reloaded stream keeps playing with no new session (C86)")
 
     var takenOver = m
     // covers: C43
