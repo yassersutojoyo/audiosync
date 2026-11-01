@@ -9603,6 +9603,10 @@ mod tests {
             "Muted on the group"
         );
         assert_eq!(
+            cast_note(CastState::Paused, true).as_str(),
+            "Paused on the device"
+        );
+        assert_eq!(
             cast_note(CastState::Playing, false).as_str(),
             "Google Cast group: Kitchen and Living Room"
         );

@@ -2348,6 +2348,27 @@ pub mod tests {
         assert_eq!(status(&cast, KITCHEN), CastStatus::Idle);
     }
 
+    // covers: C113
+    #[test]
+    fn a_pause_on_the_device_shows_until_it_plays_again() {
+        let (fake, mut cast) = listed();
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        cast.set_streaming(true);
+        fake.report(playing(KITCHEN));
+        cast.poll();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Paused,
+        });
+        assert!(cast.poll().contains(&BackendEvent::CastChanged));
+        assert_eq!(status(&cast, KITCHEN), CastStatus::Paused);
+
+        fake.report(playing(KITCHEN));
+        cast.poll();
+        assert_eq!(status(&cast, KITCHEN), CastStatus::Playing);
+    }
+
     #[test]
     fn events_of_an_older_attempt_are_ignored() {
         let (fake, mut cast) = listed();
