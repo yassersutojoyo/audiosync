@@ -1663,7 +1663,8 @@ impl CastSpeakers {
 
     /// The sender sent `level`, the latest asked for, with no answer to come
     /// (C70, C104): when `repeated`, the levels asked for since its earlier
-    /// copy never went out; else the device already reports it.
+    /// copy stop waiting; else the device already reports it, and every level
+    /// does.
     fn volume_unanswered(&mut self, device: DeviceId, level: f64, repeated: bool) {
         if self.unanswered.last() != Some(&level) {
             return;
