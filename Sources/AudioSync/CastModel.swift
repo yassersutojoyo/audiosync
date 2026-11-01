@@ -1049,7 +1049,8 @@ struct CastModel {
     /// the latest copy still awaited stops waiting, as the sender reports an
     /// ask the moment it replaces or sends it.
     private mutating func volumeUnanswered(_ id: String, _ level: Double) {
-        guard let index = unanswered.lastIndex(of: level) else { return }
+        // The sender builds a device step on its own unrounded level (0.4 + 0.02), not the rounded one awaited here.
+        guard let index = unanswered.lastIndex(where: { abs($0 - level) < 1e-9 }) else { return }
         unanswered.remove(at: index)
         if unanswered.isEmpty, let requested, requested.id == id {
             levels[id] = requested.level
