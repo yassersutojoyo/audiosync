@@ -3476,6 +3476,7 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | an_every_time_pairing_failing_after_a_stop_and_start_before_a_poll_says_pairing_failed (`desktop/src/audio/airplay.rs`) | S223 |
 | a_pairing_that_needs_airplay2_says_so (`desktop/src/adapter.rs`) | S223 |
 | a_password_required_after_the_password_typed_this_run_says_it_was_turned_down (`desktop/src/audio/airplay.rs`) | S223 |
+| a_newer_pin_waits_behind_an_open_password_prompt (`desktop/src/audio/airplay.rs`) | S223 |
 | a_pairing_cancelled_after_its_receiver_left_and_came_back_turns_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
 | a_tv_that_asks_every_time_needs_its_pin_again_on_a_new_sender (`desktop/src/audio/airplay.rs`) | S223 |
 | a_pairing_failed_as_unsupported_for_another_reason_keeps_that_reason (`desktop/src/adapter.rs`) | S223 |

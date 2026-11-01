@@ -1158,14 +1158,13 @@ pub struct AirPlaySpeakers {
     /// The speakers in `ending` whose pairing the user forgot since: what
     /// their cancelled pairing still reports pairs nothing.
     forgotten_while_ending: BTreeSet<String>,
-    /// The next `PairingRun::shown_order`.
-    next_shown_order: u64,
     /// The passwords the user typed, by speaker ID, until AudioSync quits.
     /// Never logged or written anywhere.
     passwords: BTreeMap<String, Secret>,
     /// The password prompts waiting, by speaker ID.
     password_asks: BTreeMap<String, PasswordAsk>,
-    /// The next `PasswordAsk::order`.
+    /// The last `PasswordAsk::order` or `PairingRun::shown_order`: one count
+    /// for both, so the oldest prompt of either kind shows first.
     next_ask_order: u64,
     /// The speakers the user switched on, or typed a password for, that
     /// haven't played since: a session that asks for a password or turns
@@ -1305,7 +1304,6 @@ impl AirPlaySpeakers {
             pairings: BTreeMap::new(),
             ending: BTreeSet::new(),
             forgotten_while_ending: BTreeSet::new(),
-            next_shown_order: 0,
             passwords: BTreeMap::new(),
             password_asks: BTreeMap::new(),
             next_ask_order: 0,
@@ -2489,14 +2487,17 @@ impl AirPlaySpeakers {
         saved.is_ok()
     }
 
-    /// The PIN prompt to show: the first pairing whose Apple TV showed a PIN.
+    /// The PIN prompt to show: the first pairing whose Apple TV showed a PIN,
+    /// while no older password prompt waits.
     pub fn pin_prompt(&self) -> Option<AirPlayPinPrompt> {
+        let oldest_ask = self.password_asks.values().map(|ask| ask.order).min();
         // The Apple TV that asked first keeps the prompt until its pairing
         // ends, so a second one asking meanwhile never takes over the field.
         self.pairings
             .iter()
             .filter(|(_, run)| run.shown)
             .min_by_key(|(_, run)| run.shown_order)
+            .filter(|(_, run)| oldest_ask.is_none_or(|order| run.shown_order < order))
             .map(|(id, run)| AirPlayPinPrompt {
                 id: id.clone(),
                 name: self.names.get(id).cloned().unwrap_or_else(|| id.clone()),
@@ -2681,15 +2682,19 @@ impl AirPlaySpeakers {
         waiting
     }
 
-    /// The password prompt to show: the oldest one waiting, while no PIN
-    /// prompt is open, so one dialog asks at a time.
+    /// The password prompt to show: the oldest one waiting, while no older
+    /// PIN prompt waits, so one dialog asks at a time.
     pub fn password_prompt(&self) -> Option<AirPlayPasswordPrompt> {
-        if self.pin_prompt().is_some() {
-            return None;
-        }
+        let oldest_pin = self
+            .pairings
+            .values()
+            .filter(|run| run.shown)
+            .map(|run| run.shown_order)
+            .min();
         self.password_asks
             .iter()
             .min_by_key(|(_, ask)| ask.order)
+            .filter(|(_, ask)| oldest_pin.is_none_or(|order| ask.order < order))
             .map(|(id, ask)| AirPlayPasswordPrompt {
                 id: id.clone(),
                 name: self.names.get(id).cloned().unwrap_or_else(|| id.clone()),
@@ -3719,8 +3724,8 @@ impl AirPlaySpeakers {
                 run.phase = PairingPhase::WaitingForPin;
                 if !run.shown {
                     run.shown = true;
-                    run.shown_order = self.next_shown_order;
-                    self.next_shown_order += 1;
+                    self.next_ask_order += 1;
+                    run.shown_order = self.next_ask_order;
                 }
                 self.log
                     .log(|| format!("AirPlay pairing {}: PIN prompt shown", self.label(id)));
@@ -6848,6 +6853,33 @@ pub mod tests {
             Some(second_id),
             "then the second one gets the prompt"
         );
+    }
+
+    // covers: S223
+    #[test]
+    fn a_newer_pin_waits_behind_an_open_password_prompt() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let study_id = id_of(&password_asked(&fake, &mut airplay));
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let tv_id = id_of(&tv);
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(
+            airplay.set_enabled(&tv_id, true),
+            Err(AirPlayProblem::NeedsPin)
+        );
+        airplay.start_pairing(&tv_id).expect("the pairing starts");
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        airplay.poll();
+        assert_eq!(
+            airplay.password_prompt().map(|prompt| prompt.id),
+            Some(study_id.clone()),
+            "the older password prompt stays open"
+        );
+        assert_eq!(airplay.pin_prompt(), None, "one prompt at a time");
+        airplay.cancel_password(&study_id);
+        assert_eq!(airplay.pin_prompt().map(|prompt| prompt.id), Some(tv_id));
     }
 
     // covers: S223
