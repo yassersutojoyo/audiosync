@@ -5364,6 +5364,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         });
         self.airplay_on_by_hand.remove(&airplay_id);
         self.audio.cancel_airplay_pairing(&airplay_id);
+        self.stop_if_idle();
         self.take_events();
     }
 
