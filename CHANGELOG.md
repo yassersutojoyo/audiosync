@@ -51,6 +51,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On Windows, while you capture several apps and none of them plays a track, a TV playing through AirPlay shows the source's name from the source menu, as on the Mac. Before, it said "All System Audio", or kept showing a paused track. Now only a playing track shows, on AirPlay and on Google Cast speakers.
 - On Windows, when an app other than Spotify plays a track without a cover, a TV playing through AirPlay shows AudioSync's icon at once, as on the Mac. Before, it waited 5 seconds and could keep the last track's cover meanwhile.
+- The libraries behind AirPlay pairing's cryptography are updated to versions that fix published security advisories (RUSTSEC-2026-0385 and RUSTSEC-2026-0387). On the Mac, so is the one that reads AirPlay property lists (RUSTSEC-2026-0194 and RUSTSEC-2026-0195).
 - On the Mac, with the equalizer on, sound could start with a short thump when AudioSync reopened the capture after it stopped, or rebuilt an app's tap. Now it starts clean.
 - On Windows, the Up and Down arrow keys move a volume slider, as on the Mac: Up raises it and Down lowers it by the same step as Right and Left. Before, they did nothing.
 - On Windows, the web remote's speaker notes now match the main window: "Waiting for the password" while you type a password, "Enter the code shown on <speaker>" during a PIN pairing, and "Asks for a code every time" for a speaker set that way. Before, the phone said "Asks for a code" or "Pairing…" instead.
