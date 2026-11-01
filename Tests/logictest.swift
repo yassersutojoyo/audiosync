@@ -16135,6 +16135,16 @@ do {
     check(memoryOnlyWrite == nil,
           "pairings notice: a write into a store opened as one that keeps nothing leaves the launch notice",
           String(describing: memoryOnlyWrite))
+    var restartedWrites = PairingsWriteNotice()
+    _ = restartedWrites.written(false, openedUnsaved: false)
+    let keptAtRestart = restartedWrites.atStart(openedUnsaved: false)
+    let launchAtRestart = restartedWrites.atStart(openedUnsaved: true)
+    _ = restartedWrites.written(true, openedUnsaved: false)
+    let clearedAtRestart = restartedWrites.atStart(openedUnsaved: false)
+    // covers: S224
+    check(keptAtRestart == nil && launchAtRestart == .post && clearedAtRestart == .clear,
+          "pairings notice: a new sender keeps it while the last write failed, or when its store keeps nothing",
+          "\(String(describing: keptAtRestart)) \(String(describing: launchAtRestart)) \(String(describing: clearedAtRestart))")
     var rawPairedEvent = AscAirPlayEvent()
     rawPairedEvent.kind = ASC_AIRPLAY_EVENT_PAIRED
     let pairedAndStored = NativeAirPlay.event(rawPairedEvent)

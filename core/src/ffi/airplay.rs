@@ -69,7 +69,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Once, OnceLock};
+use std::sync::{Arc, Mutex, Once, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::SAMPLE_RATE;
@@ -706,6 +706,9 @@ pub struct AscAirPlay {
     /// The paired receivers' credentials; in memory until the host opens
     /// its file ([`asc_airplay_open_pairings`]).
     store: PairingStore,
+    /// What [`asc_airplay_open_pairings`] returned for the file `store`
+    /// was read from.
+    pairings_opened: i32,
     /// The hidden AirPlay 2 switch (P2), as the sender was started with.
     airplay2: bool,
     /// The sender's AirPlay 2 preference (P214, S312).
@@ -713,6 +716,9 @@ pub struct AscAirPlay {
     /// The AirPlay 2 device ID and HomeKit credentials; in memory until the
     /// host opens their file ([`asc_airplay_open_airplay2_identity`]).
     identity: IdentityStore,
+    /// What [`asc_airplay_open_airplay2_identity`] returned for the file
+    /// `identity` was read from.
+    identity_opened: i32,
     /// The AirPlay 2 timing entries (P217), in their own file next to the
     /// identity's, so that file stays at the format older builds read.
     timing: TimingStore,
@@ -1041,7 +1047,71 @@ unsafe fn host_text<'a>(text: *const c_char) -> Option<&'a str> {
     unsafe { CStr::from_ptr(text) }.to_str().ok()
 }
 
+/// Stores whose last write failed, each with its file and what opening that
+/// file returned, from handles destroyed this run: the next handle that
+/// opens the same file takes the store instead of reading it (S224). A
+/// handle destroyed later that wrote the file, or only read it, drops the
+/// one kept for it, as that handle's view of the file is the newer one.
+type Kept<T> = Mutex<Vec<(PathBuf, T, i32)>>;
+static KEPT_PAIRINGS: Kept<PairingStore> = Mutex::new(Vec::new());
+static KEPT_IDENTITIES: Kept<IdentityStore> = Mutex::new(Vec::new());
+
+fn keep<T>(kept: &Kept<T>, file: PathBuf, store: Option<T>, opened: i32) {
+    let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
+    kept.retain(|(path, ..)| *path != file);
+    if let Some(store) = store {
+        kept.push((file, store, opened));
+    }
+}
+
+fn take_kept<T>(kept: &Kept<T>, file: &Path) -> Option<(T, i32)> {
+    let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
+    let at = kept.iter().position(|(path, ..)| path == file)?;
+    let (_, store, opened) = kept.swap_remove(at);
+    Some((store, opened))
+}
+
+/// What an open call returns: the code of a file it ignored, or how many
+/// receivers the store holds credentials for.
+fn opened_code(opened: i32, paired: usize) -> i32 {
+    if opened < 0 {
+        opened
+    } else {
+        i32::try_from(paired).unwrap_or(i32::MAX)
+    }
+}
+
+/// What an open call returns for a file that `loaded`.
+fn loaded_code(loaded: &Loaded) -> i32 {
+    match loaded {
+        Loaded::NoFile => 0,
+        Loaded::Receivers(count) => i32::try_from(*count).unwrap_or(i32::MAX),
+        Loaded::Ignored(_) => AIRPLAY_PAIRINGS_IGNORED,
+        Loaded::Newer(_) => AIRPLAY_PAIRINGS_NEWER,
+        Loaded::Unreadable(_) => AIRPLAY_PAIRINGS_UNREADABLE,
+    }
+}
+
 impl AscAirPlay {
+    /// Leaves each store whose last write failed to the next handle that
+    /// opens its file, so what the file lacks lasts the run (S224).
+    fn keep_unsaved_stores(&mut self) {
+        if let Some(file) = self.store.file().map(Path::to_path_buf) {
+            let store = self
+                .store
+                .unsaved()
+                .then(|| std::mem::take(&mut self.store));
+            keep(&KEPT_PAIRINGS, file, store, self.pairings_opened);
+        }
+        if let Some(file) = self.identity.file().map(Path::to_path_buf) {
+            let identity = self
+                .identity
+                .unsaved()
+                .then(|| std::mem::take(&mut self.identity));
+            keep(&KEPT_IDENTITIES, file, identity, self.identity_opened);
+        }
+    }
+
     /// The master's gain with the equalizer's headroom cut given back as far
     /// as unity allows (S26, S413).
     fn master_gain(&self) -> f64 {
@@ -2531,9 +2601,11 @@ fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut 
                 target_missing: HashMap::new(),
                 added: HashMap::new(),
                 store: PairingStore::in_memory(),
+                pairings_opened: 0,
                 airplay2,
                 airplay2_preferred,
                 identity: IdentityStore::in_memory(),
+                identity_opened: 0,
                 timing: TimingStore::in_memory(),
                 closed_identity: None,
                 passwords: HashMap::new(),
@@ -2587,10 +2659,12 @@ pub unsafe extern "C" fn asc_airplay_destroy(airplay: *mut *mut AscAirPlay) {
     if handle.is_null() {
         return;
     }
-    // SAFETY: the pointer came from Box::into_raw in asc_airplay_create, and
-    // by the caller's contract it is destroyed once (the host's pointer is
-    // now null), with no call in progress.
-    let freed = panic::catch_unwind(AssertUnwindSafe(|| drop(unsafe { Box::from_raw(handle) })));
+    let freed = panic::catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: the pointer came from Box::into_raw in asc_airplay_create,
+        // and by the caller's contract it is destroyed once (the host's
+        // pointer is now null), with no call in progress.
+        unsafe { Box::from_raw(handle) }.keep_unsaved_stores();
+    }));
     // A panic while freeing leaves what wasn't freed yet behind; the host's
     // pointer is null either way.
     drop(freed);
@@ -3718,7 +3792,10 @@ fn moved_on(progress: Progress, since: Duration) -> Progress {
 /// [`crate::airplay_pairings`]) in place of the one in memory, whose
 /// pairings it drops; meant for once, before discovery starts. Listed
 /// receivers are reported again, as changed, with their availability under
-/// the new store. Returns how many receivers it holds credentials for, or
+/// the new store. A store whose last write failed, left by a handle
+/// destroyed this run, is taken back instead of reading the file (S224);
+/// for a file its first open ignored, that code is returned again.
+/// Otherwise returns how many receivers it holds credentials for, or
 /// [`AIRPLAY_PAIRINGS_IGNORED`], [`AIRPLAY_PAIRINGS_NEWER`] or
 /// [`AIRPLAY_PAIRINGS_UNREADABLE`] for a file it ignored (the store is then
 /// empty), or [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or a
@@ -3745,20 +3822,20 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
     unsafe {
         live(airplay, AIRPLAY_PAIRINGS_FAILED, |airplay| {
             airplay.pump();
-            let (store, loaded) = PairingStore::open(PathBuf::from(path));
+            let path = PathBuf::from(path);
+            let (store, opened) = take_kept(&KEPT_PAIRINGS, &path).unwrap_or_else(|| {
+                let (store, loaded) = PairingStore::open(path);
+                (store, loaded_code(&loaded))
+            });
+            airplay.pairings_opened = opened;
+            let code = opened_code(opened, store.len());
             airplay.store = store;
             let mut ids: Vec<String> = airplay.listed.keys().cloned().collect();
             ids.sort();
             for id in ids {
                 airplay.relist(&id);
             }
-            match loaded {
-                Loaded::NoFile => 0,
-                Loaded::Receivers(count) => i32::try_from(count).unwrap_or(i32::MAX),
-                Loaded::Ignored(_) => AIRPLAY_PAIRINGS_IGNORED,
-                Loaded::Newer(_) => AIRPLAY_PAIRINGS_NEWER,
-                Loaded::Unreadable(_) => AIRPLAY_PAIRINGS_UNREADABLE,
-            }
+            code
         })
     }
 }
@@ -3768,7 +3845,9 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
 /// (P5, P43), made and written once when the file is missing, and the
 /// HomeKit credentials of the receivers it paired with (P152), which later
 /// sessions verify with; credentials a pairing gives from then on are
-/// written to it. Meant for once, before discovery starts. With the hidden
+/// written to it; an identity whose last write failed comes back as
+/// [`asc_airplay_open_pairings`] says for such a store. Meant for once, before
+/// discovery starts. With the hidden
 /// AirPlay 2 switch off it reads and writes nothing and returns 0, and only
 /// [`asc_airplay_forget_pairing`] opens the file, to drop the receiver from
 /// it. Returns how many receivers it holds credentials for, or
@@ -3804,16 +3883,15 @@ pub unsafe extern "C" fn asc_airplay_open_airplay2_identity(
             airplay.pump();
             let path = PathBuf::from(path);
             airplay.timing = TimingStore::open(path.with_file_name(airplay2_timing::FILE_NAME));
-            let (identity, loaded) = IdentityStore::open(path);
+            let (identity, opened) = take_kept(&KEPT_IDENTITIES, &path).unwrap_or_else(|| {
+                let (identity, loaded) = IdentityStore::open(path);
+                (identity, loaded_code(&loaded))
+            });
             airplay.sender.set_airplay2_device_id(identity.device_id());
+            airplay.identity_opened = opened;
+            let code = opened_code(opened, identity.paired());
             airplay.identity = identity;
-            match loaded {
-                Loaded::NoFile => 0,
-                Loaded::Receivers(count) => i32::try_from(count).unwrap_or(i32::MAX),
-                Loaded::Ignored(_) => AIRPLAY_PAIRINGS_IGNORED,
-                Loaded::Newer(_) => AIRPLAY_PAIRINGS_NEWER,
-                Loaded::Unreadable(_) => AIRPLAY_PAIRINGS_UNREADABLE,
-            }
+            code
         })
     }
 }
@@ -9635,6 +9713,147 @@ mod tests {
             None,
             "forgotten all the same"
         );
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S224
+    #[test]
+    fn what_the_files_lost_carries_over_to_the_next_sender_until_a_write_works() {
+        let folder = scratch("airplay-pairings-carried");
+        std::fs::create_dir_all(&folder).expect("the folder is made");
+        let path = folder.join("pairings.dat");
+        let identity_path = folder.join("identity.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let c_identity = CString::new(identity_path.to_str().expect("UTF-8")).expect("no NUL");
+        let (forgotten, unsaved, saved) = ("02005E005360", "02005E005361", "02005E005362");
+        let credentials = |fill: u8| {
+            Credentials::new(
+                "0123456789ABCDEF",
+                [fill; audiosync_airplay::pairing::SECRET_BYTES],
+            )
+            .expect("valid credentials")
+        };
+        let open = |handle: *mut AscAirPlay| {
+            inside(handle).airplay2 = true;
+            // SAFETY: a live handle, used by this thread only; the paths are
+            // NUL-terminated strings.
+            unsafe {
+                (
+                    asc_airplay_open_pairings(handle, c_path.as_ptr()),
+                    asc_airplay_open_airplay2_identity(handle, c_identity.as_ptr()),
+                )
+            }
+        };
+        let mut handle = create_with(quiet);
+        assert_eq!(open(handle), (0, 0));
+        inside(handle)
+            .store
+            .insert(forgotten, credentials(1))
+            .expect("written");
+        inside(handle)
+            .identity
+            .insert(forgotten, homekit_blob(1))
+            .expect("written");
+        let files = [&path, &identity_path].map(|file| std::fs::read(file).expect("the file"));
+        // Folders where the files go: nothing can be written there.
+        for file in [&path, &identity_path] {
+            std::fs::remove_file(file).expect("the file is removed");
+            std::fs::create_dir(file).expect("the folder is made");
+        }
+        assert!(
+            inside(handle)
+                .store
+                .insert(unsaved, credentials(2))
+                .is_err()
+        );
+        assert!(
+            inside(handle)
+                .identity
+                .insert(unsaved, homekit_blob(2))
+                .is_err()
+        );
+        let c_forgotten = CString::new(forgotten).expect("no NUL");
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_forget_pairing(handle, c_forgotten.as_ptr()),
+                AIRPLAY_FORGET_UNWRITTEN
+            );
+        }
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        // The files read again as they were before their writes failed.
+        for (file, bytes) in [&path, &identity_path].into_iter().zip(&files) {
+            std::fs::remove_dir(file).expect("the folder goes");
+            std::fs::write(file, bytes).expect("the file is back");
+        }
+        let mut handle = create_with(quiet);
+        assert_eq!(open(handle), (1, 1), "the stores kept, not the files");
+        let ap1 = &inside(handle).store;
+        assert!(ap1.contains(unsaved) && !ap1.contains(forgotten));
+        let ap2 = &inside(handle).identity;
+        assert!(ap2.get(unsaved).is_some() && ap2.get(forgotten).is_none());
+        // A write that works ends it: the next sender reads the files.
+        inside(handle)
+            .store
+            .insert(saved, credentials(3))
+            .expect("written");
+        inside(handle)
+            .identity
+            .insert(saved, homekit_blob(3))
+            .expect("written");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+        for file in [&path, &identity_path] {
+            std::fs::remove_file(file).expect("the file was written");
+        }
+        let mut handle = create_with(quiet);
+        assert_eq!(open(handle), (0, 0));
+        assert!(inside(handle).store.is_empty());
+        assert!(inside(handle).identity.get(unsaved).is_none());
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S224
+    #[test]
+    fn a_store_kept_after_a_newer_sender_read_the_file_is_dropped_when_that_one_goes() {
+        let folder = scratch("airplay-pairings-kept-stale");
+        std::fs::create_dir_all(&folder).expect("the folder is made");
+        let path = folder.join("pairings.dat");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let (lost, saved) = ("02005E005363", "02005E005364");
+        let credentials = |fill: u8| {
+            Credentials::new(
+                "0123456789ABCDEF",
+                [fill; audiosync_airplay::pairing::SECRET_BYTES],
+            )
+            .expect("valid credentials")
+        };
+        // SAFETY: a live handle, used by this thread only; the path is a
+        // NUL-terminated string.
+        let open = |handle| unsafe { asc_airplay_open_pairings(handle, c_path.as_ptr()) };
+        let mut failed = create_with(quiet);
+        assert_eq!(open(failed), 0);
+        // A folder where the file goes: nothing can be written there.
+        std::fs::create_dir(&path).expect("the folder is made");
+        assert!(inside(failed).store.insert(lost, credentials(1)).is_err());
+        std::fs::remove_dir(&path).expect("the folder goes");
+        // The retry's sender reads the file before the failed one is gone.
+        let mut retry = create_with(quiet);
+        assert_eq!(open(retry), 0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut failed) };
+        inside(retry)
+            .store
+            .insert(saved, credentials(2))
+            .expect("written");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut retry) };
+        let mut handle = create_with(quiet);
+        assert_eq!(open(handle), 1, "the file, not the failed sender's store");
+        assert!(inside(handle).store.contains(saved) && !inside(handle).store.contains(lost));
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

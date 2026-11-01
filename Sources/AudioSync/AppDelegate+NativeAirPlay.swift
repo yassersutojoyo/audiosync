@@ -71,10 +71,11 @@ extension AppDelegate {
         if started {
             clearNotices([Notice.airplaySender, Notice.airplayPtp])   // a new sender binds PTP anew
             ptpPortNotice = PtpPortNotice()
-            pairingsWrites = PairingsWriteNotice()
-            if !native.pairingsNotSaved {
+            let pairingsAtStart = pairingsWrites.atStart(openedUnsaved: native.pairingsNotSaved)
+            if pairingsAtStart == .clear {
                 clearNotices([Notice.pairings])
-            } else if !appModel.notices.items.contains(where: { $0.subject == Notice.pairings }) {
+            } else if pairingsAtStart == .post,
+                      !appModel.notices.items.contains(where: { $0.subject == Notice.pairings }) {
                 postNotice(text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings,
                            shortName: text.pairingsNotSavedNoticeName)
             }

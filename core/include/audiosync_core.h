@@ -1969,8 +1969,10 @@ bool asc_airplay_set_playback(AscAirPlay *airplay, const char *app, int32_t play
  * ASC_AIRPLAY_NEEDS_PIN. The file is versioned, mode 0600, written through a
  * temporary file created new and renamed over it, and removed once nothing
  * is paired; it never holds a password. Listed receivers are reported again
- * as changed. Returns how many receivers it holds credentials for, or an
- * ASC_AIRPLAY_PAIRINGS_* code.
+ * as changed. A store whose last write failed, left by a handle destroyed
+ * this run, is taken back instead of reading the file; for a file its first
+ * open ignored, that code is returned again. Returns how many receivers it
+ * holds credentials for, or an ASC_AIRPLAY_PAIRINGS_* code.
  */
 int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
 
@@ -1981,9 +1983,11 @@ int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
  * the receivers it paired with, which later sessions verify with; new ones
  * are written to it as pairings give them. Kept like the pairings file
  * (versioned, mode 0600, replaced through a temporary file); it never holds
- * a password and its credentials never cross this interface. With the hidden
- * AirPlay 2 switch off it reads and writes nothing and returns 0, and only
- * asc_airplay_forget_pairing opens the file, to drop the receiver from it,
+ * a password and its credentials never cross this interface. An identity
+ * whose last write failed comes back as asc_airplay_open_pairings says for
+ * such a store. With the hidden AirPlay 2 switch off it reads and writes
+ * nothing and returns 0, and only asc_airplay_forget_pairing opens the
+ * file, to drop the receiver from it,
  * and writes it only when it reads as this build's own: one it can't read
  * or parse, or that another account owns, is left as it is.
  * Returns how many receivers it holds credentials for, or an

@@ -97,6 +97,8 @@ pub struct PairingStore {
     /// keeps a copy of it first ([`keep_aside`]).
     unusable: Option<Zeroizing<Vec<u8>>>,
     entries: BTreeMap<String, Credentials>,
+    /// Whether the last write failed, so the file lacks what changed since.
+    unsaved: bool,
 }
 
 impl fmt::Debug for PairingStore {
@@ -127,6 +129,7 @@ impl PairingStore {
             access: Access::Private,
             unusable: None,
             entries: BTreeMap::new(),
+            unsaved: false,
         }
     }
 
@@ -158,6 +161,7 @@ impl PairingStore {
             access,
             unusable: bytes.filter(|_| keep_aside),
             entries,
+            unsaved: false,
         };
         (store, loaded)
     }
@@ -165,6 +169,16 @@ impl PairingStore {
     /// How private the file was found when the store was opened.
     pub fn access(&self) -> Access {
         self.access
+    }
+
+    /// The file, or `None` for a store that lives in memory only.
+    pub fn file(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Whether the last write failed, so the file lacks what changed since.
+    pub fn unsaved(&self) -> bool {
+        self.unsaved
     }
 
     /// How many receivers are paired.
@@ -224,6 +238,12 @@ impl PairingStore {
     /// it; removes the file once nothing is paired. A file that held
     /// something unusable is copied aside first, and stays when that fails.
     fn save(&mut self) -> io::Result<()> {
+        let written = self.write();
+        self.unsaved = written.is_err();
+        written
+    }
+
+    fn write(&mut self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };

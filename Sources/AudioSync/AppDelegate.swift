@@ -78,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var nativeStarts = NativeSenderStarts()
     /// Whether the PTP port notice shows; each new sender starts it afresh.
     var ptpPortNotice = PtpPortNotice()
-    /// Whether the pairings file's last write failed; each new sender starts it afresh.
+    /// Whether the pairings file's last write failed, across senders.
     var pairingsWrites = PairingsWriteNotice()
 
     // MARK: - Google Cast speakers (`+Cast`)

@@ -1256,11 +1256,19 @@ struct NativeAirPlayModel {
 /// The pairings notice as the pairings file's writes go (S224, main queue):
 /// a write that fails posts it once while the writes keep failing, and the
 /// next one that works clears it, unless the sender opened a store that
-/// keeps nothing, whose notice stays.
+/// keeps nothing, whose notice stays. It outlives a sender, as the core
+/// hands a store whose last write failed to the next one.
 struct PairingsWriteNotice: Equatable {
     enum Change: Equatable { case post, clear }
 
     private(set) var failing = false
+
+    /// The notice once a new sender has opened its store: posted for a store
+    /// that keeps nothing, left as it is while the last write failed (posted
+    /// then; one dismissed stays dismissed), cleared otherwise.
+    func atStart(openedUnsaved: Bool) -> Change? {
+        openedUnsaved ? .post : (failing ? nil : .clear)
+    }
 
     mutating func written(_ saved: Bool, openedUnsaved: Bool) -> Change? {
         guard saved == failing else { return nil }
