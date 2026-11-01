@@ -588,6 +588,15 @@ export global Strings {
         return @tr("All apps except {}", names);
     }
 
+    // The source menu's entry for the chosen input while it is unplugged,
+    // under the name it had when last seen.
+    public pure function source-not-connected(name: string) -> string {
+        if name == "" {
+            return @tr("Input Device (not connected)");
+        }
+        return @tr("{} (not connected)", name);
+    }
+
     // The status under the wordmark (and the tray icon's tooltip).
     public pure function status(running: bool, speakers: int) -> string {
         if !running {

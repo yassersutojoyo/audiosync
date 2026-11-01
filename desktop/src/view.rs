@@ -2013,6 +2013,9 @@ impl App {
                 match s.kind {
                     // The backend's name for it is English; the UI's is translated.
                     SourceKind::System => strings.get_source_system(),
+                    SourceKind::Input if s.unplugged => {
+                        strings.invoke_source_not_connected(name.into())
+                    }
                     SourceKind::App | SourceKind::Input => name.into(),
                     SourceKind::AppsExcept => strings.invoke_source_all_except(name.into()),
                 }
@@ -6060,6 +6063,33 @@ mod tests {
         app.main.invoke_source_selected(0);
         assert_eq!(app.main.get_input_pairs().row_count(), 0);
         assert_eq!(app.main.get_input_pair_index(), 0);
+    }
+
+    // covers: S355, S211
+    #[test]
+    fn an_unplugged_chosen_input_is_listed_last_as_not_connected() {
+        for (name, shown) in [
+            (
+                "Microphone (USB Audio)",
+                "Microphone (USB Audio) (not connected)",
+            ),
+            ("", "Input Device (not connected)"),
+        ] {
+            let mut backend = MockBackend::new();
+            backend.unplug_chosen_input(name);
+            let app = app_over(backend);
+            for (sources, index) in [
+                (app.main.get_sources(), app.main.get_source_index()),
+                (app.flyout.get_sources(), app.flyout.get_source_index()),
+            ] {
+                let last = sources.row_count() - 1;
+                assert_eq!(index, last as i32, "{shown}: still chosen");
+                assert_eq!(
+                    sources.row_data(last).map(String::from).as_deref(),
+                    Some(shown)
+                );
+            }
+        }
     }
 
     #[test]

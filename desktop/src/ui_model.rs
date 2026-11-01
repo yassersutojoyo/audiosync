@@ -2212,6 +2212,16 @@ impl MockBackend {
         self.state.speakers.retain(keep);
     }
 
+    /// Makes the example input the source, unplugged, last seen as `name`.
+    #[cfg(test)]
+    pub fn unplug_chosen_input(&mut self, name: &str) {
+        self.state.source_id = "input:line".into();
+        if let Some(input) = self.state.sources.iter_mut().find(|s| s.id == "input:line") {
+            input.name = name.into();
+            input.unplugged = true;
+        }
+    }
+
     /// Adds preset `id` of the speakers `members` at the master and the
     /// curve now, with no own volumes.
     pub fn add_preset(&mut self, id: &str, name: &str, members: &[&str]) {
