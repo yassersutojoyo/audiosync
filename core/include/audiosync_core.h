@@ -2308,6 +2308,13 @@ bool asc_cast_step_volume(AscCast *cast, bool up);
 void asc_cast_set_master(AscCast *cast, double master);
 
 /*
+ * Takes the equalizer's headroom cut (gains_db holds ASC_EQ_BANDS values, at
+ * 48 kHz), which the master's gain gives back as far as unity allows (S26,
+ * S415). Returns false when cast or gains_db is NULL.
+ */
+bool asc_cast_set_equalizer(AscCast *cast, bool enabled, const double *gains_db);
+
+/*
  * The speaker's zone level (0 to 1, 1 outside a zone) on a Cast speaker's
  * own level, which may pass 1. The level to send is zone * own, at most 1;
  * anything not finite counts as 0. A reported level that answers none the

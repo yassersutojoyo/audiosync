@@ -60,6 +60,7 @@ use audiosync_cast::status::{
     ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_volume, device_level, own_level,
     row_own_level, start_own_level,
 };
+use audiosync_core::eq::{self, EqSettings};
 use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 use audiosync_core::volume::gain_for_position;
@@ -603,6 +604,10 @@ pub struct CastSpeakers {
     held: Option<(DeviceId, f64)>,
     /// The master's gain, which every session's audio is scaled by (S415).
     master: MasterGain,
+    /// The master position, 0 to 100.
+    master_position: f64,
+    /// The equalizer's headroom cut in dB, given back under the master (S26).
+    eq_cut_db: f64,
     /// The zone level, 0.0 to 1.0, of each device in a zone (S249); one not
     /// here is in no zone.
     zones: BTreeMap<DeviceId, f64>,
@@ -648,6 +653,8 @@ impl CastSpeakers {
             levels: BTreeMap::new(),
             held: None,
             master: MasterGain::default(),
+            master_position: 100.0,
+            eq_cut_db: 0.0,
             zones: BTreeMap::new(),
             unanswered: Vec::new(),
             attempt: None,
@@ -1424,8 +1431,21 @@ impl CastSpeakers {
     /// gain on the S70 curve and no device is sent a volume (S415).
     pub fn set_master(&mut self, position: f64) {
         if position.is_finite() {
-            self.master.set(gain_for_position(position));
+            self.master_position = position;
+            self.send_master_gain();
         }
+    }
+
+    /// Takes the headroom cut `settings` make at the session rate, which the
+    /// master's gain gives back as far as unity allows (S26, S415).
+    pub fn set_equalizer(&mut self, settings: &EqSettings) {
+        self.eq_cut_db = eq::headroom_cut_db(settings, f64::from(SESSION_RATE));
+        self.send_master_gain();
+    }
+
+    fn send_master_gain(&self) {
+        let gain = gain_for_position(self.master_position);
+        self.master.set(eq::returned(gain, self.eq_cut_db).0);
     }
 
     /// The zone volume, 0 to 100, of every Cast device ID in a zone (S249),
