@@ -57,7 +57,7 @@ fn another_id_gets_its_own_default_name_with_the_host_suffix() {
 
 #[test]
 fn another_id_reaches_the_txt_record_and_its_own_host() {
-    let txt = television::txt(Pin::None, 0, OTHER);
+    let txt = television::txt(Pin::None, OTHER);
     let advertised = txt
         .iter()
         .find(|(key, _)| *key == "deviceid")
@@ -81,17 +81,15 @@ fn another_id_reaches_the_info_answer() {
 // 0.6 dB volume grid by this value, so the fake's live cells take that path.
 #[test]
 fn the_txt_record_carries_the_traced_televisions_features() {
-    for features_low in [0, television::FEATURES_METADATA] {
-        let txt = television::txt(Pin::None, features_low, DEVICE_ID);
-        let advertised = txt
-            .iter()
-            .find(|(key, _)| *key == "features")
-            .map(|(_, value)| value.as_str())
-            .expect("a features entry");
-        assert_eq!(
-            Features::parse_txt(advertised),
-            Some(Features(0x038B_CB46_007F_8AD0)),
-            "{advertised}"
-        );
-    }
+    let txt = television::txt(Pin::None, DEVICE_ID);
+    let advertised = txt
+        .iter()
+        .find(|(key, _)| *key == "features")
+        .map(|(_, value)| value.as_str())
+        .expect("a features entry");
+    assert_eq!(
+        Features::parse_txt(advertised),
+        Some(Features(0x038B_CB46_007F_8AD0)),
+        "{advertised}"
+    );
 }
