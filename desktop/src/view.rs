@@ -11681,6 +11681,117 @@ mod tests {
         assert!(!window.is_visible(), "Enter right after it opened");
     }
 
+    /// Command-W closes whichever window is in front on the Mac; on Windows
+    /// the windows without a menu bar take Ctrl+W themselves, as Escape, and
+    /// a dialog cancels on it.
+    #[test]
+    fn ctrl_w_closes_the_windows_without_a_menu_bar() {
+        type Open = fn() -> Rc<App>;
+        type Find = fn(&App) -> &slint::Window;
+        type Close = fn(&slint::Window);
+        let windows: [(&str, Open, Find); 9] = [
+            (
+                "equalizer",
+                || {
+                    let app = app_over(MockBackend::new());
+                    app.show_equalizer();
+                    app
+                },
+                |app| app.equalizer.window(),
+            ),
+            (
+                "AudioSync Guide",
+                || {
+                    let app = app_over(MockBackend::new());
+                    app.show_help();
+                    app
+                },
+                |app| app.help.window(),
+            ),
+            (
+                "double-audio guide",
+                || {
+                    let app = app_over(MockBackend::new());
+                    app.guide.show().expect("the guide shows headless");
+                    app.guide.invoke_take_focus();
+                    app
+                },
+                |app| app.guide.window(),
+            ),
+            (
+                "About dialog",
+                || {
+                    let app = app_over(MockBackend::new());
+                    app.main.invoke_about_requested();
+                    app
+                },
+                |app| app.about.window(),
+            ),
+            (
+                "Web Remote window",
+                || {
+                    let app = app_over(MockBackend::new());
+                    app.show_remote();
+                    app
+                },
+                |app| app.remote_window.window(),
+            ),
+            (
+                "zone name dialog",
+                || {
+                    let app = app_over(MockBackend::new());
+                    app.ask_new_zone();
+                    app
+                },
+                |app| app.zone_dialog.window(),
+            ),
+            (
+                "PIN dialog",
+                || {
+                    let app = app_over(MockBackend::new());
+                    app.preview_pin(false);
+                    app
+                },
+                |app| app.pin_dialog.window(),
+            ),
+            (
+                "password dialog",
+                || app_asking_password(false),
+                |app| app.password_dialog.window(),
+            ),
+            (
+                "Add by Address dialog",
+                || {
+                    let app = app_over(MockBackend::new());
+                    app.main.invoke_cast_add_address_requested();
+                    app
+                },
+                |app| app.cast_address_dialog.window(),
+            ),
+        ];
+        assert_eq!(
+            include_str!("../ui/dialogs.slint")
+                .matches("if event.text == Key.Escape")
+                .count(),
+            4,
+            "a new dialog that closes on Escape gets a row above"
+        );
+        let keys: [(&str, Close); 2] = [
+            ("Escape", |window| press(window, Key::Escape)),
+            ("Ctrl+W", |window| ctrl(window, "w")),
+        ];
+        for (name, open, find) in windows {
+            for (key, close) in keys {
+                let app = open();
+                draw_frames();
+                let window = find(&app);
+                assert!(window.is_visible(), "the {name} opens");
+                close(window);
+                assert!(!window.is_visible(), "{key} closes the {name}");
+            }
+        }
+    }
+
     #[test]
     fn enter_closes_the_zone_message_without_a_field() {
         let app = app_over(MockBackend::new());

@@ -522,7 +522,6 @@ mod tests {
         );
     }
 
-    const CTRL_W: &str = "event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == \"w\")";
     const CTRL_Q: &str = "if event.modifiers.control && event.text.to-lowercase() == \"q\" {\n                root.exit-requested();";
 
     /// A checkout on Windows can have CRLF line endings; the snippets above
@@ -532,55 +531,13 @@ mod tests {
     }
 
     /// The windows without a menu bar: the equalizer, both Guides and About.
-    fn windows_without_a_menu_bar() -> [(&'static str, &'static str, &'static str); 4] {
+    fn windows_without_a_menu_bar() -> [(&'static str, &'static str); 4] {
         [
-            (
-                "equalizer",
-                include_str!("../ui/equalizer.slint"),
-                "root.close-requested();",
-            ),
-            (
-                "AudioSync Guide",
-                include_str!("../ui/help.slint"),
-                "root.close-requested();",
-            ),
-            (
-                "double-audio guide",
-                include_str!("../ui/guide.slint"),
-                "root.close-requested();",
-            ),
-            (
-                "About dialog",
-                include_str!("../ui/about.slint"),
-                "root.closed();",
-            ),
+            ("equalizer", include_str!("../ui/equalizer.slint")),
+            ("AudioSync Guide", include_str!("../ui/help.slint")),
+            ("double-audio guide", include_str!("../ui/guide.slint")),
+            ("About dialog", include_str!("../ui/about.slint")),
         ]
-    }
-
-    /// Command-W closes whichever window is in front on the Mac; on Windows
-    /// the windows without a menu bar take Ctrl+W themselves, as Escape, and
-    /// a dialog cancels on it.
-    #[test]
-    fn ctrl_w_closes_the_windows_without_a_menu_bar() {
-        for (name, source, close) in windows_without_a_menu_bar() {
-            let source = lf(source);
-            let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
-            let first = &keys[..keys.find(close).expect("it closes")];
-            assert!(
-                first.contains(CTRL_W),
-                "the {name} closes on Escape and Ctrl+W"
-            );
-        }
-        let dialogs = lf(include_str!("../ui/dialogs.slint"));
-        assert_eq!(
-            dialogs.matches("if event.text == Key.Escape").count(),
-            dialogs
-                .matches(&format!(
-                    "if {CTRL_W} {{\n                root.cancelled();"
-                ))
-                .count(),
-            "every dialog that cancels on Escape cancels on Ctrl+W"
-        );
     }
 
     /// Command-Q quits from any window on the Mac, so Ctrl+Q does from the
@@ -588,7 +545,7 @@ mod tests {
     #[test]
     fn ctrl_q_exits_from_the_windows_without_a_menu_bar() {
         let view = include_str!("view.rs");
-        for (name, source, _) in windows_without_a_menu_bar() {
+        for (name, source) in windows_without_a_menu_bar() {
             let source = lf(source);
             let keys = &source[source.find("keys := FocusScope {").expect("its keys")..];
             assert!(keys.contains(CTRL_Q), "the {name} exits on Ctrl+Q");
