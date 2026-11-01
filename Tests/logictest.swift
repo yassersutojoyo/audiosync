@@ -2057,6 +2057,14 @@ do {
           && UIStrings().waitingForAudio(nil) == "Waiting for audio. Play something and it streams right away.",
           "capture notice: the waiting text names the app when one was found, and reads generic otherwise")
     // covers: S350
+    check(UIStrings().waitingForAudio(nil, permissionInDoubt: true)
+            == "Waiting for audio. Play something and it streams right away. If it doesn't, turn on AudioSync in "
+                + "System Settings → Privacy & Security → Screen & System Audio Recording, under “System Audio Recording Only”."
+          && UIStrings().waitingForAudio("Spotify", permissionInDoubt: true)
+            .hasPrefix("Waiting for audio from Spotify. Start playback there and it streams right away. If it doesn't, ")
+          && !UIStrings().waitingForAudio(nil).contains("System Settings"),
+          "capture notice: until a tap in this app run has heard sound, the waiting text names the recording permission")
+    // covers: S350
     check(CaptureNoticeGate.firstCheck == 3 && CaptureNoticeGate.recheck == 2,
           "capture notice: the first check comes 3 s after the start, then one every 2 s")
 }

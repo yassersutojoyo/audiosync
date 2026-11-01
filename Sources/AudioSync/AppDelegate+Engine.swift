@@ -449,7 +449,8 @@ extension AppDelegate {
                 clearNotices([Notice.capture])
                 return
             case .post(.waiting, let app):
-                postNotice(text.waitingForAudio(app), subject: Notice.capture,
+                let inDoubt = !engine.runHeard && CaptureCheck.provesPermission(audioSource)
+                postNotice(text.waitingForAudio(app, permissionInDoubt: inDoubt), subject: Notice.capture,
                            shortName: text.waitingForAudioNoticeName)
             case .post(_, let app):
                 notify(text.captureNotWorking(app), origin: .automatic, subject: Notice.capture,

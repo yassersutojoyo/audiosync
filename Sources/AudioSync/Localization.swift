@@ -965,9 +965,14 @@ struct UIStrings {
     let noSpeakerOn = "No speaker is on. The first one you turn on starts playing."
 
     /// Streaming is on but the source hasn't played anything yet.
-    func waitingForAudio(_ app: String?) -> String {
-        if let app { return "Waiting for audio from \(app). Start playback there and it streams right away." }
-        return "Waiting for audio. Play something and it streams right away."
+    /// `permissionInDoubt`: a tap source, and no tap in this app run has heard sound.
+    func waitingForAudio(_ app: String?, permissionInDoubt: Bool = false) -> String {
+        let permission = permissionInDoubt
+            ? " If it doesn't, turn on AudioSync in System Settings → Privacy & Security → "
+                + "Screen & System Audio Recording, under “System Audio Recording Only”."
+            : ""
+        if let app { return "Waiting for audio from \(app). Start playback there and it streams right away." + permission }
+        return "Waiting for audio. Play something and it streams right away." + permission
     }
     /// Streaming runs but no audio arrives; `source` names the app, nil for
     /// the whole system or an input device.
