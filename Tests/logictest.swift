@@ -5312,6 +5312,42 @@ do {
             && !homeTheater.homeTheaterConflict(left, enabled: [app(tv), app(den)]),
           "P229 native airplay: an Apple TV or its home theater group stays off while the other side is on, streaming or not")
 
+    func pairOf(_ leftAvailability: NativeReceiver.Availability,
+                _ rightAvailability: NativeReceiver.Availability) -> NativeAirPlayModel {
+        var model = NativeAirPlayModel()
+        model.apply(.appeared(member(left, "Left", of: pair, leftAvailability)))
+        model.apply(.appeared(member(right, "Right", of: pair, rightAvailability)))
+        model.apply(.appeared(target(pair, "Living Room")))
+        return model
+    }
+    let unplayable = pairOf(.needsPin, .unsupported), halfPlayable = pairOf(.needsPin, .available)
+    // covers: P176, P181
+    check(unplayable.availability(pair) == .needsPairing
+            && unplayable.access(pair) == nil && !unplayable.rows(enabled: []).contains(app(pair))
+            && unplayable.joinable([app(pair)], after: [], stopped: false).isEmpty
+            && halfPlayable.access(pair) == .open
+            && halfPlayable.joinable([app(pair)], after: [], stopped: false) == [app(pair)],
+          "P176 native airplay: a pair with no playable member reads its first member's reason, so it has no row and "
+            + "auto-connect leaves it off; one member that can play is enough")
+    // covers: P176, P181
+    check(unplayable.plan(streaming: true, enabled: [app(pair)]).add.isEmpty
+            && !unplayable.soundingIDs.contains(app(pair))
+            && halfPlayable.plan(streaming: true, enabled: [app(pair)]).add == [pair]
+            && halfPlayable.soundingIDs.contains(app(pair)),
+          "P176 native airplay: a pair with no playable member left on from the last run starts no session and holds "
+            + "no local output back")
+    var deafTheater = NativeAirPlayModel()
+    deafTheater.apply(.appeared(NativeReceiver(id: tv, name: "Den TV", model: "AppleTV11,1", availability: .available,
+                                               reason: nil, hints: ["airplay", "apple-tv"])))
+    deafTheater.apply(.appeared(member(left, "Left", of: den, .needsPin)))
+    deafTheater.apply(.appeared(member(right, "Right", of: den, .unsupported)))
+    var deafGroup = target(den, "Den")
+    deafGroup.control = tv
+    deafTheater.apply(.appeared(deafGroup))
+    // covers: P229
+    check(!deafTheater.homeTheaterConflict(tv, enabled: [app(den)]),
+          "P229 native airplay: a home theater group left on whose speakers can't play doesn't keep its Apple TV off")
+
     var pw = NativeAirPlayModel()
     pw.apply(.appeared(member(left, "Left", of: pair)))
     pw.apply(.appeared(member(right, "Right", of: pair, .needsPassword)))

@@ -631,7 +631,7 @@ struct NativeAirPlayModel {
         let others = (control.isEmpty ? [] : [control]) + receivers.values.filter { $0.control == id }.map(\.id)
         return others.contains { other in
             guard enabled.contains(NativeAirPlayID.app(other)) else { return false }
-            switch receivers[other]?.availability {
+            switch availability(other) {
             case .available?: return true
             case .needsPassword?: return passwords.contains(other) || isPlaying(other)
             default: return isPlaying(other)
@@ -696,7 +696,7 @@ struct NativeAirPlayModel {
     /// until switched off, and a member it holds shows as part of it
     /// (P176). `enabled`: the switched-on app IDs.
     func rows(enabled: Set<String>) -> [String] {
-        var ids = Set(receivers.values.filter { $0.access != nil }.map(\.id))
+        var ids = Set(receivers.keys.filter { access($0) != nil })
         ids.formUnion(states.keys.filter { isPlaying($0) || receivers[$0] == nil || NativeTarget.kind($0) != nil })
         ids = ids.filter { holdingTarget($0, on: enabled.contains(NativeAirPlayID.app($0))) == nil }
         return ids.sorted { a, b in
@@ -707,8 +707,23 @@ struct NativeAirPlayModel {
 
     /// How a row shows the receiver; one that only plays on is open.
     func access(_ id: String) -> AirPlayPairing.Access? {
-        if let receiver = receivers[id] { return receiver.access }
+        if let receiver = receivers[id] {
+            return receiver.isTarget && availability(id) != .available ? nil : receiver.access
+        }
         return isPlaying(id) ? .open : nil
+    }
+
+    /// The listed receiver's availability; a target's follows its members in
+    /// view, as on Windows (P176, P181): it can be switched on while one can
+    /// play or asks for a password, which is asked for by name. With none
+    /// that can, it reads as its first member, a PIN as needing pairing,
+    /// since a target never pairs.
+    func availability(_ id: String) -> NativeReceiver.Availability? {
+        guard let receiver = receivers[id] else { return nil }
+        guard receiver.isTarget else { return receiver.availability }
+        let inView = members(of: id).compactMap { receivers[$0]?.availability }
+        if inView.isEmpty || inView.contains(where: { $0 == .available || $0 == .needsPassword }) { return .available }
+        return inView[0] == .needsPin ? .needsPairing : inView[0]
     }
 
     /// The rows (app IDs) missing from `known` whose receiver is listed as
@@ -721,8 +736,8 @@ struct NativeAirPlayModel {
         return rows.filter { id in
             guard !known.contains(id), let receiver = NativeAirPlayID.receiver(id),
                   !refusedOff.contains(receiver), !asksEveryTime(receiver) else { return false }
-            let availability = receivers[receiver]?.availability
-            return availability == .available || (availability == .needsPassword && passwords.contains(receiver))
+            let listed = availability(receiver)
+            return listed == .available || (listed == .needsPassword && passwords.contains(receiver))
         }
     }
 
@@ -769,9 +784,9 @@ struct NativeAirPlayModel {
     /// as unable to play and not playing, or one that is gone, doesn't hold
     /// local outputs back.
     var soundingIDs: [String] {
-        let ids = Set(receivers.values.filter {
-            $0.availability == .available || ($0.availability == .needsPassword && passwords.contains($0.id))
-        }.map(\.id))
+        let ids = Set(receivers.keys.filter {
+            availability($0) == .available || (availability($0) == .needsPassword && passwords.contains($0))
+        })
             .union(states.keys.filter { isPlaying($0) })
         return ids.sorted().map(NativeAirPlayID.app)
     }
@@ -1084,7 +1099,7 @@ struct NativeAirPlayModel {
         for id in wanted.sorted() where states[id] == nil && !released.contains(id) {
             // A target waits while a member's password prompt is open.
             if promptTargets.values.contains(id) { continue }
-            switch receivers[id]?.availability {
+            switch availability(id) {
             case .available? where refusedOff.contains(id):
                 // Switched on without a new attempt (a recalled preset): off again, once.
                 plan.turnOff.append(.init(id: id, reason: .needsCode))
