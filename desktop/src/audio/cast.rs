@@ -244,7 +244,7 @@ pub struct CastTap {
     retired: Option<CastWriter>,
     /// How many frames the feed is held back (C77), set by the UI thread.
     hold_back: Arc<AtomicUsize>,
-    /// In at each lease, out after a stop request (S189).
+    /// In at each lease (S189); the delay line fades out.
     fade: InputFade,
 }
 
@@ -349,8 +349,9 @@ impl CastLease {
     /// See [`CastTap::push`]; after a stop request the tap fades out.
     pub fn push(&mut self, block: &[f32], frames: usize) {
         if let Some(tap) = self.tap.as_mut() {
+            // Only the line's output fades out: fading its input as well
+            // would multiply the two curves into a steeper one (S191).
             if self.closing.load(Ordering::Acquire) {
-                tap.fade.fade_out();
                 if let Some(writer) = tap.writer.as_mut() {
                     writer.delay.close();
                 }
