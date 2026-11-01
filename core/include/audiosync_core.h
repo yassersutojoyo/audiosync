@@ -253,6 +253,7 @@ extern "C" {
 #define ASC_CAST_EVENT_GROUP_LOG 18        /* a line about a Cast group for the debug log in .detail */
 #define ASC_CAST_EVENT_CERTIFICATE_CHANGED 19 /* the device's certificate changed since its last connect: "<before> to <after>" in .detail, for the debug log */
 #define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level */
+#define ASC_CAST_EVENT_PAUSED 21           /* someone paused the device itself; PLAYING follows once its next play loaded the stream again */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
 #define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */

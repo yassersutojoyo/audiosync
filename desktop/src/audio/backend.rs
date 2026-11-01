@@ -368,6 +368,8 @@ pub enum CastStatus {
     Connecting,
     /// The device plays the stream.
     Playing,
+    /// Someone paused the device itself (spec C113).
+    Paused,
     /// The connection dropped and AudioSync reconnects.
     Reconnecting,
 }

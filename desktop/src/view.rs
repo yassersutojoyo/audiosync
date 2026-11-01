@@ -4770,6 +4770,7 @@ fn cast_state(state: ui_model::CastState) -> CastState {
         S::Idle => CastState::Idle,
         S::Connecting => CastState::Connecting,
         S::Playing => CastState::Playing,
+        S::Paused => CastState::Paused,
         S::Reconnecting => CastState::Reconnecting,
     }
 }
@@ -9646,6 +9647,10 @@ mod tests {
         assert_eq!(
             cast_note(CastState::Playing, true).as_str(),
             "Muted on the group"
+        );
+        assert_eq!(
+            cast_note(CastState::Paused, true).as_str(),
+            "Paused on the speaker"
         );
         assert_eq!(
             cast_note(CastState::Playing, false).as_str(),

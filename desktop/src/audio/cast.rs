@@ -1969,6 +1969,10 @@ impl CastSpeakers {
                 self.set_codec(to);
             }
             SessionEvent::Rebuffering => self.log.log(|| "Cast: the device ran dry".to_owned()),
+            SessionEvent::Paused => {
+                self.log.log(|| "Cast: the device was paused".to_owned());
+                self.set_status(CastStatus::Paused);
+            }
             SessionEvent::Stream(event) => self.log.log(|| format!("Cast stream: {event:?}")),
             SessionEvent::GroupMessage(kind) => self.log.log(|| format!("Cast group: {kind}")),
             SessionEvent::CertificateChanged { before, after } => self.log.log(|| {
@@ -2361,6 +2365,27 @@ pub mod tests {
         cast.set_streaming(false);
         assert_eq!(fake.state().stops, 1);
         assert_eq!(status(&cast, KITCHEN), CastStatus::Idle);
+    }
+
+    // covers: C113
+    #[test]
+    fn a_pause_on_the_device_shows_until_it_plays_again() {
+        let (fake, mut cast) = listed();
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        cast.set_streaming(true);
+        fake.report(playing(KITCHEN));
+        cast.poll();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Paused,
+        });
+        assert!(cast.poll().contains(&BackendEvent::CastChanged));
+        assert_eq!(status(&cast, KITCHEN), CastStatus::Paused);
+
+        fake.report(playing(KITCHEN));
+        cast.poll();
+        assert_eq!(status(&cast, KITCHEN), CastStatus::Playing);
     }
 
     #[test]

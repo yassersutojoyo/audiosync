@@ -864,6 +864,96 @@ fn underrun_silence_counts_from_the_latest_load() {
     device.join();
 }
 
+// covers: C113
+#[test]
+fn a_pause_on_the_device_loads_nothing_and_its_play_starts_at_the_newest_audio() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        1,
+        "PAUSED",
+        None,
+    )));
+    run_until(&mut session, Duration::from_secs(3), |event| {
+        matches!(event, SessionEvent::Paused)
+    });
+    session.run_for(Duration::from_millis(500));
+    while session.poll_event().is_some() {}
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1, "a pause loads nothing");
+
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        1,
+        "PLAYING",
+        None,
+    )));
+    run_until(&mut session, Duration::from_secs(5), |event| {
+        matches!(event, SessionEvent::Playing)
+    });
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2, "the play loads again");
+    assert_eq!(device.fetches().len(), 2, "from a new fetch at the newest");
+    session.run_for(Duration::from_millis(500));
+    assert_eq!(
+        count(&device, NS_MEDIA, "LOAD"),
+        2,
+        "the reload's own PLAYING loads nothing"
+    );
+    session.stop();
+    device.join();
+}
+
+// covers: C81, C113
+#[test]
+fn a_reconnect_while_the_device_stays_paused_reports_the_pause_again() {
+    let device = FakeDevice::start(Behavior {
+        on_media_status: OnMediaStatus::Paused,
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        1,
+        "PAUSED",
+        None,
+    )));
+    run_until(&mut session, Duration::from_secs(3), |event| {
+        matches!(event, SessionEvent::Paused)
+    });
+
+    device.send(Command::DropConnection);
+    let mut seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    session.run_for(Duration::from_millis(500));
+    seen.extend(std::iter::from_fn(|| session.poll_event()));
+    let after: Vec<_> = seen
+        .iter()
+        .skip_while(|event| !matches!(event, SessionEvent::Recovered { .. }))
+        .collect();
+    assert!(
+        matches!(
+            after[..],
+            [
+                SessionEvent::Recovered { relaunched: false },
+                SessionEvent::Paused,
+                ..
+            ]
+        ),
+        "{seen:?}"
+    );
+    assert_eq!(
+        count(&device, NS_MEDIA, "LOAD"),
+        1,
+        "still paused, no reload"
+    );
+    session.stop();
+    device.join();
+}
+
 // covers: C83
 #[test]
 fn a_failed_resync_reloads_once_then_ends_with_its_reason() {

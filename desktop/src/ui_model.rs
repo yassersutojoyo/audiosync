@@ -371,6 +371,8 @@ pub enum CastState {
     Idle,
     Connecting,
     Playing,
+    /// Someone paused the device itself.
+    Paused,
     /// It played, and AudioSync is reaching it again.
     Reconnecting,
 }
