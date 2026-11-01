@@ -57,6 +57,7 @@ use audiosync_cast::stream::StreamError;
 use super::airplay::{LATEST_PANIC, PANICS, caught_panic_location, note_panic_locations};
 use super::{host_slice, stereo_samples};
 use crate::delay_line::DelayLine;
+use crate::eq::{self, BAND_COUNT, EqSettings};
 use crate::fade::InputFade;
 use crate::policy::delay::MAX_HOLD_BACK_MS;
 use crate::resample::Resampler;
@@ -490,6 +491,11 @@ pub struct AscCast {
     shared: Arc<Shared>,
     /// The master's gain, which every session's ring reads through (S415).
     master: MasterGain,
+    /// The master position ([`asc_cast_set_master`]).
+    master_position: f64,
+    /// The equalizer's headroom cut in dB, given back under the master
+    /// ([`asc_cast_set_equalizer`], S26).
+    eq_cut_db: f64,
     input_taken: bool,
     list: DeviceList,
     announcements: Announcements,
@@ -651,6 +657,13 @@ fn attempt_number(attempt: AttemptId) -> u64 {
 }
 
 impl AscCast {
+    /// Gives every session the master's gain with the equalizer's headroom
+    /// cut given back as far as unity allows (S26, S415).
+    fn send_master_gain(&self) {
+        let gain = gain_for_position(self.master_position);
+        self.master.set(eq::returned(gain, self.eq_cut_db).0);
+    }
+
     /// A call panicked, or the worker thread ended.
     fn is_dead(&self) -> bool {
         self.shared.dead.load(Ordering::Acquire) || !self.host.is_running()
@@ -1211,6 +1224,8 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
             host,
             shared: Arc::new(Shared::new()),
             master: MasterGain::default(),
+            master_position: 100.0,
+            eq_cut_db: 0.0,
             input_taken: false,
             list: DeviceList::new(),
             announcements: Announcements::default(),
@@ -1611,7 +1626,46 @@ pub unsafe extern "C" fn asc_cast_set_master(cast: *mut AscCast, master: f64) {
         return;
     }
     // SAFETY: as the caller's.
-    unsafe { live(cast, (), |cast| cast.master.set(gain_for_position(master))) }
+    unsafe {
+        live(cast, (), |cast| {
+            cast.master_position = master;
+            cast.send_master_gain();
+        })
+    }
+}
+
+/// Takes the headroom cut the equalizer makes with `enabled` and `gains_db`
+/// at [`CAST_RATE`], which the master's gain gives back as far as unity
+/// allows (S26, S415). Returns false when `cast` or `gains_db` is null.
+///
+/// # Safety
+///
+/// `cast` is null or a live handle, called under the threading contract;
+/// `gains_db` is null or points to 10 aligned, readable doubles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_set_equalizer(
+    cast: *mut AscCast,
+    enabled: bool,
+    gains_db: *const f64,
+) -> bool {
+    // SAFETY: by the caller's contract null or BAND_COUNT readable doubles.
+    let Some(gains) = (unsafe { host_slice(gains_db, BAND_COUNT) }) else {
+        return false;
+    };
+    let mut settings = EqSettings {
+        enabled,
+        ..EqSettings::default()
+    };
+    settings.gains_db.copy_from_slice(gains);
+    let cut = eq::headroom_cut_db(&settings, f64::from(CAST_RATE));
+    // SAFETY: as the caller's.
+    unsafe {
+        live(cast, false, |cast| {
+            cast.eq_cut_db = cut;
+            cast.send_master_gain();
+            true
+        })
+    }
 }
 
 /// The level to send for the speaker's zone (1 outside a zone), 0 to 1, and
@@ -2239,6 +2293,33 @@ mod tests {
         assert!(!unsafe { asc_cast_row_move(50.0, 1.0, std::ptr::null_mut()) });
         assert!((own - 1.25).abs() < 1e-12, "a refused move writes nothing");
         assert!((asc_cast_zone_own_level(0.6, 0.5, 0.9) - 1.2).abs() < 1e-12);
+    }
+
+    // covers: S26, S415
+    #[test]
+    fn the_master_gain_gives_the_equalizer_cut_back_under_the_master() {
+        let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let back = 10f64.powf(eq::cascade_peak_db(&gains, 48_000.0) / 20.0);
+        let mut handle = create();
+        // SAFETY: a live handle, used by this thread only; 10 doubles.
+        let gain = |enabled: bool, master: f64| unsafe {
+            asc_cast_set_master(handle, master);
+            assert!(asc_cast_set_equalizer(handle, enabled, gains.as_ptr()));
+            inside(handle).master.get()
+        };
+        assert!((gain(true, 50.0) - 0.125 * back).abs() < 1e-9);
+        assert_eq!(gain(false, 50.0), 0.125);
+        assert_eq!(gain(true, 100.0), 1.0, "unity keeps the cut");
+        // SAFETY: null pointers are part of the contract; destroyed once.
+        unsafe {
+            assert!(!asc_cast_set_equalizer(handle, true, ptr::null()));
+            assert!(!asc_cast_set_equalizer(
+                ptr::null_mut(),
+                true,
+                gains.as_ptr()
+            ));
+            asc_cast_destroy(&mut handle);
+        }
     }
 
     // CAST_SPEC: C70

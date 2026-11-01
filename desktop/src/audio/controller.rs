@@ -1200,6 +1200,7 @@ impl<D: Driver> Controller<D> {
     pub fn set_cast(&mut self, link: Box<dyn CastLink>) {
         let mut cast = CastSpeakers::new(link, self.log.clone());
         cast.set_master(self.policy.master());
+        cast.set_equalizer(&self.equalizer);
         cast.set_zones(self.zone_volumes.cast.clone());
         cast.set_streaming(self.session.is_some());
         self.cast = Some(cast);
@@ -4278,6 +4279,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_equalizer(&settings);
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_equalizer(&settings);
         }
         for id in self.playing_ids() {
             self.apply_gain(&id);

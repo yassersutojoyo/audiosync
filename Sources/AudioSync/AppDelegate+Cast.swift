@@ -22,6 +22,7 @@ extension AppDelegate {
                                 onEvents: { [weak self] events in self?.castEventsArrived(events) })
         castSender = sender
         sender.setMaster(masterVolume)
+        if let settings = equalizerModel?.settings { sender.setEqualizer(settings) }
         castModel.foundIDs = store.castFoundIDs
         sender.start { [weak self] running, discovering in
             self?.castSenderStarted(sender, running: running, discovering: discovering)
