@@ -24,13 +24,11 @@ export { NameField } from "widgets.slint";
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
 export { Tokens } from "tokens.slint";
-export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, GuideStepItem, MixAppItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, ZoneItem, ZoneTarget } from "types.slint";
+export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, GuideStepItem, MixAppItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, ZoneChoice, ZoneItem, ZoneTarget } from "types.slint";
 
 // Speaker rows with a line between them, in a section's or a zone's card.
 component SpeakerRows inherits VerticalLayout {
     in property <[SpeakerItem]> speakers;
-    // The zones a row's Move to Zone submenu lists.
-    in property <[ZoneItem]> zones;
     // Rows in a zone's tinted box, which shows that they play together.
     in property <bool> grouped;
     callback toggled(string);
@@ -76,7 +74,6 @@ component SpeakerRows inherits VerticalLayout {
 
         SpeakerRow {
             item: speaker;
-            zones: root.zones;
             grouped: root.grouped;
             init => {
                 if speaker.id == root.focus-id {
@@ -183,7 +180,6 @@ component SpeakerRows inherits VerticalLayout {
 // rows while it is expanded.
 component ZoneCard inherits VerticalLayout {
     in property <ZoneItem> item;
-    in property <[ZoneItem]> zones;
     callback zone-toggled <=> header.toggled;
     callback zone-expanded-changed <=> header.expanded-changed;
     callback zone-volume-changed <=> header.volume-changed;
@@ -276,7 +272,6 @@ component ZoneCard inherits VerticalLayout {
             VerticalLayout {
                 rows := SpeakerRows {
                     speakers: root.item.expanded ? root.item.members : [];
-                    zones: root.zones;
                     grouped: true;
                 }
             }
@@ -288,7 +283,6 @@ component ZoneCard inherits VerticalLayout {
 component SpeakerSection inherits VerticalLayout {
     in property <string> title;
     in property <[SpeakerItem]> speakers;
-    in property <[ZoneItem]> zones;
     in property <string> note;
     callback toggled <=> rows.toggled;
     callback volume-changed <=> rows.volume-changed;
@@ -347,7 +341,6 @@ component SpeakerSection inherits VerticalLayout {
 
         rows := SpeakerRows {
             speakers: root.speakers;
-            zones: root.zones;
         }
 
         if root.zoned.length > 0: VerticalLayout {
@@ -2058,7 +2051,6 @@ export component MainWindow inherits Window {
 
                     SpeakerSection {
                         title: Strings.this-pc-section;
-                        zones: root.zones;
                         speakers: root.this-pc;
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
@@ -2169,7 +2161,6 @@ export component MainWindow inherits Window {
 
                         for zone in root.zones: ZoneCard {
                             item: zone;
-                            zones: root.zones;
                             focus-zone-id <=> root.focus-zone-id;
                             focus-zone-part <=> root.focus-zone-part;
                             reveal-zone-id <=> root.reveal-zone-id;
@@ -2301,7 +2292,6 @@ export component MainWindow inherits Window {
 
                     SpeakerSection {
                         title: Strings.connected-section;
-                        zones: root.zones;
                         speakers: root.connected;
                         zoned: root.connected-zoned;
                         in-zones-focus-id <=> root.focus-in-zones-id;

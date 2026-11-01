@@ -94,6 +94,12 @@ export struct HiddenItem {
     present: bool,
 }
 
+// An entry of a speaker's Move to Zone submenu.
+export struct ZoneChoice {
+    id: string,
+    name: string,
+}
+
 export struct SpeakerItem {
     id: string,
     // The name the user gave it, else the one its device reports.
@@ -189,6 +195,8 @@ export struct SpeakerItem {
     // Its menu offers Move to Zone and Remove from Zone: every row but one
     // that plays as part of a stereo pair or home theater.
     zone-movable: bool,
+    // The zones its Move to Zone submenu lists.
+    move-zones: [ZoneChoice],
     // In a zone: what its row says in place of its own note (it plays as
     // part of a stereo pair, needs AirPlay 2, isn't found, stayed off);
     // empty otherwise.

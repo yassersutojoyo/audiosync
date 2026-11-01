@@ -1664,8 +1664,6 @@ export component SpeakerRow inherits Rectangle {
     // Remove, for a Google Cast speaker the user added by address.
     callback cast-remove();
     callback hide-requested();
-    // The zones its Move to Zone submenu lists.
-    in property <[ZoneItem]> zones;
     callback move-to-zone(string);
     // New Zone… in its menu: a zone of this speaker alone.
     callback new-zone();
@@ -1852,18 +1850,14 @@ export component SpeakerRow inherits Rectangle {
 
                 if root.item.zone-movable: Menu {
                     title: Strings.move-to-zone;
-                    for zone in root.zones: MenuItem {
+                    for zone in root.item.move-zones: MenuItem {
                         title: zone.name;
-                        checkable: true;
-                        checked: zone.id == root.item.zone-id;
                         activated => {
-                            if zone.id != root.item.zone-id {
-                                root.move-to-zone(zone.id);
-                            }
+                            root.move-to-zone(zone.id);
                         }
                     }
 
-                    if root.zones.length > 0: MenuSeparator { }
+                    if root.item.move-zones.length > 0: MenuSeparator { }
 
                     MenuItem {
                         title: Strings.new-zone-item;

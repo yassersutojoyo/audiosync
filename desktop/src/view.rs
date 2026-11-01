@@ -50,7 +50,7 @@ use crate::{
     GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow, MixAppItem, NameField,
     NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart,
     RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, UpdateButton,
-    ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
+    ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
 };
 
 mod help_window;
@@ -252,6 +252,9 @@ struct Models {
     /// Each zone's rows by zone ID, kept between refreshes so an unchanged
     /// zone's item compares equal and its rows aren't rebuilt.
     zone_models: RefCell<HashMap<String, ZoneModels>>,
+    /// The rows' Move to Zone lists by the zone a row is in ("" for none),
+    /// kept between refreshes as the zone rows are.
+    move_zones: RefCell<HashMap<String, Rc<VecModel<ZoneChoice>>>>,
     notices: Rc<VecModel<NoticeItem>>,
     flyout_notices: Rc<VecModel<NoticeItem>>,
     gains: Rc<VecModel<f32>>,
@@ -996,6 +999,7 @@ impl App {
             flyout_connected: Rc::new(VecModel::default()),
             zones: Rc::new(VecModel::default()),
             zone_models: RefCell::default(),
+            move_zones: RefCell::default(),
             notices: Rc::new(VecModel::default()),
             flyout_notices: Rc::new(VecModel::default()),
             gains: Rc::new(VecModel::default()),
@@ -1760,6 +1764,8 @@ impl App {
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
             became_mix
         };
+        let move_zones = self.sync_move_zones(&state);
+        let move_zones_of = |zone_id: &str| move_zones.get(zone_id).cloned().unwrap_or_default();
         let ui = self.ui.borrow();
         let item = |speaker: &ui_model::Speaker, show_kind: bool| {
             let draft = ui
@@ -1810,6 +1816,7 @@ impl App {
                     row.zone_note = zone_note(&strings, note);
                 }
             }
+            row.move_zones = move_zones_of(&row.zone_id);
             row
         };
         let (this_pc, connected) = state.layout();
@@ -1849,9 +1856,10 @@ impl App {
                     .map(|row| {
                         let mut built = match row {
                             ui_model::ZoneRow::Listed(s) => item(s, !s.kind.is_this_pc()),
-                            ui_model::ZoneRow::NotFound(id) => {
-                                missing_item(&strings, &state, &zone.id, id)
-                            }
+                            ui_model::ZoneRow::NotFound(id) => SpeakerItem {
+                                move_zones: move_zones_of(&zone.id),
+                                ..missing_item(&strings, &state, &zone.id, id)
+                            },
                         };
                         if let Some(note) = state.zone_note(zone, row) {
                             built.zone_note = zone_note(&strings, note);
@@ -2251,6 +2259,30 @@ impl App {
     fn clear_announcement(&self) {
         self.announcement_timer.stop();
         clear_announcement(&self.main.as_weak(), &self.flyout.as_weak());
+    }
+
+    /// Puts each row's Move to Zone list, the zones other than the row's own
+    /// as on the Mac, into its kept model, by that zone ("" for none).
+    fn sync_move_zones(&self, state: &AppState) -> HashMap<String, ModelRc<ZoneChoice>> {
+        let mut kept = self.models.move_zones.borrow_mut();
+        kept.retain(|id, _| id.is_empty() || state.zones.iter().any(|zone| zone.id == *id));
+        std::iter::once("")
+            .chain(state.zones.iter().map(|zone| zone.id.as_str()))
+            .map(|current| {
+                let choices = state
+                    .zones
+                    .iter()
+                    .filter(|zone| zone.id != current)
+                    .map(|zone| ZoneChoice {
+                        id: zone.id.as_str().into(),
+                        name: zone.name.as_str().into(),
+                    })
+                    .collect();
+                let model = kept.entry(current.to_owned()).or_default();
+                sync_model(model, choices);
+                (current.to_owned(), ModelRc::from(model.clone()))
+            })
+            .collect()
     }
 
     /// Puts each zone's rows into its kept models, then the zones into theirs.
@@ -4831,6 +4863,8 @@ pub fn speaker_item(
         zone_id: SharedString::default(),
         zone_name: SharedString::default(),
         zone_movable: speaker.in_target.is_none(),
+        // Needs the zones: set by the caller (`App::refresh`).
+        move_zones: ModelRc::default(),
         // Needs the zone: set by the caller (`App::refresh`).
         zone_note: SharedString::default(),
         zone_dimmed: false,
@@ -10455,6 +10489,25 @@ mod tests {
         toggle.invoke_accessible_expand_action();
         draw_frames();
         assert!(expanded(), "Expand on the flyout zone's toggle unfolded it");
+    }
+
+    // covers: S245
+    #[test]
+    fn move_to_zone_lists_only_the_zones_the_speaker_is_not_in() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:office", "Office", &["local:desk"]);
+        backend.add_zone("zone:garage", "Garage", &["airplay:not-here"]);
+        let app = app_over(backend);
+        let names = |row: SpeakerItem| -> Vec<String> {
+            row.move_zones
+                .iter()
+                .map(|zone| zone.name.to_string())
+                .collect()
+        };
+        assert_eq!(names(zone_member_row(&app, "local:desk")), ["Garage"]);
+        assert_eq!(names(in_zones_row(&app, "local:desk")), ["Garage"]);
+        assert_eq!(names(zone_member_row(&app, "airplay:not-here")), ["Office"]);
+        assert_eq!(names(row_of(&app, "airplay:kitchen")), ["Office", "Garage"]);
     }
 
     // covers: S150, S245, S359
