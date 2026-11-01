@@ -786,6 +786,9 @@ mod tests {
     /// which a read that is not given up waits out.
     const SLACK: Duration = Duration::from_secs(2);
 
+    /// How late a loaded PC ran a format read's new thread: past `TIMEOUT`.
+    const LATE_START: Duration = Duration::from_millis(400);
+
     /// The stream buffer of the stall tests, in frames.
     const BUFFER: u32 = 960;
 
@@ -979,6 +982,7 @@ mod tests {
         let hangs = |calls: &Arc<AtomicUsize>| {
             let calls = Arc::clone(calls);
             move |_: &str| {
+                thread::sleep(LATE_START);
                 calls.fetch_add(1, Ordering::AcqRel);
                 thread::sleep(HANG);
                 Ok(FORMAT)
@@ -1007,6 +1011,7 @@ mod tests {
         let hangs = |calls: &Arc<AtomicUsize>| {
             let calls = Arc::clone(calls);
             move |_: &str| {
+                thread::sleep(LATE_START);
                 calls.fetch_add(1, Ordering::AcqRel);
                 thread::sleep(HANG);
                 Err(BackendError::UnsupportedFormat)
