@@ -3524,7 +3524,9 @@ impl<D: Driver> Controller<D> {
     ) -> Result<(D::Capture, EqControl, MissingFeeds), BackendError> {
         // The capture equalizes at the session rate, after any resampling
         // (a positive rate is always accepted).
-        let (mut equalizer, processor) = eq::equalizer();
+        let (mut equalizer, mut processor) = eq::equalizer();
+        // A reopened capture goes on writing a ring that has frames in it.
+        processor.start_at(writer.ring().frames_written());
         equalizer.set_sample_rate(f64::from(SESSION_RATE));
         equalizer.set_settings(self.equalizer);
         let feed = self.feed.as_ref().and_then(FeedSlot::lease);
@@ -4202,8 +4204,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
         self.equalizer = settings;
         if let Some(session) = self.session.as_mut() {
-            let from = session.ring.frames_written() as i64;
-            session.equalizer.set_settings_from(settings, from);
+            session.equalizer.set_settings(settings);
         }
         for id in self.playing_ids() {
             self.apply_gain(&id);

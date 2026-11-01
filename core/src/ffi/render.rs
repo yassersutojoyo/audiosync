@@ -547,8 +547,8 @@ pub unsafe extern "C" fn asc_renderer_gain(renderer: *const AscRenderer) -> f32 
 }
 
 /// Control thread: sets the renderer's linear `gain` with each headroom cut
-/// of `eq` given back from the ring frame it starts at (S26, S71); returns
-/// the dB given back to the newest cut. A null `eq` sets `gain` as is.
+/// of `eq` given back from the ring frame it starts at (S26, S71). A null
+/// `eq` sets `gain` as is.
 ///
 /// # Safety
 ///
@@ -559,16 +559,16 @@ pub unsafe extern "C" fn asc_eq_give_back(
     eq: *const AscEqualizer,
     renderer: *mut AscRenderer,
     gain: f64,
-) -> f64 {
+) {
     if renderer.is_null() {
-        return 0.0;
+        return;
     }
     // SAFETY: the handle is live; this borrows only the `gain` field, which
     // the output thread only reads, atomically.
     let shared = unsafe { &(*renderer).gain };
     if eq.is_null() {
         shared.set(gain as f32);
-        return 0.0;
+        return;
     }
     // SAFETY: the handle is live; the control thread reads only the
     // `control` field, which the capture thread never touches.

@@ -178,8 +178,7 @@ final class StreamEngine {
     /// block (S31), and every later session starts with them.
     func updateEqualizer(_ settings: Equalizer.Settings) {
         equalizerSettings = settings
-        guard let parts else { return }
-        parts.equalizer.update(settings, fromFrame: parts.ring.framesWritten)
+        parts?.equalizer.update(settings)
     }
 
     // MARK: - Session

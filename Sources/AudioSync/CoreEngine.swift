@@ -180,12 +180,11 @@ final class CoreEqualizer {
 
     deinit { asc_eq_destroy(handle) }
 
-    /// Control thread: new settings, taking effect at the next block; the
-    /// headroom cut given back changes from ring frame `fromFrame` on (S26, S71).
-    func update(_ new: Equalizer.Settings, fromFrame: Int64 = .min) {
+    /// Control thread: new settings, taking effect at the next block.
+    func update(_ new: Equalizer.Settings) {
         var gains = [Double](repeating: 0, count: Int(ASC_EQ_BANDS))
         for band in 0..<min(gains.count, new.gains.count) { gains[band] = new.gains[band] }
-        _ = asc_eq_set_settings_from(handle, new.enabled, new.preamp, &gains, fromFrame)
+        _ = asc_eq_set_settings(handle, new.enabled, new.preamp, &gains)
     }
 
     /// Control thread, while capture is stopped: the design rate.
@@ -295,7 +294,7 @@ final class CoreRenderer {
     /// back from the ring frame it starts at (S26, S71).
     func setGain(_ gain: Double, givingBack equalizer: CoreEqualizer?) {
         guard let equalizer else { return setGain(gain) }
-        _ = asc_eq_give_back(equalizer.handle, handle, Self.clampedGain(gain))
+        asc_eq_give_back(equalizer.handle, handle, Self.clampedGain(gain))
     }
 
     /// Any thread: a new delay, converted at the capture rate as the core
