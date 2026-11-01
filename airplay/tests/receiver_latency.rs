@@ -14,7 +14,9 @@ use audiosync_airplay::latency::{
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::session::SessionEvent;
 use audiosync_airplay::stream::{SpeakerId, StreamEvent};
-use common::ap2::{Ap2Rig, FakeAp2, ap2_config, dict, int, plist};
+use common::ap2::{
+    Ap2Rig, DATA_PORT, FakeAp2, RECEIVER_CONTROL_PORT, ap2_config, dict, int, plist,
+};
 use common::rig::{Rig, speaker};
 use common::{FakeReceiver, Link, config};
 use plist::Value;
@@ -63,10 +65,12 @@ fn output_latency(value: Value) -> Value {
 }
 
 fn stream_setup_answer(fake: &FakeAp2, stream: &[(&str, Value)], top: &[(&str, Value)]) -> Vec<u8> {
+    let data = fake.data_port.unwrap_or(DATA_PORT);
+    let control = fake.control_port.unwrap_or(RECEIVER_CONTROL_PORT);
     let mut entries = vec![
         ("type", int(96)),
-        ("dataPort", int(i64::from(fake.data_port))),
-        ("controlPort", int(i64::from(fake.control_port))),
+        ("dataPort", int(i64::from(data))),
+        ("controlPort", int(i64::from(control))),
         ("streamID", int(1)),
     ];
     entries.extend(stream.iter().cloned());

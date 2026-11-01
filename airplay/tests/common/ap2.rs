@@ -29,7 +29,7 @@ use super::{RECEIVER, SENDER, connection, ids};
 pub const AIRPLAY_PORT: u16 = 7000;
 pub const EVENT_PORT: u16 = 50_001;
 pub const RECEIVER_TIMING_PORT: u16 = 50_002;
-// Below every ephemeral range: Ap2Server rebinds a stream port equal to one.
+// Below every ephemeral range, so audio sent to a default reaches no other test's socket.
 pub const DATA_PORT: u16 = 6_003;
 pub const RECEIVER_CONTROL_PORT: u16 = 6_004;
 pub const STREAM_ID: i64 = 77;
@@ -263,9 +263,10 @@ pub struct FakeAp2 {
     pub record_headers: Vec<(String, String)>,
     /// The stream SETUP answer leaves out `dataPort`.
     pub no_data_port: bool,
-    /// The `dataPort` and `controlPort` of the stream SETUP answer.
-    pub data_port: u16,
-    pub control_port: u16,
+    /// The `dataPort` and `controlPort` of the stream SETUP answer; one
+    /// left unset is opened by [`Ap2Server`], or is the default without one.
+    pub data_port: Option<u16>,
+    pub control_port: Option<u16>,
     /// Answers sent, for the frame counts.
     pub framing: Option<FakeFraming>,
     pub events: Option<FakeFraming>,
@@ -313,8 +314,8 @@ impl FakeAp2 {
             second_info_body: None,
             record_headers: Vec::new(),
             no_data_port: false,
-            data_port: DATA_PORT,
-            control_port: RECEIVER_CONTROL_PORT,
+            data_port: None,
+            control_port: None,
             framing: None,
             events: None,
             secret: None,
@@ -589,13 +590,15 @@ impl FakeAp2 {
                 plist(dict(&entries))
             }
             "SETUP stream" => {
+                let control = self.control_port.unwrap_or(RECEIVER_CONTROL_PORT);
                 let mut entries = vec![
                     ("type", int(96)),
-                    ("controlPort", int(i64::from(self.control_port))),
+                    ("controlPort", int(i64::from(control))),
                     ("streamID", int(STREAM_ID)),
                 ];
                 if !self.no_data_port {
-                    entries.push(("dataPort", int(i64::from(self.data_port))));
+                    let port = self.data_port.unwrap_or(DATA_PORT);
+                    entries.push(("dataPort", int(i64::from(port))));
                 }
                 plist(dict(&[("streams", Value::Array(vec![dict(&entries)]))]))
             }
@@ -929,9 +932,9 @@ impl Ap2Server {
         fake.event_port = events.local_addr().expect("address").port();
         let mut udp = Vec::new();
         for port in [&mut fake.data_port, &mut fake.control_port] {
-            if *port == DATA_PORT || *port == RECEIVER_CONTROL_PORT {
+            if port.is_none() {
                 let socket = UdpSocket::bind((ip, 0)).expect("a UDP socket");
-                *port = socket.local_addr().expect("address").port();
+                *port = Some(socket.local_addr().expect("address").port());
                 udp.push(socket);
             }
         }
