@@ -139,11 +139,11 @@ final class CastSender {
     }
 
     /// One of the device's own volume steps (C69); a level a slider left
-    /// waiting is dropped, so it can't undo the step.
+    /// waiting goes to the core first, which steps from it, so it can't undo the step.
     func stepVolume(up: Bool) {
         queue.async { [weak self] in
             guard let self, let handle = self.handle else { return }
-            self.pendingVolume = nil
+            self.sendVolume()
             _ = asc_cast_step_volume(handle, up)
         }
     }

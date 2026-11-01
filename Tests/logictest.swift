@@ -13046,11 +13046,14 @@ do {
     _ = dropped.started(tv, attempt: 1, refusal: ASC_CAST_REFUSED_NONE)
     _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.4, muted: false, fixed: false, step: 0.02)))
     _ = dropped.setVolume(tv, position: 50)
-    // The sender drops 60, still waiting for its 100 ms, when the step comes.
+    // 60 still waits for its 100 ms when the step comes, so the sender steps from 60 and never sends 60.
     _ = dropped.setVolume(tv, position: 60)
-    _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.5, muted: false, fixed: false, step: 0.02)))
     _ = dropped.stepVolume(tv, up: true)
-    _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.52, muted: false, fixed: false, step: 0.02)))
+    _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.5, muted: false, fixed: false, step: 0.02)))
+    // covers: C69, C70
+    check(approx(dropped.volume(of: tv), 62, 1e-9),
+          "cast step: the answer to a drag level sent before a step keeps the slider on the step's level")
+    _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.62, muted: false, fixed: false, step: 0.02)))
     _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.6, muted: false, fixed: false, step: 0.02)))
     // covers: C69, C70
     check(approx(dropped.volume(of: tv), 60, 1e-9),
