@@ -97,7 +97,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 - The window doesn't open at login. Click the Dock icon.
 - Speaker plays too early? Raise its delay. Too late? Lower it, below zero if needed. Bluetooth usually ends up around −150 to −300 ms.
 - Mac plays before the HomePod? Raise the AirPlay delay. After? Lower it.
-- Speakers that want a PIN or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
+- Speakers that want a code or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
 - More in the AudioSync Guide, in the gear menu.
 
 ## What doesn't work (yet)
