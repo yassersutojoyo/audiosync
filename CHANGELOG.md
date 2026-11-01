@@ -21,7 +21,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - AirPlay 2 speakers, stereo pairs and home theater groups play without turning on AirPlay 2 (Experimental) first. A speaker that plays both AirPlay 1 and AirPlay 2 still uses AirPlay 1 unless that setting is on. On the Mac and on Windows.
 - On Windows, the tray panel slides up and fades in as it opens, as Windows 11's own panels do.
-- On Windows, the note that no speakers were found names Windows Firewall only while Windows counts a connected network as Public. On a Private network it asks only that this PC is on the same network as the speakers.
+- On Windows, the note that no speakers were found suggests setting the network to Private only while Windows counts a connected network as Public.
 - A Google Cast speaker that ends the stream on its own gets it again, unless it already ended it in the 10 minutes before, which ends the session. Before, the second end in a session always ended it. On the Mac and on Windows.
 - When several AirPlay speakers start together, they connect one after another, half a second apart, and a pairing's key exchange no longer holds up the sound of a speaker that's already playing. On the Mac and on Windows.
 - On Windows, the main window and the tray panel look more like the Mac app. A speaker's name, kind and note share one line, with the kind as a small icon after the name and the device name in the name's tooltip. Card titles are small grey capitals, a zone's arrow sits at the left with its speakers in one tinted box, the AirPlay delay sits in the Connected Speakers card, and Several Apps sits right under the source. The tray panel lists this PC's speakers under the volume, then zones, then connected speakers.
