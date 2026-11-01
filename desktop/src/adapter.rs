@@ -410,6 +410,33 @@ fn mix_toggle(chosen: &Chosen, mode: MixMode, app: SavedMixApp) -> Chosen {
     mix_choice(mode, apps)
 }
 
+/// Whether `a` and `b` capture the same app, or the same apps in "only these"
+/// mode in any order, without case.
+fn same_apps(a: &Chosen, b: &Chosen) -> bool {
+    match (a, b) {
+        (Chosen::App { executable: a, .. }, Chosen::App { executable: b, .. }) => {
+            a.eq_ignore_ascii_case(b)
+        }
+        (
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps: a,
+            },
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps: b,
+            },
+        ) => {
+            a.len() == b.len()
+                && a.iter().all(|app| {
+                    b.iter()
+                        .any(|other| other.executable.eq_ignore_ascii_case(&app.executable))
+                })
+        }
+        _ => false,
+    }
+}
+
 /// A notice as it was posted.
 #[derive(Clone, Debug)]
 struct Posted {
@@ -1965,6 +1992,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     id: source.executable.clone(),
                     name: source.name.clone(),
                     checked: is_checked(&source.executable),
+                    running: true,
                 });
             }
         }
@@ -1981,6 +2009,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         app.name.clone()
                     },
                     checked: true,
+                    running: false,
                 });
             }
         }
@@ -4770,6 +4799,29 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 name: app.name,
             },
         );
+        self.pick(picked);
+    }
+
+    fn select_mix(&mut self, executables: &[String]) {
+        let listed = self.mix_apps();
+        let apps: Vec<SavedMixApp> = executables
+            .iter()
+            .filter_map(|id| listed.iter().find(|app| app.id.eq_ignore_ascii_case(id)))
+            .map(|app| SavedMixApp {
+                executable: app.id.clone(),
+                name: app.name.clone(),
+            })
+            .collect();
+        if apps.is_empty() {
+            return;
+        }
+        let picked = mix_choice(MixMode::Only, apps);
+        // The same apps in another order are the source in use (S344).
+        let picked = if same_apps(&picked, &self.chosen) {
+            self.chosen.clone()
+        } else {
+            picked
+        };
         self.pick(picked);
     }
 
@@ -12544,6 +12596,76 @@ mod tests {
             id: picker[2].clone(),
         };
         assert_eq!(phone_pick(&adapter, "app:player.exe"), [in_use]);
+    }
+
+    // covers: S353
+    #[test]
+    fn the_phone_gets_the_several_apps_list_with_an_app_only_a_mix_holds_as_not_running() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_sources();
+        let window = adapter.snapshot().mix_apps;
+        assert_eq!(window.len(), 2, "{window:?}");
+        let expected: Vec<serde_json::Value> = window
+            .iter()
+            .map(|app| {
+                let running = app.id != "browser.exe";
+                serde_json::json!({"id": app.id, "name": app.name, "running": running})
+            })
+            .collect();
+        let phone: serde_json::Value = serde_json::from_str(&page(&adapter).to_json(1)).unwrap();
+        assert_eq!(phone["mix_apps"], serde_json::Value::Array(expected));
+    }
+
+    fn phone_mix(adapter: &mut AudioAdapter<MockBackend>, apps: &[&str]) {
+        let mix = audiosync_remote::Command::Mix {
+            apps: apps.iter().map(|app| (*app).to_owned()).collect(),
+        };
+        let actions = crate::remote::actions(&mix, &adapter.snapshot(), |_| true);
+        for action in actions.expect("taken") {
+            if let crate::remote::Action::Mix { apps } = action {
+                adapter.select_mix(&apps);
+            }
+        }
+    }
+
+    // covers: S353
+    #[test]
+    fn a_phone_mix_selects_the_apps_as_the_several_apps_list_would() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.audio.add_app(4000, "chat.exe");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        let before = captures(&adapter).len();
+        phone_mix(&mut adapter, &["browser.exe", "player.exe"]);
+        let mix = "mix:only:browser.exe,player.exe";
+        assert_eq!(adapter.snapshot().source_id, mix);
+        let started = captures(&adapter).len();
+        assert!(started > before, "selected as a pick in the picker");
+
+        for (apps, why) in [
+            (&["player.exe", "browser.exe"][..], "the mix in use"),
+            (&["gone.exe"][..], "no app still listed"),
+        ] {
+            phone_mix(&mut adapter, apps);
+            assert_eq!(adapter.snapshot().source_id, mix, "{why}");
+            assert_eq!(captures(&adapter).len(), started, "{why}: no restart");
+        }
+
+        phone_mix(&mut adapter, &["chat.exe"]);
+        assert_eq!(page(&adapter).source_id.as_deref(), Some("app:chat.exe"));
+        let started = captures(&adapter).len();
+        phone_mix(&mut adapter, &["chat.exe"]);
+        assert_eq!(
+            captures(&adapter).len(),
+            started,
+            "the app in use: no restart"
+        );
     }
 
     // covers: S163

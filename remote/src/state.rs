@@ -28,7 +28,23 @@ pub struct State {
     pub sources: Vec<Source>,
     /// The source in use; `None` when it isn't one of `sources`.
     pub source_id: Option<String>,
+    /// The apps the app's several-apps list offers, in its order; empty
+    /// when the snapshot leaves them out.
+    pub mix_apps: Vec<MixApp>,
 }
+
+/// An app the several-apps list offers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MixApp {
+    /// The ID the list keys it by; the page posts it to `/api/mix`.
+    pub id: String,
+    pub name: String,
+    /// False for an app the list keeps only because a mix holds it.
+    pub running: bool,
+}
+
+/// The most apps one `/api/mix` takes: the most one Windows capture takes.
+pub const MAX_MIX_APPS: usize = 63;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NowPlaying {
@@ -308,6 +324,30 @@ fn sources_field(root: &Map<String, Value>) -> Result<Vec<Source>, StateError> {
     Ok(sources)
 }
 
+fn mix_apps_field(root: &Map<String, Value>) -> Result<Vec<MixApp>, StateError> {
+    let mut apps = Vec::new();
+    let mut ids = HashSet::new();
+    for (index, item) in optional_list(root, "mix_apps")?.iter().enumerate() {
+        let at = format!("mix_apps[{index}].");
+        let object = item
+            .as_object()
+            .ok_or_else(|| invalid(format!("mix_apps[{index}] is not an object")))?;
+        let app = MixApp {
+            id: text_field(object, "id", &at)?,
+            name: text_field(object, "name", &at)?,
+            running: bool_field(object, "running", &at)?,
+        };
+        if app.id.is_empty() {
+            return Err(invalid(format!("{at}id is empty")));
+        }
+        if !ids.insert(app.id.clone()) {
+            return Err(invalid(format!("{at}id is used twice")));
+        }
+        apps.push(app);
+    }
+    Ok(apps)
+}
+
 fn step_field(object: &Map<String, Value>, at: &str) -> Result<f64, StateError> {
     match object.get("volume_step") {
         None => Ok(1.0),
@@ -446,6 +486,7 @@ impl State {
             calibrating,
             sources,
             source_id,
+            mix_apps: mix_apps_field(root)?,
         })
     }
 
@@ -520,6 +561,11 @@ impl State {
                 })
             })
             .collect();
+        let mix_apps: Vec<Value> = self
+            .mix_apps
+            .iter()
+            .map(|app| json!({ "id": app.id, "name": app.name, "running": app.running }))
+            .collect();
         json!({
             "revision": revision,
             "computer_name": self.computer_name,
@@ -531,6 +577,7 @@ impl State {
             "calibrating": self.calibrating,
             "sources": sources,
             "source_id": self.source_id,
+            "mix_apps": mix_apps,
         })
         .to_string()
     }
@@ -605,13 +652,17 @@ pub enum Command {
     Source {
         id: String,
     },
+    /// Capture these apps of the several-apps list, in "only these" mode.
+    Mix {
+        apps: Vec<String>,
+    },
 }
 
 impl Command {
     /// `{"type":"speaker","id":…,"on"?,"volume"?,"delay_ms"?}`,
     /// `{"type":"master","volume":…}`, `{"type":"zone","id":…,"toggle"?,"volume"?}`,
-    /// `{"type":"preset","id":…,"recall":true}` or
-    /// `{"type":"source","id":…}`, with only the fields that were posted.
+    /// `{"type":"preset","id":…,"recall":true}`, `{"type":"source","id":…}`
+    /// or `{"type":"mix","apps":[…]}`, with only the fields that were posted.
     pub fn to_json(&self) -> String {
         let mut object = Map::new();
         match self {
@@ -650,6 +701,10 @@ impl Command {
             Command::Source { id } => {
                 object.insert("type".to_owned(), json!("source"));
                 object.insert("id".to_owned(), json!(id));
+            }
+            Command::Mix { apps } => {
+                object.insert("type".to_owned(), json!("mix"));
+                object.insert("apps".to_owned(), json!(apps));
             }
         }
         Value::Object(object).to_string()
@@ -737,6 +792,17 @@ pub fn preset_recall_from_body(body: &[u8]) -> Result<(), BodyError> {
 pub fn source_id_from_body(body: &[u8]) -> Result<String, BodyError> {
     let object = body_object(body)?;
     optional(&object, "id", |value| value.as_str().map(str::to_owned))?.ok_or(BodyError::Empty)
+}
+
+/// Reads `{apps}`, 1 to [`MAX_MIX_APPS`] app IDs as strings; unknown fields
+/// are ignored. `None` for anything else.
+pub fn mix_apps_from_body(body: &[u8]) -> Option<Vec<String>> {
+    let object = body_object(body).ok()?;
+    let apps = object.get("apps")?.as_array()?.iter();
+    let apps: Vec<String> = apps
+        .map(|app| app.as_str().map(str::to_owned))
+        .collect::<Option<_>>()?;
+    (1..=MAX_MIX_APPS).contains(&apps.len()).then_some(apps)
 }
 
 /// Reads `{code}`, the code as a string.
@@ -895,6 +961,38 @@ mod tests {
         for current in ["\"input:gone\"", "null"] {
             let state = State::from_json(&with_sources(current)).unwrap();
             assert_eq!(state.source_id, None, "{current}");
+        }
+    }
+
+    fn with_mix_apps(list: &str) -> String {
+        SAMPLE.replacen(
+            "\"speakers\"",
+            &format!("\"mix_apps\": {list}, \"speakers\""),
+            1,
+        )
+    }
+
+    // covers: S353
+    #[test]
+    fn the_mix_apps_keep_their_order_and_whether_they_run_and_none_without_the_field() {
+        let apps = json!([
+            {"id": "spotify.exe", "name": "Spotify", "running": true},
+            {"id": "chrome.exe", "name": "Google Chrome", "running": false}
+        ]);
+        let state = State::from_json(&with_mix_apps(&apps.to_string())).unwrap();
+        let written: Value = serde_json::from_str(&state.to_json(2)).unwrap();
+        assert_eq!(written["mix_apps"], apps);
+        let bare: Value =
+            serde_json::from_str(&State::from_json(SAMPLE).unwrap().to_json(1)).unwrap();
+        assert_eq!(bare["mix_apps"], json!([]));
+        for bad in [
+            r#"{}"#,
+            r#"[{"id": "a.exe", "name": "A", "running": 1}]"#,
+            r#"[{"id": "", "name": "A", "running": true}]"#,
+            r#"[{"id": "a.exe", "running": true}]"#,
+            r#"[{"id": "a.exe", "name": "A", "running": true}, {"id": "a.exe", "name": "B", "running": false}]"#,
+        ] {
+            assert!(State::from_json(&with_mix_apps(bad)).is_err(), "{bad}");
         }
     }
 
