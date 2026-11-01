@@ -13602,16 +13602,16 @@ do {
             && RemoteCommand(json: "{\"type\":\"mix\",\"apps\":[1]}") == nil
             && RemoteCommand(json: "{\"type\":\"mix\"}") == nil,
           "web remote: a phone mix of apps the list no longer offers changes nothing; one that doesn't read is dropped")
-    let steps = [[spotify, chrome], [chrome, spotify]].map { ids in
+    let inUseSwitches = [[spotify, chrome], [chrome, spotify]].map { ids in
         phoneMix("[" + ids.map { "\"\($0)\"" }.joined(separator: ",") + "]", inUse: pair).compactMap { action -> SourceSwitch.Step? in
             guard case .selectSource(let id) = action else { return nil }
             return SourceSwitch.decide(from: pair, to: AudioSource(defaultsValue: id), streaming: true)
         }
     }
     // covers: S353, S344
-    check(steps == [[.none], [.none]],
+    check(inUseSwitches == [[.none], [.none]],
           "web remote: a phone mix of the apps in use, in any order, is a pick of the source in use: no capture restarts",
-          "\(steps)")
+          "\(inUseSwitches)")
 
     // The core's own parser takes the snapshot.
     let noCommand: AscRemoteCommand = { _, _ in }
