@@ -936,7 +936,8 @@ export component VolumeSlider inherits HorizontalLayout {
         focus-on-click: false;
         focus-on-tab-navigation: false;
         key-pressed(event) => {
-            if event.text != Key.UpArrow && event.text != Key.DownArrow {
+            if !root.enabled || root.step <= 0 || event.modifiers.control || event.modifiers.alt || event.modifiers.shift || event.modifiers.meta
+                || (event.text != Key.UpArrow && event.text != Key.DownArrow) {
                 return reject;
             }
             let value = clamp(slider.value + (event.text == Key.UpArrow ? root.step : -root.step), 0, 100);

@@ -48,7 +48,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
-- On Windows, the Up and Down arrow keys move a volume slider, as on the Mac: Up raises it like Right and Down lowers it like Left, by the same step a Google Cast TV takes. Before, they did nothing.
+- On Windows, the Up and Down arrow keys move a volume slider, as on the Mac: Up raises it and Down lowers it by the same step as Right and Left. Before, they did nothing.
 - On Windows, the web remote's speaker notes now match the main window: "Waiting for the password" while you type a password, "Enter the code shown on <speaker>" during a PIN pairing, and "Asks for a code every time" for a speaker set that way. Before, the phone said "Asks for a code" or "Pairing…" instead.
 - On Windows, a Google Cast speaker you added by address now says "Added by address" on the web remote, as in the main window and on the Mac. Before, the phone showed no note for it.
 - On the Mac, an arrow key pressed on a Google Cast speaker's slider right after a drag now steps the TV from where the drag ended, and the slider follows the TV when you later set it with its remote to where the drag was heading. Before, the step started from an older level and the slider could stay on a number the TV no longer played.
