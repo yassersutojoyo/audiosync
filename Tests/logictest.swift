@@ -897,7 +897,7 @@ do {
 }
 
 // MARK: Debug log — opt-in, one UTC line per message, capped, never through a link
-// covers: S170 (all but the first line's versions and local time)
+// covers: S170 (all but the first line's versions and local time), S131 (the thread that logs never touches the file)
 do {
     check(DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "1"]), "debug log: on with AUDIOSYNC_DEBUG=1")
     check(!DebugTrace.isEnabled(environment: [:]) && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "0"])
@@ -5605,6 +5605,7 @@ do {
     check(LocalOutputSync.plan(enabled: [], active: ["usb"], available: ["usb"],
                                bound: ["usb": 52], listed: ["usb": 99]) == P(attach: [], detach: ["usb"]),
           "EC1 new ID: a speaker switched off is detached, not restarted")
+    // covers: S138 (handled like an unplug)
     check(LocalOutputSync.plan(enabled: ["bt", "usb"], active: ["usb"], available: ["usb"]) == P(attach: [], detach: []),
           "EC2 Bluetooth: a disconnected headset waits; the other speaker keeps playing")
     check(LocalOutputSync.plan(enabled: ["bt", "usb"], active: ["usb"], available: ["bt", "usb"]) == P(attach: ["bt"], detach: []),
@@ -5746,7 +5747,7 @@ do {
     }
 
     // EC4 / EC9: the capture rate changes under a running session.
-    // covers: S157
+    // covers: S157, S140
     check(CaptureRate.needsRestart(current: 48000, reported: 44100), "EC4 rate: a new capture rate rebuilds the session")
     check(CaptureRate.needsRestart(current: 44100, reported: 96000), "EC4 rate: a higher capture rate rebuilds the session")
     check(!CaptureRate.needsRestart(current: 48000, reported: 48000), "EC4 rate: the same rate keeps playing")
@@ -5892,7 +5893,7 @@ do {
           "EC6 app quit: the switch to the whole system never waits on the microphone prompt (S227)")
 
     // EC8: every speaker off, then one on again.
-    // covers: S162, S118, S119 (the stop and start decisions; a local speaker joining is the sync plan above)
+    // covers: S162, S118, S119, S144 (the stop and start decisions; a local speaker joining is the sync plan above)
     check(StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: streaming stops when the last speaker is switched off")
     check(!StreamingPolicy.isIdle(streaming: true, enabledAirPlay: ["a"], enabledLocal: []),
@@ -5922,7 +5923,7 @@ do {
     let many: [S] = (1...8).map { ("Speaker \($0)", SpeakerTag.usb) } + [("MacBook Pro Speakers", .builtIn)]
     let manyAirPlay: [S] = (1...8).reversed().map { ("Room \($0)", SpeakerTag.airplay) }
     let big = SpeakerLayout.split(local: many, airplay: manyAirPlay, tag: { $0.tag }, name: { $0.name })
-    // covers: S165
+    // covers: S165, S146
     check(big.thisMac.count == 1 && big.connected.count == 16
           && big.connected.prefix(8).map(\.name) == (1...8).map { "Room \($0)" },
           "EC10 many speakers: sixteen speakers all listed, in name order")
@@ -5931,6 +5932,7 @@ do {
           "EC10 many speakers: eight local speakers are attached together")
 
     // EC11: very long speaker names.
+    // covers: S166
     let long = String(repeating: "Living Room Speaker With A Very Long Name ", count: 6) + "End"
     let longs: [S] = [(long + " B", .airplay), (long + " A", .airplay), ("Den", .usb)]
     let longSplit = SpeakerLayout.split(local: [S](), airplay: longs, tag: { $0.tag }, name: { $0.name })
@@ -7168,7 +7170,7 @@ do {
             && zoneRows.contains("note = text.zoneMemberInTarget(targetName)"),
           "zones: a member its pair holds says it plays as part of the pair")
 
-    // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
+    // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel), S267 (the Control-Command-1 to 9 keys)
     let presetText = UIStrings()
     let presetFlat = [Double](repeating: 0, count: Equalizer.frequencies.count)
     let livingZone = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb:out", "lc:tv"], volume: 60)
@@ -7355,6 +7357,7 @@ do {
     let wrongTexts = presetTexts.filter { $0.0 != $0.1 }.map(\.0)
     check(wrongTexts.isEmpty, "presets: the preset texts", "\(wrongTexts)")
 
+    // covers: S24
     var tuned = Equalizer.Settings()
     tuned.enabled = true; tuned.preamp = -3; tuned.gains[0] = 6
     check(StoredEqualizer.decode(StoredEqualizer.encode(tuned)) == tuned,

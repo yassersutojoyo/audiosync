@@ -66,7 +66,7 @@ S263 Hosts only: the presets' empty state; the Mac logic suite and the Windows t
 S264 Hosts only: where the current-preset mark shows; its rule is S253's, which the core covers.
 S265 Hosts only: carrying out a recall and its notice; the plan is S252's, which the core covers.
 S266 Hosts only: a recall's focus and the phone's start origin; the Mac logic suite and the Windows tests check it.
-S267 Hosts only: keyboard reach and focus of the preset controls; the Windows tests check it, the Mac by hand.
+S267 Hosts only: keyboard reach and focus of the preset controls; the Windows tests check it, the Mac logic suite its Control-Command-1 to 9 keys and the rest by hand.
 S268 Hosts only: the preset controls' colors in light and dark; the Windows contrast tests and the Mac logic suite (the Presets card's tokens and their 4.5:1 contrast) check it.
 S269 Hosts only: the preset wording in UIStrings (Mac) and strings.slint (Windows); the Mac logic suite's "presets: the preset texts" and view.rs the_preset_texts_come_from_strings check it.
 S280 Hosts only: keeping each speaker's reported latency and setting the session's L; the rule is the AirPlay crate's (AirPlay spec P200); the Windows tests and the Mac logic suite check it.
