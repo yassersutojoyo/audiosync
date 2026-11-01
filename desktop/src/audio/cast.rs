@@ -4444,6 +4444,24 @@ pub mod tests {
 
     // covers: S415
     #[test]
+    fn a_level_held_at_zone_0_goes_once_the_session_ends_or_the_zone_moves() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.4);
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 0.0)]));
+        sends(&fake, &mut cast, 0.0);
+        report(&fake, &mut cast, 0.3);
+        assert_eq!(row(&cast), 30.0, "held at zone 0");
+
+        cast.set_enabled(KITCHEN, false).unwrap();
+        assert_eq!(row(&cast), 0.0, "the session ended");
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        assert_eq!(row(&cast), 20.0, "zone × own");
+    }
+
+    // covers: S415
+    #[test]
     fn the_master_scales_the_audio_the_session_hears() {
         let (fake, mut cast) = listed();
         let mut lease = cast.lease().expect("the tap");
