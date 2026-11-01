@@ -1128,8 +1128,12 @@ impl CastSpeakers {
         memory: &DeviceMemory,
     ) -> CastInfo {
         let reported = self.volumes.get(&id);
-        let level = self
-            .own_of(id)
+        // Nothing reaches a fixed volume (C68), so zone × own level would be a guess.
+        let fixed = reported
+            .filter(|volume| volume.control_type == ControlType::Fixed)
+            .map(|volume| volume.level);
+        let level = fixed
+            .or_else(|| self.own_of(id))
             .or_else(|| reported.map(|volume| volume.level));
         let session = self.attempt.filter(|attempt| attempt.device == id);
         let status = session.map_or(CastStatus::Idle, |attempt| attempt.status);
@@ -1141,10 +1145,12 @@ impl CastSpeakers {
             offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
             volume: (level.unwrap_or(1.0) * 100.0).max(0.0),
-            device_level: self
-                .held
-                .filter(|(held, _)| *held == id)
-                .map(|(_, level)| level)
+            device_level: fixed
+                .or_else(|| {
+                    self.held
+                        .filter(|(held, _)| *held == id)
+                        .map(|(_, level)| level)
+                })
                 .or_else(|| {
                     self.own_of(id)
                         .map(|own| device_level(self.zone_of(id), own))
@@ -1153,7 +1159,7 @@ impl CastSpeakers {
                 .map_or(100.0, |level| (level * 100.0).clamp(0.0, 100.0)),
             volume_known: level.is_some(),
             muted: reported.is_some_and(|volume| volume.muted),
-            volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
+            volume_fixed: fixed.is_some(),
             volume_step: volume_step(reported),
             offset_ms: offset_ms(memory, &id),
             status,
@@ -1664,6 +1670,28 @@ impl CastSpeakers {
         }
     }
 
+    /// The sender sent `level`, the latest asked for, with no answer to come
+    /// (C70, C104): when `repeated`, the levels asked for since its earlier
+    /// copy stop waiting; else the device already reports it, and every level
+    /// does.
+    fn volume_unanswered(&mut self, device: DeviceId, level: f64, repeated: bool) {
+        if self.unanswered.last() != Some(&level) {
+            return;
+        }
+        let kept = match self.unanswered.iter().position(|&sent| sent == level) {
+            Some(first) if repeated => first + 1,
+            _ => 0,
+        };
+        self.unanswered.truncate(kept);
+        if self.unanswered.is_empty()
+            && let Some((requested, own)) = self.requested
+            && requested == device
+        {
+            self.levels.insert(device, own);
+            self.requested = None;
+        }
+    }
+
     /// Shown at once; the device's next status replaces it (C70).
     pub fn set_muted(&mut self, id: &str, muted: bool) {
         let Some(device) = self.playing_device(id) else {
@@ -2019,6 +2047,9 @@ impl CastSpeakers {
                     attempt.reported_mute = None;
                 }
                 self.volume_reported(device, volume, answers_mute)
+            }
+            SessionEvent::VolumeUnanswered { level, repeated } => {
+                self.volume_unanswered(device, level, repeated);
             }
             SessionEvent::Diagnostics(diagnostics) => {
                 self.log
@@ -3283,6 +3314,63 @@ pub mod tests {
             report(&fake, &mut cast, answer);
         }
         assert_eq!(shown(&cast, KITCHEN), 52.0);
+    }
+
+    fn unanswered(fake: &FakeCast, cast: &mut CastSpeakers, level: f64, repeated: bool) {
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::VolumeUnanswered { level, repeated },
+        });
+        cast.poll();
+    }
+
+    // covers: C70, C104 (the TV answered 0.55 before the sender sent it again)
+    #[test]
+    fn a_drag_back_to_the_level_the_tv_reports_awaits_nothing_more() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        report(&fake, &mut cast, 0.55);
+        unanswered(&fake, &mut cast, 0.55, false);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70, C104 (the sender sent 0.55 twice, 0.6 never went out)
+    #[test]
+    fn a_level_sent_twice_while_unanswered_awaits_one_answer() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, 0.55, true);
+        report(&fake, &mut cast, 0.55);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70 (0.55, 0.6 and 0.55 all went out)
+    #[test]
+    fn late_answers_to_a_drag_back_to_its_first_level_never_move_the_slider() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        for answer in [0.55, 0.6, 0.55] {
+            report(&fake, &mut cast, answer);
+            assert_eq!(shown(&cast, KITCHEN).round(), 55.0, "after {answer}");
+        }
     }
 
     // covers: C70, C104 (a drag of 60 levels, 100 ms pacing, 400 ms echoes)
@@ -4836,5 +4924,19 @@ pub mod tests {
         fake.report(report(ControlType::Attenuation));
         cast.poll();
         assert!(!volume_fixed(&cast, KITCHEN));
+    }
+
+    // covers: C68, C104
+    #[test]
+    fn a_fixed_volume_row_shows_what_the_device_reports_whatever_the_zone() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        fake.report(reported(KITCHEN, 1.0, ControlType::Fixed));
+        cast.poll();
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 40.0)]));
+        assert_eq!(row(&cast), 100.0);
+        assert_eq!(shown(&cast, KITCHEN), 100.0);
     }
 }

@@ -144,6 +144,10 @@ pub const CAST_EVENT_GROUP_LOG: i32 = 18;
 /// The device's certificate changed since its last connect, for the debug
 /// log: `detail` is "<before> to <after>" (C21).
 pub const CAST_EVENT_CERTIFICATE_CHANGED: i32 = 19;
+/// A level sent that no status will answer, in `level` (C70, C104):
+/// `detail` is "repeated" when the level sent before it is the same and
+/// still unanswered, else empty, as the device already reports it.
+pub const CAST_EVENT_VOLUME_UNANSWERED: i32 = 20;
 
 /// How an attempt ended ([`AscCastEvent::reason`]): the sender's own
 /// teardown (C87).
@@ -1082,6 +1086,14 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending.has_level = volume.has_level;
             pending.answers_mute = answers_mute;
             pending.step = volume.step_interval.unwrap_or(0.0);
+            pending
+        }
+        SessionEvent::VolumeUnanswered { level, repeated } => {
+            let mut pending = Pending::new(CAST_EVENT_VOLUME_UNANSWERED);
+            pending.level = level;
+            if repeated {
+                pending.detail = "repeated".to_owned();
+            }
             pending
         }
         SessionEvent::ConnectFailed { error, retry_in } => {

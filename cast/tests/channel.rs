@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::channel::{
     Channel, DEAD_AFTER, Dropped, Event, LAUNCH_TIMEOUT, PING_INTERVAL, STATUS_TIMEOUT,
-    STOP_STEP_TIMEOUT,
+    STOP_STEP_TIMEOUT, VOLUME_INTERVAL,
 };
 use audiosync_cast::error::{EndReason, LaunchError, ReconnectPacer};
 use audiosync_cast::ids::RequestIds;
@@ -683,6 +683,47 @@ fn the_answer_to_an_older_level_keeps_the_newer_one_unanswered() {
     channel.handle(later, receiver_status(first_id, first_level));
     let step = channel.step_volume(later, true).expect("step");
     assert!((step - 0.4).abs() < 1e-9, "the step builds on 0.35: {step}");
+}
+
+// covers: C70, C104
+#[test]
+fn a_level_sent_that_no_status_will_answer_is_reported() {
+    let start = Instant::now();
+    let later = start + VOLUME_INTERVAL;
+    let drag = |channel: &mut Channel| {
+        for level in [0.55, 0.6, 0.55] {
+            channel.set_volume(start, level).expect("sent or waiting");
+        }
+    };
+    let unanswered = |channel: &mut Channel, repeated: bool| {
+        channel.tick(later);
+        let seen = events(channel);
+        assert!(
+            seen.contains(&Event::VolumeUnanswered {
+                level: 0.55,
+                repeated
+            }),
+            "{seen:?}"
+        );
+    };
+
+    // 0.6 never went out, so the device answers 0.55 once.
+    let mut channel = running(start);
+    drag(&mut channel);
+    unanswered(&mut channel, true);
+
+    let mut channel = running(start);
+    drag(&mut channel);
+    channel.handle(
+        start,
+        json_message(
+            PLATFORM,
+            SENDER,
+            NS_RECEIVER,
+            json!({"type": "RECEIVER_STATUS", "requestId": 0, "status": {"volume": {"level": 0.55}}}),
+        ),
+    );
+    unanswered(&mut channel, false);
 }
 
 // covers: C44
