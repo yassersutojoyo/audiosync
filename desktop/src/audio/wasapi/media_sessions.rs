@@ -398,6 +398,8 @@ mod tests {
         let gate = Arc::new(Gate::default());
         let _open = OpensOnDrop(gate.clone());
         let started = Instant::now();
+        // The thread waits a deadline already past, as a loaded PC ran it.
+        thread::sleep(APP_WAIT + SLACK);
         assert!(within(hung::<bool>(&gate), started + APP_WAIT).is_err());
         let took = started.elapsed();
         assert!(took >= APP_WAIT && took < APP_WAIT + SLACK, "took {took:?}");
