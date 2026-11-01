@@ -3525,10 +3525,11 @@ impl<D: Driver> Controller<D> {
         // The capture equalizes at the session rate, after any resampling
         // (a positive rate is always accepted).
         let (mut equalizer, mut processor) = eq::equalizer();
-        // A reopened capture goes on writing a ring that has frames in it.
-        processor.start_at(writer.ring().frames_written());
         equalizer.set_sample_rate(f64::from(SESSION_RATE));
         equalizer.set_settings(self.equalizer);
+        // A reopened capture goes on writing a ring that has frames in it,
+        // equalized with the same curve, so the cut above covers them too.
+        processor.start_at(writer.ring().frames_written());
         let feed = self.feed.as_ref().and_then(FeedSlot::lease);
         let feeds_airplay = feed.is_some();
         let cast = self.cast.as_ref().and_then(CastSpeakers::lease);
