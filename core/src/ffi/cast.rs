@@ -144,8 +144,8 @@ pub const CAST_EVENT_GROUP_LOG: i32 = 18;
 /// The device's certificate changed since its last connect, for the debug
 /// log: `detail` is "<before> to <after>" (C21).
 pub const CAST_EVENT_CERTIFICATE_CHANGED: i32 = 19;
-/// A level asked for that no status will answer, in `level`, once per ask
-/// (C70, C104).
+/// A level asked for that no status will answer, in `level`, once per ask,
+/// which `ask` names (C70, C104).
 pub const CAST_EVENT_VOLUME_UNANSWERED: i32 = 20;
 /// Someone paused the device itself; [`CAST_EVENT_PLAYING`] follows once
 /// its next `PLAYING` loaded the stream again (C113).
@@ -273,6 +273,9 @@ pub struct AscCastEvent {
     pub answers_mute: bool,
     /// The device's volume step; 0 when it reports none (C69).
     pub step: f64,
+    /// A volume-unanswered event's ask id, as [`asc_cast_set_volume`]
+    /// returned it (C70).
+    pub ask: u64,
     /// Diagnostics: dropped audio plus rebuffering since the `LOAD` (C79).
     pub drift_ms: f64,
     /// Diagnostics: audio waiting in the sender's queue (C64).
@@ -331,6 +334,7 @@ struct Pending {
     has_level: bool,
     answers_mute: bool,
     step: f64,
+    ask: u64,
     drift_ms: f64,
     queued_ms: f64,
     underrun_frames: u64,
@@ -355,6 +359,7 @@ impl Pending {
             has_level: false,
             answers_mute: false,
             step: 0.0,
+            ask: 0,
             drift_ms: 0.0,
             queued_ms: 0.0,
             underrun_frames: 0,
@@ -1071,6 +1076,7 @@ impl AscCast {
             has_level: pending.has_level,
             answers_mute: pending.answers_mute,
             step: pending.step,
+            ask: pending.ask,
             drift_ms: pending.drift_ms,
             queued_ms: pending.queued_ms,
             underrun_frames: pending.underrun_frames,
@@ -1105,9 +1111,10 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending.step = volume.step_interval.unwrap_or(0.0);
             pending
         }
-        SessionEvent::VolumeUnanswered { level, .. } => {
+        SessionEvent::VolumeUnanswered { level, ask } => {
             let mut pending = Pending::new(CAST_EVENT_VOLUME_UNANSWERED);
             pending.level = level;
+            pending.ask = ask;
             pending
         }
         SessionEvent::ConnectFailed { error, retry_in } => {
@@ -1605,24 +1612,25 @@ unsafe fn with_session(cast: *mut AscCast, send: impl FnOnce(&CastHost)) -> bool
 /// Sets the device's volume, 0 to 1, clamped (C65, C67). The level shown is
 /// the one volume events report (C69, C70); the sender sends at most one
 /// every 100 ms and reports each level it won't get an answer for, so a
-/// host passes every level asked for. False, sending nothing, for a null or dead
-/// handle, a level that isn't finite, or when no session runs; a refusal
-/// (a locked volume, C68) comes as a command-failed event.
+/// host passes every level asked for. Returns the ask id that a
+/// volume-unanswered event on this ask names; 0, sending nothing, for a null
+/// or dead handle, a level that isn't finite, or when no session runs; a
+/// refusal (a locked volume, C68) comes as a command-failed event.
 ///
 /// # Safety
 ///
 /// `cast` is null or a live handle, called under the threading contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn asc_cast_set_volume(cast: *mut AscCast, level: f64) -> bool {
+pub unsafe extern "C" fn asc_cast_set_volume(cast: *mut AscCast, level: f64) -> u64 {
     if !level.is_finite() {
-        return false;
+        return 0;
     }
+    let mut ask = 0;
     // SAFETY: as the caller's.
     unsafe {
-        with_session(cast, |host| {
-            host.set_volume(level.clamp(0.0, 1.0));
-        })
+        with_session(cast, |host| ask = host.set_volume(level.clamp(0.0, 1.0)));
     }
+    ask
 }
 
 /// Mutes or unmutes the device, apart from its level (C65). False, sending
@@ -2544,6 +2552,7 @@ mod tests {
             has_level: false,
             answers_mute: false,
             step: 0.0,
+            ask: 0,
             drift_ms: 0.0,
             queued_ms: 0.0,
             underrun_frames: 0,
@@ -2667,6 +2676,21 @@ mod tests {
         }
     }
 
+    // CAST_SPEC: C70
+    #[test]
+    fn an_unanswered_volume_event_names_its_ask() {
+        let handle = create();
+        let unanswered = SessionEvent::VolumeUnanswered { level: 0.4, ask: 7 };
+        let pending = session_event(unanswered, |_| {});
+        inside(handle).events.push_back(pending);
+        let mut event = blank_event();
+        // SAFETY: a live handle, used by this thread only.
+        assert!(unsafe { asc_cast_next_event(handle, &mut event) });
+        assert_eq!(event.kind, CAST_EVENT_VOLUME_UNANSWERED);
+        assert_eq!((event.level, event.ask), (0.4, 7));
+        destroy(handle);
+    }
+
     // CAST_SPEC: C21
     #[test]
     fn a_changed_certificate_reaches_the_app_as_a_log_line() {
@@ -2715,7 +2739,7 @@ mod tests {
             assert_eq!(asc_cast_start(no_handle, id, &mut refused), 0);
             assert_eq!(refused, CAST_REFUSED_CLOSED);
             asc_cast_stop(no_handle);
-            assert!(!asc_cast_set_volume(no_handle, 0.5));
+            assert_eq!(asc_cast_set_volume(no_handle, 0.5), 0);
             assert!(!asc_cast_set_muted(no_handle, true));
             assert!(!asc_cast_step_volume(no_handle, true));
             asc_cast_set_master(no_handle, 50.0);
@@ -2750,7 +2774,7 @@ mod tests {
             assert!(!asc_cast_add_device(handle, c"not an address".as_ptr()));
             assert!(!asc_cast_remove_device(handle, ptr::null()));
             assert!(!asc_cast_remove_device(handle, c"\xff".as_ptr()));
-            assert!(!asc_cast_set_volume(handle, f64::NAN));
+            assert_eq!(asc_cast_set_volume(handle, f64::NAN), 0);
             assert!(!asc_cast_set_artwork(handle, ptr::null(), 3));
             assert!(!asc_cast_set_metadata(
                 handle,
@@ -2778,7 +2802,7 @@ mod tests {
         // Nothing plays: volume, mute, step and Resync send nothing.
         // SAFETY: as above.
         unsafe {
-            assert!(!asc_cast_set_volume(handle, 0.5));
+            assert_eq!(asc_cast_set_volume(handle, 0.5), 0);
             assert!(!asc_cast_set_muted(handle, false));
             assert!(!asc_cast_step_volume(handle, false));
             assert!(!asc_cast_resync(handle));
@@ -3811,7 +3835,12 @@ mod tests {
         assert!(start(handle, &id).0 > 0);
         // SAFETY: a live handle, used by this thread only.
         unsafe {
-            assert!(asc_cast_set_volume(handle, 0.4));
+            // C70: each ask gets its own id, which a report on it names.
+            let asks = [
+                asc_cast_set_volume(handle, 0.4),
+                asc_cast_set_volume(handle, 0.4),
+            ];
+            assert!(asks[0] > 0 && asks[1] > 0 && asks[0] != asks[1]);
             assert!(asc_cast_set_muted(handle, true));
             assert!(asc_cast_step_volume(handle, true));
             assert!(asc_cast_resync(handle));

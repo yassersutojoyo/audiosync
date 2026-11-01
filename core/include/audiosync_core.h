@@ -256,7 +256,7 @@ extern "C" {
 #define ASC_CAST_EVENT_MEMBERS 17          /* the playing group's members changed: asc_cast_member_count, asc_cast_member */
 #define ASC_CAST_EVENT_GROUP_LOG 18        /* a line about a Cast group for the debug log in .detail */
 #define ASC_CAST_EVENT_CERTIFICATE_CHANGED 19 /* the device's certificate changed since its last connect: "<before> to <after>" in .detail, for the debug log */
-#define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level */
+#define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level, .ask */
 #define ASC_CAST_EVENT_PAUSED 21           /* someone paused the device itself; PLAYING follows once its next play loaded the stream again */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
@@ -2177,6 +2177,7 @@ typedef struct AscCastEvent {
     bool has_level;      /* the status gave the level; .level means nothing without it */
     bool answers_mute;   /* a volume event's status is the first since a mute was sent */
     double step;         /* the device's volume step; 0 when it reports none */
+    uint64_t ask;        /* a volume-unanswered event's ask id, as asc_cast_set_volume returned it */
     double drift_ms;     /* dropped audio plus rebuffering since the stream was loaded */
     double queued_ms;    /* audio waiting in the sender's queue */
     uint64_t underrun_frames; /* silent frames sent since the stream was loaded because the input ran dry */
@@ -2299,11 +2300,12 @@ void asc_cast_stop(AscCast *cast);
 /*
  * Sets the device's volume, 0 to 1, clamped. Show the level volume events
  * report, and while the user drags a slider send at most one every 100 ms.
- * Returns false, sending nothing, for a NULL or dead handle, a level that
- * isn't finite, or when no session runs or starts; a locked volume comes as
+ * Returns the ask id that ASC_CAST_EVENT_VOLUME_UNANSWERED names for this
+ * ask; 0, sending nothing, for a NULL or dead handle, a level that isn't
+ * finite, or when no session runs or starts; a locked volume comes as
  * ASC_CAST_EVENT_COMMAND_FAILED with ASC_CAST_ERROR_VOLUME_FIXED.
  */
-bool asc_cast_set_volume(AscCast *cast, double level);
+uint64_t asc_cast_set_volume(AscCast *cast, double level);
 
 /*
  * Mutes or unmutes the device, apart from its level. Returns false, sending

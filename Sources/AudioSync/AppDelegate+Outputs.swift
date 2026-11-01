@@ -27,7 +27,7 @@ extension AppDelegate {
     func applyZoneVolumes() {
         reapplyLocalGains()
         nativeAirPlay?.setZones(nativeZoneVolumes())
-        if let level = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast)) { castSender?.setVolume(level) }
+        if let level = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast)) { sendCastVolume(level) }
     }
 
     /// The zone volume of every AirPlay speaker in a zone, by receiver ID.

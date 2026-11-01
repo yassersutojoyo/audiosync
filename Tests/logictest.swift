@@ -13011,6 +13011,11 @@ do {
         CastVolume(level: level, muted: false, fixed: fixed)
     }
     func near(_ level: Double?, _ expected: Double) -> Bool { level.map { approx($0, expected, 1e-9) } == true }
+    // The user sets `position`; the sender's ask id comes back, here the send's own number.
+    func ask(_ m: inout CastModel, _ position: Double) {
+        _ = m.setVolume(tv, position: position)
+        m.volumeAsked(send: m.sends, ask: m.sends)
+    }
     func appeared() -> CastModel {
         var m = CastModel()
         m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
@@ -13081,11 +13086,12 @@ do {
           "cast master: a status answers the oldest level it matches, so 30, 50, 30 sent never jumps the slider to 50 (C70)")
 
     var resent = session(attempt: 10)
-    _ = resent.setVolume(tv, position: 30)
+    ask(&resent, 30)
     // covers: C105
     check(resent.apply(.volume(attempt: 10, reported(0.8))) == .setVolume(0.3),
           "cast master: the level set while starting goes again at the first status")
-    _ = resent.apply(.volumeUnanswered(attempt: 10, level: 0.3))
+    resent.volumeAsked(send: 2, ask: 2)
+    _ = resent.apply(.volumeUnanswered(attempt: 10, level: 0.3, ask: 2))
     for level in [0.3, 0.7, 0.3] { _ = resent.apply(.volume(attempt: 10, reported(level))) }
     // covers: C70, C105
     check(approx(resent.volume(of: tv), 30, 1e-9),
@@ -13176,10 +13182,10 @@ do {
     // covers: C70, C104 (the TV answered 0.55 before the sender sent it again)
     var dragBack = session(attempt: 8)
     _ = dragBack.apply(.volume(attempt: 8, reported(0.5)))
-    for position in [55.0, 60.0, 55.0] { _ = dragBack.setVolume(tv, position: position) }
-    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.6))
+    for position in [55.0, 60.0, 55.0] { ask(&dragBack, position) }
+    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.6, ask: 2))
     _ = dragBack.apply(.volume(attempt: 8, reported(0.55)))
-    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.55))
+    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.55, ask: 3))
     _ = dragBack.apply(.volume(attempt: 8, reported(0.6)))
     check(approx(dragBack.volume(of: tv), 60, 1e-9),
           "cast master: after a drag back to the level the TV reports, the TV's remote moves the slider")
@@ -13187,8 +13193,8 @@ do {
     // covers: C70, C104 (the sender sent 0.55 twice, 0.6 never went out)
     var twice = session(attempt: 9)
     _ = twice.apply(.volume(attempt: 9, reported(0.5)))
-    for position in [55.0, 60.0, 55.0] { _ = twice.setVolume(tv, position: position) }
-    for level in [0.6, 0.55] { _ = twice.apply(.volumeUnanswered(attempt: 9, level: level)) }
+    for position in [55.0, 60.0, 55.0] { ask(&twice, position) }
+    for (id, level) in [(2, 0.6), (3, 0.55)] { _ = twice.apply(.volumeUnanswered(attempt: 9, level: level, ask: UInt64(id))) }
     _ = twice.apply(.volume(attempt: 9, reported(0.55)))
     _ = twice.apply(.volume(attempt: 9, reported(0.6)))
     check(approx(twice.volume(of: tv), 60, 1e-9),
@@ -13197,8 +13203,8 @@ do {
     // covers: C70, C104 (0.55, 0.6 and 0.55 went out, then 0.55 again; the second 0.6 never did)
     var wobble = session(attempt: 10)
     _ = wobble.apply(.volume(attempt: 10, reported(0.5)))
-    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { _ = wobble.setVolume(tv, position: position) }
-    for level in [0.6, 0.55] { _ = wobble.apply(.volumeUnanswered(attempt: 10, level: level)) }
+    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { ask(&wobble, position) }
+    for (id, level) in [(4, 0.6), (5, 0.55)] { _ = wobble.apply(.volumeUnanswered(attempt: 10, level: level, ask: UInt64(id))) }
     var wobbleShown: [Double] = []
     for answer in [0.55, 0.6, 0.55] {
         _ = wobble.apply(.volume(attempt: 10, reported(answer)))
@@ -13210,8 +13216,10 @@ do {
     // covers: C70, C104 (0.55 went out, the next three waited and were replaced, then 0.55 went out again)
     var replaced = session(attempt: 11)
     _ = replaced.apply(.volume(attempt: 11, reported(0.5)))
-    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { _ = replaced.setVolume(tv, position: position) }
-    for level in [0.6, 0.55, 0.6, 0.55] { _ = replaced.apply(.volumeUnanswered(attempt: 11, level: level)) }
+    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { ask(&replaced, position) }
+    for (id, level) in [(2, 0.6), (3, 0.55), (4, 0.6), (5, 0.55)] {
+        _ = replaced.apply(.volumeUnanswered(attempt: 11, level: level, ask: UInt64(id)))
+    }
     _ = replaced.apply(.volume(attempt: 11, reported(0.55)))
     _ = replaced.apply(.volume(attempt: 11, reported(0.6)))
     check(approx(replaced.volume(of: tv), 60, 1e-9),
@@ -13220,8 +13228,8 @@ do {
     // covers: C70, C104 (0.98 and 1.0 went out, 1.0 asked again waited and 0.9 replaced it)
     var again = session(attempt: 13)
     _ = again.apply(.volume(attempt: 13, reported(0.5)))
-    for position in [98.0, 100.0, 100.0, 90.0] { _ = again.setVolume(tv, position: position) }
-    _ = again.apply(.volumeUnanswered(attempt: 13, level: 1))
+    for position in [98.0, 100.0, 100.0, 90.0] { ask(&again, position) }
+    _ = again.apply(.volumeUnanswered(attempt: 13, level: 1, ask: 3))
     for answer in [0.98, 1, 0.9] { _ = again.apply(.volume(attempt: 13, reported(answer))) }
     check(approx(again.volume(of: tv), 90, 1e-9),
           "cast master: a level asked again while it waits is awaited again, so the slider follows the TV to 90")
@@ -13229,11 +13237,33 @@ do {
     // covers: C70, C104 (0.3, 0.6 and 0.3 went out, 0.35 was replaced, then 0.3 went out again)
     var strand = session(attempt: 12)
     _ = strand.apply(.volume(attempt: 12, reported(0.5)))
-    for position in [30.0, 60.0, 30.0, 35.0, 30.0] { _ = strand.setVolume(tv, position: position) }
-    for level in [0.35, 0.3] { _ = strand.apply(.volumeUnanswered(attempt: 12, level: level)) }
+    for position in [30.0, 60.0, 30.0, 35.0, 30.0] { ask(&strand, position) }
+    for (id, level) in [(4, 0.35), (5, 0.3)] { _ = strand.apply(.volumeUnanswered(attempt: 12, level: level, ask: UInt64(id))) }
     for answer in [0.3, 0.6, 0.3] { _ = strand.apply(.volume(attempt: 12, reported(answer))) }
     check(approx(strand.volume(of: tv), 30, 1e-9),
           "cast master: a repeat of a level sent earlier never strands the slider on another level")
+
+    // covers: C70, C104 (the TV answered 0.6, then 0.55 and 0.6 go out before any echo)
+    var inFlight = session(attempt: 15)
+    _ = inFlight.apply(.volume(attempt: 15, reported(0.6)))
+    for position in [55.0, 60.0] { ask(&inFlight, position) }
+    var inFlightShown: [Double] = []
+    for answer in [0.55, 0.6] {
+        _ = inFlight.apply(.volume(attempt: 15, reported(answer)))
+        inFlightShown.append(inFlight.volume(of: tv).rounded())
+    }
+    check(inFlightShown == [60, 60],
+          "cast master: asking the level the TV reports while another level is in flight awaits it, so the earlier echo never moves the slider")
+
+    // covers: C70, C104 (0.6 goes out, 0.7 replaces the waiting 0.55, then 0.55 and 0.8 go out; the
+    // report on the replaced 0.55 arrives after the second 0.55 was asked)
+    var lateReport = session(attempt: 16)
+    _ = lateReport.apply(.volume(attempt: 16, reported(0.5)))
+    for position in [60.0, 55.0, 70.0, 55.0, 80.0] { ask(&lateReport, position) }
+    _ = lateReport.apply(.volumeUnanswered(attempt: 16, level: 0.55, ask: 2))
+    for answer in [0.6, 0.7, 0.55, 0.8] { _ = lateReport.apply(.volume(attempt: 16, reported(answer))) }
+    check(approx(lateReport.volume(of: tv), 80, 1e-9),
+          "cast master: a late report on a replaced level leaves a newer ask of that level awaited, so the slider ends at 80")
 
     // covers: S415
     var row = session(attempt: 11)
@@ -13398,10 +13428,12 @@ do {
     _ = dropped.started(tv, attempt: 1, refusal: ASC_CAST_REFUSED_NONE)
     _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.4, muted: false, fixed: false, step: 0.02)))
     _ = dropped.setVolume(tv, position: 50)
+    dropped.volumeAsked(send: 1, ask: 1)
     // 60 still waits for its 100 ms when the step comes, so the sender steps from 60 and never sends 60.
     _ = dropped.setVolume(tv, position: 60)
+    dropped.volumeAsked(send: 2, ask: 2)
     _ = dropped.stepVolume(tv, up: true)
-    _ = dropped.apply(.volumeUnanswered(attempt: 1, level: 0.6))
+    _ = dropped.apply(.volumeUnanswered(attempt: 1, level: 0.6, ask: 2))
     _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.5, muted: false, fixed: false, step: 0.02)))
     // covers: C69, C70
     check(approx(dropped.volume(of: tv), 62, 1e-9),
@@ -13419,16 +13451,18 @@ do {
     _ = stepBack.started(tv, attempt: 1, refusal: ASC_CAST_REFUSED_NONE)
     _ = stepBack.apply(.volume(attempt: 1, CastVolume(level: 0.3, muted: false, fixed: false, step: 0.02)))
     _ = stepBack.setVolume(tv, position: 40)
+    stepBack.volumeAsked(send: 1, ask: 1)
     _ = stepBack.stepVolume(tv, up: true)
     _ = stepBack.setVolume(tv, position: 40)
-    // The sender steps from 0.4 unrounded, replaces that step with the drag back to 40, and sends 40 again.
-    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4 + 0.02))
-    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4))
+    stepBack.volumeAsked(send: 2, ask: 2)
+    // The sender steps from 0.4 under an ask of its own (3), replaces that step with the drag back to 40, and sends 40 again.
+    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4 + 0.02, ask: 3))
+    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4, ask: 2))
     _ = stepBack.apply(.volume(attempt: 1, CastVolume(level: 0.4, muted: false, fixed: false, step: 0.02)))
     _ = stepBack.apply(.volume(attempt: 1, CastVolume(level: 0.42, muted: false, fixed: false, step: 0.02)))
     // covers: C69, C70
     check(approx(stepBack.volume(of: tv), 42, 1e-9),
-          "cast step: a step the sender reports unanswered at its own unrounded level stops waiting, so the TV's remote moves the slider")
+          "cast step: a step the sender takes on its own is not awaited, so after a drag back the TV's remote moves the slider")
 
     var raw = AscCastEvent()
     raw.kind = ASC_CAST_EVENT_VOLUME
