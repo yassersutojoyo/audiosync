@@ -498,8 +498,15 @@ impl Channel {
         );
         // A device reports only changes, so the level it already has gets no answer (C104).
         let current = self.status.as_ref().map(|status| &status.volume);
-        self.volume_unconfirmed =
-            (!current.is_some_and(|current| answers_volume(level, current))).then_some((id, level));
+        let reported = current.is_some_and(|current| answers_volume(level, current));
+        let repeated = self
+            .volume_unconfirmed
+            .is_some_and(|(_, sent)| sent == level);
+        if repeated || (reported && self.volume_unconfirmed.is_none()) {
+            self.events
+                .push_back(Event::VolumeUnanswered { level, repeated });
+        }
+        self.volume_unconfirmed = (!reported).then_some((id, level));
     }
 
     /// Tears the session down (C44, C87): media `STOP` for the sender's

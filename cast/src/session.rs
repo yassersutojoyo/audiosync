@@ -862,6 +862,9 @@ impl CastSession {
                     self.report(SessionEvent::Volume(status.volume, answers_mute));
                 }
             }
+            Event::VolumeUnanswered { level, repeated } => {
+                self.report(SessionEvent::VolumeUnanswered { level, repeated });
+            }
             Event::MediaStatus(status) => self.last_media = Some(status),
             Event::Multizone(message) => self.on_multizone(message),
             Event::Rebuffering => {

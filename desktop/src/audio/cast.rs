@@ -1124,8 +1124,12 @@ impl CastSpeakers {
         memory: &DeviceMemory,
     ) -> CastInfo {
         let reported = self.volumes.get(&id);
-        let level = self
-            .own_of(id)
+        // Nothing reaches a fixed volume (C68), so zone × own level would be a guess.
+        let fixed = reported
+            .filter(|volume| volume.control_type == ControlType::Fixed)
+            .map(|volume| volume.level);
+        let level = fixed
+            .or_else(|| self.own_of(id))
             .or_else(|| reported.map(|volume| volume.level));
         let session = self.attempt.filter(|attempt| attempt.device == id);
         let status = session.map_or(CastStatus::Idle, |attempt| attempt.status);
@@ -1137,10 +1141,12 @@ impl CastSpeakers {
             offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
             volume: (level.unwrap_or(1.0) * 100.0).max(0.0),
-            device_level: self
-                .held
-                .filter(|(held, _)| *held == id)
-                .map(|(_, level)| level)
+            device_level: fixed
+                .or_else(|| {
+                    self.held
+                        .filter(|(held, _)| *held == id)
+                        .map(|(_, level)| level)
+                })
                 .or_else(|| {
                     self.own_of(id)
                         .map(|own| device_level(self.zone_of(id), own))
@@ -1149,7 +1155,7 @@ impl CastSpeakers {
                 .map_or(100.0, |level| (level * 100.0).clamp(0.0, 100.0)),
             volume_known: level.is_some(),
             muted: reported.is_some_and(|volume| volume.muted),
-            volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
+            volume_fixed: fixed.is_some(),
             volume_step: volume_step(reported),
             offset_ms: offset_ms(memory, &id),
             status,
@@ -1655,6 +1661,27 @@ impl CastSpeakers {
         }
     }
 
+    /// The sender sent `level`, the latest asked for, with no answer to come
+    /// (C70, C104): when `repeated`, the levels asked for since its earlier
+    /// copy never went out; else the device already reports it.
+    fn volume_unanswered(&mut self, device: DeviceId, level: f64, repeated: bool) {
+        if self.unanswered.last() != Some(&level) {
+            return;
+        }
+        let kept = match self.unanswered.iter().position(|&sent| sent == level) {
+            Some(first) if repeated => first + 1,
+            _ => 0,
+        };
+        self.unanswered.truncate(kept);
+        if self.unanswered.is_empty()
+            && let Some((requested, own)) = self.requested
+            && requested == device
+        {
+            self.levels.insert(device, own);
+            self.requested = None;
+        }
+    }
+
     /// Shown at once; the device's next status replaces it (C70).
     pub fn set_muted(&mut self, id: &str, muted: bool) {
         let Some(device) = self.playing_device(id) else {
@@ -2011,7 +2038,9 @@ impl CastSpeakers {
                 }
                 self.volume_reported(device, volume, answers_mute)
             }
-            SessionEvent::VolumeUnanswered { .. } => {}
+            SessionEvent::VolumeUnanswered { level, repeated } => {
+                self.volume_unanswered(device, level, repeated);
+            }
             SessionEvent::Diagnostics(diagnostics) => {
                 self.log
                     .log(|| format!("Cast diagnostics: {diagnostics:?}"));
