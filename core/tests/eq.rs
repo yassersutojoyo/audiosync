@@ -128,10 +128,14 @@ impl Reference {
     }
 
     fn retune(&mut self, settings: &EqSettings, fs: f64) {
-        let (state, from) = (self.state, self.ramped());
+        let (state, ramp, from, old) = (self.state, self.ramp, self.ramped(), self.preamp);
         *self = Reference::new(settings, fs);
         self.state = state;
-        self.ramp = (from, 0, (0.010 * fs).round() as u64);
+        self.ramp = if self.preamp == old {
+            ramp
+        } else {
+            (from, 0, (0.010 * fs).round() as u64)
+        };
     }
 
     fn ramped(&self) -> f64 {
@@ -509,6 +513,7 @@ fn a_curve_change_ramps_the_preamp_instead_of_stepping_it() {
     let flat = enabled([0.0; BAND_COUNT], 0.0);
     let bass = enabled(preset("bassBoost").unwrap().gains_db, 0.0);
     let (mut control, mut processor) = configured(48_000.0, flat);
+    let mut reference = Reference::new(&flat, 48_000.0);
     // A 37.5 Hz cosine peaks every 1280 frames, so the change at frame 5120
     // lands on a peak, where Bass Boost's 6 dB headroom cut steps furthest.
     let input: Vec<f32> = (0..40 * BLOCK)
@@ -518,14 +523,23 @@ fn a_curve_change_ramps_the_preamp_instead_of_stepping_it() {
         })
         .collect();
     let mut output = Vec::with_capacity(input.len());
+    let mut expected = Vec::with_capacity(input.len());
     for (index, chunk) in input.chunks(2 * BLOCK).enumerate() {
         if index == 10 {
             control.set_settings(bass);
+            reference.retune(&bass, 48_000.0);
         }
         let mut block = chunk.to_vec();
         processor.process(&mut block);
         output.extend_from_slice(&block);
+        let mut block = chunk.to_vec();
+        reference.process(&mut block);
+        expected.extend_from_slice(&block);
     }
+    assert_eq!(
+        output, expected,
+        "a linear preamp ramp of 10 ms, 480 frames"
+    );
     let tone = largest_step(&input);
     let worst = largest_step(&output);
     // The new filters swell the bass in over the first frames at up to about

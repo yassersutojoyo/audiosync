@@ -781,6 +781,7 @@ impl EqProcessor {
             // S28: the first enabled block after a disabled stretch starts
             // from zeroed filters; their memory is from audio that is long gone.
             self.zero_state();
+            self.preamp_frames = self.current.fade_frames;
             self.running = true;
         }
         let samples = interleaved.len() / 2 * 2;
