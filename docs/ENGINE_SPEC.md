@@ -3989,7 +3989,7 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_zone_member_moved_while_closed_isnt_guessed_between_two_or_another_kind | S286 |
 | zone_member_kinds_are_optional_and_an_unknown_kind_costs_only_its_entry | S286, S212 |
 | an_address_added_cast_zone_member_keeps_its_announced_name_once_it_leaves_the_list | S286 |
-| a_cast_speaker_listed_under_its_address_that_leaves_its_zone_is_named_alike_in_row_and_notices | S286 |
+| a_cast_speaker_listed_under_its_address_that_leaves_its_zone_is_named_alike_in_row_notices_and_renames | S286 |
 | a_zoned_gain_crosses_the_boundary_as_the_core_makes_it (`core/src/ffi.rs`) | S71, S249 |
 | k1_at_master_63_the_row_and_the_television_agree_both_ways (`core/src/ffi/airplay.rs`) | S290, S291, S413 |
 | the_s290_vector_cases_land_on_the_television (`core/src/ffi/airplay.rs`) | S290, S291, S276, S271, S289, S413 |

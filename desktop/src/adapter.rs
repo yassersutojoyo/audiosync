@@ -15832,7 +15832,7 @@ mod tests {
 
     // covers: S286
     #[test]
-    fn a_cast_speaker_listed_under_its_address_that_leaves_its_zone_is_named_alike_in_row_and_notices()
+    fn a_cast_speaker_listed_under_its_address_that_leaves_its_zone_is_named_alike_in_row_notices_and_renames()
      {
         let dir = test_dir("adapter-cast-zone-left-name");
         let path = dir.join(settings::FILE_NAME);
@@ -15860,6 +15860,15 @@ mod tests {
             messages(&adapter).contains(&cast_cant_play("192.0.2.31", UiCastProblem::Busy)),
             "{:?}",
             messages(&adapter)
+        );
+        adapter.rename_speaker(&cc(DEN), "Den");
+        adapter.rename_speaker(&cc(DEN), "192.0.2.31");
+        assert!(
+            !adapter
+                .current_settings()
+                .speaker_names
+                .contains_key(&cc(DEN)),
+            "typing the name its row shows clears the rename"
         );
         let _ = std::fs::remove_dir_all(dir);
     }
