@@ -8492,6 +8492,16 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
+    #[test]
+    fn a_format_that_converts_reads_apart_from_one_that_doesnt() {
+        let own = crate::audio::mock::MOCK_STREAM.format;
+        let converted = RenderFormat {
+            convert: !own.convert,
+            ..own
+        };
+        assert_ne!(describe_format(Some(own)), describe_format(Some(converted)));
+    }
+
     // covers: S330, S177
     #[test]
     fn a_format_reopen_never_moves_another_outputs_hold_back() {
