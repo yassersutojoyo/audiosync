@@ -3142,6 +3142,33 @@ mod tests {
         assert!(read.to_json().contains(r#""maximized": false"#));
     }
 
+    #[test]
+    fn a_window_saved_before_the_slim_speaker_list_opens_at_the_default_width_once() {
+        let text = r#"{"version": 3, "window": {"x": 10, "y": 20, "width": 980.0, "height": 700.0}}"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        let slim = WindowFrame {
+            x: 10,
+            y: 20,
+            width: MIN_WINDOW.0,
+            height: 700.0,
+            maximized: false,
+        };
+        assert_eq!(read.window, Some(slim), "only the width changes");
+        let widened = Settings {
+            window: Some(WindowFrame {
+                width: 980.0,
+                ..slim
+            }),
+            ..read
+        };
+        let (again, _) = Settings::from_json(&widened.to_json()).expect("read");
+        assert_eq!(
+            again.window.map(|frame| frame.width),
+            Some(980.0),
+            "a width saved after that is kept"
+        );
+    }
+
     // covers: S385
     #[test]
     fn a_newer_file_is_kept_aside_before_the_first_save_over_it() {
