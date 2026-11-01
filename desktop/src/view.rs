@@ -2609,17 +2609,15 @@ impl App {
             });
         });
         let w = weak.clone();
-        main.on_calibrate_all_include_requested(move |row, included| {
+        main.on_calibrate_all_include_requested(move |id, included| {
             with_app(&w, |app| {
-                let id = usize::try_from(row).ok().and_then(|row| {
-                    let state = app.snapshot();
-                    state
-                        .calibrate_all
-                        .left_out
-                        .get(row)
-                        .map(|left| left.id.clone())
-                });
-                if let Some(id) = id {
+                let listed = app
+                    .snapshot()
+                    .calibrate_all
+                    .left_out
+                    .iter()
+                    .any(|left| left.id == id.as_str());
+                if listed {
                     app.update(|b| b.include_in_calibration(&id, included));
                 }
             });
@@ -5210,6 +5208,7 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             .left_out
             .iter()
             .map(|row| LeftOutItem {
+                id: row.id.as_str().into(),
                 name: row.name.as_str().into(),
                 reason: left_out_reason(strings, row),
                 help: match row.kind {
@@ -7018,6 +7017,50 @@ mod tests {
             "Left out of microphone calibration: a virtual output has nothing for the \
              microphone to hear."
         );
+    }
+
+    // covers: S362
+    #[test]
+    fn include_anyway_acts_on_the_output_its_row_showed_after_the_list_changed() {
+        use i_slint_backend_testing::ElementHandle;
+        fn row(id: &str, name: &str) -> LeftOutRow {
+            LeftOutRow {
+                id: id.into(),
+                name: name.into(),
+                kind: ui_model::MicKind::Headphones,
+                included: false,
+            }
+        }
+        let backend = MockBackend::new();
+        let left_out = backend.left_out.clone();
+        let includes = backend.includes.clone();
+        *left_out.borrow_mut() = vec![row("phones", "Headphones"), row("cable", "Cable Input")];
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        // Tall enough that the card's left-out rows are on screen.
+        app.main
+            .window()
+            .set_size(slint::PhysicalSize::new(1000, 2000));
+        let click = |label: &str| {
+            let buttons: Vec<_> =
+                ElementHandle::find_by_accessible_label(&app.main, label).collect();
+            assert_eq!(buttons.len(), 1, "{label}");
+            buttons[0].invoke_accessible_default_action();
+        };
+
+        // A headset plugged in ahead of them before the card redraws.
+        *left_out.borrow_mut() = vec![
+            row("usb", "USB Headset"),
+            row("phones", "Headphones"),
+            row("cable", "Cable Input"),
+        ];
+        click("Include Cable Input anyway");
+        assert_eq!(*includes.borrow(), vec![("cable".to_owned(), true)]);
+
+        // Unplugged before the card redraws: the click does nothing.
+        *left_out.borrow_mut() = vec![row("usb", "USB Headset"), row("cable", "Cable Input")];
+        click("Include Headphones anyway");
+        assert_eq!(includes.borrow().len(), 1);
     }
 
     #[test]

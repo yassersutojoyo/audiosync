@@ -1958,6 +1958,10 @@ pub struct MockBackend {
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each AirPlay delay applied, as asked.
     pub airplay_delays: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+    /// Calibrate All's left-out list, read at each snapshot.
+    pub left_out: std::rc::Rc<std::cell::RefCell<Vec<LeftOutRow>>>,
+    /// Each Include Anyway (true) or Leave Out, by output ID.
+    pub includes: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each volume slider hold (true) or release (false), by speaker key.
     pub volume_editing: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Window settings the next poll takes in, as a settings file read
@@ -2148,6 +2152,8 @@ impl MockBackend {
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
             airplay_delays: std::rc::Rc::default(),
+            left_out: std::rc::Rc::default(),
+            includes: std::rc::Rc::default(),
             volume_editing: std::rc::Rc::default(),
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
@@ -2506,6 +2512,7 @@ impl Backend for MockBackend {
             .iter()
             .any(|speaker| speaker.kind == SpeakerKind::Cast && speaker.enabled);
         show_presets(&mut state, &self.presets);
+        state.calibrate_all.left_out = self.left_out.borrow().clone();
         state
     }
 
@@ -2637,6 +2644,10 @@ impl Backend for MockBackend {
         {
             speaker.delay_ms = Some(clamp_delay_ms(ms));
         }
+    }
+
+    fn include_in_calibration(&mut self, id: &str, included: bool) {
+        self.includes.borrow_mut().push((id.to_owned(), included));
     }
 
     fn set_airplay_delay(&mut self, ms: f64) {

@@ -816,8 +816,9 @@ component CalibrationCard inherits Card {
     callback cancel();
     callback privacy-requested();
     callback measure-again(int);
-    // Include Anyway (true) or Leave Out (false) on a left-out row.
-    callback include(int, bool);
+    // Include Anyway (true) or Leave Out (false) on a left-out row, by its
+    // output's ID.
+    callback include(string, bool);
     callback apply();
     callback undo();
     callback focus-changed(bool);
@@ -914,7 +915,7 @@ component CalibrationCard inherits Card {
                         accessible-label: item.included ? Strings.leave-out-label(item.name) : Strings.include-anyway-label(item.name);
                         accessible-description: item.reason + " " + item.help;
                         clicked => {
-                            root.include(index, !item.included);
+                            root.include(item.id, !item.included);
                         }
                     }
                 }
@@ -1343,7 +1344,7 @@ export component MainWindow inherits Window {
     callback calibrate-all-requested();
     callback cancel-calibrate-all-requested();
     callback calibrate-all-again-requested(int);
-    callback calibrate-all-include-requested(int, bool);
+    callback calibrate-all-include-requested(string, bool);
     callback calibrate-all-apply-requested();
     callback calibrate-all-undo-requested();
     callback calibrate-all-close-requested();
@@ -2005,8 +2006,8 @@ export component MainWindow inherits Window {
                         measure-again(row) => {
                             root.calibrate-all-again-requested(row);
                         }
-                        include(row, included) => {
-                            root.calibrate-all-include-requested(row, included);
+                        include(id, included) => {
+                            root.calibrate-all-include-requested(id, included);
                         }
                         focus-changed(has) => {
                             root.control-focus-changed(MainControl.calibration, has);

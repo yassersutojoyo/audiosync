@@ -58,6 +58,8 @@ export struct MixAppItem {
 
 // An output that is on but left out of Calibrate All by its kind.
 export struct LeftOutItem {
+    // Its endpoint ID.
+    id: string,
     name: string,
     // Why it is left out, or that it is included anyway.
     reason: string,
