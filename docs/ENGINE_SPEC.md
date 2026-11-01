@@ -1160,6 +1160,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | capture rate: the rate of the device the IOProc runs on wins over the tap's | S16, S157 |
 | capture rate: the tap's rate when the device's can't be read | S16, S157 |
 | capture rate: nothing readable keeps the session playing | S157 |
+| capture rate: a reopen whose app tap waits for an audio process keeps the session rate | S335 |
+| capture rate: a reopened capture at a real other rate still restarts the session | S335 |
 | input format: native 32-bit float is read as it is | S14, S16 |
 | input format: big-endian, 64-bit, unsigned and fixed-point samples aren't read | S14, S16 |
 | input format: a device without input channels has nothing to capture | S14 |
