@@ -2622,11 +2622,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         self.log
             .log(|| format!("the user recalled preset \"{}\"", preset.name));
-        // Before any member goes on, so a speaker that starts plays at its zone level.
+        // Before any member goes on, so a speaker that starts plays at the
+        // preset's master, its zone level and its own volume.
+        self.audio.set_master_volume(preset.master);
         for (zone, volume) in presets::recall_zone_volumes(&preset, &self.zones) {
             self.zones.set_volume(zone, volume);
         }
         self.push_zone_volumes();
+        for ((key, volume, ..), set_volume) in members.iter().zip(&plan.set_volume) {
+            if let (true, Some(volume)) = (*set_volume, volume) {
+                self.set_preset_volume(key, *volume);
+            }
+        }
         for ((id, ..), off) in others.iter().zip(&plan.switch_off) {
             if let (true, Some(key)) = (*off, SpeakerKey::parse(id)) {
                 self.switch_zone_member(&key, false);
@@ -2637,17 +2644,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             preset.members.iter().any(|member| member.key == key)
         });
         let running = self.running();
-        for ((key, volume, _, facts), (step, set_volume)) in
-            members.iter().zip(plan.steps.iter().zip(&plan.set_volume))
-        {
+        for ((key, _, _, facts), step) in members.iter().zip(&plan.steps) {
             if matches!(step, RecallStep::On | RecallStep::Waiting) && (!running || !facts.on) {
                 self.switch_zone_member(key, true);
             }
-            if let (true, Some(volume)) = (*set_volume, volume) {
-                self.set_preset_volume(key, *volume);
-            }
         }
-        self.audio.set_master_volume(preset.master);
         // The preamp and the equalizer switch are standing trims outside
         // every preset.
         self.equalizer.gains_db = preset.gains_db;
@@ -17205,6 +17206,65 @@ mod tests {
         let cast = *fake.state().volumes.last().expect("a Cast volume");
         assert!((cast - 0.225).abs() < 1e-9, "{cast}");
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
+    // covers: S252
+    #[test]
+    fn an_output_a_recall_switches_on_starts_at_the_preset_master() {
+        let mut adapter = adapter();
+        adapter.restore(Settings {
+            master_volume: 30.0,
+            speaker_presets: vec![SavedPreset {
+                gains_db: [0.0; audiosync_core::eq::BAND_COUNT],
+                ..saved_preset(&[(key(SPEAKERS), None), (key(HEADPHONES), None)])
+            }],
+            ..Settings::default()
+        });
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+
+        adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        let preset_gain = adapter
+            .audio
+            .playing_params(HEADPHONES)
+            .expect("playing")
+            .gain;
+        let started = adapter.audio.driver().start_gains();
+        assert_eq!(
+            started.last(),
+            Some(&(HEADPHONES.to_owned(), preset_gain)),
+            "{started:?}"
+        );
+    }
+
+    // covers: S252
+    #[test]
+    fn an_output_a_recall_switches_on_starts_at_its_preset_volume() {
+        let mut adapter = adapter();
+        adapter.restore(Settings {
+            speaker_presets: vec![SavedPreset {
+                gains_db: [0.0; audiosync_core::eq::BAND_COUNT],
+                ..saved_preset(&[(key(SPEAKERS), None), (key(HEADPHONES), Some(20.0))])
+            }],
+            ..Settings::default()
+        });
+        adapter.poll();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_speaker_volume(&key(HEADPHONES), 90.0);
+
+        adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        let preset_gain = adapter
+            .audio
+            .playing_params(HEADPHONES)
+            .expect("playing")
+            .gain;
+        let first_gain = adapter.audio.driver().start_gains().last().cloned();
+        assert_eq!(first_gain, Some((HEADPHONES.to_owned(), preset_gain)));
     }
 
     // covers: S252, S253
