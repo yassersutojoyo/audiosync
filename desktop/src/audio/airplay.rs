@@ -6852,6 +6852,33 @@ pub mod tests {
 
     // covers: S223
     #[test]
+    fn a_newer_pin_waits_behind_an_open_password_prompt() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let study_id = id_of(&password_asked(&fake, &mut airplay));
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let tv_id = id_of(&tv);
+        fake.appear(&tv);
+        airplay.poll();
+        assert_eq!(
+            airplay.set_enabled(&tv_id, true),
+            Err(AirPlayProblem::NeedsPin)
+        );
+        airplay.start_pairing(&tv_id).expect("the pairing starts");
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        airplay.poll();
+        assert_eq!(
+            airplay.password_prompt().map(|prompt| prompt.id),
+            Some(study_id.clone()),
+            "the older password prompt stays open"
+        );
+        assert_eq!(airplay.pin_prompt(), None, "one prompt at a time");
+        airplay.cancel_password(&study_id);
+        assert_eq!(airplay.pin_prompt().map(|prompt| prompt.id), Some(tv_id));
+    }
+
+    // covers: S223
+    #[test]
     fn cancel_stops_the_pairing_and_leaves_the_speaker_off() {
         let fake = FakeAirPlay::new();
         let mut airplay = speakers(&fake);
