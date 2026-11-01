@@ -1270,6 +1270,11 @@ mod tests {
                 "ASC_AIRPLAY_EVENT_LATENCY_HELD",
                 AIRPLAY_EVENT_LATENCY_HELD.to_string(),
             ),
+            ("ASC_AIRPLAY_EVENT_STORED", AIRPLAY_EVENT_STORED.to_string()),
+            (
+                "ASC_AIRPLAY_PAIRED_FOR_SESSION",
+                AIRPLAY_PAIRED_FOR_SESSION.to_string(),
+            ),
             (
                 "ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY",
                 AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY.to_string(),

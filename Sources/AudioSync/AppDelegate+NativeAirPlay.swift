@@ -71,6 +71,7 @@ extension AppDelegate {
         if started {
             clearNotices([Notice.airplaySender, Notice.airplayPtp])   // a new sender binds PTP anew
             ptpPortNotice = PtpPortNotice()
+            pairingsWrites = PairingsWriteNotice()
             if !native.pairingsNotSaved {
                 clearNotices([Notice.pairings])
             } else if !appModel.notices.items.contains(where: { $0.subject == Notice.pairings }) {
@@ -131,8 +132,22 @@ extension AppDelegate {
     private func nativeSpeakerEvent(_ event: NativeSpeakerEvent, _ outcome: NativeAirPlayOutcome?) {
         let names = nativeAirPlay?.model.names ?? [:]
         DebugTrace.log(event.logLine { names[$0] })
+        if let saved = event.pairingsSaved { pairingsWritten(saved) }
         if let outcome { nativeOutcome(outcome) }
         closeWithdrawnPrompt()   // its pairing may have ended underneath
+    }
+
+    /// A write of the pairings file worked or failed (S224), as on Windows.
+    private func pairingsWritten(_ saved: Bool) {
+        switch pairingsWrites.written(saved, openedUnsaved: nativeAirPlay?.pairingsNotSaved ?? false) {
+        case .post?:
+            postNotice(text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings,
+                       shortName: text.pairingsNotSavedNoticeName)
+        case .clear?:
+            clearNotices([Notice.pairings])
+        case nil:
+            break
+        }
     }
 
     /// Acts on what the native model decided.
@@ -525,7 +540,7 @@ extension AppDelegate {
     func forgetNativePairing(_ id: String) {
         guard let receiver = NativeAirPlayID.receiver(id) else { return }
         endNativeAttempt(id)
-        nativeAirPlay?.forgetPairing(receiver)
+        nativeAirPlay?.forgetPairing(receiver) { [weak self] saved in self?.pairingsWritten(saved) }
         nativeAirPlay?.setPassword(receiver, nil)
         nativeAirPlay?.model.forgetPassword(receiver)
         clearNotices(Notice.forgotten(airPlay: id))

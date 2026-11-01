@@ -377,14 +377,18 @@ final class NativeAirPlay {
     }
 
     /// Forgets the stored pairing of `id`, AirPlay 2 credentials included;
-    /// it needs a PIN again.
-    func forgetPairing(_ id: String) {
+    /// it needs a PIN again. `written` gets on the main queue whether its
+    /// files were written, when it was paired.
+    func forgetPairing(_ id: String, written: @escaping (Bool) -> Void) {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
-            if asc_airplay_forget_pairing(handle, id) == ASC_AIRPLAY_FORGET_UNWRITTEN {
-                DispatchQueue.main.async {
+            let forgotten = asc_airplay_forget_pairing(handle, id)
+            guard forgotten != ASC_AIRPLAY_FORGET_NOT_PAIRED else { return }
+            DispatchQueue.main.async {
+                if forgotten == ASC_AIRPLAY_FORGET_UNWRITTEN {
                     DebugTrace.log("[AudioSync] native AirPlay: \(id) pairing forgotten for this run only; its file couldn't be written")
                 }
+                written(forgotten != ASC_AIRPLAY_FORGET_UNWRITTEN)
             }
         }
     }
@@ -809,7 +813,9 @@ final class NativeAirPlay {
             return .pairingFailed(id: id, wrongPin: raw.error == ASC_AIRPLAY_ERROR_WRONG_PIN,
                                   Self.problem(raw.error, reason: raw.unsupported), detail: text(raw.detail))
         case ASC_AIRPLAY_EVENT_PAIRED:
-            return .paired(id: id, storeNote: text(raw.detail))
+            return .paired(id: id, storeNote: text(raw.detail), forSession: raw.error == ASC_AIRPLAY_PAIRED_FOR_SESSION)
+        case ASC_AIRPLAY_EVENT_STORED:
+            return .stored(id: id, storeNote: text(raw.detail))
         case ASC_AIRPLAY_EVENT_VOLUME:
             return .volume(id: id, position: raw.volume, level: raw.device_level)
         case ASC_AIRPLAY_EVENT_WARNING:

@@ -314,8 +314,12 @@ enum NativeSpeakerEvent: Equatable {
     /// (`wrongPin`, a new pairing shows a PIN again), or `problem`.
     case pairingFailed(id: String, wrongPin: Bool, Problem, detail: String)
     /// A pairing succeeded and its credentials are stored; `storeNote` is
-    /// empty, or why they last only until AudioSync quits.
-    case paired(id: String, storeNote: String)
+    /// empty, or why they last only until AudioSync quits. `forSession`: it
+    /// paired for this session only and nothing was stored.
+    case paired(id: String, storeNote: String, forSession: Bool = false)
+    /// A PIN pairing whose verify failed stored its credentials; the
+    /// pairing failure that follows ends it (P153). `storeNote` as above.
+    case stored(id: String, storeNote: String)
     /// Someone changed its volume on the speaker itself: the own volume
     /// (0 to 100) behind it and the device level D (0 to 100) the row shows
     /// (S290), which the sender already counts as the speaker's (P122, P180).
@@ -327,6 +331,14 @@ enum NativeSpeakerEvent: Equatable {
     /// Its session bound the PTP ports after the sender reported them
     /// taken: they are free again (P158).
     case ptpFree(id: String)
+
+    /// Whether the pairings' write worked, for an event that wrote them (S224).
+    var pairingsSaved: Bool? {
+        switch self {
+        case .paired(_, let storeNote, false), .stored(_, let storeNote): return storeNote.isEmpty
+        default: return nil
+        }
+    }
 
     /// The event as a debug log line; `name` gives a speaker's name. Never
     /// holds a PIN, password or credential (none crosses into the app).
@@ -361,8 +373,13 @@ enum NativeSpeakerEvent: Equatable {
             line = "\(label(id)): pairing needs the password" + (wrong ? " (the one given was turned down)" : "")
         case .pairingFailed(let id, let wrongPin, let problem, let detail):
             line = "\(label(id)): pairing failed: " + (wrongPin ? "wrong PIN" : problem.rawValue) + " (\(detail))"
-        case .paired(let id, let note):
+        case .paired(let id, _, true):
+            line = "\(label(id)): paired for this session, nothing stored (it asks for a code every time)"
+        case .paired(let id, let note, false):
             line = "\(label(id)): paired, credentials stored" + (note.isEmpty ? "" : " for this run only (\(note))")
+        case .stored(let id, let note):
+            line = "\(label(id)): the pairing's credentials stored before its verify failed"
+                + (note.isEmpty ? "" : " for this run only (\(note))")
         case .volume(let id, let position, let level):
             let shown = String(format: "%.1f", level)
             line = "\(label(id)) volume changed on the speaker: device level \(shown), own volume \(Int(position.rounded()))"
@@ -1060,7 +1077,7 @@ struct NativeAirPlayModel {
             default: reason = .pairingFailed
             }
             return .turnOff(NativeAirPlayID.app(id), reason)
-        case .paired(let id, _):
+        case .paired(let id, _, _):
             // Turned off meanwhile: the credentials stay stored, the speaker off.
             guard stages[id]?.pairingRuns == true else { return nil }
             stages[id] = nil
@@ -1223,6 +1240,8 @@ struct NativeAirPlayModel {
             return .senderFailed
         case .pinNeeded, .passwordNeeded, .pairingFailed, .paired:
             return pairingEvent(event)
+        case .stored:
+            return nil
         case .volume(let id, let position, let level):
             guard states[id] != nil else { return nil }
             return .volumeChanged(NativeAirPlayID.app(id), position, level)
@@ -1231,6 +1250,22 @@ struct NativeAirPlayModel {
         case .ptpFree:
             return .ptpPortsFree
         }
+    }
+}
+
+/// The pairings notice as the pairings file's writes go (S224, main queue):
+/// a write that fails posts it once while the writes keep failing, and the
+/// next one that works clears it, unless the sender opened a store that
+/// keeps nothing, whose notice stays.
+struct PairingsWriteNotice: Equatable {
+    enum Change: Equatable { case post, clear }
+
+    private(set) var failing = false
+
+    mutating func written(_ saved: Bool, openedUnsaved: Bool) -> Change? {
+        guard saved == failing else { return nil }
+        failing = !saved
+        return saved ? (openedUnsaved ? nil : .clear) : .post
     }
 }
 

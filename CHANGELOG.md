@@ -58,6 +58,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On the Mac, when AudioSync can't save a new AirPlay pairing or a forgotten one, you get the notice that your pairings aren't saved, as on Windows, and it goes away once a save works again. Before, the Mac told you only when the pairings file couldn't be opened at launch.
 - On Windows, while you capture several apps and none of them plays a track, a TV playing through AirPlay shows the source's name from the source menu, as on the Mac. Before, it said "All System Audio", or kept showing a paused track. Now only a playing track shows, on AirPlay and on Google Cast speakers.
 - On Windows, when an app other than Spotify plays a track without a cover, a TV playing through AirPlay shows AudioSync's icon at once, as on the Mac. Before, it waited 5 seconds and could keep the last track's cover meanwhile.
 - The libraries behind AirPlay pairing's cryptography are updated to versions that fix published security advisories (RUSTSEC-2026-0385 and RUSTSEC-2026-0387). On the Mac, so is the one that reads AirPlay property lists (RUSTSEC-2026-0194 and RUSTSEC-2026-0195).

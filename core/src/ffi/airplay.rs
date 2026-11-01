@@ -238,7 +238,8 @@ pub const AIRPLAY_EVENT_PAIRING_FAILED: i32 = 8;
 /// A pairing succeeded and the receiver is listed as available again; its
 /// credentials are in the store (P54). [`AscAirPlayEvent::detail`] is ""
 /// when they were written to the file, or why they last only until the
-/// handle is destroyed.
+/// handle is destroyed. With [`AIRPLAY_PAIRED_FOR_SESSION`] as its error it
+/// paired for this session only and nothing was stored.
 pub const AIRPLAY_EVENT_PAIRED: i32 = 9;
 /// A person changed the speaker's volume on the speaker itself
 /// ([`asc_airplay_read_volumes`], P122, P180): [`AscAirPlayEvent::volume`]
@@ -262,6 +263,16 @@ pub const AIRPLAY_EVENT_REMOTE: i32 = 13;
 /// speaker or the timeline restarts, when a timeline event reports it
 /// (P201).
 pub const AIRPLAY_EVENT_LATENCY_HELD: i32 = 14;
+/// A pin pairing whose verify failed got credentials, which are in the
+/// store (P153); the failure that follows ends the pairing.
+/// [`AscAirPlayEvent::detail`] is "" when they were written to the file, or
+/// why they last only until the handle is destroyed.
+pub const AIRPLAY_EVENT_STORED: i32 = 15;
+
+/// A paired event's [`AscAirPlayEvent::error`]: paired for this session
+/// only, with nothing stored or written; the receiver asks for a code every
+/// time.
+pub const AIRPLAY_PAIRED_FOR_SESSION: i32 = 1;
 
 /// A remote event's control ([`AscAirPlayEvent::remote`]): play-pause.
 pub const AIRPLAY_REMOTE_PLAY_PAUSE: i32 = 1;
@@ -625,7 +636,7 @@ enum Pending {
     /// The sender is dead ([`AIRPLAY_EVENT_FAILED`]).
     Failed,
     /// A pairing event for the host: its kind (`AIRPLAY_EVENT_PIN_NEEDED`
-    /// to `AIRPLAY_EVENT_PAIRED`), the receiver ID, the error and
+    /// to `AIRPLAY_EVENT_PAIRED`, or `AIRPLAY_EVENT_STORED`), the receiver ID, the error and
     /// unsupported codes and the detail. Never a secret.
     Pairing {
         kind: i32,
@@ -1561,7 +1572,12 @@ impl AscAirPlay {
                 // for the session came unauthenticated (P61, P154).
                 self.paired_for_session.insert(id.clone());
                 self.relist(&id);
-                (AIRPLAY_EVENT_PAIRED, 0, AIRPLAY_REASON_NONE, String::new())
+                (
+                    AIRPLAY_EVENT_PAIRED,
+                    AIRPLAY_PAIRED_FOR_SESSION,
+                    AIRPLAY_REASON_NONE,
+                    String::new(),
+                )
             }
             PairingEvent::Failed { error, wrong_pin } => {
                 self.pairing.remove(&id);
@@ -1694,15 +1710,17 @@ impl AscAirPlay {
         detail
     }
 
-    /// Stores the credentials of a PIN pairing whose verify failed (P153);
-    /// a failed write reaches the debug log only, as the Failed that
-    /// follows is what the host shows.
+    /// Stores the credentials of a PIN pairing whose verify failed (P153)
+    /// and tells the host how their write went ([`AIRPLAY_EVENT_STORED`]).
     fn store_unverified(&mut self, id: &str, credentials: HomeKitCredentials) {
         let detail = self.store_homekit_paired(id, credentials);
-        if !detail.is_empty() && debug_trace_on() {
-            let line = SpeakerEvent::Trace(format!("pairing: {detail}"));
-            self.queue_event(Pending::Speaker(id.to_owned(), line));
-        }
+        self.queue_event(Pending::Pairing {
+            kind: AIRPLAY_EVENT_STORED,
+            id: id.to_owned(),
+            error: 0,
+            unsupported: AIRPLAY_REASON_NONE,
+            detail,
+        });
     }
 
     /// Has the sender start a pairing with `device`, the receiver `id`,
@@ -9106,13 +9124,26 @@ mod tests {
         });
         events.extend(std::iter::from_fn(|| take_event(handle)));
         // Every event the host gets besides the sender's timeline ticks: the
-        // failure, and no PAIRED or state that would turn the speaker on.
+        // write of the credentials and the failure, and no PAIRED or state
+        // that would turn the speaker on.
         let all: Vec<_> = events
             .iter()
             .filter(|e| e.kind != AIRPLAY_EVENT_TIMELINE)
             .map(|e| (e.kind, e.id.as_str()))
             .collect();
-        assert_eq!(all, [(AIRPLAY_EVENT_PAIRING_FAILED, id)]);
+        assert_eq!(
+            all,
+            [
+                (AIRPLAY_EVENT_STORED, id),
+                (AIRPLAY_EVENT_PAIRING_FAILED, id)
+            ]
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == AIRPLAY_EVENT_STORED && e.detail.is_empty()),
+            "the file was written"
+        );
         assert!(inside(handle).pairing.is_empty());
         assert_eq!(inside(handle).identity.get(id), Some(&credentials));
         // SAFETY: destroyed once, by this thread.
@@ -9240,7 +9271,7 @@ mod tests {
         });
         assert_eq!(
             pairing_events(&events),
-            vec![(AIRPLAY_EVENT_PAIRED, id.clone(), 0)]
+            vec![(AIRPLAY_EVENT_PAIRED, id.clone(), AIRPLAY_PAIRED_FOR_SESSION)]
         );
         assert_eq!(
             inside(handle).identity.get(&id),

@@ -16115,6 +16115,53 @@ do {
     // covers: S224
     check(NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_UNREADABLE),
           "pairings notice: a file that couldn't be read, which is left as it is, is told")
+    var pairingsWrites = PairingsWriteNotice()
+    let firstFailedWrite = pairingsWrites.written(false, openedUnsaved: false)
+    let secondFailedWrite = pairingsWrites.written(false, openedUnsaved: false)
+    // covers: S224
+    check(firstFailedWrite == .post && secondFailedWrite == nil,
+          "pairings notice: a write that fails posts it, once while the writes keep failing",
+          "\(String(describing: firstFailedWrite)) \(String(describing: secondFailedWrite))")
+    let workingWrite = pairingsWrites.written(true, openedUnsaved: false)
+    let nextWorkingWrite = pairingsWrites.written(true, openedUnsaved: false)
+    // covers: S224
+    check(workingWrite == .clear && nextWorkingWrite == nil,
+          "pairings notice: the next write that works clears it",
+          "\(String(describing: workingWrite)) \(String(describing: nextWorkingWrite))")
+    var unsavedStore = PairingsWriteNotice()
+    _ = unsavedStore.written(false, openedUnsaved: true)
+    let memoryOnlyWrite = unsavedStore.written(true, openedUnsaved: true)
+    // covers: S224
+    check(memoryOnlyWrite == nil,
+          "pairings notice: a write into a store opened as one that keeps nothing leaves the launch notice",
+          String(describing: memoryOnlyWrite))
+    var rawPairedEvent = AscAirPlayEvent()
+    rawPairedEvent.kind = ASC_AIRPLAY_EVENT_PAIRED
+    let pairedAndStored = NativeAirPlay.event(rawPairedEvent)
+    rawPairedEvent.error = ASC_AIRPLAY_PAIRED_FOR_SESSION
+    let pairedForSessionOnly = NativeAirPlay.event(rawPairedEvent)
+    var rawStoredEvent = AscAirPlayEvent()
+    rawStoredEvent.kind = ASC_AIRPLAY_EVENT_STORED
+    let storedUnverified = NativeAirPlay.event(rawStoredEvent)
+    // covers: S224
+    check(pairedAndStored == .paired(id: "", storeNote: "")
+            && pairedForSessionOnly == .paired(id: "", storeNote: "", forSession: true)
+            && storedUnverified == .stored(id: "", storeNote: ""),
+          "pairings notice: the core's paired, session-only paired and stored events read apart",
+          "\(String(describing: pairedAndStored)) \(String(describing: pairedForSessionOnly)) \(String(describing: storedUnverified))")
+    // covers: S224
+    check(NativeSpeakerEvent.paired(id: "B2", storeNote: "").pairingsSaved == true
+            && NativeSpeakerEvent.paired(id: "B2", storeNote: "disk full").pairingsSaved == false
+            && NativeSpeakerEvent.stored(id: "B2", storeNote: "").pairingsSaved == true
+            && NativeSpeakerEvent.stored(id: "B2", storeNote: "disk full").pairingsSaved == false
+            && NativeSpeakerEvent.paired(id: "B2", storeNote: "", forSession: true).pairingsSaved == nil,
+          "pairings notice: a pairing or a verify-failed pairing's credentials report their write, a session-only pairing none")
+    // covers: S224
+    check(NativeSpeakerEvent.paired(id: "B2", storeNote: "").logLine(name: { _ in nil })
+            == "[AudioSync] native AirPlay: B2: paired, credentials stored"
+            && NativeSpeakerEvent.paired(id: "B2", storeNote: "", forSession: true).logLine(name: { _ in nil })
+            == "[AudioSync] native AirPlay: B2: paired for this session, nothing stored (it asks for a code every time)",
+          "native pairing: a pairing for this session only logs that nothing was stored")
 }
 
 // MARK: Main window opens one sheet at a time (MainWindowSheet.mayOpen)
