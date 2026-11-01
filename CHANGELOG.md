@@ -47,6 +47,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, a stereo pair or home theater group you turn on stays on while it asks for a member's password, and its row says "Waiting for the password", as a single speaker's does and as on the Mac. Cancel turns it off. Before, it showed as off until you typed the password.
 - On the Mac, the menu bar panel's link to add a Google Cast device by address only brings the main window forward while the calibration sheet is open, and calibration doesn't start while the address sheet is open. Before, the other sheet could pop up later, or the link did nothing the next time it was clicked.
 - On the Mac, a Google Cast group that never answers now goes off after its third failed connect with a notice that it isn't responding, as on Windows. Before, AudioSync kept trying it with no notice. A group that lists no address yet still keeps trying until it does.
 - On Windows, when a newer version of AudioSync wrote your settings and an older one opens them, the older one now tells you it's using the default settings and names the copy of your file it kept. Before, it said nothing.
