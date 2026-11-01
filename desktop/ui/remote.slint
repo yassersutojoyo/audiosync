@@ -122,23 +122,23 @@ export component RemoteWindow inherits Window {
 
     keys := FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
+            if event.text == Key.Escape || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "w") {
                 root.close-requested();
                 return accept;
             }
-            if event.modifiers.control && event.text.to-lowercase() == "q" {
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "q" {
                 root.exit-requested();
                 return accept;
             }
-            if event.text == Key.F1 {
+            if event.text == Key.F1 && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta {
                 root.help-requested();
                 return accept;
             }
-            if event.modifiers.control && event.text.to-lowercase() == "n" {
+            if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "n" {
                 root.new-zone-requested();
                 return accept;
             }
-            if event.text == Key.F5 {
+            if event.text == Key.F5 && !event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta {
                 root.refresh-devices();
                 return accept;
             }
