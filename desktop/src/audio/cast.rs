@@ -351,10 +351,10 @@ impl CastLease {
         if let Some(tap) = self.tap.as_mut() {
             // Only the line's output fades out: fading its input as well
             // would multiply the two curves into a steeper one (S191).
-            if self.closing.load(Ordering::Acquire) {
-                if let Some(writer) = tap.writer.as_mut() {
-                    writer.delay.close();
-                }
+            if self.closing.load(Ordering::Acquire)
+                && let Some(writer) = tap.writer.as_mut()
+            {
+                writer.delay.close();
             }
             tap.push(block, frames);
         }
@@ -4582,8 +4582,9 @@ pub mod tests {
             f64::from(i16::from_le_bytes([bytes[0], bytes[1]]))
         };
         // Past the lease's fade-in (S189).
-        lease.push(&[0.5; 1920], 960);
-        fake.state().readers[0].read_into(&mut Vec::new(), 960);
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        lease.push(&vec![0.5; 2 * fade], fade);
+        fake.state().readers[0].read_into(&mut Vec::new(), fade);
         lease.push(&[0.5; 64], 32);
         let whole = first_sample(&fake);
         let before = sent(&fake);
