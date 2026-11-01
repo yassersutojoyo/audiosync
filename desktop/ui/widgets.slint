@@ -2156,11 +2156,21 @@ export component SpeakerRow inherits Rectangle {
                                     }
 
                                     TouchArea {
+                                        changed has-hover => {
+                                            if !self.has-hover {
+                                                root.tip-allowed = true;
+                                            }
+                                        }
+                                        pointer-event(event) => {
+                                            if event.kind == PointerEventKind.down {
+                                                root.tip-allowed = false;
+                                            }
+                                        }
                                         clicked => {
                                             root.box-clicked();
                                         }
 
-                                        Tooltip {
+                                        if root.tip-allowed: Tooltip {
                                             Rectangle {
                                                 width: min(group-tip.preferred-width + 16px, root.width);
                                                 height: group-tip.preferred-height + 10px;
@@ -3116,11 +3126,21 @@ export component ZoneHeader inherits Rectangle {
                                 }
 
                                 TouchArea {
+                                    changed has-hover => {
+                                        if !self.has-hover {
+                                            root.tip-allowed = true;
+                                        }
+                                    }
+                                    pointer-event(event) => {
+                                        if event.kind == PointerEventKind.down {
+                                            root.tip-allowed = false;
+                                        }
+                                    }
                                     clicked => {
                                         root.expanded-changed(!root.item.expanded);
                                     }
 
-                                    Tooltip {
+                                    if root.tip-allowed: Tooltip {
                                         Rectangle {
                                             width: min(count-tip.preferred-width + 16px, root.width);
                                             height: count-tip.preferred-height + 10px;
