@@ -2611,7 +2611,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         self.log
             .log(|| format!("the user recalled preset \"{}\"", preset.name));
-        // Before any member goes on, so a speaker that starts plays at its zone level.
+        // Before any member goes on, so a speaker that starts plays at the
+        // preset's master and its zone level.
+        self.audio.set_master_volume(preset.master);
         for (zone, volume) in presets::recall_zone_volumes(&preset, &self.zones) {
             self.zones.set_volume(zone, volume);
         }
@@ -2636,7 +2638,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.set_preset_volume(key, *volume);
             }
         }
-        self.audio.set_master_volume(preset.master);
         // The preamp and the equalizer switch are standing trims outside
         // every preset.
         self.equalizer.gains_db = preset.gains_db;
