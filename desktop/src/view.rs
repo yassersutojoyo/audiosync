@@ -9605,7 +9605,7 @@ mod tests {
         );
         assert_eq!(
             cast_note(CastState::Paused, true).as_str(),
-            "Paused on the device"
+            "Paused on the speaker"
         );
         assert_eq!(
             cast_note(CastState::Playing, false).as_str(),
