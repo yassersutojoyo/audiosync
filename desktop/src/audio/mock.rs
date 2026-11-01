@@ -820,7 +820,9 @@ impl Driver for MockDriver {
         gain: Arc<SharedGain>,
     ) -> Result<MockRenderer, BackendError> {
         self.renderer_attempts.push(endpoint.id.clone());
-        if !self.outputs.iter().any(|output| output.id == endpoint.id) {
+        let enumerated =
+            (self.readings.iter()).any(|reading| reading.id.as_deref() == Ok(endpoint.id.as_str()));
+        if !enumerated && !self.outputs.iter().any(|output| output.id == endpoint.id) {
             return Err(BackendError::DeviceGone);
         }
         if let Some(error) = self.output_errors.get(&endpoint.id) {
