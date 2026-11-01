@@ -1099,7 +1099,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         };
         match kept {
             Ok(Some(Retried::Read(read))) => self.restore_read_late(*read),
-            Ok(Some(Retried::KeptAside(kept))) => self.tell_kept_aside(&kept, ""),
+            Ok(Some(Retried::KeptAside(kept))) => {
+                self.tell_kept_aside(&kept, "");
+                true
+            }
             Ok(None) => false,
             Err(error) => {
                 if !due {
@@ -1166,8 +1169,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Logs that the settings file was kept aside (`when`, for the log),
     /// and tells the user once with the copy's name: their settings were
-    /// replaced by the defaults. Returns true.
-    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) -> bool {
+    /// replaced by the defaults.
+    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) {
         let file = kept.file_name();
         self.log.log(|| match kept {
             KeptAside::Newer(_) => {
@@ -1181,7 +1184,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
             NoticeSubject::SettingsKeptAside,
             NoticeMessage::SettingsKeptAside { file },
         );
-        true
     }
 
     /// Writes the settings file if anything changed since it was last read
@@ -1224,7 +1226,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if let Some(Retried::KeptAside(kept)) = kept {
-                    notices_changed |= self.tell_kept_aside(&kept, " before saving over it");
+                    self.tell_kept_aside(&kept, " before saving over it");
+                    notices_changed = true;
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
