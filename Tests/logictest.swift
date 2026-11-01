@@ -15676,6 +15676,9 @@ do {
           "pairings notice: a file a newer AudioSync wrote, or a folder that couldn't be found, is told")
     check(!NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_IGNORED),
           "pairings notice: an ignored file, which the next pairing replaces, gets none")
+    // covers: S224
+    check(NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_UNREADABLE),
+          "pairings notice: a file that couldn't be read, which is left as it is, is told")
 }
 
 // MARK: Main window opens one sheet at a time (MainWindowSheet.mayOpen)
