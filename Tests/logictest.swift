@@ -12883,6 +12883,26 @@ do {
     check(approx(dragged.volume(of: tv), 40, 1e-9),
           "cast master: the answer to the first level of a 60-level drag is not read as a change")
 
+    // covers: C70, C104 (the TV answered 0.55 before the sender sent it again)
+    var resent = session(attempt: 8)
+    _ = resent.apply(.volume(attempt: 8, reported(0.5)))
+    for position in [55.0, 60.0, 55.0] { _ = resent.setVolume(tv, position: position) }
+    _ = resent.apply(.volume(attempt: 8, reported(0.55)))
+    _ = resent.apply(.volumeUnanswered(attempt: 8, level: 0.55, repeated: false))
+    _ = resent.apply(.volume(attempt: 8, reported(0.6)))
+    check(approx(resent.volume(of: tv), 60, 1e-9),
+          "cast master: after a drag back to the level the TV reports, the TV's remote moves the slider")
+
+    // covers: C70, C104 (the sender sent 0.55 twice, 0.6 never went out)
+    var twice = session(attempt: 9)
+    _ = twice.apply(.volume(attempt: 9, reported(0.5)))
+    for position in [55.0, 60.0, 55.0] { _ = twice.setVolume(tv, position: position) }
+    _ = twice.apply(.volumeUnanswered(attempt: 9, level: 0.55, repeated: true))
+    _ = twice.apply(.volume(attempt: 9, reported(0.55)))
+    _ = twice.apply(.volume(attempt: 9, reported(0.6)))
+    check(approx(twice.volume(of: tv), 60, 1e-9),
+          "cast master: a level sent twice while unanswered awaits one answer, so the TV's remote moves the slider")
+
     // covers: S415
     var row = session(attempt: 11)
     _ = row.apply(.volume(attempt: 11, reported(0.4)))
