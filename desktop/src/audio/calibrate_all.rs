@@ -1827,11 +1827,18 @@ pub(crate) mod tests {
                 .push(member(Class::Local, "hdmi", Some(0.0), 2500.0));
         };
         let edit: fn(&mut FakeRig) = |rig| rig.lineup.members[1].offset_ms = Some(400.0);
+        // L moves with L_s while A stays: rows read at two L would share one median.
+        let sender_moves: fn(&mut FakeRig) = |rig| {
+            let kitchen = &mut rig.lineup.members[2];
+            kitchen.offset_ms = Some(2400.0);
+            kitchen.sender_ms = 400.0;
+        };
         for (meddle, reason) in [
             (switch, EndReason::SourceChanged),
             (waiting_switch, EndReason::SourceChanged),
             (turn_on, EndReason::SpeakersChanged),
             (edit, EndReason::SpeakersChanged),
+            (sender_moves, EndReason::SpeakersChanged),
         ] {
             let mut rig = FakeRig::new();
             let mut run = start(&mut rig);
