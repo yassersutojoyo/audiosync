@@ -774,7 +774,8 @@ mod tests {
             match self.thumbnail {
                 Thumbnail::Image => Ok(Some(IMAGE.to_vec())),
                 Thumbnail::Hung => {
-                    thread::sleep(deadline.saturating_duration_since(Instant::now()));
+                    // Woken a wait late, as a loaded PC wakes a thread.
+                    thread::sleep(deadline.saturating_duration_since(Instant::now()) + APP_WAIT);
                     Err("the app didn't answer in time".to_owned())
                 }
             }
