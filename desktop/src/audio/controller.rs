@@ -11838,11 +11838,10 @@ mod tests {
         backend.poll();
         assert!(now_playing_sent(&fake).is_empty(), "nothing changed");
 
-        for _ in 1..DROP_AFTER {
-            reader.read(None);
-            backend.poll();
-            assert!(now_playing_sent(&fake).is_empty(), "the paused track stays");
-        }
+        reader.read(None);
+        backend.poll();
+        assert!(now_playing_sent(&fake).is_empty(), "the paused track stays");
+        thread::sleep(DROP_AFTER);
         reader.read(None);
         backend.poll();
         let sent = now_playing_sent(&fake);

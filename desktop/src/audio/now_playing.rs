@@ -3,9 +3,10 @@
 //! read from the media sessions Windows lists (the system media transport
 //! controls) or the MPRIS players on Linux, as the Mac app reads its players.
 //!
-//! A [`TrackReader`] reads the sessions every [`POLL_INTERVAL`] on a thread
-//! of its own, only while AirPlay receivers play; [`TrackInfo`] turns its
-//! readings into what the sender is given, at the backend's polls, and
+//! A [`TrackReader`] reads the sessions every [`POLL_INTERVAL`], and at
+//! once when Windows reports a change, on a thread of its own, only while
+//! AirPlay receivers play; [`TrackInfo`] turns its readings into what
+//! the sender is given, at the backend's polls, and
 //! gives it only what changed. The sender keeps that and sends it to every
 //! speaker that starts, until the last receiver stops: then it is cleared,
 //! so a receiver that starts later never shows a track from before. The
@@ -57,9 +58,10 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(2);
 pub const ARTWORK_WAIT: Duration = Duration::from_secs(5);
 /// How long track info waits for the first reading once reading starts.
 pub const READING_WAIT: Duration = Duration::from_secs(3);
-/// The readings in a row, neither playing nor paused, after which the
-/// paused track of the app that played last goes (S218).
-pub const DROP_AFTER: u32 = 3;
+/// How long readings in a row neither playing nor paused last before the
+/// paused track of the app that played last goes (S218). A time, not a
+/// count: a change Windows reports can bring several such readings at once.
+pub const DROP_AFTER: Duration = Duration::from_secs(6);
 /// The image for AirPlay 2 receivers: large enough for a TV-sized cover
 /// (S272).
 pub const LARGE_ARTWORK: ArtworkLimits = ArtworkLimits {
@@ -552,8 +554,8 @@ pub struct TrackInfo {
     reading: Option<Reading>,
     /// The app seen playing last since the source was chosen (S218).
     last_played: Option<String>,
-    /// Its readings in a row neither playing nor paused.
-    idle_readings: u32,
+    /// When its readings in a row neither playing nor paused began.
+    idle_since: Option<Instant>,
     /// The fields receivers should show, and since when.
     fields: Option<(TrackFields, Instant)>,
     /// What the sender was given last, and when.
@@ -643,7 +645,7 @@ impl TrackInfo {
             self.since = Some(now);
             self.reading = None;
             self.last_played = None;
-            self.idle_readings = 0;
+            self.idle_since = None;
             reader.played_last(None);
             self.timelines = TimelineGuard::default();
             if stopped {
@@ -662,24 +664,26 @@ impl TrackInfo {
         }
         if let Some(reading) = reader.take_reading() {
             let session = reading.track.as_ref().map(|track| &track.session);
-            self.idle_readings = match session {
+            self.idle_since = match session {
                 Some(session) if session.playing && source.mix.is_none() => {
                     self.last_played = Some(session.app_id.clone());
-                    0
+                    None
                 }
                 // Another app's paused track never counts, so it can't tell whether this one quit.
                 Some(session)
                     if session.paused || self.last_played.as_ref() != Some(&session.app_id) =>
                 {
-                    0
+                    None
                 }
                 // Windows reports a track change as neither playing nor paused, as it does a stop;
                 // no track may be an app that missed its answer.
-                _ if self.idle_readings + 1 < DROP_AFTER => self.idle_readings + 1,
-                _ => {
-                    self.last_played = None;
-                    0
-                }
+                _ => match self.idle_since {
+                    Some(since) if now.saturating_duration_since(since) >= DROP_AFTER => {
+                        self.last_played = None;
+                        None
+                    }
+                    since => Some(since.unwrap_or(now)),
+                },
             };
             reader.played_last(self.last_played.as_deref());
             // An app paused when it was chosen never played, yet its paused track counts too.
@@ -692,7 +696,7 @@ impl TrackInfo {
                         && counts(track, &source.follow, self.last_played.as_deref())
                 });
             if reading.track.is_some()
-                || self.last_played.is_none() && (!held || self.idle_readings == 0)
+                || self.last_played.is_none() && (!held || self.idle_since.is_none())
             {
                 self.reading = Some(reading);
             }
@@ -1235,27 +1239,31 @@ mod tests {
         };
 
         play_then_pause(&mut info);
-        for _ in 1..DROP_AFTER {
+        for at in [0, 3] {
             reader.read(None);
             assert_eq!(
-                info.sync(Some(&whole_system()), start),
+                info.sync(Some(&whole_system()), start + Duration::from_secs(at)),
                 None,
                 "no answer yet"
             );
         }
         reader.read(None);
-        let sent = info.sync(Some(&whole_system()), start).expect("quit");
+        let sent = info
+            .sync(Some(&whole_system()), start + DROP_AFTER)
+            .expect("quit");
         assert_eq!(sent.track, whole_system_label());
         reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
         assert_eq!(info.sync(Some(&whole_system()), start), None, "forgotten");
 
         play_then_pause(&mut info);
-        for _ in 1..DROP_AFTER {
+        for at in [0, 3] {
             reader.read(Some(stopped("Spotify.exe", "Song")));
-            info.sync(Some(&whole_system()), start);
+            info.sync(Some(&whole_system()), start + Duration::from_secs(at));
         }
         reader.read(Some(stopped("Spotify.exe", "Song")));
-        let sent = info.sync(Some(&whole_system()), start).expect("stopped");
+        let sent = info
+            .sync(Some(&whole_system()), start + DROP_AFTER)
+            .expect("stopped");
         assert_eq!(sent.track, whole_system_label());
 
         play_then_pause(&mut info);
@@ -1278,22 +1286,52 @@ mod tests {
         reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
         info.sync(Some(&whole_system()), start);
 
-        for _ in 1..DROP_AFTER {
+        for at in [0, 3] {
             reader.read(Some(stopped("Spotify.exe", "Song")));
-            assert_eq!(info.sync(Some(&whole_system()), start), None, "it stays");
+            let now = start + Duration::from_secs(at);
+            assert_eq!(info.sync(Some(&whole_system()), now), None, "it stays");
         }
+        let paused = start + Duration::from_secs(5);
         reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
         assert_eq!(
-            info.sync(Some(&whole_system()), start),
+            info.sync(Some(&whole_system()), paused),
             None,
             "paused again"
         );
-        for _ in 1..DROP_AFTER {
+        for at in [0, 3] {
             reader.read(Some(stopped("Spotify.exe", "Song")));
-            assert_eq!(info.sync(Some(&whole_system()), start), None, "counts anew");
+            let now = paused + Duration::from_secs(at);
+            assert_eq!(info.sync(Some(&whole_system()), now), None, "counts anew");
         }
         reader.read(Some(stopped("Spotify.exe", "Song")));
-        let sent = info.sync(Some(&whole_system()), start).expect("dropped");
+        let sent = info
+            .sync(Some(&whole_system()), paused + DROP_AFTER)
+            .expect("dropped");
+        assert_eq!(sent.track, whole_system_label());
+    }
+
+    // covers: S218
+    #[test]
+    fn a_burst_of_readings_neither_playing_nor_paused_keeps_the_paused_track_for_6_s() {
+        let reader = FakeReader::with_icon(ICON);
+        let mut info = track_info(&reader);
+        let start = Instant::now();
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", true, Some(COVER))));
+        info.sync(Some(&whole_system()), start);
+        reader.read(Some(track("Spotify.exe", "Song", false, Some(COVER))));
+        info.sync(Some(&whole_system()), start);
+
+        let stop = start + Duration::from_secs(1);
+        for at in [0, 100, 400, 2400, 5900] {
+            reader.read(Some(stopped("Spotify.exe", "Song")));
+            let now = stop + Duration::from_millis(at);
+            assert_eq!(info.sync(Some(&whole_system()), now), None, "it stays");
+        }
+        reader.read(Some(stopped("Spotify.exe", "Song")));
+        let sent = info
+            .sync(Some(&whole_system()), stop + DROP_AFTER)
+            .expect("dropped");
         assert_eq!(sent.track, whole_system_label());
     }
 
@@ -1309,12 +1347,15 @@ mod tests {
         let sent = info.sync(Some(&spotify), start).expect("paused track");
         assert_eq!(sent.track, fields("Song", "Song artist", "Song album"));
 
-        for _ in 1..DROP_AFTER {
+        for at in [0, 3] {
             reader.read(None);
-            assert_eq!(info.sync(Some(&spotify), start), None, "it stays");
+            let now = start + Duration::from_secs(at);
+            assert_eq!(info.sync(Some(&spotify), now), None, "it stays");
         }
         reader.read(None);
-        let sent = info.sync(Some(&spotify), start).expect("dropped");
+        let sent = info
+            .sync(Some(&spotify), start + DROP_AFTER)
+            .expect("dropped");
         assert_eq!(sent.track, fields("Title label", "Spotify", "Album label"));
     }
 
@@ -1897,12 +1938,12 @@ mod tests {
         let resumed = info.sync(Some(&source), start).expect("it is sent");
         assert_eq!(resumed.progress, progress(30, 180));
 
-        for _ in 1..DROP_AFTER {
-            reader.read(None);
-            info.sync(Some(&source), start);
-        }
         reader.read(None);
-        let labels = info.sync(Some(&source), start).expect("it is sent");
+        info.sync(Some(&source), start);
+        reader.read(None);
+        let labels = info
+            .sync(Some(&source), start + DROP_AFTER)
+            .expect("it is sent");
         assert_eq!(labels.progress, None);
     }
 

@@ -10,6 +10,7 @@ use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
 use std::time::Instant;
 
+use windows::Foundation::TypedEventHandler;
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as Session,
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
@@ -25,7 +26,7 @@ use windows_future::{IAsyncInfo, IAsyncOperation};
 use super::com::Apartment;
 use super::media;
 use crate::audio::media_sessions::{
-    APP_WAIT, MediaCardReader, MediaSessionReader, SessionList, THUMBNAIL_LIMIT, spawn,
+    APP_WAIT, Changed, MediaCardReader, MediaSessionReader, SessionList, THUMBNAIL_LIMIT, spawn,
 };
 use crate::audio::now_playing::{FittedArtwork, MediaSession, POLL_INTERVAL, RawTimeline};
 use crate::debug_log::DebugLog;
@@ -38,6 +39,12 @@ pub fn read_media_sessions(log: DebugLog) -> (MediaSessionReader, MediaCardReade
 
 struct WindowsSessions {
     manager: Option<SessionManager>,
+    /// Told when Windows reports a session added, gone or changed.
+    changed: Option<Changed>,
+    /// The manager's handler for sessions added or gone.
+    sessions_changed: Option<i64>,
+    /// The sessions `changed` hears from, with their handlers' tokens.
+    watched: Vec<(Session, [i64; 3])>,
     /// Declared last, so the session objects are released before COM.
     _apartment: Apartment,
 }
@@ -48,6 +55,9 @@ impl WindowsSessions {
             .map_err(|error| format!("COM couldn't start on the reading thread: {error}"))?;
         Ok(WindowsSessions {
             manager: None,
+            changed: None,
+            sessions_changed: None,
+            watched: Vec::new(),
             _apartment: apartment,
         })
     }
@@ -57,6 +67,9 @@ impl WindowsSessions {
             Some(manager) => manager.clone(),
             None => {
                 let manager = SessionManager::RequestAsync()?.join()?;
+                if let Some(changed) = &self.changed {
+                    self.sessions_changed = manager.SessionsChanged(&handler(changed)).ok();
+                }
                 self.manager = Some(manager.clone());
                 manager
             }
@@ -65,6 +78,7 @@ impl WindowsSessions {
         let sessions: Vec<Session> = (0..list.Size()?)
             .filter_map(|index| list.GetAt(index).ok())
             .collect();
+        self.watch_each(&sessions);
         Ok(describe_each(
             sessions,
             |session| session.TryGetMediaPropertiesAsync(),
@@ -74,6 +88,56 @@ impl WindowsSessions {
             },
         ))
     }
+
+    /// Hears from the sessions listed now, and no longer from those gone.
+    fn watch_each(&mut self, sessions: &[Session]) {
+        let Some(changed) = &self.changed else {
+            return;
+        };
+        let mut watched = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            match self.watched.iter().position(|(known, _)| known == session) {
+                Some(index) => watched.push(self.watched.swap_remove(index)),
+                None => {
+                    if let Ok(tokens) = watch(session, changed) {
+                        watched.push((session.clone(), tokens));
+                    }
+                }
+            }
+        }
+        for (session, tokens) in std::mem::replace(&mut self.watched, watched) {
+            unwatch(&session, tokens);
+        }
+    }
+}
+
+fn handler<S, A>(changed: &Changed) -> TypedEventHandler<S, A>
+where
+    S: RuntimeType + 'static,
+    A: RuntimeType + 'static,
+{
+    let changed = changed.clone();
+    TypedEventHandler::new(move |_, _| {
+        changed.notify();
+        Ok(())
+    })
+}
+
+/// Has `changed` told when the session's play state, track or timeline
+/// changes: the tokens of its three handlers.
+fn watch(session: &Session, changed: &Changed) -> windows::core::Result<[i64; 3]> {
+    Ok([
+        session.PlaybackInfoChanged(&handler(changed))?,
+        session.MediaPropertiesChanged(&handler(changed))?,
+        session.TimelinePropertiesChanged(&handler(changed))?,
+    ])
+}
+
+// A session whose app quit may refuse; it is gone either way.
+fn unwatch(session: &Session, [playback, properties, timeline]: [i64; 3]) {
+    let _ = session.RemovePlaybackInfoChanged(playback);
+    let _ = session.RemoveMediaPropertiesChanged(properties);
+    let _ = session.RemoveTimelinePropertiesChanged(timeline);
 }
 
 impl SessionList for WindowsSessions {
@@ -127,7 +191,16 @@ impl SessionList for WindowsSessions {
     }
 
     fn reset(&mut self) {
-        self.manager = None;
+        if let (Some(manager), Some(token)) = (self.manager.take(), self.sessions_changed.take()) {
+            let _ = manager.RemoveSessionsChanged(token);
+        }
+        for (session, tokens) in self.watched.drain(..) {
+            unwatch(&session, tokens);
+        }
+    }
+
+    fn watch(&mut self, changed: Changed) {
+        self.changed = Some(changed);
     }
 
     fn fit_image(&self, image: &[u8]) -> Result<Option<FittedArtwork>, String> {
