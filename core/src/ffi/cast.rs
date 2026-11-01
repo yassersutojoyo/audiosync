@@ -2764,6 +2764,22 @@ mod tests {
         destroy(handle);
     }
 
+    // CAST_SPEC: C13
+    #[test]
+    fn a_device_without_a_friendly_name_is_listed_under_its_instance_name() {
+        let handle = create();
+        let mut kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
+        kitchen.txt.retain(|entry| !entry.starts_with(b"fn="));
+        let instance = kitchen.fullname.clone();
+        browse(handle, vec![BrowseEvent::Resolved(kitchen)], false);
+        let names: Vec<String> = devices(handle)
+            .into_iter()
+            .map(|found| found.name)
+            .collect();
+        assert_eq!(names, [instance]);
+        destroy(handle);
+    }
+
     // CAST_SPEC: C108
     #[test]
     fn every_device_the_list_cap_drops_is_reported_gone() {
