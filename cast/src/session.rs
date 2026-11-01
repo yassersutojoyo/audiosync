@@ -871,6 +871,7 @@ impl CastSession {
                     let reason = reason.unwrap_or(IdleReason::Error);
                     self.end(SessionEnd::Failed(MediaError::Idle(reason).into()));
                 } else {
+                    // An ERROR during the recovery still ends the session.
                     self.error_recovered = Some(now);
                     self.recover(EndReason::Io("playback error".to_owned()), true);
                     self.error_recovered = Some((self.clock)());
