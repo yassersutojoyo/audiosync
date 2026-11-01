@@ -37,9 +37,10 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
     AUDIOCLIENT_ACTIVATION_PARAMS, AUDIOCLIENT_ACTIVATION_PARAMS_0,
     AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
-    ActivateAudioInterfaceAsync, DEVICE_STATE_ACTIVE, IActivateAudioInterfaceAsyncOperation,
-    IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl,
-    IAudioCaptureClient, IAudioClient, PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+    ActivateAudioInterfaceAsync, DEVICE_STATE, DEVICE_STATE_ACTIVE,
+    IActivateAudioInterfaceAsyncOperation, IActivateAudioInterfaceCompletionHandler,
+    IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient, IAudioClient,
+    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
     PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
     WAVEFORMATEX,
 };
@@ -56,7 +57,7 @@ use super::com::{
     device_error, float_format, input_code_error, read_mix_format, spawn_worker, system_error,
     wave_format,
 };
-use super::devices::enumerator;
+use super::devices::{enumerator, properties};
 use super::processes::{ProcessWatch, Watch};
 use crate::audio::SESSION_RATE;
 use crate::audio::backend::{BackendError, TIMED_OUT};
@@ -529,13 +530,20 @@ fn activate_input(endpoint_id: &str) -> Result<IAudioClient, BackendError> {
         let state = device
             .GetState()
             .map_err(|error| device_error("IMMDevice::GetState", &error))?;
-        if state != DEVICE_STATE_ACTIVE {
-            return Err(BackendError::InputGone);
+        let enumerator_name = properties(&device).ok().and_then(|found| found.enumerator);
+        if let Some(error) = input_refusal(state, enumerator_name.as_deref()) {
+            return Err(error);
         }
         device
             .Activate(CLSCTX_ALL, None)
             .map_err(|error| input_code_error("IMMDevice::Activate", error.code()))
     }
+}
+
+/// Why a capture endpoint in `state`, listed by device enumerator
+/// `enumerator`, can't be opened as the input source, if it can't.
+fn input_refusal(state: DEVICE_STATE, enumerator: Option<&str>) -> Option<BackendError> {
+    (state != DEVICE_STATE_ACTIVE).then_some(BackendError::InputGone)
 }
 
 /// The activation parameters and the PROPVARIANT that carries them, kept
@@ -1540,6 +1548,23 @@ mod tests {
                 "{call}"
             );
         }
+    }
+
+    // covers: S355
+    #[test]
+    fn a_hands_free_input_is_refused_as_not_connected_even_when_saved() {
+        use crate::audio::outputs::HANDS_FREE_ENUMERATOR;
+        use windows::Win32::Media::Audio::DEVICE_STATE_UNPLUGGED;
+        assert_eq!(input_refusal(DEVICE_STATE_ACTIVE, Some("USB")), None);
+        assert_eq!(input_refusal(DEVICE_STATE_ACTIVE, None), None);
+        assert_eq!(
+            input_refusal(DEVICE_STATE_ACTIVE, Some(HANDS_FREE_ENUMERATOR)),
+            Some(BackendError::InputGone)
+        );
+        assert_eq!(
+            input_refusal(DEVICE_STATE_UNPLUGGED, Some("USB")),
+            Some(BackendError::InputGone)
+        );
     }
 
     // covers: S329, S355
