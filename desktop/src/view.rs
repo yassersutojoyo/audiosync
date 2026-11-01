@@ -11560,6 +11560,30 @@ mod tests {
     }
 
     #[test]
+    fn enter_closes_the_about_dialog() {
+        let app = app_over(MockBackend::new());
+        let window = app.about.window();
+        app.main.invoke_about_requested();
+        assert!(window.is_visible());
+        press(window, Key::Return);
+        assert!(!window.is_visible(), "Enter right after it opened");
+    }
+
+    #[test]
+    fn enter_closes_the_zone_message_without_a_field() {
+        let app = app_over(MockBackend::new());
+        for speaker in app.snapshot().speakers {
+            app.update(|b| b.set_speaker_enabled(&speaker.id, false));
+        }
+        app.ask_new_zone();
+        let window = app.zone_dialog.window();
+        assert!(window.is_visible());
+        assert!(!app.zone_dialog.get_show_field());
+        press(window, Key::Return);
+        assert!(!window.is_visible(), "Enter on the message closed it");
+    }
+
+    #[test]
     fn a_stereo_pair_or_home_theater_row_names_its_members_or_the_missing_one() {
         use crate::audio::backend::AirPlayGroup;
         let app = app_over(MockBackend::new());

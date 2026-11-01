@@ -33,7 +33,7 @@ export component AboutDialog inherits Dialog {
 
     keys := FocusScope {
         key-pressed(event) => {
-            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") {
+            if event.text == Key.Escape || (event.modifiers.control && event.text.to-lowercase() == "w") || event.text == Key.Return {
                 root.closed();
                 return accept;
             }
