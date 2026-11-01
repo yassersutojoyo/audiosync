@@ -2151,6 +2151,7 @@ impl App {
         self.main.set_airplay2_experimental(airplay2_experimental);
         self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main.set_updater_available(self.has_updater());
+        self.help.set_updater_available(self.has_updater());
         self.main
             .set_check_updates_automatically(check_updates_automatically);
         self.main
@@ -9497,6 +9498,41 @@ mod tests {
         );
         // Local and test builds have no updater, so its menu items stay hidden.
         assert!(!app.main.get_updater_available());
+    }
+
+    /// With the updater, More Controls ends with how updates work, naming
+    /// the menu items and the notice button by their own words; without it,
+    /// the Guide leaves them out as the menus do.
+    #[test]
+    fn the_guide_says_how_updates_work_only_with_the_updater() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let updates = strings.get_help_more_updates().to_string();
+        for named in [
+            format!(
+                "{} > {}",
+                strings.get_menu_help(),
+                strings.get_menu_check_for_updates()
+            ),
+            format!(
+                "{} > {}",
+                strings.get_menu_file(),
+                strings.get_check_updates_automatically()
+            ),
+            strings
+                .invoke_update_button(UpdateButton::Download)
+                .to_string(),
+        ] {
+            assert!(updates.contains(&named), "{named} in: {updates}");
+        }
+        assert!(!app.help.get_updater_available());
+        #[cfg(windows)]
+        {
+            let (updater, _) = crate::updater::tests::updater("guide-updates");
+            *app.updater.borrow_mut() = Some(updater);
+            app.refresh();
+            assert!(app.help.get_updater_available());
+        }
     }
 
     // covers: S308
