@@ -616,6 +616,7 @@ dependencies = [
  "windows",
  "windows-core",
  "windows-future",
+ "windows-sys 0.61.2",
  "x25519-dalek",
  "zbus",
  "zeroize",
