@@ -58,7 +58,7 @@ use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use audiosync_cast::status::{
     ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_volume, device_level, own_level,
-    start_own_level,
+    row_own_level, start_own_level,
 };
 use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
@@ -1058,7 +1058,11 @@ impl CastSpeakers {
             offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
             volume: (level.unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
-            device_level: (level.unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
+            device_level: self
+                .own_of(id)
+                .map(|own| device_level(self.master, self.zone_of(id), own))
+                .or_else(|| reported.map(|volume| volume.level))
+                .map_or(100.0, |level| (level * 100.0).clamp(0.0, 100.0)),
             volume_known: level.is_some(),
             muted: reported.is_some_and(|volume| volume.muted),
             volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
@@ -1378,7 +1382,10 @@ impl CastSpeakers {
         if !position.is_finite() {
             return;
         }
-        let own = (position / 100.0).clamp(0.0, 1.0);
+        self.set_own(id, device, (position / 100.0).clamp(0.0, 1.0));
+    }
+
+    fn set_own(&mut self, id: &str, device: DeviceId, own: f64) {
         if self.playing_device(id).is_none() {
             self.levels.insert(device, own);
             return;
@@ -1387,9 +1394,16 @@ impl CastSpeakers {
         self.send_level(device, own);
     }
 
-    /// The speaker's row moved to `row`, 0 to 100 (S413).
+    /// The speaker's row moved to `row`, 0 to 100: the device gets the row
+    /// and the own level becomes row ÷ (master × zone); with master × zone
+    /// at 0 nothing changes (S413).
     pub fn move_row(&mut self, id: &str, row: f64) {
-        self.set_volume(id, row);
+        let Some(device) = DeviceId::parse(id) else {
+            return;
+        };
+        if let Some(own) = row_own_level(row, self.master, self.zone_of(device)) {
+            self.set_own(id, device, own);
+        }
     }
 
     /// The master position, 0 to 100 (C104): a change reaches the device in
@@ -3769,7 +3783,11 @@ pub mod tests {
         assert!((shown_after - 50.0).abs() < 1e-9, "shown {shown_after}");
 
         let (sent_after, shown_after) = rekeyed_into(25.0);
-        assert_eq!(sent_after, vec![0.25], "the loudest the new zone reaches");
+        assert_eq!(
+            sent_after,
+            Vec::<f64>::new(),
+            "the own level passes 100 (S413)"
+        );
         assert!((shown_after - 100.0).abs() < 1e-9, "shown {shown_after}");
     }
 

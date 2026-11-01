@@ -12594,8 +12594,8 @@ do {
     // covers: C104
     check(m.apply(.volume(attempt: 1, reported(0.3))) != .setVolume(0) && approx(m.volume(of: tv), 40, 1e-9),
           "cast master: at master 0 a level set elsewhere leaves the speaker's level and isn't fought")
-    // covers: C104
-    check(m.stepVolume(tv, up: true) == .level(0), "cast master: a step at master 0 sends level 0")
+    // covers: S413
+    check(m.stepVolume(tv, up: true) == nil, "cast master: a step at master 0 sends nothing")
 
     var off = session(master: 0, attempt: 2)
     // covers: C105
@@ -12607,9 +12607,9 @@ do {
           "cast master: only the first status of a session is answered")
 
     var loud = session(master: 50, attempt: 3)
-    // covers: C105
-    check(loud.apply(.volume(attempt: 3, reported(0.8))) == .setVolume(0.5) && approx(loud.volume(of: tv), 100, 1e-9),
-          "cast master: a device louder than the master allows comes down once at the start")
+    // covers: C105, S413
+    check(loud.apply(.volume(attempt: 3, reported(0.8))) == .changed && loud.rowVolume(of: tv) == 80,
+          "cast master: a device with no own level keeps its loudness at the start, its own level passing 100")
     _ = loud.apply(.volume(attempt: 3, reported(0.5, fixed: true)))
     // covers: C68, C104
     check(loud.setMaster(20) == nil, "cast master: a fixed volume gets nothing (C68)")
@@ -12678,6 +12678,17 @@ do {
     // covers: C104
     check(near(group.setVolume("group1", position: 80), 0.4) && near(group.setMaster(100), 0.8),
           "cast master: a group follows the master like a device")
+
+    var rows = session(master: 50, attempt: 11)
+    _ = rows.apply(.volume(attempt: 11, reported(0.4)))
+    // covers: S413
+    check(rows.rowVolume(of: tv) == 40 && near(rows.moveRow(tv, row: 80), 0.8) && rows.rowVolume(of: tv) == 80
+            && near(rows.setMaster(100), 1) && near(rows.setMaster(50), 0.8) && rows.rowVolume(of: tv) == 80,
+          "cast row: the row shows the level the device gets after a row move, a master move and the master back")
+    _ = rows.setMaster(0)
+    // covers: S413
+    check(rows.moveRow(tv, row: 50) == nil && rows.rowVolume(of: tv) == 0,
+          "cast row: at master 0 a row move sends nothing")
 
     // covers: C70, C104, C105
     check(approx(asc_cast_device_level(0.5, 0.8), 0.4, 1e-12) && asc_cast_device_level(0, 0.8) == 0
@@ -14092,14 +14103,13 @@ do {
             && otherZone.zoneLevels == [realID: 0.8],
           "cast model: a playing speaker added by address that a browse finds plays as loud as before when its id "
             + "has another zone volume")
-    // Played at 0.4 in no zone; the id's 25 zone reaches 0.25 at most.
+    // Played at 0.4 in no zone; in the id's 25 zone the own level becomes 1.6.
     var cappedZone = rekeyedModel(zones: [realID: 25])
-    let capped = cappedZone.takeLevelDue()
-    // covers: S341
-    check(cappedZone.volume(of: realID) == 100 && capped.map { abs($0 - 0.25) < 1e-9 } == true
-            && cappedZone.takeLevelDue() == nil,
-          "cast model: a playing speaker added by address whose loudness its id's zone can't reach gets the nearest "
-            + "level sent once")
+    // covers: S341, S413
+    check(cappedZone.volume(of: realID) == 100 && cappedZone.takeLevelDue() == nil
+            && cappedZone.rowVolume(of: realID) == 40,
+          "cast model: a playing speaker added by address whose id's zone is quieter keeps its loudness, its own "
+            + "level passing 100")
     var idle = rekeyedModel(zones: [manualID: 50, realID: 80], playing: false)
     check(idle.takeLevelDue() == nil && idle.zoneLevels == [realID: 0.8],
           "cast model: a speaker added by address that a browse finds with no session gets no level sent")

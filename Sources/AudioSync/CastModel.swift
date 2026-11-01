@@ -580,6 +580,17 @@ struct CastModel {
         requested?.id == id ? requested!.level : levels[id]
     }
 
+    /// The whole number the row shows, 0 to 100: the level the device gets (S413).
+    func rowVolume(of id: String) -> Double {
+        // S290's rounding down, which AirPlay rows use too.
+        asc_airplay_row_level(deviceLevel(of: id) * 100)
+    }
+
+    /// Master × zone × own, else the reported level, else 1.
+    private func deviceLevel(of id: String) -> Double {
+        ownLevel(of: id).map { asc_cast_zone_level(master, zone(of: id), $0) } ?? volumes[id]?.level ?? 1
+    }
+
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
 
     /// Offline or taken over by another app: a zone click and Only This
@@ -942,7 +953,19 @@ struct CastModel {
     /// device without a session, off or waiting for one, keeps the level for it (C105, S348).
     mutating func setVolume(_ id: String, position: Double) -> Double? {
         guard position.isFinite else { return nil }
-        let own = min(1, max(0, position / 100))
+        return setOwn(id, own: min(1, max(0, position / 100)))
+    }
+
+    /// The row moved to `row`, 0 to 100 (S413): the device gets the row and
+    /// the own level becomes row ÷ (master × zone). Returns what `setVolume`
+    /// does; nil, changing nothing, when master × zone is 0.
+    mutating func moveRow(_ id: String, row: Double) -> Double? {
+        var own = 0.0
+        guard asc_cast_row_move(row, master, zone(of: id), &own) else { return nil }
+        return setOwn(id, own: own)
+    }
+
+    private mutating func setOwn(_ id: String, own: Double) -> Double? {
         guard isLive(id) else {
             levels[id] = own
             return nil
@@ -1055,7 +1078,10 @@ struct CastModel {
         guard isLive(id), volumes[id]?.fixed != true else { return nil }
         let deviceStep = volumes[id]?.step ?? 0
         let size = deviceStep > 0 ? deviceStep : Self.fallbackVolumeStep
-        let own = min(1, max(0, volume(of: id) / 100 + (up ? size : -size)))
+        // A step moves the row (S413); with master × zone at 0 it sends nothing.
+        var own = 0.0
+        guard asc_cast_row_move((deviceLevel(of: id) + (up ? size : -size)) * 100, master, zone(of: id), &own)
+        else { return nil }
         requested = (id, own)
         attempt?.reportedMute = nil
         // The device's own step moves its level, which is the own level only at master × zone 1 (C104).

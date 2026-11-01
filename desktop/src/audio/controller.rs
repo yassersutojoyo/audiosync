@@ -4428,6 +4428,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn move_cast_row(&mut self, id: &str, row: f64) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.move_row(id, row);
+        }
+    }
+
     fn set_cast_muted(&mut self, id: &str, muted: bool) {
         if let Some(cast) = self.cast.as_mut() {
             cast.set_muted(id, muted);

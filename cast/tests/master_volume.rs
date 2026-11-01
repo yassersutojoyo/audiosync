@@ -30,7 +30,6 @@ fn a_session_starts_from_the_own_level_kept_whatever_the_device_reports() {
         0.7,
         "none kept, master 0"
     );
-    assert_eq!(start_own_level(0.5, NO_ZONE, None, 0.8), 1.0);
     assert_eq!(start_own_level(1.0, NO_ZONE, Some(f64::NAN), 0.3), 0.3);
 }
 
@@ -100,11 +99,6 @@ fn the_cast_level_is_master_times_zone_times_own() {
 fn a_level_from_elsewhere_moves_the_own_level_by_the_master() {
     assert!(close(own_level(0.2, 0.5, NO_ZONE, 0.9), 0.4));
     assert!(close(own_level(0.3, 1.0, NO_ZONE, 0.9), 0.3));
-    assert_eq!(
-        own_level(0.8, 0.5, NO_ZONE, 0.9),
-        1.0,
-        "louder than the master allows"
-    );
     assert_eq!(own_level(0.2, 0.0, NO_ZONE, 0.7), 0.7, "master 0 leaves it");
     for bad in [f64::NAN, f64::INFINITY, -1.0] {
         assert_eq!(own_level(0.2, bad, NO_ZONE, 0.7), 0.7, "master {bad}");
@@ -118,7 +112,6 @@ fn a_level_from_elsewhere_moves_the_own_level_by_the_master() {
 fn a_cast_report_moves_own_to_level_over_master_times_zone() {
     assert!(close(own_level(0.2, 0.5, 0.5, 0.9), 0.8), "0.2 ÷ 0.25");
     assert!(close(own_level(0.3, 1.0, 0.5, 0.9), 0.6));
-    assert_eq!(own_level(0.6, 0.5, 0.5, 0.9), 1.0, "clamped to 1");
     assert_eq!(own_level(0.2, 1.0, 0.0, 0.7), 0.7, "zone 0 leaves it");
     for (reported, master) in [(0.2, 0.5), (0.37, 0.81), (0.9, 1.0)] {
         assert_eq!(

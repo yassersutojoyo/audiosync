@@ -1095,8 +1095,11 @@ pub trait AudioBackend {
         None
     }
 
-    /// Sets a Cast speaker's device volume, 0 to 100.
+    /// Sets a Cast speaker's own volume, 0 to 100.
     fn set_cast_volume(&mut self, _id: &str, _position: f64) {}
+
+    /// A Cast speaker's row moved to `row`, its device level (spec S413).
+    fn move_cast_row(&mut self, _id: &str, _row: f64) {}
 
     fn set_cast_muted(&mut self, _id: &str, _muted: bool) {}
 
