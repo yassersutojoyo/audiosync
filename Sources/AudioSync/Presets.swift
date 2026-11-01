@@ -77,9 +77,9 @@ struct SpeakerPreset: Codable, Equatable {
         var out = self
         out.members = zip(kept, volumes).map { member, volume in
             guard !volume.isNaN else { return Member(key: member.key, volume: nil) }
-            // asc_preset_levels doesn't see the keys: only an AirPlay member's own volume may pass 100 (S290).
-            let airPlay = SpeakerKey.parseAny(member.key)?.kind == .airplay
-            return Member(key: member.key, volume: airPlay ? volume : min(100, volume))
+            // asc_preset_levels doesn't see the keys: only an AirPlay or Cast member's own volume may pass 100 (S290, S415).
+            let kind = SpeakerKey.parseAny(member.key)?.kind
+            return Member(key: member.key, volume: kind == .airplay || kind == .cast ? volume : min(100, volume))
         }
         out.zones = zip(keptZones, zoneVolumes).map { ZoneVolume(id: $0.0.id, volume: $0.1) }
         out.master = master

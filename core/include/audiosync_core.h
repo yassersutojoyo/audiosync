@@ -2294,29 +2294,33 @@ bool asc_cast_set_muted(AscCast *cast, bool muted);
 bool asc_cast_step_volume(AscCast *cast, bool up);
 
 /*
- * The host's master on a Cast speaker, all levels 0 to 1. The level to send
- * is the master times the speaker's own level, clamped; anything not finite
- * counts as 0. A reported level that answers none the host sent means the
- * own level reported / master, clamped, and leaves `own` as it is at master 0
- * or when a value isn't finite. A reported level answers a sent one within
- * half a percent. A session starts from `own` when has_own is true, whatever
- * its first status reports; without one, from that status's level read as
- * asc_cast_own_level reads it.
+ * Sets the master position (0 to 100): every session's audio is scaled by
+ * its gain on the volume curve, a change fading in over the next read, and
+ * no device is sent a volume (S415). A master that isn't finite is ignored.
  */
-double asc_cast_device_level(double master, double own);
-double asc_cast_own_level(double reported, double master, double own);
-double asc_cast_start_own_level(double master, bool has_own, double own, double reported);
+void asc_cast_set_master(AscCast *cast, double master);
 
 /*
- * The same three with the speaker's zone level (0 to 1, 1 outside a zone)
- * as a stage between the master and the own level: the level to send is
- * master * zone * own; a report means reported / (master * zone), and leaves
- * `own` as it is when master * zone is 0. At zone 1 each is bit-identical to
- * the function above without the zone.
+ * The speaker's zone level (0 to 1, 1 outside a zone) on a Cast speaker's
+ * own level, which may pass 1. The level to send is zone * own, at most 1;
+ * anything not finite counts as 0. A reported level that answers none the
+ * host sent means the own level reported / zone, unclamped above, and
+ * leaves `own` as it is at zone 0 or when a value isn't finite. A reported
+ * level answers a sent one within half a percent. A session starts from
+ * `own` when has_own is true, whatever its first status reports; without
+ * one, from that status's level read as asc_cast_zone_own_level reads it.
  */
-double asc_cast_zone_level(double master, double zone, double own);
-double asc_cast_zone_own_level(double reported, double master, double zone, double own);
-double asc_cast_zone_start_own_level(double master, double zone, bool has_own, double own, double reported);
+double asc_cast_zone_level(double zone, double own);
+double asc_cast_zone_own_level(double reported, double zone, double own);
+double asc_cast_zone_start_own_level(double zone, bool has_own, double own, double reported);
+
+/*
+ * A Cast row moved to `row`, 0 to 100 (S415): writes the own level to store,
+ * row / zone, possibly above 1, through `own`, so the device gets the row
+ * itself. False, writing nothing, at zone 0, when `row` isn't finite or
+ * `own` is NULL.
+ */
+bool asc_cast_row_move(double row, double zone, double *own);
 bool asc_cast_level_answers(double sent, double reported);
 
 /*

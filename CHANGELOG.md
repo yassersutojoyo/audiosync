@@ -41,6 +41,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the update prompt no longer offers to install updates automatically. Every update waits for your click.
 - On Windows, an AirPlay speaker's own delay saved by an older version is no longer applied, as on the Mac, since no window shows it or lets you reset it. Such a speaker now plays by the AirPlay delay alone.
 - The master volume now sets how loud AudioSync sends to AirPlay speakers, and no longer changes any AirPlay speaker's own volume, its row or a TV's own volume. A speaker's own volume and its zone's volume still set the speaker. On the Mac and on Windows.
+- The master volume turns a Google Cast speaker down inside AudioSync, as it does for local and Bluetooth speakers, and no longer changes the TV's own volume or its row. The row shows the volume the TV plays at. On the Mac and on Windows.
 - AirPlay speakers and TVs show the artist alone under the song title, without the album. On the Mac and on Windows.
 - On the Mac, the Pair button in an AirPlay PIN prompt stays off until four digits are typed, and in a password prompt until something is typed. Cancelling the prompt turns the speaker off without a notice.
 

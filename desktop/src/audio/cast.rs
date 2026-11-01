@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
+use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, MasterGain, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
@@ -58,10 +58,11 @@ use audiosync_cast::media::{MediaError, Metadata};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use audiosync_cast::status::{
     ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_volume, device_level, own_level,
-    start_own_level,
+    row_own_level, start_own_level,
 };
 use audiosync_core::fade::Fade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
+use audiosync_core::volume::gain_for_position;
 
 use super::SESSION_RATE;
 use super::backend::{
@@ -591,13 +592,17 @@ pub struct CastSpeakers {
     saved_on: Option<DeviceId>,
     /// Each device's volume as its latest status reports it.
     volumes: BTreeMap<DeviceId, DeviceVolume>,
-    /// An own level the user set that no status has answered yet, 0.0 to
-    /// 1.0.
+    /// An own level the user set that no status has answered yet, at
+    /// least 0.0.
     requested: Option<(DeviceId, f64)>,
-    /// Each device's own level, 0.0 to 1.0, which the master scales (C104).
+    /// Each device's own level, at least 0.0 and possibly above 1.0, which
+    /// the zone scales (C104).
     levels: BTreeMap<DeviceId, f64>,
-    /// The master, 0.0 to 1.0.
-    master: f64,
+    /// A level set on the device while its zone is 0, which its row shows
+    /// until its own level or zone moves or the session ends (S415).
+    held: Option<(DeviceId, f64)>,
+    /// The master's gain, which every session's audio is scaled by (S415).
+    master: MasterGain,
     /// The zone level, 0.0 to 1.0, of each device in a zone (S249); one not
     /// here is in no zone.
     zones: BTreeMap<DeviceId, f64>,
@@ -641,7 +646,8 @@ impl CastSpeakers {
             volumes: BTreeMap::new(),
             requested: None,
             levels: BTreeMap::new(),
-            master: 1.0,
+            held: None,
+            master: MasterGain::default(),
             zones: BTreeMap::new(),
             unanswered: Vec::new(),
             attempt: None,
@@ -1057,7 +1063,17 @@ impl CastSpeakers {
             address,
             offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
-            volume: (level.unwrap_or(1.0) * 100.0).clamp(0.0, 100.0),
+            volume: (level.unwrap_or(1.0) * 100.0).max(0.0),
+            device_level: self
+                .held
+                .filter(|(held, _)| *held == id)
+                .map(|(_, level)| level)
+                .or_else(|| {
+                    self.own_of(id)
+                        .map(|own| device_level(self.zone_of(id), own))
+                })
+                .or_else(|| reported.map(|volume| volume.level))
+                .map_or(100.0, |level| (level * 100.0).clamp(0.0, 100.0)),
             volume_known: level.is_some(),
             muted: reported.is_some_and(|volume| volume.muted),
             volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
@@ -1292,6 +1308,7 @@ impl CastSpeakers {
         };
         let (writer, reader) = audio_ring(RING_FRAMES);
         let track = self.track.clone().unwrap_or_default();
+        let reader = reader.with_master(self.master.clone());
         match link.start(target, SESSION_RATE, track.clone(), reader) {
             Ok(attempt) => {
                 self.sent = Some(track);
@@ -1338,6 +1355,7 @@ impl CastSpeakers {
         };
         self.records = None;
         self.requested = None;
+        self.held = None;
         self.unanswered.clear();
         if let Some(link) = self.link.as_mut() {
             link.stop();
@@ -1367,9 +1385,10 @@ impl CastSpeakers {
         self.pending.push(BackendEvent::CastChanged);
     }
 
-    /// The device's own level, 0 to 100, sent times the master (C69,
-    /// C104); shown until the device's next status answers it. Without a
-    /// session it is kept, and the next session's first status sets it (C105).
+    /// The device's own level, at least 0 and possibly above 100, sent
+    /// times the zone (C69, C104); shown until the device's next status
+    /// answers it. Without a session it is kept, and the next session's
+    /// first status sets it (C105).
     pub fn set_volume(&mut self, id: &str, position: f64) {
         let Some(device) = DeviceId::parse(id) else {
             return;
@@ -1377,7 +1396,10 @@ impl CastSpeakers {
         if !position.is_finite() {
             return;
         }
-        let own = (position / 100.0).clamp(0.0, 1.0);
+        self.set_own(id, device, (position / 100.0).max(0.0));
+    }
+
+    fn set_own(&mut self, id: &str, device: DeviceId, own: f64) {
         if self.playing_device(id).is_none() {
             self.levels.insert(device, own);
             return;
@@ -1386,27 +1408,29 @@ impl CastSpeakers {
         self.send_level(device, own);
     }
 
-    /// The master position, 0 to 100 (C104): a change reaches the device in
-    /// a session at once.
+    /// The speaker's row moved to `row`, 0 to 100: the device gets the row
+    /// and the own level becomes row ÷ zone; at zone 0 nothing changes and
+    /// the row holds (S415).
+    pub fn move_row(&mut self, id: &str, row: f64) {
+        let Some(device) = DeviceId::parse(id) else {
+            return;
+        };
+        if let Some(own) = row_own_level(row, self.zone_of(device)) {
+            self.set_own(id, device, own);
+        }
+    }
+
+    /// The master position, 0 to 100: every session's audio is scaled by its
+    /// gain on the S70 curve and no device is sent a volume (S415).
     pub fn set_master(&mut self, position: f64) {
-        if !position.is_finite() {
-            return;
-        }
-        let master = (position / 100.0).clamp(0.0, 1.0);
-        if master == self.master {
-            return;
-        }
-        self.master = master;
-        if let Some(attempt) = self.attempt
-            && let Some(own) = self.own_of(attempt.device)
-        {
-            self.send_level(attempt.device, own);
+        if position.is_finite() {
+            self.master.set(gain_for_position(position));
         }
     }
 
     /// The zone volume, 0 to 100, of every Cast device ID in a zone (S249),
     /// the rest being in no zone: a change reaches the device in a session
-    /// at once, as a master change does (C104).
+    /// at once (C104).
     pub fn set_zones(&mut self, zones: BTreeMap<String, f64>) {
         let zones: BTreeMap<DeviceId, f64> = zones
             .into_iter()
@@ -1416,6 +1440,11 @@ impl CastSpeakers {
             .collect();
         let live = self.attempt.map(|attempt| attempt.device);
         let before = live.map(|device| self.zone_of(device));
+        if let Some((device, _)) = self.held
+            && zones.get(&device) != self.zones.get(&device)
+        {
+            self.held = None;
+        }
         self.zones = zones;
         if let Some(device) = live
             && before != Some(self.zone_of(device))
@@ -1439,10 +1468,10 @@ impl CastSpeakers {
         }
     }
 
-    /// Sends master × zone × `own`, unless the device's volume is fixed
-    /// (C68).
+    /// Sends zone × `own`, unless the device's volume is fixed (C68).
     fn send_level(&mut self, device: DeviceId, own: f64) {
-        let level = device_level(self.master, self.zone_of(device), own);
+        self.held = None;
+        let level = device_level(self.zone_of(device), own);
         let reported = self.volumes.get(&device);
         if reported.is_some_and(|volume| volume.control_type == ControlType::Fixed) {
             return;
@@ -1474,9 +1503,9 @@ impl CastSpeakers {
     }
 
     /// A status's volume (C70, C104, C105): the answer to a level sent keeps
-    /// the own level and any other level moves it by master × zone, except
-    /// the session's first, which is set to master × zone × own level
-    /// instead.
+    /// the own level and any other level moves it by the zone, or is held
+    /// for the row at zone 0 (S415), except the session's first, which is
+    /// set to zone × own level instead.
     fn volume_reported(&mut self, device: DeviceId, volume: DeviceVolume, answers_mute: bool) {
         let shown = self.own_of(device);
         let zone = self.zone_of(device);
@@ -1503,10 +1532,13 @@ impl CastSpeakers {
                     .get(&device)
                     .is_some_and(|known| known.has_level && known.level == level));
         let own = match (first, elsewhere) {
-            (true, _) => start_own_level(self.master, zone, shown, level),
-            (false, false) => shown.unwrap_or_else(|| own_level(level, self.master, zone, level)),
-            (false, true) => own_level(level, self.master, zone, shown.unwrap_or(level)),
+            (true, _) => start_own_level(zone, shown, level),
+            (false, false) => shown.unwrap_or_else(|| own_level(level, zone, level)),
+            (false, true) => own_level(level, zone, shown.unwrap_or(level)),
         };
+        if !first && elsewhere && zone == 0.0 {
+            self.held = Some((device, level));
+        }
         if self
             .requested
             .is_some_and(|(requested, _)| requested == device)
@@ -1521,7 +1553,7 @@ impl CastSpeakers {
         } else if self.own_of(device) != shown {
             self.pending.push(BackendEvent::CastChanged);
         }
-        let allowed = device_level(self.master, zone, own);
+        let allowed = device_level(zone, own);
         let at_level = self
             .volumes
             .get(&device)
@@ -1815,6 +1847,7 @@ impl CastSpeakers {
                 self.records = None;
                 self.sent = None;
                 self.requested = None;
+                self.held = None;
                 self.unanswered.clear();
                 self.feed.hand(None);
                 self.list.set_in_session(key, false);
@@ -3763,8 +3796,11 @@ pub mod tests {
         assert!((shown_after - 50.0).abs() < 1e-9, "shown {shown_after}");
 
         let (sent_after, shown_after) = rekeyed_into(25.0);
-        assert_eq!(sent_after, vec![0.25], "the loudest the new zone reaches");
-        assert!((shown_after - 100.0).abs() < 1e-9, "shown {shown_after}");
+        assert_eq!(sent_after, Vec::<f64>::new(), "above 100 in a quieter zone");
+        assert!((shown_after - 160.0).abs() < 1e-9, "shown {shown_after}");
+
+        let (sent_after, _) = rekeyed_into(0.0);
+        assert_eq!(sent_after, vec![0.0], "zone 0 can't give it");
     }
 
     // covers: S341
@@ -4316,23 +4352,17 @@ pub mod tests {
 
     // covers: C104
     #[test]
-    fn the_master_scales_the_level_sent_and_a_master_change_resends_it() {
+    fn the_master_sends_no_level_and_the_own_level_goes_whole() {
         let (fake, mut cast) = listed();
         cast.set_master(50.0);
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
         cast.set_volume(KITCHEN, 80.0);
-        assert_eq!(sent(&fake), [0.4]);
+        assert_eq!(sent(&fake), [0.8]);
         assert_eq!(shown(&cast, KITCHEN), 80.0);
 
         cast.set_master(0.0);
-        assert_eq!(sent(&fake), [0.4, 0.0], "master 0 sends level 0");
-        assert!(fake.state().mutes.is_empty(), "never the muted flag");
-        assert_eq!(shown(&cast, KITCHEN), 80.0);
-
-        report(&fake, &mut cast, 0.0);
-        cast.set_master(100.0);
-        assert_eq!(sent(&fake), [0.4, 0.0, 0.8]);
+        assert_eq!(sent(&fake), [0.8], "a master move sends nothing");
         assert_eq!(shown(&cast, KITCHEN), 80.0);
     }
 
@@ -4345,79 +4375,188 @@ pub mod tests {
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
         cast.set_volume(KITCHEN, 80.0);
-        assert_eq!(sent(&fake), [0.2], "master × zone × own");
+        assert_eq!(sent(&fake), [0.4], "zone × own");
         cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
-        assert_eq!(sent(&fake), [0.2], "unchanged: nothing goes out");
+        assert_eq!(sent(&fake), [0.4], "unchanged: nothing goes out");
         cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 0.0)]));
-        assert_eq!(sent(&fake), [0.2, 0.0], "zone 0 sends level 0");
+        assert_eq!(sent(&fake), [0.4, 0.0], "zone 0 sends level 0");
         assert!(fake.state().mutes.is_empty(), "never the muted flag");
         cast.set_zones(BTreeMap::new());
-        assert_eq!(sent(&fake), [0.2, 0.0, 0.4], "out of the zone");
+        assert_eq!(sent(&fake), [0.4, 0.0, 0.8], "out of the zone");
         assert_eq!(shown(&cast, KITCHEN), 80.0);
+    }
+
+    /// The whole number the row shows (S415).
+    fn row(cast: &CastSpeakers) -> f64 {
+        cast.speakers()
+            .into_iter()
+            .find(|info| info.id == KITCHEN)
+            .map(|info| audiosync_core::volume::row_level(info.device_level))
+            .expect("listed")
+    }
+
+    fn sends(fake: &FakeCast, cast: &mut CastSpeakers, level: f64) {
+        let last = *sent(fake).last().expect("a level sent");
+        assert!((last - level).abs() < 1e-9, "sent {last}, not {level}");
+        report(fake, cast, level);
+    }
+
+    // covers: S290, S415
+    #[test]
+    fn a_cast_row_shows_the_level_the_tv_gets_and_a_master_move_changes_neither() {
+        let (fake, mut cast) = listed();
+        cast.set_master(50.0);
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.4);
+        assert_eq!(row(&cast), 40.0, "the first status");
+        cast.set_master(100.0);
+        assert!(sent(&fake).is_empty(), "a master move sends nothing");
+        assert_eq!(row(&cast), 40.0);
+
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        sends(&fake, &mut cast, 0.2);
+        assert_eq!(row(&cast), 20.0, "a zone move");
+        cast.move_row(KITCHEN, 30.0);
+        sends(&fake, &mut cast, 0.3);
+        assert_eq!(row(&cast), 30.0, "a row move");
+        let count = sent(&fake).len();
+        cast.set_master(20.0);
+        assert_eq!(sent(&fake).len(), count, "a master move sends nothing");
+        assert_eq!(row(&cast), 30.0);
+        cast.set_zones(BTreeMap::new());
+        sends(&fake, &mut cast, 0.6);
+        assert_eq!(row(&cast), 60.0, "out of the zone");
+
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 0.0)]));
+        sends(&fake, &mut cast, 0.0);
+        report(&fake, &mut cast, 0.3);
+        assert_eq!(
+            row(&cast),
+            30.0,
+            "a level set on the TV while the zone is 0"
+        );
+        let count = sent(&fake).len();
+        cast.move_row(KITCHEN, 50.0);
+        assert_eq!(
+            sent(&fake).len(),
+            count,
+            "at zone 0 a row move sends nothing"
+        );
+        assert_eq!(row(&cast), 30.0);
+        cast.set_zones(BTreeMap::new());
+        sends(&fake, &mut cast, 0.6);
+        assert_eq!(row(&cast), 60.0, "the own level stayed");
+    }
+
+    // covers: S415
+    #[test]
+    fn a_level_held_at_zone_0_goes_once_the_session_ends_or_the_zone_moves() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.4);
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 0.0)]));
+        sends(&fake, &mut cast, 0.0);
+        report(&fake, &mut cast, 0.3);
+        assert_eq!(row(&cast), 30.0, "held at zone 0");
+
+        cast.set_enabled(KITCHEN, false).unwrap();
+        assert_eq!(row(&cast), 0.0, "the session ended");
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        assert_eq!(row(&cast), 20.0, "zone × own");
+    }
+
+    // covers: S415
+    #[test]
+    fn the_master_scales_the_audio_the_session_hears() {
+        let (fake, mut cast) = listed();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_volume(KITCHEN, 80.0);
+        let first_sample = |fake: &FakeCast| {
+            let mut bytes = Vec::new();
+            fake.state().readers[0].read_into(&mut bytes, 32);
+            f64::from(i16::from_le_bytes([bytes[0], bytes[1]]))
+        };
+        lease.push(&[0.5; 64], 32);
+        let whole = first_sample(&fake);
+        let before = sent(&fake);
+        cast.set_master(50.0);
+        assert_eq!(sent(&fake), before, "the TV's level stays");
+        // The first read after the change fades into the new gain.
+        lease.push(&[0.5; 64], 32);
+        first_sample(&fake);
+        lease.push(&[0.5; 64], 32);
+        let scaled = first_sample(&fake);
+        let gain = audiosync_core::volume::gain_for_position(50.0);
+        assert!(
+            (scaled - (whole * gain).round()).abs() <= 1.0,
+            "{scaled} at master 50, {whole} at 100"
+        );
     }
 
     // covers: C104, C105
     #[test]
-    fn a_cast_report_in_a_zone_moves_the_slider_by_master_times_zone() {
+    fn a_cast_report_in_a_zone_moves_the_own_level_by_the_zone() {
         let (fake, mut cast) = listed();
         cast.set_master(50.0);
         cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
-        // No own level yet: the first status's 0.2 ÷ (0.5 × 0.5) (C105).
+        // No own level yet: the first status's 0.2 ÷ 0.5 (C105).
         report(&fake, &mut cast, 0.2);
-        assert!((shown(&cast, KITCHEN) - 80.0).abs() < 1e-9);
+        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9);
         assert!(sent(&fake).is_empty(), "it plays what the sliders show");
         report(&fake, &mut cast, 0.1);
-        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9);
+        assert!((shown(&cast, KITCHEN) - 20.0).abs() < 1e-9);
         cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 0.0)]));
         assert_eq!(sent(&fake), [0.0]);
         report(&fake, &mut cast, 0.0);
         report(&fake, &mut cast, 0.3);
         assert!(
-            (shown(&cast, KITCHEN) - 40.0).abs() < 1e-9,
+            (shown(&cast, KITCHEN) - 20.0).abs() < 1e-9,
             "zone 0 leaves it"
         );
     }
 
     // covers: C70, C104
     #[test]
-    fn a_level_from_elsewhere_moves_the_slider_by_the_master() {
+    fn a_level_from_elsewhere_moves_the_slider_whatever_the_master() {
         let (fake, mut cast) = listed();
         cast.set_master(50.0);
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
         report(&fake, &mut cast, 0.2);
-        assert!((shown(&cast, KITCHEN) - 40.0).abs() < 1e-9);
+        assert!((shown(&cast, KITCHEN) - 20.0).abs() < 1e-9);
         assert!(sent(&fake).is_empty(), "nothing sent back");
 
         cast.set_master(0.0);
-        assert_eq!(sent(&fake), [0.0]);
-        report(&fake, &mut cast, 0.0);
         report(&fake, &mut cast, 0.3);
+        assert!((shown(&cast, KITCHEN) - 30.0).abs() < 1e-9);
         assert!(
-            (shown(&cast, KITCHEN) - 40.0).abs() < 1e-9,
-            "master 0 leaves it"
+            sent(&fake).is_empty(),
+            "a change from elsewhere isn't fought"
         );
-        assert_eq!(sent(&fake), [0.0], "a change from elsewhere isn't fought");
     }
 
     // covers: C105
     #[test]
-    fn a_session_starts_no_louder_than_the_master_allows() {
+    fn a_session_starts_no_louder_than_the_zone_allows() {
         let (fake, mut cast) = listed();
-        cast.set_master(0.0);
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 0.0)]));
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
         report(&fake, &mut cast, 0.7);
-        assert_eq!(sent(&fake), [0.0], "turned on at master 0");
+        assert_eq!(sent(&fake), [0.0], "turned on at zone 0");
         assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9);
         report(&fake, &mut cast, 0.0);
         report(&fake, &mut cast, 0.5);
         assert_eq!(sent(&fake), [0.0], "only the first status is answered");
 
         cast.set_enabled(KITCHEN, false).unwrap();
-        cast.set_master(50.0);
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
         cast.set_enabled(KITCHEN, true).unwrap();
         fake.report(HostEvent::Session {
             attempt: AttemptId(2),
@@ -4432,7 +4571,7 @@ pub mod tests {
             ),
         });
         cast.poll();
-        assert_eq!(sent(&fake), [0.0, 0.35], "louder than master × own: set");
+        assert_eq!(sent(&fake), [0.0, 0.35], "louder than zone × own: set");
         assert!((shown(&cast, KITCHEN) - 70.0).abs() < 1e-9, "not read back");
     }
 
@@ -4445,13 +4584,9 @@ pub mod tests {
         report(&fake, &mut cast, 0.5);
         cast.set_volume(KITCHEN, 0.0);
         report(&fake, &mut cast, 0.0);
-        for master in [60.0, 50.0, 40.0] {
-            cast.set_master(master);
-        }
         report(&fake, &mut cast, 0.3);
         report(&fake, &mut cast, 0.0);
         assert_eq!(shown(&cast, KITCHEN), 0.0, "the buttons' 0 is read back");
-        cast.set_master(100.0);
         assert_eq!(
             sent(&fake).last(),
             Some(&0.0),
@@ -4461,7 +4596,7 @@ pub mod tests {
 
     // covers: C105
     #[test]
-    fn a_session_starts_at_master_times_the_own_level_even_when_the_device_is_quieter() {
+    fn a_session_starts_at_the_own_level_even_when_the_device_is_quieter() {
         let (fake, mut cast) = listed();
         cast.set_streaming(true);
         cast.set_enabled(KITCHEN, true).unwrap();
@@ -4485,21 +4620,21 @@ pub mod tests {
             ),
         });
         cast.poll();
-        assert_eq!(sent(&fake), [0.8, 0.8], "quieter than master × own: set");
+        assert_eq!(sent(&fake), [0.8, 0.8], "quieter than the own level: set");
         assert_eq!(shown(&cast, KITCHEN), 80.0, "not read back");
     }
 
     // covers: C68, C100, C104
     #[test]
-    fn a_group_follows_the_master_and_a_fixed_volume_gets_nothing() {
+    fn a_group_gets_its_own_level_and_a_fixed_volume_gets_nothing() {
         let (fake, mut cast) = listed();
         cast.set_master(50.0);
         cast.set_streaming(true);
         cast.set_enabled(ATTIC, true).unwrap();
         cast.set_volume(ATTIC, 80.0);
-        assert_eq!(sent(&fake), [0.4]);
+        assert_eq!(sent(&fake), [0.8]);
         cast.set_master(100.0);
-        assert_eq!(sent(&fake), [0.4, 0.8]);
+        assert_eq!(sent(&fake), [0.8], "the master sends nothing");
 
         cast.set_enabled(ATTIC, false).unwrap();
         cast.set_enabled(KITCHEN, true).unwrap();
@@ -4517,12 +4652,8 @@ pub mod tests {
             ),
         });
         cast.poll();
-        cast.set_master(20.0);
-        assert_eq!(
-            sent(&fake),
-            [0.4, 0.8],
-            "a fixed volume sends nothing (C68)"
-        );
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 20.0)]));
+        assert_eq!(sent(&fake), [0.8], "a fixed volume sends nothing (C68)");
     }
 
     fn volume_fixed(cast: &CastSpeakers, id: &str) -> bool {

@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering}
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use audiosync_cast::audio::{AudioWriter, Codec, audio_ring};
+use audiosync_cast::audio::{AudioWriter, Codec, MasterGain, audio_ring};
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
@@ -61,6 +61,7 @@ use crate::fade::InputFade;
 use crate::policy::delay::MAX_HOLD_BACK_MS;
 use crate::resample::Resampler;
 use crate::ring::is_supported_rate;
+use crate::volume::gain_for_position;
 
 /// The rate of every Cast stream from this interface; the input resamples
 /// the capture to it (C63 allows 44 100 and 48 000 Hz).
@@ -487,6 +488,8 @@ impl Drop for Shared {
 pub struct AscCast {
     host: CastHost,
     shared: Arc<Shared>,
+    /// The master's gain, which every session's ring reads through (S415).
+    master: MasterGain,
     input_taken: bool,
     list: DeviceList,
     announcements: Announcements,
@@ -974,7 +977,7 @@ impl AscCast {
                 CAST_RATE,
                 self.metadata.clone(),
                 self.artwork.clone(),
-                reader,
+                reader.with_master(self.master.clone()),
             )
             .map_err(|refused| match refused {
                 StartRefused::Busy { .. } => CAST_REFUSED_BUSY,
@@ -1207,6 +1210,7 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
         Box::into_raw(Box::new(AscCast {
             host,
             shared: Arc::new(Shared::new()),
+            master: MasterGain::default(),
             input_taken: false,
             list: DeviceList::new(),
             announcements: Announcements::default(),
@@ -1594,68 +1598,70 @@ pub unsafe extern "C" fn asc_cast_step_volume(cast: *mut AscCast, up: bool) -> b
     unsafe { with_session(cast, |host| host.step_volume(up)) }
 }
 
-/// The level to send for the host's master and the speaker's own level, all
-/// 0 to 1: their product, clamped; anything not finite counts as 0 (C104).
+/// Sets the master position (0 to 100): every session's audio is scaled by
+/// its gain on the S70 curve, a change fading in over the next read, and no
+/// device is sent a volume (S415). A master that isn't finite is ignored.
+///
+/// # Safety
+///
+/// `cast` is null or a live handle, called under the threading contract.
 #[unsafe(no_mangle)]
-pub extern "C" fn asc_cast_device_level(master: f64, own: f64) -> f64 {
-    status::device_level(master, status::NO_ZONE_LEVEL, own)
+pub unsafe extern "C" fn asc_cast_set_master(cast: *mut AscCast, master: f64) {
+    if !master.is_finite() {
+        return;
+    }
+    // SAFETY: as the caller's.
+    unsafe { live(cast, (), |cast| cast.master.set(gain_for_position(master))) }
 }
 
-/// The level to send for the host's master, the speaker's zone (1 outside a
-/// zone) and its own level, all 0 to 1: master × zone × own, clamped;
-/// anything not finite counts as 0 (C104, S249).
+/// The level to send for the speaker's zone (1 outside a zone), 0 to 1, and
+/// its own level, which may pass 1: zone × own, at most 1; anything not
+/// finite counts as 0 (C104, S249, S415).
 #[unsafe(no_mangle)]
-pub extern "C" fn asc_cast_zone_level(master: f64, zone: f64, own: f64) -> f64 {
-    status::device_level(master, zone, own)
+pub extern "C" fn asc_cast_zone_level(zone: f64, own: f64) -> f64 {
+    status::device_level(zone, own)
 }
 
-/// The own level a reported device level means at `master` (C104):
-/// level ÷ master, clamped to 0 to 1; `own` as it is at master 0 or when a
-/// value isn't finite.
+/// The own level a reported device level means at `zone` (C104, S250):
+/// level ÷ zone, unclamped above; `own` as it is at zone 0 or when a value
+/// isn't finite.
 #[unsafe(no_mangle)]
-pub extern "C" fn asc_cast_own_level(reported: f64, master: f64, own: f64) -> f64 {
-    status::own_level(reported, master, status::NO_ZONE_LEVEL, own)
+pub extern "C" fn asc_cast_zone_own_level(reported: f64, zone: f64, own: f64) -> f64 {
+    status::own_level(reported, zone, own)
 }
 
-/// The own level a reported device level means at `master` and `zone`
-/// (C104, S250): level ÷ (master × zone), clamped to 0 to 1; `own` as it is
-/// when master × zone is 0 or a value isn't finite.
+/// A Cast row moved to `row`, 0 to 100 (S415): writes the own level to
+/// store, row ÷ zone and possibly above 1, through `own`, so the device
+/// gets the row itself. False, writing nothing, at zone 0, when `row` isn't
+/// finite or `own` is null.
+///
+/// # Safety
+///
+/// `own` is null or points to a writable double.
 #[unsafe(no_mangle)]
-pub extern "C" fn asc_cast_zone_own_level(reported: f64, master: f64, zone: f64, own: f64) -> f64 {
-    status::own_level(reported, master, zone, own)
+pub unsafe extern "C" fn asc_cast_row_move(row: f64, zone: f64, own: *mut f64) -> bool {
+    if own.is_null() {
+        return false;
+    }
+    let Some(level) = status::row_own_level(row, zone) else {
+        return false;
+    };
+    // SAFETY: checked non-null above; by the caller's contract writable.
+    unsafe { *own = level };
+    true
 }
 
-/// The own level a session starts from (C105): `own` when `has_own` and it is
-/// finite, whatever the first status reports; else that status's level ÷ master, clamped, or
-/// the level itself at master 0.
-#[unsafe(no_mangle)]
-pub extern "C" fn asc_cast_start_own_level(
-    master: f64,
-    has_own: bool,
-    own: f64,
-    reported: f64,
-) -> f64 {
-    status::start_own_level(
-        master,
-        status::NO_ZONE_LEVEL,
-        has_own.then_some(own),
-        reported,
-    )
-}
-
-/// The own level a session starts from (C105) for a speaker in a zone:
-/// `own` when `has_own`, whatever the first status reports; else that
-/// status's level ÷ (master × zone), clamped, or the level itself when
-/// master × zone is 0.
+/// The own level a session starts from (C105): `own` when `has_own`,
+/// whatever the first status reports; else that status's level ÷ zone,
+/// unclamped above, or the level itself at zone 0.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_cast_zone_start_own_level(
-    master: f64,
     zone: f64,
     has_own: bool,
     own: f64,
     reported: f64,
 ) -> f64 {
-    status::start_own_level(master, zone, has_own.then_some(own), reported)
+    status::start_own_level(zone, has_own.then_some(own), reported)
 }
 
 /// Whether a reported level is the device's answer to the level `sent`
@@ -2209,24 +2215,30 @@ mod tests {
     // covers: S249, S250
     #[test]
     fn the_zoned_cast_levels_cross_the_boundary_as_the_sender_makes_them() {
-        assert!((asc_cast_zone_level(0.5, 0.5, 0.8) - 0.2).abs() < 1e-12);
-        assert!((asc_cast_zone_own_level(0.2, 0.5, 0.5, 0.9) - 0.8).abs() < 1e-12);
-        assert_eq!(asc_cast_zone_own_level(0.2, 1.0, 0.0, 0.7), 0.7);
-        assert!((asc_cast_zone_start_own_level(0.5, 0.5, false, 0.0, 0.2) - 0.8).abs() < 1e-12);
-        for (master, own, reported) in [(0.5, 0.8, 0.2), (0.37, 0.91, 0.3)] {
-            assert_eq!(
-                asc_cast_zone_level(master, 1.0, own).to_bits(),
-                asc_cast_device_level(master, own).to_bits()
-            );
-            assert_eq!(
-                asc_cast_zone_own_level(reported, master, 1.0, own).to_bits(),
-                asc_cast_own_level(reported, master, own).to_bits()
-            );
-            assert_eq!(
-                asc_cast_zone_start_own_level(master, 1.0, false, 0.0, reported).to_bits(),
-                asc_cast_start_own_level(master, false, 0.0, reported).to_bits()
-            );
+        assert!((asc_cast_zone_level(0.5, 0.8) - 0.4).abs() < 1e-12);
+        assert!((asc_cast_zone_own_level(0.2, 0.5, 0.9) - 0.4).abs() < 1e-12);
+        assert_eq!(asc_cast_zone_own_level(0.2, 0.0, 0.7), 0.7);
+        assert!((asc_cast_zone_start_own_level(0.5, false, 0.0, 0.2) - 0.4).abs() < 1e-12);
+        assert_eq!(asc_cast_zone_start_own_level(0.5, true, 1.25, 0.2), 1.25);
+    }
+
+    // covers: S415
+    #[test]
+    fn a_cast_row_move_stores_row_over_zone_past_1() {
+        let mut own = -1.0;
+        // SAFETY: a local double.
+        assert!(unsafe { asc_cast_row_move(100.0, 0.8, &mut own) });
+        assert!((own - 1.25).abs() < 1e-12);
+        assert!((asc_cast_zone_level(0.8, own) - 1.0).abs() < 1e-12);
+        assert_eq!(asc_cast_zone_level(1.0, own), 1.0, "capped at 1");
+        for zone in [0.0, f64::NAN] {
+            // SAFETY: as above.
+            assert!(!unsafe { asc_cast_row_move(50.0, zone, &mut own) });
         }
+        // SAFETY: a null pointer is refused.
+        assert!(!unsafe { asc_cast_row_move(50.0, 1.0, std::ptr::null_mut()) });
+        assert!((own - 1.25).abs() < 1e-12, "a refused move writes nothing");
+        assert!((asc_cast_zone_own_level(0.6, 0.5, 0.9) - 1.2).abs() < 1e-12);
     }
 
     // CAST_SPEC: C70
@@ -2502,6 +2514,7 @@ mod tests {
             assert!(!asc_cast_set_volume(no_handle, 0.5));
             assert!(!asc_cast_set_muted(no_handle, true));
             assert!(!asc_cast_step_volume(no_handle, true));
+            asc_cast_set_master(no_handle, 50.0);
             assert!(!asc_cast_set_metadata(
                 no_handle,
                 ptr::null(),

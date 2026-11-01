@@ -77,32 +77,6 @@ pub fn zoned_output_gain(local_position: f64, zone_position: f64, master_positio
         * gain_for_position(master_position)
 }
 
-/// The linear level of three slider stages, own × zone × master, each
-/// `position / 100` clamped to 0…1 (S249): what an AirPlay speaker's volume
-/// spreads over its dB range.
-pub fn stage_level(own_position: f64, zone_position: f64, master_position: f64) -> f64 {
-    (own_position / MAX_POSITION).clamp(0.0, 1.0)
-        * (zone_position / MAX_POSITION).clamp(0.0, 1.0)
-        * (master_position / MAX_POSITION).clamp(0.0, 1.0)
-}
-
-/// [`stage_level`] backwards (S250): the own position, rounded to a whole
-/// step and clamped to 0…100, that plays at `level` (0…1) through the zone
-/// and the master. None when zone × master is 0, where every own position
-/// sounds the same, or `level` isn't finite.
-pub fn own_position_for_level(level: f64, zone_position: f64, master_position: f64) -> Option<f64> {
-    let scale = (master_position / MAX_POSITION).clamp(0.0, 1.0)
-        * (zone_position / MAX_POSITION).clamp(0.0, 1.0);
-    if scale.is_nan() || scale <= 0.0 || !level.is_finite() {
-        return None;
-    }
-    Some(
-        (level.clamp(0.0, 1.0) / scale * MAX_POSITION)
-            .clamp(MIN_POSITION, MAX_POSITION)
-            .round(),
-    )
-}
-
 /// The dB an AirPlay device level of 0 maps to; 100 is 0 dB (S289).
 const DEVICE_FLOOR_DB: f64 = -30.0;
 

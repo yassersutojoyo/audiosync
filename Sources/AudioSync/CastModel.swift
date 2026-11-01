@@ -392,7 +392,7 @@ enum CastOutcome: Equatable {
     case playing(String)
     /// The device went off on its own; a notice says why when `problem` is set.
     case turnedOff(String, problem: CastProblem?)
-    /// Send this level, 0 to 1, to the device: its session starts at master
+    /// Send this level, 0 to 1, to the device: its session starts at zone
     /// × own level (C105). The row changed too.
     case setVolume(Double)
     case memoryChanged
@@ -459,10 +459,12 @@ struct CastModel {
     private(set) var volumes: [String: CastVolume] = [:]
     /// An own level the user set that no status has answered yet.
     private(set) var requested: (id: String, level: Double)?
-    /// Each device's own level, 0 to 1, which the master scales (C104).
+    /// Each device's own level, at least 0 and possibly above 1, which the
+    /// zone scales (C104).
     private(set) var levels: [String: Double] = [:]
-    /// The master, 0 to 1.
-    private(set) var master = 1.0
+    /// A level set on the device while its zone is 0, which its row shows
+    /// until its own level or zone moves or the session ends (S415).
+    private var held: (id: String, level: Double)?
     /// The zone level, 0 to 1, of each device in a zone (S249); one not here
     /// is in no zone.
     private(set) var zoneLevels: [String: Double] = [:]
@@ -571,13 +573,26 @@ struct CastModel {
     /// status answers it, else the one kept, else the reported level.
     func volume(of id: String) -> Double { knownVolume(of: id) ?? 100 }
 
-    /// `volume(of:)`, nil while no status reported a level and the user set none.
+    /// `volume(of:)`, nil while no status reported a level and the user set
+    /// none; it may pass 100 (S415).
     func knownVolume(of id: String) -> Double? {
-        (ownLevel(of: id) ?? volumes[id]?.level).map { min(100, max(0, $0 * 100)) }
+        (ownLevel(of: id) ?? volumes[id]?.level).map { max(0, $0 * 100) }
     }
 
     private func ownLevel(of id: String) -> Double? {
         requested?.id == id ? requested!.level : levels[id]
+    }
+
+    /// The whole number the row shows, 0 to 100: the level the device gets (S415).
+    func rowVolume(of id: String) -> Double {
+        // S290's rounding down, which AirPlay rows use too.
+        asc_airplay_row_level(deviceLevel(of: id) * 100)
+    }
+
+    /// A level held at zone 0, else zone × own, else the reported level, else 1.
+    private func deviceLevel(of id: String) -> Double {
+        if let held, held.id == id { return held.level }
+        return ownLevel(of: id).map { asc_cast_zone_level(zone(of: id), $0) } ?? volumes[id]?.level ?? 1
     }
 
     func offset(of id: String) -> Double { offsets[id] ?? 0 }
@@ -614,16 +629,16 @@ struct CastModel {
         return keptLoudness(new, playedZone: playedZone ?? 1)
     }
 
-    /// The session's own level rescaled so master × zone × own still gives
-    /// what it played in `playedZone` (S341); the level to send when the
-    /// clamp to 0 to 1 keeps it from that.
+    /// The session's own level rescaled so zone × own still gives what it
+    /// played in `playedZone` (S341); the level to send when the new zone
+    /// can't give it, which is only at zone 0, where it sends 0.
     private mutating func keptLoudness(_ id: String, playedZone: Double) -> Double? {
         let zone = self.zone(of: id)
         guard attempt?.device == id, zone != playedZone, let own = ownLevel(of: id) else { return nil }
-        let played = asc_cast_zone_level(master, playedZone, own)
-        let kept = asc_cast_zone_own_level(played, master, zone, own)
+        let played = asc_cast_zone_level(playedZone, own)
+        let kept = asc_cast_zone_own_level(played, zone, own)
         if requested?.id == id { requested = (id, kept) } else { levels[id] = kept }
-        if asc_cast_level_answers(asc_cast_zone_level(master, zone, kept), played) { return nil }
+        if asc_cast_level_answers(asc_cast_zone_level(zone, kept), played) { return nil }
         return levelToSend(id, own: kept)
     }
 
@@ -813,6 +828,7 @@ struct CastModel {
     mutating func stopSent() {
         attempt = nil
         requested = nil
+        held = nil
         unanswered = []
         members = nil
     }
@@ -915,6 +931,7 @@ struct CastModel {
         case .ended(_, let end):
             attempt = nil
             requested = nil
+            held = nil
             unanswered = []
             members = nil
             if enabled == id { enabled = nil }
@@ -936,13 +953,26 @@ struct CastModel {
         return status == .playing ? .playing(current.device) : .changed
     }
 
-    /// The user's own level for the device in a session, 0 to 100. Returns
-    /// the level to send, master × zone × own, 0 to 1 (C104); nil when no session
-    /// runs for it, the position isn't a number or the volume is fixed. A
-    /// device without a session, off or waiting for one, keeps the level for it (C105, S348).
+    /// The user's own level for the device in a session, at least 0 and
+    /// possibly above 100, as a preset keeps it. Returns the level to send,
+    /// zone × own, 0 to 1 (C104); nil when no session runs for it, the
+    /// position isn't a number or the volume is fixed. A device without a
+    /// session, off or waiting for one, keeps the level for it (C105, S348).
     mutating func setVolume(_ id: String, position: Double) -> Double? {
         guard position.isFinite else { return nil }
-        let own = min(1, max(0, position / 100))
+        return setOwn(id, own: max(0, position / 100))
+    }
+
+    /// The row moved to `row`, 0 to 100 (S415): the device gets the row and
+    /// the own level becomes row ÷ zone. Returns what `setVolume` does; nil,
+    /// changing nothing, at zone 0, where the row holds.
+    mutating func moveRow(_ id: String, row: Double) -> Double? {
+        var own = 0.0
+        guard asc_cast_row_move(row, zone(of: id), &own) else { return nil }
+        return setOwn(id, own: own)
+    }
+
+    private mutating func setOwn(_ id: String, own: Double) -> Double? {
         guard isLive(id) else {
             levels[id] = own
             return nil
@@ -960,21 +990,10 @@ struct CastModel {
         return true
     }
 
-    /// The master position, 0 to 100 (C104). Returns the level to send to
-    /// the device in a session; nil when none runs, the master is unchanged,
-    /// the device's own level isn't known yet or its volume is fixed.
-    mutating func setMaster(_ position: Double) -> Double? {
-        guard position.isFinite else { return nil }
-        let new = min(1, max(0, position / 100))
-        guard new != master else { return nil }
-        master = new
-        guard let id = attempt?.device, let own = ownLevel(of: id) else { return nil }
-        return levelToSend(id, own: own)
-    }
-
     /// The zone position, 0 to 100, of every device ID in a zone, the rest
     /// being in no zone (S249). Returns the level to send to the device in a
-    /// session when its zone changed, as `setMaster` does.
+    /// session when its zone changed; nil when none runs, the device's own
+    /// level isn't known yet or its volume is fixed.
     mutating func setZones(_ positions: [String: Double]) -> Double? {
         var new: [String: Double] = [:]
         for (id, position) in positions where position.isFinite {
@@ -983,6 +1002,7 @@ struct CastModel {
         }
         let live = attempt?.device
         let before = live.map { zone(of: $0) }
+        if let held, new[held.id] != zoneLevels[held.id] { self.held = nil }
         zoneLevels = new
         guard let id = live, before != zone(of: id), let own = ownLevel(of: id) else { return nil }
         return levelToSend(id, own: own)
@@ -991,12 +1011,13 @@ struct CastModel {
     /// The zone level of `id`, 1 when it is in no zone.
     private func zone(of id: String) -> Double { zoneLevels[id] ?? 1 }
 
-    /// Master × zone × `own`, kept to recognize the device's answer; nil for
-    /// a fixed volume (C68).
+    /// Zone × `own`, kept to recognize the device's answer; nil for a fixed
+    /// volume (C68).
     private mutating func levelToSend(_ id: String, own: Double) -> Double? {
+        held = nil
         guard volumes[id]?.fixed != true else { return nil }
         attempt?.reportedMute = nil
-        let level = asc_cast_zone_level(master, zone(of: id), own)
+        let level = asc_cast_zone_level(zone(of: id), own)
         if let current = volumes[id], asc_cast_volume_answers(level, current.level, current.step) {
             // The device reports only changes, so this level gets no answer; it
             // is still sent, so it replaces a level the sender holds back.
@@ -1012,8 +1033,9 @@ struct CastModel {
     }
 
     /// A status's volume (C70, C104, C105): the answer to a level sent keeps
-    /// the own level and any other level moves it by master × zone, except
-    /// the session's first, which is set to master × zone × own level instead.
+    /// the own level and any other level moves it by the zone, or is held for
+    /// the row at zone 0 (S415), except the session's first, which is set to
+    /// zone × own level instead.
     private mutating func volumeReported(_ id: String, _ volume: CastVolume, answersMute: Bool) -> CastOutcome? {
         let shown = ownLevel(of: id)
         let zone = self.zone(of: id)
@@ -1026,17 +1048,18 @@ struct CastModel {
         let elsewhere = answered == nil && !(answersMute && volumes[id]?.level == level)
         let own: Double
         if first {
-            own = asc_cast_zone_start_own_level(master, zone, shown != nil, shown ?? 0, level)
+            own = asc_cast_zone_start_own_level(zone, shown != nil, shown ?? 0, level)
         } else if !elsewhere {
-            own = shown ?? asc_cast_zone_own_level(level, master, zone, level)
+            own = shown ?? asc_cast_zone_own_level(level, zone, level)
         } else {
-            own = asc_cast_zone_own_level(level, master, zone, shown ?? level)
+            own = asc_cast_zone_own_level(level, zone, shown ?? level)
+            if zone == 0 { held = (id, level) }
         }
         if requested?.id == id, elsewhere || unanswered.isEmpty { requested = nil }
         levels[id] = own
         let changed = volumes[id] != volume || ownLevel(of: id) != shown
         volumes[id] = volume
-        if first, !asc_cast_volume_answers(asc_cast_zone_level(master, zone, own), level, volume.step),
+        if first, !asc_cast_volume_answers(asc_cast_zone_level(zone, own), level, volume.step),
            let send = levelToSend(id, own: own) {
             return .setVolume(send)
         }
@@ -1055,11 +1078,14 @@ struct CastModel {
         guard isLive(id), volumes[id]?.fixed != true else { return nil }
         let deviceStep = volumes[id]?.step ?? 0
         let size = deviceStep > 0 ? deviceStep : Self.fallbackVolumeStep
-        let own = min(1, max(0, volume(of: id) / 100 + (up ? size : -size)))
+        // A step moves the row (S415); at zone 0 it sends nothing.
+        var own = 0.0
+        guard asc_cast_row_move((deviceLevel(of: id) + (up ? size : -size)) * 100, zone(of: id), &own)
+        else { return nil }
         requested = (id, own)
         attempt?.reportedMute = nil
-        // The device's own step moves its level, which is the own level only at master × zone 1 (C104).
-        if deviceStep > 0, master == 1, zone(of: id) == 1 { return .device(up: up) }
+        // The device's own step moves its level, which is the own level only at zone 1 (C104).
+        if deviceStep > 0, zone(of: id) == 1 { return .device(up: up) }
         return levelToSend(id, own: own).map { .level($0) }
     }
 
