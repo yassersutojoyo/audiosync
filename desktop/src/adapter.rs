@@ -3774,7 +3774,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// An AirPlay speaker the user switched on can't play yet: an Apple TV
     /// that asks for a PIN is paired and one that asks for a password prompts
-    /// for it, each on meanwhile; any other stays off with a notice.
+    /// for it; any other stays off with a notice.
     fn airplay_switch_failed(&mut self, id: &str, problem: AirPlayProblem) {
         if problem == AirPlayProblem::NeedsPassword {
             self.log.log(|| {

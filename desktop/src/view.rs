@@ -10098,7 +10098,11 @@ mod tests {
         }
         let mut backend = MockBackend::new();
         backend.set_running(true);
-        let mut tv = backend.snapshot().speaker("airplay:kitchen").unwrap().clone();
+        let mut tv = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
         tv.id = "airplay:tv".into();
         tv.name = "Den TV".into();
         tv.enabled = true;

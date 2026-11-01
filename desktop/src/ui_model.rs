@@ -438,11 +438,9 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped announcing itself on the network; it
     /// plays once it is announced again (P215).
     NotOnNetwork,
-    /// An AirPlay speaker the user switched on whose password prompt is
-    /// open or queued (S223).
+    /// Its password prompt is open or queued (S223).
     ForPassword,
-    /// An AirPlay speaker the user switched on whose PIN pairing runs
-    /// (S223).
+    /// Its PIN pairing runs (S223).
     ForPin,
 }
 
@@ -1327,11 +1325,8 @@ impl AppState {
         let on = zones::click_plan(&members, situation).action == ClickAction::TurnOff;
         match SpeakerState::new(on, self.running) {
             SpeakerState::Playing => {
-                let waiting: Option<Vec<Waiting>> = self
-                    .zone_counted(zone)
-                    .iter()
-                    .map(|s| s.waiting)
-                    .collect();
+                let waiting: Option<Vec<Waiting>> =
+                    self.zone_counted(zone).iter().map(|s| s.waiting).collect();
                 waiting
                     .and_then(|w| w.first().copied())
                     .map_or(SpeakerState::Playing, SpeakerState::Waiting)

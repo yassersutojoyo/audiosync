@@ -2239,8 +2239,7 @@ impl AirPlaySpeakers {
     /// cancelled just before that hasn't reported its end yet goes first,
     /// and this one starts on the sender once it has, or, when that one
     /// paired after all, ends there as paired with no PIN (see `ending`).
-    /// The speaker is on meanwhile, and plays once paired
-    /// ([`BackendEvent::AirPlayPaired`]).
+    /// Paired, it plays ([`BackendEvent::AirPlayPaired`]).
     pub fn start_pairing(&mut self, id: &str) -> Result<(), AirPlayProblem> {
         let Some(listed) = self.listed.get(id) else {
             self.log.log(|| {
@@ -2490,8 +2489,8 @@ impl AirPlaySpeakers {
     }
 
     /// Asks the user for the password of a speaker they switched on that
-    /// asks for one AudioSync doesn't have. It stays on meanwhile, and plays
-    /// once the password is typed ([`AirPlaySpeakers::submit_password`]).
+    /// asks for one AudioSync doesn't have. It plays once the password is
+    /// typed ([`AirPlaySpeakers::submit_password`]).
     pub fn ask_password(&mut self, id: &str) -> Result<(), AirPlayProblem> {
         // A target asks for its member's password by the member's name.
         if let Some(target) = self.targets.get(id) {
