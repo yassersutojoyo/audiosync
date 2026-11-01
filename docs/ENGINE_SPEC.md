@@ -3667,6 +3667,8 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | a_cancelled_pairings_late_success_with_nothing_waiting_leaves_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
 | a_cancelled_pairings_late_wrong_pin_starts_nothing_again (`desktop/src/audio/airplay.rs`) | S223 |
 | a_failed_pairing_turns_the_speaker_off_with_a_notice (`desktop/src/audio/airplay.rs`) | S223 |
+| a_first_pairing_from_the_users_switch_on_turned_down_stops_with_the_notice (`desktop/src/audio/airplay.rs`) | S223 |
+| a_legacy_apple_tv_that_turns_its_credentials_down_pairs_again_in_the_same_attempt (`desktop/src/audio/airplay.rs`) | S223 |
 | a_member_that_wants_a_password_is_asked_for_by_name (`desktop/src/audio/airplay.rs`) | S223 |
 | a_new_sender_drops_the_password_prompt_of_a_pairing (`desktop/src/audio/airplay.rs`) | S223 |
 | a_new_sender_starts_a_pairing_at_once_after_a_cancel (`desktop/src/audio/airplay.rs`) | S223 |
@@ -3680,6 +3682,7 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | a_password_typed_switches_the_speaker_on_and_is_kept_until_quit (`desktop/src/audio/airplay.rs`) | S223 |
 | a_sender_that_stops_during_a_password_prompt_turns_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
 | a_speaker_that_cant_play_stays_off_and_is_never_added (`desktop/src/audio/airplay.rs`) | S223 |
+| a_speaker_whose_listing_asks_no_pin_turning_its_credentials_down_stops_with_the_notice (`desktop/src/audio/airplay.rs`) | S223 |
 | a_tv_that_asks_every_time_plays_after_its_pin_and_stores_nothing (`desktop/src/audio/airplay.rs`) | S223 |
 | a_wrong_password_asks_again_and_cancel_turns_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
 | a_wrong_pin_starts_a_new_pairing_and_keeps_the_prompt (`desktop/src/audio/airplay.rs`) | S223 |

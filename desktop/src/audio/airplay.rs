@@ -3476,15 +3476,21 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// The speaker `id` the user switched on turned its stored AirPlay 2
-    /// credentials down: it pairs with a PIN in the same attempt, and its
+    /// The speaker `id` the user switched on turned its stored credentials
+    /// down: it pairs with a PIN in the same attempt, and its
     /// session goes on over the pairing connection (P153). It stays off
     /// meanwhile, as on a first pairing; with no pairing it is turned off.
     fn pair_in_attempt(&mut self, id: &str, events: &mut Vec<BackendEvent>) -> bool {
         self.drop_password_ask(id, "the speaker pairs with a PIN");
         self.entry(id).enabled = false;
         self.reconcile();
-        if let Err(problem) = self.start_pairing(id) {
+        let problem = match self.start_pairing(id) {
+            Err(problem) => Some(problem),
+            // Its listing asks for no PIN, so no pairing starts.
+            Ok(()) if !self.pairings.contains_key(id) => Some(AirPlayProblem::NeedsPin),
+            Ok(()) => None,
+        };
+        if let Some(problem) = problem {
             events.push(BackendEvent::AirPlayFailed {
                 id: id.to_owned(),
                 problem,
@@ -4514,7 +4520,6 @@ impl AirPlaySpeakers {
                     )
                 });
                 if problem == AirPlayProblem::NeedsPin
-                    && self.over_airplay2(id)
                     && self.password_attempts.contains(id)
                     && !self.paired_in_attempt.contains(id)
                     && self.added.contains_key(id)
@@ -7359,6 +7364,144 @@ pub mod tests {
             problem: AirPlayProblem::NeedsPin
         }));
         assert!(!airplay.speakers()[0].paired);
+        assert!(airplay.enabled_ids().is_empty());
+    }
+
+    // covers: S223, P154
+    #[test]
+    fn a_legacy_apple_tv_that_turns_its_credentials_down_pairs_again_in_the_same_attempt() {
+        use crate::audio::pairings::tests::credentials;
+
+        let fake = FakeAirPlay::new();
+        let mut store = PairingStore::in_memory();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        store
+            .insert(&id, credentials("0123456789ABCDEF", 3))
+            .unwrap();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        airplay.set_streaming(true);
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.begin_attempt(&id);
+        fake.take_calls();
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::AirPlayFailed { .. })),
+            "{events:?}"
+        );
+        let calls = fake.take_calls();
+        assert!(
+            calls.contains(&Call::StartPairing(id.clone())),
+            "{calls:?} {events:?}"
+        );
+        assert!(airplay.speakers()[0].enabled, "on while it pairs");
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        airplay.poll();
+        assert_eq!(airplay.pin_prompt().unwrap().id, id);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("FEDCBA9876543210", 4)),
+        );
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayPaired { id: id.clone() }),
+            "{events:?}"
+        );
+
+        // Turned down again in the same attempt: no pairing loop, it stops
+        // with the notice.
+        fake.take_calls();
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::NeedsPin,
+            }),
+            "{events:?}"
+        );
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_)))
+        );
+    }
+
+    // covers: S223
+    #[test]
+    fn a_speaker_whose_listing_asks_no_pin_turning_its_credentials_down_stops_with_the_notice() {
+        use crate::audio::pairings::tests::credentials;
+
+        let fake = FakeAirPlay::new();
+        let mut store = PairingStore::in_memory();
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        store
+            .insert(&id, credentials("0123456789ABCDEF", 3))
+            .unwrap();
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_streaming(true);
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.begin_attempt(&id);
+        fake.take_calls();
+        fake.fail(&kitchen, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::NeedsPin,
+            }),
+            "{events:?}"
+        );
+        assert!(airplay.enabled_ids().is_empty());
+    }
+
+    // covers: S223
+    #[test]
+    fn a_first_pairing_from_the_users_switch_on_turned_down_stops_with_the_notice() {
+        use crate::audio::pairings::tests::credentials;
+
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        let id = id_of(&tv);
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 3)),
+        );
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayPaired { id: id.clone() }),
+            "{events:?}"
+        );
+        fake.take_calls();
+        fake.fail(&tv, ErrorKind::PairingRequired);
+        let events = airplay.poll();
+        assert!(
+            events.contains(&BackendEvent::AirPlayFailed {
+                id: id.clone(),
+                problem: AirPlayProblem::NeedsPin,
+            }),
+            "{events:?}"
+        );
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::StartPairing(_)))
+        );
         assert!(airplay.enabled_ids().is_empty());
     }
 
