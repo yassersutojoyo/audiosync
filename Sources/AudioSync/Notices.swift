@@ -20,6 +20,9 @@ struct Notice: Identifiable, Equatable {
     /// the info glyph instead of the warning triangle.
     var info = false
     var id: String { subject }
+    /// AudioSync's own AirPlay sender stopped or couldn't start: the notice
+    /// offers Retry, which starts it again.
+    var retriesAirPlay: Bool { subject == Notice.airplaySender }
 
     /// Its close button's VoiceOver label. A notice with neither name keeps the
     /// plain label, so the button doesn't read the whole notice again.
@@ -35,7 +38,7 @@ struct Notice: Identifiable, Equatable {
     static let start = "start"          // streaming couldn't start
     static let capture = "capture"      // streaming started but no audio arrives
     static let login = "login"          // Launch at Login
-    static let airplaySender = "airplay-sender"   // AudioSync's own AirPlay sender couldn't start
+    static let airplaySender = "airplay-sender"   // AudioSync's own AirPlay sender stopped or couldn't start
     static let airplayPtp = "airplay-ptp"   // another app holds PTP port 319 or 320
     static let pairings = "pairings"    // the AirPlay sender keeps pairings only until AudioSync quits
     static let zones = "zones"          // the groups became zones at this launch (S248)

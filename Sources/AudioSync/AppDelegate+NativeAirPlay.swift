@@ -85,7 +85,7 @@ extension AppDelegate {
         } else {
             nativeAirPlay = nil
             if news {
-                notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender,
+                notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender,
                        shortName: text.airPlayStoppedNoticeName)
             }
             stopNativeLocalNetworkProbe()
@@ -347,8 +347,8 @@ extension AppDelegate {
     }
 
     /// The sender stopped after an internal error: it goes (torn down off
-    /// the main queue), its rows with it, and the AirPlay section shows it
-    /// as failed, with Retry, in place of a notice. The switches stay as
+    /// the main queue), its rows with it, and the AirPlay section and a
+    /// notice show it as failed, both with Retry. The switches stay as
     /// they are, so the speakers rejoin once a new sender runs.
     private func nativeSenderFailed() {
         guard let native = nativeAirPlay else { return }
@@ -362,8 +362,7 @@ extension AppDelegate {
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
         stopNativeLocalNetworkProbe()
-        // No notice: Connected Speakers says so in place of the AirPlay speakers, with Retry.
-        clearNotices([Notice.airplaySender])
+        postNotice(text.nativeAirPlayStopped, subject: Notice.airplaySender, shortName: text.airPlayStoppedNoticeName)
         retimeLocalOutputs()   // no native speaker is chosen any more
         endNativePinSessions(.senderFailed, streaming: engine.isRunning, model: native.model)
         pushModel()

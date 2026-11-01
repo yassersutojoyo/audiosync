@@ -102,7 +102,7 @@ Manual: turn off AudioSync > Switch to All System Audio When the Source App Quit
 
 ## EC7: The AirPlay sender stops after an internal error
 
-The sender runs inside the app, so there's no separate process to restart. If it stops after an internal error, its speakers leave the list (their switches stay as they are), the Local Network probe stops, the local speakers stop waiting for AirPlay, and a notice says the sender stopped; the AirPlay section offers Retry. Retry starts a new sender, which finds the speakers again, plays to the ones switched on and gets the current track info sent again. A sender that can't start at all is tried again every 10 s or so, with one notice.
+The sender runs inside the app, so there's no separate process to restart. If it stops after an internal error, its speakers leave the list (their switches stay as they are), the Local Network probe stops, the local speakers stop waiting for AirPlay, and a notice says the sender stopped; the notice and the AirPlay section offer Retry. Retry starts a new sender, which finds the speakers again, plays to the ones switched on and gets the current track info sent again. A sender that can't start at all is tried again every 10 s or so, with one notice that offers Retry.
 
 Code path: the core catches a panic at its C interface and reports `ASC_AIRPLAY_EVENT_FAILED` once; `nativeSenderFailed` (`AppDelegate+NativeAirPlay.swift`) drops the sender, and `NativeSenderStarts` (`NativeAirPlayModel.swift`) keeps it from starting again by itself until Retry (`retryNativeAirPlay`). A start that fails is retried by `reconcileNativeAirPlay` in the reconcile that falls due `NativeSenderStarts.retrySpacing` later (`NativeSenderStarts.restartAt`, armed by `AppDelegate.scheduleDueReconcile`).
 

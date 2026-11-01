@@ -2425,7 +2425,8 @@ struct NoticeStack: View {
             if let newest = list.newest {
                 NoticeBanner(notice: newest, text: t, showsTime: false,
                              lineLimit: list.count > 1 ? 3 : nil,
-                             dismiss: { model.actions.dismissNotice(newest.subject) }) {
+                             dismiss: { model.actions.dismissNotice(newest.subject) },
+                             retry: { model.actions.retryAirPlay() }) {
                     if list.count > 1 { footer(t, more: list.count - 1) }
                 }
             }
@@ -2433,7 +2434,8 @@ struct NoticeStack: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(list.items) { notice in
                     NoticeBanner(notice: notice, text: t, showsTime: true, lineLimit: nil,
-                                 dismiss: { model.actions.dismissNotice(notice.subject) }) { EmptyView() }
+                                 dismiss: { model.actions.dismissNotice(notice.subject) },
+                                 retry: { model.actions.retryAirPlay() }) { EmptyView() }
                 }
                 if list.count > 1 {
                     HStack {
@@ -2477,6 +2479,7 @@ struct NoticeBanner<Footer: View>: View {
     let showsTime: Bool
     let lineLimit: Int?
     let dismiss: () -> Void
+    let retry: () -> Void
     @ViewBuilder let footer: () -> Footer
 
     var body: some View {
@@ -2506,6 +2509,10 @@ struct NoticeBanner<Footer: View>: View {
                 if let pane = notice.settings {
                     NoticeLink(title: text.openSettings) { NSWorkspace.shared.open(pane.url) }
                         .accessibilityHint(text.openSettingsHint)
+                }
+                if notice.retriesAirPlay {
+                    NoticeLink(title: text.retry, action: retry)
+                        .accessibilityHint(text.retryAirPlayHelp)
                 }
                 footer()
             }

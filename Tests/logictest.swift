@@ -3937,6 +3937,13 @@ do {
         stops.retry()
         // covers: S101, S222
         check(stops.mayStart(at: t0) && !stops.stopped, "EC7 native airplay: Retry starts a new sender at once")
+        let stoppedNotice = Notice(subject: Notice.airplaySender, text: UIStrings().nativeAirPlayStopped, date: t0)
+        // covers: S222
+        check(stoppedNotice.retriesAirPlay && !Notice(subject: Notice.start, text: "", date: t0).retriesAirPlay
+                && stoppedNotice.text == "AirPlay stopped or couldn't start. Click Retry to try again. "
+                    + "If it keeps happening, restart AudioSync.",
+              "EC7 native airplay: the notice that it stopped or couldn't start offers Retry, in Windows' words",
+              stoppedNotice.text)
 
         var up = NativeSenderStarts()
         // covers: S154, S222

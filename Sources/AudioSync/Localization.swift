@@ -782,9 +782,9 @@ struct UIStrings {
     }
 
     /// AudioSync's own AirPlay sender couldn't start (or browse the network
-    /// for speakers). AudioSync tries again by itself.
-    let nativeAirPlayCouldNotStart = "AirPlay couldn't start, so no AirPlay speakers are listed. "
-        + "AudioSync keeps trying. If it keeps happening, quit AudioSync and open it again."
+    /// for speakers), or stopped after an internal error; the notice has Retry.
+    let nativeAirPlayStopped = "AirPlay stopped or couldn't start. Click Retry to try again. "
+        + "If it keeps happening, restart AudioSync."
 
     /// AudioSync's own AirPlay sender can't play to this receiver.
     func nativeAirPlayCantPlay(name: String) -> String {
