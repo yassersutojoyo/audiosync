@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -60,7 +60,7 @@ use audiosync_cast::status::{
     ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_volume, device_level, own_level,
     row_own_level, start_own_level,
 };
-use audiosync_core::fade::Fade;
+use audiosync_core::fade::{Fade, InputFade};
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 use audiosync_core::volume::gain_for_position;
 
@@ -69,6 +69,7 @@ use super::backend::{
     BackendEvent, CastDiscovery, CastGroup, CastInfo, CastMember, CastMembers, CastProblem,
     CastStatus,
 };
+use super::capture::CONVERT_CHUNK;
 use super::cast_address::{self, CastAddress};
 use crate::debug_log::DebugLog;
 
@@ -214,21 +215,26 @@ pub struct CastTap {
     retired: Option<CastWriter>,
     /// How many frames the feed is held back (C77), set by the UI thread.
     hold_back: Arc<AtomicUsize>,
+    /// In at each lease, out after a stop request (S189).
+    fade: InputFade,
 }
 
 impl CastTap {
     /// Takes the newest writer the UI thread handed over, then writes the
-    /// first `frames` frames of interleaved stereo `block` through it, held
-    /// back as the UI thread asks. Never allocates, frees, locks or blocks
-    /// (C8).
+    /// first `frames` frames of interleaved stereo `block` through it, faded
+    /// (S189) and held back as the UI thread asks. Never allocates, frees,
+    /// locks or blocks (C8).
     pub fn push(&mut self, block: &[f32], frames: usize) {
         self.take_handoffs();
         let target = self.hold_back.load(Ordering::Relaxed);
-        if let Some(CastWriter { audio, delay }) = self.writer.as_mut() {
-            delay.process(&block[..(frames * 2).min(block.len())], target, |held| {
-                audio.write_f32(held);
-            });
-        }
+        let CastTap { writer, fade, .. } = self;
+        fade.process(&block[..(frames * 2).min(block.len())], |piece| {
+            if let Some(CastWriter { audio, delay }) = writer.as_mut() {
+                delay.process(piece, target, |held| {
+                    audio.write_f32(held);
+                });
+            }
+        });
     }
 
     /// Every old writer goes back to the UI thread to be freed there; while
@@ -262,20 +268,33 @@ impl CastTap {
 #[derive(Clone)]
 pub struct CastFeedSlot {
     tap: Arc<Mutex<Option<CastTap>>>,
+    /// A stop asked the capture's tap to fade out (S186, S189); cleared by
+    /// the next lease.
+    closing: Arc<AtomicBool>,
 }
 
 impl CastFeedSlot {
-    /// Lends the tap to a capture; `None` while another capture holds it.
+    /// Lends the tap to a capture, starting its fade-in from silence; `None`
+    /// while another capture holds it.
     pub fn lease(&self) -> Option<CastLease> {
-        let tap = self
+        let mut tap = self
             .tap
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take()?;
+        tap.fade.restart(SESSION_RATE);
+        self.closing.store(false, Ordering::Release);
         Some(CastLease {
             tap: Some(tap),
             slot: Arc::clone(&self.tap),
+            closing: Arc::clone(&self.closing),
         })
+    }
+
+    /// Asks the capture's tap to fade out over the next 20 ms it pushes and
+    /// to write zeros after that, until the capture ends (S186, S189).
+    pub fn request_fade_out(&self) {
+        self.closing.store(true, Ordering::Release);
     }
 
     /// Whether the tap is in the slot, lent to no capture.
@@ -291,12 +310,16 @@ impl CastFeedSlot {
 pub struct CastLease {
     tap: Option<CastTap>,
     slot: Arc<Mutex<Option<CastTap>>>,
+    closing: Arc<AtomicBool>,
 }
 
 impl CastLease {
-    /// See [`CastTap::push`].
+    /// See [`CastTap::push`]; after a stop request the tap fades out.
     pub fn push(&mut self, block: &[f32], frames: usize) {
         if let Some(tap) = self.tap.as_mut() {
+            if self.closing.load(Ordering::Acquire) {
+                tap.fade.fade_out();
+            }
             tap.push(block, frames);
         }
     }
@@ -336,12 +359,14 @@ impl CastFeed {
             writer: None,
             retired: None,
             hold_back: Arc::clone(&hold_back),
+            fade: InputFade::new(SESSION_RATE, CONVERT_CHUNK),
         };
         CastFeed {
             to_tap,
             from_tap,
             slot: CastFeedSlot {
                 tap: Arc::new(Mutex::new(Some(tap))),
+                closing: Arc::new(AtomicBool::new(false)),
             },
             waiting: None,
             hold_back,
@@ -967,6 +992,11 @@ impl CastSpeakers {
     /// Whether the tap is free for a capture that starts.
     pub fn is_free(&self) -> bool {
         self.feed.slot().is_free()
+    }
+
+    /// See [`CastFeedSlot::request_fade_out`].
+    pub fn request_fade_out(&self) {
+        self.feed.slot().request_fade_out();
     }
 
     pub fn discovery(&self) -> CastDiscovery {
@@ -4480,6 +4510,9 @@ pub mod tests {
             fake.state().readers[0].read_into(&mut bytes, 32);
             f64::from(i16::from_le_bytes([bytes[0], bytes[1]]))
         };
+        // Past the lease's fade-in (S189).
+        lease.push(&[0.5; 1920], 960);
+        fake.state().readers[0].read_into(&mut Vec::new(), 960);
         lease.push(&[0.5; 64], 32);
         let whole = first_sample(&fake);
         let before = sent(&fake);

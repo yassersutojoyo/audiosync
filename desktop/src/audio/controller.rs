@@ -2255,8 +2255,8 @@ impl<D: Driver> Controller<D> {
         );
     }
 
-    /// Ends the session (S186): every output and the AirPlay sender's input
-    /// fade out at once while the capture runs on, and once the outputs'
+    /// Ends the session (S186): every output, the AirPlay sender's input and
+    /// the Cast tap fade out at once while the capture runs on, and once the outputs'
     /// devices have played their fades (or [`STOP_FADE_CAP`] passed), the
     /// outputs stop, then the capture. The UI thread doesn't wait: a poll, a
     /// new start or the drop finishes it.
@@ -2304,6 +2304,9 @@ impl<D: Driver> Controller<D> {
         }
         if let Some(feed) = &self.feed {
             feed.request_fade_out();
+        }
+        if let Some(cast) = &self.cast {
+            cast.request_fade_out();
         }
         self.retiring.push(Retiring {
             outputs,
@@ -6276,7 +6279,9 @@ mod tests {
             let mut bytes = Vec::new();
             cast.state().readers[0].read_into(&mut bytes, 2 * fade);
             bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|frame| i16::from_le_bytes([frame[0], frame[1]]))
                 .collect()
         };
