@@ -51,6 +51,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, VoiceOver reads a notice's close button as "Dismiss:" followed by a few words that name the notice, the same words as on Windows, with the Mac's names for its settings. The AirPlay notices for a speaker that waits or reconnects read their title. A notice Windows doesn't have keeps "Dismiss Notice".
 - On the Mac, the pairing prompt, its notices and the Guide ask for the code an Apple TV or AirPlay 2 speaker shows, the word its speaker row already uses, instead of a PIN.
 - On the Mac, while AudioSync waits for audio from the whole system or an app and hasn't heard any since it started, the "Waiting for audio" notice also says where to allow it: System Settings → Privacy & Security → Screen & System Audio Recording.
+- On the Mac, the Guide says that Check for Updates… in the AudioSync menu looks for a newer version, and its Tips no longer repeat the delay rule from More Controls or quote a typical Bluetooth delay.
 
 ### Fixed
 

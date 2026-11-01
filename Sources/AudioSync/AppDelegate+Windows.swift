@@ -815,7 +815,9 @@ extension AppDelegate {
 
         let guide = NSMutableAttributedString()
         var firstPiece = true
-        for piece in GuideLayout.pieces(of: text.helpText, anchor: text.guideArtAnchor) {
+        var strings = text
+        strings.updatesOn = AppUpdater.isEnabled
+        for piece in GuideLayout.pieces(of: strings.helpText, anchor: strings.guideArtAnchor) {
             let paragraphs = GuideLayout.paragraphs(of: piece.text)
             let roles = GuideLayout.roles(of: paragraphs, opensText: firstPiece)
             firstPiece = false

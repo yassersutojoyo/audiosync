@@ -21,6 +21,9 @@ struct UIStrings {
     /// Whether the AirPlay 2 switch reads as the preference the build's flag
     /// makes it (S312): not until a relabel is decided (S313).
     var airPlay2Auto = false
+    /// Whether this build checks for updates, so the Guide names Check for
+    /// Updates… only when the app menu has it.
+    var updatesOn = false
 
     // MARK: Main window
 
@@ -1812,7 +1815,7 @@ struct UIStrings {
         - Launch at Login: in the gear menu, or in the AudioSync menu. The window
           doesn't open at login; click the Dock icon to bring it back.
         - Appearance: in the gear menu, or in the AudioSync menu. Match System
-          follows macOS; Light or Dark keeps AudioSync's windows that way.
+          follows macOS; Light or Dark keeps AudioSync's windows that way.\(guideUpdatesLine)
         - When the source app quits, AudioSync switches to All System Audio and
           keeps playing. To stop streaming instead, turn off “Switch to All
           System Audio When the Source App Quits” in the gear menu or the
@@ -1919,12 +1922,10 @@ struct UIStrings {
         - Line the built-in speakers up with the HomePod first: if the Mac plays
           first and the HomePod echoes behind it, raise the AirPlay delay; if the
           HomePod plays first, lower it.
-        - Then tune each other local speaker against the built-in speakers: if it
-          plays first, raise its delay; if it plays late, lower it.
-        - Bluetooth speakers and headphones add their own lag; they usually need
-          about −150 to −300 ms. A Bluetooth headset's hands-free microphone
-          carries call audio, so it isn't offered as a source.
-        - Add multiple local speakers one by one and tune each separately.
+        - Then add the other local speakers one by one and tune each against
+          the built-in speakers.
+        - A Bluetooth headset's hands-free microphone carries call audio, so it
+          isn't offered as a source.
 
         Volume
         Local speakers' sliders follow how loudness is heard: halfway is about −18 dB.
@@ -1960,6 +1961,10 @@ struct UIStrings {
         case .classes:
             return "Left: local and AirPlay speakers playing in step. Right: a Google Cast speaker starting after an offset you set by ear."
         }
+    }
+
+    private var guideUpdatesLine: String {
+        updatesOn ? "\n- Updates: choose \(menuCheckForUpdates) in the AudioSync menu to\n  look for a newer version." : ""
     }
 
     /// The Guide's lines on the AirPlay 2 switch, which the AirPlay 2 flag

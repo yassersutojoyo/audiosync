@@ -16116,5 +16116,21 @@ do {
           "notices: the close button reads the short name, else the title, else the plain label")
 }
 
+// MARK: Guide: updates, and Tips that don't repeat More Controls
+do {
+    let guide = UIStrings()
+    let updatingGuide = UIStrings(updatesOn: true)
+    check(updatingGuide.helpText.contains("\(guide.menuCheckForUpdates) in the AudioSync menu")
+            && !guide.helpText.contains(guide.menuCheckForUpdates),
+          "guide: names Check for Updates… in the AudioSync menu only in a build that checks for updates")
+    let guideLines = guide.helpText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    let tipsStart = guideLines.firstIndex(of: "Tips")
+    let tipsEnd = guideLines.firstIndex(of: "Volume")
+    let tips = tipsStart.flatMap { s in tipsEnd.map { e in s < e ? guideLines[s..<e].joined(separator: "\n") : "" } } ?? ""
+    check(!tips.isEmpty && !tips.contains(" ms") && !tips.contains("if it plays late, lower it")
+            && tips.contains("one by one") && tips.contains("hands-free microphone"),
+          "guide: Tips keep their advice without an unsourced delay range or More Controls' raise/lower rule", tips)
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

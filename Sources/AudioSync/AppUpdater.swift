@@ -13,7 +13,7 @@ enum AppUpdater {
     private static var controller: SPUStandardUpdaterController?
     #endif
 
-    static var isEnabled: Bool {
+    nonisolated static var isEnabled: Bool {
         UpdateGate.isEnabled(publicEDKey: Bundle.main.object(forInfoDictionaryKey: UpdateGate.publicKeyInfoKey),
                              releaseBuild: Bundle.main.object(forInfoDictionaryKey: UpdateGate.releaseBuildInfoKey))
     }
