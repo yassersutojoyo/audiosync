@@ -419,8 +419,11 @@ impl HostLink {
         not(os_backend),
         expect(dead_code, reason = "the OS backend's startup starts it")
     )]
-    pub fn start(memory: DeviceMemory) -> io::Result<(HostLink, Option<String>)> {
-        let host = CastHost::new(memory)?;
+    pub fn start(
+        memory: DeviceMemory,
+        fingerprints: audiosync_cast::client::FingerprintBook,
+    ) -> io::Result<(HostLink, Option<String>)> {
+        let host = CastHost::with_fingerprints(memory, fingerprints)?;
         let (browser, error) = match MdnsBrowser::new() {
             Ok(browser) => (Some(browser), None),
             Err(error) => (None, Some(error.to_string())),

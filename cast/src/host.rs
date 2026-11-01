@@ -419,6 +419,14 @@ impl CastHost {
     /// Starts the worker thread. `memory` is what the host stored from
     /// [`CastHost::memory`] last time, or the default.
     pub fn new(memory: DeviceMemory) -> std::io::Result<CastHost> {
+        CastHost::with_fingerprints(memory, FingerprintBook::new())
+    }
+
+    /// As [`CastHost::new`], with the fingerprints recorded so far (C21).
+    pub fn with_fingerprints(
+        memory: DeviceMemory,
+        fingerprints: FingerprintBook,
+    ) -> std::io::Result<CastHost> {
         let (commands, inbox) = mpsc::channel();
         let (outbox, events) = mpsc::sync_channel(MAX_HOST_EVENTS);
         let shared = Arc::new(Shared {
@@ -433,7 +441,7 @@ impl CastHost {
             thread::Builder::new()
                 .name("cast-host".to_owned())
                 .spawn(move || {
-                    let mut worker = Worker::new(inbox, outbox, shared);
+                    let mut worker = Worker::new(inbox, outbox, shared, fingerprints);
                     let mut pause = Duration::ZERO;
                     let mut last_panic: Option<Instant> = None;
                     while panic::catch_unwind(AssertUnwindSafe(|| worker.run())).is_err() {
@@ -691,14 +699,19 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(inbox: Receiver<Command>, outbox: SyncSender<HostEvent>, shared: Arc<Shared>) -> Worker {
+    fn new(
+        inbox: Receiver<Command>,
+        outbox: SyncSender<HostEvent>,
+        shared: Arc<Shared>,
+        fingerprints: FingerprintBook,
+    ) -> Worker {
         Worker {
             inbox,
             outbox,
             held: Arc::new(Mutex::new(VecDeque::new())),
             shared,
             running: None,
-            fingerprints: Arc::new(Mutex::new(FingerprintBook::new())),
+            fingerprints: Arc::new(Mutex::new(fingerprints)),
             in_hand: None,
         }
     }
@@ -1122,7 +1135,7 @@ mod tests {
             quitting: Arc::new(AtomicBool::new(false)),
             panic_in_start: std::sync::atomic::AtomicU32::new(0),
         });
-        let mut worker = Worker::new(inbox, outbox, shared);
+        let mut worker = Worker::new(inbox, outbox, shared, FingerprintBook::new());
         for answers_mute in [true, false] {
             worker.emit(HostEvent::Session {
                 attempt: AttemptId(1),

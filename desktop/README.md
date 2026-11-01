@@ -54,6 +54,7 @@ build you make yourself, you write that file as shown below), and run it.
   window was) are saved in `%LOCALAPPDATA%\AudioSync\settings.json`. Next to
   it sit `airplay-pairings.dat`, the Apple TV pairings, encrypted for your
   Windows account; `cast-speakers.json`, each Google Cast speaker's offset;
+  `cast-certificates.txt`, each Cast speaker's last certificate fingerprint;
   and `remote-devices.json`, the phones paired with Web Remote.
   To start over, quit AudioSync and delete that folder. A launch doesn't
   start streaming by itself unless an auto-connect speaker is there,

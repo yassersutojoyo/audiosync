@@ -64,6 +64,9 @@ impl Media {
 
 /// The file that keeps each Google Cast speaker's offset and audio format.
 const CAST_FILE_NAME: &str = "cast-speakers.json";
+/// The file that keeps each Google Cast speaker's last certificate
+/// fingerprint, so a change across a relaunch is logged (C21).
+const CAST_CERTIFICATES_FILE_NAME: &str = "cast-certificates.txt";
 
 /// Starts the Google Cast host with the speakers' offsets and formats from
 /// their file, and returns that file for the changes, `None` when the system
@@ -74,6 +77,7 @@ fn start_cast<D: Driver>(
     audio: &mut Controller<D>,
     log: &DebugLog,
 ) -> (Option<std::path::PathBuf>, bool) {
+    use audiosync_cast::client::FingerprintBook;
     use audiosync_cast::host::DeviceMemory;
     let path = data_folder::folder().map(|folder| folder.join(CAST_FILE_NAME));
     let mut unread = false;
@@ -88,7 +92,25 @@ fn start_cast<D: Driver>(
             DeviceMemory::default()
         }
     };
-    match audio::cast::HostLink::start(memory) {
+    let fingerprints = match data_folder::folder() {
+        Some(folder) => {
+            let (book, error) = FingerprintBook::open(
+                folder.join(CAST_CERTIFICATES_FILE_NAME),
+                data_folder::read_at_launch,
+                data_folder::write_atomically,
+            );
+            if let Some(error) = error {
+                log.log(|| format!("Cast: the certificates file couldn't be read: {error}"));
+            }
+            let save_log = log.clone();
+            book.on_save_error(move |error| {
+                save_log
+                    .log(|| format!("Cast: the certificates file couldn't be written: {error}"));
+            })
+        }
+        None => FingerprintBook::new(),
+    };
+    match audio::cast::HostLink::start(memory, fingerprints) {
         Ok((link, browse_error)) => {
             match browse_error {
                 Some(error) => log.log(|| format!("Cast: discovery couldn't start: {error}")),
