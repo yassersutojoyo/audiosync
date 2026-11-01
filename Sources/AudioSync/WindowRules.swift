@@ -514,8 +514,10 @@ enum SourceList {
         /// bundle ID for an app, "input:<uid>" for an input device.
         let id, name: String
         let isInput: Bool
-        /// False only for the chosen input device while it is unplugged or a hands-free input.
+        /// False only for the chosen input device while it is unplugged.
         var connected = true
+        /// False for the chosen input device while it is unplugged or a hands-free input.
+        var available = true
     }
 
     /// The whole system first, then the apps by name, then the input devices
@@ -525,7 +527,7 @@ enum SourceList {
     /// unplugged, listed last as `unpluggedInputName`, not connected.
     /// Devices without a UID can't be chosen and are skipped, and a Bluetooth
     /// headset's hands-free input (`AudioDevices.isHandsFreeInput`) is left
-    /// out; a chosen one is listed last under its name, not connected.
+    /// out; a chosen one is listed last under its name, not available.
     static func entries(systemName: String,
                         apps: [(bundleID: String, name: String)],
                         inputs: [Input],
@@ -550,7 +552,7 @@ enum SourceList {
             let plugged = inputs.first { $0.uid == uid }
             if plugged.map({ leftOut($0) != nil }) ?? true {
                 inputEntries.append(Entry(id: chosen.defaultsValue, name: plugged?.name ?? unpluggedInputName,
-                                          isInput: true, connected: false))
+                                          isInput: true, connected: plugged != nil, available: false))
             }
         }
         return [Entry(id: AudioSource.system.defaultsValue, name: systemName, isInput: false)]

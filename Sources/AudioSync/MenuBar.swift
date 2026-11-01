@@ -123,11 +123,15 @@ final class AppModel: ObservableObject {
         /// The channel pairs an input device with more than two channels
         /// offers, as shown (`InputChannelPair.offered`); empty otherwise.
         var pairs: [String] = []
-        /// False for the chosen input device while it is unplugged or a hands-free input.
+        /// False for the chosen input device while it is unplugged.
         var connected = true
-        /// The plain device name while the chosen input is not connected.
+        /// The plain device name while the chosen input is unplugged.
         var deviceName: String? = nil
-        static func == (a: Source, b: Source) -> Bool { a.id == b.id && a.name == b.name && a.pairs == b.pairs && a.connected == b.connected }
+        /// False for the chosen input device while it is unplugged or a hands-free input.
+        var available = true
+        static func == (a: Source, b: Source) -> Bool {
+            a.id == b.id && a.name == b.name && a.pairs == b.pairs && a.connected == b.connected && a.available == b.available
+        }
     }
 
     struct Actions {
@@ -2134,7 +2138,7 @@ struct SourcePicker: View {
                     if let icon = source.icon { Image(nsImage: icon) }
                     Text(source.name)
                 }
-                .disabled(!source.connected)
+                .disabled(!source.available)
                 if source.id.isEmpty { Divider() }
             }
             Divider()

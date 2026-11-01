@@ -625,7 +625,8 @@ extension AppDelegate {
             }
             return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs,
                                    connected: entry.connected,
-                                   deviceName: entry.connected ? nil : inputName ?? text.sourceInputDevice)
+                                   deviceName: entry.connected ? nil : inputName ?? text.sourceInputDevice,
+                                   available: entry.available)
         }
         publish(\.sources, sources)
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)

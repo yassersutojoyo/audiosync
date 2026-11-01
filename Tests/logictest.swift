@@ -6911,7 +6911,8 @@ do {
             == ["All System Audio", "Music", "Safari", "Spotify", "MacBook Pro Microphone"],
           "sources: a chosen app that isn't running stays listed, sorted among the apps")
     check(list(.input(uid: "gone")).count == 5 && list(.input(uid: "gone")).last?.connected == false
-            && list(.system).allSatisfy(\.connected),
+            && list(.input(uid: "gone")).last?.available == false
+            && list(.system).allSatisfy(\.connected) && list(.system).allSatisfy(\.available),
           "sources: a chosen input device that is unplugged is listed last, not connected")
     check(list(.input(uid: "gone")).last.map { $0.id == "input:gone" && $0.isInput && $0.name != "All System Audio" } == true,
           "sources: an unplugged chosen input isn't labelled as the whole system")
@@ -6948,7 +6949,7 @@ do {
           "\(headsetList(.system).map(\.id))")
     check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id) + ["input:buds:input"]
             && headsetList(.input(uid: "buds:input")).last == SourceList.Entry(id: "input:buds:input", name: "Example Buds",
-                                                                              isInput: true),
+                                                                              isInput: true, available: false),
           "sources: a saved source that is a hands-free input still plugged in is listed last under its name, "
             + "disabled but not marked unplugged",
           "\(headsetList(.input(uid: "buds:input")))")
@@ -13777,6 +13778,12 @@ do {
     // covers: S344
     check(plugged["available"] as? Bool == true && plugged["notice"] is NSNull,
           "web remote: a plugged-in source goes out available with no notice", "\(plugged)")
+    let handsFree = RemoteSource(pickerID: "input:buds:input", name: "Example Buds", available: false).json
+    // covers: S344, S211
+    check(handsFree["available"] as? Bool == false && handsFree["notice"] is NSNull
+            && handsFree["name"] as? String == "Example Buds",
+          "web remote: a chosen hands-free input goes out greyed under its own name, with no not-connected note",
+          "\(handsFree)")
 }
 
 // MARK: Google Cast speakers added by address (C18): what the sheet reads, and the stored list
