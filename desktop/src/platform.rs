@@ -859,6 +859,43 @@ unsafe extern "system" fn session_end_procedure(
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
 
+/// Runs `quit` when a Ctrl-C or Ctrl-Break reaches the process (S414), from
+/// a thread Windows starts for it, and keeps the process running so the
+/// quit steps can follow. A second one ends the process at once.
+#[cfg(windows)]
+pub fn on_console_quit(quit: fn()) {
+    use windows::Win32::System::Console::SetConsoleCtrlHandler;
+
+    if CONSOLE_QUIT.set(quit).is_ok() {
+        // SAFETY: the procedure is a plain function that lives for the
+        // whole process.
+        let _ = unsafe { SetConsoleCtrlHandler(Some(console_quit_procedure), true) };
+    }
+}
+
+#[cfg(windows)]
+static CONSOLE_QUIT: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+static CONSOLE_QUIT_SENT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(windows)]
+unsafe extern "system" fn console_quit_procedure(event: u32) -> windows::core::BOOL {
+    use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT};
+
+    let quit = CONSOLE_QUIT
+        .get()
+        .filter(|_| event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT)
+        .filter(|_| !CONSOLE_QUIT_SENT.swap(true, std::sync::atomic::Ordering::Relaxed));
+    match quit {
+        Some(quit) => {
+            quit();
+            true.into()
+        }
+        None => false.into(),
+    }
+}
+
 /// Whether the taskbar (and the notification area) uses the light theme, so
 /// the tray icon picks its dark-on-light variant. Dark when it can't be read,
 /// the Windows 11 default.
@@ -1080,6 +1117,44 @@ mod tests {
             assert_eq!(runs.get(), 1);
             let _ = DestroyWindow(hwnd);
         }
+    }
+
+    // covers: S414
+    #[cfg(windows)]
+    #[test]
+    fn ctrl_c_or_ctrl_break_ends_the_event_loop_as_quit_does_and_keeps_the_process() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT};
+
+        static QUITS: AtomicUsize = AtomicUsize::new(0);
+        // Stored without registering the procedure, so a Ctrl-C still stops the test run.
+        CONSOLE_QUIT
+            .set(|| {
+                QUITS.fetch_add(1, Ordering::Relaxed);
+            })
+            .unwrap();
+        for event in [CTRL_C_EVENT, CTRL_BREAK_EVENT] {
+            CONSOLE_QUIT_SENT.store(false, Ordering::Relaxed);
+            // SAFETY: the procedure only calls the quit stored above.
+            let handled = unsafe { console_quit_procedure(event) };
+            assert!(
+                handled.as_bool(),
+                "Windows' default would end the process before the fades"
+            );
+            // SAFETY: as above.
+            let again = unsafe { console_quit_procedure(CTRL_C_EVENT) };
+            assert!(!again.as_bool(), "a second one ends the process at once");
+        }
+        assert_eq!(
+            QUITS.load(Ordering::Relaxed),
+            2,
+            "each first one ends the event loop, as Quit does"
+        );
+        CONSOLE_QUIT_SENT.store(false, Ordering::Relaxed);
+        // SAFETY: as above.
+        let logoff = unsafe { console_quit_procedure(CTRL_LOGOFF_EVENT) };
+        assert!(!logoff.as_bool(), "the session's end has its own handler");
+        assert_eq!(QUITS.load(Ordering::Relaxed), 2);
     }
 
     #[test]

@@ -7836,10 +7836,12 @@ mod tests {
         );
     }
 
-    // covers: S351
-    #[cfg(windows)]
-    #[test]
-    fn the_end_of_a_windows_session_tears_the_airplay_and_cast_senders_down() {
+    /// An app streaming to an AirPlay and a Google Cast speaker.
+    fn app_with_both_senders_joined() -> (
+        Rc<App>,
+        crate::audio::airplay::tests::FakeAirPlay,
+        crate::audio::cast::tests::FakeCast,
+    ) {
         use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
         let mut audio = crate::audio::mock::MockBackend::empty();
@@ -7864,9 +7866,29 @@ mod tests {
             calls.iter().any(|call| matches!(call, Call::Add { .. })),
             "the AirPlay speaker joined: {calls:?}"
         );
-        let app = app_over(adapter);
+        (app_over(adapter), airplay, cast)
+    }
+
+    // covers: S351
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_tears_the_airplay_and_cast_senders_down() {
+        let (app, airplay, cast) = app_with_both_senders_joined();
 
         app.at_session_end();
+        assert!(airplay.links_dropped(), "the AirPlay sender tore down");
+        assert_eq!(cast.state().shutdowns, 1, "the Cast host shut down");
+    }
+
+    // covers: S186 (Quit from the tray or a window)
+    #[test]
+    fn quitting_drops_the_app_so_the_backend_runs_its_shut_down() {
+        let (app, airplay, cast) = app_with_both_senders_joined();
+
+        // What main does once the event loop ends; the shut-down's fades are
+        // checked in the controller's tests.
+        app.at_quit();
+        drop(app);
         assert!(airplay.links_dropped(), "the AirPlay sender tore down");
         assert_eq!(cast.state().shutdowns, 1, "the Cast host shut down");
     }
