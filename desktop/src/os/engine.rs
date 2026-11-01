@@ -108,6 +108,8 @@ fn receiver_labels(strings: &Strings<'_>) -> ReceiverLabels {
         album: strings.get_receiver_album().into(),
         whole_system: strings.get_source_system().into(),
         unnamed_source: strings.get_receiver_unnamed_source().into(),
+        list_separator: strings.get_list_separator().into(),
+        all_except: strings.invoke_source_all_except("{}".into()).into(),
     }
 }
 

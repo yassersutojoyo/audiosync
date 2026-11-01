@@ -84,7 +84,7 @@ use super::capture::{
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
 use super::clock_probe::{ClockQueue, describe_clock_queue};
-use super::now_playing::{Follow, SharedLabels, TrackInfo, TrackReader, TrackSource};
+use super::now_playing::{Follow, Mix, SharedLabels, TrackInfo, TrackReader, TrackSource};
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{
@@ -1374,10 +1374,19 @@ impl<D: Driver> Controller<D> {
             return Some(source.clone());
         }
         let source = match &id {
-            SourceId::WholeSystem | SourceId::Apps { .. } | SourceId::AppsExcept { .. } => {
+            SourceId::WholeSystem => TrackSource {
+                follow: Follow::AnyApp,
+                name: None,
+                mix: None,
+            },
+            SourceId::Apps { executables, .. } | SourceId::AppsExcept { executables } => {
                 TrackSource {
                     follow: Follow::AnyApp,
                     name: None,
+                    mix: Some(Mix {
+                        apps: executables.iter().map(|app| display_name(app)).collect(),
+                        except: matches!(id, SourceId::AppsExcept { .. }),
+                    }),
                 }
             }
             SourceId::App { root_pid } => {
@@ -1388,6 +1397,7 @@ impl<D: Driver> Controller<D> {
                             pid: Some(*root_pid),
                         },
                         name: None,
+                        mix: None,
                     });
                 };
                 let executable = processes
@@ -1400,6 +1410,7 @@ impl<D: Driver> Controller<D> {
                         executable,
                         pid: Some(*root_pid),
                     },
+                    mix: None,
                 }
             }
             // An input device has no media session; receivers get the
@@ -1411,6 +1422,7 @@ impl<D: Driver> Controller<D> {
                         pid: None,
                     },
                     name: None,
+                    mix: None,
                 };
                 // A failed listing isn't kept, so a later poll can still name it.
                 let Ok(readings) = self.driver.inputs() else {
@@ -11841,6 +11853,56 @@ mod tests {
             now_playing_sent(&fake),
             [NowPlaying::default()],
             "a receiver that starts later gets no track from before"
+        );
+    }
+
+    // covers: S218
+    #[test]
+    fn a_mix_shows_only_a_playing_track_and_otherwise_its_picker_name() {
+        let (mut backend, fake, kitchen) = with_airplay();
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_receiver_labels(shared_labels());
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        let mix_artist = |reader: &FakeReader, backend: &mut MockBackend, track| {
+            reader.read(track);
+            backend.poll();
+            now_playing_sent(&fake)
+                .last()
+                .and_then(|sent| sent.track.as_ref())
+                .map(|track| track.artist.clone())
+        };
+
+        backend
+            .start(&SourceId::AppsExcept {
+                executables: vec!["chat.exe".to_owned(), "game.exe".to_owned()],
+            })
+            .unwrap();
+        backend.poll();
+        let playing = Some(track("Spotify.exe", "Song", true, Some(b"cover")));
+        assert_eq!(
+            mix_artist(&reader, &mut backend, playing).as_deref(),
+            Some("Song artist")
+        );
+        let paused = Some(track("Spotify.exe", "Song", false, Some(b"cover")));
+        assert_eq!(
+            mix_artist(&reader, &mut backend, paused).as_deref(),
+            Some("Every app but Chat + Game"),
+            "the app that played last keeps no paused track in a mix, as on the Mac"
+        );
+
+        backend.stop();
+        backend.poll();
+        backend
+            .start(&SourceId::Apps {
+                root_pids: Vec::new(),
+                executables: vec!["player.exe".to_owned(), "chat.exe".to_owned()],
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(
+            mix_artist(&reader, &mut backend, None).as_deref(),
+            Some("Player + Chat")
         );
     }
 
