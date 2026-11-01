@@ -386,6 +386,12 @@ final class NativeAirPlay {
         }
     }
 
+    /// Whether pairings made while the store opened with `loaded` is in use
+    /// are lost when AudioSync quits.
+    static func pairingsNotSaved(_ loaded: Int32) -> Bool {
+        false
+    }
+
     /// How private the core found a pairing file, for the debug log; nil
     /// when it wasn't read.
     static func fileAccessLogLine(_ access: Int32) -> String? {
