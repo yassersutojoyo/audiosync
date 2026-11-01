@@ -400,9 +400,9 @@ mod tests {
         let started = Instant::now();
         // The thread waits a deadline already past, as a loaded PC ran it.
         thread::sleep(APP_WAIT + SLACK);
-        assert!(within(hung::<bool>(&gate), started + APP_WAIT).is_err());
-        let took = started.elapsed();
-        assert!(took >= APP_WAIT && took < APP_WAIT + SLACK, "took {took:?}");
+        let given_up = within(hung::<bool>(&gate), started + APP_WAIT).unwrap_err();
+        // The app's own answer, E_FAIL, comes only once the gate opens.
+        assert_eq!(given_up.code(), ERROR_TIMEOUT.to_hresult());
     }
 
     #[test]
