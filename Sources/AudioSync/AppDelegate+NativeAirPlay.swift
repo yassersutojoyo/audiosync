@@ -74,7 +74,8 @@ extension AppDelegate {
             if !native.pairingsNotSaved {
                 clearNotices([Notice.pairings])
             } else if !appModel.notices.items.contains(where: { $0.subject == Notice.pairings }) {
-                postNotice(text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings)
+                postNotice(text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings,
+                           shortName: text.pairingsNotSavedNoticeName)
             }
             resendTrackInfo()   // a new sender knows nothing of what plays
             // Its discovery raised the Local Network prompt, if any: the
@@ -83,7 +84,10 @@ extension AppDelegate {
             updateLocalNetworkProbe(senderRunning: true)
         } else {
             nativeAirPlay = nil
-            if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
+            if news {
+                notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender,
+                       shortName: text.airPlayStoppedNoticeName)
+            }
             stopNativeLocalNetworkProbe()
         }
         retimeLocalOutputs()   // L is known now
@@ -207,7 +211,7 @@ extension AppDelegate {
         change(&ptpPortNotice)
         let shown = ptpPortNotice.shown
         if shown && (!was || ptpPortNotice.raises != raises) {
-            postNotice(text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp)
+            postNotice(text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp, shortName: text.ptpPortsNoticeName)
         } else if was && !shown {
             clearNotices([Notice.airplayPtp])
         }
@@ -495,7 +499,8 @@ extension AppDelegate {
               let target = native.model.holdingTarget(receiver, on: enabledAirPlay.contains(id)) else { return false }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off: it plays as part of \(nativeLabel(target))")
         notify(text.nativeAirPlayPlaysInGroup(name: shownName(airPlay: id), group: shownName(airPlay: NativeAirPlayID.app(target))),
-               origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+               origin: origin, subject: SpeakerKey.make(id: id, airplay: true),
+               shortName: text.cantPlayNoticeName(shownName(airPlay: id)))
         pushModel()
         return true
     }
@@ -507,7 +512,8 @@ extension AppDelegate {
               nativeAirPlay?.model.homeTheaterConflict(receiver, enabled: enabledAirPlay) == true else { return false }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off: its home theater group and Apple TV can't play at once")
         if let words = nativeTurnOffText(id, .playsThroughSpeakers, onThisMac: false) {
-            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true),
+                   shortName: text.cantPlayNoticeName(shownName(airPlay: id)))
         }
         pushModel()
         return true
@@ -621,7 +627,8 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) turned off (\(reason))")
         enabledAirPlay.remove(id)
         if let words = nativeTurnOffText(id, reason, onThisMac: onThisMac) {
-            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true),
+                   shortName: text.cantPlayNoticeName(shownName(airPlay: id)))
         }
         let timing = reason == .timingUnavailable
         updatePtpPortNotice { $0.turnedOff(id, timing: timing) }

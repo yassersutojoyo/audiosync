@@ -85,7 +85,8 @@ extension AppDelegate {
             let name = castName(change.id)   // read before the change takes the row away
             if case .turnedOff(let id, let problem?)? = castModel.apply(change) {
                 DebugTrace.log("[AudioSync] Cast: \(id) left the list, so it is off")
-                postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id))
+                postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id),
+                           shortName: text.cantPlayNoticeName(name))
             }
             if let level = castModel.takeLevelDue() { castSender?.setVolume(level) }
             if let address = castModel.takeRelistDue(), let sender = castSender {
@@ -117,7 +118,8 @@ extension AppDelegate {
         var list = appModel.notices
         guard let notice = list.items.first(where: { $0.subject == Notice.cast(old) }) else { return }
         list.clear([Notice.cast(old)])
-        list.post(notice.text, subject: Notice.cast(new), at: notice.date, title: notice.title, settings: notice.settings)
+        list.post(notice.text, subject: Notice.cast(new), at: notice.date, title: notice.title,
+                  shortName: notice.shortName, settings: notice.settings)
         appModel.notices = list
     }
 
@@ -156,7 +158,10 @@ extension AppDelegate {
             clearNotices([Notice.cast(id)])
         case .turnedOff(let id, let problem):
             DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) is off")
-            if let problem { postNotice(text.castProblem(problem, name: named(id)), subject: Notice.cast(id)) }
+            if let problem {
+                postNotice(text.castProblem(problem, name: named(id)), subject: Notice.cast(id),
+                           shortName: text.cantPlayNoticeName(named(id)))
+            }
         case .senderFailed(let wasOn):
             DebugTrace.log("[AudioSync] Cast: the sender stopped after an internal error")
             let name = wasOn.map(named)
@@ -211,7 +216,8 @@ extension AppDelegate {
         if on {
             if let problem = castModel.turnOn(id) {
                 DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) stays off (\(problem))")
-                postNotice(text.castProblem(problem, name: castName(id)), subject: Notice.cast(id))
+                postNotice(text.castProblem(problem, name: castName(id)), subject: Notice.cast(id),
+                           shortName: text.cantPlayNoticeName(castName(id)))
                 pushModel()
                 return
             }

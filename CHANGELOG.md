@@ -46,7 +46,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AirPlay speakers and TVs show the artist alone under the song title, without the album. On the Mac and on Windows.
 - On the Mac, the Pair button in an AirPlay PIN prompt stays off until four digits are typed, and in a password prompt until something is typed. Cancelling the prompt turns the speaker off without a notice.
 - On Windows, the notice that a picked source couldn't start, so the one before it plays on, now also says to pick that source again to retry, as on the Mac.
-- On the Mac, VoiceOver reads a titled notice's close button as "Dismiss:" followed by the title, as on Windows. A notice without a title keeps "Dismiss Notice".
+- On the Mac, VoiceOver reads a notice's close button as "Dismiss:" followed by a few words that name the notice, the same words as on Windows. A notice Windows doesn't have keeps "Dismiss Notice".
 
 ### Fixed
 

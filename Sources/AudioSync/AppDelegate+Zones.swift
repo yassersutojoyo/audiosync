@@ -145,7 +145,7 @@ extension AppDelegate {
         for key in keys {
             guard let speaker = listed.first(where: { $0.key == key }) else { continue }
             DebugTrace.log("[AudioSync] web remote: \(key) stays off, it asks for a code")
-            postNotice(text.remotePairFirst(speaker.name), subject: key)
+            postNotice(text.remotePairFirst(speaker.name), subject: key, shortName: text.pairFirstNoticeName(speaker.name))
         }
     }
 
@@ -422,10 +422,12 @@ extension AppDelegate {
             if on { try service.register() } else { try service.unregister() }
         } catch {
             DebugTrace.log("[AudioSync] login item: \(error)")
-            notify(Notice.loginRefused(turningOn: on, text), origin: .user, subject: Notice.login)
+            notify(Notice.loginRefused(turningOn: on, text), origin: .user, subject: Notice.login,
+                   shortName: text.launchAtLoginNoticeName(turningOn: on))
         }
         if on && service.status == .requiresApproval {
-            notify(text.launchAtLoginNeedsApproval, origin: .user, subject: Notice.login, style: .informational)
+            notify(text.launchAtLoginNeedsApproval, origin: .user, subject: Notice.login, style: .informational,
+                   shortName: text.loginItemOffNoticeName)
             SMAppService.openSystemSettingsLoginItems()
         }
         launchAtLogin = service.status == .enabled

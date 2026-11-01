@@ -138,7 +138,8 @@ extension AppDelegate {
             return
         }
         postNotice(message, subject: Notice.presets,
-                   title: PresetNotice.title(nothingChanged: nothingChanged, text: text))
+                   title: PresetNotice.title(nothingChanged: nothingChanged, text: text),
+                   shortName: text.presetLeftOffNoticeName)
         presetNotice = PresetNotice.Cause(presetID: preset.id, leftOff: leftOff, nothingChanged: nothingChanged)
     }
 
@@ -190,7 +191,8 @@ extension AppDelegate {
            let message = PresetNotice.message(preset: preset.name, leftOff: cause.leftOff,
                                               nothingChanged: cause.nothingChanged, text: text) {
             postNotice(message, subject: Notice.presets,
-                       title: PresetNotice.title(nothingChanged: cause.nothingChanged, text: text))
+                       title: PresetNotice.title(nothingChanged: cause.nothingChanged, text: text),
+                       shortName: text.presetLeftOffNoticeName)
         }
         pushModel()
     }

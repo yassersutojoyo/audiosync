@@ -2475,9 +2475,9 @@ struct NoticeBanner<Footer: View>: View {
     let dismiss: () -> Void
     @ViewBuilder let footer: () -> Footer
 
-    /// An untitled notice keeps the plain label, so the button doesn't read the whole notice again.
+    /// A notice with neither name keeps the plain label, so the button doesn't read the whole notice again.
     private var dismissLabel: String {
-        if let title = notice.title, !title.isEmpty { return text.dismissNotice(title) }
+        if let name = notice.shortName ?? notice.title, !name.isEmpty { return text.dismissNotice(name) }
         return text.dismissNotice
     }
 

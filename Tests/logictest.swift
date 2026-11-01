@@ -15963,5 +15963,20 @@ do {
           "notices: a close button names the notice it dismisses, as on Windows")
 }
 
+do {
+    let words = UIStrings()
+    check(words.noSpeakerNoticeName == "no speaker on"
+            && words.speakerLostNoticeName("Den") == "Den disconnected"
+            && words.cantPlayNoticeName("Den") == "Den can't play"
+            && words.sourceStoppedNoticeName(.inputDisconnected, input: "Mic") == "Mic was disconnected, streaming stopped"
+            && words.streamingStartNoticeName(for: SourceCapture.CaptureError.inputHandsFree("buds:input"),
+                                              input: "Buds") == nil,
+          "notices: each short name is Windows' title for the same notice, none where Windows has no such notice")
+    var named = NoticeList()
+    named.post("Den was disconnected.", subject: "den", shortName: "Den disconnected")
+    check(named.newest?.shortName == "Den disconnected" && named.newest?.title == nil,
+          "notices: a short name is kept apart from the drawn title")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
