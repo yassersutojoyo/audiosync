@@ -11,9 +11,12 @@ set -u
 crate=$1 runs=$2 procs=$3
 shift 3
 root=$(cd "$(dirname "$0")/.." && pwd)
+main=$(dirname "$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)")
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$main/windows/target}"
 cd "$root/$crate" || exit 1
-exe=$(cargo test "$@" --no-run 2>&1 | sed -n 's/.*Executable .*(\(.*\))$/\1/p' | tail -1)
-[ -n "$exe" ] || { echo "cargo built no test binary for: $*" >&2; exit 1; }
+build=$(cargo test "$@" --no-run 2>&1) || { echo "$build" >&2; exit 1; }
+exe=$(echo "$build" | sed -n 's/.*Executable .*(\(.*\))$/\1/p' | tail -1)
+[ -n "$exe" ] || { echo "$build" >&2; echo "cargo built no test binary for: $*" >&2; exit 1; }
 log=target/test-loop.log
 mkdir -p target
 : > "$log"
