@@ -12849,6 +12849,24 @@ mod tests {
         assert!(!app.zone_dialog.window().is_visible(), "Ctrl+W");
     }
 
+    #[test]
+    fn ctrl_shift_w_and_ctrl_shift_q_do_nothing_in_the_about_dialog() {
+        let app = app_over(MockBackend::new());
+        let exits = Rc::new(Cell::new(0));
+        let counted = exits.clone();
+        app.about
+            .on_exit_requested(move || counted.set(counted.get() + 1));
+        let window = app.about.window();
+        app.main.invoke_about_requested();
+        draw_frames();
+        held(window, &[Key::Control, Key::Shift], "w");
+        assert!(window.is_visible(), "Ctrl+Shift+W");
+        held(window, &[Key::Control, Key::Shift], "q");
+        assert_eq!(exits.get(), 0, "Ctrl+Shift+Q");
+        ctrl(window, "q");
+        assert_eq!(exits.get(), 1, "Ctrl+Q");
+    }
+
     // covers: S260, S266
     #[test]
     fn a_recall_from_the_flyout_opens_nothing_and_leaves_the_flyout_as_it_is() {
