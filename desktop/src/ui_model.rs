@@ -662,6 +662,9 @@ pub enum NoticeMessage {
     CaptureFailed,
     /// Capture stopped working while streaming, so streaming stopped.
     CaptureLost,
+    /// Streaming is on but the source hasn't played anything yet (S350);
+    /// `app` names the one app captured, `None` for any other source.
+    WaitingForAudio { app: Option<String> },
     /// A speaker couldn't start, so it was turned off.
     SpeakerFailed { speaker: String },
     /// A speaker's device went away while it played. It stays on and plays
@@ -778,12 +781,14 @@ pub enum NoticeMessage {
 }
 
 impl NoticeMessage {
-    /// Whether the notice tells of a change AudioSync made or will make,
-    /// with nothing that failed, so it shows the info glyph.
+    /// Whether the notice tells of a change AudioSync made or will make, or
+    /// that it waits for audio, with nothing that failed, so it shows the
+    /// info glyph.
     pub fn reports_a_change(&self) -> bool {
         matches!(
             self,
             Self::SourceSwitched { .. }
+                | Self::WaitingForAudio { .. }
                 | Self::AirPlay2NextLaunch { .. }
                 | Self::GroupsBecameZones
                 | Self::Update(

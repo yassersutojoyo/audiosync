@@ -147,6 +147,8 @@ export global Strings {
     out property <string> notice-no-speaker: @tr("Turn on at least one speaker first (under This PC or Connected Speakers).");
     out property <string> notice-capture-failed: @tr("AudioSync couldn't capture audio from the selected source. Turn streaming off and on again, or pick another source. If it keeps happening, restart your PC.");
     out property <string> notice-capture-lost: @tr("AudioSync lost the audio from the selected source, so streaming has stopped. Turn streaming on again, or pick another source.");
+    // Streaming is on but the source hasn't played anything yet (S350).
+    out property <string> notice-waiting-for-audio: @tr("Waiting for audio. Play something and it streams right away.");
     out property <string> notice-airplay-stopped: @tr("AirPlay stopped or couldn't start. Select Retry to try again. If it keeps happening, restart AudioSync.");
     // The settings file in the app's data folder couldn't be written.
     out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits.");
@@ -654,6 +656,11 @@ export global Strings {
         return @tr("{} is not running. Open it first, or pick another source.", source);
     }
 
+    // Streaming is on but the app being captured hasn't played anything yet (S350).
+    public pure function notice-waiting-for-audio-from(app: string) -> string {
+        return @tr("Waiting for audio from {}. Start playback there and it streams right away.", app);
+    }
+
     // Streaming was turned on while the chosen input device was unplugged.
     public pure function notice-input-not-connected(source: string) -> string {
         return @tr("{} is not connected. Plug it in, or pick another source.", source);
@@ -1081,6 +1088,9 @@ export global Strings {
         }
         if kind == NoticeKind.capture-lost {
             return @tr("capture stopped");
+        }
+        if kind == NoticeKind.waiting-for-audio {
+            return @tr("waiting for audio");
         }
         if kind == NoticeKind.speaker-failed {
             return @tr("{} didn't start, turned off", name);

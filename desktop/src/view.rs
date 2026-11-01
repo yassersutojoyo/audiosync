@@ -5548,6 +5548,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         }
         NoticeMessage::CaptureFailed => strings.get_notice_capture_failed(),
         NoticeMessage::CaptureLost => strings.get_notice_capture_lost(),
+        NoticeMessage::WaitingForAudio { app: Some(app) } => {
+            strings.invoke_notice_waiting_for_audio_from(app.as_str().into())
+        }
+        NoticeMessage::WaitingForAudio { app: None } => strings.get_notice_waiting_for_audio(),
         NoticeMessage::SpeakerFailed { speaker } => {
             strings.invoke_notice_speaker_failed(speaker.as_str().into())
         }
@@ -5729,6 +5733,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::MicrophoneBlocked { .. } => (NoticeKind::MicrophoneBlocked, ""),
         NoticeMessage::CaptureFailed => (NoticeKind::CaptureFailed, ""),
         NoticeMessage::CaptureLost => (NoticeKind::CaptureLost, ""),
+        NoticeMessage::WaitingForAudio { .. } => (NoticeKind::WaitingForAudio, ""),
         NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
         NoticeMessage::SpeakerLost { speaker } => (NoticeKind::SpeakerLost, speaker.as_str()),
         NoticeMessage::SpeakerBusy { speaker } => (NoticeKind::SpeakerBusy, speaker.as_str()),
@@ -9358,6 +9363,29 @@ mod tests {
         assert_eq!(notice_title(&strings, &notice).as_str(), "Right can't play");
     }
 
+    // covers: S350
+    #[test]
+    fn the_waiting_notice_names_the_app_when_one_is_captured_and_reads_generic_otherwise() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let from_app = NoticeMessage::WaitingForAudio {
+            app: Some("Spotify".to_owned()),
+        };
+        assert_eq!(
+            notice_text(&strings, &from_app).as_str(),
+            "Waiting for audio from Spotify. Start playback there and it streams right away."
+        );
+        assert_eq!(
+            notice_text(&strings, &NoticeMessage::WaitingForAudio { app: None }).as_str(),
+            "Waiting for audio. Play something and it streams right away."
+        );
+        assert_eq!(
+            notice_title(&strings, &from_app).as_str(),
+            "waiting for audio"
+        );
+        assert!(from_app.reports_a_change(), "a calm notice: the info glyph");
+    }
+
     #[test]
     fn a_refusal_before_any_pairing_step_names_no_code() {
         let app = app_over(MockBackend::new());
@@ -11641,6 +11669,7 @@ mod tests {
             NoticeMessage::MicrophoneBlocked { source: "A".into() },
             NoticeMessage::CaptureFailed,
             NoticeMessage::CaptureLost,
+            NoticeMessage::WaitingForAudio { app: None },
             NoticeMessage::SpeakerFailed {
                 speaker: "A".into(),
             },

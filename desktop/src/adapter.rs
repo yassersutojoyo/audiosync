@@ -4087,6 +4087,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.refresh_sources();
             }
             BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
+            BackendEvent::WaitingForAudio { waiting: true } => {
+                let app = match &self.chosen {
+                    Chosen::App { name, .. } => Some(name.clone()),
+                    _ => None,
+                };
+                self.post(
+                    NoticeSubject::Capture,
+                    NoticeMessage::WaitingForAudio { app },
+                );
+            }
+            BackendEvent::WaitingForAudio { waiting: false } => {
+                self.clear_if(NoticeSubject::Capture, |message| {
+                    matches!(message, NoticeMessage::WaitingForAudio { .. })
+                });
+            }
             BackendEvent::AirPlayChanged => self.airplay_listed(),
             BackendEvent::CastChanged => {
                 let mut names = std::mem::take(&mut self.cast_names);
@@ -8717,6 +8732,141 @@ mod tests {
         adapter.set_running(true);
         assert!(adapter.snapshot().running);
         assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
+    }
+
+    fn waiting(adapter: &AudioAdapter<MockBackend>) -> Vec<NoticeMessage> {
+        messages(adapter)
+            .into_iter()
+            .filter(|message| matches!(message, NoticeMessage::WaitingForAudio { .. }))
+            .collect()
+    }
+
+    fn waiting_for_player() -> Vec<NoticeMessage> {
+        vec![NoticeMessage::WaitingForAudio {
+            app: Some("Player".to_owned()),
+        }]
+    }
+
+    /// The player streaming to the speakers, nothing captured yet.
+    fn streaming_the_player() -> AudioAdapter<MockBackend> {
+        let mut adapter = adapter();
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        adapter
+    }
+
+    /// Runs the session's next check for sound and takes in what it reports.
+    fn check_audio(adapter: &mut AudioAdapter<MockBackend>) {
+        adapter.audio_mut().check_audio_now();
+        adapter.poll();
+    }
+
+    // covers: S350
+    #[test]
+    fn a_session_that_hears_only_silence_posts_the_waiting_notice_naming_the_app() {
+        let mut adapter = streaming_the_player();
+        adapter.poll();
+        assert!(waiting(&adapter).is_empty(), "not before the first check");
+        adapter.audio_mut().feed_capture(480);
+        check_audio(&mut adapter);
+        assert_eq!(waiting(&adapter), waiting_for_player());
+        assert_eq!(adapter.snapshot().notices[0].subject, "Capture");
+    }
+
+    // covers: S350
+    #[test]
+    fn the_waiting_notice_names_no_app_for_the_whole_system() {
+        let mut adapter = adapter();
+        adapter.select_source(SYSTEM_KEY);
+        turn_on(&mut adapter, SPEAKERS);
+        check_audio(&mut adapter);
+        assert_eq!(
+            waiting(&adapter),
+            [NoticeMessage::WaitingForAudio { app: None }]
+        );
+    }
+
+    // covers: S350
+    #[test]
+    fn sound_arriving_clears_the_waiting_notice_and_ends_the_checks() {
+        let mut adapter = streaming_the_player();
+        check_audio(&mut adapter);
+        assert_eq!(waiting(&adapter), waiting_for_player());
+        adapter.audio_mut().feed_capture_level(480, 0.25);
+        check_audio(&mut adapter);
+        assert!(waiting(&adapter).is_empty());
+        check_audio(&mut adapter);
+        assert!(waiting(&adapter).is_empty(), "no check after the sound");
+    }
+
+    // covers: S350
+    #[test]
+    fn a_dismissed_waiting_notice_stays_away_while_the_session_still_waits() {
+        let mut adapter = streaming_the_player();
+        check_audio(&mut adapter);
+        let id = adapter
+            .snapshot()
+            .notices
+            .iter()
+            .find(|notice| matches!(notice.message, NoticeMessage::WaitingForAudio { .. }))
+            .map(|notice| notice.id)
+            .expect("the waiting notice");
+        adapter.dismiss_notice(id);
+        check_audio(&mut adapter);
+        check_audio(&mut adapter);
+        assert!(waiting(&adapter).is_empty());
+    }
+
+    // covers: S350, S329
+    #[test]
+    fn an_input_device_away_while_streaming_gets_no_waiting_notice() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        check_audio(&mut adapter);
+        assert!(adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::InputNotConnected {
+                source: "Microphone (USB Audio)".to_owned()
+            }]
+        );
+    }
+
+    // covers: S350, S329
+    #[test]
+    fn a_capture_waiting_for_its_reopen_gets_no_waiting_notice() {
+        let mut adapter = streaming_the_player();
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        adapter.poll();
+        check_audio(&mut adapter);
+        assert!(adapter.snapshot().running);
+        assert!(waiting(&adapter).is_empty());
+    }
+
+    // covers: S350
+    #[test]
+    fn streaming_stopping_clears_the_waiting_notice_and_a_new_session_posts_it_again() {
+        let mut adapter = streaming_the_player();
+        check_audio(&mut adapter);
+        assert_eq!(waiting(&adapter), waiting_for_player());
+        adapter.set_running(false);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert!(waiting(&adapter).is_empty());
+        adapter.set_running(true);
+        check_audio(&mut adapter);
+        assert_eq!(waiting(&adapter), waiting_for_player());
     }
 
     const PASSWORD_TXT: &[&str] = &[

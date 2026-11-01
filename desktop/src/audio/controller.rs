@@ -132,6 +132,18 @@ enum VolumeMove {
 /// that the audio service is back.
 const RESTART_DELAY_POLLS: u32 = 2;
 
+/// A session's first check for sound comes this long after it starts, and
+/// the next ones this far apart until sound arrives (S350). Tests, whose
+/// rings stay silent, run each check by hand instead.
+#[cfg(not(test))]
+const FIRST_AUDIO_CHECK: Duration = Duration::from_secs(3);
+#[cfg(not(test))]
+const AUDIO_RECHECK: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const FIRST_AUDIO_CHECK: Duration = Duration::from_secs(3600);
+#[cfg(test)]
+const AUDIO_RECHECK: Duration = Duration::from_secs(3600);
+
 /// A capture lost that way is tried this many times, [`RESTART_DELAY_POLLS`]
 /// apart (about five seconds in all), before streaming stops: Windows audio
 /// can take a few seconds to come back.
@@ -499,6 +511,10 @@ struct Session<D: Driver> {
     /// Whether a follow found none of the apps of an "only these" mix, whose
     /// quit then waits for the next follow.
     quit_held: bool,
+    /// When the next check for sound is due (S350); `None` once sound arrived.
+    audio_check: Option<Instant>,
+    /// Whether a check reported the session waiting for its first sound.
+    said_waiting: bool,
 }
 
 /// A single app captured whose process Windows won't open for a wait (an
@@ -2247,8 +2263,14 @@ impl<D: Driver> Controller<D> {
             capture,
             ring,
             reopen,
+            audio_check,
+            said_waiting,
             ..
         } = session;
+        if said_waiting && audio_check.is_some() {
+            self.pending
+                .push(BackendEvent::WaitingForAudio { waiting: false });
+        }
         // A capture told busy, or waiting for its input device, no longer
         // waits (S333, S329).
         if reopen.is_some_and(|reopen| reopen.busy_since.is_some() || reopen.away) {
@@ -3488,6 +3510,8 @@ impl<D: Driver> Controller<D> {
             unwatched,
             held_leads: BTreeMap::new(),
             quit_held: false,
+            audio_check: Some(Instant::now() + FIRST_AUDIO_CHECK),
+            said_waiting: false,
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -3750,6 +3774,50 @@ impl<D: Driver> Controller<D> {
     pub fn check_routing_now(&mut self) {
         if self.session.is_some() {
             self.check_routing(Instant::now());
+        }
+    }
+
+    /// Runs the running session's next check for sound now, whenever it is
+    /// due (S350).
+    #[cfg(test)]
+    pub fn check_audio_now(&mut self) {
+        let now = Instant::now();
+        if let Some(due) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.audio_check.as_mut())
+        {
+            *due = now;
+        }
+        self.check_audio(now);
+    }
+
+    /// Checks whether the running session has captured sound once its check
+    /// is due, until it has (S18, S350), and queues
+    /// [`BackendEvent::WaitingForAudio`] when the answer changed.
+    fn check_audio(&mut self, now: Instant) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        // A capture being reopened, or an input away or busy, has its own
+        // outcome or notice, which playing something won't answer.
+        if session.reopen.is_some() || session.audio_check.is_none_or(|due| now < due) {
+            return;
+        }
+        // Any sample other than zero is sound; the level meter of an input
+        // device takes the same peak, but only in silence could it hide it.
+        if session.ring.take_peak() > 0.0 {
+            session.audio_check = None;
+            if session.said_waiting {
+                self.pending
+                    .push(BackendEvent::WaitingForAudio { waiting: false });
+            }
+            return;
+        }
+        session.audio_check = Some(now + AUDIO_RECHECK);
+        if !std::mem::replace(&mut session.said_waiting, true) {
+            self.pending
+                .push(BackendEvent::WaitingForAudio { waiting: true });
         }
     }
 
@@ -4582,6 +4650,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.log_session_lead();
         self.log_clock_queues();
         self.log_rested_volumes(Instant::now());
+        self.check_audio(Instant::now());
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);
@@ -5411,6 +5480,12 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
                 "the source is heard twice, straight from {}",
                 endpoints.join(", ")
             )
+        }
+        BackendEvent::WaitingForAudio { waiting: true } => {
+            "the source played no sound in the session's first 3 s".to_owned()
+        }
+        BackendEvent::WaitingForAudio { waiting: false } => {
+            "no longer waiting for sound: it arrived, or the session ended".to_owned()
         }
         BackendEvent::AirPlayChanged => "the AirPlay speakers changed".to_owned(),
         BackendEvent::AirPlayPlaying { id } => format!("AirPlay speaker ({id}) plays"),

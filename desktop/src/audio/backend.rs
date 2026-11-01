@@ -590,6 +590,10 @@ pub enum BackendEvent {
         /// stopped.
         paths: Vec<DirectPath>,
     },
+    /// Whether the running session still waits for its first sound (S350):
+    /// `true` once, when a check 3 s after it started heard none; `false`
+    /// when sound arrives after that, or the session ends.
+    WaitingForAudio { waiting: bool },
     /// AirPlay speakers appeared, changed, went away, or started or stopped
     /// playing: list them again.
     AirPlayChanged,
