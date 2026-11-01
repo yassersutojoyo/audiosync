@@ -3445,6 +3445,8 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | an_unannounced_airplay_speaker_stays_on_without_a_notice_until_it_plays (`desktop/src/adapter.rs`) | S222 |
 | a_speaker_whose_receiver_is_gone_mid_stream_keeps_its_row_and_its_place_in_the_sender_off_the_network (`desktop/src/adapter.rs`) | S222 |
 | a_receiver_asking_every_time_with_credentials_no_answer_turned_down_reads_as_paired (`core/src/ffi/airplay.rs`) | S223 |
+| a_receiver_that_asks_every_time_with_credentials_turned_down_never_reads_as_paired (`core/src/ffi/airplay.rs`) | S223 |
+| a_session_paired_with_a_pin_that_plays_leaves_turned_down_credentials_marked (`desktop/src/audio/airplay.rs`) | S223 |
 | an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_streaming_stops (`desktop/src/adapter.rs`) | S223 |
 | an_every_time_speaker_whose_pin_prompt_outlives_the_stream_turns_on_once_paired (`desktop/src/adapter.rs`) | S223 |
 | an_every_time_pairing_that_fails_after_the_stream_ended_says_it_needs_a_pin (`desktop/src/adapter.rs`) | S223 |

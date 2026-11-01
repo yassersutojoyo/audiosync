@@ -1725,9 +1725,10 @@ impl AscAirPlay {
     /// Whether a session of `id` that plays proved the receiver holds the
     /// stored credentials, so whatever turned them down is gone (P154):
     /// AirPlay 2 verifies its signature with them, AirPlay 1 only when they
-    /// carry its key (P56), and a password the user typed proves nothing.
+    /// carry its key (P56); a password the user typed or a PIN session,
+    /// which runs no pair-verify, proves nothing.
     fn playing_proves_credentials(&self, id: &str) -> bool {
-        if self.passwords.contains_key(id) {
+        if self.passwords.contains_key(id) || self.paired_for_session.contains(id) {
             return false;
         }
         match self.listed.get(id) {
@@ -9182,6 +9183,7 @@ mod tests {
         assert_eq!(again.get(&id), None, "gone from the file too");
     }
 
+    // covers: P154, S223
     #[test]
     fn a_receiver_that_asks_every_time_with_credentials_turned_down_never_reads_as_paired() {
         let mut handle = create_with(quiet);
@@ -9237,6 +9239,12 @@ mod tests {
             Some(&credentials),
             "an answer during the pairing proves nothing about them"
         );
+        // Playing proves nothing either: a PIN session runs no pair-verify.
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::State(SpeakerState::Playing),
+        });
+        assert!(inside(handle).credentials_turned_down.contains(&id));
         inside(handle).take_in(SenderEvent::Speaker {
             key,
             event: SpeakerEvent::Error(SpeakerError {

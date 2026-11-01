@@ -1898,9 +1898,10 @@ impl AirPlaySpeakers {
     /// Whether a session of `id` that plays proved the receiver holds the
     /// stored credentials, so whatever turned them down is gone (P154):
     /// AirPlay 2 verifies its signature with them, AirPlay 1 only when they
-    /// carry its key (P56), and a password the user typed proves nothing.
+    /// carry its key (P56); a password the user typed or a PIN session,
+    /// which runs no pair-verify, proves nothing.
     fn playing_proves_credentials(&self, id: &str) -> bool {
-        if self.passwords.contains_key(id) {
+        if self.passwords.contains_key(id) || self.paired_for_session.contains(id) {
             return false;
         }
         if self.over_airplay2(id) {
@@ -7463,6 +7464,35 @@ pub mod tests {
         airplay.poll();
         assert!(airplay.speakers()[0].paired);
         assert!(!airplay.credentials_turned_down.contains(&id));
+    }
+
+    // A PIN typed for this session ran no pair-verify, so its playing proves
+    // nothing about the stored credentials.
+    // covers: P154, S223
+    #[test]
+    fn a_session_paired_with_a_pin_that_plays_leaves_turned_down_credentials_marked() {
+        use crate::audio::pairings::tests::homekit;
+
+        let tv = airplay2_every_time_tv(9, "Den");
+        let id = id_of(&tv);
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        airplay
+            .store
+            .insert_homekit(&id, homekit(0x5A))
+            .expect("saved");
+        airplay.credentials_turned_down.insert(id.clone());
+        pin_shown(&fake, &mut airplay, &tv);
+        assert!(airplay.submit_pin(&id, "4821"));
+        fake.pairing(&tv, PairingEvent::PairedForSession);
+        airplay.poll();
+
+        fake.state(&tv, SpeakerState::Playing);
+        airplay.poll();
+        assert!(airplay.credentials_turned_down.contains(&id));
+        assert!(!airplay.speakers()[0].paired);
     }
 
     // An impostor plays on legacy credentials without the receiver's key,
