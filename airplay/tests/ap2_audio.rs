@@ -958,9 +958,9 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     const ANSWER: Duration = Duration::from_millis(800);
     // 2 s in the app (P132).
     const FEEDBACK: Duration = Duration::from_millis(500);
-    // Feedback answered this late goes out every third interval, as on a
-    // runner too loaded to keep the rhythm.
-    const SLOW_FEEDBACK: Duration = Duration::from_millis(1_050);
+    // Feedback answered this late skips intervals, as on a runner too
+    // loaded to keep the rhythm; 1.05 s plus the 0.5 s a loaded PC added.
+    const SLOW_FEEDBACK: Duration = Duration::from_millis(1_550);
     let _serial = serial();
     let udp = Udp::bind();
     let server = Ap2Server::start(udp.fake(FakeAp2::new()));
