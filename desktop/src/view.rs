@@ -7459,6 +7459,43 @@ mod tests {
         );
     }
 
+    /// With only this PC's outputs listed, the flyout gives the main window's
+    /// note on the network speakers, and while AirPlay still looks, both name
+    /// a Google Cast search that found nothing after it.
+    #[test]
+    fn the_network_note_shows_beside_this_pcs_outputs() {
+        use i_slint_backend_testing::ElementHandle;
+        let shown = |airplay_searching: bool, cast: ui_model::CastList| {
+            let mut backend = MockBackend::new();
+            backend.retain_speakers(|s| s.kind.is_this_pc());
+            backend.set_airplay_none_found(!airplay_searching);
+            backend.set_airplay_searching(airplay_searching);
+            backend.set_cast_list(cast);
+            let app = app_over(backend);
+            app.main.show().unwrap();
+            app.flyout.show().expect("the flyout shows headless");
+            draw_frames();
+            app
+        };
+        fn has(window: &impl slint::ComponentHandle, text: &str) -> bool {
+            ElementHandle::find_by_accessible_label(window, text)
+                .next()
+                .is_some()
+        }
+
+        let app = shown(false, ui_model::CastList::Quiet);
+        let none_found = app.strings().get_airplay_none_found();
+        assert!(has(&app.flyout, &none_found), "{none_found}");
+
+        let app = shown(true, ui_model::CastList::NoneFound);
+        let looking = format!(
+            "Looking for AirPlay speakers… {}",
+            app.strings().invoke_cast_list(CastList::NoneFound)
+        );
+        assert!(has(&app.main, &looking), "main: {looking}");
+        assert!(has(&app.flyout, &looking), "flyout: {looking}");
+    }
+
     /// Streaming with no speaker listed at all: neither window asks to turn
     /// one on, which there is none to turn on.
     #[test]
