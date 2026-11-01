@@ -223,6 +223,17 @@ struct RemoteSource: Equatable {
     }
 }
 
+/// An app the several-apps menu offers, as the page lists it (S353).
+struct RemoteMixApp: Equatable {
+    /// The bundle ID.
+    var id: String
+    var name: String
+    /// False for a checked app the menu keeps while it isn't running.
+    var running: Bool
+
+    var json: [String: Any] { ["id": id, "name": name, "running": running] }
+}
+
 /// Everything the page shows, as `asc_remote_publish` takes it.
 struct RemoteSnapshot: Equatable {
     struct Playing: Equatable {
@@ -243,6 +254,8 @@ struct RemoteSnapshot: Equatable {
     var sources: [RemoteSource] = []
     /// The page ID of the source in use; nil when the picker doesn't list it.
     var sourceID: String? = nil
+    /// In the several-apps menu's order.
+    var mixApps: [RemoteMixApp] = []
 
     /// One line, keys sorted, so an unchanged snapshot gives the same text.
     var json: String {
@@ -257,6 +270,7 @@ struct RemoteSnapshot: Equatable {
             "calibrating": calibrating,
             "sources": sources.map(\.json),
             "source_id": sourceID.map { $0 as Any } ?? NSNull(),
+            "mix_apps": mixApps.map(\.json),
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]) else { return "" }
         return String(decoding: data, as: UTF8.self)
@@ -280,6 +294,8 @@ enum RemoteCommand: Equatable {
     case preset(id: String)
     /// `id` is the page's ID (`RemoteSource.id`).
     case source(id: String)
+    /// Bundle IDs in the order the phone sent them.
+    case mix(apps: [String])
 
     /// Nil for anything that doesn't read as one.
     init?(json: String) {
@@ -311,6 +327,9 @@ enum RemoteCommand: Equatable {
         case "source":
             guard let id = object["id"] as? String else { return nil }
             self = .source(id: id)
+        case "mix":
+            guard let apps = object["apps"] as? [String] else { return nil }
+            self = .mix(apps: apps)
         default:
             return nil
         }
@@ -337,11 +356,13 @@ enum RemoteAction: Equatable {
     /// then the delay; a switch or delay already in place changes nothing, and
     /// a volume moves the row even when it equals the shown number (S348). A source
     /// pick needs a listed source; one of the source in use clears a failed
-    /// switch's notice, as in the picker (S163). Nothing while calibrating:
-    /// the page's snapshot can lag behind a run (S258).
+    /// switch's notice, as in the picker (S163). A mix is the several-apps
+    /// menu's "only these" with the apps it still offers checked (S353).
+    /// Nothing while calibrating: the page's snapshot can lag behind a run (S258).
     static func plan(_ command: RemoteCommand, rows: [RemoteRow], zones: [RemoteZoneRow] = [],
                      presets: [RemotePresetRow] = [], calibrating: Bool = false,
-                     sources: [RemoteSource] = []) -> [RemoteAction] {
+                     sources: [RemoteSource] = [], mixApps: [RemoteMixApp] = [],
+                     inUse: AudioSource = .system) -> [RemoteAction] {
         guard !calibrating else { return [] }
         switch command {
         case .zone(let id, let toggle, let volume):
@@ -363,6 +384,12 @@ enum RemoteAction: Equatable {
             guard sources.contains(where: { $0.id == id }),
                   let pickerID = RemoteSource.pickerID(id) else { return [] }
             return [.selectSource(pickerID: pickerID)]
+        case .mix(let apps):
+            let picked = AudioSource.mixed(.only, bundleIDs: apps.filter { id in mixApps.contains { $0.id == id } })
+            guard !picked.capturedApps.isEmpty else { return [] }
+            // The same apps in another order are the source in use (S344).
+            let same = Set(picked.capturedApps) == Set(inUse.capturedApps)
+            return [.selectSource(pickerID: (same ? inUse : picked).defaultsValue)]
         case .speaker(let id, let on, let volume, let delayMs):
             guard let row = rows.first(where: { $0.id == id }), row.available else { return [] }
             var actions: [RemoteAction] = []

@@ -255,7 +255,8 @@ final class WebRemote {
         return RemoteSnapshot(computerName: computerName, master: model.master, nowPlaying: playing, rows: listed,
                               zones: host.zones().map { RemoteZoneRow($0, listed: listed) }, presets: host.presets(),
                               calibrating: RemoteSnapshot.calibrating(model.calibration, model.calibrateAll),
-                              sources: sources, sourceID: current)
+                              sources: sources, sourceID: current,
+                              mixApps: model.mixApps.map { RemoteMixApp(id: $0.id, name: $0.name, running: $0.available) })
     }
 
     /// The picker's entries and the page ID of the one in use, if it is listed.
@@ -314,7 +315,8 @@ final class WebRemote {
             DebugTrace.log("[AudioSync] web remote: ignored a pick of a source the picker no longer lists")
         }
         let actions = RemoteAction.plan(command, rows: now.rows, zones: now.zones, presets: now.presets,
-                                        calibrating: now.calibrating, sources: now.sources)
+                                        calibrating: now.calibrating, sources: now.sources, mixApps: now.mixApps,
+                                        inUse: AudioSource(defaultsValue: model.sourceID))
         if RemoteVolumeLog.logsPlan(actions) {
             DebugTrace.log("[AudioSync] web remote: \(actions.count) change(s) from a phone")
         }

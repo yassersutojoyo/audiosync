@@ -523,7 +523,8 @@ enum SourceList {
         let isInput: Bool
         /// False only for the chosen input device while it is unplugged.
         var connected = true
-        /// False for the chosen input device while it is unplugged or a hands-free input.
+        /// False for the chosen input device while it is unplugged or a hands-free input,
+        /// and in the several-apps menu for a checked app that isn't running.
         var available = true
     }
 
@@ -573,7 +574,7 @@ enum SourceList {
                         chosenAppName: (String) -> String) -> [Entry] {
         var entries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
         for id in checked where !entries.contains(where: { $0.id == id }) {
-            entries.append(Entry(id: id, name: chosenAppName(id), isInput: false))
+            entries.append(Entry(id: id, name: chosenAppName(id), isInput: false, available: false))
         }
         return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
