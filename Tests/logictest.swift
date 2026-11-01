@@ -14272,6 +14272,20 @@ do {
     // covers: C18
     check(removed && !removedAgain && afterOne == [den] && stored.values[key] == nil,
           "cast address list: Remove drops one address, and the setting goes once none is left")
+    let namesNoDevice = ["0.0.0.0", "255.255.255.255", "224.0.0.1", "239.255.255.250", "speaker.123", "a.b.0"]
+    let takenAnyway = namesNoDevice.filter { CastManualAddress($0) != nil }
+    // covers: C18
+    check(takenAnyway.isEmpty && CastManualAddress("223.255.255.254") != nil && CastManualAddress("speaker.1a") != nil,
+          "cast address: 0.0.0.0, the broadcast address, a multicast address and a host name whose last label is all digits are refused",
+          "accepted: \(takenAnyway)")
+    var crammed = CastManualList(stored: nil)
+    for n in 1...64 { crammed.add(CastManualAddress("192.0.2.\(n)")!) }
+    let lastOver = crammed.add(CastManualAddress("192.0.2.65")!)
+    let overStored = (1...70).map { "192.0.2.\($0)" }
+    let readCapped = CastManualList(stored: overStored).stored
+    // covers: C18
+    check(crammed.addresses.count == 64 && !lastOver && readCapped == Array(overStored.prefix(64)),
+          "cast address list: it keeps at most 64 addresses; one more is not kept, and a longer stored list keeps its first 64")
 
     let id = "manual:192.0.2.7:8010"
     var m = CastModel()

@@ -1431,20 +1431,24 @@ struct CastManualAddress: Hashable {
     }
 
     /// Four decimal parts from 0 to 255, without leading zeros, which the
-    /// core would not read.
+    /// core would not read; 0.0.0.0, broadcast and multicast name no device.
     static func isIPv4(_ text: String) -> Bool {
         let parts = text.split(separator: ".", omittingEmptySubsequences: false)
-        return parts.count == 4 && parts.allSatisfy { part in
+        let wellFormed = parts.count == 4 && parts.allSatisfy { part in
             (1...3).contains(part.count) && part.allSatisfy(\.isASCIIDigit)
                 && (part.count == 1 || part.first != "0") && Int(part).map { $0 <= 255 } == true
         }
+        return wellFormed && text != "0.0.0.0" && text != "255.255.255.255"
+            && Int(parts[0]).map { !(224...239).contains($0) } == true
     }
 
     /// Labels of letters, digits and hyphens (RFC 1123), 63 characters at
-    /// most and not starting or ending with a hyphen, 253 in all.
+    /// most and not starting or ending with a hyphen, 253 in all; a last
+    /// label of only digits is a malformed IPv4 address, not a name.
     static func isHostName(_ text: String) -> Bool {
-        guard (1...253).contains(text.count) else { return false }
-        return text.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
+        let labels = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...253).contains(text.count), labels.last?.allSatisfy(\.isASCIIDigit) == false else { return false }
+        return labels.allSatisfy { label in
             (1...63).contains(label.count) && label.first != "-" && label.last != "-"
                 && label.allSatisfy { $0 == "-" || $0.isASCIIDigit || ("a"..."z").contains($0) }
         }
@@ -1463,9 +1467,12 @@ enum CastAddProblem: Equatable {
 /// The addresses the user added, in the order added, one entry each; the
 /// app adds them to the sender again at every launch.
 struct CastManualList: Equatable {
+    static let maxAddresses = 64
+
     private(set) var addresses: [CastManualAddress] = []
 
-    /// From the stored strings; one that no longer reads, or repeats, is dropped.
+    /// From the stored strings; one that no longer reads, or repeats, is
+    /// dropped, and only the first `maxAddresses` are kept.
     init(stored: Any?) {
         for text in stored as? [String] ?? [] {
             if let address = CastManualAddress(text) { add(address) }
@@ -1474,10 +1481,10 @@ struct CastManualList: Equatable {
 
     var stored: [String] { addresses.map(\.text) }
 
-    /// False when it is listed already.
+    /// False when it is listed already or the list is full.
     @discardableResult
     mutating func add(_ address: CastManualAddress) -> Bool {
-        guard !addresses.contains(address) else { return false }
+        guard !addresses.contains(address), addresses.count < Self.maxAddresses else { return false }
         addresses.append(address)
         return true
     }
