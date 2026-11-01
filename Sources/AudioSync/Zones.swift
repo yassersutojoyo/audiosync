@@ -389,7 +389,7 @@ enum ZoneLayout {
     /// `inPair`: the members that play as part of a stereo pair.
     static func count(on: Int, waiting: Int, present: Int, total: Int, inPair: Int = 0, text: UIStrings) -> String {
         if total == 0 { return text.zoneEmpty }
-        if present == 0 { return text.zoneNoneHere(total) }
+        if present == 0 { return inPair == total ? text.zonePlayingInPair(total) : text.zoneNoneHere(total) }
         return text.zoneCount(on: on, of: total) + (waiting > 0 ? text.zoneWaiting(waiting) : "")
     }
 

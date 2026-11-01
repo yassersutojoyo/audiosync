@@ -92,6 +92,8 @@ final class AppModel: ObservableObject {
         var waiting = 0
         /// Members listed now that a click switches.
         var present = 0
+        /// Members that play as part of a stereo pair instead of on their own.
+        var inPair = 0
         /// Every member a click would switch on is on.
         var allOn = false
         var total: Int { members.count }
@@ -497,7 +499,7 @@ final class AppModel: ObservableObject {
     }
 
     func countText(of zone: Zone) -> String {
-        ZoneLayout.count(on: zone.on, waiting: zone.waiting, present: zone.present, total: zone.total, text: text)
+        ZoneLayout.count(on: zone.on, waiting: zone.waiting, present: zone.present, total: zone.total, inPair: zone.inPair, text: text)
     }
 
     /// The listed speaker a zone member's row shows.

@@ -1090,6 +1090,8 @@ struct UIStrings {
     func zoneWaiting(_ n: Int) -> String { ", \(n) waiting" }
     /// A zone none of whose members is here.
     func zoneNoneHere(_ total: Int) -> String { "None of \(total) found" }
+    /// A zone none of whose members is here because they all play as a stereo pair.
+    func zonePlayingInPair(_ total: Int) -> String { "\(total) playing in a pair" }
     /// A zone with no member, until it is deleted.
     let zoneEmpty = "No speakers"
     /// A zone header's VoiceOver label and value.
