@@ -111,6 +111,8 @@ struct Reference {
     bands: [[f64; 5]; BAND_COUNT],
     preamp: f64,
     state: [[(f64, f64); BAND_COUNT]; 2],
+    /// The linear 10 ms preamp ramp after a retune (S31): from, frames played, length.
+    ramp: (f64, u64, u64),
 }
 
 impl Reference {
@@ -121,19 +123,32 @@ impl Reference {
             }),
             preamp: 10f64.powf((settings.preamp_db - headroom_db(settings, fs)) / 20.0),
             state: [[(0.0, 0.0); BAND_COUNT]; 2],
+            ramp: (0.0, u64::MAX, 1),
         }
     }
 
     fn retune(&mut self, settings: &EqSettings, fs: f64) {
-        let state = self.state;
+        let (state, from) = (self.state, self.ramped());
         *self = Reference::new(settings, fs);
         self.state = state;
+        self.ramp = (from, 0, (0.010 * fs).round() as u64);
+    }
+
+    fn ramped(&self) -> f64 {
+        let (from, done, full) = self.ramp;
+        if done >= full {
+            self.preamp
+        } else {
+            from + (self.preamp - from) * (done as f64 / full as f64)
+        }
     }
 
     fn process(&mut self, block: &mut [f32]) {
         for frame in block.chunks_exact_mut(2) {
+            self.ramp.1 = self.ramp.1.saturating_add(1);
+            let preamp = self.ramped();
             for (channel, sample) in frame.iter_mut().enumerate() {
-                let mut y = f64::from(*sample) * self.preamp;
+                let mut y = f64::from(*sample) * preamp;
                 for (c, z) in self.bands.iter().zip(self.state[channel].iter_mut()) {
                     let x = y;
                     y = c[0] * x + z.0;
