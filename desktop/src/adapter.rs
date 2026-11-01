@@ -2075,8 +2075,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn cast_list(&self) -> CastList {
         match self.audio.cast_discovery() {
             CastDiscovery::Off => CastList::Quiet,
-            _ if !self.audio.cast_speakers().is_empty() => CastList::Quiet,
+            // A dead browser leaves browsed rows listed; the Mac keeps only these two (S339).
+            CastDiscovery::Failed
+                if self.audio.cast_speakers().iter().any(|speaker| {
+                    speaker.address.is_some() || speaker.status != CastStatus::Idle
+                }) =>
+            {
+                CastList::Quiet
+            }
             CastDiscovery::Failed => CastList::Failed,
+            CastDiscovery::Browsing if !self.audio.cast_speakers().is_empty() => CastList::Quiet,
             CastDiscovery::Browsing if self.cast_quiet_polls >= NONE_FOUND_POLLS => {
                 CastList::NoneFound
             }
