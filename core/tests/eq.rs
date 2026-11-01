@@ -488,6 +488,39 @@ fn a_change_takes_effect_at_the_next_block_and_keeps_filter_state() {
     assert_eq!(untouched, copy);
 }
 
+// covers: S26, S31
+#[test]
+fn a_curve_change_ramps_the_preamp_instead_of_stepping_it() {
+    let flat = enabled([0.0; BAND_COUNT], 0.0);
+    let bass = enabled(preset("bassBoost").unwrap().gains_db, 0.0);
+    let (mut control, mut processor) = configured(48_000.0, flat);
+    // A 37.5 Hz cosine peaks every 1280 frames, so the change at frame 5120
+    // lands on a peak, where Bass Boost's 6 dB headroom cut steps furthest.
+    let input: Vec<f32> = (0..40 * BLOCK)
+        .flat_map(|i| {
+            let x = (0.5 * (2.0 * PI * 37.5 * i as f64 / 48_000.0).cos()) as f32;
+            [x, x]
+        })
+        .collect();
+    let mut output = Vec::with_capacity(input.len());
+    for (index, chunk) in input.chunks(2 * BLOCK).enumerate() {
+        if index == 10 {
+            control.set_settings(bass);
+        }
+        let mut block = chunk.to_vec();
+        processor.process(&mut block);
+        output.extend_from_slice(&block);
+    }
+    let tone = largest_step(&input);
+    let worst = largest_step(&output);
+    // The new filters swell the bass in over the first frames at up to about
+    // three times the tone's slope; a stepped preamp jumped by 0.28.
+    assert!(
+        worst <= 4.0 * tone,
+        "step {worst} against the tone's {tone}"
+    );
+}
+
 // covers: S32
 #[test]
 fn measured_response_matches_the_reference_measurements() {
