@@ -359,6 +359,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A Google Cast speaker that closes the stream or reports a playback error a second time now recovers again when it has played for a minute since the first. Before, a second one hours later turned it off. On the Mac and on Windows.
 - On Windows, Refresh Devices (F5) starts AirPlay again after it stopped because of an error, as the notice's Retry does. Before, once that notice was dismissed, AirPlay stayed off until you quit AudioSync.
 - On Windows, a USB speaker you only renamed, or only saved in a preset, keeps its name and its place in the preset when you plug it into another USB port. Before, it came back under its system name and the preset still pointed at the old port.
+- On the Mac, a zone whose speakers all play as part of a stereo pair now says "2 playing in a pair" instead of "None of 2 found".
 
 ## [0.7.1] - 2026-10-27
 
