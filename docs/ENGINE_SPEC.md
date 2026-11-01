@@ -5157,6 +5157,7 @@ The release side:
 | sinks_are_listed_by_node_name_with_the_default_marked (`desktop/src/audio/pipewire/graph.rs`) | S381 |
 | hands_free_and_airplay_sinks_are_left_out_with_a_note (`desktop/src/audio/pipewire/graph.rs`) | S381 |
 | kinds_come_from_bus_form_factor_and_name (`desktop/src/audio/pipewire/graph.rs`) | S381 |
+| calibration_leaves_out_worn_and_virtual_sinks (`desktop/src/audio/pipewire/graph.rs`) | S381 |
 | removing_a_sink_says_the_listing_changed (`desktop/src/audio/pipewire/graph.rs`) | S381 |
 | built_in_outputs_are_listed_under_this_pc (`desktop/src/adapter.rs`) | S381 |
 | a_usb_device_keeps_its_form_and_stays_under_connected_speakers (`desktop/src/adapter.rs`) | S381 |

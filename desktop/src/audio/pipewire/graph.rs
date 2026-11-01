@@ -507,6 +507,7 @@ pub fn linear_volume(level: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::outputs::MicKind;
     use crate::audio::process::ProcessEntry;
 
     fn props(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -627,6 +628,49 @@ mod tests {
         );
         assert_eq!(sink_kind(&node(&[device])), OutputKind::Other);
         assert_eq!(sink_kind(&node(&[])), OutputKind::Virtual);
+    }
+
+    // covers: S381
+    #[test]
+    fn calibration_leaves_out_worn_and_virtual_sinks() {
+        let mut graph = Graph::default();
+        let device = ("device.id", "7");
+        sink(&mut graph, 1, &[("node.name", "a-room"), device]);
+        sink(
+            &mut graph,
+            2,
+            &[
+                ("node.name", "b-phones"),
+                device,
+                ("device.form-factor", "headphone"),
+            ],
+        );
+        sink(
+            &mut graph,
+            3,
+            &[
+                ("node.name", "c-headset"),
+                device,
+                ("device.api", "bluez5"),
+                ("device.form-factor", "headset"),
+            ],
+        );
+        sink(&mut graph, 4, &[("node.name", "d-null-sink")]);
+        let kinds: Vec<MicKind> = graph
+            .listing()
+            .endpoints
+            .iter()
+            .map(|output| output.traits.mic_kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                MicKind::Speaker,
+                MicKind::Headphones,
+                MicKind::Headphones,
+                MicKind::Virtual
+            ]
+        );
     }
 
     // covers: S380
