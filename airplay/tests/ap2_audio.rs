@@ -996,8 +996,13 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
         .pause
         .insert("POST /feedback".to_owned(), SLOW_FEEDBACK);
     let feedback = count(&server, "POST /feedback");
+    // The recorder's thread held up for a second, as load holds it up,
+    // while the audio before the pause goes on arriving.
+    let starved = udp.data.got.lock().expect("datagrams");
+    std::thread::sleep(Duration::from_secs(1));
     sender.pause();
     let paused = Instant::now();
+    drop(starved);
     assert!(wait_until(LONG, || count(&server, "FLUSH") == 2));
     assert!(wait_until(LONG, || count(&server, "POST /feedback") >= feedback + 2));
     let (seq, rtptime) = rtp_info(&server);
