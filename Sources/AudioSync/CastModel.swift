@@ -24,6 +24,9 @@ enum CastID {
 
     static func app(_ device: String) -> String { prefix + device }
 
+    /// The Cast speaker that is on, as the streaming policy counts it with the AirPlay ones (S162).
+    static func switchedOn(_ enabled: String?) -> Set<String> { enabled.map { [app($0)] } ?? [] }
+
     static func device(_ appID: String) -> String? {
         appID.hasPrefix(prefix) ? String(appID.dropFirst(prefix.count)) : nil
     }
