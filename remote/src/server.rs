@@ -1035,6 +1035,10 @@ fn serve(
     if shared.stopped.load(Ordering::SeqCst) {
         return;
     }
+    let Some(host) = allowed_host(&request, from, local, shared) else {
+        let _ = http::write_response(&mut stream, &Response::error(&text::bad_host()), csp);
+        return;
+    };
     if shared.paired(&request, local.port()).is_some() {
         if !shared.mark_paired(paired) {
             return;
@@ -1044,7 +1048,7 @@ fn serve(
         let _ = http::write_response(&mut stream, &Response::error(&text::busy()), csp);
         return;
     }
-    match route(&request, from, local, shared) {
+    match route(&request, host, from, local, shared) {
         Answer::Response(response) => {
             let _ = http::write_response(&mut stream, &response, csp);
         }
@@ -1105,19 +1109,30 @@ impl ApiRoute {
     }
 }
 
-fn route(request: &Request, from: IpAddr, local: SocketAddr, shared: &Shared) -> Answer {
-    let host = match request.header("host") {
-        Some(host)
-            if request.header_count("host") == 1
-                && net::host_allowed(host, local, lock(&shared.local_name).as_deref()) =>
-        {
-            host
-        }
-        _ => {
-            shared.report(ServerEvent::Refused { from, status: 403 });
-            return error(text::bad_host());
-        }
-    };
+/// The request's one `Host` when it names this server; reports a refusal otherwise.
+fn allowed_host<'a>(
+    request: &'a Request,
+    from: IpAddr,
+    local: SocketAddr,
+    shared: &Shared,
+) -> Option<&'a str> {
+    let host = request.header("host").filter(|host| {
+        request.header_count("host") == 1
+            && net::host_allowed(host, local, lock(&shared.local_name).as_deref())
+    });
+    if host.is_none() {
+        shared.report(ServerEvent::Refused { from, status: 403 });
+    }
+    host
+}
+
+fn route(
+    request: &Request,
+    host: &str,
+    from: IpAddr,
+    local: SocketAddr,
+    shared: &Shared,
+) -> Answer {
     let path = request.path.as_str();
     if !path.starts_with("/api/") {
         return static_route(request, path);
@@ -1803,7 +1818,11 @@ mod tests {
             let host = 1 + (index as usize / auth::WRONG_PER_WINDOW) as u8;
             let from = IpAddr::V4(Ipv4Addr::new(127, 0, 0, host));
             let request = pair_request(&named("kitchen"), &wrong);
-            assert_eq!(status(route(&request, from, local, &server.shared)), 401);
+            let host = named("kitchen");
+            assert_eq!(
+                status(route(&request, &host, from, local, &server.shared)),
+                401
+            );
         }
         assert!(server.pairing_locked());
 
@@ -1813,9 +1832,61 @@ mod tests {
         assert_eq!(server.pairing_code().as_deref(), Some(code.as_str()));
         let from = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 100));
         let renamed = pair_request(&named("kitchen-2"), &code);
-        assert_eq!(status(route(&renamed, from, local, &server.shared)), 429);
+        let host = named("kitchen-2");
+        assert_eq!(
+            status(route(&renamed, &host, from, local, &server.shared)),
+            429
+        );
         let old = pair_request(&named("kitchen"), &code);
-        assert_eq!(status(route(&old, from, local, &server.shared)), 403);
+        assert!(allowed_host(&old, from, local, &server.shared).is_none());
+        server.stop();
+    }
+
+    // Through serve on a socket of the test's own, listed as a held connection.
+    // covers: S373
+    #[test]
+    fn a_foreign_host_with_a_paired_token_leaves_last_seen_and_the_slot_alone() {
+        let config = Config {
+            port: 0,
+            listen: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            ..Config::default()
+        };
+        let server = RemoteServer::start(config, |_: &Command| {}).unwrap();
+        let shared = &server.shared;
+        let token = auth::random_token().unwrap();
+        let paired_at = SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60);
+        let _ = lock(&shared.devices).add(&token, paired_at);
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let (stream, from) = listener.accept().unwrap();
+        let paired = Arc::new(AtomicBool::new(false));
+        lock(&shared.connections).push(Connection {
+            slot: Slot {
+                peer: from.ip(),
+                reserved: false,
+                paired: false,
+            },
+            paired: Arc::clone(&paired),
+            stream: stream.try_clone().unwrap(),
+            thread: thread::spawn(|| {}),
+        });
+        let raw = format!(
+            "GET /api/state HTTP/1.1\r\nHost: evil.example:{port}\r\nCookie: {}={token}\r\n\r\n",
+            token_cookie_name(port)
+        );
+        client.write_all(raw.as_bytes()).unwrap();
+        let closer = stream.try_clone().unwrap();
+        serve(stream, from.ip(), false, &paired, shared);
+        let _ = closer.shutdown(Shutdown::Both);
+        let mut answer = String::new();
+        let _ = client.read_to_string(&mut answer);
+        assert!(answer.starts_with("HTTP/1.1 403 "), "{answer:?}");
+        assert!(!paired.load(Ordering::SeqCst), "the slot was marked paired");
+        assert!(
+            !lock(&shared.devices).contains(&token, paired_at + auth::DEVICE_IDLE_LIMIT),
+            "last-seen moved"
+        );
         server.stop();
     }
 

@@ -1679,6 +1679,26 @@ fn a_foreign_host_is_refused_first_even_with_a_matching_origin_and_a_token() {
     assert_eq!(exchange(port, lower.as_bytes()).status, 200);
 }
 
+// covers: S373
+#[test]
+fn a_foreign_host_in_a_reserved_slot_gets_403_not_busy() {
+    let remote = start_with(Config {
+        capacity: Capacity {
+            connections: 4,
+            per_peer: 4,
+            reserved: 2,
+            reserved_per_peer: 1,
+        },
+        ..config("reserved-host", Timing::default())
+    });
+    // Accepted in order, so both hold the shared slots before the next connection comes.
+    let _slow: Vec<TcpStream> = (0..2).map(|_| idle_connection(&remote)).collect();
+    let port = remote.server.port();
+    let raw = format!("GET / HTTP/1.1\r\nHost: evil.example:{port}\r\n\r\n");
+    let reply = exchange(port, raw.as_bytes());
+    assert_eq!((reply.status, reply.error().as_str()), (403, "bad_host"));
+}
+
 fn zoned(calibrating: bool) -> State {
     let json = SAMPLE.replacen(
         "\"speakers\": [",
