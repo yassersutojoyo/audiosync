@@ -996,6 +996,15 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     assert!(wait_until(LONG, || count(&server, "FLUSH") == 2));
     assert!(wait_until(LONG, || count(&server, "POST /feedback") >= feedback + 2));
     let (seq, rtptime) = rtp_info(&server);
+    // A packet from another stream, as a sender of a test that held this
+    // port before still sends for a moment after that test ends.
+    let mut stray = vec![0u8; 1_448];
+    stray[..4].copy_from_slice(&[0x80, 0x60, 0, 0]);
+    stray[2..4].copy_from_slice(&seq.wrapping_add(1_000).to_be_bytes());
+    UdpSocket::bind("127.0.0.1:0")
+        .and_then(|socket| socket.send_to(&stray, ("127.0.0.1", udp.data.port())))
+        .expect("the stray packet");
+    assert!(udp.data.wait_for(|(_, _, bytes)| *bytes == stray).is_some());
     // The FLUSH names the first packet held back. Packets before it left
     // before the sender took the pause, however late a busy runner stamps
     // them; nothing else arrives.
