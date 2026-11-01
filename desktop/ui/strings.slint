@@ -81,9 +81,9 @@ export global Strings {
     out property <string> notice-show-how-label: @tr("Show how to hear it only once");
     // The button on the notice that AirPlay stopped: starts it again.
     out property <string> notice-retry: @tr("Retry");
-    out property <string> notice-retry-label: @tr("Start AirPlay again");
+    out property <string> notice-retry-label: @tr("Retry, AirPlay");
     out property <string> notice-open-privacy: @tr("Open Privacy Settings");
-    out property <string> notice-open-privacy-label: @tr("Open the microphone privacy settings");
+    out property <string> notice-open-privacy-label: @tr("Open Privacy Settings, Microphone");
     out property <string> delay-field-label: @tr("Delay in milliseconds");
     // Under a delay field while it holds typing not yet applied; also the
     // field's Narrator description then.
@@ -1648,7 +1648,7 @@ export global Strings {
     out property <string> calibration-implausible: @tr("The two speakers were too far apart to measure.");
 
     public pure function calibrate-label(name: string) -> string {
-        return @tr("Calibrate {} with the microphone", name);
+        return @tr("Calibrate with Microphone, {}", name);
     }
 
     public pure function calibration-cancel-label(name: string) -> string {
@@ -1780,11 +1780,11 @@ export global Strings {
     out property <string> leave-out: @tr("Leave Out");
 
     public pure function include-anyway-label(name: string) -> string {
-        return @tr("Include {} anyway", name);
+        return @tr("Include Anyway, {}", name);
     }
 
     public pure function leave-out-label(name: string) -> string {
-        return @tr("Leave {} out", name);
+        return @tr("Leave Out, {}", name);
     }
 
     // In a left-out output's delay controls, instead of Calibrate with
@@ -1855,7 +1855,7 @@ export global Strings {
     }
 
     public pure function calibrate-all-again-label(name: string) -> string {
-        return @tr("Measure {} again", name);
+        return @tr("Measure Again, {}", name);
     }
 
     // The label of a delay step button: "−100", "+10".
