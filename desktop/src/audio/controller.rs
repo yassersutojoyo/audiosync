@@ -790,10 +790,10 @@ struct Retiring<D: Driver> {
     session: Option<(Option<D::Capture>, Arc<Ring>)>,
     /// When the fade-outs were asked for.
     since: Instant,
-    /// The capture feeds a network sender and no output fades meanwhile:
-    /// the sender's input fades out only on the audio pushed after the
-    /// request, so the capture runs on for [`FEED_FADE`]. An output's fade
-    /// plays in real time for at least as long.
+    /// The capture feeds a network sender, whose input fades out only on
+    /// the audio pushed after the request: the capture runs on for
+    /// [`FEED_FADE`], or until an output has played its fade, which takes
+    /// at least as long in real time.
     feeds: bool,
 }
 
@@ -2319,9 +2319,8 @@ impl<D: Driver> Controller<D> {
         if let Some(cast) = &self.cast {
             cast.request_fade_out();
         }
-        let feeds = outputs.is_empty()
-            && (self.feed.as_ref().is_some_and(|feed| !feed.is_free())
-                || self.cast.as_ref().is_some_and(|cast| !cast.is_free()));
+        let feeds = self.feed.as_ref().is_some_and(|feed| !feed.is_free())
+            || self.cast.as_ref().is_some_and(|cast| !cast.is_free());
         self.retiring.push(Retiring {
             outputs,
             session: Some((capture, ring)),
@@ -2355,7 +2354,11 @@ impl<D: Driver> Controller<D> {
                     .outputs
                     .iter()
                     .all(|playing| playing.handle.is_faded() || playing.handle.has_ended())
-                    && (!entry.feeds || waited >= FEED_FADE);
+                    && (!entry.feeds
+                        || waited >= FEED_FADE
+                        || entry.outputs.iter().any(|playing| {
+                            playing.handle.is_faded() && !playing.handle.has_ended()
+                        }));
                 if faded || waited >= STOP_FADE_CAP {
                     let entry = self.retiring.remove(index);
                     self.retire(entry, faded, waited);
