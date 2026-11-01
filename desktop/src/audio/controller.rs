@@ -857,8 +857,10 @@ pub struct Controller<D: Driver> {
     listing_error: Option<BackendError>,
     sources_error: Option<BackendError>,
     /// Why the input devices couldn't be listed last time, if they couldn't:
-    /// the log tells once per failure, and the list goes on without them.
+    /// the log tells once per failure, and the list keeps the last inputs
+    /// listed, so the chosen one doesn't show as unplugged while it captures.
     inputs_error: Option<BackendError>,
+    inputs_listed: Vec<SourceInfo>,
     /// The name and kind of each input device listed in this run, and the
     /// endpoint IDs a device left when a capture followed it to another
     /// (S329).
@@ -991,6 +993,7 @@ impl<D: Driver> Controller<D> {
             listing_error: None,
             sources_error: None,
             inputs_error: None,
+            inputs_listed: Vec::new(),
             inputs_seen: BTreeMap::new(),
             inputs_left_behind: BTreeSet::new(),
             listing_notes: Vec::new(),
@@ -4017,17 +4020,20 @@ impl<D: Driver> Controller<D> {
                         .log(|| "listing the input devices works again".to_owned());
                 }
                 self.take_inputs(&readings);
-                sources.extend(input_sources(readings));
+                self.inputs_listed = input_sources(readings);
             }
             Err(error) => {
                 if self.inputs_error.as_ref() != Some(&error) {
                     self.log.log(|| {
-                        format!("listing the input devices failed, so none are offered: {error}")
+                        format!(
+                            "listing the input devices failed, so the last listing stays: {error}"
+                        )
                     });
                     self.inputs_error = Some(error);
                 }
             }
         }
+        sources.extend(self.inputs_listed.iter().cloned());
         Ok(sources)
     }
 }
