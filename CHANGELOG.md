@@ -14,8 +14,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A speaker's dimmed volume slider says why it's dimmed: the speaker is off, or a Google Cast speaker isn't playing yet. VoiceOver or Narrator reads the reason, and it shows when you hover over the slider in the main window. On the Mac and on Windows.
 - A Google Cast speaker you turned on is on again after you quit and reopen AudioSync, once it shows up on the network, as AirPlay and local speakers already were. A hidden speaker stays off. On the Mac and on Windows.
 - On Windows, while streaming is on and nothing has played yet, a notice in the main window and the tray panel says "Waiting for audio", naming the app when you capture one, as on the Mac. It goes away once sound arrives.
-- On the Mac, a speaker on this Mac whose device is unplugged, or that keeps refusing to start for 30 s, gets the notice "<name> was disconnected. It plays again as soon as it's back.", as on Windows. It goes away once the speaker plays again, you switch it off or streaming stops.
-- On the Mac, an AirPlay speaker's row says "Waiting for the password" while its password prompt waits, and "Enter the code shown on <name>" while it pairs with a PIN.
+- On the Mac, a playing speaker on this Mac whose device is unplugged, or that keeps refusing to start for 30 s, gets the notice "<name> was disconnected. It plays again as soon as it's back.", as on Windows. It goes away once the speaker plays again, you switch it off or streaming stops.
+- On the Mac, an AirPlay speaker's row says "Waiting for the password" while its password prompt waits, and "Enter the code shown on <name>" while its PIN prompt waits.
 
 ### Changed
 
