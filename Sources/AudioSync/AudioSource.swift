@@ -148,6 +148,26 @@ extension AudioSource {
     }
 }
 
+/// The last source of several apps that was in use, kept while another
+/// source is so the picker can still offer it (S354).
+enum LastMix {
+    /// What is kept once the source in use goes from `old` to `new`: only a
+    /// mix that is left replaces the one kept. A failed switch putting the
+    /// old source back is not a leave, so it never comes through here.
+    static func kept(_ kept: AudioSource?, leaving old: AudioSource, for new: AudioSource) -> AudioSource? {
+        if case .mix = old, old != new { return old }
+        return kept
+    }
+
+    /// A stored last mix, read as the stored source in use is; one that
+    /// reads back as no mix is dropped.
+    static func restored(_ stored: String?) -> AudioSource? {
+        let source = AudioSource(defaultsValue: stored)
+        if case .mix = source { return source }
+        return nil
+    }
+}
+
 // MARK: - Switching
 
 /// What choosing a source in the picker does to the session (EC5).

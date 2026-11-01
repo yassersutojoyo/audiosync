@@ -707,6 +707,13 @@ pub struct Settings {
         deserialize_with = "or_default"
     )]
     pub source_mix: Option<SavedMix>,
+    /// The last source of several apps that was in use, kept after a
+    /// switch to another source (spec S354).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
+    pub last_mix: Option<SavedMix>,
     /// The master volume slider position, 0 to 100.
     #[serde(deserialize_with = "number_or_nan")]
     pub master_volume: f64,
@@ -945,6 +952,7 @@ impl Default for Settings {
             input_device: None,
             input_pairs: BTreeMap::new(),
             source_mix: None,
+            last_mix: None,
             master_volume: DEFAULT_MASTER_POSITION,
             outputs: BTreeMap::new(),
             airplay: BTreeMap::new(),
@@ -1166,7 +1174,7 @@ impl Settings {
         } else {
             (MIN_OFFSET_MS, MAX_OFFSET_MS)
         };
-        let source_mix = self.source_mix.and_then(|mix| {
+        let clean_mix = |mix: SavedMix| {
             let mut apps: Vec<SavedMixApp> = Vec::new();
             for app in mix.apps {
                 if usable_id(&app.executable)
@@ -1185,7 +1193,9 @@ impl Settings {
                 mode: mix.mode,
                 apps,
             })
-        });
+        };
+        let source_mix = self.source_mix.and_then(clean_mix);
+        let last_mix = self.last_mix.and_then(clean_mix);
         Settings {
             version: VERSION,
             source,
@@ -1199,6 +1209,7 @@ impl Settings {
                 .take(MAX_ENTRIES)
                 .collect(),
             source_mix,
+            last_mix,
             master_volume: sanitize_position(self.master_volume).unwrap_or(DEFAULT_MASTER_POSITION),
             outputs: clamp_speakers(self.outputs, output_delays, false),
             airplay: clamp_speakers(self.airplay, (0.0, MAX_AIRPLAY_DELAY_MS), true),
@@ -1427,6 +1438,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("input_device", reads::<Option<SavedInput>>),
         ("input_pairs", Value::is_object),
         ("source_mix", reads::<Option<SavedMix>>),
+        ("last_mix", reads::<Option<SavedMix>>),
         ("master_volume", Value::is_number),
         ("outputs", Value::is_object),
         ("airplay", Value::is_object),
@@ -1817,6 +1829,13 @@ mod tests {
                 apps: vec![SavedMixApp {
                     executable: "player.exe".to_owned(),
                     name: "Player".to_owned(),
+                }],
+            }),
+            last_mix: Some(SavedMix {
+                mode: MixMode::Only,
+                apps: vec![SavedMixApp {
+                    executable: "chat.exe".to_owned(),
+                    name: "Chat".to_owned(),
                 }],
             }),
             master_volume: sample.master_volume,
@@ -2334,6 +2353,7 @@ mod tests {
             input_device,
             input_pairs,
             source_mix,
+            last_mix,
             master_volume,
             outputs,
             airplay,
@@ -2370,6 +2390,7 @@ mod tests {
         assert_ne!(input_device, default.input_device);
         assert_ne!(input_pairs, default.input_pairs);
         assert_ne!(source_mix, default.source_mix);
+        assert_ne!(last_mix, default.last_mix);
         assert_ne!(master_volume, default.master_volume);
         assert_ne!(outputs, default.outputs);
         assert_ne!(airplay, default.airplay);
@@ -2502,6 +2523,7 @@ mod tests {
             "input_device",
             "input_pairs",
             "source_mix",
+            "last_mix",
             "hidden_speakers",
             "equalizer_curves",
             "update_record",

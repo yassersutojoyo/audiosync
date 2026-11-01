@@ -309,6 +309,7 @@ extension AppDelegate {
             postNotice(text.sourceTerminated(name: name), subject: Notice.source,
                        shortName: text.sourceQuitNoticeName(name))
         case .switchToSystem:
+            lastMix = LastMix.kept(lastMix, leaving: audioSource, for: .system)
             audioSource = .system
             updateNowPlayingTarget()
             clearNotices([Notice.source, Notice.capture])   // about the app
