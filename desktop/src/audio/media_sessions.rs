@@ -722,6 +722,8 @@ mod tests {
         changed: Mutex<Option<Changed>>,
         /// Every session lists as paused from now on.
         paused: AtomicBool,
+        /// When the last thumbnail read was asked for, and its deadline.
+        thumbnail_asked: Mutex<Option<(Instant, Instant)>>,
     }
 
     impl Counts {
@@ -774,6 +776,7 @@ mod tests {
             match self.thumbnail {
                 Thumbnail::Image => Ok(Some(IMAGE.to_vec())),
                 Thumbnail::Hung => {
+                    *self.counts.thumbnail_asked.lock().unwrap() = Some((Instant::now(), deadline));
                     // Woken a wait late, as a loaded PC wakes a thread.
                     thread::sleep(deadline.saturating_duration_since(Instant::now()) + APP_WAIT);
                     Err("the app didn't answer in time".to_owned())
@@ -883,8 +886,8 @@ mod tests {
         let mut reader = Reader::new(fake);
         let started = Instant::now();
         let (track, card) = poll(&mut reader);
-        let took = started.elapsed();
-        assert!(took >= APP_WAIT && took < APP_WAIT * 2, "took {took:?}");
+        let (asked, deadline) = counts.thumbnail_asked.lock().unwrap().expect("it was read");
+        assert!(deadline >= started + APP_WAIT && deadline <= asked + APP_WAIT);
         assert_eq!(counts.thumbnails(), 1, "one wait covers both readers");
         let track = track.expect("the track still shows");
         assert_eq!((track.session, track.artwork), (playing(), None));
