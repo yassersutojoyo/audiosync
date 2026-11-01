@@ -18118,6 +18118,58 @@ mod tests {
         assert!(kept.is_empty(), "{} copies kept", kept.len());
     }
 
+    /// A Cast adapter launched over the settings in `dir`, with the Cast
+    /// speakers file there too.
+    fn cast_adapter_saving_to(dir: &std::path::Path) -> (AudioAdapter<MockBackend>, FakeCast) {
+        let mut audio = launch_audio();
+        let fake = FakeCast::default();
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        audio.set_cast(fake.link());
+        let mut adapter = launch(audio, &dir.join(settings::FILE_NAME));
+        adapter.set_cast_file(Some(dir.join("cast-speakers.json")), false);
+        adapter.poll();
+        (adapter, fake)
+    }
+
+    // covers: S394
+    #[test]
+    fn a_cast_speakers_file_written_again_clears_the_not_saved_notice_the_settings_dont_hold() {
+        let dir = test_dir("cast-memory-unsaved");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        let cast_blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&cast_blocked).expect("blocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&cast_blocked).expect("unblocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 300.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+
+        // A settings file that still can't be saved keeps its notice.
+        let blocked = crate::data_folder::temporary_path(&dir.join(settings::FILE_NAME));
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(64.0);
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 350.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S394
+    #[test]
+    fn the_last_save_tells_a_cast_offset_is_unsaved_when_its_file_cant_be_written() {
+        let dir = test_dir("cast-memory-last-save");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        let blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        assert!(!adapter.save_settings(), "the Cast file is still blocked");
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        assert!(adapter.save_settings());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     // covers: C2
     #[test]
     fn a_refused_cast_speakers_notice_stays_while_the_other_starts_playing() {
