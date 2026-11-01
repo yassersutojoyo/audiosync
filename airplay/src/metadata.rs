@@ -295,11 +295,10 @@ pub fn dmap_chunk(code: &[u8; 4], data: &[u8]) -> Vec<u8> {
     chunk
 }
 
-/// Track information as DMAP: an `mlit` container holding `minm` (title),
-/// `asar` (artist) and `asal` (album) (P124).
+/// Track information as DMAP: an `mlit` container holding `minm` (title)
+/// and `asar` (artist); the album is left out (P124).
 pub fn dmap_track(info: &TrackInfo) -> Vec<u8> {
     let mut items = dmap_chunk(b"minm", info.title.as_bytes());
     items.extend(dmap_chunk(b"asar", info.artist.as_bytes()));
-    items.extend(dmap_chunk(b"asal", info.album.as_bytes()));
     dmap_chunk(b"mlit", &items)
 }
