@@ -10085,6 +10085,34 @@ mod tests {
         );
     }
 
+    // covers: S223
+    #[test]
+    fn a_zone_whose_speaker_waits_for_a_pin_names_the_speaker_not_the_zone() {
+        use i_slint_backend_testing::ElementHandle;
+        fn header_notes(window: &impl ComponentHandle) -> Vec<String> {
+            ElementHandle::find_by_accessible_label(window, "Living Room, zone")
+                .filter_map(|header| header.accessible_description())
+                .map(|note| note.to_string())
+                .collect()
+        }
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut tv = backend.snapshot().speaker("airplay:kitchen").unwrap().clone();
+        tv.id = "airplay:tv".into();
+        tv.name = "Den TV".into();
+        tv.enabled = true;
+        tv.waiting = Some(ui_model::Waiting::ForPin);
+        backend.add_speaker(tv);
+        backend.add_zone("zone:living", "Living Room", &["airplay:tv"]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let pin = "Enter the code shown on Den TV".to_owned();
+        assert_eq!(header_notes(&app.main), vec![pin.clone()]);
+        assert_eq!(header_notes(&app.flyout), vec![pin]);
+    }
+
     // covers: S359
     #[test]
     fn go_to_zone_with_no_member_found_lands_on_the_arrow_which_folds_it() {
