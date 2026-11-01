@@ -2900,6 +2900,9 @@ impl<D: Driver> Controller<D> {
                     if let Some(airplay) = self.airplay.as_mut() {
                         airplay.sleeping();
                     }
+                    if let Some(cast) = self.cast.as_mut() {
+                        cast.set_asleep(true);
+                    }
                     self.log.log(|| {
                         "the PC is going to sleep: a capture lost now is opened again once it \
                          wakes"
@@ -2971,6 +2974,9 @@ impl<D: Driver> Controller<D> {
         self.cancel_fresh_restarts_for_sleep();
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.woke();
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_asleep(false);
         }
         for appeared in self.appeared.values_mut() {
             *appeared = self.polls;

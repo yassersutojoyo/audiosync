@@ -47,6 +47,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- A Google Cast speaker still connecting when the computer goes to sleep no longer turns itself off as not responding because of the failed connects while asleep. Only the failures before the sleep and after the wake count now, on Windows and the Mac.
 - On the Mac, a Google Cast group that never answers now goes off after its third failed connect with a notice that it isn't responding, as on Windows. Before, AudioSync kept trying it with no notice. A group that lists no address yet still keeps trying until it does.
 - On the Mac, a stereo pair or home theater group whose speakers all ask for a PIN or can't play from AudioSync no longer shows as a speaker you can turn on, and auto-connect leaves it alone, as on Windows. Before, it could be turned on and then went off again with a notice.
 - On the Mac, a Bluetooth headset's microphone saved as the source, such as AirPods, now stays in the source picker under its name, greyed out, and the menu bar panel and the web remote name it. Before, the panel said "All System Audio" while nothing played.
