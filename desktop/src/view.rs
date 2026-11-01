@@ -4363,7 +4363,7 @@ impl App {
         let reading = self.network_watch.borrow().as_ref().and_then(Watch::latest);
         if let Some(Some(connected)) = reading {
             self.strings()
-                .set_public_network(network_profile::names_firewall(&connected));
+                .set_public_network(network_profile::suggests_private(&connected));
         }
     }
 
