@@ -1372,6 +1372,10 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | capture watch: an input that left follows neither of two new UIDs with its name and transport nor a twin listed while it played | S329 |
 | capture watch: a busy try comes again every 3 s outside the 5 tries; another answer counts as one of them | S333 |
 | capture watch: busy tries rest while the Mac sleeps; after a wake the first comes 3 s after it | S333 |
+| native airplay: a retried error while the Mac sleeps counts nothing toward reconnecting | S412 |
+| native airplay: a reconcile while the Mac sleeps starts no session, the one at the wake starts it | S412 |
+| native airplay: a speaker switched on or found while the Mac sleeps starts no session | S412 |
+| cast: a connect failure while the Mac sleeps counts nothing toward turning the speaker off (S412) | S412 |
 | output format: a running output reopens once its device reports another rate or channel count, never for a notice that changes neither | S330 |
 | output format: an output fading out, or a format the start or the notice can't read, is never reopened | S330 |
 | output format: one debug line names the output's number and the old and the new format | S330 |
@@ -1747,7 +1751,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | session stop: … (which reasons restart, one log line each) | S20 |
 | airplay level: … (a level set on the speaker kept or held, own volume above 100, DeviceVolume at master 0) | S276, S290, S291 |
 | airplay volume event: a report made before the row's latest set reached the core is dropped, that speaker only | S276 |
-| airplay level vectors: … (`core/tests/vectors/s290_volume.json` through the Mac's calls) | S290, S289 |
+| airplay level vectors: … (`core/tests/vectors/s290_volume.json` through the Mac's calls) | S290, S289, S413 |
 | device anchor: … (the device anchor in the status line) | S334 |
 | observer: the line names every value with its unit | S229 |
 | followed rate: one line after 10 s past 1000 ppm, one more when the rate changes | S207 |
@@ -3186,6 +3190,7 @@ The checks for S187's large increases and for S47 and S48 at the largest hold-ba
 | with_a_clock_reading_a_stop_waits_on_the_padding_not_the_stream_latency (`desktop/src/audio/render.rs`) | S185 |
 | the_end_of_a_windows_session_tears_the_airplay_and_cast_senders_down (`desktop/src/view.rs`) | S351 |
 | an_exit_signal_on_linux_runs_the_quit_steps_of_a_windows_session_end (`desktop/src/view.rs`) | S351 |
+| ctrl_c_or_ctrl_break_ends_the_event_loop_as_quit_does_and_keeps_the_process (`desktop/src/platform.rs`, Windows only) | S414 |
 
 ### fades: Mac
 
@@ -3720,12 +3725,12 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_reading_maps_linearly_onto_0_to_100 (core) | S289 |
 | speaker_volume_spreads_the_product_of_both_sliders_over_30_db (`core/src/ffi/airplay.rs`; the Mac sends through the same core path) | S289 |
 | windows_uses_the_cores_device_volume (`desktop/src/audio/airplay.rs`; Windows sends through the core's mapping) | S289 |
-| the_row_shows_the_device_level_rounded_down | S290 |
-| a_row_move_sends_the_row_and_stores_the_row_over_k | S290 |
+| the_row_shows_the_device_level_rounded_down | S290, S289 |
+| a_row_move_sends_the_row_and_stores_the_row_over_k | S290, S289 |
 | the_zone_is_no_ceiling_for_a_row_move (core) | S290 |
 | with_k_at_0_a_row_move_sends_nothing (core) | S290 |
 | a_zone_move_keeps_the_own_volume_and_caps_the_level_at_100 (core) | S290 |
-| the_shared_s290_vectors_hold_through_the_c_interface (core) | S275, S276, S290 |
+| the_shared_s290_vectors_hold_through_the_c_interface (core) | S275, S276, S290, S413 |
 | a_zone_move_and_back_gives_the_level_read_before (Windows) | S290 |
 | a_device_volume_reports_the_level_it_was_sent | S276, S290 |
 | a_device_volume_at_k_0_reports_its_level_and_keeps_the_own_volume (core) | S276, S290 |
@@ -3761,8 +3766,12 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | zone_member_kinds_are_optional_and_an_unknown_kind_costs_only_its_entry | S286, S212 |
 | an_address_added_cast_zone_member_keeps_its_announced_name_once_it_leaves_the_list | S286 |
 | a_zoned_gain_crosses_the_boundary_as_the_core_makes_it (`core/src/ffi.rs`) | S71, S249 |
-| k1_at_master_63_the_row_and_the_television_agree_both_ways (`core/src/ffi/airplay.rs`) | S290, S291 |
-| the_s290_vector_cases_land_on_the_television (`core/src/ffi/airplay.rs`) | S290, S291, S276, S271 |
+| k1_at_master_63_the_row_and_the_television_agree_both_ways (`core/src/ffi/airplay.rs`) | S290, S291, S413 |
+| the_s290_vector_cases_land_on_the_television (`core/src/ffi/airplay.rs`) | S290, S291, S276, S271, S289, S413 |
+| the_stream_gain_gives_the_equalizer_cut_back_under_the_master (`core/src/ffi/airplay.rs`) | S26, S413 |
+| a_master_move_sends_a_speaker_no_volume_and_its_own_volume_is_its_level (`core/src/ffi/airplay.rs`) | S413 |
+| a_master_move_scales_the_stream_and_sends_no_volume (`desktop/src/audio/airplay.rs`) | S413 |
+| the_airplay_stream_gets_the_equalizer_cut_back_under_the_master (`desktop/src/audio/controller.rs`) | S26, S413 |
 | k1_keep_a_row_at_40_comes_back_at_40_after_a_restart (`core/src/ffi/airplay.rs`) | S290, S291 |
 | a_target_reads_its_volume_through_a_member (`core/src/ffi/airplay.rs`) | S291 |
 | the_zoned_cast_levels_cross_the_boundary_as_the_sender_makes_them (`core/src/ffi/cast.rs`) | S249, S250 |
@@ -3844,7 +3853,7 @@ The Mac (logic suite):
 
 | Check | Clauses |
 |---|---|
-| airplay remote: play-pause, next and previous go to the now-playing control as they are | S274 |
+| airplay remote: play-pause, next and previous go to the now-playing control as they are | S273, S274 |
 | airplay remote: an unknown remote code sends nothing | S274 |
 | airplay remote: a remote handed over before the sender stops reaches the now-playing control | S273, S274 |
 | airplay remote: a remote drained after the sender stopped reaches nothing | S273 |
@@ -4548,6 +4557,8 @@ The release side:
 | a_wake_hours_after_the_last_read_starts_the_stall_span_over (`desktop/src/audio/wasapi/endpoint.rs`) | S326, S332 |
 | a_jump_or_a_discontinuity_gets_silence_for_the_time_between (`desktop/src/audio/capture.rs`) | S332 |
 | a_packet_whose_position_windows_flags_follows_the_last_one (`desktop/src/audio/capture.rs`) | S332 |
+| no_airplay_session_starts_while_the_pc_sleeps_and_its_failures_post_no_notice (`desktop/src/audio/controller.rs`) | S412 |
+| a_cast_speakers_connect_failures_while_the_pc_sleeps_count_nothing_toward_turning_it_off (`desktop/src/audio/controller.rs`) | S412 |
 | a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll (`desktop/src/audio/controller.rs`) | S330, S138, S140 |
 | a_format_notice_that_changes_nothing_leaves_the_output_playing (`desktop/src/audio/controller.rs`) | S330 |
 | a_format_read_that_hangs_answers_in_time_and_starts_no_second_read (`desktop/src/audio/wasapi/endpoint.rs`) | S330 |
