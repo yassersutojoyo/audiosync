@@ -894,6 +894,29 @@ fn the_cut_comes_back_when_the_first_equalized_frame_plays() {
     );
 }
 
+// covers: S26, S71
+#[test]
+fn a_curve_set_while_a_block_is_equalized_gives_its_cut_back_from_the_next_block() {
+    let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+    let gain = 0.1675;
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let shared = SharedGain::new(gain as f32);
+    let (mut eq, mut processor) = equalizer();
+    eq.give_back(gain, &shared);
+    let mut block = sine(0, BLOCK, 1000.0, 48_000.0, 0.25);
+    processor.process(&mut block);
+    // The capture thread holds a block equalized with no curve, not yet written.
+    eq.set_settings_from(enabled(gains, 0.5), ring.frames_written() as i64);
+    eq.give_back(gain, &shared);
+    writer.write(&block, BLOCK);
+    assert_eq!(shared.gain_at(0), Some(gain as f32), "the block with no curve");
+    assert_eq!(shared.gain_at(BLOCK as i64 - 1), Some(gain as f32));
+    let returned = eq.returned_gain(gain).0 as f32;
+    assert!(returned > gain as f32);
+    assert_eq!(shared.gain_at(BLOCK as i64), Some(returned), "the next block");
+}
+
 // covers: S27, S28
 #[test]
 fn toggling_bass_boost_on_a_steady_tone_never_steps_further_than_the_tone() {
