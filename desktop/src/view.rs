@@ -9639,6 +9639,21 @@ mod tests {
         assert_eq!(notice_title(&strings, &notice).as_str(), "Right can't play");
     }
 
+    // covers: S141
+    #[test]
+    fn the_switch_failed_notice_says_to_pick_the_source_again() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let failed = NoticeMessage::SwitchFailed {
+            new: SwitchName::Source(SourceName::Named("Spotify".into())),
+            old: SwitchName::System,
+        };
+        assert_eq!(
+            notice_text(&strings, &failed).as_str(),
+            "Couldn't start Spotify, still on All System Audio. Pick Spotify again to retry."
+        );
+    }
+
     // covers: S350
     #[test]
     fn the_waiting_notice_names_the_app_when_one_is_captured_and_reads_generic_otherwise() {
