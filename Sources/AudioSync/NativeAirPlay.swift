@@ -61,6 +61,9 @@ final class NativeAirPlay {
     /// The zone position of every receiver in a zone, which the sender gets,
     /// also when it is created later (queue only, S249).
     private var zoneVolumes: [String: Double] = [:]
+    /// The equalizer, whose headroom cut the sender gives back under the
+    /// master, also when it is created later (queue only, S26, S413).
+    private var equalizer = Equalizer.Settings()
     /// The receivers added to the sender, in the order they were added, and
     /// the uptime of the last status line (queue only; `logStatusIfDue`).
     private var addedIDs: [String] = []
@@ -269,6 +272,22 @@ final class NativeAirPlay {
             guard let handle = self?.handle else { return }
             asc_airplay_set_master(handle, master)
         }
+    }
+
+    /// The equalizer settings, live: the stream's gain gives their headroom
+    /// cut back under the master (S26, S413). Main queue.
+    func setEqualizer(_ settings: Equalizer.Settings) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.equalizer = settings
+            if let handle = self.handle { Self.sendEqualizer(settings, to: handle) }
+        }
+    }
+
+    private static func sendEqualizer(_ settings: Equalizer.Settings, to handle: OpaquePointer) {
+        var gains = [Double](repeating: 0, count: Int(ASC_EQ_BANDS))
+        for band in 0..<min(gains.count, settings.gains.count) { gains[band] = settings.gains[band] }
+        _ = asc_airplay_set_equalizer(handle, settings.enabled, &gains)
     }
 
     /// The zone position (0 to 100) of every receiver in a zone, live; the
@@ -565,6 +584,7 @@ final class NativeAirPlay {
             }
         }
         asc_airplay_set_master(created, master)
+        Self.sendEqualizer(equalizer, to: created)
         for (id, zone) in zoneVolumes { _ = asc_airplay_set_zone_volume(created, id, zone) }
         _ = asc_airplay_set_hold_back(created, queuedHoldBackMs)
         _ = asc_airplay_set_playback(created, playback.app, playback.state)

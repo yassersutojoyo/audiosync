@@ -1176,6 +1176,7 @@ impl<D: Driver> Controller<D> {
     ) {
         let mut airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
         airplay.set_zones(self.zone_volumes.airplay.clone());
+        airplay.set_equalizer(&self.equalizer);
         self.log.log(|| {
             format!(
                 "AirPlay: the sender runs, L = {} ms; local outputs line up with each other \
@@ -4274,6 +4275,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.equalizer = settings;
         if let Some(session) = self.session.as_mut() {
             session.equalizer.set_settings(settings);
+        }
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_equalizer(&settings);
         }
         for id in self.playing_ids() {
             self.apply_gain(&id);

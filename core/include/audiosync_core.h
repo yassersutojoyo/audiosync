@@ -1799,6 +1799,13 @@ void asc_airplay_read_volumes(AscAirPlay *airplay);
 void asc_airplay_set_master(AscAirPlay *airplay, double master);
 
 /*
+ * Takes the equalizer's headroom cut (gains_db holds ASC_EQ_BANDS values, at
+ * 48 kHz), which the stream's gain gives back under the master as far as
+ * unity allows (S26, S413). Returns false when airplay or gains_db is NULL.
+ */
+bool asc_airplay_set_equalizer(AscAirPlay *airplay, bool enabled, const double *gains_db);
+
+/*
  * Holds every speaker back by hold_back_ms on top of L, live, and every
  * speaker added later, so they meet an output that plays later than L, such
  * as a Google Cast speaker with a longer offset. The sender caps a speaker's

@@ -625,11 +625,7 @@ impl EqControl {
 
     /// Publishes the settings; a `fresh` cut covers every frame.
     fn publish(&mut self, fresh: bool) {
-        let cut = if self.settings.enabled {
-            cascade_peak_db(&self.settings.gains_db, self.sample_rate).max(0.0)
-        } else {
-            0.0
-        };
+        let cut = headroom_cut_db(&self.settings, self.sample_rate);
         let snapshot = Snapshot::design(&self.settings, self.sample_rate, self.epoch);
         self.publish_snapshot(&snapshot);
         let from = if fresh { i64::MIN } else { self.adopted_from() };
@@ -685,8 +681,18 @@ impl EqControl {
     }
 }
 
+/// The headroom cut of S26 in dB that `settings` take at `sample_rate`: 0
+/// while disabled. Non-finite gains count as 0 dB.
+pub fn headroom_cut_db(settings: &EqSettings, sample_rate: f64) -> f64 {
+    if settings.enabled {
+        cascade_peak_db(&settings.gains_db.map(finite_or_zero), sample_rate).max(0.0)
+    } else {
+        0.0
+    }
+}
+
 /// `gain` with `cut_db` given back as far as unity allows, and the dB given back.
-fn returned(gain: f64, cut_db: f64) -> (f64, f64) {
+pub fn returned(gain: f64, cut_db: f64) -> (f64, f64) {
     let db = cut_db.min(-20.0 * gain.log10()).max(0.0);
     if db > 0.0 && gain > 0.0 {
         ((gain * 10f64.powf(db / 20.0)).min(1.0), db)
