@@ -6946,8 +6946,11 @@ do {
           "sources: a Bluetooth hands-free input, or an aggregate with one, is left out; "
             + "Bluetooth LE, built-in, USB and other aggregate inputs stay",
           "\(headsetList(.system).map(\.id))")
-    check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id),
-          "sources: a saved source that is a hands-free input isn't listed, like an unplugged one")
+    check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id) + ["input:buds:input"]
+            && headsetList(.input(uid: "buds:input")).last == SourceList.Entry(id: "input:buds:input", name: "Example Buds",
+                                                                              isInput: true, connected: false),
+          "sources: a saved source that is a hands-free input still plugged in is listed last under its name, disabled",
+          "\(headsetList(.input(uid: "buds:input")))")
     check(AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetooth)
             && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetoothLE)
             && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeUSB)
