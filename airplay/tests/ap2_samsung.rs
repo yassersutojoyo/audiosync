@@ -628,13 +628,15 @@ fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues()
 const REBUILD: Duration = Duration::from_millis(300);
 /// The longest silence a source switch may leave on the television.
 const SWITCH_GAP: Duration = Duration::from_secs(1);
+/// A rebuild a loaded host stretches past [`SWITCH_GAP`].
+const SLOW_REBUILD: Duration = Duration::from_millis(1200);
 
 /// A source switch as both hosts make it: the old capture stops, and the
 /// new one, marked as new on the input, writes its own audio, numbered from
 /// 0 again, to the same input (P143).
-fn switch_capture(tv: &mut Playing) {
+fn switch_capture(tv: &mut Playing, rebuild: Duration) {
     let mut writer = tv.host.take().expect("a capture").stop();
-    tv.run(REBUILD, false);
+    tv.run(rebuild, false);
     writer.new_capture();
     tv.host = Some(HostAudio::start(writer));
 }
@@ -707,6 +709,26 @@ fn heard(
 // and the switch sends no FLUSH, TEARDOWN, SETUP, pair-verify or /info.
 #[test]
 fn capture_switch_without_flush() {
+    let gap = capture_switch(REBUILD);
+    cell(
+        "W6.switch",
+        &format!(
+            "source switch on the fake Samsung: 0 PIN prompts; 0 FLUSH, TEARDOWN, SETUP, pair-setup, pair-verify, GET /info; last old to first new frame {} ms (limit 1000)",
+            gap.as_millis()
+        ),
+    );
+}
+
+// covers: P143
+// Load stretches the host's rebuild; the silence follows it.
+#[test]
+fn capture_switch_after_a_slow_rebuild() {
+    capture_switch(SLOW_REBUILD);
+}
+
+/// Plays to the fake Samsung, switches the capture after `rebuild` and
+/// returns the silence the switch left on the television.
+fn capture_switch(rebuild: Duration) -> Duration {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
@@ -752,7 +774,7 @@ fn capture_switch_without_flush() {
         })
         .expect("the stream start's first-sound time");
     let switched = Instant::now();
-    switch_capture(&mut tv);
+    switch_capture(&mut tv, rebuild);
     tv.run(Duration::from_secs(4), false);
 
     let shk = stream_key(&server.fake()).expect("shk");
@@ -775,13 +797,7 @@ fn capture_switch_without_flush() {
     tv.assert_no_error();
     tv.sender.shutdown();
     assert!(gap < SWITCH_GAP, "{gap:?} of silence at the switch");
-    cell(
-        "W6.switch",
-        &format!(
-            "source switch on the fake Samsung: 0 PIN prompts; 0 FLUSH, TEARDOWN, SETUP, pair-setup, pair-verify, GET /info; last old to first new frame {} ms (limit 1000)",
-            gap.as_millis()
-        ),
-    );
+    gap
 }
 
 /// How long the television holds the answer to a volume read.
