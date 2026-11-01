@@ -1920,6 +1920,7 @@ impl App {
         self.main.set_no_speaker_on(state.no_speaker_on);
         self.flyout.set_no_speaker_on(state.no_speaker_on);
         self.main.set_cast_list(cast_list(state.cast_list));
+        self.flyout.set_cast_list(cast_list(state.cast_list));
         self.watch_network(
             state.airplay_none_found || state.cast_list == ui_model::CastList::NoneFound,
         );
