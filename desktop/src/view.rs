@@ -12449,6 +12449,21 @@ mod tests {
         );
     }
 
+    /// The TV's own controls end the stream too, so the notice blames no
+    /// other app, as on the Mac.
+    #[test]
+    fn a_cast_speaker_that_ends_the_stream_says_it_stopped_it() {
+        let app = app_over(MockBackend::new());
+        let text = notice_text(
+            &app.strings(),
+            &NoticeMessage::CastCantPlay {
+                speaker: "Den TV".to_owned(),
+                problem: ui_model::CastProblem::TakenOver,
+            },
+        );
+        assert_eq!(text, "Den TV stopped AudioSync's stream, so it's off.");
+    }
+
     // covers: S242
     #[test]
     fn double_audio_from_all_apps_except_some_names_the_source_in_the_uis_words() {
