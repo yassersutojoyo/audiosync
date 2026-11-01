@@ -4780,6 +4780,8 @@ The release side:
 | a_twin_listed_before_that_comes_back_first_doesnt_take_the_others_settings (`desktop/src/adapter.rs`) | S384 |
 | a_new_speaker_of_another_kind_doesnt_take_the_settings_of_one_with_its_name (`desktop/src/adapter.rs`) | S384 |
 | a_hidden_usb_speaker_moved_to_another_port_stays_hidden (`desktop/src/adapter.rs`) | S384 |
+| a_usb_speaker_only_renamed_keeps_its_name_in_another_port (`desktop/src/adapter.rs`) | S384 |
+| a_usb_speaker_only_in_a_preset_stays_in_it_in_another_port (`desktop/src/adapter.rs`) | S384 |
 | a_device_missing_at_launch_keeps_its_settings_until_it_is_back (`desktop/src/adapter.rs`) | S384 |
 | a_write_replaces_the_whole_file_and_leaves_no_temporary_file (`desktop/src/data_folder.rs`) | S385 |
 | a_link_planted_at_the_temporary_path_is_not_written_through (`desktop/src/data_folder.rs`) | S385 |

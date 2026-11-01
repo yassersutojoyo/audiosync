@@ -3050,13 +3050,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Whether the user set anything for output `endpoint_id`: settings, an
-    /// auto-connect mark, a group, a zone or Hide Speaker.
+    /// auto-connect mark, a name, a group, a zone, a preset or Hide Speaker.
     fn has_choices(&self, endpoint_id: &str) -> bool {
         let key = speaker_key(endpoint_id);
         self.audio.has_output_settings(endpoint_id)
             || self.auto_connect.contains(&key)
+            || self.custom_names.contains(&key)
             || self.groups.iter().any(|group| group.members.contains(&key))
             || self.zones.zone_of(&key).is_some()
+            || self
+                .presets
+                .iter()
+                .any(|preset| preset.members.iter().any(|member| member.key == key))
             || self.is_hidden(&key)
     }
 
@@ -13131,6 +13136,36 @@ mod tests {
         assert_eq!(hidden.len(), 1, "no stale entry: {hidden:?}");
         assert_eq!(hidden[0].id, key(DAC_PORT_2));
         assert!(hidden[0].present.is_some());
+    }
+
+    // covers: S384
+    #[test]
+    fn a_usb_speaker_only_renamed_keeps_its_name_in_another_port() {
+        let mut adapter = adapter();
+        plug_dac(&mut adapter, DAC_PORT_1);
+        adapter.rename_speaker(&key(DAC_PORT_1), "Desk DAC");
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        assert_eq!(speaker_of(&adapter, &key(DAC_PORT_2)).name, "Desk DAC");
+    }
+
+    // covers: S384
+    #[test]
+    fn a_usb_speaker_only_in_a_preset_stays_in_it_in_another_port() {
+        let mut adapter = adapter();
+        adapter.restore(Settings {
+            speaker_presets: vec![saved_preset(&[(key(DAC_PORT_1), Some(40.0))])],
+            ..Settings::default()
+        });
+        plug_dac(&mut adapter, DAC_PORT_1);
+        unplug(&mut adapter, DAC_PORT_1);
+        plug_dac(&mut adapter, DAC_PORT_2);
+        let members: Vec<&str> = adapter.presets[0]
+            .members
+            .iter()
+            .map(|member| member.key.as_str())
+            .collect();
+        assert_eq!(members, [key(DAC_PORT_2)]);
     }
 
     // covers: S152
