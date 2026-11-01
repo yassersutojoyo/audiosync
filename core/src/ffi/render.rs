@@ -18,7 +18,7 @@ use std::ptr;
 use std::sync::Arc;
 
 use super::ring::{AscReaderCounters, AscRing, ring_of};
-use super::{host_slice, host_slice_mut, samples_for, stereo_samples};
+use super::{AscEqualizer, host_slice, host_slice_mut, samples_for, stereo_samples};
 use crate::clock;
 use crate::convert;
 use crate::fade::{FadeState, fade_frames};
@@ -544,6 +544,35 @@ pub unsafe extern "C" fn asc_renderer_gain(renderer: *const AscRenderer) -> f32 
     }
     // SAFETY: the handle is live; this borrows only the `gain` field.
     unsafe { &(*renderer).gain }.get()
+}
+
+/// Control thread: sets the renderer's linear `gain` with each headroom cut
+/// of `eq` given back from the ring frame it starts at (S26, S71). A null
+/// `eq` sets `gain` as is.
+///
+/// # Safety
+///
+/// `eq` is null or a live equalizer, called under its threading contract (a
+/// control call); `renderer` is null or a live renderer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_eq_give_back(
+    eq: *const AscEqualizer,
+    renderer: *mut AscRenderer,
+    gain: f64,
+) {
+    if renderer.is_null() {
+        return;
+    }
+    // SAFETY: the handle is live; this borrows only the `gain` field, which
+    // the output thread only reads, atomically.
+    let shared = unsafe { &(*renderer).gain };
+    if eq.is_null() {
+        shared.set(gain as f32);
+        return;
+    }
+    // SAFETY: the handle is live; the control thread reads only the
+    // `control` field, which the capture thread never touches.
+    unsafe { &(*eq).control }.give_back(gain, shared)
 }
 
 /// Any thread: a new delay in capture-rate frames (negative counts as 0).

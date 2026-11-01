@@ -166,6 +166,15 @@ func equalizerChecks() {
     b.withUnsafeMutableBufferPointer { eq.process($0.baseAddress!, frames: n) }
     let peak = b.map { abs($0) }.max() ?? 0
     check(peak == 0, "eq: recovers from a NaN sample (silence stays silent)", "peak \(peak)")
+    var curve = Equalizer.Settings()
+    curve.enabled = true
+    curve.preamp = 0.5
+    curve.gains = [5, 4, 1, 0, -2, 1, 0, 1, 4, 5]
+    eq.update(curve)
+    let back = eq.returnedGain(0.1675)
+    check(approx(back.db, 5.8, 0.01) && approx(back.gain, 0.1675 * pow(10, back.db / 20), 1e-12),
+          "eq: a local output below unity gets the headroom cut back (S26, S71)", "\(back)")
+    check(eq.returnedGain(1) == (gain: 1, db: 0), "eq: a local output at unity keeps the cut (S26, S71)")
 }
 
 /// The volume curve and a local output's gain stage (S64, S65, S70, S71, S75).

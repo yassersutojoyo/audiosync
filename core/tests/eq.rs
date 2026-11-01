@@ -1,6 +1,7 @@
 //! Equalizer behavior (spec section 3).
 
 use std::f64::consts::PI;
+use std::sync::Arc;
 
 use audiosync_core::eq::{
     BAND_CENTERS_HZ, BAND_COUNT, BAND_Q, Biquad, CurveMatch, DEFAULT_SAMPLE_RATE, EqControl,
@@ -8,6 +9,10 @@ use audiosync_core::eq::{
     UserCurve, cascade_peak_db, delete_curve, design_bands, equalizer, matching_curve, preset,
     quantize_gain_db, rename_curve, sanitized_curves, save_curve,
 };
+use audiosync_core::reader::Reader;
+use audiosync_core::render::{Renderer, RendererControl};
+use audiosync_core::ring::Ring;
+use audiosync_core::volume::{GainStage, SharedGain};
 use proptest::prelude::*;
 
 const BLOCK: usize = 512;
@@ -785,6 +790,138 @@ fn the_engine_takes_the_cascade_peak_off_the_user_preamp() {
     assert!(
         (measured - expected).abs() < 0.05,
         "measured {measured:.3} dB, expected {expected:.3} dB"
+    );
+}
+
+// covers: S26, S71
+#[test]
+fn a_local_output_below_unity_gets_the_headroom_cut_back() {
+    // A user's curve whose cut P is 5.8 dB at about 33 Hz; 0.7.1 played it
+    // with no cut, at its +0.5 dB preamp.
+    let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+    let settings = enabled(gains, 0.5);
+    let peak = headroom_db(&settings, 48_000.0);
+    assert!((peak - 5.8).abs() < 0.01, "P is {peak:.3} dB");
+    let at_1k: f64 = design_bands(&gains, 48_000.0)
+        .iter()
+        .map(|b| response_db(b, 1000.0, 48_000.0))
+        .sum();
+    for (gain, expected) in [(0.1675, 0.5 + at_1k), (1.0, 0.5 - peak + at_1k)] {
+        let (control, mut processor) = configured(48_000.0, settings);
+        let played = control.returned_gain(gain).0 as f32;
+        let mut stage = GainStage::new();
+        let (mut energy_in, mut energy_out) = (0.0f64, 0.0f64);
+        for start in (0..48_000).step_by(BLOCK) {
+            let input = sine(start, BLOCK, 1000.0, 48_000.0, 0.25);
+            let mut block = input.clone();
+            processor.process(&mut block);
+            stage.apply(&mut block, 2, played);
+            if start >= 24_000 {
+                energy_in += input.iter().map(|x| f64::from(*x).powi(2)).sum::<f64>();
+                energy_out += block.iter().map(|y| f64::from(*y).powi(2)).sum::<f64>();
+            }
+        }
+        let level = 10.0 * (energy_out / energy_in).log10() - 20.0 * gain.log10();
+        assert!(
+            (level - expected).abs() < 0.1,
+            "at gain {gain}: {level:.3} dB over the gain, expected {expected:.3} dB"
+        );
+    }
+}
+
+// covers: S26, S71
+#[test]
+fn the_cut_comes_back_when_the_first_equalized_frame_plays() {
+    // A local output held back 2 s, as an AirPlay speaker's delay holds it,
+    // at gain 0.1675; the curve goes on at writer frame `on_at`, and the
+    // output plays that frame 2 s later.
+    const FRAMES: usize = 480;
+    let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+    let gain = 0.1675;
+    let at_1k: f64 = design_bands(&gains, 48_000.0)
+        .iter()
+        .map(|b| response_db(b, 1000.0, 48_000.0))
+        .sum();
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let reader = Reader::new(Arc::clone(&ring), 48_000);
+    let control = RendererControl::new(&reader);
+    control.set_delay_frames(96_000);
+    let shared = Arc::new(SharedGain::new(gain as f32));
+    let mut renderer =
+        Renderer::new(reader, &control, Arc::clone(&shared), 48_000, 48_000, 2).unwrap();
+    let (mut eq, mut processor) = equalizer();
+    let mut off = enabled(gains, 0.5);
+    off.enabled = false;
+    eq.set_settings(off);
+    eq.give_back(gain, &shared);
+    let on_at = 192_000i64;
+    let (mut before, mut after) = (0, 0);
+    let mut out = vec![0.0f32; FRAMES * 2];
+    for start in (0..8 * 48_000).step_by(FRAMES) {
+        if start as i64 == on_at {
+            eq.set_settings(enabled(gains, 0.5));
+            eq.give_back(gain, &shared);
+        }
+        let mut block = sine(start, FRAMES, 1000.0, 48_000.0, 0.25);
+        processor.process(&mut block);
+        writer.write(&block, FRAMES);
+        renderer.render(&mut out);
+        // The output plays from about 2 s in; a second later its fade-in is long over.
+        if start < 3 * 48_000 {
+            continue;
+        }
+        let end = ring.frames_written() as i64 - control.lag_frames();
+        let energy = out.iter().map(|y| f64::from(*y).powi(2)).sum::<f64>();
+        let level = 10.0 * (energy / (FRAMES as f64 * 0.0625)).log10() - 20.0 * gain.log10();
+        let expected = if end <= on_at {
+            before += 1;
+            0.0
+        } else if end - FRAMES as i64 >= on_at + FRAMES as i64 {
+            after += 1;
+            0.5 + at_1k
+        } else {
+            continue;
+        };
+        assert!(
+            (level - expected).abs() < 0.1,
+            "frames up to {end}: {level:.3} dB over the gain, expected {expected:.3} dB"
+        );
+    }
+    assert!(
+        before > 200 && after > 150,
+        "{before} before, {after} after"
+    );
+}
+
+// covers: S26, S71
+#[test]
+fn a_curve_set_while_a_block_is_equalized_gives_its_cut_back_from_the_next_block() {
+    let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+    let gain = 0.1675;
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let shared = SharedGain::new(gain as f32);
+    let (mut eq, mut processor) = equalizer();
+    eq.give_back(gain, &shared);
+    let mut block = sine(0, BLOCK, 1000.0, 48_000.0, 0.25);
+    processor.process(&mut block);
+    // The capture thread holds a block equalized with no curve, not yet written.
+    eq.set_settings(enabled(gains, 0.5));
+    eq.give_back(gain, &shared);
+    writer.write(&block, BLOCK);
+    assert_eq!(
+        shared.gain_at(0),
+        Some(gain as f32),
+        "the block with no curve"
+    );
+    assert_eq!(shared.gain_at(BLOCK as i64 - 1), Some(gain as f32));
+    let returned = eq.returned_gain(gain).0 as f32;
+    assert!(returned > gain as f32);
+    assert_eq!(
+        shared.gain_at(BLOCK as i64),
+        Some(returned),
+        "the next block"
     );
 }
 

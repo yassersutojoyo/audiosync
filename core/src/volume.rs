@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
 
 use audiosync_airplay::volume::{MIN_DB, Volume};
 
@@ -323,27 +323,83 @@ pub fn migrate_legacy_percent(percent: f64) -> f64 {
     position_for_gain(percent / 100.0)
 }
 
+/// The most steps a [`SharedGain`] holds: the equalizer cuts still on their
+/// way through the delay ring (S26, S71).
+pub const GAIN_STEPS: usize = 8;
+
 /// A linear gain shared between the control thread and one renderer thread
-/// through a relaxed atomic (S64, S133). Negative and non-finite gains are
-/// stored as 0.
+/// through atomics (S64, S133): one gain, or up to [`GAIN_STEPS`] gains,
+/// each from a ring frame on, so a gain that answers an equalizer change
+/// plays with the first frame equalized with it (S26, S71). Negative and
+/// non-finite gains are stored as 0. One thread at a time sets it.
 #[derive(Debug)]
-pub struct SharedGain(AtomicU32);
+pub struct SharedGain {
+    /// Odd while the steps are being written (a sequence lock).
+    sequence: AtomicU64,
+    count: AtomicUsize,
+    from: [AtomicI64; GAIN_STEPS],
+    gains: [AtomicU32; GAIN_STEPS],
+}
 
 impl SharedGain {
     /// A shared gain with this initial value.
     pub fn new(gain: f32) -> Self {
-        SharedGain(AtomicU32::new(sanitize_gain(gain).to_bits()))
+        let shared = SharedGain {
+            sequence: AtomicU64::new(0),
+            count: AtomicUsize::new(0),
+            from: std::array::from_fn(|_| AtomicI64::new(i64::MIN)),
+            gains: std::array::from_fn(|_| AtomicU32::new(0)),
+        };
+        shared.set(gain);
+        shared
     }
 
-    /// Stores a new gain; the renderer applies it from its next callback.
+    /// Stores a new gain for every frame; the renderer applies it from its
+    /// next callback.
     pub fn set(&self, gain: f32) {
-        self.0
-            .store(sanitize_gain(gain).to_bits(), Ordering::Relaxed);
+        self.set_steps(&[(i64::MIN, gain)]);
     }
 
-    /// The current gain.
+    /// Stores gains by the ring frame each starts at, ascending; the first
+    /// also covers every frame before it. Steps past [`GAIN_STEPS`] are
+    /// dropped.
+    pub fn set_steps(&self, steps: &[(i64, f32)]) {
+        self.sequence.fetch_add(1, Ordering::Relaxed);
+        fence(Ordering::Release);
+        let count = steps.len().min(GAIN_STEPS);
+        for (index, &(from, gain)) in steps[..count].iter().enumerate() {
+            self.from[index].store(from, Ordering::Relaxed);
+            self.gains[index].store(sanitize_gain(gain).to_bits(), Ordering::Relaxed);
+        }
+        self.count.store(count, Ordering::Relaxed);
+        self.sequence.fetch_add(1, Ordering::Release);
+    }
+
+    /// The gain of the newest step.
     pub fn get(&self) -> f32 {
-        f32::from_bits(self.0.load(Ordering::Relaxed))
+        self.read(i64::MAX)
+    }
+
+    /// The gain for ring frame `frame`: that of the last step starting at or
+    /// before it, or the first. `None` while the control thread writes the
+    /// steps; the renderer then keeps the gain it has. Real-time safe.
+    pub fn gain_at(&self, frame: i64) -> Option<f32> {
+        let before = self.sequence.load(Ordering::Acquire);
+        if before % 2 == 1 {
+            return None;
+        }
+        let gain = self.read(frame);
+        fence(Ordering::Acquire);
+        (self.sequence.load(Ordering::Relaxed) == before).then_some(gain)
+    }
+
+    fn read(&self, frame: i64) -> f32 {
+        let count = self.count.load(Ordering::Relaxed).clamp(1, GAIN_STEPS);
+        let step = (1..count)
+            .take_while(|&index| self.from[index].load(Ordering::Relaxed) <= frame)
+            .last()
+            .unwrap_or(0);
+        f32::from_bits(self.gains[step].load(Ordering::Relaxed))
     }
 }
 

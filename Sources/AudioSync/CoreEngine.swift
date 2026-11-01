@@ -170,7 +170,7 @@ extension CoreDelayReader.Counters {
 
 /// The core's 10-band equalizer, applied once to the captured stream (S22–S34).
 final class CoreEqualizer {
-    private let handle: OpaquePointer
+    fileprivate let handle: OpaquePointer
 
     /// Disabled and flat, designed for `sampleRate` until told otherwise.
     init?(sampleRate: Double = 48000) {
@@ -190,6 +190,14 @@ final class CoreEqualizer {
     /// Control thread, while capture is stopped: the design rate.
     func setSampleRate(_ rate: Double) {
         _ = asc_eq_set_sample_rate(handle, rate)
+    }
+
+    /// Control thread: a local output's linear `gain` with the headroom cut
+    /// given back as far as unity allows, and the dB given back (S26, S71).
+    func returnedGain(_ gain: Double) -> (gain: Double, db: Double) {
+        var db = 0.0
+        let played = asc_eq_returned_gain(handle, gain, &db)
+        return (played, db)
     }
 
     /// Capture thread: equalizes interleaved stereo in place. Real-time safe.
@@ -280,6 +288,13 @@ final class CoreRenderer {
     /// next callback (S64).
     func setGain(_ gain: Double) {
         asc_renderer_set_gain(handle, Float(Self.clampedGain(gain)))
+    }
+
+    /// Control thread: `setGain` with each headroom cut of `equalizer` given
+    /// back from the ring frame it starts at (S26, S71).
+    func setGain(_ gain: Double, givingBack equalizer: CoreEqualizer?) {
+        guard let equalizer else { return setGain(gain) }
+        asc_eq_give_back(equalizer.handle, handle, Self.clampedGain(gain))
     }
 
     /// Any thread: a new delay, converted at the capture rate as the core

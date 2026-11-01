@@ -487,6 +487,13 @@ void asc_eq_process(AscEqualizer *eq, float *interleaved, size_t frames);
 /* Control thread: how often a channel produced NaN or infinity and was reset. */
 uint64_t asc_eq_nan_resets(const AscEqualizer *eq);
 
+/*
+ * Control thread: a local output's linear gain with the equalizer's headroom
+ * cut given back as far as unity allows (S26, S71). The dB given back goes to
+ * returned_db when it isn't NULL. A NULL eq gives gain unchanged.
+ */
+double asc_eq_returned_gain(const AscEqualizer *eq, double gain, double *returned_db);
+
 /* ---- Delay ring, writer and readers ------------------------------------- */
 
 /*
@@ -817,6 +824,14 @@ void asc_renderer_set_gain(AscRenderer *renderer, float gain);
 
 /* Any thread: the gain last set. */
 float asc_renderer_gain(const AscRenderer *renderer);
+
+/*
+ * Control thread: sets the renderer's linear gain with each headroom cut of
+ * eq given back from the ring frame it starts at, so the gain changes with
+ * the first frame equalized with that cut (S26, S71). A NULL eq sets gain
+ * as is.
+ */
+void asc_eq_give_back(const AscEqualizer *eq, AscRenderer *renderer, double gain);
 
 /*
  * Any thread: a new delay in capture-rate frames. A renderer that plays

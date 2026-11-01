@@ -467,6 +467,13 @@ pub trait Driver {
     }
 }
 
+/// `gain` with `equalizer`'s headroom cut given back as far as unity allows,
+/// and the dB given back (S26, S71).
+fn returned_gain(equalizer: &EqControl, gain: f32) -> (f32, f64) {
+    let (played, db) = equalizer.returned_gain(f64::from(gain));
+    (played as f32, db)
+}
+
 /// Output `id`'s gain: 0 while a calibration lets only `solo` be heard.
 fn solo_gain(solo: Option<&str>, id: &str, gain: f32) -> f32 {
     match solo {
@@ -1797,11 +1804,10 @@ impl<D: Driver> Controller<D> {
             reader.control().set_delay_frames(params.delay_frames);
             let control = RendererControl::new(&reader);
             control.set_bluetooth(endpoint.kind == OutputKind::Bluetooth);
-            let gain = Arc::new(SharedGain::new(solo_gain(
-                self.calibration_solo.as_deref(),
-                &endpoint.id,
-                params.gain,
-            )));
+            let (played, _) = returned_gain(&session.equalizer, params.gain);
+            let solo = solo_gain(self.calibration_solo.as_deref(), &endpoint.id, params.gain);
+            let gain = Arc::new(SharedGain::new(solo));
+            session.equalizer.give_back(f64::from(solo), &gain);
             let started =
                 self.driver
                     .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain));
@@ -1872,7 +1878,7 @@ impl<D: Driver> Controller<D> {
                             setup,
                             self.policy.hold_back_ms(&endpoint.id),
                             self.policy.settings(&endpoint.id).volume,
-                            params.gain,
+                            played,
                             control.extra_lead_frames(),
                         )
                     });
@@ -2405,11 +2411,11 @@ impl<D: Driver> Controller<D> {
             self.volume_moves.remove(&moved);
             match moved {
                 VolumeMove::Output(id) => self.log.log(|| {
+                    let (gain, returned_db) = self.played_gain(&id);
                     format!(
-                        "output {} volume: {} (gain {:.3})",
+                        "output {} volume: {} (gain {gain:.3}, EQ headroom returned {returned_db:.2} dB)",
                         label(&self.names, &id),
                         self.policy.settings(&id).volume,
-                        self.policy.params(&id).gain,
                     )
                 }),
                 VolumeMove::AirPlay(id) => {
@@ -2581,17 +2587,25 @@ impl<D: Driver> Controller<D> {
 
     /// Gives a playing output its current gain.
     fn apply_gain(&self, id: &str) {
-        if let Some(playing) = self.session.as_ref().and_then(|s| s.outputs.get(id)) {
-            playing.gain.set(self.gain_of(id));
+        if let Some(session) = self.session.as_ref()
+            && let Some(playing) = session.outputs.get(id)
+        {
+            let gain = solo_gain(
+                self.calibration_solo.as_deref(),
+                id,
+                self.policy.params(id).gain,
+            );
+            session.equalizer.give_back(f64::from(gain), &playing.gain);
         }
     }
 
-    fn gain_of(&self, id: &str) -> f32 {
-        solo_gain(
-            self.calibration_solo.as_deref(),
-            id,
-            self.policy.params(id).gain,
-        )
+    /// Output `id`'s gain with the session equalizer's headroom cut given
+    /// back, and the dB given back (S26, S71).
+    fn played_gain(&self, id: &str) -> (f32, f64) {
+        let gain = self.policy.params(id).gain;
+        self.session.as_ref().map_or((gain, 0.0), |session| {
+            returned_gain(&session.equalizer, gain)
+        })
     }
 
     /// Starts a session capturing `source`, or, while the last session's
@@ -3534,9 +3548,12 @@ impl<D: Driver> Controller<D> {
     ) -> Result<(D::Capture, EqControl, MissingFeeds), BackendError> {
         // The capture equalizes at the session rate, after any resampling
         // (a positive rate is always accepted).
-        let (mut equalizer, processor) = eq::equalizer();
+        let (mut equalizer, mut processor) = eq::equalizer();
         equalizer.set_sample_rate(f64::from(SESSION_RATE));
         equalizer.set_settings(self.equalizer);
+        // A reopened capture goes on writing a ring that has frames in it,
+        // equalized with the same curve, so the cut above covers them too.
+        processor.start_at(writer.ring().frames_written());
         let feed = self.feed.as_ref().and_then(FeedSlot::lease);
         let feeds_airplay = feed.is_some();
         let cast = self.cast.as_ref().and_then(CastSpeakers::lease);
@@ -4257,6 +4274,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.equalizer = settings;
         if let Some(session) = self.session.as_mut() {
             session.equalizer.set_settings(settings);
+        }
+        for id in self.playing_ids() {
+            self.apply_gain(&id);
         }
     }
 
@@ -6359,6 +6379,31 @@ mod tests {
         );
     }
 
+    // covers: S26, S71
+    #[test]
+    fn an_output_below_unity_gets_the_equalizer_cut_back() {
+        let mut backend = backend();
+        backend.set_output_volume(SPEAKERS, 50.0);
+        backend.set_output_volume(HEADPHONES, 100.0);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let gains_db = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let on = EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db,
+        };
+        backend.set_equalizer(on);
+        let gain = |backend: &MockBackend, id| backend.playing_params(id).unwrap().gain;
+        let back = 10f64.powf(eq::cascade_peak_db(&gains_db, 48_000.0) / 20.0);
+        assert!((f64::from(gain(&backend, SPEAKERS)) - 0.125 * back).abs() < 1e-6);
+        assert_eq!(gain(&backend, HEADPHONES), 1.0, "unity keeps the cut");
+        backend.set_equalizer(EqSettings {
+            enabled: false,
+            ..on
+        });
+        assert_eq!(gain(&backend, SPEAKERS), 0.125);
+    }
+
     // covers: S232
     #[test]
     fn a_calibration_lets_one_output_be_heard_and_then_all_again() {
@@ -7839,6 +7884,34 @@ mod tests {
         poll_quietly(&mut backend, RESTART_DELAY_POLLS);
         assert_eq!(backend.driver().captures_started().len(), 2);
         assert!(backend.driver().capture_running());
+    }
+
+    // covers: S26, S71, S329
+    #[test]
+    fn a_reopened_capture_gives_the_cut_back_to_the_frames_already_in_the_ring() {
+        let mut backend = backend();
+        backend.set_output_volume(SPEAKERS, 50.0);
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db: [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0],
+        });
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let ring = backend.driver().capture_ring().expect("a ring");
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        // Equalized by the lost capture, with the same curve.
+        let mut writer = ring.writer().expect("the mock capture let it go");
+        writer.write(&[0.0; 960], 480);
+        drop(writer);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        backend.set_output_volume(SPEAKERS, 40.0);
+        let gain = &backend.session.as_ref().unwrap().outputs[SPEAKERS].gain;
+        assert!(gain.get() > 0.4f32.powi(3), "the cut comes back");
+        for frame in [0, 479, 480] {
+            assert_eq!(gain.gain_at(frame), Some(gain.get()), "frame {frame}");
+        }
     }
 
     // covers: S329, S20, S140, S157 (another rate restarts the session on a new ring)
@@ -10060,7 +10133,8 @@ mod tests {
         assert_eq!(
             logged(&log, &dir),
             [format!(
-                "output \"Headphones\" (headphones) volume: 50 (gain {gain:.3})"
+                "output \"Headphones\" (headphones) volume: 50 (gain {gain:.3}, \
+                 EQ headroom returned 0.00 dB)"
             )]
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -10139,7 +10213,10 @@ mod tests {
             messages[..3],
             [
                 "output \"Speakers\" (speakers) offset: 120 ms".to_owned(),
-                format!("output \"Headphones\" (headphones) volume: 50 (gain {gain:.3})"),
+                format!(
+                    "output \"Headphones\" (headphones) volume: 50 (gain {gain:.3}, \
+                     EQ headroom returned 0.00 dB)"
+                ),
                 "master volume: 80".to_owned(),
             ]
         );
