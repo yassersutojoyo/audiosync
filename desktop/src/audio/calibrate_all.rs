@@ -2285,6 +2285,36 @@ pub(crate) mod tests {
 
     // covers: S239
     #[test]
+    fn measure_again_of_an_airplay_row_whose_sender_latency_moved_still_measures() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let members = run.members().to_vec();
+        let mut sheet = run_to_end(&mut rig, &mut run, |_, _| {})
+            .sheet
+            .expect("a sheet");
+        // Another AirPlay speaker turned off moves L_s and so L; A stays.
+        let kitchen = &mut rig.lineup.members[2];
+        kitchen.offset_ms = Some(2400.0);
+        kitchen.sender_ms = 400.0;
+        let now = rig.now.get();
+        let mut again = AllRun::again(
+            &mut rig,
+            &sheet,
+            &members,
+            run.rate(),
+            run.microphone(),
+            2,
+            now,
+            DebugLog::default(),
+        )
+        .expect("it starts");
+        let finished = run_to_end(&mut rig, &mut again, |_, _| {});
+        assert!(sheet.replace(finished.sheet.expect("a sheet")));
+        given_back(&rig);
+    }
+
+    // covers: S239
+    #[test]
     fn measure_again_with_another_microphone_at_the_same_rate_is_refused() {
         let mut rig = FakeRig::new();
         let mut run = start(&mut rig);
