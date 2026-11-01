@@ -8345,7 +8345,7 @@ mod tests {
         assert_eq!(help(Availability::Open, true, RowState::Off), every_time);
         assert_eq!(
             help(Availability::NeedsCode, false, RowState::Off),
-            "This speaker asks for a PIN or password. AudioSync asks you for it when you \
+            "This speaker asks for a code or password. AudioSync asks you for it when you \
              turn the speaker on."
         );
         // No note, no tooltip.
@@ -9239,7 +9239,7 @@ mod tests {
         let app = app_over(backend);
         app.main.invoke_speaker_toggled("airplay:living".into());
         draw_frames();
-        let text = "Living Room shows a 4-digit PIN on its screen. Enter it to pair. Cancel \
+        let text = "Living Room shows a 4-digit code on its screen. Enter it to pair. Cancel \
                     turns the speaker off; turn it on again to retry.";
         assert!(
             ElementHandle::find_by_accessible_label(&app.pin_dialog, text)
@@ -12407,7 +12407,7 @@ mod tests {
             (
                 ui_model::AirPlayProblem::ReceiverUnverified,
                 "Den TV",
-                "Den TV didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and turn it on to pair again with its PIN.",
+                "Den TV didn't answer as the speaker you paired, so it's off. If it's yours, use Forget Pairing and turn it on to pair again with its code.",
             ),
         ] {
             let text = notice_text(

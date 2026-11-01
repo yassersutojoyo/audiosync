@@ -1026,6 +1026,16 @@ fn windows_texts_with_a_linux_twin_are_unchanged() {
     }
 }
 
+/// Pairing texts ask for the code a speaker shows, the word its row uses,
+/// never a PIN, as on the Mac.
+#[test]
+fn no_text_asks_for_a_pin() {
+    let strings = include_str!("../ui/strings.slint");
+    for line in strings.lines().filter(|line| line.contains("@tr(")) {
+        assert!(!line.contains("PIN"), "strings.slint: `{}`", line.trim());
+    }
+}
+
 /// Help > AudioSync Guide (F1) opens the Guide, which spells out no text of
 /// its own, closes on Escape, and keeps every paragraph's full height.
 #[test]
