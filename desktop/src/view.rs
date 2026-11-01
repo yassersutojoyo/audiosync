@@ -11641,6 +11641,7 @@ mod tests {
 
     #[test]
     fn a_volume_slider_moves_with_the_up_and_down_arrow_keys() {
+        use i_slint_backend_testing::ElementHandle;
         let backend = MockBackend::new();
         let editing = backend.volume_editing.clone();
         let app = app_over(backend);
@@ -11673,9 +11674,22 @@ mod tests {
             Some(&("local:desk".to_owned(), false)),
             "releasing Down ends the move"
         );
+        for modifier in [Key::Control, Key::Shift, Key::Alt] {
+            window.dispatch_event(WindowEvent::KeyPressed {
+                text: modifier.into(),
+            });
+            press(window, Key::UpArrow);
+            window.dispatch_event(WindowEvent::KeyReleased {
+                text: modifier.into(),
+            });
+            assert_eq!(speaker_volume(&app, "local:desk"), start, "{modifier:?}");
+        }
 
-        // The master volume's slider, as in the name field test above.
-        click(window, 150.0, 310.0);
+        let master = ElementHandle::find_by_accessible_label(&app.main, "Master volume")
+            .next()
+            .expect("the master volume");
+        let (at, size) = (master.absolute_position(), master.size());
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
         let master = app.snapshot().master_volume;
         press(window, Key::UpArrow);
         assert_ne!(
@@ -11687,8 +11701,8 @@ mod tests {
         assert_eq!(app.snapshot().master_volume, master);
     }
 
-    #[test]
-    fn up_on_a_cast_volume_sends_the_same_step_as_right() {
+    /// A backend with the playing Cast speaker "cc:attic", which steps by 5.
+    fn cast_backend(volume_fixed: bool) -> MockBackend {
         let mut backend = MockBackend::new();
         let mut speaker = backend.snapshot().speaker("local:desk").unwrap().clone();
         speaker.id = "cc:attic".into();
@@ -11699,7 +11713,7 @@ mod tests {
         speaker.cast = Some(ui_model::CastRow {
             state: ui_model::CastState::Playing,
             muted: false,
-            volume_fixed: false,
+            volume_fixed,
             volume_step: 5.0,
             group: None,
             added_by_address: false,
@@ -11707,7 +11721,12 @@ mod tests {
             taken_over: false,
         });
         backend.add_speaker(speaker);
-        let app = app_over(backend);
+        backend
+    }
+
+    #[test]
+    fn up_on_a_cast_volume_sends_the_same_step_as_right() {
+        let app = app_over(cast_backend(false));
         focus_speaker_volume(&app, "cc:attic");
         let window = app.main.window();
         let start = speaker_volume(&app, "cc:attic");
@@ -11729,6 +11748,25 @@ mod tests {
             start,
             "Down sends what Left sends"
         );
+    }
+
+    #[test]
+    fn up_and_down_send_nothing_once_the_focused_cast_volume_is_fixed() {
+        let app = app_over(cast_backend(false));
+        focus_speaker_volume(&app, "cc:attic");
+        let fixed = cast_backend(true);
+        let editing = fixed.volume_editing.clone();
+        *app.backend.borrow_mut() = Box::new(fixed);
+        app.refresh();
+        draw_frames();
+        let window = app.main.window();
+        let start = speaker_volume(&app, "cc:attic");
+
+        press(window, Key::UpArrow);
+        press(window, Key::DownArrow);
+        press(window, Key::DownArrow);
+        assert_eq!(speaker_volume(&app, "cc:attic"), start);
+        assert!(editing.borrow().is_empty(), "{:?}", editing.borrow());
     }
 
     #[test]
