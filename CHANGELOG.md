@@ -51,7 +51,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
-- On Windows, a Google Cast speaker you added by address and then took out of its zone has the same name in its notices as in its row. Before, its notices could still use the name the zone kept for it.
+- On Windows, a Google Cast speaker you added by address and then took out of its zone has the same name in its notices as in its row. Before, its notices could still use the name the zone kept for it, and renaming it to the name its row showed kept that as a name of your own.
 - On Windows, the speaker list no longer says AudioSync can't look for Google Cast speakers while a Cast speaker you added by address or one that's playing is listed, as on the Mac.
 - On the Mac, a Google Cast speaker that announces no name of its own is listed under its network service name, as on Windows. Before, it read "Unknown device".
 - On Windows, while you capture several apps and none of them plays a track, a TV playing through AirPlay shows the source's name from the source menu, as on the Mac. Before, it said "All System Audio", or kept showing a paused track. Now only a playing track shows, on AirPlay and on Google Cast speakers.

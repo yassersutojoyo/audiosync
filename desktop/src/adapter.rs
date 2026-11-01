@@ -2214,21 +2214,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .any(|zone| zone.members.iter().any(|member| member == key))
     }
 
-    /// The name a Cast speaker shows: the user's, else its row's own name
-    /// while listed, else the one last listed.
+    /// The name a Cast speaker shows: the user's, else its system name.
     fn cast_name(&self, id: &str) -> String {
+        let system = self.cast_system_name(id);
+        self.custom_names
+            .shown(&cast_key(id), system.as_deref().unwrap_or(id))
+    }
+
+    /// A Cast speaker's own name: its row's while listed, else the one last listed.
+    fn cast_system_name(&self, id: &str) -> Option<String> {
         // Its row's name can change with no list change: leaving its zone drops the kept name (S286).
         let listed = self
             .audio
             .cast_speakers()
             .into_iter()
             .find(|speaker| speaker.id == id);
-        let own = listed.map(|speaker| self.cast_own_name(&speaker));
-        let system = own
-            .as_deref()
-            .or(self.cast_names.get(id).map(String::as_str))
-            .unwrap_or(id);
-        self.custom_names.shown(&cast_key(id), system)
+        listed
+            .map(|speaker| self.cast_own_name(&speaker))
+            .or_else(|| self.cast_names.get(id).cloned())
     }
 
     /// The user switched a Cast speaker on or off. One that can't play
@@ -5155,7 +5158,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let system = match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => self.names.get(&endpoint_id).cloned(),
             Some(SpeakerKey::AirPlay(airplay_id)) => self.airplay_names.get(&airplay_id).cloned(),
-            Some(SpeakerKey::Cast(cast_id)) => self.cast_names.get(&cast_id).cloned(),
+            Some(SpeakerKey::Cast(cast_id)) => self.cast_system_name(&cast_id),
             None => None,
         };
         // A speaker never listed has no system name to come back to.
