@@ -1096,6 +1096,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             show_virtual_devices: self.view.show_virtual_devices,
             appearance: self.view.appearance,
             window: self.view.window,
+            slim_window_applied: true,
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
             when_source_quits: self.when_source_quits.stored().to_owned(),
             remote: self.view.remote,
