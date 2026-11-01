@@ -781,6 +781,19 @@ fn every_level_asked_for_is_awaited_or_reported_unanswered_exactly_once() {
         (vec![0.55, 0.6, 0.55, 0.55], vec![0.6, 0.55]),
         "the first three are awaited"
     );
+    // A level still waiting when the next one goes out at once never goes out.
+    let start = Instant::now();
+    let mut channel = running(start);
+    for (ms, level) in [(0, 0.55), (10, 0.6), (150, 0.7)] {
+        channel
+            .set_volume(start + Duration::from_millis(ms), level)
+            .expect("sent or waiting");
+    }
+    let seen = events(&mut channel);
+    assert!(
+        seen.contains(&Event::VolumeUnanswered { level: 0.6 }),
+        "{seen:?}"
+    );
     // A level waiting when the volume turns fixed never goes out (C68).
     assert_eq!(
         volume_outcomes(&[(0, 0.55), (10, 0.6)], Some(20)),

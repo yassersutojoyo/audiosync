@@ -1910,7 +1910,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast master: two levels set while the speaker starts are both sent, so their echoes leave it at the second | C70, C105 |
 | cast master: a status answers the oldest level it matches, so 30, 50, 30 sent never jumps the slider to 50 (C70) | C70 |
 | cast master: the level set while starting goes again at the first status | C105 |
-| cast master: a level re-sent at the first status is answered once, so a later change to it from elsewhere moves the speaker | C70, C105 |
+| cast master: the sender reports a level re-sent at the first status unanswered, so a later change to it from elsewhere moves the speaker | C70, C105 |
 | cast master: a session starts at the own level when the device is quieter, not read back (C105) | C105 |
 | cast master: a fixed volume is not set at the start (C68) | C68, C105 |
 | cast master: a group gets its own level like a device | C104 |

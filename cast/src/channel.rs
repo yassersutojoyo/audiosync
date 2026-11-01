@@ -427,7 +427,13 @@ impl Channel {
                         .push_back(Event::VolumeUnanswered { level: replaced });
                 }
             }
-            _ => self.send_level(now, level),
+            _ => {
+                if let Some(replaced) = self.volume_queued.take() {
+                    self.events
+                        .push_back(Event::VolumeUnanswered { level: replaced });
+                }
+                self.send_level(now, level);
+            }
         }
         Ok(())
     }

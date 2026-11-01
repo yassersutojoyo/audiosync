@@ -1586,8 +1586,9 @@ unsafe fn with_session(cast: *mut AscCast, send: impl FnOnce(&CastHost)) -> bool
 }
 
 /// Sets the device's volume, 0 to 1, clamped (C65, C67). The level shown is
-/// the one volume events report (C69, C70); a host dragging a slider sends
-/// at most one every 100 ms. False, sending nothing, for a null or dead
+/// the one volume events report (C69, C70); the sender sends at most one
+/// every 100 ms and reports each level it won't get an answer for, so a
+/// host passes every level asked for. False, sending nothing, for a null or dead
 /// handle, a level that isn't finite, or when no session runs; a refusal
 /// (a locked volume, C68) comes as a command-failed event.
 ///
