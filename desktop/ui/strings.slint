@@ -1311,7 +1311,8 @@ export global Strings {
     }
 
     // The note under a Google Cast speaker's name: where one that is on is,
-    // else a group's `group-note` (empty for a single speaker).
+    // and its mute while it plays; else a group's `group-note` (empty for a
+    // single speaker).
     public pure function cast-note(state: CastState, muted: bool, group-note: string) -> string {
         if state == CastState.connecting {
             return @tr("Connecting…");
@@ -1319,10 +1320,10 @@ export global Strings {
         if state == CastState.reconnecting {
             return root.reconnecting;
         }
-        if muted && group-note != "" {
+        if state == CastState.playing && muted && group-note != "" {
             return @tr("Muted on the group");
         }
-        if muted {
+        if state == CastState.playing && muted {
             return @tr("Muted on the speaker");
         }
         return group-note;

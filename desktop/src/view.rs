@@ -9285,6 +9285,29 @@ mod tests {
     }
 
     #[test]
+    fn a_muted_cast_row_says_so_only_while_it_plays() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let group = SharedString::from("Google Cast group");
+        assert_eq!(
+            strings
+                .invoke_cast_note(CastState::Idle, true, "".into())
+                .as_str(),
+            ""
+        );
+        assert_eq!(
+            strings.invoke_cast_note(CastState::Idle, true, group.clone()),
+            group
+        );
+        assert_eq!(
+            strings
+                .invoke_cast_note(CastState::Playing, true, group)
+                .as_str(),
+            "Muted on the group"
+        );
+    }
+
+    #[test]
     fn a_cast_row_names_its_kind_and_says_where_it_is() {
         let app = app_over(MockBackend::new());
         let state = MockBackend::new().snapshot();
