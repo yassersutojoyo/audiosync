@@ -1393,6 +1393,7 @@ fn the_updater_notice_uses_strings_and_tokens() {
     for label in [
         "Download and Install",
         "Not Now",
+        "Skip This Version",
         "Cancel",
         "Try Again",
         "Open Release Page",

@@ -3432,6 +3432,7 @@ impl App {
             let button = match button {
                 UpdateButton::Download => UpdaterButton::Download,
                 UpdateButton::NotNow => UpdaterButton::NotNow,
+                UpdateButton::SkipThisVersion => UpdaterButton::SkipThisVersion,
                 UpdateButton::Cancel => UpdaterButton::Cancel,
                 UpdateButton::TryAgain => UpdaterButton::TryAgain,
                 UpdateButton::OpenReleasePage => UpdaterButton::OpenReleasePage,
@@ -3441,6 +3442,9 @@ impl App {
                 Some(updater) => updater.press(button),
                 None => return,
             };
+            if button == UpdaterButton::SkipThisVersion {
+                self.keep_update_record();
+            }
             match action {
                 Action::Nothing => {}
                 Action::OpenReleasePage => {
@@ -5801,7 +5805,7 @@ fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -
         N::Available {
             new,
             running,
-            last: None,
+            last: None | Some(ui_model::UpdateRecordReason::Skipped),
         } => strings.invoke_notice_update_available(new.into(), running.into()),
         N::Available {
             new,
@@ -5856,6 +5860,7 @@ fn update_buttons(message: &NoticeMessage) -> ModelRc<UpdateButton> {
         .map(|button| match button {
             B::Download => UpdateButton::Download,
             B::NotNow => UpdateButton::NotNow,
+            B::SkipThisVersion => UpdateButton::SkipThisVersion,
             B::Cancel => UpdateButton::Cancel,
             B::TryAgain => UpdateButton::TryAgain,
             B::OpenReleasePage => UpdateButton::OpenReleasePage,
@@ -9222,6 +9227,7 @@ mod tests {
         let labels: HashSet<String> = [
             UpdateButton::Download,
             UpdateButton::NotNow,
+            UpdateButton::SkipThisVersion,
             UpdateButton::Cancel,
             UpdateButton::TryAgain,
             UpdateButton::OpenReleasePage,
@@ -9230,7 +9236,7 @@ mod tests {
         .into_iter()
         .map(|button| strings.invoke_update_button(button).to_string())
         .collect();
-        assert_eq!(labels.len(), 6);
+        assert_eq!(labels.len(), 7);
         assert!(labels.contains("Download and Install") && labels.contains("Restart Now"));
         assert_eq!(
             strings.get_check_updates_automatically().as_str(),
@@ -9265,7 +9271,11 @@ mod tests {
         );
         assert_eq!(
             item.update_buttons.iter().collect::<Vec<_>>(),
-            [UpdateButton::Download, UpdateButton::NotNow]
+            [
+                UpdateButton::Download,
+                UpdateButton::NotNow,
+                UpdateButton::SkipThisVersion
+            ]
         );
         let id = item.id;
         // The test's own handlers: the app's would refresh the notices away.
@@ -9299,6 +9309,13 @@ mod tests {
             *pressed.borrow(),
             [UpdateButton::Download, UpdateButton::NotNow],
             "Enter"
+        );
+        tab(window, 1);
+        assert!(focused.get(), "Skip This Version is the last stop");
+        press(window, " ");
+        assert_eq!(
+            pressed.borrow().last(),
+            Some(&UpdateButton::SkipThisVersion)
         );
     }
 

@@ -444,6 +444,19 @@ impl Updater {
                 self.notice = None;
                 Action::Nothing
             }
+            UpdaterButton::SkipThisVersion => {
+                if let Some(update) = &self.offered {
+                    self.keep_record(
+                        Some(UpdateRecord {
+                            version: update.version_text.clone(),
+                            reason: UpdateRecordReason::Skipped,
+                        }),
+                        &mut Polled::default(),
+                    );
+                }
+                self.notice = None;
+                Action::Nothing
+            }
             UpdaterButton::Cancel => {
                 self.cancel_install();
                 Action::Nothing
@@ -1117,7 +1130,11 @@ pub mod tests {
         );
         assert_eq!(
             updater.notice().unwrap().buttons(),
-            [UpdaterButton::Download, UpdaterButton::NotNow]
+            [
+                UpdaterButton::Download,
+                UpdaterButton::NotNow,
+                UpdaterButton::SkipThisVersion
+            ]
         );
         assert_eq!(updater.press(UpdaterButton::Download), Action::Nothing);
         updater.wait();
