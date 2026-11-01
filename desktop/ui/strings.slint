@@ -35,7 +35,6 @@ export global Strings {
     out property <string> not-on-network: @tr("Not on the network right now, plays once it's back");
     // An AirPlay speaker the user switched on, while its prompt is open.
     out property <string> waiting-for-password: @tr("Waiting for the password");
-    out property <string> waiting-for-pin: @tr("Enter the code shown on the TV");
     out property <string> status-off: @tr("Off");
     out property <string> connected-none: @tr("No connected speakers");
     // The flyout's speaker list when it has no speaker and no zone.
@@ -1185,7 +1184,7 @@ export global Strings {
     }
 
     // A row's accessible value.
-    public pure function value(state: RowState) -> string {
+    public pure function value(state: RowState, name: string) -> string {
         if state == RowState.off {
             return root.off;
         }
@@ -1196,14 +1195,14 @@ export global Strings {
                 || state == RowState.waiting-for-airplay2 || state == RowState.waiting-for-ptp
                 || state == RowState.not-on-network || state == RowState.waiting-for-password
                 || state == RowState.waiting-for-pin {
-            return root.row-note(state);
+            return root.row-note(state, name);
         }
         return root.on;
     }
 
     // The note under the name of a speaker that is on but can't play right
     // now; empty otherwise.
-    public pure function row-note(state: RowState) -> string {
+    public pure function row-note(state: RowState, name: string) -> string {
         if state == RowState.waiting-for-device {
             return root.waiting-for-device;
         }
@@ -1223,7 +1222,7 @@ export global Strings {
             return root.waiting-for-password;
         }
         if state == RowState.waiting-for-pin {
-            return root.waiting-for-pin;
+            return @tr("Enter the code shown on {}", name);
         }
         return "";
     }

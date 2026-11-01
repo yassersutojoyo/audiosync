@@ -6405,7 +6405,7 @@ mod tests {
         );
     }
 
-    // covers: P215
+    // covers: P215, S223
     #[test]
     fn a_speaker_that_cant_play_right_now_shows_waiting_not_playing() {
         let mut backend = MockBackend::new();
@@ -6442,9 +6442,9 @@ mod tests {
         let strings = app.strings();
         let read = |state: RowState| {
             (
-                strings.invoke_value(state).to_string(),
+                strings.invoke_value(state, "Kitchen".into()).to_string(),
                 strings.invoke_help(state).to_string(),
-                strings.invoke_row_note(state).to_string(),
+                strings.invoke_row_note(state, "Kitchen".into()).to_string(),
             )
         };
         let turn_off = strings.get_turn_off().to_string();
@@ -6473,6 +6473,17 @@ mod tests {
         assert_eq!(
             read(RowState::NotOnNetwork),
             (away.clone(), turn_off.clone(), away)
+        );
+        // The Mac row's words, naming the speaker whose code is asked for.
+        let password = "Waiting for the password".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForPassword),
+            (password.clone(), turn_off.clone(), password)
+        );
+        let pin = "Enter the code shown on Kitchen".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForPin),
+            (pin.clone(), turn_off.clone(), pin)
         );
         assert_eq!(
             read(RowState::Playing),

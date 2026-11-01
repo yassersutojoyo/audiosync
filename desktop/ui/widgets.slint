@@ -681,6 +681,7 @@ export component DialogButton inherits FocusScope {
 export component SpeakerBadge inherits Rectangle {
     in property <string> glyph;
     in property <RowState> state;
+    in property <string> name;
     in property <string> label;
     in property <string> description;
     in property <bool> enabled: true;
@@ -717,7 +718,7 @@ export component SpeakerBadge inherits Rectangle {
     accessible-label: root.label;
     accessible-checkable: true;
     accessible-checked: root.state != RowState.off;
-    accessible-value: !root.narrated ? "" : root.value-text != "" ? root.value-text : Strings.value(root.state);
+    accessible-value: !root.narrated ? "" : root.value-text != "" ? root.value-text : Strings.value(root.state, root.name);
     accessible-description: root.narrated ? root.description : "";
     accessible-enabled: root.enabled;
     accessible-expandable: root.expandable;
@@ -1744,7 +1745,7 @@ export component SpeakerRow inherits Rectangle {
     // "Reconnecting…").
     property <string> cast-note: Strings.cast-note(root.item.cast-state, root.item.muted, root.item.cast-group-note);
     property <string> availability-note: Strings.speaker-availability(root.item.availability, root.item.code-every-time, root.item.state);
-    property <string> state-note: root.availability-note != "" ? root.availability-note : Strings.row-note(root.item.state);
+    property <string> state-note: root.availability-note != "" ? root.availability-note : Strings.row-note(root.item.state, root.item.name);
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : root.item.cast && root.cast-note != "" ? root.cast-note : root.state-note == "" && root.item.cast-added-by-address ? Strings.cast-added-by-address : root.state-note;
     property <string> note-help: root.note == root.availability-note ? Strings.speaker-availability-help(root.item.availability, root.item.code-every-time, root.item.state) : "";
 
@@ -1910,6 +1911,7 @@ export component SpeakerRow inherits Rectangle {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
                             enabled: !root.item.missing;
+                            name: root.item.name;
                             label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
                             description: Strings.with-group-note(root.item.group-note, root.item.zone-note != "" ? root.item.zone-note : root.availability-note != "" ? root.availability-note : Strings.help(root.item.state));
                             toggled => {
@@ -2467,7 +2469,7 @@ export component ZoneMemberRow inherits Rectangle {
         }
     }
 
-    property <string> note: root.item.zone-note != "" ? root.item.zone-note : Strings.row-note(root.item.state);
+    property <string> note: root.item.zone-note != "" ? root.item.zone-note : Strings.row-note(root.item.state, root.item.name);
     property <RowPart> pending-focus: RowPart.none;
     property <bool> badge-focused;
     property <bool> options-focused;
@@ -2535,6 +2537,7 @@ export component ZoneMemberRow inherits Rectangle {
                             size: 24px;
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
+                            name: root.item.name;
                             label: Strings.in-zone-label(root.item.name, root.item.zone-name);
                             description: root.note != "" ? root.note : Strings.help(root.item.state);
                             toggled => {
@@ -2863,7 +2866,7 @@ export component ZoneHeader inherits Rectangle {
                             narrated: root.live;
                             label: Strings.zone-label(root.item.name);
                             value-text: Strings.zone-value(root.item.on, root.item.total, root.item.waiting);
-                            description: Strings.row-note(root.item.state);
+                            description: Strings.row-note(root.item.state, root.item.name);
                             expandable: true;
                             expanded: root.item.expanded;
                             toggled => {
@@ -2954,7 +2957,7 @@ export component ZoneHeader inherits Rectangle {
                             // The count, and the note of a zone whose members all
                             // wait ("Waiting for device", "Reconnecting…").
                             count-text := QuietText {
-                                text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
+                                text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state, root.item.name));
                                 wrap: no-wrap;
                                 overflow: elide;
                             }

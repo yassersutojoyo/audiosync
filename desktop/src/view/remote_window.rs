@@ -199,7 +199,10 @@ impl RowText for StringsText<'_> {
             return note.into();
         }
         self.0
-            .invoke_row_note(row_state(state.speaker_state(speaker)))
+            .invoke_row_note(
+                row_state(state.speaker_state(speaker)),
+                speaker.name.as_str().into(),
+            )
             .into()
     }
 }
