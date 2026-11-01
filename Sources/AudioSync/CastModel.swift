@@ -199,6 +199,8 @@ enum CastEvent: Equatable {
     case reloaded(attempt: UInt64)
     /// `answersMute`: the first status since a mute was sent (C70).
     case volume(attempt: UInt64, CastVolume, answersMute: Bool = false)
+    /// A level asked for that no status will answer, once per ask (C70).
+    case volumeUnanswered(attempt: UInt64, level: Double)
     case commandFailed(attempt: UInt64, error: CastError?)
     case ended(attempt: UInt64, CastEnd)
     /// The device refused WAV; `format` is loaded instead (C84).
@@ -218,7 +220,7 @@ enum CastEvent: Equatable {
         switch self {
         case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .connectFailed(let a, _, _, _),
              .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _, _), .commandFailed(let a, _),
-             .ended(let a, _), .note(let a, _), .members(let a, _):
+             .volumeUnanswered(let a, _), .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
         case .groupLog, .memoryChanged, .discoveryStopped, .failed:
             return nil
@@ -252,6 +254,8 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_VOLUME:
             self = .volume(attempt: a, CastVolume(level: raw.level, muted: raw.muted, fixed: raw.volume_fixed,
                                                   step: raw.step), answersMute: raw.answers_mute)
+        case ASC_CAST_EVENT_VOLUME_UNANSWERED:
+            self = .volumeUnanswered(attempt: a, level: raw.level)
         case ASC_CAST_EVENT_COMMAND_FAILED: self = .commandFailed(attempt: a, error: error)
         case ASC_CAST_EVENT_ENDED:
             let end: CastEnd
@@ -931,6 +935,9 @@ struct CastModel {
         case .volume(_, let volume, let answersMute):
             attempt?.reportedMute = nil
             return volumeReported(id, volume, answersMute: answersMute)
+        case .volumeUnanswered(_, let level):
+            volumeUnanswered(id, level)
+            return nil
         case .members(_, let list):
             guard devices[id]?.group == true, members != list else { return nil }
             members = list
@@ -1031,12 +1038,24 @@ struct CastModel {
             unanswered = []
             levels[id] = own
             if requested?.id == id { requested = nil }
-        } else if unanswered.last != level {
-            // The same level sent twice in a row gets one answer.
+        } else {
             if unanswered.count == Self.maxUnanswered { unanswered.removeFirst() }
             unanswered.append(level)
         }
         return level
+    }
+
+    /// The sender will get no answer to one ask for `level` (C70, C104), so
+    /// the latest copy still awaited stops waiting, as the sender reports an
+    /// ask the moment it replaces or sends it.
+    private mutating func volumeUnanswered(_ id: String, _ level: Double) {
+        // The sender builds a device step on its own unrounded level (0.4 + 0.02), not the rounded one awaited here.
+        guard let index = unanswered.lastIndex(where: { abs($0 - level) < 1e-9 }) else { return }
+        unanswered.remove(at: index)
+        if unanswered.isEmpty, let requested, requested.id == id {
+            levels[id] = requested.level
+            self.requested = nil
+        }
     }
 
     /// A status's volume (C70, C104, C105): the answer to a level sent keeps
