@@ -3869,6 +3869,7 @@ The checks for S251 to S254 in the Rust core (`core/tests/policy_presets.rs`, `c
 | a_recall_skips_a_deleted_zone_even_after_a_new_zone_is_made (`desktop/src/adapter.rs`) | S245, S252 |
 | a_deleted_presets_id_is_never_given_to_a_new_preset (`desktop/src/adapter.rs`) | S251 |
 | a_settings_file_without_the_id_counters_gives_ids_above_every_stored_one (`desktop/src/adapter.rs`) | S245, S251 |
+| id_counters_at_their_largest_still_give_new_zones_and_presets_distinct_ids (`desktop/src/adapter.rs`) | S245, S251 |
 | an_older_files_preset_keeps_a_deleted_zones_id_from_a_new_zone (`desktop/src/adapter.rs`) | S245, S252 |
 | a_recalled_cast_volume_is_set_at_the_speakers_first_status (`desktop/src/adapter.rs`) | S252 |
 | a_recall_after_a_relaunch_names_a_missing_member_by_its_zone_name (`desktop/src/adapter.rs`) | S252, S286 |
