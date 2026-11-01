@@ -1067,22 +1067,29 @@ fn rtp_seconds(from: u32, to: u32) -> f64 {
 }
 
 /// How long after `set` the television got the audio at RTP time
-/// `current`: the progress names the audio arriving as it is set.
+/// `current`: the progress names the audio arriving as it is set. A
+/// receiving thread that falls behind stamps its backlog late, so this
+/// takes the earliest stamp of the audio from there on, less the audio in
+/// between, which the sender sends in real time.
 fn current_heard_after(audio: &Mutex<Vec<Datagram>>, current: u32, set: Instant) -> f64 {
-    let at = audio
-        .lock()
-        .expect("audio")
+    let audio = audio.lock().expect("audio");
+    let Some(named) = audio.iter().position(|datagram| {
+        datagram.at + Duration::from_secs(1) >= set
+            && datagram.rtptime.wrapping_sub(current) < 0x8000_0000
+    }) else {
+        return f64::INFINITY;
+    };
+    audio[named..]
         .iter()
-        .find(|datagram| {
-            datagram.at + Duration::from_secs(1) >= set
-                && datagram.rtptime.wrapping_sub(current) < 0x8000_0000
+        .filter_map(|datagram| {
+            let ahead = rtp_seconds(audio[named].rtptime, datagram.rtptime);
+            let after = match datagram.at.checked_duration_since(set) {
+                Some(after) => after.as_secs_f64(),
+                None => -set.duration_since(datagram.at).as_secs_f64(),
+            };
+            (ahead >= 0.0).then_some(after - ahead)
         })
-        .map(|datagram| datagram.at);
-    match at {
-        Some(at) if at >= set => at.duration_since(set).as_secs_f64(),
-        Some(at) => -set.duration_since(at).as_secs_f64(),
-        None => f64::INFINITY,
-    }
+        .fold(f64::INFINITY, f64::min)
 }
 
 // The weekend sheet's Progress row on the fake Samsung: each progress the
