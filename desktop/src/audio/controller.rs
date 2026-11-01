@@ -10495,7 +10495,12 @@ mod tests {
     #[test]
     fn a_bth_enumerator_makes_a_bluetooth_output_whose_start_lead_is_a_block_longer() {
         let mut backend = backend();
-        for (index, id, enumerator) in [(2, "a2dp", "BTHENUM"), (3, "le", "BTHLEDevice")] {
+        let bluetooth = [
+            (2, "a2dp", "BTHENUM"),
+            (3, "le", "BTHLEDevice"),
+            (4, "ble", "BTHLE"),
+        ];
+        for (index, id, enumerator) in bluetooth {
             backend.enumerate_endpoint(EndpointReading {
                 index,
                 id: Ok(id.to_owned()),
@@ -10510,20 +10515,20 @@ mod tests {
         }
         backend.poll();
         let listed = backend.list_outputs().unwrap();
-        for id in ["a2dp", "le"] {
+        for (_, id, _) in bluetooth {
             let output = listed.iter().find(|o| o.id == id).expect("listed");
             assert_eq!(output.kind, OutputKind::Bluetooth, "{id}");
+            backend.set_output_enabled(id, true).unwrap();
         }
-
-        backend.connect_output_as("buds", "Buds", OutputKind::Bluetooth);
-        backend.set_output_enabled("buds", true).unwrap();
         backend.start(&SourceId::WholeSystem).unwrap();
         let extra = |id: &str| {
             let session = backend.session.as_ref().expect("a session");
             session.outputs[id].control.extra_lead_frames()
         };
         let block = audiosync_core::render::BLUETOOTH_LEAD_FRAMES as i64;
-        assert_eq!(extra("buds"), block);
+        for (_, id, _) in bluetooth {
+            assert_eq!(extra(id), block, "{id}");
+        }
         assert_eq!((extra(SPEAKERS), extra(HEADPHONES)), (0, 0));
     }
 

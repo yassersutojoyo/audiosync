@@ -5105,8 +5105,9 @@ The release side:
 | the_relaunch_poll_matches_the_mac (`desktop/src/single_instance.rs`) | S215 |
 | the_second_copy_logs_one_line_per_outcome (`desktop/src/single_instance.rs`) | S215 |
 | a_bth_enumerator_makes_a_bluetooth_output_whose_start_lead_is_a_block_longer (`desktop/src/audio/controller.rs`) | S230 |
-| the_stream_latency_counts_only_for_a_stop_without_a_clock (`desktop/src/audio/render.rs`) | S231 |
 | a_signal_for_a_local_output_leaves_the_network_feeds_silent (`desktop/src/audio/capture.rs`) | S232 |
+
+S231 has no Windows test: Windows reads no device latency.
 
 ### App identity, output lists, double audio, auto-connect, moved outputs and saved files: Windows (`cargo test` in `desktop/`)
 
