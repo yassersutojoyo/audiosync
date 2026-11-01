@@ -485,6 +485,9 @@ pub struct AllRun {
     members: Vec<Member>,
     /// The rows this run measures, the reference's first.
     taking_part: Vec<usize>,
+    /// Each `taking_part` row's stored delay as it played at the start,
+    /// which for AirPlay is L at the start's sender latency.
+    started_ms: Vec<Option<f64>>,
     /// The speakers that play and aren't measured, kept quiet in the mix
     /// send by the solo until the run gives the outputs back (S255).
     silenced: Vec<Member>,
@@ -759,6 +762,17 @@ impl AllRun {
                 lineup.hold_backs_ms.get(id).map(|ms| (id.clone(), *ms))
             })
             .collect();
+        let started_ms = taking_part
+            .iter()
+            .map(|row| {
+                let member = &members[*row];
+                lineup
+                    .members
+                    .iter()
+                    .find(|now| now.same(member))
+                    .map_or(member.offset_ms, |now| now.offset_ms)
+            })
+            .collect();
         // Every speaker still plays the music until it faded: the longest
         // way any of them has to play out sets the wait.
         let quiet_ms = lineup
@@ -773,6 +787,7 @@ impl AllRun {
             run: Some(run),
             members,
             taking_part,
+            started_ms,
             silenced,
             again,
             rate,
@@ -1016,11 +1031,11 @@ impl AllRun {
         if lineup.reference.as_deref() != Some(self.reference.as_str()) {
             return Some(EndReason::SpeakersChanged);
         }
-        for row in &self.taking_part {
+        for (row, started_ms) in self.taking_part.iter().zip(&self.started_ms) {
             let member = &self.members[*row];
             match lineup.members.iter().find(|now| now.same(member)) {
                 None => return Some(EndReason::SpeakerTurnedOff),
-                Some(now) if member.delay_changed(now) => {
+                Some(now) if member.delay_changed(now) || now.offset_ms != *started_ms => {
                     return Some(EndReason::SpeakersChanged);
                 }
                 Some(_) => {}
