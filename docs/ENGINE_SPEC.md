@@ -4504,6 +4504,7 @@ The release side:
 | an_only_these_mix_streams_on_through_a_relaunch_of_its_app (`desktop/src/audio/controller.rs`) | S327 |
 | a_mix_on_a_later_instance_streams_on_when_the_session_list_fails_once (`desktop/src/audio/controller.rs`) | S327 |
 | a_mix_that_quit_while_its_capture_waits_gives_way_though_the_session_list_fails (`desktop/src/audio/controller.rs`) | S327 |
+| an_only_these_mix_quits_when_only_another_app_on_its_apps_process_id_runs (`desktop/src/audio/controller.rs`) | S327 |
 | a_capture_lost_after_a_resume_keeps_trying_until_60_s_after_it (`desktop/src/audio/controller.rs`) | S332 |
 | a_capture_still_failing_60_s_after_a_resume_stops_as_before (`desktop/src/audio/controller.rs`) | S21, S329, S332 |
 | a_capture_lost_as_the_resume_window_ends_gets_the_usual_tries (`desktop/src/audio/controller.rs`) | S329, S332, S139 |
@@ -4659,6 +4660,8 @@ The release side:
 | an_app_that_started_again_is_found_by_its_executable (`desktop/src/adapter.rs`) | S380 |
 | the_listed_app_is_followed_whatever_the_case_of_its_executable (`desktop/src/adapter.rs`) | S380 |
 | another_app_with_the_process_id_of_one_that_quit_isnt_captured (`desktop/src/adapter.rs`) | S380 |
+| an_only_these_mix_leaves_out_another_app_that_took_a_quit_apps_process_id (`desktop/src/audio/controller.rs`) | S380 |
+| a_lost_app_capture_is_not_opened_again_on_another_app_that_took_its_process_id (`desktop/src/audio/controller.rs`) | S380 |
 | an_app_without_an_audio_session_is_still_captured (`desktop/src/adapter.rs`) | S380 |
 | an_app_opened_again_is_captured_before_it_plays (`desktop/src/adapter.rs`) | S380 |
 | a_vanished_app_is_gone (`desktop/src/audio/capture.rs`) | S380 |

@@ -485,6 +485,9 @@ fn solo_gain(solo: Option<&str>, id: &str, gain: f32) -> f32 {
 /// A running session.
 struct Session<D: Driver> {
     source: SourceId,
+    /// The executable a single app ran as the session started: a lost
+    /// capture opens again only on a process still running it (S380).
+    app_executable: Option<String>,
     /// What the capture takes in.
     target: CaptureTarget,
     ring: Arc<Ring>,
@@ -2622,7 +2625,7 @@ impl<D: Driver> Controller<D> {
         if !self.last_session_fading() {
             return self.start_session(source);
         }
-        self.capture_target(source)?;
+        self.capture_target(source, None)?;
         self.log
             .log(|| "the capture starts once the last session's outputs have faded out".to_owned());
         self.next_start = Some(source.clone());
@@ -3059,13 +3062,14 @@ impl<D: Driver> Controller<D> {
         let busy_since = reopen.busy_since;
         let away = reopen.away;
         let source = session.source.clone();
+        let app_executable = session.app_executable.clone();
         let ring = Arc::clone(&session.ring);
         let started_as = session.started_as;
         // The lost capture's thread, let go while Windows audio hangs, may
         // still hold the ring's writer: that try fails as one Windows audio
         // didn't answer, and the next may work.
         let mut writer_held = false;
-        let opened = match self.capture_target(&source) {
+        let opened = match self.capture_target(&source, app_executable.as_deref()) {
             Ok(target) => match ring.writer() {
                 Some(writer) => self
                     .open_capture(&target, writer)
@@ -3439,14 +3443,28 @@ impl<D: Driver> Controller<D> {
 
     /// What capturing `source` opens, from the running processes where it
     /// names apps, and for "all except" from the apps with audio sessions.
-    fn capture_target(&mut self, source: &SourceId) -> Result<CaptureTarget, BackendError> {
+    /// A single app's top process must run `app_executable` when one is
+    /// given.
+    fn capture_target(
+        &mut self,
+        source: &SourceId,
+        app_executable: Option<&str>,
+    ) -> Result<CaptureTarget, BackendError> {
         let own_pid = self.driver.own_pid();
         match source {
             SourceId::WholeSystem | SourceId::Input { .. } => {
                 decide_capture(source, own_pid, &ProcessTable::default(), &self.input_pairs)
             }
-            SourceId::App { .. } => {
+            SourceId::App { root_pid } => {
                 let processes = self.driver.processes()?;
+                // The app's process ID may have gone to another app since.
+                if let Some(executable) = app_executable
+                    && processes
+                        .get(*root_pid)
+                        .is_some_and(|entry| !entry.executable.eq_ignore_ascii_case(executable))
+                {
+                    return Err(BackendError::SourceGone);
+                }
                 decide_capture(source, own_pid, &processes, &self.input_pairs)
             }
             SourceId::Apps {
@@ -3480,7 +3498,7 @@ impl<D: Driver> Controller<D> {
             executables,
         } = source
         else {
-            return self.capture_target(source);
+            return self.capture_target(source, None);
         };
         let processes = self.driver.processes()?;
         let sessions = self.driver.session_pids();
@@ -3504,15 +3522,24 @@ impl<D: Driver> Controller<D> {
         {
             self.note_inputs(&listed_inputs(&readings));
         }
-        let target = self.capture_target(source)?;
+        let target = self.capture_target(source, None)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         let (capture, equalizer, waits_for_feed) = self.open_capture(&target, writer)?;
         let unwatched = self.unwatched_app(&target, &capture);
+        let app_executable = match source {
+            SourceId::App { root_pid } => self.driver.processes().ok().and_then(|processes| {
+                processes
+                    .get(*root_pid)
+                    .map(|entry| entry.executable.clone())
+            }),
+            _ => None,
+        };
         self.log.log(|| self.policy.describe_lead());
         self.policy.end_brief_losses();
         self.session = Some(Session {
             source: source.clone(),
+            app_executable,
             target,
             ring,
             started_as: capture.setup(),
