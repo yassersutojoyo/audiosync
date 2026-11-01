@@ -525,6 +525,7 @@ export component IconButton inherits Rectangle {
 export component LinkButton inherits Rectangle {
     in property <string> text;
     in property <string> label;
+    in property <TextOverflow> overflow: clip;
     // Whether it has the keyboard focus (a click doesn't give it).
     out property <bool> keyboard-focused: focus.has-focus;
     callback clicked();
@@ -571,6 +572,7 @@ export component LinkButton inherits Rectangle {
             font-weight: 600;
             color: Tokens.teal-text;
             vertical-alignment: center;
+            overflow: root.overflow;
             opacity: touch.pressed ? 0.75 : 1;
             accessible-role: none;
         }
@@ -2646,7 +2648,8 @@ export component ZoneMemberRow inherits Rectangle {
 
                         if !root.item.renaming: Rectangle {
                             horizontal-stretch: 1;
-                            min-width: 0px;
+                            // The zone link elides before the name goes under this.
+                            min-width: min(name-label.preferred-width, 80px);
                             preferred-width: name-label.preferred-width;
                             max-width: name-label.preferred-width;
                             min-height: name-label.preferred-height;
@@ -2738,6 +2741,7 @@ export component ZoneMemberRow inherits Rectangle {
                         if !root.item.renaming: LinkButton {
                             text: Strings.in-zone(root.item.zone-name);
                             label: Strings.go-to-zone-label(root.item.zone-name);
+                            overflow: elide;
                             clicked => {
                                 root.go-to-zone();
                             }
