@@ -12927,6 +12927,15 @@ do {
     check(approx(replaced.volume(of: tv), 60, 1e-9),
           "cast master: levels a drag replaced before sending never hold the slider, so the TV's remote moves it")
 
+    // covers: C70, C104 (0.3, 0.6 and 0.3 went out, 0.35 was replaced, then 0.3 went out again)
+    var strand = session(attempt: 12)
+    _ = strand.apply(.volume(attempt: 12, reported(0.5)))
+    for position in [30.0, 60.0, 30.0, 35.0, 30.0] { _ = strand.setVolume(tv, position: position) }
+    for level in [0.35, 0.3] { _ = strand.apply(.volumeUnanswered(attempt: 12, level: level)) }
+    for answer in [0.3, 0.6, 0.3] { _ = strand.apply(.volume(attempt: 12, reported(answer))) }
+    check(approx(strand.volume(of: tv), 30, 1e-9),
+          "cast master: a repeat of a level sent earlier never strands the slider on another level")
+
     // covers: S415
     var row = session(attempt: 11)
     _ = row.apply(.volume(attempt: 11, reported(0.4)))

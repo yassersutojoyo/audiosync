@@ -3386,6 +3386,23 @@ pub mod tests {
         }
     }
 
+    // covers: C70, C104 (0.3, 0.6 and 0.3 went out, 0.35 was replaced, then 0.3 went out again)
+    #[test]
+    fn a_repeat_of_a_level_sent_earlier_never_strands_the_slider_on_another() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [30.0, 60.0, 30.0, 35.0, 30.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, &[0.35, 0.3]);
+        for answer in [0.3, 0.6, 0.3] {
+            report(&fake, &mut cast, answer);
+        }
+        assert_eq!(shown(&cast, KITCHEN).round(), 30.0);
+    }
+
     // covers: C70 (0.55, 0.6 and 0.55 all went out)
     #[test]
     fn late_answers_to_a_drag_back_to_its_first_level_never_move_the_slider() {
