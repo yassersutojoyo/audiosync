@@ -10729,6 +10729,28 @@ mod tests {
         assert!(messages(&adapter).is_empty());
     }
 
+    // covers: S223
+    #[test]
+    fn cancelling_the_pin_prompt_of_the_only_speaker_left_stops_streaming() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&tv), true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert!(adapter.snapshot().running, "the waiting TV still counts");
+
+        adapter.cancel_pairing(&ap(&tv));
+        fake.pairing(&tv, PairingEvent::Stopped);
+        adapter.poll();
+        assert_eq!(shown(&adapter, &tv), "Off");
+        assert!(!adapter.snapshot().running);
+    }
+
     // covers: S349
     #[test]
     fn auto_connect_never_asks_for_a_password() {
