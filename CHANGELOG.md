@@ -17,6 +17,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a playing speaker on this Mac whose device is unplugged, or that keeps refusing to start for 30 s, gets the notice "<name> was disconnected. It plays again as soon as it's back.", as on Windows. It goes away once the speaker plays again, you switch it off or streaming stops.
 - An AirPlay speaker you turn on stays on while it asks for its password or code, and Cancel turns it off. While other speakers play, its row says "Waiting for the password" or "Enter the code shown on" followed by its name. Before, Windows left it off until you typed the code and the Mac row said nothing. On the Mac and on Windows.
 - With the debug log on, each playing speaker on this computer logs its peak and RMS level every 10 seconds, after volume and equalizer, and every volume or master change logs the gain it plays at. On the Mac and on Windows.
+- On the Mac, Calibrate All Speakers opens with a "Before you start" list: the microphone where you listen, the Mac's own volume, with an Unmute or Set to button when it's muted or quiet, and the outputs it leaves out. Each result shows as a card with the new delay, the one it replaces and whether it was measured clearly.
 
 ### Changed
 
@@ -40,7 +41,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the notices after a source switch fails or a speaker asks for a PIN or password now say what to do next: pick the source again, turn streaming on again, or, for a speaker the web remote turned on, turn it on again on this Mac.
 - On the Mac, a speaker or zone you turn on from the web remote no longer opens a PIN or password prompt on the Mac when the speaker asks for one, or turns its pairing down, as it connects. It goes off with the usual notice, as a preset recalled from the phone already did. A source picked on the phone that can't start shows a notice instead of an alert.
 - On the Mac, a calibrate button that can't be pressed says why on a line under it, and with the equalizer off its gain values and band labels stay readable; only the sliders fade.
-- On Windows, hovering over a speaker's "Asks for a code" or "Asks for a code every time" note explains it, with the same text as on the Mac.
+- On Windows, hovering over a speaker's "Asks for a code" or "Asks for a code every time" note explains it, with the same text as on the Mac, and Narrator reads that text after the note.
 - AudioSync's AirPlay sending now asks the system for a higher priority. On Windows that's the priority AudioSync's local outputs already had. On the Mac and on Windows.
 - A Google Cast speaker that loses its connection tries again at once, then after 1, 2, 4 and 8 seconds, then every 10 seconds, and right away when it shows up on the network again. On the Mac and on Windows.
 - An AirPlay speaker that loses its connection shows Reconnecting… once its second retry, about 3 seconds in, has failed, and the first retry that works clears it. On the Mac its row and a notice now say so too, as on Windows.
@@ -59,6 +60,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the pairing prompt, its notices and the Guide ask for the code an Apple TV or AirPlay 2 speaker shows, the word its speaker row already uses, instead of a PIN.
 - On the Mac, while AudioSync waits for audio from the whole system or an app and hasn't heard any since it started, the "Waiting for audio" notice also says where to allow it: System Settings → Privacy & Security → Screen & System Audio Recording.
 - On the Mac, the Guide says that Check for Updates… in the AudioSync menu looks for a newer version, and its Tips no longer repeat the delay rule from More Controls or quote a typical Bluetooth delay.
+- On the Mac, Now Playing shows a track change, pause or play in Music or Spotify as soon as the app announces it, instead of at the next 2-second check.
+- On the Mac, Add by Address refuses 0.0.0.0, 255.255.255.255, a multicast address and a host name whose last part is all digits, and keeps at most 64 addresses, as on Windows.
+- On the Mac, the Guide's equalizer line mentions the curves you save yourself, as the Windows Guide does.
 
 ### Fixed
 
@@ -85,7 +89,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, an arrow key pressed on a Google Cast speaker's slider right after a drag now steps the TV from where the drag ended, and the slider follows the TV when you later set it with its remote to where the drag was heading. Before, the step started from an older level and the slider could stay on a number the TV no longer played.
 - On Windows, a speaker on this PC that a preset recall turns on starts at the preset's master volume and the preset's volume for that speaker, as on the Mac. Before, it could play its first moment at the volumes it had before the recall.
 - On Windows, a Google Cast speaker's volume follows the TV again after a quick drag that ends on a level the slider passed a moment before. Before, a later change with the TV's remote to a level from that drag could leave the slider on the old value for good.
-- On Windows, a Google Cast speaker with a fixed volume in a zone shows the level the speaker reports. Before, its dimmed slider moved with the zone volume although the speaker's own volume never changed.
+- A Google Cast speaker with a fixed volume shows the level the speaker reports. Before, on Windows its dimmed slider moved with its zone's volume, and on the Mac its row showed the level you last set, although the speaker's own volume never changed. On the Mac and on Windows.
 - On Windows, a Google Cast speaker now gets a cover up to 720 px, as on the Mac. Before, it got the 600 px cover made for AirPlay.
 - On Windows, when an app you capture closes and Windows hands its process number to another program, AudioSync no longer captures that program. A mix of chosen apps leaves it out and stops once none of its apps is left, and a single app's capture lost to an audio restart doesn't come back on it.
 - Picking another equalizer curve while music plays fades the volume change in over 10 ms instead of jumping, so a curve such as Bass Boost no longer makes a sustained bass note click. On the Mac and on Windows.
@@ -380,6 +384,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a USB speaker you only renamed, or only saved in a preset, keeps its name and its place in the preset when you plug it into another USB port. Before, it came back under its system name and the preset still pointed at the old port.
 - On the Mac, a zone whose speakers all play as part of a stereo pair now says "2 playing in a pair" instead of "None of 2 found".
 - On the Mac, when a Google Cast speaker ends AudioSync's stream, by another app or by its own controls, the notice says "<name> stopped AudioSync's stream, so it's off." instead of blaming another app.
+- On Windows and in the Linux preview, a Bluetooth headset's hands-free input saved as your source counts as not connected at start, as on the Mac, instead of being opened and dropping the headset to call quality.
 
 ## [0.7.1] - 2026-10-27
 
