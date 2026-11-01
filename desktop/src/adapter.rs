@@ -1099,7 +1099,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         };
         match kept {
             Ok(Some(Retried::Read(read))) => self.restore_read_late(*read),
-            Ok(Some(Retried::KeptAside(kept))) => self.tell_kept_aside(&kept, ""),
+            Ok(Some(Retried::KeptAside(kept))) => {
+                self.tell_kept_aside(&kept, "");
+                true
+            }
             Ok(None) => false,
             Err(error) => {
                 if !due {
@@ -1165,10 +1168,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Logs that the settings file was kept aside (`when`, for the log),
-    /// and, for a file ignored at launch, tells the user once with the
-    /// copy's name: their settings were replaced by the defaults. Returns
-    /// whether a notice was posted.
-    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) -> bool {
+    /// and tells the user once with the copy's name: their settings were
+    /// replaced by the defaults.
+    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) {
         let file = kept.file_name();
         self.log.log(|| match kept {
             KeptAside::Newer(_) => {
@@ -1178,14 +1180,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 format!("settings: the file ignored at launch was kept as {file}{when}")
             }
         });
-        if let KeptAside::Ignored(_) = kept {
-            self.post(
-                NoticeSubject::SettingsKeptAside,
-                NoticeMessage::SettingsKeptAside { file },
-            );
-            return true;
-        }
-        false
+        self.post(
+            NoticeSubject::SettingsKeptAside,
+            NoticeMessage::SettingsKeptAside { file },
+        );
     }
 
     /// Writes the settings file if anything changed since it was last read
@@ -1228,7 +1226,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if let Some(Retried::KeptAside(kept)) = kept {
-                    notices_changed |= self.tell_kept_aside(&kept, " before saving over it");
+                    self.tell_kept_aside(&kept, " before saving over it");
+                    notices_changed = true;
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
@@ -14906,6 +14905,34 @@ mod tests {
             1
         );
         assert_eq!(SettingsFile::at(path).load().0.master_volume, 64.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S385
+    #[test]
+    fn a_newer_settings_file_gets_its_notice_once_the_first_save_keeps_it_aside() {
+        let dir = test_dir("adapter-settings-newer-kept-aside");
+        let path = dir.join(settings::FILE_NAME);
+        let newer = r#"{"version": 5000000000, "master_volume": 40}"#;
+        std::fs::write(&path, newer).expect("written");
+        let mut adapter = launch(launch_audio(), &path);
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("settings.newer-"), "{file}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            newer
+        );
+        // Told once: dismissed, it stays away at the next saves.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         let _ = std::fs::remove_dir_all(dir);
     }
 

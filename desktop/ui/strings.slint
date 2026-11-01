@@ -694,9 +694,9 @@ export global Strings {
     }
 
     // The settings file couldn't be read when the app started (another
-    // program held it, or it was damaged), so the defaults applied; it was
-    // kept under this file name in %LOCALAPPDATA%\AudioSync before the
-    // first save over it.
+    // program held it, it was damaged, or a newer AudioSync wrote it), so
+    // the defaults applied; it was kept under this file name in
+    // %LOCALAPPDATA%\AudioSync before the first save over it.
     public pure function notice-settings-kept-aside(file: string) -> string {
         return @tr("AudioSync couldn't read your saved settings when it started, so it's using the default settings. The old file was kept as {} in AudioSync's data folder (type %LOCALAPPDATA% in File Explorer's address bar, then open AudioSync).", file);
     }
