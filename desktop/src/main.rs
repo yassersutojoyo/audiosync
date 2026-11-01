@@ -258,23 +258,10 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
 
     // Windows may end the process once this handler returns, before the event loop ends.
     #[cfg(windows)]
-    platform::on_session_end({
-        let app = std::rc::Rc::downgrade(&app);
-        let log = log.clone();
-        Box::new(move || {
-            let Some(app) = app.upgrade() else {
-                return;
-            };
-            let saved = app.at_session_end();
-            log.log(|| {
-                format!(
-                    "Windows session ends: settings {}",
-                    if saved { "saved" } else { "not saved" }
-                )
-            });
-            log.flush(LOG_FLUSH_AT_EXIT);
-        })
-    });
+    platform::on_session_end(session_ending(&app, log, "Windows session ends"));
+    // A logout sends SIGTERM, and its default ends the process with no quit step.
+    #[cfg(target_os = "linux")]
+    platform::on_exit_signal(session_ending(&app, log, "exit signal"));
     #[cfg(windows)]
     platform::on_console_quit(|| {
         // Queued until the event loop runs, so a Ctrl-C before then still quits through it.
@@ -354,6 +341,30 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     log.log(|| "the event loop ended".to_owned());
     app.at_quit();
     Ok(())
+}
+
+/// The quit steps for an end that may come before the event loop ends, or
+/// instead of it (S351).
+fn session_ending(
+    app: &std::rc::Rc<view::App>,
+    log: &DebugLog,
+    what: &'static str,
+) -> Box<dyn Fn()> {
+    let app = std::rc::Rc::downgrade(app);
+    let log = log.clone();
+    Box::new(move || {
+        let Some(app) = app.upgrade() else {
+            return;
+        };
+        let saved = app.at_session_end();
+        log.log(|| {
+            format!(
+                "{what}: settings {}",
+                if saved { "saved" } else { "not saved" }
+            )
+        });
+        log.flush(LOG_FLUSH_AT_EXIT);
+    })
 }
 
 #[cfg(test)]

@@ -203,7 +203,7 @@ fn fresh() -> (Airplay2Identity, bool) {
 }
 
 fn left_as_it_is(error: &std::io::Error) -> Loaded {
-    Loaded::Ignored(format!(
+    Loaded::Unreadable(format!(
         "the file can't be read, so it is left as it is: {error}"
     ))
 }
@@ -554,7 +554,7 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("a folder");
         let (mut store, loaded) = IdentityStore::open(path.clone());
-        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert!(matches!(loaded, Loaded::Unreadable(_)), "{loaded:?}");
         assert!(!store.writable);
         assert!(store.insert("A1", credentials(2)).is_err());
         assert_eq!(store.get("A1"), Some(&credentials(2)), "kept for this run");
@@ -610,7 +610,7 @@ mod tests {
         let path = scratch("link.dat");
         std::os::unix::fs::symlink(&target, &path).expect("a symbolic link");
         let (store, loaded) = IdentityStore::open(path.clone());
-        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert!(matches!(loaded, Loaded::Unreadable(_)), "{loaded:?}");
         assert_eq!(store.access(), Access::Unread);
         let mode = fs::metadata(&target)
             .expect("metadata")

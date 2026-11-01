@@ -192,8 +192,9 @@ extern "C" {
 
 /* What asc_airplay_open_pairings returns when the store holds nothing it found. */
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
-#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* ignored; the wrong format is replaced by the next pairing, an unreadable file is left as it is */
+#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* not in the expected format: ignored and replaced by the next pairing */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
+#define ASC_AIRPLAY_PAIRINGS_UNREADABLE -4 /* it can't be read: ignored and left as it is */
 
 /* How private asc_airplay_pairings_access and asc_airplay_airplay2_identity_access found a file. */
 #define ASC_AIRPLAY_FILE_UNREAD -1     /* NULL or dead handle, the identity file with AirPlay 2 off, or a file not read: another account owns it, it isn't a regular file, or opening it failed */
@@ -949,6 +950,11 @@ uint64_t asc_renderer_late_max_ns(const AscRenderer *renderer);
 /* Any thread: the callbacks that came more than 5 ms later than
    the renderer's earliest ones (S209); 0 for a NULL handle. */
 uint64_t asc_renderer_late_callbacks(const AscRenderer *renderer);
+
+/* Control thread: the peak and RMS in dBFS the device got since the last take,
+   after every gain and the equalizer; silence reads as -infinity. False,
+   writing nothing, when nothing was rendered since or a pointer is NULL. */
+bool asc_renderer_take_level(const AscRenderer *renderer, double *peak_db, double *rms_db);
 
 /* Any thread: the device frames the converter couldn't produce and that were
    played as silence, in all (0 unless the read sizing is wrong); 0 for a NULL

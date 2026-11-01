@@ -63,8 +63,10 @@ extension AppDelegate {
     /// about it once, and the reconcile that falls due
     /// `NativeSenderStarts.retrySpacing` later starts it again (armed by the
     /// model update below, `scheduleDueReconcile`). A start that works clears
-    /// that notice.
+    /// that notice. A finish for a replaced sender, or during a quit (which
+    /// keeps `nativeAirPlay` set), is ignored: browsing has already stopped.
     private func nativeStartFinished(_ native: NativeAirPlay, started: Bool) {
+        guard nativeAirPlay === native, !Self.exiting.load(ordering: .relaxed) else { return }
         let news = nativeStarts.finished(started: started, at: Date())
         if started {
             clearNotices([Notice.airplaySender, Notice.airplayPtp])   // a new sender binds PTP anew
@@ -79,7 +81,7 @@ extension AppDelegate {
             // probe may ask now, and an empty list counts from here.
             airplayEmptySince = native.model.rows(enabled: enabledAirPlay).isEmpty ? Date() : nil
             updateLocalNetworkProbe(senderRunning: true)
-        } else if nativeAirPlay === native {
+        } else {
             nativeAirPlay = nil
             if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
             stopNativeLocalNetworkProbe()
@@ -174,7 +176,7 @@ extension AppDelegate {
             guard let receiver = NativeAirPlayID.receiver(id),
                   nativeAirPlay?.volumeEvents.applies(receiver) == true else { return }
             airplayVolume[id] = position
-            airplayHeldLevel[id] = AirPlayDeviceLevel.held(level: level, zone: airPlayZoneVolume(id))
+            airplayHeldLevel[id] = nativeAirPlay?.volumeEvents.held(receiver, level: level, zone: airPlayZoneVolume(id))
             pushModel()
         case .ptpPortsTaken:
             updatePtpPortNotice { $0.reported() }

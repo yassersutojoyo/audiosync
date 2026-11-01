@@ -86,6 +86,8 @@ extension RemoteRow {
         /// A stereo pair or home theater whose member asks for a password
         /// this run hasn't had: turning it on prompts for that member (P176).
         var memberAsksPassword = false
+        /// Turned off for refusing a pairing: only a switch on the Mac turns it on again.
+        var refusedForCode = false
         /// What the window writes under the name, if anything.
         var note: String?
         var key = ""
@@ -97,7 +99,7 @@ extension RemoteRow {
     /// from the phone: the prompt would open on the Mac with nobody there.
     init(_ f: Facts, text: UIStrings) {
         let turnsOn = SpeakerState(enabled: f.on, streaming: f.streaming).clickTurnsOn
-        let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword) && turnsOn
+        let codeBlocked = (f.needsCode && !f.paired && !f.holdsPassword || f.memberAsksPassword || f.refusedForCode) && turnsOn
         let castStep = f.castVolumeStep > 0 && f.castVolumeStep <= 1 ? f.castVolumeStep : CastModel.fallbackVolumeStep
         let delay: RemoteDelay
         if f.isAirPlay { delay = .airPlay(f.airPlayDelayMs) }

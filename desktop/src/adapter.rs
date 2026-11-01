@@ -410,6 +410,33 @@ fn mix_toggle(chosen: &Chosen, mode: MixMode, app: SavedMixApp) -> Chosen {
     mix_choice(mode, apps)
 }
 
+/// Whether `a` and `b` capture the same app, or the same apps in "only these"
+/// mode in any order, without case.
+fn same_apps(a: &Chosen, b: &Chosen) -> bool {
+    match (a, b) {
+        (Chosen::App { executable: a, .. }, Chosen::App { executable: b, .. }) => {
+            a.eq_ignore_ascii_case(b)
+        }
+        (
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps: a,
+            },
+            Chosen::Mix {
+                mode: MixMode::Only,
+                apps: b,
+            },
+        ) => {
+            a.len() == b.len()
+                && a.iter().all(|app| {
+                    b.iter()
+                        .any(|other| other.executable.eq_ignore_ascii_case(&app.executable))
+                })
+        }
+        _ => false,
+    }
+}
+
 /// A notice as it was posted.
 #[derive(Clone, Debug)]
 struct Posted {
@@ -576,6 +603,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// once until a save works again. They are tried again after a change,
     /// every [`SAVE_RETRY_POLLS`] polls and at quit.
     unsaved: Option<Settings>,
+    /// The Cast speakers file's last write failed, so its notice stays
+    /// after a settings save that works.
+    cast_unsaved: bool,
     /// Polls left until [`AudioAdapter::unsaved`] is tried again.
     save_retry_wait: u32,
     /// An output listing worked at least once, so an empty list means
@@ -745,6 +775,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay_unrestored: BTreeSet::new(),
             cast_unrestored: None,
             unsaved: None,
+            cast_unsaved: false,
             save_retry_wait: 0,
             outputs_known: false,
             no_output_noticed: false,
@@ -1201,7 +1232,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let current = self.current_settings();
         if current == self.saved && !self.must_save {
             if self.unsaved.take().is_some() {
-                self.notices.clear(&[NoticeSubject::SettingsFile]);
+                if !self.cast_unsaved {
+                    self.notices.clear(&[NoticeSubject::SettingsFile]);
+                }
                 return true;
             }
             return false;
@@ -1219,7 +1252,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             return self.restore_read_late(*read);
         }
         let mut notices_changed = saved.is_ok() == self.unsaved.is_some();
-        if saved.is_ok() && self.unsaved.is_some() {
+        if saved.is_ok() && self.unsaved.is_some() && !self.cast_unsaved {
             self.notices.clear(&[NoticeSubject::SettingsFile]);
         }
         let failed = saved.is_err();
@@ -1959,6 +1992,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     id: source.executable.clone(),
                     name: source.name.clone(),
                     checked: is_checked(&source.executable),
+                    running: true,
                 });
             }
         }
@@ -1975,6 +2009,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         app.name.clone()
                     },
                     checked: true,
+                    running: false,
                 });
             }
         }
@@ -2072,17 +2107,22 @@ impl<A: AudioBackend> AudioAdapter<A> {
 
     /// Writes the Cast speakers' offsets and formats to their file when they
     /// changed since the last write. One that can't be written gets the
-    /// settings' notice: the change lasts until AudioSync quits.
-    fn save_cast_memory(&mut self) {
+    /// settings' notice: the change lasts until AudioSync quits. Returns
+    /// false only when the file couldn't be kept aside or written.
+    fn save_cast_memory(&mut self) -> bool {
         if self.auto_connect_skipped {
-            return;
+            return true;
         }
         let (Some(path), Some(mut json)) = (self.cast_file.as_ref(), self.audio.cast_memory_json())
         else {
-            return;
+            return true;
         };
         if self.cast_saved.as_ref() == Some(&json) {
-            return;
+            // Set back to what the file holds after a failed write.
+            if std::mem::take(&mut self.cast_unsaved) && self.unsaved.is_none() {
+                self.notices.clear(&[NoticeSubject::SettingsFile]);
+            }
+            return true;
         }
         if !self.cast_file_checked {
             match keep_unread_cast_file_aside(path, self.cast_unread_at_launch) {
@@ -2108,16 +2148,27 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     self.log
                         .log(|| format!("Cast: the speakers' file couldn't be kept: {error}"));
                     self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
-                    return;
+                    self.cast_unsaved = true;
+                    return false;
                 }
             }
         }
         match data_folder::write_atomically(path, json.as_bytes()) {
-            Ok(()) => self.cast_saved = Some(json),
+            Ok(()) => {
+                self.cast_saved = Some(json);
+                self.cast_unsaved = false;
+                // The notice stays while the settings file is the one that can't be saved.
+                if self.unsaved.is_none() {
+                    self.notices.clear(&[NoticeSubject::SettingsFile]);
+                }
+                true
+            }
             Err(error) => {
                 self.log
                     .log(|| format!("Cast: the speakers' file couldn't be written: {error}"));
                 self.post(NoticeSubject::SettingsFile, NoticeMessage::SettingsNotSaved);
+                self.cast_unsaved = true;
+                false
             }
         }
     }
@@ -4121,7 +4172,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.note_speakers();
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
-            BackendEvent::CastMemoryChanged => self.save_cast_memory(),
+            BackendEvent::CastMemoryChanged => {
+                self.save_cast_memory();
+            }
             BackendEvent::AirPlayWaitOver { id } => {
                 self.reconnecting.remove(&id);
                 self.clear_if(airplay_subject(&id), |message| {
@@ -4746,6 +4799,29 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 name: app.name,
             },
         );
+        self.pick(picked);
+    }
+
+    fn select_mix(&mut self, executables: &[String]) {
+        let listed = self.mix_apps();
+        let apps: Vec<SavedMixApp> = executables
+            .iter()
+            .filter_map(|id| listed.iter().find(|app| app.id.eq_ignore_ascii_case(id)))
+            .map(|app| SavedMixApp {
+                executable: app.id.clone(),
+                name: app.name.clone(),
+            })
+            .collect();
+        if apps.is_empty() {
+            return;
+        }
+        let picked = mix_choice(MixMode::Only, apps);
+        // The same apps in another order are the source in use (S344).
+        let picked = if same_apps(&picked, &self.chosen) {
+            self.chosen.clone()
+        } else {
+            picked
+        };
         self.pick(picked);
     }
 
@@ -5728,9 +5804,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let _ = self.persist();
         // Before the backend drops and the Cast host shuts down, so the last
         // offset change is kept even when its event was never polled.
-        self.save_cast_memory();
+        let cast_saved = self.save_cast_memory();
         // A run that writes nothing (no file, delays to migrate, no auto-connect) keeps changes unsaved.
-        self.settings_file.path().is_some() && self.current_settings() == self.saved
+        cast_saved && self.settings_file.path().is_some() && self.current_settings() == self.saved
     }
 
     fn shut_down(&mut self) {
@@ -12522,6 +12598,76 @@ mod tests {
         assert_eq!(phone_pick(&adapter, "app:player.exe"), [in_use]);
     }
 
+    // covers: S353
+    #[test]
+    fn the_phone_gets_the_several_apps_list_with_an_app_only_a_mix_holds_as_not_running() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_sources();
+        let window = adapter.snapshot().mix_apps;
+        assert_eq!(window.len(), 2, "{window:?}");
+        let expected: Vec<serde_json::Value> = window
+            .iter()
+            .map(|app| {
+                let running = app.id != "browser.exe";
+                serde_json::json!({"id": app.id, "name": app.name, "running": running})
+            })
+            .collect();
+        let phone: serde_json::Value = serde_json::from_str(&page(&adapter).to_json(1)).unwrap();
+        assert_eq!(phone["mix_apps"], serde_json::Value::Array(expected));
+    }
+
+    fn phone_mix(adapter: &mut AudioAdapter<MockBackend>, apps: &[&str]) {
+        let mix = audiosync_remote::Command::Mix {
+            apps: apps.iter().map(|app| (*app).to_owned()).collect(),
+        };
+        let actions = crate::remote::actions(&mix, &adapter.snapshot(), |_| true);
+        for action in actions.expect("taken") {
+            if let crate::remote::Action::Mix { apps } = action {
+                adapter.select_mix(&apps);
+            }
+        }
+    }
+
+    // covers: S353
+    #[test]
+    fn a_phone_mix_selects_the_apps_as_the_several_apps_list_would() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.audio.add_app(4000, "chat.exe");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        let before = captures(&adapter).len();
+        phone_mix(&mut adapter, &["browser.exe", "player.exe"]);
+        let mix = "mix:only:browser.exe,player.exe";
+        assert_eq!(adapter.snapshot().source_id, mix);
+        let started = captures(&adapter).len();
+        assert!(started > before, "selected as a pick in the picker");
+
+        for (apps, why) in [
+            (&["player.exe", "browser.exe"][..], "the mix in use"),
+            (&["gone.exe"][..], "no app still listed"),
+        ] {
+            phone_mix(&mut adapter, apps);
+            assert_eq!(adapter.snapshot().source_id, mix, "{why}");
+            assert_eq!(captures(&adapter).len(), started, "{why}: no restart");
+        }
+
+        phone_mix(&mut adapter, &["chat.exe"]);
+        assert_eq!(page(&adapter).source_id.as_deref(), Some("app:chat.exe"));
+        let started = captures(&adapter).len();
+        phone_mix(&mut adapter, &["chat.exe"]);
+        assert_eq!(
+            captures(&adapter).len(),
+            started,
+            "the app in use: no restart"
+        );
+    }
+
     // covers: S163
     #[test]
     fn another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped() {
@@ -17274,6 +17420,43 @@ mod tests {
         assert_eq!(adapter.presets[2].id, "preset:7");
     }
 
+    // covers: S245, S251
+    #[test]
+    fn id_counters_at_their_largest_still_give_new_zones_and_presets_distinct_ids() {
+        let edited = Settings {
+            speaker_zones: vec![zone(vec![key(SPEAKERS)])],
+            last_zone_id: u64::MAX,
+            last_preset_id: u64::MAX,
+            ..Settings::default()
+        };
+        let reopen = |text: &str| {
+            let mut adapter = preset_adapter(Vec::new());
+            adapter.restore(Settings::from_json(text).unwrap().0);
+            turn_on(&mut adapter, HEADPHONES);
+            adapter
+        };
+        let mut adapter = reopen(&edited.to_json());
+        adapter.new_zone_with(&key(HEADPHONES), "Den");
+        adapter.new_zone_with(&key(HEADPHONES), "Porch");
+        Backend::save_preset(&mut adapter, "Night").expect("saved");
+        Backend::save_preset(&mut adapter, "Late").expect("saved");
+
+        let adapter = reopen(&adapter.current_settings().to_json());
+        let zones: Vec<_> = adapter
+            .snapshot()
+            .zones
+            .iter()
+            .map(|zone| zone.name.clone())
+            .collect();
+        assert_eq!(zones, ["Downstairs", "Den", "Porch"]);
+        let presets: Vec<_> = adapter
+            .presets
+            .iter()
+            .map(|preset| preset.name.as_str())
+            .collect();
+        assert_eq!(presets, ["Night", "Late"]);
+    }
+
     // covers: S251, S265
     #[test]
     fn a_hidden_speaker_is_never_saved_and_a_recall_names_it_hidden() {
@@ -17445,6 +17628,89 @@ mod tests {
         assert!(
             matches!(&notices[..], [NoticeMessage::AirPlayMemberNeedsPassword { member, .. }] if member == "Bedroom"),
             "{notices:?}"
+        );
+    }
+
+    // covers: S223, P176
+    #[test]
+    fn a_stereo_pair_switched_on_stays_on_and_waits_while_its_member_password_prompt_is_open() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.poll();
+        let id = "ap:pair:5f0c";
+        adapter.set_speaker_enabled(id, true);
+        fake.fail(&right, ErrorKind::PasswordRequired);
+        adapter.poll();
+        assert!(adapter.snapshot().password_prompt.is_some());
+        assert_eq!(
+            format!("{:?}", state_of(&adapter, id)),
+            "Waiting(ForPassword)"
+        );
+        adapter.cancel_password(&ap(&right));
+        assert_eq!(format!("{:?}", state_of(&adapter, id)), "Off");
+
+        // Right is known to ask now, so the prompt opens before any session.
+        adapter.set_speaker_enabled(id, true);
+        adapter.poll();
+        assert!(adapter.snapshot().password_prompt.is_some());
+        assert_eq!(
+            format!("{:?}", state_of(&adapter, id)),
+            "Waiting(ForPassword)"
+        );
+        assert!(messages(&adapter).is_empty());
+        fake.take_calls();
+        adapter.submit_password(&ap(&right), "hunter2");
+        assert!(
+            matches!(&fake.take_calls()[..], [Call::AddTarget { id: added, .. }] if added == "pair:5f0c")
+        );
+        fake.state(&left, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(format!("{:?}", state_of(&adapter, id)), "Playing");
+        assert!(messages(&adapter).is_empty());
+    }
+
+    // covers: S223, P176
+    #[test]
+    fn a_stereo_pair_waiting_on_its_member_password_prompt_goes_off_with_one_notice_when_the_sender_stops()
+     {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.poll();
+        let id = "ap:pair:5f0c";
+        adapter.set_speaker_enabled(id, true);
+        fake.fail(&right, ErrorKind::PasswordRequired);
+        adapter.poll();
+        assert_eq!(
+            format!("{:?}", state_of(&adapter, id)),
+            "Waiting(ForPassword)"
+        );
+
+        fake.stop_running();
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(state.password_prompt, None);
+        assert!(!state.speaker(id).is_some_and(|row| row.enabled));
+        assert_eq!(
+            messages(&adapter),
+            [
+                NoticeMessage::AirPlayStopped,
+                NoticeMessage::AirPlayCantPlay {
+                    speaker: "Living Room".to_owned(),
+                    problem: ui_model::AirPlayProblem::NeedsPassword,
+                },
+            ]
         );
     }
 
@@ -18156,6 +18422,99 @@ mod tests {
         adapter.save_settings();
         let kept = crate::data_folder::copies_kept_aside(&folder, "cast-speakers.ignored");
         assert!(kept.is_empty(), "{} copies kept", kept.len());
+    }
+
+    /// A Cast adapter launched over the settings in `dir`, with the Cast
+    /// speakers file there too.
+    fn cast_adapter_saving_to(dir: &std::path::Path) -> (AudioAdapter<MockBackend>, FakeCast) {
+        let mut audio = launch_audio();
+        let fake = FakeCast::default();
+        fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
+        audio.set_cast(fake.link());
+        let mut adapter = launch(audio, &dir.join(settings::FILE_NAME));
+        adapter.set_cast_file(Some(dir.join("cast-speakers.json")), false);
+        adapter.poll();
+        (adapter, fake)
+    }
+
+    // covers: S394
+    #[test]
+    fn a_cast_speakers_file_written_again_clears_the_not_saved_notice_the_settings_dont_hold() {
+        let dir = test_dir("cast-memory-unsaved");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        let cast_blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&cast_blocked).expect("blocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&cast_blocked).expect("unblocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 300.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+
+        // A settings file that still can't be saved keeps its notice.
+        let blocked = crate::data_folder::temporary_path(&dir.join(settings::FILE_NAME));
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(64.0);
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 350.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S394
+    #[test]
+    fn a_settings_save_that_works_keeps_the_notice_while_the_cast_file_cant_be_written() {
+        let dir = test_dir("cast-memory-unsaved-settings-saved");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        let cast_blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&cast_blocked).expect("blocked");
+        let path = dir.join(settings::FILE_NAME);
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(64.0);
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert_eq!(SettingsFile::at(path).load().0.master_volume, 65.0);
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S394
+    #[test]
+    fn a_cast_offset_set_back_to_the_one_in_its_file_clears_the_not_saved_notice() {
+        let dir = test_dir("cast-memory-unsaved-set-back");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 100.0);
+        adapter.poll();
+        let blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 100.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S394
+    #[test]
+    fn the_last_save_tells_a_cast_offset_is_unsaved_when_its_file_cant_be_written() {
+        let dir = test_dir("cast-memory-last-save");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        let blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        assert!(!adapter.save_settings(), "the Cast file is still blocked");
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        assert!(adapter.save_settings());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     // covers: C2

@@ -46,6 +46,6 @@ pub mod text;
 
 pub use server::{Capacity, Config, DEFAULT_PORT, RemoteError, RemoteServer, ServerEvent, Timing};
 pub use state::{
-    Command, NowPlaying, Preset, Source, SourceKind, Speaker, SpeakerChange, State, StateError,
-    Zone, ZoneChange, ZoneCounts,
+    Command, MixApp, NowPlaying, Preset, Source, SourceKind, Speaker, SpeakerChange, State,
+    StateError, Zone, ZoneChange, ZoneCounts,
 };

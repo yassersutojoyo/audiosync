@@ -196,7 +196,7 @@ struct UIStrings {
     // MARK: Microphone calibration (S232)
 
     let calibrateWithMicrophone = "Calibrate with Microphone"
-    func calibrateLabel(of name: String) -> String { "Calibrate \(name) with the microphone" }
+    func calibrateLabel(of name: String) -> String { "\(calibrateWithMicrophone), \(name)" }
     let calibrationHint = "Put the microphone where you listen. AudioSync fades the music out, plays a short, "
         + "quiet sweep on the built-in speakers and then on this speaker, sets this speaker's delay from the "
         + "difference and fades the music back in."
@@ -394,7 +394,7 @@ struct UIStrings {
 
     let calibrateAllLeftOutIncluded = "Included anyway: measured in this run."
     let includeAnyway = "Include Anyway"
-    func includeAnywayLabel(of name: String) -> String { "Include \(name) anyway" }
+    func includeAnywayLabel(of name: String) -> String { "\(includeAnyway), \(name)" }
     func includeAnywayHelp(_ reason: CalibrationLeftOut) -> String {
         switch reason {
         case .headphones: "For a speaker that reports itself as headphones. It counts until you close this window."
@@ -403,7 +403,7 @@ struct UIStrings {
         }
     }
     let leaveOut = "Leave Out"
-    func leaveOutLabel(of name: String) -> String { "Leave \(name) out" }
+    func leaveOutLabel(of name: String) -> String { "\(leaveOut), \(name)" }
 
     func calibrateAllProgress(_ progress: CalibrateAllProgress) -> String {
         switch progress {
@@ -427,7 +427,7 @@ struct UIStrings {
     let calibrateAllClose = "Close"
     let calibrateAllDone = "Done"
     let measureAgain = "Measure Again"
-    func measureAgainLabel(of name: String) -> String { "Measure \(name) again" }
+    func measureAgainLabel(of name: String) -> String { "\(measureAgain), \(name)" }
 
     /// The kind line under a row's name.
     func calibrateAllKind(_ kind: CalibrateAllKind, reference: Bool) -> String {
@@ -1271,10 +1271,10 @@ struct UIStrings {
     /// VoiceOver's name for a row's Open Settings button.
     func setupOpenSettings(_ permission: Permission) -> String {
         switch permission {
-        case .localNetwork: return "Open Local Network Settings"
-        case .audioCapture: return "Open Screen & System Audio Recording Settings"
-        case .microphone: return "Open Microphone Settings"
-        case .automation: return "Open Automation Settings"
+        case .localNetwork: return "\(openSettings), Local Network"
+        case .audioCapture: return "\(openSettings), Screen & System Audio Recording"
+        case .microphone: return "\(openSettings), Microphone"
+        case .automation: return "\(openSettings), Automation"
         }
     }
     /// The app menu item that opens the window again.
@@ -1336,6 +1336,11 @@ struct UIStrings {
         if reconnecting { return self.reconnecting }
         if unannounced { return notOnNetwork }
         return target.map(airPlayTargetNote)
+    }
+    /// The `rowNote` a menu bar panel row shows next to the name; the others
+    /// reach VoiceOver only.
+    func panelRowNote(_ note: String?, cast: CastRow?) -> String? {
+        note == reconnecting || note == notOnNetwork || cast?.status == .connecting ? note : nil
     }
     /// A stereo pair or home theater group: its kind and members, or the
     /// members that are missing (P176, P181).

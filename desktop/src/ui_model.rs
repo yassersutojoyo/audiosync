@@ -71,6 +71,8 @@ pub struct MixApp {
     pub name: String,
     /// Checked in the mode the list shows.
     pub checked: bool,
+    /// False for an app the list keeps only because a chosen source holds it.
+    pub running: bool,
 }
 
 /// Something AudioSync can capture.
@@ -919,11 +921,17 @@ pub fn show_presets(state: &mut AppState, presets: &[Preset]) {
 }
 
 /// The next N for a `<prefix>N` ID: above `last`, the highest given out, and
-/// above every ID in `ids`, so a deleted ID never comes back.
+/// above every ID in `ids`, so a deleted ID never comes back. Past
+/// `u64::MAX` (an edited settings file) it is the lowest N no ID in `ids` has.
 pub fn next_id<'a>(prefix: &str, ids: impl Iterator<Item = &'a str>, last: u64) -> u64 {
-    ids.filter_map(|id| id.strip_prefix(prefix)?.parse::<u64>().ok())
-        .fold(last, u64::max)
-        .saturating_add(1)
+    let taken: Vec<u64> = ids
+        .filter_map(|id| id.strip_prefix(prefix)?.parse::<u64>().ok())
+        .collect();
+    let highest = taken.iter().copied().fold(last, u64::max);
+    highest
+        .checked_add(1)
+        .or_else(|| (1..).find(|n| !taken.contains(n)))
+        .unwrap_or(highest)
 }
 
 /// The preset notice after a recall of `preset` (spec S265); `None` when
@@ -1549,6 +1557,9 @@ pub trait Backend {
     fn select_input_pair(&mut self, pair: u16);
     /// Checks or unchecks an app of the several-apps list, by executable.
     fn toggle_mix_app(&mut self, executable: &str);
+    /// Picks the source the several-apps list builds in "only these" mode
+    /// with exactly these of its apps checked, by executable (S353).
+    fn select_mix(&mut self, executables: &[String]);
     /// Switches the several-apps list to "all except" (true) or "only" (false).
     fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
@@ -2094,11 +2105,13 @@ impl MockBackend {
                     id: "player.exe".into(),
                     name: "Music Player".into(),
                     checked: false,
+                    running: true,
                 },
                 MixApp {
                     id: "browser.exe".into(),
                     name: "Web Browser".into(),
                     checked: false,
+                    running: true,
                 },
             ],
             mix_all_except: false,
@@ -2531,6 +2544,12 @@ impl Backend for MockBackend {
             .find(|source| source.id == self.state.source_id);
         if chosen.is_some_and(|source| source.kind == SourceKind::Input) {
             self.state.input_pair = pair;
+        }
+    }
+
+    fn select_mix(&mut self, executables: &[String]) {
+        for app in &mut self.state.mix_apps {
+            app.checked = executables.contains(&app.id);
         }
     }
 

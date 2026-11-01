@@ -378,9 +378,8 @@ pub const AIRPLAY_ERROR_RECEIVER_UNVERIFIED: i32 = 11;
 /// What [`asc_airplay_open_pairings`] returns when it can't open a store:
 /// a null or dead handle, or a path that isn't UTF-8.
 pub const AIRPLAY_PAIRINGS_FAILED: i32 = -1;
-/// The pairings file can't be read or isn't in the expected format: it is
-/// ignored; a file in the wrong format is replaced by the next pairing, an
-/// unreadable one is left as it is.
+/// The pairings file isn't in the expected format: it is ignored and
+/// replaced by the next pairing.
 pub const AIRPLAY_PAIRINGS_IGNORED: i32 = -2;
 
 /// The largest hold-back [`asc_airplay_set_hold_back`] applies, in ms: the
@@ -389,6 +388,9 @@ pub const AIRPLAY_MAX_DELAY_MS: i32 = MAX_DELAY.as_millis() as i32;
 /// A newer AudioSync wrote the pairings file: it is ignored and left as it
 /// is, and pairings made now last until the handle is destroyed.
 pub const AIRPLAY_PAIRINGS_NEWER: i32 = -3;
+/// The pairings file can't be read: it is ignored and left as it is, and
+/// pairings made now last until the handle is destroyed.
+pub const AIRPLAY_PAIRINGS_UNREADABLE: i32 = -4;
 
 /// What [`asc_airplay_pairings_access`] and
 /// [`asc_airplay_airplay2_identity_access`] return for a null or dead
@@ -1725,9 +1727,10 @@ impl AscAirPlay {
     /// Whether a session of `id` that plays proved the receiver holds the
     /// stored credentials, so whatever turned them down is gone (P154):
     /// AirPlay 2 verifies its signature with them, AirPlay 1 only when they
-    /// carry its key (P56), and a password the user typed proves nothing.
+    /// carry its key (P56); a password the user typed or a PIN session,
+    /// which runs no pair-verify, proves nothing.
     fn playing_proves_credentials(&self, id: &str) -> bool {
-        if self.passwords.contains_key(id) {
+        if self.passwords.contains_key(id) || self.paired_for_session.contains(id) {
             return false;
         }
         match self.listed.get(id) {
@@ -3676,10 +3679,10 @@ fn moved_on(progress: Progress, since: Duration) -> Progress {
 /// pairings it drops; meant for once, before discovery starts. Listed
 /// receivers are reported again, as changed, with their availability under
 /// the new store. Returns how many receivers it holds credentials for, or
-/// [`AIRPLAY_PAIRINGS_IGNORED`] or [`AIRPLAY_PAIRINGS_NEWER`] for a file it
-/// ignored (the store is then empty), or [`AIRPLAY_PAIRINGS_FAILED`] for a
-/// null or dead handle or a null or non-UTF-8 `path`, leaving the store
-/// as it was.
+/// [`AIRPLAY_PAIRINGS_IGNORED`], [`AIRPLAY_PAIRINGS_NEWER`] or
+/// [`AIRPLAY_PAIRINGS_UNREADABLE`] for a file it ignored (the store is then
+/// empty), or [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or a
+/// null or non-UTF-8 `path`, leaving the store as it was.
 ///
 /// # Safety
 ///
@@ -3714,6 +3717,7 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
                 Loaded::Receivers(count) => i32::try_from(count).unwrap_or(i32::MAX),
                 Loaded::Ignored(_) => AIRPLAY_PAIRINGS_IGNORED,
                 Loaded::Newer(_) => AIRPLAY_PAIRINGS_NEWER,
+                Loaded::Unreadable(_) => AIRPLAY_PAIRINGS_UNREADABLE,
             }
         })
     }
@@ -3727,11 +3731,11 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
 /// written to it. Meant for once, before discovery starts. With the hidden
 /// AirPlay 2 switch off it reads and writes nothing and returns 0, and only
 /// [`asc_airplay_forget_pairing`] opens the file, to drop the receiver from
-/// it. Returns
-/// how many receivers it holds credentials for, or
-/// [`AIRPLAY_PAIRINGS_IGNORED`] or [`AIRPLAY_PAIRINGS_NEWER`] for a file
-/// it ignored, or [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or
-/// a null, empty or non-UTF-8 `path`, leaving the identity as it was.
+/// it. Returns how many receivers it holds credentials for, or
+/// [`AIRPLAY_PAIRINGS_IGNORED`], [`AIRPLAY_PAIRINGS_NEWER`] or
+/// [`AIRPLAY_PAIRINGS_UNREADABLE`] for a file it ignored, or
+/// [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or a null, empty
+/// or non-UTF-8 `path`, leaving the identity as it was.
 ///
 /// # Safety
 ///
@@ -3768,6 +3772,7 @@ pub unsafe extern "C" fn asc_airplay_open_airplay2_identity(
                 Loaded::Receivers(count) => i32::try_from(count).unwrap_or(i32::MAX),
                 Loaded::Ignored(_) => AIRPLAY_PAIRINGS_IGNORED,
                 Loaded::Newer(_) => AIRPLAY_PAIRINGS_NEWER,
+                Loaded::Unreadable(_) => AIRPLAY_PAIRINGS_UNREADABLE,
             }
         })
     }
@@ -9182,6 +9187,7 @@ mod tests {
         assert_eq!(again.get(&id), None, "gone from the file too");
     }
 
+    // covers: P154, S223
     #[test]
     fn a_receiver_that_asks_every_time_with_credentials_turned_down_never_reads_as_paired() {
         let mut handle = create_with(quiet);
@@ -9237,6 +9243,12 @@ mod tests {
             Some(&credentials),
             "an answer during the pairing proves nothing about them"
         );
+        // Playing proves nothing either: a PIN session runs no pair-verify.
+        inside(handle).take_in(SenderEvent::Speaker {
+            key: key.clone(),
+            event: SpeakerEvent::State(SpeakerState::Playing),
+        });
+        assert!(inside(handle).credentials_turned_down.contains(&id));
         inside(handle).take_in(SenderEvent::Speaker {
             key,
             event: SpeakerEvent::Error(SpeakerError {
@@ -10274,6 +10286,27 @@ mod tests {
                 AIRPLAY_PAIRINGS_IGNORED
             );
             asc_airplay_destroy(&mut third);
+        }
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    // covers: S224
+    #[test]
+    fn an_unreadable_pairings_file_is_told_apart_from_one_in_the_wrong_format() {
+        // A folder in the file's place can't be read, as a permission or disk
+        // error would: it is left as it is, so pairings made now aren't saved.
+        let folder = scratch("ffi-pairings-unreadable");
+        let path = folder.join("airplay-pairings.dat");
+        std::fs::create_dir_all(&path).expect("a folder");
+        let c_path = CString::new(path.to_str().expect("UTF-8")).expect("no NUL");
+        let mut handle = asc_airplay_create();
+        // SAFETY: a live handle, used by this thread only; a local C string.
+        unsafe {
+            assert_eq!(
+                asc_airplay_open_pairings(handle, c_path.as_ptr()),
+                AIRPLAY_PAIRINGS_UNREADABLE
+            );
+            asc_airplay_destroy(&mut handle);
         }
         let _ = std::fs::remove_dir_all(&folder);
     }

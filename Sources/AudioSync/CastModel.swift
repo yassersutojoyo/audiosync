@@ -449,6 +449,9 @@ struct CastModel {
 
     /// The connect failures before a first connect that turn the device off (C80).
     static let failuresBeforeOff = 3
+    /// From the Mac's will-sleep notice to its wake: a connect failure doesn't
+    /// count toward turning the device off (S412).
+    var asleep = false
 
     var discovery = Discovery.off
     private(set) var devices: [String: CastDevice] = [:]
@@ -924,7 +927,7 @@ struct CastModel {
         case .connectFailed(_, let error, _, _):
             guard current.status == .connecting else { return setStatus(.reconnecting) }
             // A group with no address yet waits for its records (C81).
-            guard error != .noAddress else { return nil }
+            guard error != .noAddress, !asleep else { return nil }
             attempt?.connectFailures += 1
             guard attempt?.connectFailures == Self.failuresBeforeOff else { return nil }
             enabled = nil
@@ -1102,12 +1105,21 @@ struct CastModel {
         let size = deviceStep > 0 ? deviceStep : Self.fallbackVolumeStep
         // A step moves the row (S415); at zone 0 it sends nothing.
         var own = 0.0
-        guard asc_cast_row_move((deviceLevel(of: id) + (up ? size : -size)) * 100, zone(of: id), &own)
+        // Unrounded, 0.4 + 0.02 lands past 0.42, and a status of 0.43, exactly
+        // half a step away, would answer the level sent (C70).
+        let row = ((deviceLevel(of: id) + (up ? size : -size)) * 1e8).rounded() / 1e6
+        guard asc_cast_row_move(row, zone(of: id), &own)
         else { return nil }
         requested = (id, own)
         attempt?.reportedMute = nil
         // The device's own step moves its level, which is the own level only at zone 1 (C104).
-        if deviceStep > 0, zone(of: id) == 1 { return .device(up: up) }
+        if deviceStep > 0, zone(of: id) == 1 {
+            // The sender replaces a drag level still waiting for its interval
+            // with the step built on it; awaiting the step's level lets its
+            // answer clear that level and the ones before it.
+            _ = levelToSend(id, own: own)
+            return .device(up: up)
+        }
         return levelToSend(id, own: own).map { .level($0) }
     }
 

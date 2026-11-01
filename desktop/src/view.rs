@@ -3360,9 +3360,9 @@ impl App {
         self.save_settings();
     }
 
-    /// When Windows ends the session, which may end the process before the
-    /// event loop does. Returns whether no change is left unsaved.
-    #[cfg(windows)]
+    /// When Windows ends the session or Linux sends an exit signal, which
+    /// ends the process before the event loop does. Returns whether no
+    /// change is left unsaved.
     pub fn at_session_end(&self) -> bool {
         self.stop_remote_at_exit();
         self.updater_at_exit();
@@ -8020,6 +8020,24 @@ mod tests {
         assert!(app.ui.borrow().rename.is_none());
     }
 
+    // covers: S351
+    #[test]
+    fn an_exit_signal_on_linux_runs_the_quit_steps_of_a_windows_session_end() {
+        let (app, airplay, cast) = app_with_both_senders_joined();
+        let ending = crate::session_ending(&app, &app.log, "exit signal");
+        crate::platform::keep_exit_signal_ending(ending);
+
+        assert_eq!(crate::platform::end_at_exit_signal(15), Some(143));
+        assert!(airplay.links_dropped(), "the AirPlay sender tore down");
+        assert_eq!(cast.state().shutdowns, 1, "the Cast host shut down");
+        assert_eq!(
+            crate::platform::end_at_exit_signal(2),
+            None,
+            "the steps run once"
+        );
+        assert_eq!(cast.state().shutdowns, 1);
+    }
+
     // covers: S220
     #[test]
     fn quitting_with_unreadable_typing_keeps_the_applied_delay() {
@@ -9281,6 +9299,29 @@ mod tests {
             *pressed.borrow(),
             [UpdateButton::Download, UpdateButton::NotNow],
             "Enter"
+        );
+    }
+
+    #[test]
+    fn a_muted_cast_row_says_so_only_while_it_plays() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let group = SharedString::from("Google Cast group");
+        assert_eq!(
+            strings
+                .invoke_cast_note(CastState::Idle, true, "".into())
+                .as_str(),
+            ""
+        );
+        assert_eq!(
+            strings.invoke_cast_note(CastState::Idle, true, group.clone()),
+            group
+        );
+        assert_eq!(
+            strings
+                .invoke_cast_note(CastState::Playing, true, group)
+                .as_str(),
+            "Muted on the group"
         );
     }
 

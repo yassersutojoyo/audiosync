@@ -209,6 +209,8 @@ final class OutputRenderer: FadingOutput {
     /// How late callbacks came against the earliest ones (S209).
     var lateMaxMs: Double { target?.renderer.lateMaxMs ?? 0 }
     var lateCallbacks: Int64 { target?.renderer.lateCallbacks ?? 0 }
+    /// The peak and RMS in dBFS the device got since the last take.
+    func takeLevel() -> (peakDb: Double, rmsDb: Double)? { target?.renderer.takeLevel() }
     /// The share of its callbacks that starved over its latest 5 s (S347).
     var starvedPercent: Int { Int(target?.renderer.starvedPercent ?? 0) }
     /// The device's IO overloads since the latest start (S229).

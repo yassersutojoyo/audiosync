@@ -296,14 +296,15 @@ final class NativeAirPlay {
     /// The zone position (0 to 100) of every receiver in a zone, live; the
     /// rest are in no zone (S249). Main queue.
     func setZones(_ zones: [String: Double]) {
+        let moved = volumeEvents.sendingZones(zones)
         queue.async { [weak self] in
             guard let self else { return }
-            let old = self.zoneVolumes
             self.zoneVolumes = zones
-            guard let handle = self.handle else { return }
-            for id in Set(old.keys).union(zones.keys) where old[id] != zones[id] {
-                _ = asc_airplay_set_zone_volume(handle, id, zones[id] ?? SpeakerZone.noZoneVolume)
+            if let handle = self.handle {
+                for id in moved { _ = asc_airplay_set_zone_volume(handle, id, zones[id] ?? SpeakerZone.noZoneVolume) }
             }
+            // Behind every report polled before the move, as in setVolume.
+            DispatchQueue.main.async { [weak self] in self?.volumeEvents.reachedZones(moved) }
         }
     }
 
@@ -398,7 +399,9 @@ final class NativeAirPlay {
     static func pairingsLogLine(_ loaded: Int32) -> String {
         switch loaded {
         case ASC_AIRPLAY_PAIRINGS_IGNORED:
-            return "the pairings file was unreadable or not in the expected format; it is ignored; a file in the wrong format is replaced by the next pairing, an unreadable one is left as it is"
+            return "the pairings file was not in the expected format; it is ignored and replaced by the next pairing"
+        case ASC_AIRPLAY_PAIRINGS_UNREADABLE:
+            return "the pairings file couldn't be read; it is left as it is, and pairings made now last until AudioSync quits"
         case ASC_AIRPLAY_PAIRINGS_NEWER:
             return "a newer AudioSync wrote the pairings file; it is left as it is, and pairings made now last until AudioSync quits"
         case ASC_AIRPLAY_PAIRINGS_FAILED:
@@ -412,6 +415,7 @@ final class NativeAirPlay {
     /// are lost when AudioSync quits.
     static func pairingsNotSaved(_ loaded: Int32) -> Bool {
         loaded == ASC_AIRPLAY_PAIRINGS_FAILED || loaded == ASC_AIRPLAY_PAIRINGS_NEWER
+            || loaded == ASC_AIRPLAY_PAIRINGS_UNREADABLE
     }
 
     /// How private the core found a pairing file, for the debug log; nil

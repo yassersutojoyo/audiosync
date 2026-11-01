@@ -524,6 +524,8 @@ pub fn equalizer() -> (EqControl, EqProcessor) {
         state: [[BandState::ZERO; BAND_COUNT]; 2],
         running: false,
         wet_frames: 0,
+        preamp_from: snapshot.preamp,
+        preamp_frames: snapshot.fade_frames,
         seen_version: 0,
         position: 0,
         curve_start: i64::MIN,
@@ -744,6 +746,10 @@ pub struct EqProcessor {
     running: bool,
     /// Position in the on/off ramp: 0 is dry, `fade_frames` is fully equalized.
     wet_frames: u64,
+    /// The preamp a curve change ramps from, and the frames of that ramp
+    /// played; `fade_frames` or more plays the current preamp (S31).
+    preamp_from: f64,
+    preamp_frames: u64,
     seen_version: u64,
     /// The ring frame the next block starts at.
     position: i64,
@@ -775,11 +781,13 @@ impl EqProcessor {
             // S28: the first enabled block after a disabled stretch starts
             // from zeroed filters; their memory is from audio that is long gone.
             self.zero_state();
+            self.preamp_frames = self.current.fade_frames;
             self.running = true;
         }
         let samples = interleaved.len() / 2 * 2;
         let block = &mut interleaved[..samples];
-        let preamp = self.current.preamp;
+        let (from, to) = (self.preamp_from, self.current.preamp);
+        let ramp = self.preamp_frames;
         let bands = &self.current.bands;
         let full = self.current.fade_frames;
         let start = self.wet_frames.min(full);
@@ -788,7 +796,7 @@ impl EqProcessor {
         for (channel, saved) in self.state.iter_mut().enumerate() {
             let mut state = *saved;
             let mut wet = start;
-            for frame in block.chunks_exact_mut(2) {
+            for (index, frame) in block.chunks_exact_mut(2).enumerate() {
                 wet = if enabled {
                     (wet + 1).min(full)
                 } else {
@@ -798,7 +806,7 @@ impl EqProcessor {
                     break;
                 }
                 let dry = f64::from(frame[channel]);
-                let mut y = dry * preamp;
+                let mut y = dry * ramped(from, to, ramp + index as u64 + 1, full);
                 for (band, z) in bands.iter().zip(state.iter_mut()) {
                     let x = y;
                     y = band.b0 * x + z.z1;
@@ -824,6 +832,7 @@ impl EqProcessor {
             end = wet;
         }
         self.wet_frames = end;
+        self.preamp_frames = (ramp + (samples / 2) as u64).min(full);
         if end == 0 {
             self.running = false;
         }
@@ -892,6 +901,12 @@ impl EqProcessor {
             if next.epoch != self.current.epoch {
                 // A new design rate: stale state would click (S30).
                 self.state = [[BandState::ZERO; BAND_COUNT]; 2];
+                self.preamp_frames = next.fade_frames;
+            } else if self.running && next.preamp != self.current.preamp {
+                // A step in the preamp on a sustained tone is audible.
+                let (from, to) = (self.preamp_from, self.current.preamp);
+                self.preamp_from = ramped(from, to, self.preamp_frames, next.fade_frames);
+                self.preamp_frames = 0;
             }
             self.current = next;
             self.seen_version = version;
@@ -901,6 +916,15 @@ impl EqProcessor {
 
     fn zero_state(&mut self) {
         self.state = [[BandState::ZERO; BAND_COUNT]; 2];
+    }
+}
+
+/// The preamp `done` frames into a linear ramp of `full` frames from `from` to `to`.
+fn ramped(from: f64, to: f64, done: u64, full: u64) -> f64 {
+    if done >= full {
+        to
+    } else {
+        from + (to - from) * (done as f64 / full as f64)
     }
 }
 

@@ -48,7 +48,7 @@ The Windows parts are in the Windows preview, out since 0.7.1.
 - The Web Remote can switch the source, zones and presets too.
 - On the Mac, a Bluetooth headset's call microphone isn't offered as a source anymore, since using it drops the headset to call quality.
 - Calibrate with Microphone works on Windows too.
-- Master Volume scales Google Cast speakers and groups too, on the device's own volume.
+- Master Volume turns Google Cast speakers and groups down too, inside AudioSync, without touching the TV's own volume.
 - A Cast speaker that doesn't show up can be added by its IP address or host name, with Add by Address… under Connected Speakers on the Mac or in the Speakers menu on Windows.
 - Cast speakers show the track that's playing, with the title, artist, album and cover.
 - On Windows you can rename a speaker too, with a double-click on its name.

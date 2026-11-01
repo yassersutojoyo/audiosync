@@ -179,7 +179,9 @@ final class SourceCapture {
     /// any failure everything is released again and the error is thrown. An
     /// input source reads the channel pair stored as `inputPair`. A `rebuild`
     /// (S20, S227 e) also counts the app processes the last session found.
-    func start(source: AudioSource, parts: EngineParts, inputPair: Int = 0, rebuild: Bool = false) throws {
+    /// A reopen (S335) passes the session's rate as `reopening`.
+    func start(source: AudioSource, parts: EngineParts, inputPair: Int = 0, rebuild: Bool = false,
+               reopening: Double? = nil) throws {
         halt()   // a start always follows a halt; this keeps a stray second start harmless
         sessionMark &+= 1
         self.source = source
@@ -187,7 +189,7 @@ final class SourceCapture {
         self.parts = parts
         _ = Self.runHeard   // the static's lazy init runs here, never on the IO thread
         sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(source))
-        sampleRate = CaptureRate.fallback
+        sampleRate = CaptureRate.untilRead(reopening: reopening)
         do { try startSource(source, rebuild: rebuild) } catch { halt(); throw error }
     }
 
@@ -197,7 +199,7 @@ final class SourceCapture {
     /// that attach meanwhile.
     func reopen(source: AudioSource, parts: EngineParts, inputPair: Int) throws {
         let rate = sampleRate
-        do { try start(source: source, parts: parts, inputPair: inputPair, rebuild: true) } catch {
+        do { try start(source: source, parts: parts, inputPair: inputPair, rebuild: true, reopening: rate) } catch {
             sampleRate = rate
             throw error
         }

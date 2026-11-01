@@ -1039,6 +1039,89 @@ pub fn is_on_a_monitor(_x: i32, _y: i32) -> bool {
     false
 }
 
+/// Runs `ending` on the event loop's thread when SIGTERM or SIGINT arrives
+/// (S351), never inside the signal handler, then exits with 128 plus the
+/// signal's number. A second one gets the default and ends the process.
+#[cfg(target_os = "linux")]
+pub fn on_exit_signal(ending: Box<dyn Fn()>) {
+    keep_exit_signal_ending(ending);
+    let mut pipe = [0; 2];
+    // SAFETY: `pipe` has room for the two descriptors pipe2 writes.
+    if unsafe { libc::pipe2(pipe.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return;
+    }
+    EXIT_SIGNAL_PIPE.store(pipe[1], std::sync::atomic::Ordering::Relaxed);
+    let reader = pipe[0];
+    let waiting = std::thread::Builder::new()
+        .name("exit signal".to_owned())
+        .spawn(move || {
+            let mut signal = 0u8;
+            // SAFETY: reads at most one byte into `signal`.
+            if unsafe { libc::read(reader, (&raw mut signal).cast(), 1) } == 1 {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(status) = end_at_exit_signal(i32::from(signal)) {
+                        std::process::exit(status);
+                    }
+                });
+            }
+        });
+    if waiting.is_err() {
+        return;
+    }
+    let handler = exit_signal_handler as extern "C" fn(libc::c_int);
+    for signal in [libc::SIGTERM, libc::SIGINT] {
+        // SAFETY: an all-zero sigaction is valid, sigemptyset fills its
+        // mask, and the handler lives for the whole process.
+        unsafe {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = handler as libc::sighandler_t;
+            action.sa_flags = libc::SA_RESETHAND | libc::SA_RESTART;
+            libc::sigemptyset(&mut action.sa_mask);
+            libc::sigaction(signal, &action, std::ptr::null_mut());
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+static EXIT_SIGNAL_PIPE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+#[cfg(target_os = "linux")]
+extern "C" fn exit_signal_handler(signal: libc::c_int) {
+    // Only async-signal-safe calls, and errno goes back as the interrupted code left it.
+    // SAFETY: errno is this thread's, and `byte` is valid for the one-byte write.
+    unsafe {
+        let errno = *libc::__errno_location();
+        let byte = signal as u8;
+        libc::write(
+            EXIT_SIGNAL_PIPE.load(std::sync::atomic::Ordering::Relaxed),
+            (&raw const byte).cast(),
+            1,
+        );
+        *libc::__errno_location() = errno;
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+thread_local! {
+    static EXIT_SIGNAL_ENDING: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Keeps, on the event loop's thread, the quit steps an exit signal runs.
+#[cfg(any(target_os = "linux", test))]
+pub fn keep_exit_signal_ending(ending: Box<dyn Fn()>) {
+    EXIT_SIGNAL_ENDING.with(|slot| *slot.borrow_mut() = Some(ending));
+}
+
+/// On the event loop's thread: runs the kept quit steps once and returns
+/// the exit status for `signal`, the Mac's (S111); `None` once they ran.
+#[cfg(any(target_os = "linux", test))]
+pub fn end_at_exit_signal(signal: i32) -> Option<i32> {
+    let ending = EXIT_SIGNAL_ENDING.with(|slot| slot.borrow_mut().take())?;
+    ending();
+    Some(128 + signal)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

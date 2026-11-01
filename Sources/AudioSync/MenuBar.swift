@@ -52,6 +52,8 @@ final class AppModel: ObservableObject {
         var holdsCredentials = false
         /// An AirPlay speaker whose password AudioSync holds until it quits.
         var holdsPassword = false
+        /// An AirPlay speaker turned off for refusing a pairing, until the user turns it on here.
+        var refusedForCode = false
         /// A stereo pair or home theater group: its kind and members (P176).
         var airPlayTarget: AirPlayTargetRow? = nil
         /// Why a local speaker sits out of microphone calibration: headphones
@@ -1911,12 +1913,13 @@ struct MenuBarView: View {
     /// `note`: what the speaker's zone says about it, when its own note is empty.
     private func speakerRow(_ speaker: AppModel.Speaker, note: String?) -> some View {
         let t = model.text
+        let hint = t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                             waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                             codeWait: speaker.codeWait, name: speaker.name,
+                             unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
-                          text: t, height: rowHeight,
-                          hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
-                                          waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
-                                          codeWait: speaker.codeWait, name: speaker.name,
-                                          unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note,
+                          text: t, height: rowHeight, hint: hint,
+                          shownNote: t.panelRowNote(hint, cast: speaker.cast),
                           renamedFrom: speaker.renamedFrom,
                           value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
                           kind: speaker.tag, airPlay2: speaker.airPlay2,
@@ -1945,6 +1948,8 @@ private struct CompactRow: View {
     /// Read after the name by VoiceOver: what a Google Cast speaker is
     /// doing, or why a zone member doesn't play with its zone.
     var hint: String? = nil
+    /// The part of `hint` shown in the row, in place of the availability note.
+    var shownNote: String? = nil
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
     /// VoiceOver's label and value in place of the speaker's: a zone's, read
@@ -1978,8 +1983,20 @@ private struct CompactRow: View {
                     SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2)
                 }
                 Spacer(minLength: 4)
-                AvailabilityNote(availability: availability, text: text, givesWay: true)
-                    .layoutPriority(1)
+                if let shownNote {
+                    Text(shownNote)
+                        .lineLimit(1)
+                        .font(.caption)
+                        .foregroundStyle(Brand.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(shownNote)
+                        // Read in the row's hint, or its value when off the network.
+                        .accessibilityHidden(true)
+                        .layoutPriority(1)
+                } else {
+                    AvailabilityNote(availability: availability, text: text, givesWay: true)
+                        .layoutPriority(1)
+                }
                 if let deviceVolume { DeviceVolumeBadge(glyph: deviceVolume) }
             }
             .padding(.horizontal, 6)

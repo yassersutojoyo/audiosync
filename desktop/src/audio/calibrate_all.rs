@@ -58,6 +58,15 @@ impl Member {
         member_key(self.class, &self.id)
     }
 
+    /// Whether its stored delay differs in `now`. AirPlay compares the
+    /// setting A, since L also moves with the sender latency (S239).
+    fn delay_changed(&self, now: &Member) -> bool {
+        match self.class {
+            Class::AirPlay => now.adjustment_ms != self.adjustment_ms,
+            _ => now.offset_ms != self.offset_ms,
+        }
+    }
+
     /// Its speaker key (S149), as a zone holds it.
     pub fn speaker_key(&self) -> String {
         let id = self.id.clone();
@@ -476,6 +485,9 @@ pub struct AllRun {
     members: Vec<Member>,
     /// The rows this run measures, the reference's first.
     taking_part: Vec<usize>,
+    /// Each `taking_part` row's stored delay as it played at the start,
+    /// which for AirPlay is L at the start's sender latency.
+    started_ms: Vec<Option<f64>>,
     /// The speakers that play and aren't measured, kept quiet in the mix
     /// send by the solo until the run gives the outputs back (S255).
     silenced: Vec<Member>,
@@ -685,7 +697,7 @@ impl AllRun {
         // An off row was read while it didn't play: it starts from its values now (S255).
         let run = if off {
             sheet.measure_again_off(row, now.offset_ms, now.latency_ms)
-        } else if now.offset_ms != measured.offset_ms {
+        } else if measured.delay_changed(now) {
             return refuse(Failure::DelayChanged);
         } else {
             sheet.measure_again(row)
@@ -750,6 +762,17 @@ impl AllRun {
                 lineup.hold_backs_ms.get(id).map(|ms| (id.clone(), *ms))
             })
             .collect();
+        let started_ms = taking_part
+            .iter()
+            .map(|row| {
+                let member = &members[*row];
+                lineup
+                    .members
+                    .iter()
+                    .find(|now| now.same(member))
+                    .map_or(member.offset_ms, |now| now.offset_ms)
+            })
+            .collect();
         // Every speaker still plays the music until it faded: the longest
         // way any of them has to play out sets the wait.
         let quiet_ms = lineup
@@ -764,6 +787,7 @@ impl AllRun {
             run: Some(run),
             members,
             taking_part,
+            started_ms,
             silenced,
             again,
             rate,
@@ -1007,11 +1031,11 @@ impl AllRun {
         if lineup.reference.as_deref() != Some(self.reference.as_str()) {
             return Some(EndReason::SpeakersChanged);
         }
-        for row in &self.taking_part {
+        for (row, started_ms) in self.taking_part.iter().zip(&self.started_ms) {
             let member = &self.members[*row];
             match lineup.members.iter().find(|now| now.same(member)) {
                 None => return Some(EndReason::SpeakerTurnedOff),
-                Some(now) if now.offset_ms != member.offset_ms => {
+                Some(now) if member.delay_changed(now) || now.offset_ms != *started_ms => {
                     return Some(EndReason::SpeakersChanged);
                 }
                 Some(_) => {}
@@ -1818,11 +1842,18 @@ pub(crate) mod tests {
                 .push(member(Class::Local, "hdmi", Some(0.0), 2500.0));
         };
         let edit: fn(&mut FakeRig) = |rig| rig.lineup.members[1].offset_ms = Some(400.0);
+        // L moves with L_s while A stays: rows read at two L would share one median.
+        let sender_moves: fn(&mut FakeRig) = |rig| {
+            let kitchen = &mut rig.lineup.members[2];
+            kitchen.offset_ms = Some(2400.0);
+            kitchen.sender_ms = 400.0;
+        };
         for (meddle, reason) in [
             (switch, EndReason::SourceChanged),
             (waiting_switch, EndReason::SourceChanged),
             (turn_on, EndReason::SpeakersChanged),
             (edit, EndReason::SpeakersChanged),
+            (sender_moves, EndReason::SpeakersChanged),
         ] {
             let mut rig = FakeRig::new();
             let mut run = start(&mut rig);
@@ -2280,6 +2311,36 @@ pub(crate) mod tests {
             DebugLog::default(),
         );
         assert_eq!(again.err(), Some(Failure::DelayChanged));
+        given_back(&rig);
+    }
+
+    // covers: S239
+    #[test]
+    fn measure_again_of_an_airplay_row_whose_sender_latency_moved_still_measures() {
+        let mut rig = FakeRig::new();
+        let mut run = start(&mut rig);
+        let members = run.members().to_vec();
+        let mut sheet = run_to_end(&mut rig, &mut run, |_, _| {})
+            .sheet
+            .expect("a sheet");
+        // Another AirPlay speaker turned off moves L_s and so L; A stays.
+        let kitchen = &mut rig.lineup.members[2];
+        kitchen.offset_ms = Some(2400.0);
+        kitchen.sender_ms = 400.0;
+        let now = rig.now.get();
+        let mut again = AllRun::again(
+            &mut rig,
+            &sheet,
+            &members,
+            run.rate(),
+            run.microphone(),
+            2,
+            now,
+            DebugLog::default(),
+        )
+        .expect("it starts");
+        let finished = run_to_end(&mut rig, &mut again, |_, _| {});
+        assert!(sheet.replace(finished.sheet.expect("a sheet")));
         given_back(&rig);
     }
 

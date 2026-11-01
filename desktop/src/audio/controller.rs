@@ -107,6 +107,9 @@ mod log_lines_tests;
 /// How often the debug log gets a status line while a session runs.
 const STATUS_INTERVAL: Duration = Duration::from_secs(5);
 
+/// How often the debug log gets each playing output's level.
+const LEVEL_INTERVAL: Duration = Duration::from_secs(10);
+
 /// How often a running session checks whether the source is heard twice
 /// ([`routing`](super::routing)).
 const ROUTING_INTERVAL: Duration = Duration::from_secs(3);
@@ -486,6 +489,9 @@ fn solo_gain(solo: Option<&str>, id: &str, gain: f32) -> f32 {
 /// A running session.
 struct Session<D: Driver> {
     source: SourceId,
+    /// The executable a single app ran as the session started: a lost
+    /// capture opens again only on a process still running it (S380).
+    app_executable: Option<String>,
     /// What the capture takes in.
     target: CaptureTarget,
     ring: Arc<Ring>,
@@ -863,6 +869,8 @@ pub struct Controller<D: Driver> {
     listing_notes: Vec<ListingNote>,
     /// When the log last got a status line, and the frames captured then.
     last_status: Option<(Instant, u64)>,
+    /// When the log last got the outputs' levels.
+    last_levels: Option<Instant>,
     /// The double-audio check of the running session.
     routing: RoutingState,
     /// The AirPlay side, once there is a sender.
@@ -987,6 +995,7 @@ impl<D: Driver> Controller<D> {
             inputs_left_behind: BTreeSet::new(),
             listing_notes: Vec::new(),
             last_status: None,
+            last_levels: None,
             routing: RoutingState::default(),
             airplay: None,
             feed: None,
@@ -2330,6 +2339,7 @@ impl<D: Driver> Controller<D> {
             feeds,
         });
         self.last_status = None;
+        self.last_levels = None;
         self.reap(false);
         // Without a session, nothing is heard twice.
         let routing = std::mem::take(&mut self.routing);
@@ -2491,6 +2501,35 @@ impl<D: Driver> Controller<D> {
         }
     }
 
+    /// Logs each playing output's peak and RMS every [`LEVEL_INTERVAL`],
+    /// read from the atomics its renderer keeps.
+    fn log_levels_if_due(&mut self, now: Instant) {
+        if !self.log.enabled() {
+            return;
+        }
+        let Some(session) = &self.session else {
+            return;
+        };
+        match self.last_levels {
+            Some(at) if now.saturating_duration_since(at) < LEVEL_INTERVAL => return,
+            None => {
+                self.last_levels = Some(now);
+                return;
+            }
+            Some(_) => self.last_levels = Some(now),
+        }
+        for (id, playing) in &session.outputs {
+            if let Some((peak, rms)) = playing.control.take_level() {
+                self.log.log(|| {
+                    format!(
+                        "output {} level: peak {peak:.1} dBFS, RMS {rms:.1} dBFS",
+                        label(&self.names, id)
+                    )
+                });
+            }
+        }
+    }
+
     /// Logs how the session is doing, at most every [`STATUS_INTERVAL`]:
     /// the frames captured, and each playing output's delay, volume and
     /// reader counters, all read from the atomics the audio threads keep.
@@ -2644,7 +2683,7 @@ impl<D: Driver> Controller<D> {
         if !self.last_session_fading() {
             return self.start_session(source);
         }
-        self.capture_target(source)?;
+        self.capture_target(source, None)?;
         self.log
             .log(|| "the capture starts once the last session's outputs have faded out".to_owned());
         self.next_start = Some(source.clone());
@@ -2922,6 +2961,9 @@ impl<D: Driver> Controller<D> {
                     if let Some(airplay) = self.airplay.as_mut() {
                         airplay.sleeping();
                     }
+                    if let Some(cast) = self.cast.as_mut() {
+                        cast.set_asleep(true);
+                    }
                     self.log.log(|| {
                         "the PC is going to sleep: a capture lost now is opened again once it \
                          wakes"
@@ -2993,6 +3035,9 @@ impl<D: Driver> Controller<D> {
         self.cancel_fresh_restarts_for_sleep();
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.woke();
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_asleep(false);
         }
         for appeared in self.appeared.values_mut() {
             *appeared = self.polls;
@@ -3081,14 +3126,15 @@ impl<D: Driver> Controller<D> {
         let busy_since = reopen.busy_since;
         let away = reopen.away;
         let source = session.source.clone();
+        let app_executable = session.app_executable.clone();
         let ring = Arc::clone(&session.ring);
         let started_as = session.started_as;
         // The lost capture's thread, let go while Windows audio hangs, may
         // still hold the ring's writer: that try fails as one Windows audio
         // didn't answer, and the next may work.
         let mut writer_held = false;
-        let opened = match self.capture_target(&source) {
-            Ok(target) => match ring.writer() {
+        let opened = match self.capture_target(&source, app_executable.as_deref()) {
+            Ok((target, _)) => match ring.writer() {
                 Some(writer) => self
                     .open_capture(&target, writer)
                     .map(|opened| (target, opened)),
@@ -3461,15 +3507,31 @@ impl<D: Driver> Controller<D> {
 
     /// What capturing `source` opens, from the running processes where it
     /// names apps, and for "all except" from the apps with audio sessions.
-    fn capture_target(&mut self, source: &SourceId) -> Result<CaptureTarget, BackendError> {
+    /// A single app's top process must run `app_executable` when one is
+    /// given, and the executable it runs comes back with the capture.
+    fn capture_target(
+        &mut self,
+        source: &SourceId,
+        app_executable: Option<&str>,
+    ) -> Result<(CaptureTarget, Option<String>), BackendError> {
         let own_pid = self.driver.own_pid();
-        match source {
+        let target = match source {
             SourceId::WholeSystem | SourceId::Input { .. } => {
                 decide_capture(source, own_pid, &ProcessTable::default(), &self.input_pairs)
             }
-            SourceId::App { .. } => {
+            SourceId::App { root_pid } => {
                 let processes = self.driver.processes()?;
-                decide_capture(source, own_pid, &processes, &self.input_pairs)
+                let runs = processes
+                    .get(*root_pid)
+                    .map(|entry| entry.executable.clone());
+                // The app's process ID may have gone to another app since.
+                if let (Some(expected), Some(executable)) = (app_executable, &runs)
+                    && !expected.eq_ignore_ascii_case(executable)
+                {
+                    return Err(BackendError::SourceGone);
+                }
+                return decide_capture(source, own_pid, &processes, &self.input_pairs)
+                    .map(|target| (target, runs));
             }
             SourceId::Apps {
                 root_pids,
@@ -3490,7 +3552,8 @@ impl<D: Driver> Controller<D> {
                     executables,
                 ))
             }
-        }
+        };
+        target.map(|target| (target, None))
     }
 
     /// The capture a mix's follow moves to. A mix whose top processes all
@@ -3502,7 +3565,7 @@ impl<D: Driver> Controller<D> {
             executables,
         } = source
         else {
-            return self.capture_target(source);
+            return self.capture_target(source, None).map(|(target, _)| target);
         };
         let processes = self.driver.processes()?;
         let sessions = self.driver.session_pids();
@@ -3526,7 +3589,7 @@ impl<D: Driver> Controller<D> {
         {
             self.note_inputs(&listed_inputs(&readings));
         }
-        let target = self.capture_target(source)?;
+        let (target, app_executable) = self.capture_target(source, None)?;
         let ring = Ring::for_rate(SESSION_RATE).map_err(|_| BackendError::UnsupportedFormat)?;
         let writer = ring.writer().ok_or(BackendError::UnsupportedFormat)?;
         let (capture, equalizer, waits_for_feed) = self.open_capture(&target, writer)?;
@@ -3535,6 +3598,7 @@ impl<D: Driver> Controller<D> {
         self.policy.end_brief_losses();
         self.session = Some(Session {
             source: source.clone(),
+            app_executable,
             target,
             ring,
             started_as: capture.setup(),
@@ -4258,6 +4322,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
             let after = self.policy.master();
             if after != before {
                 self.log.log(|| format!("master volume: {after}"));
+                let now = Instant::now();
+                for id in self.playing_ids() {
+                    self.volume_moves.insert(VolumeMove::Output(id), now);
+                }
             }
         }
     }
@@ -4898,6 +4966,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.check_routing_if_due(now);
         self.follow_mix_apps(now);
         self.log_status_if_due(now);
+        self.log_levels_if_due(now);
         self.log_drift(now);
         self.power.awake = Some((self.driver.wall_clock(), self.driver.awake_clock()));
         let events = std::mem::take(&mut self.pending);
@@ -5821,6 +5890,56 @@ mod tests {
         assert_eq!(
             backend.driver().capture_target(),
             Some(included(&[PLAYER_PID + 1]))
+        );
+    }
+
+    // covers: S380
+    #[test]
+    fn an_only_these_mix_leaves_out_another_app_that_took_a_quit_apps_process_id() {
+        const BROWSER_PID: u32 = PLAYER_PID + 10;
+        let mut backend = backend();
+        backend.add_app(BROWSER_PID, "browser.exe");
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID, BROWSER_PID],
+                executables: vec!["player.exe".to_owned(), "browser.exe".to_owned()],
+            })
+            .unwrap();
+        backend.quit_app(BROWSER_PID);
+        backend.add_app(BROWSER_PID, "chat.exe");
+        backend.mix_checked = None;
+        backend.poll();
+        assert_eq!(
+            backend.driver().capture_target(),
+            Some(included(&[PLAYER_PID]))
+        );
+    }
+
+    // covers: S327
+    #[test]
+    fn an_only_these_mix_quits_when_only_another_app_on_its_apps_process_id_runs() {
+        let mut backend = backend();
+        backend.refuse_watch(PLAYER_PID);
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID],
+                executables: vec!["PLAYER.exe".to_owned()],
+            })
+            .unwrap();
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "chat.exe");
+        backend.mix_checked = None;
+        let mut events = backend.poll();
+        backend.mix_checked = None;
+        events.extend(backend.poll());
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                BackendEvent::Stopped {
+                    reason: StopReason::SourceQuit
+                }
+            )),
+            "{events:?}"
         );
     }
 
@@ -9003,6 +9122,42 @@ mod tests {
         assert!(trouble(backend.poll()));
     }
 
+    // covers: S412
+    #[test]
+    fn a_cast_speakers_connect_failures_while_the_pc_sleeps_count_nothing_toward_turning_it_off() {
+        use audiosync_cast::error::ConnectError;
+
+        use crate::audio::cast::tests::{FakeCast, KITCHEN, connect_failed};
+        let off = |events: Vec<BackendEvent>| {
+            events
+                .iter()
+                .any(|event| matches!(event, BackendEvent::CastFailed { .. }))
+        };
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        assert!(!off(backend.poll()));
+        backend.notify_power(PowerNotice::Suspend);
+        backend.poll();
+        for _ in 0..3 {
+            cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        }
+        assert!(!off(backend.poll()), "no failure counts while asleep");
+        backend.pass_wall_time(Duration::from_secs(2 * 3600));
+        backend.notify_power(PowerNotice::Resume);
+        backend.poll();
+        // The failure before the sleep still counts.
+        cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        assert!(!off(backend.poll()));
+        cast.report(connect_failed(1, KITCHEN, ConnectError::NoStatus));
+        assert!(off(backend.poll()));
+    }
+
     // covers: S325, S332
     #[test]
     fn a_sleep_cancels_a_fresh_link_restart_and_the_output_plays_on() {
@@ -9731,6 +9886,29 @@ mod tests {
             }]
         );
         assert_eq!(backend.running_source(), None);
+    }
+
+    // covers: S380
+    #[test]
+    fn a_lost_app_capture_is_not_opened_again_on_another_app_that_took_its_process_id() {
+        let mut backend = backend();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        backend.quit_app(PLAYER_PID);
+        backend.add_app(PLAYER_PID, "chat.exe");
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS - 1);
+        assert_eq!(
+            backend.poll(),
+            [BackendEvent::Stopped {
+                reason: StopReason::SourceQuit,
+            }]
+        );
+        assert_eq!(backend.driver().captures_started().len(), 1);
     }
 
     // covers: S329
@@ -10463,6 +10641,68 @@ mod tests {
             )]
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_master_change_logs_each_playing_outputs_gain_once_it_rests() {
+        let (mut backend, log, dir) = logged_backend("controller-master-gain");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_master_volume(70.0);
+        backend.set_master_volume(80.0);
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
+        let expected: Vec<String> = [(HEADPHONES, "Headphones"), (SPEAKERS, "Speakers")]
+            .into_iter()
+            .map(|(id, name)| {
+                let gain = backend.policy().params(id).gain;
+                let volume = backend.policy().settings(id).volume;
+                format!(
+                    "output \"{name}\" ({id}) volume: {volume} (gain {gain:.3}, \
+                     EQ headroom returned 0.00 dB)"
+                )
+            })
+            .collect();
+        let messages = logged(&log, &dir);
+        let gains: Vec<&String> = messages
+            .iter()
+            .filter(|m| m.starts_with("output ") && m.contains(" volume: "))
+            .collect();
+        assert_eq!(gains, expected.iter().collect::<Vec<_>>(), "{messages:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn each_rendered_outputs_level_is_logged_once_per_ten_seconds() {
+        let (mut logging, log, dir) = logged_backend("controller-levels");
+        logging.start(&SourceId::WholeSystem).unwrap();
+        let start = Instant::now();
+        // The first check only starts the window.
+        logging.log_levels_if_due(start);
+        logging.render_output(HEADPHONES, 480);
+        logging.log_levels_if_due(start + LEVEL_INTERVAL - Duration::from_secs(1));
+        logging.log_levels_if_due(start + LEVEL_INTERVAL);
+        logging.log_levels_if_due(start + LEVEL_INTERVAL + Duration::from_secs(1));
+        let levels: Vec<String> = logged(&log, &dir)
+            .into_iter()
+            .filter(|m| m.contains(" level: "))
+            .collect();
+        // The ring holds no audio, so Headphones rendered silence; Speakers rendered nothing.
+        assert_eq!(
+            levels,
+            ["output \"Headphones\" (headphones) level: peak -inf dBFS, RMS -inf dBFS"]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+
+        let mut quiet = backend();
+        quiet.start(&SourceId::WholeSystem).unwrap();
+        quiet.log_levels_if_due(start);
+        quiet.render_output(HEADPHONES, 480);
+        quiet.log_levels_if_due(start + LEVEL_INTERVAL);
+        assert_eq!(quiet.last_levels, None, "no window without the debug log");
+        let outputs = &quiet.session.as_ref().unwrap().outputs;
+        assert!(
+            outputs[HEADPHONES].control.take_level().is_some(),
+            "the level is left untaken"
+        );
     }
 
     // covers: S291
