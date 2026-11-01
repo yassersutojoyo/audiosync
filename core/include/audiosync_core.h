@@ -2035,7 +2035,8 @@ void asc_airplay_cancel_pairing(AscAirPlay *airplay, const char *id);
  * (asc_airplay_add_speaker adds or restarts one) and pairings, until the
  * handle is destroyed; NULL or "" forgets it. Kept in memory only and wiped
  * when dropped, never stored or logged, and forgotten when the receiver turns
- * it down. Returns false when the handle or id is NULL.
+ * it down. Returns false when the handle or id is NULL, or when password is
+ * not UTF-8, which keeps the stored one.
  */
 bool asc_airplay_set_password(AscAirPlay *airplay, const char *id, const char *password);
 

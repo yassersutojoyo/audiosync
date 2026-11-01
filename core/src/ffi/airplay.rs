@@ -3970,7 +3970,8 @@ pub unsafe extern "C" fn asc_airplay_cancel_pairing(airplay: *mut AscAirPlay, id
 /// until the handle is destroyed; null or "" forgets it. It is kept in
 /// memory only, wiped when replaced, forgotten or dropped, never stored or
 /// logged, and forgotten when the receiver turns it down. False when the
-/// handle or `id` is null.
+/// handle or `id` is null, or `password` isn't UTF-8, which keeps the
+/// stored one.
 ///
 /// # Safety
 ///
@@ -3983,14 +3984,17 @@ pub unsafe extern "C" fn asc_airplay_set_password(
     password: *const c_char,
 ) -> bool {
     // SAFETY: by the caller's contract null or NUL-terminated strings.
-    let (Some(id), password) = (unsafe { host_text(id) }, unsafe { host_text(password) }) else {
+    let (Some(id), text) = (unsafe { host_text(id) }, unsafe { host_text(password) }) else {
         return false;
     };
+    if text.is_none() && !password.is_null() {
+        return false;
+    }
     // SAFETY: by the caller's contract null or a live handle that no other
     // call uses now.
     unsafe {
         live(airplay, false, |airplay| {
-            match password.filter(|password| !password.is_empty()) {
+            match text.filter(|password| !password.is_empty()) {
                 Some(password) => {
                     airplay
                         .passwords
@@ -9530,6 +9534,16 @@ mod tests {
                 c"secret".as_ptr()
             ));
             assert_eq!(inside(handle).passwords.len(), 1);
+            assert!(!asc_airplay_set_password(
+                handle,
+                id.as_ptr(),
+                c"\xff\xfe".as_ptr()
+            ));
+            assert_eq!(
+                inside(handle).passwords.len(),
+                1,
+                "a password that isn't UTF-8 keeps the stored one"
+            );
             assert!(asc_airplay_set_password(handle, id.as_ptr(), ptr::null()));
             assert!(inside(handle).passwords.is_empty(), "null forgets it");
             assert_eq!(
