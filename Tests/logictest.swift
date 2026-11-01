@@ -12903,6 +12903,19 @@ do {
     check(approx(twice.volume(of: tv), 60, 1e-9),
           "cast master: a level sent twice while unanswered awaits one answer, so the TV's remote moves the slider")
 
+    // covers: C70, C104 (0.55, 0.6 and 0.55 went out, then 0.55 again; the second 0.6 never did)
+    var wobble = session(attempt: 10)
+    _ = wobble.apply(.volume(attempt: 10, reported(0.5)))
+    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { _ = wobble.setVolume(tv, position: position) }
+    _ = wobble.apply(.volumeUnanswered(attempt: 10, level: 0.55, repeated: true))
+    var wobbleShown: [Double] = []
+    for answer in [0.55, 0.6, 0.55] {
+        _ = wobble.apply(.volume(attempt: 10, reported(answer)))
+        wobbleShown.append(wobble.volume(of: tv).rounded())
+    }
+    check(wobbleShown == [55, 55, 55],
+          "cast master: a repeat after a wobble still awaits the levels sent before it, so their late answers never move the slider")
+
     // covers: S415
     var row = session(attempt: 11)
     _ = row.apply(.volume(attempt: 11, reported(0.4)))

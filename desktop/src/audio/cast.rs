@@ -3348,6 +3348,23 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
     }
 
+    // covers: C70, C104 (0.55, 0.6 and 0.55 went out, then 0.55 again; the second 0.6 never did)
+    #[test]
+    fn a_repeat_after_a_wobble_still_awaits_the_levels_sent_before_it() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, 0.55, true);
+        for answer in [0.55, 0.6, 0.55] {
+            report(&fake, &mut cast, answer);
+            assert_eq!(shown(&cast, KITCHEN).round(), 55.0, "after {answer}");
+        }
+    }
+
     // covers: C70 (0.55, 0.6 and 0.55 all went out)
     #[test]
     fn late_answers_to_a_drag_back_to_its_first_level_never_move_the_slider() {
