@@ -3679,10 +3679,9 @@ fn moved_on(progress: Progress, since: Duration) -> Progress {
 /// receivers are reported again, as changed, with their availability under
 /// the new store. Returns how many receivers it holds credentials for, or
 /// [`AIRPLAY_PAIRINGS_IGNORED`], [`AIRPLAY_PAIRINGS_NEWER`] or
-/// [`AIRPLAY_PAIRINGS_UNREADABLE`] for a file it
-/// ignored (the store is then empty), or [`AIRPLAY_PAIRINGS_FAILED`] for a
-/// null or dead handle or a null or non-UTF-8 `path`, leaving the store
-/// as it was.
+/// [`AIRPLAY_PAIRINGS_UNREADABLE`] for a file it ignored (the store is then
+/// empty), or [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or a
+/// null or non-UTF-8 `path`, leaving the store as it was.
 ///
 /// # Safety
 ///
@@ -3731,11 +3730,11 @@ pub unsafe extern "C" fn asc_airplay_open_pairings(
 /// written to it. Meant for once, before discovery starts. With the hidden
 /// AirPlay 2 switch off it reads and writes nothing and returns 0, and only
 /// [`asc_airplay_forget_pairing`] opens the file, to drop the receiver from
-/// it. Returns
-/// how many receivers it holds credentials for, or
+/// it. Returns how many receivers it holds credentials for, or
 /// [`AIRPLAY_PAIRINGS_IGNORED`], [`AIRPLAY_PAIRINGS_NEWER`] or
-/// [`AIRPLAY_PAIRINGS_UNREADABLE`] for a file it ignored, or [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or
-/// a null, empty or non-UTF-8 `path`, leaving the identity as it was.
+/// [`AIRPLAY_PAIRINGS_UNREADABLE`] for a file it ignored, or
+/// [`AIRPLAY_PAIRINGS_FAILED`] for a null or dead handle or a null, empty
+/// or non-UTF-8 `path`, leaving the identity as it was.
 ///
 /// # Safety
 ///
