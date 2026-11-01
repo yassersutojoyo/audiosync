@@ -417,9 +417,11 @@ enum CaptureRate {
     /// The capture rate assumed until a format is read, and when one reads 0.
     static let fallback: Double = 48_000
 
-    /// The rate a capture build assumes until it reads a format.
+    /// The rate a capture build assumes until it reads a format: on a reopen
+    /// (S335) the session's own, so an app tap still waiting for an audio
+    /// process restarts nothing; else `fallback`.
     static func untilRead(reopening session: Double?) -> Double {
-        fallback
+        session ?? fallback
     }
 
     /// The rate a capture runs at: the rate of the device its IOProc runs on,
