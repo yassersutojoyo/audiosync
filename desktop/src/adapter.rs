@@ -1165,9 +1165,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Logs that the settings file was kept aside (`when`, for the log),
-    /// and, for a file ignored at launch, tells the user once with the
-    /// copy's name: their settings were replaced by the defaults. Returns
-    /// whether a notice was posted.
+    /// and tells the user once with the copy's name: their settings were
+    /// replaced by the defaults. Returns true.
     fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) -> bool {
         let file = kept.file_name();
         self.log.log(|| match kept {
@@ -1178,14 +1177,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 format!("settings: the file ignored at launch was kept as {file}{when}")
             }
         });
-        if let KeptAside::Ignored(_) = kept {
-            self.post(
-                NoticeSubject::SettingsKeptAside,
-                NoticeMessage::SettingsKeptAside { file },
-            );
-            return true;
-        }
-        false
+        self.post(
+            NoticeSubject::SettingsKeptAside,
+            NoticeMessage::SettingsKeptAside { file },
+        );
+        true
     }
 
     /// Writes the settings file if anything changed since it was last read
