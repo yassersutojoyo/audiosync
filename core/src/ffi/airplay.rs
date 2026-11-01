@@ -2739,8 +2739,10 @@ pub unsafe extern "C" fn asc_airplay_next_event(
 /// use the password handed over for it ([`asc_airplay_set_password`]) and
 /// verify with the stored credentials, if any. Adding a speaker already
 /// added applies the volume, the password and the credentials, keeps its
-/// own offset ([`asc_airplay_set_speaker_offset`]) and, if it failed or
-/// waits for a retry, starts a new session now. False, adding nothing,
+/// own offset ([`asc_airplay_set_speaker_offset`]) and its calibration
+/// mute ([`asc_airplay_set_silenced`]) and, if it failed or waits for a
+/// retry, starts a new session now; added again as a target, its single
+/// session stops, and nothing else a removal does. False, adding nothing,
 /// when the handle or `id` is null, `id` isn't a listed receiver, or
 /// `volume` isn't finite.
 ///
@@ -2766,14 +2768,23 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
     unsafe {
         live(airplay, false, |airplay| {
             airplay.pump();
-            // The host sends an offset only when it changes, so a re-add keeps it.
-            let offset = airplay
+            // The host sends an offset only when it changes, so a re-add keeps
+            // it; a calibration still running keeps it muted (S276).
+            let (offset, silenced) = airplay
                 .added
                 .get(id)
-                .map_or(Duration::ZERO, |added| added.offset);
+                .map_or((Duration::ZERO, false), |added| {
+                    (added.offset, added.silenced)
+                });
+            let muted = |volume| if silenced { Volume::Muted } else { volume };
             if let Some(target) = airplay.targets.get(id) {
+                if let Some(single) = airplay.added.get(id)
+                    && single.target.is_none()
+                {
+                    single.remove(&airplay.sender);
+                }
                 let position = sanitize_own(volume);
-                let options = target_options(
+                let mut options = target_options(
                     airplay,
                     id,
                     position,
@@ -2782,6 +2793,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                         .ok()
                         .as_deref(),
                 );
+                options.volume = muted(options.volume);
                 let target_id = target.id.clone();
                 let members = target
                     .members
@@ -2793,7 +2805,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                         .sender
                         .add_target(target.clone(), options, member_credentials(airplay));
                 let key = DeviceKey::Instance(ServiceKind::AirPlay, id.to_owned());
-                let initial = speaker_volume(position, zone_in(&airplay.zones, id));
+                let initial = muted(speaker_volume(position, zone_in(&airplay.zones, id)));
                 let mut added = Added::new(
                     key,
                     position,
@@ -2806,6 +2818,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
                 );
                 added.sent(initial);
                 added.offset = offset;
+                added.silenced = silenced;
                 airplay.added.insert(id.to_owned(), added);
                 airplay.remote.forget(id);
                 return true;
@@ -2817,7 +2830,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             let position = sanitize_own(volume);
             let key = device.key.clone();
             let zone = zone_in(&airplay.zones, id);
-            let initial = speaker_volume(position, zone);
+            let initial = muted(speaker_volume(position, zone));
             let mut options = SpeakerOptions::new(initial);
             options.delay = (airplay.hold_back + offset).min(MAX_DELAY);
             options.password = airplay.passwords.get(id).cloned();
@@ -2841,6 +2854,7 @@ pub unsafe extern "C" fn asc_airplay_add_speaker(
             );
             added.sent(initial);
             added.offset = offset;
+            added.silenced = silenced;
             airplay.added.insert(id.to_owned(), added);
             airplay.remote.forget(id);
             true
@@ -8072,6 +8086,48 @@ mod tests {
         read_back(handle, &key, -6.0);
         assert_eq!(volume_events(handle), vec![(id.to_owned(), 80.0)]);
         assert_eq!(inside(handle).added[id].level, 0.0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: S276
+    #[test]
+    fn a_silenced_speaker_added_again_stays_muted() {
+        let id = "02005E005416";
+        let mut handle = listing(vec![loopback_record(id, "Den", closed_port())]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe {
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0));
+            assert!(asc_airplay_set_silenced(handle, c_id.as_ptr(), true));
+            assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 60.0));
+        }
+        assert!(inside(handle).added[id].silenced);
+        assert_eq!(inside(handle).added[id].level, 0.0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn a_speaker_added_again_as_a_target_tears_its_own_session_down() {
+        let receiver = Loopback::start();
+        let id = "02005E005417";
+        let mut handle = listing(vec![loopback_record(id, "Den", receiver.port)]);
+        let c_id = c_string(id);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0)) };
+        let playing = events_until(handle, |seen| has_state(seen, id, AIRPLAY_STATE_PLAYING));
+        assert!(
+            has_state(&playing, id, AIRPLAY_STATE_PLAYING),
+            "{playing:?}"
+        );
+        let (left, right) = (pair_member(0x41, "0x2004"), pair_member(0x42, "0x4"));
+        let found = audiosync_airplay::targets::find_targets([&left, &right]);
+        let pair = found.first().cloned().expect("a pair");
+        inside(handle).targets.insert(id.to_owned(), pair);
+        // SAFETY: a live handle, used by this thread only; a C string.
+        unsafe { assert!(asc_airplay_add_speaker(handle, c_id.as_ptr(), 50.0)) };
+        assert!(wait_for(|| receiver.methods().contains(&Method::Teardown)));
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
