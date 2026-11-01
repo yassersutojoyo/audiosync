@@ -1884,6 +1884,7 @@ impl App {
                         on: count(counts.on),
                         total: count(counts.total),
                         waiting: count(counts.waiting),
+                        waiting_name: state.zone_waiter(zone).unwrap_or_default().into(),
                         present: count(counts.present),
                         volume: zone.volume as f32,
                         expanded: !ui.collapsed.contains(&zone.id),
@@ -1919,6 +1920,7 @@ impl App {
         self.main.set_no_speaker_on(state.no_speaker_on);
         self.flyout.set_no_speaker_on(state.no_speaker_on);
         self.main.set_cast_list(cast_list(state.cast_list));
+        self.flyout.set_cast_list(cast_list(state.cast_list));
         self.watch_network(
             state.airplay_none_found || state.cast_list == ui_model::CastList::NoneFound,
         );
@@ -2013,6 +2015,9 @@ impl App {
                 match s.kind {
                     // The backend's name for it is English; the UI's is translated.
                     SourceKind::System => strings.get_source_system(),
+                    SourceKind::Input if s.unplugged => {
+                        strings.invoke_source_not_connected(name.into())
+                    }
                     SourceKind::App | SourceKind::Input => name.into(),
                     SourceKind::AppsExcept => strings.invoke_source_all_except(name.into()),
                 }
@@ -2867,6 +2872,9 @@ impl App {
         self.follow_frame(|app| app.equalizer.window(), "equalizer");
         let eq_window = &self.equalizer;
         let weak = Rc::downgrade(self);
+        eq_window
+            .global::<NameField>()
+            .set_double_click(crate::platform::double_click_ms());
 
         let w = weak.clone();
         eq_window.on_enabled_toggled(move |on| {
@@ -4356,7 +4364,7 @@ impl App {
         let reading = self.network_watch.borrow().as_ref().and_then(Watch::latest);
         if let Some(Some(connected)) = reading {
             self.strings()
-                .set_public_network(network_profile::names_firewall(&connected));
+                .set_public_network(network_profile::suggests_private(&connected));
         }
     }
 
@@ -4618,6 +4626,8 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::Waiting(ui_model::Waiting::ForAirPlay2Slot) => RowState::WaitingForAirplay2,
         SpeakerState::Waiting(ui_model::Waiting::ForPtp) => RowState::WaitingForPtp,
         SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork) => RowState::NotOnNetwork,
+        SpeakerState::Waiting(ui_model::Waiting::ForPassword) => RowState::WaitingForPassword,
+        SpeakerState::Waiting(ui_model::Waiting::ForPin) => RowState::WaitingForPin,
     }
 }
 
@@ -5548,6 +5558,10 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         }
         NoticeMessage::CaptureFailed => strings.get_notice_capture_failed(),
         NoticeMessage::CaptureLost => strings.get_notice_capture_lost(),
+        NoticeMessage::WaitingForAudio { app: Some(app) } => {
+            strings.invoke_notice_waiting_for_audio_from(app.as_str().into())
+        }
+        NoticeMessage::WaitingForAudio { app: None } => strings.get_notice_waiting_for_audio(),
         NoticeMessage::SpeakerFailed { speaker } => {
             strings.invoke_notice_speaker_failed(speaker.as_str().into())
         }
@@ -5729,6 +5743,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::MicrophoneBlocked { .. } => (NoticeKind::MicrophoneBlocked, ""),
         NoticeMessage::CaptureFailed => (NoticeKind::CaptureFailed, ""),
         NoticeMessage::CaptureLost => (NoticeKind::CaptureLost, ""),
+        NoticeMessage::WaitingForAudio { .. } => (NoticeKind::WaitingForAudio, ""),
         NoticeMessage::SpeakerFailed { speaker } => (NoticeKind::SpeakerFailed, speaker.as_str()),
         NoticeMessage::SpeakerLost { speaker } => (NoticeKind::SpeakerLost, speaker.as_str()),
         NoticeMessage::SpeakerBusy { speaker } => (NoticeKind::SpeakerBusy, speaker.as_str()),
@@ -6055,6 +6070,33 @@ mod tests {
         app.main.invoke_source_selected(0);
         assert_eq!(app.main.get_input_pairs().row_count(), 0);
         assert_eq!(app.main.get_input_pair_index(), 0);
+    }
+
+    // covers: S355, S211
+    #[test]
+    fn an_unplugged_chosen_input_is_listed_last_as_not_connected() {
+        for (name, shown) in [
+            (
+                "Microphone (USB Audio)",
+                "Microphone (USB Audio) (not connected)",
+            ),
+            ("", "Input Device (not connected)"),
+        ] {
+            let mut backend = MockBackend::new();
+            backend.unplug_chosen_input(name);
+            let app = app_over(backend);
+            for (sources, index) in [
+                (app.main.get_sources(), app.main.get_source_index()),
+                (app.flyout.get_sources(), app.flyout.get_source_index()),
+            ] {
+                let last = sources.row_count() - 1;
+                assert_eq!(index, last as i32, "{shown}: still chosen");
+                assert_eq!(
+                    sources.row_data(last).map(String::from).as_deref(),
+                    Some(shown)
+                );
+            }
+        }
     }
 
     #[test]
@@ -6403,7 +6445,7 @@ mod tests {
         );
     }
 
-    // covers: P215
+    // covers: P215, S223
     #[test]
     fn a_speaker_that_cant_play_right_now_shows_waiting_not_playing() {
         let mut backend = MockBackend::new();
@@ -6440,9 +6482,9 @@ mod tests {
         let strings = app.strings();
         let read = |state: RowState| {
             (
-                strings.invoke_value(state).to_string(),
+                strings.invoke_value(state, "Kitchen".into()).to_string(),
                 strings.invoke_help(state).to_string(),
-                strings.invoke_row_note(state).to_string(),
+                strings.invoke_row_note(state, "Kitchen".into()).to_string(),
             )
         };
         let turn_off = strings.get_turn_off().to_string();
@@ -6471,6 +6513,17 @@ mod tests {
         assert_eq!(
             read(RowState::NotOnNetwork),
             (away.clone(), turn_off.clone(), away)
+        );
+        // The Mac row's words, naming the speaker whose code is asked for.
+        let password = "Waiting for the password".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForPassword),
+            (password.clone(), turn_off.clone(), password)
+        );
+        let pin = "Enter the code shown on Kitchen".to_owned();
+        assert_eq!(
+            read(RowState::WaitingForPin),
+            (pin.clone(), turn_off.clone(), pin)
         );
         assert_eq!(
             read(RowState::Playing),
@@ -6749,6 +6802,7 @@ mod tests {
                         offset_ms: Some(0.0),
                         latency_ms: 2500.0,
                         sender_ms: 0.0,
+                        adjustment_ms: 0.0,
                     })
                     .collect(),
                 ..Default::default()
@@ -7407,6 +7461,51 @@ mod tests {
         );
     }
 
+    /// With only this PC's outputs listed, the flyout gives the main window's
+    /// note on the network speakers, and while AirPlay still looks, both name
+    /// a Google Cast search that found nothing after it.
+    #[test]
+    fn the_network_note_shows_beside_this_pcs_outputs() {
+        use i_slint_backend_testing::ElementHandle;
+        let shown_with = |this_pc: bool, airplay_searching: bool, cast: ui_model::CastList| {
+            let mut backend = MockBackend::new();
+            backend.retain_speakers(|s| this_pc && s.kind.is_this_pc());
+            backend.set_airplay_none_found(!airplay_searching);
+            backend.set_airplay_searching(airplay_searching);
+            backend.set_cast_list(cast);
+            let app = app_over(backend);
+            app.main.show().unwrap();
+            app.flyout.show().expect("the flyout shows headless");
+            draw_frames();
+            app
+        };
+        let shown = |airplay_searching, cast| shown_with(true, airplay_searching, cast);
+        fn has(window: &impl slint::ComponentHandle, text: &str) -> bool {
+            ElementHandle::find_by_accessible_label(window, text)
+                .next()
+                .is_some()
+        }
+
+        let app = shown(false, ui_model::CastList::Quiet);
+        let none_found = app.strings().get_airplay_none_found();
+        assert!(has(&app.flyout, &none_found), "{none_found}");
+
+        let app = shown(true, ui_model::CastList::NoneFound);
+        let looking = format!(
+            "Looking for AirPlay speakers… {}",
+            app.strings().invoke_cast_list(CastList::NoneFound)
+        );
+        assert!(has(&app.main, &looking), "main: {looking}");
+        assert!(has(&app.flyout, &looking), "flyout: {looking}");
+
+        let app = shown_with(false, true, ui_model::CastList::Failed);
+        let looking = format!(
+            "Looking for AirPlay speakers… {}",
+            app.strings().invoke_cast_list(CastList::Failed)
+        );
+        assert!(has(&app.flyout, &looking), "no PC outputs: {looking}");
+    }
+
     /// Streaming with no speaker listed at all: neither window asks to turn
     /// one on, which there is none to turn on.
     #[test]
@@ -7432,11 +7531,12 @@ mod tests {
         );
     }
 
-    /// The notes that no speaker was found name Windows Firewall only once
-    /// Windows reports a Public network; until then they name the network.
+    /// On Windows the notes that no speaker was found always name Windows
+    /// Firewall, and suggest a Private network only once Windows reports a
+    /// Public one; the Guide names the firewall for any network.
     // covers: S391
     #[test]
-    fn the_none_found_notes_leave_the_firewall_out_off_a_public_network() {
+    fn the_none_found_notes_suggest_private_only_on_a_public_network() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         for note in [
@@ -7444,13 +7544,26 @@ mod tests {
             strings.get_network_none_found(),
             strings.invoke_cast_list(CastList::NoneFound),
         ] {
-            assert!(!note.contains("Windows Firewall"), "{note}");
+            assert!(!note.contains("Private"), "{note}");
+            assert!(
+                !cfg!(windows) || note.contains("Windows Firewall allows AudioSync"),
+                "{note}"
+            );
+        }
+        for guide in [
+            strings.get_help_airplay(),
+            strings.get_help_airplay_prefer(),
+        ] {
+            assert!(
+                guide.contains("Windows Firewall allows AudioSync"),
+                "{guide}"
+            );
         }
         strings.set_public_network(true);
         assert!(
             strings
                 .get_airplay_none_found()
-                .contains("Windows Firewall")
+                .contains("set the network to Private")
         );
     }
 
@@ -7836,10 +7949,12 @@ mod tests {
         );
     }
 
-    // covers: S351
-    #[cfg(windows)]
-    #[test]
-    fn the_end_of_a_windows_session_tears_the_airplay_and_cast_senders_down() {
+    /// An app streaming to an AirPlay and a Google Cast speaker.
+    fn app_with_both_senders_joined() -> (
+        Rc<App>,
+        crate::audio::airplay::tests::FakeAirPlay,
+        crate::audio::cast::tests::FakeCast,
+    ) {
         use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, id_of};
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
         let mut audio = crate::audio::mock::MockBackend::empty();
@@ -7864,9 +7979,29 @@ mod tests {
             calls.iter().any(|call| matches!(call, Call::Add { .. })),
             "the AirPlay speaker joined: {calls:?}"
         );
-        let app = app_over(adapter);
+        (app_over(adapter), airplay, cast)
+    }
+
+    // covers: S351
+    #[cfg(windows)]
+    #[test]
+    fn the_end_of_a_windows_session_tears_the_airplay_and_cast_senders_down() {
+        let (app, airplay, cast) = app_with_both_senders_joined();
 
         app.at_session_end();
+        assert!(airplay.links_dropped(), "the AirPlay sender tore down");
+        assert_eq!(cast.state().shutdowns, 1, "the Cast host shut down");
+    }
+
+    // covers: S186 (Quit from the tray or a window)
+    #[test]
+    fn quitting_drops_the_app_so_the_backend_runs_its_shut_down() {
+        let (app, airplay, cast) = app_with_both_senders_joined();
+
+        // What main does once the event loop ends; the shut-down's fades are
+        // checked in the controller's tests.
+        app.at_quit();
+        drop(app);
         assert!(airplay.links_dropped(), "the AirPlay sender tore down");
         assert_eq!(cast.state().shutdowns, 1, "the Cast host shut down");
     }
@@ -9250,6 +9385,30 @@ mod tests {
     }
 
     #[test]
+    fn a_reconnecting_cast_row_says_so_before_its_mute_or_group() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(
+            strings
+                .invoke_cast_note(CastState::Reconnecting, true, "".into())
+                .as_str(),
+            "Reconnecting…",
+            "muted"
+        );
+        assert_eq!(
+            strings
+                .invoke_cast_note(
+                    CastState::Reconnecting,
+                    false,
+                    "Google Cast group: Kitchen and Living Room".into()
+                )
+                .as_str(),
+            "Reconnecting…",
+            "group"
+        );
+    }
+
+    #[test]
     fn a_cast_group_row_names_its_members_or_says_they_are_unknown() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
@@ -9334,6 +9493,29 @@ mod tests {
             "Right plays as part of Living Room, so it stays off by itself."
         );
         assert_eq!(notice_title(&strings, &notice).as_str(), "Right can't play");
+    }
+
+    // covers: S350
+    #[test]
+    fn the_waiting_notice_names_the_app_when_one_is_captured_and_reads_generic_otherwise() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let from_app = NoticeMessage::WaitingForAudio {
+            app: Some("Spotify".to_owned()),
+        };
+        assert_eq!(
+            notice_text(&strings, &from_app).as_str(),
+            "Waiting for audio from Spotify. Start playback there and it streams right away."
+        );
+        assert_eq!(
+            notice_text(&strings, &NoticeMessage::WaitingForAudio { app: None }).as_str(),
+            "Waiting for audio. Play something and it streams right away."
+        );
+        assert_eq!(
+            notice_title(&strings, &from_app).as_str(),
+            "waiting for audio"
+        );
+        assert!(from_app.reports_a_change(), "a calm notice: the info glyph");
     }
 
     #[test]
@@ -10070,6 +10252,38 @@ mod tests {
             strings.invoke_zone_label("Living Room".into()),
             "Living Room, zone"
         );
+    }
+
+    // covers: S223
+    #[test]
+    fn a_zone_whose_speaker_waits_for_a_pin_names_the_speaker_not_the_zone() {
+        use i_slint_backend_testing::ElementHandle;
+        fn header_notes(window: &impl ComponentHandle) -> Vec<String> {
+            ElementHandle::find_by_accessible_label(window, "Living Room, zone")
+                .filter_map(|header| header.accessible_description())
+                .map(|note| note.to_string())
+                .collect()
+        }
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let mut tv = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        tv.id = "airplay:tv".into();
+        tv.name = "Den TV".into();
+        tv.enabled = true;
+        tv.waiting = Some(ui_model::Waiting::ForPin);
+        backend.add_speaker(tv);
+        backend.add_zone("zone:living", "Living Room", &["airplay:tv"]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let pin = "Enter the code shown on Den TV".to_owned();
+        assert_eq!(header_notes(&app.main), vec![pin.clone()]);
+        assert_eq!(header_notes(&app.flyout), vec![pin]);
     }
 
     // covers: S359
@@ -11238,6 +11452,120 @@ mod tests {
         }
     }
 
+    fn first_band_gain(app: &App) -> f64 {
+        app.snapshot().equalizer.gains_db[0]
+    }
+
+    #[test]
+    fn an_equalizer_band_moves_with_the_left_and_right_arrow_keys() {
+        let app = app_over(MockBackend::new());
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_take_focus();
+        draw_frames();
+        let window = app.equalizer.window();
+        // The switch, the curve picker, the preamp, then the first band.
+        tab(window, 4);
+        press(window, Key::UpArrow);
+        assert_eq!(first_band_gain(&app), 0.5, "the first band has the focus");
+
+        press(window, Key::RightArrow);
+        assert_eq!(first_band_gain(&app), 1.0, "Right moves it up");
+        press(window, Key::LeftArrow);
+        press(window, Key::LeftArrow);
+        assert_eq!(first_band_gain(&app), 0.0, "Left moves it down");
+    }
+
+    #[test]
+    fn an_equalizer_band_ignores_the_left_and_right_arrows_with_a_modifier() {
+        let app = app_over(MockBackend::new());
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_take_focus();
+        draw_frames();
+        let window = app.equalizer.window();
+        tab(window, 4);
+        press(window, Key::UpArrow);
+        for modifier in [Key::Control, Key::Shift, Key::Alt] {
+            window.dispatch_event(WindowEvent::KeyPressed {
+                text: modifier.into(),
+            });
+            press(window, Key::RightArrow);
+            press(window, Key::LeftArrow);
+            press(window, Key::LeftArrow);
+            window.dispatch_event(WindowEvent::KeyReleased {
+                text: modifier.into(),
+            });
+            assert_eq!(first_band_gain(&app), 0.5, "{modifier:?}");
+        }
+    }
+
+    /// Shows the equalizer and finds where a click above the middle of the
+    /// first band's track raises it; the double-click time has run out after.
+    fn first_band_point(app: &App) -> (f32, f32) {
+        app.equalizer.show().expect("the equalizer shows headless");
+        draw_frames();
+        let window = app.equalizer.window();
+        let y = 250.0;
+        let x = (0..1000)
+            .step_by(8)
+            .map(|x| x as f32)
+            .find(|&x| {
+                click(window, x, y);
+                advance_clock(Duration::from_secs(1));
+                draw_frames();
+                first_band_gain(app) > 0.0
+            })
+            .expect("a click raises the first band");
+        (x, y)
+    }
+
+    #[test]
+    fn a_double_click_on_an_equalizer_band_sets_it_to_0_db() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        let (x, y) = first_band_point(&app);
+        let window = app.equalizer.window();
+        click(window, x, y);
+        click(window, x, y);
+        assert_eq!(first_band_gain(&app), 0.0);
+    }
+
+    #[test]
+    fn two_slow_clicks_or_a_drag_and_a_click_leave_an_equalizer_band_where_it_is() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        let (x, y) = first_band_point(&app);
+        let window = app.equalizer.window();
+        let raised = first_band_gain(&app);
+        click(window, x, y);
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        click(window, x, y);
+        assert_eq!(first_band_gain(&app), raised, "two slow clicks");
+
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        let button = PointerEventButton::Left;
+        let from = slint::LogicalPosition::new(x, y);
+        let to = slint::LogicalPosition::new(x, y + 60.0);
+        window.dispatch_event(WindowEvent::PointerMoved { position: from });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: from,
+            button,
+        });
+        for step in [20.0, 40.0, 60.0] {
+            let position = slint::LogicalPosition::new(x, y + step);
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+        }
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position: to,
+            button,
+        });
+        draw_frames();
+        assert!(first_band_gain(&app) < raised, "the drag lowers it");
+        click(window, x, y);
+        assert_eq!(first_band_gain(&app), raised, "a drag and a click");
+    }
+
     #[test]
     fn a_curve_deleted_while_its_rename_is_open_renames_no_other_curve() {
         let app = app_over(MockBackend::new());
@@ -11300,6 +11628,30 @@ mod tests {
         tab(window, 1);
         press(window, Key::Escape);
         assert!(!window.is_visible(), "Escape on a focused button");
+    }
+
+    #[test]
+    fn enter_closes_the_about_dialog() {
+        let app = app_over(MockBackend::new());
+        let window = app.about.window();
+        app.main.invoke_about_requested();
+        assert!(window.is_visible());
+        press(window, Key::Return);
+        assert!(!window.is_visible(), "Enter right after it opened");
+    }
+
+    #[test]
+    fn enter_closes_the_zone_message_without_a_field() {
+        let app = app_over(MockBackend::new());
+        for speaker in app.snapshot().speakers {
+            app.update(|b| b.set_speaker_enabled(&speaker.id, false));
+        }
+        app.ask_new_zone();
+        let window = app.zone_dialog.window();
+        assert!(window.is_visible());
+        assert!(!app.zone_dialog.get_show_field());
+        press(window, Key::Return);
+        assert!(!window.is_visible(), "Enter on the message closed it");
     }
 
     #[test]
@@ -11619,6 +11971,7 @@ mod tests {
             NoticeMessage::MicrophoneBlocked { source: "A".into() },
             NoticeMessage::CaptureFailed,
             NoticeMessage::CaptureLost,
+            NoticeMessage::WaitingForAudio { app: None },
             NoticeMessage::SpeakerFailed {
                 speaker: "A".into(),
             },

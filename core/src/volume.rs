@@ -6,7 +6,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
 
 use audiosync_airplay::volume::{MIN_DB, Volume};
 
@@ -77,50 +77,23 @@ pub fn zoned_output_gain(local_position: f64, zone_position: f64, master_positio
         * gain_for_position(master_position)
 }
 
-/// The linear level of three slider stages, own × zone × master, each
-/// `position / 100` clamped to 0…1 (S249): what an AirPlay speaker's volume
-/// spreads over its dB range.
-pub fn stage_level(own_position: f64, zone_position: f64, master_position: f64) -> f64 {
-    (own_position / MAX_POSITION).clamp(0.0, 1.0)
-        * (zone_position / MAX_POSITION).clamp(0.0, 1.0)
-        * (master_position / MAX_POSITION).clamp(0.0, 1.0)
-}
-
-/// [`stage_level`] backwards (S250): the own position, rounded to a whole
-/// step and clamped to 0…100, that plays at `level` (0…1) through the zone
-/// and the master. None when zone × master is 0, where every own position
-/// sounds the same, or `level` isn't finite.
-pub fn own_position_for_level(level: f64, zone_position: f64, master_position: f64) -> Option<f64> {
-    let scale = (master_position / MAX_POSITION).clamp(0.0, 1.0)
-        * (zone_position / MAX_POSITION).clamp(0.0, 1.0);
-    if scale.is_nan() || scale <= 0.0 || !level.is_finite() {
-        return None;
-    }
-    Some(
-        (level.clamp(0.0, 1.0) / scale * MAX_POSITION)
-            .clamp(MIN_POSITION, MAX_POSITION)
-            .round(),
-    )
-}
-
 /// The dB an AirPlay device level of 0 maps to; 100 is 0 dB (S289).
 const DEVICE_FLOOR_DB: f64 = -30.0;
 
 /// Slack for float error when a device level is rounded down for its row (S290).
 const ROW_SLACK: f64 = 0.01;
 
-/// k of S290: zone × master, each `position / 100` clamped to 0…1.
-fn stage_scale(zone_position: f64, master_position: f64) -> f64 {
+/// k of S290: the zone's `position / 100` clamped to 0…1. The master is a
+/// gain on the stream and never part of it (S413).
+fn stage_scale(zone_position: f64) -> f64 {
     (zone_position / MAX_POSITION).clamp(0.0, 1.0)
-        * (master_position / MAX_POSITION).clamp(0.0, 1.0)
 }
 
 /// An AirPlay speaker's device level D, 0…100, for its own volume through
-/// the zone and the master: min(100, s × k) (S290). The own volume may pass
-/// 100: the zone and the master are multipliers, never a ceiling. 0 when a
-/// value isn't finite.
-pub fn device_level(own_position: f64, zone_position: f64, master_position: f64) -> f64 {
-    let level = sanitize_own(own_position) * stage_scale(zone_position, master_position);
+/// the zone: min(100, s × k) (S290, S413). The own volume may pass 100: the
+/// zone is a multiplier, never a ceiling. 0 when a value isn't finite.
+pub fn device_level(own_position: f64, zone_position: f64) -> f64 {
+    let level = sanitize_own(own_position) * stage_scale(zone_position);
     if level.is_finite() {
         level.min(MAX_POSITION)
     } else {
@@ -182,12 +155,12 @@ pub struct RowMove {
 
 /// An AirPlay row moved to `row` (rounded to a whole number, S290): the
 /// device level sent is the row itself, and the own volume stored is
-/// row ÷ k, unrounded, past 100 when the zone and the master are below 100.
-/// None when k is 0, where the move sends nothing, or `row` isn't finite.
-pub fn row_move(row: f64, zone_position: f64, master_position: f64) -> Option<RowMove> {
+/// row ÷ k, unrounded, past 100 when the zone is below 100. None when k is
+/// 0, where the move sends nothing, or `row` isn't finite.
+pub fn row_move(row: f64, zone_position: f64) -> Option<RowMove> {
     let row = row.round().clamp(MIN_POSITION, MAX_POSITION);
     Some(RowMove {
-        own_position: own_for_device_level(row, zone_position, master_position)?,
+        own_position: own_for_device_level(row, zone_position)?,
         device_level: row,
     })
 }
@@ -195,8 +168,8 @@ pub fn row_move(row: f64, zone_position: f64, master_position: f64) -> Option<Ro
 /// The own volume a device level reported by the speaker leads to (S290):
 /// D ÷ k, unrounded, with D clamped to 0…100. None when k is 0, where s
 /// stays, or `level` isn't finite.
-pub fn own_for_device_level(level: f64, zone_position: f64, master_position: f64) -> Option<f64> {
-    let scale = stage_scale(zone_position, master_position);
+pub fn own_for_device_level(level: f64, zone_position: f64) -> Option<f64> {
+    let scale = stage_scale(zone_position);
     if scale.is_nan() || scale <= 0.0 || !level.is_finite() {
         return None;
     }
@@ -212,14 +185,8 @@ pub fn level_set_on_speaker(
     own_position: f64,
     shown_level: f64,
     zone_position: f64,
-    master_position: f64,
 ) -> Option<RowMove> {
-    let moved = level_on_speaker(
-        device_level_for_db(db)?,
-        own_position,
-        zone_position,
-        master_position,
-    );
+    let moved = level_on_speaker(device_level_for_db(db)?, own_position, zone_position);
     let unchanged = moved.own_position == own_position
         && row_level(moved.device_level) == row_level(shown_level);
     (!unchanged).then_some(moved)
@@ -228,20 +195,14 @@ pub fn level_set_on_speaker(
 /// A change made on the speaker to device level `level` (S290): a reading
 /// (S291) or a DACP DeviceVolume (S276). The row gets `level` and the own
 /// volume becomes D ÷ k, unclamped, or stays `own_position` with k at 0.
-pub fn level_on_speaker(
-    level: f64,
-    own_position: f64,
-    zone_position: f64,
-    master_position: f64,
-) -> RowMove {
+pub fn level_on_speaker(level: f64, own_position: f64, zone_position: f64) -> RowMove {
     let level = if level.is_finite() {
         level.clamp(MIN_POSITION, MAX_POSITION)
     } else {
         MIN_POSITION
     };
     RowMove {
-        own_position: own_for_device_level(level, zone_position, master_position)
-            .unwrap_or(own_position),
+        own_position: own_for_device_level(level, zone_position).unwrap_or(own_position),
         device_level: level,
     }
 }
@@ -336,27 +297,83 @@ pub fn migrate_legacy_percent(percent: f64) -> f64 {
     position_for_gain(percent / 100.0)
 }
 
+/// The most steps a [`SharedGain`] holds: the equalizer cuts still on their
+/// way through the delay ring (S26, S71).
+pub const GAIN_STEPS: usize = 8;
+
 /// A linear gain shared between the control thread and one renderer thread
-/// through a relaxed atomic (S64, S133). Negative and non-finite gains are
-/// stored as 0.
+/// through atomics (S64, S133): one gain, or up to [`GAIN_STEPS`] gains,
+/// each from a ring frame on, so a gain that answers an equalizer change
+/// plays with the first frame equalized with it (S26, S71). Negative and
+/// non-finite gains are stored as 0. One thread at a time sets it.
 #[derive(Debug)]
-pub struct SharedGain(AtomicU32);
+pub struct SharedGain {
+    /// Odd while the steps are being written (a sequence lock).
+    sequence: AtomicU64,
+    count: AtomicUsize,
+    from: [AtomicI64; GAIN_STEPS],
+    gains: [AtomicU32; GAIN_STEPS],
+}
 
 impl SharedGain {
     /// A shared gain with this initial value.
     pub fn new(gain: f32) -> Self {
-        SharedGain(AtomicU32::new(sanitize_gain(gain).to_bits()))
+        let shared = SharedGain {
+            sequence: AtomicU64::new(0),
+            count: AtomicUsize::new(0),
+            from: std::array::from_fn(|_| AtomicI64::new(i64::MIN)),
+            gains: std::array::from_fn(|_| AtomicU32::new(0)),
+        };
+        shared.set(gain);
+        shared
     }
 
-    /// Stores a new gain; the renderer applies it from its next callback.
+    /// Stores a new gain for every frame; the renderer applies it from its
+    /// next callback.
     pub fn set(&self, gain: f32) {
-        self.0
-            .store(sanitize_gain(gain).to_bits(), Ordering::Relaxed);
+        self.set_steps(&[(i64::MIN, gain)]);
     }
 
-    /// The current gain.
+    /// Stores gains by the ring frame each starts at, ascending; the first
+    /// also covers every frame before it. Steps past [`GAIN_STEPS`] are
+    /// dropped.
+    pub fn set_steps(&self, steps: &[(i64, f32)]) {
+        self.sequence.fetch_add(1, Ordering::Relaxed);
+        fence(Ordering::Release);
+        let count = steps.len().min(GAIN_STEPS);
+        for (index, &(from, gain)) in steps[..count].iter().enumerate() {
+            self.from[index].store(from, Ordering::Relaxed);
+            self.gains[index].store(sanitize_gain(gain).to_bits(), Ordering::Relaxed);
+        }
+        self.count.store(count, Ordering::Relaxed);
+        self.sequence.fetch_add(1, Ordering::Release);
+    }
+
+    /// The gain of the newest step.
     pub fn get(&self) -> f32 {
-        f32::from_bits(self.0.load(Ordering::Relaxed))
+        self.read(i64::MAX)
+    }
+
+    /// The gain for ring frame `frame`: that of the last step starting at or
+    /// before it, or the first. `None` while the control thread writes the
+    /// steps; the renderer then keeps the gain it has. Real-time safe.
+    pub fn gain_at(&self, frame: i64) -> Option<f32> {
+        let before = self.sequence.load(Ordering::Acquire);
+        if before % 2 == 1 {
+            return None;
+        }
+        let gain = self.read(frame);
+        fence(Ordering::Acquire);
+        (self.sequence.load(Ordering::Relaxed) == before).then_some(gain)
+    }
+
+    fn read(&self, frame: i64) -> f32 {
+        let count = self.count.load(Ordering::Relaxed).clamp(1, GAIN_STEPS);
+        let step = (1..count)
+            .take_while(|&index| self.from[index].load(Ordering::Relaxed) <= frame)
+            .last()
+            .unwrap_or(0);
+        f32::from_bits(self.gains[step].load(Ordering::Relaxed))
     }
 }
 

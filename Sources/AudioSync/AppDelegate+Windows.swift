@@ -68,6 +68,9 @@ extension AppDelegate {
 
     private func equalizerChanged(_ settings: Equalizer.Settings) {
         engine.updateEqualizer(settings)
+        reapplyLocalGains()   // the headroom cut given back changes with the curve (S26)
+        nativeAirPlay?.setEqualizer(settings)
+        castSender?.setEqualizer(settings)
         if let data = StoredEqualizer.encode(settings) {
             store.write(data, Keys.equalizer)
         }
@@ -467,7 +470,9 @@ extension AppDelegate {
     /// through the menu bar icon.
     private func rereadExternalState() {
         launchAtLogin = SMAppService.mainApp.status == .enabled
-        if launchAtLogin { clearNotices([Notice.login]) }   // approved meanwhile
+        if Notice.loginSettled(in: appModel.notices, enabled: launchAtLogin, text) {
+            clearNotices([Notice.login])   // changed in System Settings meanwhile
+        }
         recheckLocalNetwork()
         pushSources()
         pushModel()
@@ -622,7 +627,8 @@ extension AppDelegate {
             }
             return AppModel.Source(id: entry.id, name: entry.name, icon: icon, isInput: entry.isInput, pairs: pairs,
                                    connected: entry.connected,
-                                   deviceName: entry.connected ? nil : inputName ?? text.sourceInputDevice)
+                                   deviceName: entry.connected ? nil : inputName ?? text.sourceInputDevice,
+                                   available: entry.available)
         }
         publish(\.sources, sources)
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
@@ -686,6 +692,7 @@ extension AppDelegate {
                                     waitingForAirPlay2: receiver.map { native?.waitReason($0) == .tooManyAirPlay2 } ?? false,
                                     waitingForPtp: receiver.map { native?.waitReason($0) == .ptpOtherNetwork } ?? false,
                                     reconnecting: receiver.map { native?.isReconnecting($0) == true } ?? false,
+                                    codeWait: receiver.flatMap { native?.codeWait($0) },
                                     unannounced: receiver.map { native?.isUnannounced($0) == true } ?? false,
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,

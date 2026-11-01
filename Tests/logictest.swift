@@ -34,6 +34,15 @@ check(VolumeCurve.accepted(.nan) == nil && VolumeCurve.accepted(.infinity) == ni
         && VolumeCurve.accepted(-.infinity) == nil && VolumeCurve.accepted(-5) == 0
         && VolumeCurve.accepted(150) == 100 && VolumeCurve.accepted(37.5) == 37.5,
       "volume: a local or master volume is clamped to 0 to 100; one that isn't a number is ignored")
+do {
+    let outputs = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Outputs.swift", encoding: .utf8)) ?? ""
+    let unclamped = ["func setLocalVolume(", "func setMasterVolume(", "func setZoneVolume("].filter { setter in
+        outputs.components(separatedBy: setter).dropFirst().first?.components(separatedBy: "\n    }\n").first?
+            .contains("VolumeCurve.accepted(position)") != true
+    }
+    // covers: S76
+    check(unclamped.isEmpty, "volume: a local, master or zone volume set on the Mac goes through that clamp", "\(unclamped)")
+}
 var mono = true
 for p in stride(from: 0.0, to: 100, by: 1) where VolumeCurve.gain(position: p + 1) <= VolumeCurve.gain(position: p) { mono = false }
 check(mono, "volume: strictly increasing")
@@ -54,41 +63,49 @@ do {
           "volume: a calibration playing through one output silences every other local speaker")
 }
 
+do {
+    let own = NativeAirPlayModel.ownVolume("native:new", stored: ["native:den": 80])
+    // covers: S399
+    check(own == 60 && NativeAirPlayModel.ownVolume("native:den", stored: ["native:den": 80]) == 80
+            && AirPlayDeviceLevel.sent(own: own, zone: 100) == 60,
+          "airplay level: a speaker with no stored volume starts at 60 and joins at level 60 with the zone at 100",
+          "\(own)")
+}
+
 // covers: S290, S291 (a level set on the speaker is kept for its next session)
 do {
     // A TV remote's level D reaches the Mac as the core's own volume D / k, which row_move gives for a whole D.
     for (level, db) in [(40.0, -18.0), (80.0, -6.0)] {
-        let own = AirPlayDeviceLevel.move(row: level, zone: 100, master: 63)?.own ?? .nan
-        let rejoin = AirPlayDeviceLevel.sent(own: own, zone: 100, master: 63)
-        let row = AirPlayDeviceLevel.row(own: own, zone: 100, master: 63, held: nil)
+        let own = AirPlayDeviceLevel.move(row: level, zone: 63)?.own ?? .nan
+        let rejoin = AirPlayDeviceLevel.sent(own: own, zone: 63)
+        let row = AirPlayDeviceLevel.row(own: own, zone: 63, held: nil)
         check(approx(rejoin, level, 1e-9) && approx(-30 + 0.3 * rejoin, db, 1e-9) && row == level,
-              "airplay level: added again or after Calibrate All Speakers, it gets its remote's \(Int(level)) at master 63",
+              "airplay level: added again or after Calibrate All Speakers, it gets its remote's \(Int(level)) in a zone at 63",
               "sent \(rejoin), row \(row), own \(own)")
     }
 }
 
 // covers: S290 (k at 0: a level set on the speaker is held for the row)
 do {
-    let atZero = AirPlayDeviceLevel.held(level: 40, zone: 100, master: 0)
-    let zoneZero = AirPlayDeviceLevel.held(level: 40, zone: 0, master: 63)
-    let row = AirPlayDeviceLevel.row(own: 50, zone: 100, master: 0, held: atZero)
-    check(atZero == 40 && zoneZero == 40 && row == 40,
-          "airplay level: at master 0 a TV set to 40 holds the row at 40",
-          "\(String(describing: atZero)) \(String(describing: zoneZero)) row \(row)")
-    let moved = AirPlayDeviceLevel.row(own: 50, zone: 100, master: 50, held: nil)
-    check(AirPlayDeviceLevel.held(level: 40, zone: 100, master: 63) == nil && moved == 25
-            && AirPlayDeviceLevel.sent(own: 50, zone: 100, master: 0) == 0,
+    let zoneZero = AirPlayDeviceLevel.held(level: 40, zone: 0)
+    let row = AirPlayDeviceLevel.row(own: 50, zone: 0, held: zoneZero)
+    check(zoneZero == 40 && row == 40,
+          "airplay level: in a zone at 0 a TV set to 40 holds the row at 40",
+          "\(String(describing: zoneZero)) row \(row)")
+    let moved = AirPlayDeviceLevel.row(own: 50, zone: 50, held: nil)
+    check(AirPlayDeviceLevel.held(level: 40, zone: 63) == nil && moved == 25
+            && AirPlayDeviceLevel.sent(own: 50, zone: 0) == 0,
           "airplay level: with k above 0 nothing is held, and a held level is never sent", "row \(moved)")
 
-    // covers: S276 (a DACP DeviceVolume of −18 dB at master 0: the core reports own 50, level 40)
-    let dacpHeld = AirPlayDeviceLevel.held(level: 40, zone: 100, master: 0)
-    let dacpRow = AirPlayDeviceLevel.row(own: 50, zone: 100, master: 0, held: dacpHeld)
-    check(dacpHeld == 40 && dacpRow == 40 && AirPlayDeviceLevel.sent(own: 50, zone: 100, master: 0) == 0,
-          "airplay level: a DeviceVolume at master 0 keeps own 50, the row shows the TV's 40 and 0 is what a send gives",
+    // covers: S276 (a DACP DeviceVolume of −18 dB in a zone at 0: the core reports own 50, level 40)
+    let dacpHeld = AirPlayDeviceLevel.held(level: 40, zone: 0)
+    let dacpRow = AirPlayDeviceLevel.row(own: 50, zone: 0, held: dacpHeld)
+    check(dacpHeld == 40 && dacpRow == 40 && AirPlayDeviceLevel.sent(own: 50, zone: 0) == 0,
+          "airplay level: a DeviceVolume in a zone at 0 keeps own 50, the row shows the TV's 40 and 0 is what a send gives",
           "\(String(describing: dacpHeld)) row \(dacpRow)")
 
-    let joined = AirPlayDeviceLevel.restored(own: 50, zone: 100, master: 0, held: 40, afterCalibration: false)
-    let calibrated = AirPlayDeviceLevel.restored(own: 50, zone: 0, master: 63, held: 40, afterCalibration: true)
+    let joined = AirPlayDeviceLevel.restored(own: 50, zone: 0, held: 40, afterCalibration: false)
+    let calibrated = AirPlayDeviceLevel.restored(own: 50, zone: 0, held: 40, afterCalibration: true)
     check(joined.level == 0 && joined.held == nil && calibrated.level == 40 && calibrated.held == 40,
           "airplay level: a join sends the level k gives and drops a held 40, the end of a calibration sends 40 back and keeps it",
           "joined \(joined), calibrated \(calibrated)")
@@ -105,30 +122,29 @@ do {
           "\(changed.sorted())")
 }
 
-// covers: S290 (core/tests/vectors/s290_volume.json, the vectors the core and Windows run, through the calls the Mac makes), S289 (the row shows the device level)
+// covers: S290 (core/tests/vectors/s290_volume.json, the vectors the core and Windows run, through the calls the Mac makes), S289 (the row shows the device level), S413 (a master step changes no level)
 do {
     let file = URL(fileURLWithPath: "core/tests/vectors/s290_volume.json")
     let root = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
     let vectors = root?["cases"] as? [[String: Any]] ?? []
     check(!vectors.isEmpty, "airplay level vectors: the shared file is read", file.path)
-    let known: Set<String> = ["own", "stored_own", "row_move", "step", "tv_level", "device_volume", "master",
+    let known: Set<String> = ["own", "stored_own", "row_move", "step", "tv_level", "device_volume", "zone", "master",
                               "sent", "level", "own_after", "row"]
     for vector in vectors {
         let name = vector["name"] as? String ?? "?"
-        let zone = vector["zone"] as? Double ?? .nan
-        var master = vector["master"] as? Double ?? .nan
+        var zone = vector["zone"] as? Double ?? .nan
         var own = 0.0
         var held: Double?
         let steps = vector["steps"] as? [[String: Any]] ?? []
-        check(zone.isFinite && master.isFinite && !steps.isEmpty,
-              "airplay level vectors: \(name) has a zone, a master and steps", "\(zone) \(master) \(steps.count)")
+        check(zone.isFinite && !steps.isEmpty,
+              "airplay level vectors: \(name) has a zone and steps", "\(zone) \(steps.count)")
         for (index, step) in steps.enumerated() {
             let label = "airplay level vectors: \(name), step \(index + 1)"
             let unknown = Set(step.keys).subtracting(known)
             // covers: S290
             check(unknown.isEmpty, "\(label): every key is one the Mac runs", "\(unknown.sorted())")
             let ops = Set(step.keys).intersection(["own", "stored_own", "row_move", "step", "tv_level", "device_volume",
-                                                   "master"])
+                                                   "zone", "master"])
             // covers: S290
             check(ops.count == 1, "\(label): one op, as the core runner applies only one", "\(ops.sorted())")
             var sent = true
@@ -148,11 +164,11 @@ do {
             }
             if let row = step["row_move"] as? Double {
                 // setNativeAirPlayVolume.
-                if let moved = AirPlayDeviceLevel.move(row: row, zone: zone, master: master) {
+                if let moved = AirPlayDeviceLevel.move(row: row, zone: zone) {
                     own = moved.own
                     held = nil
                     // covers: S290
-                    check(approx(moved.level, AirPlayDeviceLevel.sent(own: own, zone: zone, master: master), 1e-6),
+                    check(approx(moved.level, AirPlayDeviceLevel.sent(own: own, zone: zone), 1e-6),
                           "\(label): the level a row move sends is the level the own volume gives", "\(moved)")
                 } else {
                     sent = false
@@ -160,9 +176,9 @@ do {
             }
             if let by = step["step"] as? Double {
                 // The core turns a remote step into a row move from the row shown (policy/remote.rs); the Mac stores its own volume.
-                let shown = AirPlayDeviceLevel.row(own: own, zone: zone, master: master, held: held)
+                let shown = AirPlayDeviceLevel.row(own: own, zone: zone, held: held)
                 let target = min(100, max(0, shown + by))
-                if target != shown, let moved = AirPlayDeviceLevel.move(row: target, zone: zone, master: master) {
+                if target != shown, let moved = AirPlayDeviceLevel.move(row: target, zone: zone) {
                     own = moved.own
                     held = nil
                 } else {
@@ -174,19 +190,19 @@ do {
                 // A change on the speaker reaches the Mac as the core's own volume D / k, which row_move gives for a whole D.
                 // covers: S290
                 check(level == level.rounded(), "\(label): the level set on the speaker is whole", "\(level)")
-                if let moved = AirPlayDeviceLevel.move(row: level, zone: zone, master: master) { own = moved.own }
-                held = AirPlayDeviceLevel.held(level: level, zone: zone, master: master)
+                if let moved = AirPlayDeviceLevel.move(row: level, zone: zone) { own = moved.own }
+                held = AirPlayDeviceLevel.held(level: level, zone: zone)
             }
-            if let value = step["master"] as? Double {
-                if value != master { held = nil }
-                master = value
+            if let value = step["zone"] as? Double {
+                if value != zone { held = nil }
+                zone = value
             }
             if let expected = step["sent"] as? Bool {
                 // covers: S290
                 check(sent == expected, "\(label): a level is sent or not", "\(sent)")
             }
             if let level = step["level"] as? Double {
-                let got = AirPlayDeviceLevel.level(own: own, zone: zone, master: master, held: held)
+                let got = AirPlayDeviceLevel.level(own: own, zone: zone, held: held)
                 // covers: S290
                 check(approx(got, level, 1e-6), "\(label): the level the speaker has", "\(got), own \(own)")
             }
@@ -195,7 +211,7 @@ do {
                 check(approx(own, expected, 1e-6), "\(label): the own volume stored", "\(own)")
             }
             if let row = step["row"] as? Double {
-                let got = AirPlayDeviceLevel.row(own: own, zone: zone, master: master, held: held)
+                let got = AirPlayDeviceLevel.row(own: own, zone: zone, held: held)
                 // covers: S290
                 check(got == row, "\(label): the row", "\(got)")
             }
@@ -204,14 +220,14 @@ do {
     check(AppSettings.airPlayOwn(126.98) == 126.98 && AppSettings.airPlayOwn(-1) == 0,
           "airplay level: a stored own volume above 100 loads as it is")
 
-    // A DeviceVolume 100 at master 63 stores s = 158.7; after a relaunch the row and the TV still say 100.
+    // A DeviceVolume 100 in a zone at 63 stores s = 158.7; after a relaunch the row and the TV still say 100.
     final class Stored { var values: [String: Any] = [:] }
     let stored = Stored()
     let store = SettingsStore(read: { stored.values[$0] }, write: { value, key in stored.values[key] = value })
-    let own = AirPlayDeviceLevel.move(row: 100, zone: 100, master: 63)?.own ?? .nan
+    let own = AirPlayDeviceLevel.move(row: 100, zone: 63)?.own ?? .nan
     store.save(levels: ["A1": own, "B2": -4], forKey: AppSettings.Keys.airplayVolumes)
     let loaded = store.load().airplayVolumes
-    let row = AirPlayDeviceLevel.row(own: loaded["A1"] ?? .nan, zone: 100, master: 63, held: nil)
+    let row = AirPlayDeviceLevel.row(own: loaded["A1"] ?? .nan, zone: 63, held: nil)
     check(own > 158 && loaded["A1"] == own && loaded["B2"] == 0 && row == 100,
           "airplay level: an own volume above 100 survives a relaunch, so the row stays at the TV's 100",
           "\(loaded), row \(row)")
@@ -602,6 +618,13 @@ do {
     stored.order = []
     check(store.load().zones == expected && stored.order.isEmpty,
           "zones: migrating twice changes nothing: once marked, a launch writes nothing")
+    // covers: S248 (a mark stored as anything but a bool counts as set)
+    for mark in ["1", NSNumber(value: 0)] as [Any] {
+        stored.values[Keys.zonesMigrated] = mark
+        check(store.load().zones == expected && stored.order.isEmpty,
+              "zones: a migrated mark that isn't a bool, a number 0 included, counts as set", "\(mark) \(stored.order)")
+    }
+    stored.values[Keys.zonesMigrated] = true
     // covers: S248
     check(first.zonesNoticeDue, "zones: groups moved to zones leave the notice due for the next window")
     store.zonesNoticeShown()
@@ -741,6 +764,11 @@ do {
     stored.order = []
     check(store.load().presets == expected && stored.order.isEmpty,
           "presets: migrating presets twice changes nothing: once marked, a launch writes nothing")
+    // covers: S254 (a mark stored as anything but a bool counts as set)
+    stored.values[Keys.presetsMigrated] = "yes"
+    check(store.load().presets == expected && stored.order.isEmpty,
+          "presets: a migrated mark that isn't a bool counts as set, so the presets stay as they are", "\(stored.order)")
+    stored.values[Keys.presetsMigrated] = true
 
     let edited = [SpeakerPreset(id: "p1", name: "Evening",
                                 members: [.init(key: "lc:usb:out", volume: 35.5), .init(key: "cc:Group-7", volume: nil)],
@@ -748,7 +776,7 @@ do {
     store.save(presets: edited)
     check(store.load().presets == edited, "presets: presets round-trip through the user defaults, a fixed Cast volume included")
     let messy = [SpeakerPreset(id: "p1", name: "A",
-                               members: [.init(key: "lc:a", volume: 140), .init(key: "lc:a", volume: 10), .init(key: "cc:x", volume: nil),
+                               members: [.init(key: "lc:a", volume: 140), .init(key: "lc:a", volume: 10), .init(key: "cc:x", volume: 125),
                                          .init(key: "cc:y", volume: 20), .init(key: "zz:b", volume: 5),
                                          .init(key: "ap:c", volume: 140)],
                                zones: [.init(id: "z1", volume: -3), .init(id: "z1", volume: 50)], master: 130,
@@ -757,11 +785,11 @@ do {
                  SpeakerPreset(id: "p2", name: "Short", members: [], zones: [], master: 50, gains: [0, 0])]
     store.save(presets: messy)
     check(store.load().presets == [SpeakerPreset(id: "p1", name: "A",
-                                                 members: [.init(key: "lc:a", volume: 100), .init(key: "cc:x", volume: nil),
+                                                 members: [.init(key: "lc:a", volume: 100), .init(key: "cc:x", volume: 125),
                                                            .init(key: "ap:c", volume: 140)],
                                                  zones: [.init(id: "z1", volume: 0)], master: 100,
                                                  gains: [0.5, 12, -12, 0, 0, 0, 0, 0, 0, 0])],
-          "presets: stored presets keep one Cast key, one preset per ID, levels within range (an AirPlay own volume may pass 100)",
+          "presets: stored presets keep one Cast key, one preset per ID, levels within range (an AirPlay or Cast own volume may pass 100)",
           "\(store.load().presets)")
 
     // covers: S251 (an own volume that isn't a number is none, a master that isn't one is 100, a preset without ten gains is dropped alone)
@@ -869,7 +897,7 @@ do {
 }
 
 // MARK: Debug log — opt-in, one UTC line per message, capped, never through a link
-// covers: S170 (all but the first line's versions and local time)
+// covers: S170 (all but the first line's versions and local time), S131 (the thread that logs never touches the file)
 do {
     check(DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "1"]), "debug log: on with AUDIOSYNC_DEBUG=1")
     check(!DebugTrace.isEnabled(environment: [:]) && !DebugTrace.isEnabled(environment: ["AUDIOSYNC_DEBUG": "0"])
@@ -1125,6 +1153,20 @@ do {
     check(den == ["airplay native:den true", "airplay native:den false"],
           "volume drag: an AirPlay row's slider drag reaches the dragging hook with its id at the first move and at release",
           "\(den)")
+}
+// covers: S291 (a phone's pause ends only a hold its own steps set; a window drag holds until the mouse lets go)
+do {
+    func run(_ moves: [(held: Bool, phone: Bool)]) -> [Bool] {
+        var holds = AirPlayVolumeHolds()
+        return moves.map { holds.sends("native:den", $0.held, phone: $0.phone) }
+    }
+    let windowFirst = run([(true, false), (true, true), (false, true), (false, false)])
+    let phoneFirst = run([(true, true), (true, false), (false, true), (false, false)])
+    let phoneAlone = run([(true, true), (true, true), (false, true)])
+    check(windowFirst == [true, false, false, true] && phoneFirst == [true, true, false, true]
+            && phoneAlone == [true, true, true],
+          "volume drag: a phone's pause after its last step ends no window drag on the same AirPlay row, in either order",
+          "\(windowFirst) \(phoneFirst) \(phoneAlone)")
 }
 
 // MARK: Equalizer presets (the core runs the filters; core/tests/eq.rs)
@@ -3600,6 +3642,22 @@ do {
             && slept.isReconnecting("R4"),
           "native airplay: a retried error while the Mac sleeps counts nothing toward reconnecting",
           "\(asleepFails) \(wokeFails)")
+    var dozing = NativeAirPlayModel()
+    dozing.apply(.appeared(receiver("R5", "Attic", .available)))
+    dozing.asleep = true
+    let whileAsleep = dozing.reconcilePlan(streaming: true, enabled: ["native:R5"])
+    dozing.asleep = false
+    let afterWake = dozing.reconcilePlan(streaming: true, enabled: ["native:R5"])
+    // covers: S412
+    check(whileAsleep.isEmpty && afterWake.add == ["R5"],
+          "native airplay: a reconcile while the Mac sleeps starts no session, the one at the wake starts it",
+          "\(whileAsleep) \(afterWake)")
+    dozing.asleep = true
+    let switchedOnAsleep = dozing.plan(streaming: true, enabled: ["native:R5"])
+    // covers: S412
+    check(switchedOnAsleep.add.isEmpty,
+          "native airplay: a speaker switched on or found while the Mac sleeps starts no session",
+          "\(switchedOnAsleep)")
 
     // P169, S285: a 17th AirPlay 2 speaker waits for a place, switched on,
     // and the sender starts it once one of the others stops.
@@ -3907,6 +3965,9 @@ do {
                 && !NativeAirPlayModel.isPin("12a4") && !NativeAirPlayModel.isPin("12 34")
                 && !NativeAirPlayModel.isPin("\u{FF11}\u{FF12}"),
               "native pairing: a PIN is ASCII digits only")
+        // covers: S223
+        check(!NativeAirPlayModel.isPin("123") && !NativeAirPlayModel.isPin("12345"),
+              "native pairing: a PIN has exactly four digits")
 
         var m = listed([("A1", .available), ("B2", .needsPin), ("C3", .needsPassword)])
         // covers: S223
@@ -3918,10 +3979,23 @@ do {
         // covers: S223
         check(m.plan(streaming: true, enabled: ["native:B2", "native:C3"]).isEmpty,
               "native pairing: while pairing or prompting, the speaker waits instead of going off")
+        func rowWait(_ id: String, _ name: String) -> String? {
+            UIStrings().rowNote(cast: nil, waitingForAirPlay2: false, codeWait: m.codeWait(id), name: name,
+                                unannounced: false, target: nil)
+        }
+        // covers: S223
+        check(rowWait("C3", "Kitchen") == "Waiting for the password" && rowWait("B2", "Den") == nil
+                && rowWait("A1", "Hall") == nil,
+              "native pairing: while its password prompt runs, the row says so; a pairing before its PIN shows says nothing",
+              "\(String(describing: rowWait("B2", "Den"))) \(String(describing: rowWait("C3", "Kitchen")))")
 
         // The PIN: shown on the TV, typed, checked.
         // covers: S223
         check(m.apply(.pinNeeded(id: "B2")) == .prompt, "native pairing: the TV shows a PIN, a prompt is queued")
+        // covers: S223
+        check(rowWait("B2", "Den") == "Enter the code shown on Den",
+              "native pairing: while its PIN prompt runs, the row asks for the code shown on the speaker, by its name",
+              "\(String(describing: rowWait("B2", "Den")))")
         let password = m.nextPrompt()
         // covers: S223
         check(password == NativePrompt(id: "C3", password: true, wrong: false) && m.nextPrompt() == nil,
@@ -3952,11 +4026,13 @@ do {
         check(pin == NativePrompt(id: "B2", password: false, wrong: false), "native pairing: then the PIN prompt opens")
         // covers: S223
         check(m.answered(pin!, code: "12a4") == .askAgain && m.nextPrompt() == NativePrompt(id: "B2", password: false, wrong: true),
-              "native pairing: something that isn't a PIN asks again")
+              "native pairing: a code past the prompt that isn't a PIN asks again")
         // covers: S223
         check(m.answered(NativePrompt(id: "B2", password: false, wrong: true), code: "1234") == .submitPin
                 && m.stages["B2"] == .checkingPin,
               "native pairing: a PIN goes to the pairing")
+        // covers: S223
+        check(rowWait("B2", "Den") == nil, "native pairing: while its PIN is checked, the row says nothing of a code")
         // covers: S223
         check(m.apply(.pairingFailed(id: "B2", wrongPin: true, .refused, detail: "")) == .startPairing("B2")
                 && m.apply(.pinNeeded(id: "B2")) == .prompt
@@ -3994,7 +4070,7 @@ do {
         // covers: S223
         check(m.answered(NativePrompt(id: "C3", password: true, wrong: true), code: "") == .turnOff(.cancelled)
                 && !m.turnedOff("C3"),
-              "native pairing: an empty password counts as Cancel; no pairing runs to cancel")
+              "native pairing: an empty password past the prompt counts as Cancel; no pairing runs to cancel")
         // covers: S223
         check(m.plan(streaming: true, enabled: ["native:C3"]).turnOff.isEmpty
                 && m.plan(streaming: true, enabled: []).remove == ["C3"],
@@ -4513,18 +4589,18 @@ do {
             remotes.apply(.appeared(receiver(id, name, .available)))
             remotes.added(id)
         }
-        let master = 80.0
+        let zone = 80.0
         var own = ["native:A1": 40.0, "native:B2": 60.0]
         var held: [String: Double] = [:]
         func take(_ event: NativeSpeakerEvent) {
             guard case .volumeChanged(let id, let position, let level)? = remotes.apply(event) else { return }
             own[id] = position
-            held[id] = AirPlayDeviceLevel.held(level: level, zone: 100, master: master)
+            held[id] = AirPlayDeviceLevel.held(level: level, zone: zone)
         }
         func row(_ id: String) -> Double {
-            AirPlayDeviceLevel.row(own: own[id] ?? .nan, zone: 100, master: master, held: held[id])
+            AirPlayDeviceLevel.row(own: own[id] ?? .nan, zone: zone, held: held[id])
         }
-        // Own 40 at master 80 shows row 32; VolumeUp sends row 37 and stores own 37 / 0.8.
+        // Own 40 in a zone at 80 shows row 32; VolumeUp sends row 37 and stores own 37 / 0.8.
         let before = (row("native:A1"), row("native:B2"))
         take(.volume(id: "A1", position: 46.25, level: 37))
         let up = (row("native:A1"), row("native:B2"))
@@ -5236,6 +5312,42 @@ do {
             && !homeTheater.homeTheaterConflict(left, enabled: [app(tv), app(den)]),
           "P229 native airplay: an Apple TV or its home theater group stays off while the other side is on, streaming or not")
 
+    func pairOf(_ leftAvailability: NativeReceiver.Availability,
+                _ rightAvailability: NativeReceiver.Availability) -> NativeAirPlayModel {
+        var model = NativeAirPlayModel()
+        model.apply(.appeared(member(left, "Left", of: pair, leftAvailability)))
+        model.apply(.appeared(member(right, "Right", of: pair, rightAvailability)))
+        model.apply(.appeared(target(pair, "Living Room")))
+        return model
+    }
+    let unplayable = pairOf(.needsPin, .unsupported), halfPlayable = pairOf(.needsPin, .available)
+    // covers: P176, P181
+    check(unplayable.availability(pair) == .needsPairing
+            && unplayable.access(pair) == nil && !unplayable.rows(enabled: []).contains(app(pair))
+            && unplayable.joinable([app(pair)], after: [], stopped: false).isEmpty
+            && halfPlayable.access(pair) == .open
+            && halfPlayable.joinable([app(pair)], after: [], stopped: false) == [app(pair)],
+          "P176 native airplay: a pair with no playable member reads its first member's reason, so it has no row and "
+            + "auto-connect leaves it off; one member that can play is enough")
+    // covers: P176, P181
+    check(unplayable.plan(streaming: true, enabled: [app(pair)]).add.isEmpty
+            && !unplayable.soundingIDs.contains(app(pair))
+            && halfPlayable.plan(streaming: true, enabled: [app(pair)]).add == [pair]
+            && halfPlayable.soundingIDs.contains(app(pair)),
+          "P176 native airplay: a pair with no playable member left on from the last run starts no session and holds "
+            + "no local output back")
+    var deafTheater = NativeAirPlayModel()
+    deafTheater.apply(.appeared(NativeReceiver(id: tv, name: "Den TV", model: "AppleTV11,1", availability: .available,
+                                               reason: nil, hints: ["airplay", "apple-tv"])))
+    deafTheater.apply(.appeared(member(left, "Left", of: den, .needsPin)))
+    deafTheater.apply(.appeared(member(right, "Right", of: den, .unsupported)))
+    var deafGroup = target(den, "Den")
+    deafGroup.control = tv
+    deafTheater.apply(.appeared(deafGroup))
+    // covers: P229
+    check(!deafTheater.homeTheaterConflict(tv, enabled: [app(den)]),
+          "P229 native airplay: a home theater group left on whose speakers can't play doesn't keep its Apple TV off")
+
     var pw = NativeAirPlayModel()
     pw.apply(.appeared(member(left, "Left", of: pair)))
     pw.apply(.appeared(member(right, "Right", of: pair, .needsPassword)))
@@ -5448,6 +5560,35 @@ do {
           "EC1 unplug: a lost speaker stays on and waits while its device is missing")
     check(!StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: ["usb"]),
           "EC1 unplug: streaming keeps running while the only speaker is unplugged")
+    // covers: S68 (the disconnected notice waits for the list: a device listed again at once gets none)
+    do {
+        var goneNotices = OutputGoneNotices()
+        goneNotices.deviceGone("usb")
+        goneNotices.deviceGone("hdmi")
+        goneNotices.deviceGone("bt")
+        let goneDue = goneNotices.settle(enabled: ["usb", "hdmi"], listed: ["hdmi", "builtin"])
+        let goneAgain = goneNotices.settle(enabled: ["usb", "hdmi"], listed: [])
+        check(goneDue.post == ["usb"] && goneAgain.post.isEmpty,
+              "EC1 unplug: a speaker whose device left the list gets the disconnected notice once; one listed again or switched off gets none",
+              "\(goneDue) \(goneAgain)")
+    }
+    // covers: S68, S331 (the disconnected notice ends with a switch-off or a stop, as on Windows)
+    do {
+        var endingNotices = OutputGoneNotices()
+        endingNotices.deviceGone("usb")
+        endingNotices.deviceGone("hdmi")
+        _ = endingNotices.settle(enabled: ["usb", "hdmi", "bt"], listed: [])
+        endingNotices.refusedLost("bt")
+        endingNotices.started("hdmi")
+        let switchedOff = endingNotices.settle(enabled: ["hdmi", "bt"], listed: ["hdmi", "bt"])
+        endingNotices.deviceGone("tv")
+        let stopped = endingNotices.stop()
+        let afterStop = endingNotices.settle(enabled: ["tv", "bt"], listed: [])
+        check(switchedOff.clear == ["usb"] && switchedOff.post.isEmpty && stopped == ["bt"]
+                && afterStop.post.isEmpty && afterStop.clear.isEmpty,
+              "EC1 unplug: the disconnected notice ends when the speaker is switched off or streaming stops; one that played again keeps none",
+              "\(switchedOff) \(stopped) \(afterStop)")
+    }
     check(LocalOutputSync.plan(enabled: ["usb"], active: [], available: ["usb", "builtin"]) == P(attach: ["usb"], detach: []),
           "EC1 replug: the speaker is attached again once its device is listed")
     check(LocalOutputSync.plan(enabled: [], active: ["usb"], available: ["usb"]) == P(attach: [], detach: ["usb"]),
@@ -5464,6 +5605,7 @@ do {
     check(LocalOutputSync.plan(enabled: [], active: ["usb"], available: ["usb"],
                                bound: ["usb": 52], listed: ["usb": 99]) == P(attach: [], detach: ["usb"]),
           "EC1 new ID: a speaker switched off is detached, not restarted")
+    // covers: S138 (handled like an unplug)
     check(LocalOutputSync.plan(enabled: ["bt", "usb"], active: ["usb"], available: ["usb"]) == P(attach: [], detach: []),
           "EC2 Bluetooth: a disconnected headset waits; the other speaker keeps playing")
     check(LocalOutputSync.plan(enabled: ["bt", "usb"], active: ["usb"], available: ["bt", "usb"]) == P(attach: ["bt"], detach: []),
@@ -5605,7 +5747,7 @@ do {
     }
 
     // EC4 / EC9: the capture rate changes under a running session.
-    // covers: S157
+    // covers: S157, S140
     check(CaptureRate.needsRestart(current: 48000, reported: 44100), "EC4 rate: a new capture rate rebuilds the session")
     check(CaptureRate.needsRestart(current: 44100, reported: 96000), "EC4 rate: a higher capture rate rebuilds the session")
     check(!CaptureRate.needsRestart(current: 48000, reported: 48000), "EC4 rate: the same rate keeps playing")
@@ -5751,11 +5893,20 @@ do {
           "EC6 app quit: the switch to the whole system never waits on the microphone prompt (S227)")
 
     // EC8: every speaker off, then one on again.
-    // covers: S162, S118, S119 (the stop and start decisions; a local speaker joining is the sync plan above)
+    // covers: S162, S118, S119, S144 (the stop and start decisions; a local speaker joining is the sync plan above)
     check(StreamingPolicy.isIdle(streaming: true, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: streaming stops when the last speaker is switched off")
     check(!StreamingPolicy.isIdle(streaming: true, enabledAirPlay: ["a"], enabledLocal: []),
           "EC8 all off: one AirPlay speaker still on keeps streaming")
+    var castOn = CastModel()
+    castOn.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
+    _ = castOn.turnOn("K1")
+    _ = castOn.started("K1", attempt: 1, refusal: 0)
+    let castCounted = CastID.switchedOn(castOn.enabled)
+    // covers: S162
+    check(castCounted == [CastID.app("K1")] && CastID.switchedOn(nil).isEmpty
+            && !StreamingPolicy.isIdle(streaming: true, enabledAirPlay: castCounted, enabledLocal: []),
+          "EC8 all off: one Cast speaker still on, connecting, keeps streaming", "\(castCounted)")
     check(!StreamingPolicy.isIdle(streaming: false, enabledAirPlay: [], enabledLocal: []),
           "EC8 all off: nothing to stop while stopped")
     check(StreamingPolicy.startsStreaming(turnedOn: true, streaming: false),
@@ -5772,7 +5923,7 @@ do {
     let many: [S] = (1...8).map { ("Speaker \($0)", SpeakerTag.usb) } + [("MacBook Pro Speakers", .builtIn)]
     let manyAirPlay: [S] = (1...8).reversed().map { ("Room \($0)", SpeakerTag.airplay) }
     let big = SpeakerLayout.split(local: many, airplay: manyAirPlay, tag: { $0.tag }, name: { $0.name })
-    // covers: S165
+    // covers: S165, S146
     check(big.thisMac.count == 1 && big.connected.count == 16
           && big.connected.prefix(8).map(\.name) == (1...8).map { "Room \($0)" },
           "EC10 many speakers: sixteen speakers all listed, in name order")
@@ -5781,6 +5932,7 @@ do {
           "EC10 many speakers: eight local speakers are attached together")
 
     // EC11: very long speaker names.
+    // covers: S166
     let long = String(repeating: "Living Room Speaker With A Very Long Name ", count: 6) + "End"
     let longs: [S] = [(long + " B", .airplay), (long + " A", .airplay), ("Den", .usb)]
     let longSplit = SpeakerLayout.split(local: [S](), airplay: longs, tag: { $0.tag }, name: { $0.name })
@@ -6812,7 +6964,8 @@ do {
             == ["All System Audio", "Music", "Safari", "Spotify", "MacBook Pro Microphone"],
           "sources: a chosen app that isn't running stays listed, sorted among the apps")
     check(list(.input(uid: "gone")).count == 5 && list(.input(uid: "gone")).last?.connected == false
-            && list(.system).allSatisfy(\.connected),
+            && list(.input(uid: "gone")).last?.available == false
+            && list(.system).allSatisfy(\.connected) && list(.system).allSatisfy(\.available),
           "sources: a chosen input device that is unplugged is listed last, not connected")
     check(list(.input(uid: "gone")).last.map { $0.id == "input:gone" && $0.isInput && $0.name != "All System Audio" } == true,
           "sources: an unplugged chosen input isn't labelled as the whole system")
@@ -6847,8 +7000,12 @@ do {
           "sources: a Bluetooth hands-free input, or an aggregate with one, is left out; "
             + "Bluetooth LE, built-in, USB and other aggregate inputs stay",
           "\(headsetList(.system).map(\.id))")
-    check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id),
-          "sources: a saved source that is a hands-free input isn't listed, like an unplugged one")
+    check(headsetList(.input(uid: "buds:input")).map(\.id) == headsetList(.system).map(\.id) + ["input:buds:input"]
+            && headsetList(.input(uid: "buds:input")).last == SourceList.Entry(id: "input:buds:input", name: "Example Buds",
+                                                                              isInput: true, available: false),
+          "sources: a saved source that is a hands-free input still plugged in is listed last under its name, "
+            + "disabled but not marked unplugged",
+          "\(headsetList(.input(uid: "buds:input")))")
     check(AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetooth)
             && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeBluetoothLE)
             && !AudioDevices.isHandsFreeInput(transport: kAudioDeviceTransportTypeUSB)
@@ -7013,7 +7170,7 @@ do {
             && zoneRows.contains("note = text.zoneMemberInTarget(targetName)"),
           "zones: a member its pair holds says it plays as part of the pair")
 
-    // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel)
+    // covers: S259, S260, S261, S262, S263, S264, S265, S266, S269 (presets in the menus and the panel), S267 (the Control-Command-1 to 9 keys)
     let presetText = UIStrings()
     let presetFlat = [Double](repeating: 0, count: Equalizer.frequencies.count)
     let livingZone = SpeakerZone(id: "z1", name: "Living Room", members: ["lc:usb:out", "lc:tv"], volume: 60)
@@ -7200,6 +7357,7 @@ do {
     let wrongTexts = presetTexts.filter { $0.0 != $0.1 }.map(\.0)
     check(wrongTexts.isEmpty, "presets: the preset texts", "\(wrongTexts)")
 
+    // covers: S24
     var tuned = Equalizer.Settings()
     tuned.enabled = true; tuned.preamp = -3; tuned.gains[0] = 6
     check(StoredEqualizer.decode(StoredEqualizer.encode(tuned)) == tuned,
@@ -7463,7 +7621,7 @@ do {
     // covers: S405
     check(!bar.contains("panel resize layers") && openBody.contains("ownShadow(window)")
             && (openBody.range(of: "ownShadow(window)")?.lowerBound ?? openBody.endIndex)
-                < (openBody.range(of: "grow(layer")?.lowerBound ?? openBody.startIndex),
+                < (openBody.range(of: "growInSteps(layer")?.lowerBound ?? openBody.startIndex),
           "menu bar panel source: the panel grows only once its background can scale with it; otherwise it fades in at full size")
 
     // The open panel moved by AppKit (another display, a status item shifting).
@@ -7680,13 +7838,24 @@ do {
             && abs(revealSteps[12] - 1) < abs(revealSteps[6] - 1),
           "menu bar panel: the reveal follows the open's spring, one step per 120 Hz frame, from 0.92 to exactly 1",
           "\(revealSteps.count) \(revealSteps.first ?? 0) \(revealSteps.last ?? 0)")
+    let growBodies = revealSteps.map { PanelReveal.body(revealBody, scale: $0, about: revealTip, pixel: 0.5) }
+    let growLaid = growBodies.allSatisfy { step in
+        let laid = revealBody.applying(PanelReveal.stretch(revealBody, onto: step))
+        return [laid.minX - step.minX, laid.minY - step.minY, laid.maxX - step.maxX, laid.maxY - step.maxY]
+            .allSatisfy { abs($0) < 1e-9 }
+    }
+    // covers: S405
+    check(growLaid && growBodies.first != revealBody
+            && PanelReveal.stretch(revealBody, onto: growBodies.last ?? .zero) == .identity,
+          "menu bar panel: each step of the open lays the whole body's outer edges exactly on its pixel-aligned step and ends with no transform")
     let revealSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let revealOpen = revealSource.components(separatedBy: "private func animateOpen(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
     // covers: S405
-    check(revealOpen.contains("reveal(") && revealOpen.contains("if PanelSwitches.scaleContent")
+    check(revealOpen.contains("growInSteps(") && revealOpen.contains("if PanelSwitches.revealContent")
+            && revealSource.contains("shadow.add(steps(")
             && revealSource.contains("calculationMode = .discrete") && !revealSource.contains("shouldRasterize"),
-          "menu bar panel source: the open reveals the content at its own size instead of scaling it, so its hairlines stay on the pixel grid")
+          "menu bar panel source: the open scales the whole panel and its own shadow on the same discrete steps, never through a rasterized copy, so its outer edges stay on the pixel grid")
 }
 
 // MARK: The panel's stand-in on the first open after launch (MenuBar.swift, WindowRules.swift)
@@ -7830,6 +7999,15 @@ do {
                           SpeakerGroup(id: "g3", name: "C", members: ["lc:c"])],
           "settings: a stored group value that can't be read loses only that member, or its group, never the others",
           "\(oneBadGroup)")
+    // covers: S212 (a stored list that isn't one is dropped with one debug line; nothing stored logs nothing)
+    var listLines: [String] = []
+    let notAList = AppSettings.decodeList(SpeakerZone.self, Data(#"{"id":"z1"}"#.utf8), key: Keys.zones) { listLines.append($0) }
+    let garbage = AppSettings.decodeList(SpeakerZone.self, Data([0xFF, 0x00, 0x7B]), key: Keys.zones) { listLines.append($0) }
+    let missing = AppSettings.decodeList(SpeakerZone.self, nil, key: Keys.zones) { listLines.append($0) }
+    check(notAList.isEmpty && garbage.isEmpty && missing.isEmpty
+            && listLines == Array(repeating: "[AudioSync] settings: speakerZones unreadable, nothing kept", count: 2),
+          "settings: zones that can't be read as a list are dropped with one debug line naming the key, and missing zones log nothing",
+          "\(listLines)")
     // covers: S212 (the Mac debug log's path for a value that didn't read)
     do {
         struct PathKey: CodingKey {
@@ -8152,6 +8330,10 @@ do {
             && loaded.localDelaysMigrated,
           "migration: runs once and leaves the old values in place",
           "first \(String(describing: first)), second \(String(describing: second))")
+    stored.values[Keys.localDelaysMigrated] = "yes"
+    let markedWrites = stored.writes
+    check(store.migrateLocalDelays(listed: [r, usb], reference: r) == nil && stored.writes == markedWrites,
+          "migration: a mark that isn't a bool counts as set, so the delays don't migrate again")
     stored.values = [Keys.localOffsets: [usb: 25_000.0, bt: -9000.0, "x": Double.nan, "y": "loud"] as [String: Any],
                      Keys.airPlayDelay: -5.0, Keys.nativeAirPlayAdjustment: 30_000.0]
     let damaged = store.load()
@@ -8235,6 +8417,10 @@ do {
     check(accented == String(repeating: "a", count: 59) + "e" && accented.unicodeScalars.count == 60,
           "speaker names: a name is cut at 60 Unicode scalars, the same count on both hosts",
           "cut: \(accented.unicodeScalars.count) scalars")
+    let unicodeBreaks = SpeakerNames.clean("Desk\u{85}left\u{2028}right\u{2029}rear")
+    // covers: S228
+    check(unicodeBreaks == "Desk left right rear",
+          "speaker names: U+0085, U+2028 and U+2029 inside a name become spaces, the same set on both hosts", unicodeBreaks)
     let longSystem = String(repeating: "a", count: 59) + "e\u{301}"
     var untouched = SpeakerNames()
     // covers: S228
@@ -8326,6 +8512,11 @@ do {
     // covers: S228
     check(renameAt != nil && stopAt != nil && renameAt!.lowerBound < stopAt!.lowerBound,
           "speaker rename: quit applies an open rename before the session stops")
+    let quitOrder = ["webRemote?.shutdown()", "stopEngine(", "engine.finishStopping()", "nativeAirPlay?.shutdown()"]
+        .compactMap { quitBody.range(of: $0)?.lowerBound }
+    // covers: S379 (the Mac's quit order)
+    check(quitOrder.count == 4 && quitOrder == quitOrder.sorted(),
+          "web remote: quit stops the remote before the outputs fade and the AirPlay sender tears down")
     var quitting = InlineRename()
     _ = quitting.start(livingTarget, name: "Living")
     quitting.text = "Lounge"
@@ -8867,16 +9058,19 @@ do {
           "status line: a re-attach gets a new token, the other outputs keep theirs", "\(tokens.byUID)")
     let new = SessionTally(capture: CaptureCounts(callbacks: 1_500, frames: 752_000, silentCallbacks: 4),
                            outputs: ["BT-AA:BB": Out(number: 1, attach: bt, frames: 340_000, starvedRenders: 3, starvedFrames: 1_412, driftSkips: 3,
-                                                     driftSilences: 4, lateCallbacks: 7, overloads: 2),
+                                                     driftSilences: 4, rejectedCopies: 2, lateCallbacks: 7, overloads: 2),
                                      "Built-in": Out(number: 2, attach: builtInAfter, frames: 48_000, starvedRenders: 7, starvedFrames: 3_360,
-                                                     driftSkips: 1, driftSilences: 2, lateCallbacks: 0, overloads: 0),
+                                                     driftSkips: 1, driftSilences: 2, rejectedCopies: 1, lateCallbacks: 0, overloads: 0),
                                      "USB": Out(number: 3, attach: tokens.byUID["USB"] ?? 0, starvedRenders: 0, starvedFrames: 0,
                                                 lateCallbacks: 1, overloads: 0)])
     let line = SessionTally.statusText(since: old, now: new, seconds: 5.0)
     check(line == "status over 5.0 s: capture 240000 frames (48000 frames/s), 500 callbacks, 0 without usable channels"
-              + "; output 1: 240000 frames, starved 1 (512 frames), drift skips 2, drift silences 0, late callbacks 0, IO overloads 1"
-              + "; output 2: 48000 frames, starved 7 (3360 frames), drift skips 1, drift silences 2, late callbacks 0, IO overloads 0"
-              + "; output 3: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, late callbacks 1, IO overloads 0",
+              + "; output 1: 240000 frames, starved 1 (512 frames), drift skips 2, drift silences 0, rejected copies 2, "
+              + "late callbacks 0, IO overloads 1"
+              + "; output 2: 48000 frames, starved 7 (3360 frames), drift skips 1, drift silences 2, rejected copies 1, "
+              + "late callbacks 0, IO overloads 0"
+              + "; output 3: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, rejected copies 0, "
+              + "late callbacks 1, IO overloads 0",
           "status line: deltas since the last line, frames rendered per output; a re-attached output's counts are all new, a new output counts from 0",
           line)
     check(!line.contains("BT-AA") && !line.contains("Built-in") && !line.contains("USB"),
@@ -8934,7 +9128,7 @@ do {
         now: SessionTally(outputs: ["BT": SessionTally.Output(number: 1, anchor: stepped)]), seconds: 5)
     // covers: S334
     check(line.hasSuffix("; output 1: 0 frames, starved 0 (0 frames), drift skips 0, drift silences 0, "
-                         + "late callbacks 0, IO overloads 0, device anchor min +0.0 max +150.0 last +150.0 ms"),
+                         + "rejected copies 0, late callbacks 0, IO overloads 0, device anchor min +0.0 max +150.0 last +150.0 ms"),
           "status line: an output with timed callbacks carries its device anchor", line)
 }
 
@@ -11988,6 +12182,17 @@ do {
             && CastModel.networkWaitMs(airPlay: 100, cast: 250) == 250
             && CastModel.networkWaitMs(airPlay: nil, cast: nil) == nil,
           "cast: local outputs wait the longer of the AirPlay delay and the Cast offset")
+    var expired = m
+    // covers: C17
+    check(expired.apply(.changed(CastDevice(id: kitchen, name: "Kitchen", offline: true), offsetMs: 250)) == .changed
+            && expired.rows.contains(kitchen) && expired.status(of: kitchen) == .playing
+            && expired.enabled == kitchen && expired.plan(streaming: true) == .none,
+          "cast: a speaker in a session stays listed and playing after its records expire (C17)")
+    var reloaded = m
+    // covers: C86
+    check(reloaded.apply(.reloaded(attempt: 3)) == nil && reloaded.status(of: kitchen) == .playing
+            && reloaded.enabled == kitchen && reloaded.plan(streaming: true) == .none,
+          "cast: a reloaded stream keeps playing with no new session (C86)")
 
     var takenOver = m
     // covers: C43
@@ -12025,7 +12230,7 @@ do {
             && refused.enabled == nil && refused.status(of: den) == .idle,
           "cast: attempt 0 means refused, and the speaker goes off")
 
-    // covers: C80 (the third failure turns a speaker off; on the Mac no group counts)
+    // covers: C80 (the third failure turns a speaker off; a group with no address yet doesn't count)
     var tvOff = CastModel()
     tvOff.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
     tvOff.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
@@ -12042,10 +12247,15 @@ do {
     _ = tvOff.turnOn("group1")
     tvOff.startSent("group1")
     _ = tvOff.started("group1", attempt: 5, refusal: ASC_CAST_REFUSED_NONE)
-    let groupFailed = CastEvent.connectFailed(attempt: 5, error: .connect, retryMs: 1000)
+    let noAddress = CastEvent.connectFailed(attempt: 5, error: CastError(ASC_CAST_ERROR_NO_ADDRESS), retryMs: 1000)
     // covers: C80, C81
-    check((1...4).allSatisfy { _ in tvOff.apply(groupFailed) == nil } && tvOff.enabled == "group1",
-          "cast: a group keeps trying while connecting, as one with no address yet must (C80, C81)")
+    check((1...4).allSatisfy { _ in tvOff.apply(noAddress) == nil } && tvOff.enabled == "group1",
+          "cast: a group with no address yet keeps trying while connecting (C80, C81)")
+    let groupFailed = CastEvent.connectFailed(attempt: 5, error: .connect, retryMs: 1000)
+    // covers: C80
+    check(tvOff.apply(groupFailed) == nil && tvOff.apply(groupFailed) == nil
+            && tvOff.apply(groupFailed) == .turnedOff("group1", problem: .notResponding) && tvOff.enabled == nil,
+          "cast: a group that never answers goes off at its third connect failure, as on Windows (C80)")
 
     // covers: C56, C80, C83
     check(CastEnd.failed(.connect).problem == .notResponding && CastEnd.failed(.launch).problem == .refused
@@ -12517,77 +12727,66 @@ do {
           "cast group: the measured offset is stored under the group's id, the members' stay as they were")
 }
 
-// MARK: Google Cast and the master volume (C104)
+// MARK: Google Cast and the master volume (C104, S415)
 do {
     let tv = "00112233445566778899aabbccddeeff"
     func reported(_ level: Double, fixed: Bool = false) -> CastVolume {
         CastVolume(level: level, muted: false, fixed: fixed)
     }
     func near(_ level: Double?, _ expected: Double) -> Bool { level.map { approx($0, expected, 1e-9) } == true }
-    func session(master: Double, attempt: UInt64) -> CastModel {
+    func appeared() -> CastModel {
         var m = CastModel()
         m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
-        // covers: C104
-        check(m.setMaster(master) == nil, "cast master: nothing is sent while no session runs")
+        return m
+    }
+    func session(attempt: UInt64, from start: CastModel? = nil) -> CastModel {
+        var m = start ?? appeared()
         _ = m.turnOn(tv)
         m.startSent(tv)
         _ = m.started(tv, attempt: attempt, refusal: ASC_CAST_REFUSED_NONE)
         return m
     }
 
-    var m = session(master: 50, attempt: 1)
+    var m = session(attempt: 1)
+    // covers: C104, S415
+    check(near(m.setVolume(tv, position: 80), 0.8) && approx(m.rowVolume(of: tv), 80, 1e-9),
+          "cast master: the speaker at 80 sends level 0.8 and its row shows 80, whatever the master")
+    _ = m.apply(.volume(attempt: 1, reported(0.8)))
     // covers: C104
-    check(near(m.setVolume(tv, position: 80), 0.4) && approx(m.volume(of: tv), 80, 1e-9),
-          "cast master: master 50 with the speaker at 80 sends level 0.4 and the slider shows 80")
-    // covers: C104
-    check(m.setMaster(0) == 0 && approx(m.volume(of: tv), 80, 1e-9),
-          "cast master: master 0 sends level 0, the speaker keeps 80")
-    _ = m.apply(.volume(attempt: 1, reported(0)))
-    // covers: C104
-    check(approx(m.volume(of: tv), 80, 1e-9), "cast master: the device answering level 0 leaves the speaker at 80")
-    // covers: C104
-    check(near(m.setMaster(50), 0.4), "cast master: a master change resends master × speaker")
-    _ = m.apply(.volume(attempt: 1, reported(0.4)))
-    // covers: C104
-    check(m.apply(.volume(attempt: 1, reported(0.2))) == .changed && approx(m.volume(of: tv), 40, 1e-9),
-          "cast master: level 0.2 set elsewhere at master 50 moves the speaker to 40, nothing sent back")
-    _ = m.setMaster(0)
-    _ = m.apply(.volume(attempt: 1, reported(0)))
-    // covers: C104
-    check(m.apply(.volume(attempt: 1, reported(0.3))) != .setVolume(0) && approx(m.volume(of: tv), 40, 1e-9),
-          "cast master: at master 0 a level set elsewhere leaves the speaker's level and isn't fought")
-    // covers: C104
-    check(m.stepVolume(tv, up: true) == .level(0), "cast master: a step at master 0 sends level 0")
+    check(m.apply(.volume(attempt: 1, reported(0.2))) == .changed && approx(m.rowVolume(of: tv), 20, 1e-9),
+          "cast master: level 0.2 set elsewhere moves the row to 20, nothing sent back")
 
-    var off = session(master: 0, attempt: 2)
+    var kept = appeared()
+    _ = kept.setVolume(tv, position: 0)
+    var off = session(attempt: 2, from: kept)
     // covers: C105
-    check(off.apply(.volume(attempt: 2, reported(0.7))) == .setVolume(0) && approx(off.volume(of: tv), 70, 1e-9),
-          "cast master: a speaker turned on at master 0 is sent level 0 at its first status")
+    check(off.apply(.volume(attempt: 2, reported(0.7))) == .setVolume(0) && approx(off.rowVolume(of: tv), 0, 1e-9),
+          "cast master: a speaker kept at 0 is sent level 0 at its first status")
     _ = off.apply(.volume(attempt: 2, reported(0)))
     // covers: C105
     check(off.apply(.volume(attempt: 2, reported(0.5))) != .setVolume(0),
           "cast master: only the first status of a session is answered")
 
-    var loud = session(master: 50, attempt: 3)
-    // covers: C105
-    check(loud.apply(.volume(attempt: 3, reported(0.8))) == .setVolume(0.5) && approx(loud.volume(of: tv), 100, 1e-9),
-          "cast master: a device louder than the master allows comes down once at the start")
+    var loud = session(attempt: 3)
+    // covers: C105, S415
+    check(loud.apply(.volume(attempt: 3, reported(0.8))) == .changed && approx(loud.rowVolume(of: tv), 80, 1e-9),
+          "cast master: a session with no level kept starts from the device's own, never brought down by the master")
     _ = loud.apply(.volume(attempt: 3, reported(0.5, fixed: true)))
     // covers: C68, C104
-    check(loud.setMaster(20) == nil, "cast master: a fixed volume gets nothing (C68)")
+    check(loud.setVolume(tv, position: 20) == nil, "cast master: a fixed volume gets nothing (C68)")
 
-    var still = session(master: 100, attempt: 8)
+    var still = session(attempt: 8)
     _ = still.apply(.volume(attempt: 8, reported(0.5)))
     _ = still.setVolume(tv, position: 0)
     _ = still.apply(.volume(attempt: 8, reported(0)))
-    for position in [60.0, 50, 40] { _ = still.setMaster(position) }
+    _ = still.setVolume(tv, position: 0)
     _ = still.apply(.volume(attempt: 8, reported(0.3)))
     _ = still.apply(.volume(attempt: 8, reported(0)))
     // covers: C70, C104
-    check(still.volume(of: tv) == 0 && still.setMaster(100) == 0,
-          "cast master: a level the device already has is not waited for, so its buttons' 0 is read back and a muted speaker stays silent")
+    check(still.volume(of: tv) == 0 && still.rowVolume(of: tv) == 0,
+          "cast master: a level the device already has is not waited for, so its buttons' 0 is read back")
 
-    var starting = session(master: 100, attempt: 9)
+    var starting = session(attempt: 9)
     _ = starting.setVolume(tv, position: 30)
     _ = starting.setVolume(tv, position: 40)
     for level in [0.8, 0.3, 0.4] { _ = starting.apply(.volume(attempt: 9, reported(level))) }
@@ -12595,7 +12794,7 @@ do {
     check(approx(starting.volume(of: tv), 40, 1e-9),
           "cast master: two levels set while the speaker starts are both sent, so their echoes leave it at the second")
 
-    var back = session(master: 100, attempt: 9)
+    var back = session(attempt: 9)
     _ = back.apply(.volume(attempt: 9, reported(0.1)))
     for position in [30.0, 50, 30] { _ = back.setVolume(tv, position: position) }
     _ = back.apply(.volume(attempt: 9, reported(0.3)))
@@ -12604,7 +12803,7 @@ do {
     check(approx(back.volume(of: tv), 30, 1e-9),
           "cast master: a status answers the oldest level it matches, so 30, 50, 30 sent never jumps the slider to 50 (C70)")
 
-    var resent = session(master: 100, attempt: 10)
+    var resent = session(attempt: 10)
     _ = resent.setVolume(tv, position: 30)
     // covers: C105
     check(resent.apply(.volume(attempt: 10, reported(0.8))) == .setVolume(0.3),
@@ -12614,7 +12813,7 @@ do {
     check(approx(resent.volume(of: tv), 30, 1e-9),
           "cast master: a level re-sent at the first status is answered once, so a later change to it from elsewhere moves the speaker")
 
-    var quiet = session(master: 100, attempt: 5)
+    var quiet = session(attempt: 5)
     _ = quiet.apply(.volume(attempt: 5, reported(0.5)))
     _ = quiet.setVolume(tv, position: 80)
     _ = quiet.apply(.volume(attempt: 5, reported(0.8)))
@@ -12623,7 +12822,7 @@ do {
     _ = quiet.started(tv, attempt: 6, refusal: ASC_CAST_REFUSED_NONE)
     // covers: C105
     check(quiet.apply(.volume(attempt: 6, reported(0.1))) == .setVolume(0.8) && approx(quiet.volume(of: tv), 80, 1e-9),
-          "cast master: a session starts at master × own level when the device is quieter, not read back (C105)")
+          "cast master: a session starts at the own level when the device is quieter, not read back (C105)")
     quiet.stopSent()
     quiet.startSent(tv)
     _ = quiet.started(tv, attempt: 7, refusal: ASC_CAST_REFUSED_NONE)
@@ -12633,24 +12832,24 @@ do {
 
     var group = CastModel()
     group.apply(.appeared(CastDevice(id: "group1", name: "Everywhere", group: true), offsetMs: nil))
-    _ = group.setMaster(50)
     _ = group.turnOn("group1")
     group.startSent("group1")
     _ = group.started("group1", attempt: 4, refusal: ASC_CAST_REFUSED_NONE)
     // covers: C104
-    check(near(group.setVolume("group1", position: 80), 0.4) && near(group.setMaster(100), 0.8),
-          "cast master: a group follows the master like a device")
+    check(near(group.setVolume("group1", position: 80), 0.8), "cast master: a group gets its own level like a device")
 
     // covers: C70, C104, C105
-    check(approx(asc_cast_device_level(0.5, 0.8), 0.4, 1e-12) && asc_cast_device_level(0, 0.8) == 0
-            && approx(asc_cast_own_level(0.2, 0.5, 0.9), 0.4, 1e-12) && asc_cast_own_level(0.2, 0, 0.7) == 0.7
-            && asc_cast_start_own_level(1, true, 0.8, 0.1) == 0.8 && approx(asc_cast_start_own_level(0.5, false, 0, 0.2), 0.4, 1e-12)
+    check(approx(asc_cast_zone_level(0.5, 0.8), 0.4, 1e-12) && asc_cast_zone_level(0, 0.8) == 0
+            && asc_cast_zone_level(1, 1.25) == 1
+            && approx(asc_cast_zone_own_level(0.2, 0.5, 0.9), 0.4, 1e-12) && asc_cast_zone_own_level(0.2, 0, 0.7) == 0.7
+            && asc_cast_zone_start_own_level(1, true, 0.8, 0.1) == 0.8
+            && approx(asc_cast_zone_start_own_level(0.5, false, 0, 0.2), 0.4, 1e-12)
             && asc_cast_level_answers(0.4, 0.404) && !asc_cast_level_answers(0.4, 0.41),
           "cast master: the core's arithmetic")
 
     // covers: C70, C104 (a device that rounds to its 0.05 step)
     func stepped(_ level: Double) -> CastVolume { CastVolume(level: level, muted: false, fixed: false, step: 0.05) }
-    var rounding = session(master: 100, attempt: 5)
+    var rounding = session(attempt: 5)
     _ = rounding.apply(.volume(attempt: 5, stepped(0.5)))
     _ = rounding.setVolume(tv, position: 33)
     _ = rounding.apply(.volume(attempt: 5, stepped(0.35)))
@@ -12663,16 +12862,17 @@ do {
     // covers: C70, C104
     check(approx(rounding.volume(of: tv), 35, 1e-9),
           "cast master: 0.36 rounds to the 0.35 it has, so 0.35 after 0.4 is a change from elsewhere")
-    var scaled = session(master: 60, attempt: 6)
+    var scaled = session(attempt: 6)
+    _ = scaled.setZones([tv: 60])
     _ = scaled.apply(.volume(attempt: 6, stepped(0.5)))
     _ = scaled.setVolume(tv, position: 53)
     _ = scaled.apply(.volume(attempt: 6, stepped(0.3)))
     // covers: C70, C104
     check(approx(scaled.volume(of: tv), 53, 1e-9),
-          "cast master: at master 60 the device's 0.30 answers the 0.318 sent and the slider stays at 53")
+          "cast master: in a zone at 60 the device's 0.30 answers the 0.318 sent and the slider stays at 53")
 
     // covers: C70, C104 (the sender paces a drag after the model recorded it)
-    var dragged = session(master: 100, attempt: 7)
+    var dragged = session(attempt: 7)
     _ = dragged.apply(.volume(attempt: 7, reported(1)))
     for position in stride(from: 99, through: 40, by: -1) {
         _ = dragged.setVolume(tv, position: Double(position))
@@ -12682,6 +12882,53 @@ do {
     // covers: C70, C104
     check(approx(dragged.volume(of: tv), 40, 1e-9),
           "cast master: the answer to the first level of a 60-level drag is not read as a change")
+
+    // covers: S415
+    var row = session(attempt: 11)
+    _ = row.apply(.volume(attempt: 11, reported(0.4)))
+    _ = row.setZones([tv: 50])
+    _ = row.apply(.volume(attempt: 11, reported(0.2)))
+    check(near(row.moveRow(tv, row: 30), 0.3) && approx(row.volume(of: tv), 60, 1e-9) && approx(row.rowVolume(of: tv), 30, 1e-9),
+          "cast row: a row move sends the row and stores row ÷ zone")
+    _ = row.apply(.volume(attempt: 11, reported(0.3)))
+    // covers: S415
+    check(near(row.moveRow(tv, row: 100), 1) && approx(row.knownVolume(of: tv) ?? 0, 200, 1e-9),
+          "cast row: the own level passes 100, so a zone is never a ceiling")
+    _ = row.apply(.volume(attempt: 11, reported(1)))
+    _ = row.setZones([tv: 0])
+    _ = row.apply(.volume(attempt: 11, reported(0)))
+    _ = row.apply(.volume(attempt: 11, reported(0.3)))
+    // covers: S415
+    check(approx(row.rowVolume(of: tv), 30, 1e-9) && row.moveRow(tv, row: 50) == nil && approx(row.rowVolume(of: tv), 30, 1e-9),
+          "cast row: a level set on the TV while the zone is 0 shows on the row, and a row move there sends nothing")
+    // covers: S415
+    check(near(row.setZones([:]), 1) && approx(row.rowVolume(of: tv), 100, 1e-9),
+          "cast row: out of the zone the own level kept plays again")
+
+    var step = session(attempt: 12)
+    _ = step.apply(.volume(attempt: 12, reported(0.4)))
+    _ = step.setZones([tv: 50])
+    _ = step.apply(.volume(attempt: 12, reported(0.2)))
+    let size = CastModel.fallbackVolumeStep
+    var stepped: Double?
+    if case .level(let level)? = step.stepVolume(tv, up: true) { stepped = level }
+    // covers: S415, C69
+    check(near(stepped, 0.2 + size) && approx(step.volume(of: tv), (0.2 + size) / 0.5 * 100, 1e-9),
+          "cast row: a step in a zone at 50 sends the row plus the step and stores row ÷ zone")
+    _ = step.apply(.volume(attempt: 12, reported(0.2 + size)))
+    _ = step.setZones([tv: 0])
+    // covers: S415
+    check(step.stepVolume(tv, up: true) == nil, "cast row: a step at zone 0 sends nothing")
+    _ = step.apply(.volume(attempt: 12, reported(0)))
+    _ = step.apply(.volume(attempt: 12, reported(0.3)))
+    let heldRow = step.rowVolume(of: tv)
+    step.stopSent()
+    let endedRow = step.rowVolume(of: tv)
+    _ = step.setZones([tv: 50])
+    // covers: S415
+    check(approx(heldRow, 30, 1e-9) && approx(endedRow, 0, 1e-9)
+          && approx(step.rowVolume(of: tv), asc_airplay_row_level((0.2 + size) * 100), 1e-9),
+          "cast row: a level held at zone 0 goes once the session ends or the zone moves")
 }
 
 // MARK: Zone volumes (S71, S249, S250, C104, C105)
@@ -12703,8 +12950,6 @@ do {
         for master in stride(from: 0.0, through: 100, by: 12.5) {
             identical = identical
                 && asc_zone_output_gain(own, 100, master).bitPattern == asc_output_gain(own, master).bitPattern
-                && asc_cast_zone_level(master / 100, 1, own / 100).bitPattern
-                    == asc_cast_device_level(master / 100, own / 100).bitPattern
         }
     }
     // covers: S71, S249
@@ -12728,14 +12973,14 @@ do {
     var m = session(zone: 50, attempt: 1)
     // covers: S249, C104
     check(near(m.setVolume(tv, position: 80), 0.4) && approx(m.volume(of: tv), 80, 1e-9),
-          "zones: the Cast level is master × zone × own")
+          "zones: the Cast level is zone × own")
     // covers: S249, C104
     check(near(m.setZones([tv: 25]), 0.2) && m.setZones([tv: 25]) == nil,
           "zones: a zone volume change gives the Cast speaker in a session its new level, once")
     _ = m.apply(.volume(attempt: 1, reported(0.2)))
     // covers: S250
     check(m.apply(.volume(attempt: 1, reported(0.1))) == .changed && approx(m.volume(of: tv), 40, 1e-9),
-          "zones: a Cast report in a zone moves the own level by master times zone")
+          "zones: a Cast report in a zone moves the own level by the zone")
     _ = m.setZones([tv: 0])
     _ = m.apply(.volume(attempt: 1, reported(0)))
     _ = m.apply(.volume(attempt: 1, reported(0.3)))
@@ -12745,7 +12990,7 @@ do {
     var fresh = session(zone: 50, attempt: 2)
     // covers: S250, C105
     check(fresh.apply(.volume(attempt: 2, reported(0.2))) != .setVolume(0.2) && approx(fresh.volume(of: tv), 40, 1e-9),
-          "zones: a Cast session's first status divides by master times zone (C105)")
+          "zones: a Cast session's first status divides by the zone (C105)")
 }
 
 // MARK: Google Cast track info and volume steps (C53, C54, C69)
@@ -13352,7 +13597,7 @@ do {
             == [.setEnabled(id: "usb", on: true), .setVolume(id: "usb", position: 70)],
           "web remote: turning a speaker on with a volume flips the switch, then moves the slider")
     let willPlay = RemoteRow(Facts(id: "usb", name: "Desk", kind: "USB", on: true, volume: 40, streaming: false), text: t)
-    // covers: S343, S345
+    // covers: S343, S345, S376 (the phone's on maps to the row's switch)
     check(!willPlay.on && RemoteAction.plan(.speaker(id: "usb", on: true, volume: nil, delayMs: nil), rows: [willPlay])
             == [.setEnabled(id: "usb", on: true)],
           "web remote: a speaker that will play shows off, and the phone's switch-on turns it on as the window's button does")
@@ -13378,12 +13623,32 @@ do {
     // covers: S175 (a local output's offset is clamped)
     check(toLocal && toCast && toAirPlay && noDelay && unchanged,
           "web remote: each delay goes to its own control, clamped like the window's field; the reference has none")
+    let castFixed = RemoteRow(Facts(id: "fixed", name: "Bar", kind: "Google Cast", on: false, volume: 50,
+                                    castVolumeFixed: true, offsetMs: 300), text: t)
+    let atFloor = RemoteRow(Facts(id: "floor", name: "Den", kind: "USB", on: true, volume: 40, offsetMs: -2000), text: t)
+    func partPlan(_ id: String, on: Bool? = nil, volume: Double? = nil, delayMs: Double? = nil) -> [RemoteAction] {
+        RemoteAction.plan(.speaker(id: id, on: on, volume: volume, delayMs: delayMs), rows: rows + [castFixed, atFloor])
+    }
+    // covers: S257 (a command applies the parts the host can, each clamped to its control's range)
+    check(partPlan("builtin", on: false, volume: 150, delayMs: 100)
+            == [.setEnabled(id: "builtin", on: false), .setVolume(id: "builtin", position: 100)]
+            && partPlan("fixed", on: true, volume: 70, delayMs: 25000)
+            == [.setEnabled(id: "fixed", on: true), .setCastOffset(id: "fixed", ms: 20000)],
+          "web remote: a speaker's switch and volume apply with no delay field, its switch and delay with a fixed volume")
+    // covers: S257
+    check(partPlan("floor", delayMs: -5000).isEmpty && partPlan("hp", delayMs: 1750.4).isEmpty,
+          "web remote: a phone's delay that, clamped, equals the speaker's own changes nothing")
     let leftAlone = ["tv", "gone"].allSatisfy { plan("{\"type\":\"speaker\",\"id\":\"\($0)\",\"on\":true}").isEmpty }
     let pairedOn = plan("{\"type\":\"speaker\",\"id\":\"tv2\",\"on\":true}") == [.setEnabled(id: "tv2", on: true)]
     let groupOn = plan("{\"type\":\"speaker\",\"id\":\"group\",\"on\":true}") == [.setEnabled(id: "group", on: true)]
     // covers: S257 (a speaker that would ask for a code stays off)
     check(leftAlone && pairedOn && groupOn,
           "web remote: a speaker that can't be driven or isn't listed is left alone; a paired one and a Cast group turn on")
+    // covers: S376 (an on the row already shows changes nothing)
+    check(plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":true}").isEmpty
+            && plan("{\"type\":\"speaker\",\"id\":\"usb\",\"on\":false}").isEmpty
+            && plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":true,\"volume\":20}") == [.setVolume(id: "hp", position: 20)],
+          "web remote: a phone's on equal to the row's switch leaves the switch alone")
     let offFirst = plan("{\"type\":\"speaker\",\"id\":\"hp\",\"on\":false,\"volume\":10}")
         == [.setEnabled(id: "hp", on: false), .setVolume(id: "hp", position: 10)]
     let masterClamped = plan("{\"type\":\"master\",\"volume\":150}") == [.setMaster(position: 100)]
@@ -13495,6 +13760,10 @@ do {
             && codePlan(.preset(id: "p3")) == [.recallPreset(id: "p3", keepOff: ["ap:tv"])]
             && codePlan(.zone(id: "z4", toggle: true, volume: nil)).isEmpty,
           "web remote: a zone or preset from the phone keeps a member that asks for a code off; with no other member it doesn't flip")
+    // covers: S257 (a zone's volume applies when its toggle can't)
+    check(zonePlan("{\"type\":\"zone\",\"id\":\"z2\",\"toggle\":true,\"volume\":150}") == [.setZoneVolume(id: "z2", position: 100)]
+            && codePlan(.zone(id: "z4", toggle: true, volume: 40)) == [.setZoneVolume(id: "z4", position: 40)],
+          "web remote: a zone's volume applies, clamped, when its toggle finds no member that can play")
     let loungeRow = RemoteRow(Facts(id: "lounge", name: "Lounge", kind: "AirPlay 2", on: false, volume: 50,
                                     isAirPlay: true, paired: true, memberAsksPassword: true, note: "Stereo pair",
                                     key: "ap:lounge"), text: t)
@@ -13532,6 +13801,7 @@ do {
     check(fromPhone?.alertNames == nil && fromPhone?.notices.map(\.uid) == ["usb"] && fromPhone?.enabled == [],
           "remote: a start from the phone shows no alert, only a notice for the failed speaker")
 
+    // covers: S379 (the Mac's port setting takes 1024 to 65535)
     check(RemotePort.parse(" 8080 ") == 8080 && RemotePort.parse("80") == nil && RemotePort.parse("70000") == nil
             && RemotePort.parse("abc") == nil && RemotePort.stored(1e30) == nil && RemotePort.stored(7655.5) == nil,
           "web remote: a port from 1024 to 65535 is taken")
@@ -13560,6 +13830,7 @@ do {
     let kept = AppSettings.load { stored[$0] }
     let damaged: [String: Any] = ["webRemotePort": 1e30]
     let dropsDamaged = AppSettings.load { damaged[$0] }.webRemotePort == RemotePort.default
+    // covers: S379 (the Mac: off by default, and a saved port outside the range reads as 7655)
     check(!fresh.webRemote && fresh.webRemotePort == RemotePort.default && kept.webRemote && kept.webRemotePort == 8080
             && dropsDamaged,
           "web remote: off on port 7655 by default; the stored setting and port are read back, a damaged port is dropped")
@@ -13651,6 +13922,12 @@ do {
     // covers: S344
     check(plugged["available"] as? Bool == true && plugged["notice"] is NSNull,
           "web remote: a plugged-in source goes out available with no notice", "\(plugged)")
+    let handsFree = RemoteSource(pickerID: "input:buds:input", name: "Example Buds", available: false).json
+    // covers: S344, S211
+    check(handsFree["available"] as? Bool == false && handsFree["notice"] is NSNull
+            && handsFree["name"] as? String == "Example Buds",
+          "web remote: a chosen hands-free input goes out greyed under its own name, with no not-connected note",
+          "\(handsFree)")
 }
 
 // MARK: Google Cast speakers added by address (C18): what the sheet reads, and the stored list
@@ -14047,14 +14324,17 @@ do {
             && otherZone.zoneLevels == [realID: 0.8],
           "cast model: a playing speaker added by address that a browse finds plays as loud as before when its id "
             + "has another zone volume")
-    // Played at 0.4 in no zone; the id's 25 zone reaches 0.25 at most.
-    var cappedZone = rekeyedModel(zones: [realID: 25])
-    let capped = cappedZone.takeLevelDue()
+    // Played at 0.4 in no zone: own 1.6 in the id's 25 zone (S415).
+    var quieterZone = rekeyedModel(zones: [realID: 25])
     // covers: S341
-    check(cappedZone.volume(of: realID) == 100 && capped.map { abs($0 - 0.25) < 1e-9 } == true
-            && cappedZone.takeLevelDue() == nil,
-          "cast model: a playing speaker added by address whose loudness its id's zone can't reach gets the nearest "
-            + "level sent once")
+    check(abs(quieterZone.volume(of: realID) - 160) < 1e-9 && quieterZone.takeLevelDue() == nil,
+          "cast model: a playing speaker added by address keeps its loudness in its id's quieter zone, the own level "
+            + "passing 100")
+    var silentZone = rekeyedModel(zones: [realID: 0])
+    let silent = silentZone.takeLevelDue()
+    // covers: S341
+    check(silent == 0 && silentZone.takeLevelDue() == nil,
+          "cast model: a playing speaker added by address whose id's zone is at 0 gets level 0 sent once")
     var idle = rekeyedModel(zones: [manualID: 50, realID: 80], playing: false)
     check(idle.takeLevelDue() == nil && idle.zoneLevels == [realID: 0.8],
           "cast model: a speaker added by address that a browse finds with no session gets no level sent")
@@ -14078,6 +14358,63 @@ do {
     check(ownReport.volumes[realID]?.fixed == false && ownReport.volumes[manualID] == nil,
           "cast model: a browse that finds an address of a device playing under its id keeps the volume its "
             + "session reported")
+
+    do {
+        func dac(_ uid: String, _ name: String = "USB DAC",
+                 _ transport: UInt32 = kAudioDeviceTransportTypeUSB) -> AudioDevices.Device {
+            AudioDevices.Device(id: 0, name: name, uid: uid, transport: transport)
+        }
+        var hidden = HiddenSpeakers()
+        hidden.hide(key: "lc:portA", name: "USB DAC", kind: "USB")
+        let kept = SpeakerIDMigration.Saved(
+            enabledAirPlay: [], airplayVolumes: [:],
+            groups: [SpeakerGroup(id: "g1", name: "Office", members: ["lc:portA"])], autoConnect: ["lc:portA"],
+            zones: [SpeakerZone(id: "z1", name: "Desk", members: ["lc:built-in", "lc:portA"], volume: 60)],
+            presets: [evening([.init(key: "lc:portA", volume: 40)])],
+            names: SpeakerNames(custom: ["lc:portA": "Desk DAC"]), hidden: hidden,
+            enabledLocal: ["portA"], localVolumes: ["portA": 35], localOffsets: ["portA": 12])
+        let seen = ["built-in": dac("built-in", "MacBook Pro Speakers", kAudioDeviceTransportTypeBuiltIn),
+                    "portA": dac("portA")]
+        let listed: Set = ["built-in", "portB"]
+        let moves = SpeakerIDMigration.movedOutputs(appeared: [dac("portB")], seen: seen, listed: listed, saved: kept)
+        let moved = SpeakerIDMigration.localMoved("portA", as: "portB", in: kept)
+        let keysMoved = moved.names == SpeakerNames(custom: ["lc:portB": "Desk DAC"])
+            && moved.hidden.contains("lc:portB") && !moved.hidden.contains("lc:portA")
+            && moved.zones.map(\.members) == [["lc:built-in", "lc:portB"]] && moved.autoConnect == ["lc:portB"]
+        let entriesMoved = moved.groups.map(\.members) == [["lc:portB"]]
+            && moved.presets == [evening([.init(key: "lc:portB", volume: 40)])]
+        let levelsMoved = moved.localVolumes == ["portB": 35] && moved.localOffsets == ["portB": 12]
+            && moved.enabledLocal == ["portB"]
+        let back = SpeakerIDMigration.movedOutputs(appeared: [dac("portA")], seen: ["portB": dac("portB")],
+                                                   listed: ["portA"], saved: moved)
+        // covers: S384
+        check(moves == ["portB": "portA"] && keysMoved && entriesMoved && levelsMoved && back == ["portA": "portB"],
+              "moved output: a USB DAC plugged into another port keeps its name, hidden mark, volume, delay, zone "
+                + "place, auto-connect mark, switch, group and preset entries under its new uid, and they follow it back")
+
+        var newSet = kept
+        newSet.localVolumes["portB"] = 50
+        let empty = SpeakerIDMigration.Saved(enabledAirPlay: [], airplayVolumes: [:], groups: [], autoConnect: [])
+        func follow(_ appeared: [AudioDevices.Device], seenToo: AudioDevices.Device? = nil,
+                    listed: Set<String>? = nil, saved: SpeakerIDMigration.Saved? = nil) -> [String: String] {
+            var all = seen
+            if let seenToo { all[seenToo.uid] = seenToo }
+            return SpeakerIDMigration.movedOutputs(appeared: appeared, seen: all, listed: listed ?? ["built-in", "portB"],
+                                                   saved: saved ?? kept)
+        }
+        let twoGone = follow([dac("portB")], seenToo: dac("portC"))
+        let twoAppeared = follow([dac("portB"), dac("portC")], listed: ["built-in", "portB", "portC"])
+        let seenBefore = follow([dac("portB")], seenToo: dac("portB"))
+        let otherKind = follow([dac("bt", "USB DAC", kAudioDeviceTransportTypeBluetooth)], listed: ["built-in", "bt"])
+        let nothingSet = follow([dac("portB")], saved: empty)
+        let newHasSome = follow([dac("portB")], saved: newSet)
+        // covers: S384
+        check(twoGone.isEmpty && twoAppeared.isEmpty && seenBefore.isEmpty && otherKind.isEmpty && nothingSet.isEmpty
+                && newHasSome.isEmpty,
+              "moved output: a new uid takes nothing with two of its name and transport gone or appearing, when it "
+                + "was listed before, from another transport, from a gone one with nothing set, or with settings "
+                + "of its own")
+    }
 
     // covers: S339
     var stopped = CastModel()
@@ -14496,6 +14833,36 @@ do {
           "microphone: a pick of a capture the switch doesn't leave, or with no switch waiting, changes nothing")
 }
 
+// MARK: The format a local output's render callback fills (OutputRenderer.clientFormat)
+do {
+    func refusing(_ refused: Set<Int>) -> (Double, Int) -> OSStatus {
+        { _, channels in refused.contains(channels) ? OSStatus(kAudioUnitErr_FormatNotSupported) : noErr }
+    }
+    let fast = try? OutputRenderer.clientFormat(deviceRate: 768_000, deviceChannels: 2, captureRate: 48_000,
+                                                set: refusing([]))
+    // covers: S62
+    check(fast?.rate == 48_000 && fast?.channels == 2,
+          "output format: a device rate outside the core's range is filled at the capture rate", "\(String(describing: fast))")
+    let surround = try? OutputRenderer.clientFormat(deviceRate: 44_100, deviceChannels: 6, captureRate: 48_000,
+                                                    set: refusing([6]))
+    // covers: S62
+    check(surround?.rate == 44_100 && surround?.channels == 2,
+          "output format: a unit that refuses the device's 6 channels gets plain stereo", "\(String(describing: surround))")
+    var refusal: Error?
+    do {
+        _ = try OutputRenderer.clientFormat(deviceRate: 48_000, deviceChannels: 2, captureRate: 48_000, set: refusing([2]))
+    } catch {
+        refusal = error
+    }
+    var refusedFormat = false
+    if case .formatRefused(let status)? = refusal as? OutputRenderer.StartFailure {
+        refusedFormat = status == OSStatus(kAudioUnitErr_FormatNotSupported)
+    }
+    // covers: S62
+    check(refusedFormat, "output format: a unit that refuses stereo fails the start as a refused format",
+          "\(String(describing: refusal))")
+}
+
 // MARK: Late output callbacks in the debug log (LateCallbackLog, LogRateLimiter in OutputRenderer.swift)
 // covers: S364
 do {
@@ -14594,7 +14961,7 @@ do {
     let plist = (try? String(contentsOfFile: "Info.plist", encoding: .utf8)) ?? ""
     check(plist.contains("<key>SUFeedURL</key>\n\t<string>https://github.com/yassersutojoyo/audiosync/releases/latest/download/appcast.xml</string>"),
           "updates: Info.plist points SUFeedURL at the latest release's appcast.xml")
-    // covers: S306
+    // covers: S306, S411
     check(plist.contains("<key>SUAllowsAutomaticUpdates</key>\n\t<false/>"),
           "updates: Info.plist turns off Sparkle's automatic download and install")
     check(!plist.isEmpty && !plist.contains(UpdateGate.releaseBuildInfoKey),
@@ -15219,6 +15586,27 @@ do {
           "about: the license credits and the copyright come through unchanged")
 }
 
+// MARK: A Launch at Login change macOS refuses posts a notice either way (Notice.loginRefused)
+// covers: S388 (Mac host: a refused removal has its own notice)
+do {
+    let loginText = UIStrings()
+    check(Notice.loginRefused(turningOn: true, loginText) == loginText.launchAtLoginFailed,
+          "launch at login: a refused registration posts its notice")
+    let removal: String? = Notice.loginRefused(turningOn: false, loginText)
+    check(removal != nil && removal != loginText.launchAtLoginFailed,
+          "launch at login: a refused removal posts its own notice", removal ?? "none")
+    var loginNotices = NoticeList()
+    loginNotices.post(loginText.launchAtLoginOffFailed, subject: Notice.login)
+    check(!Notice.loginSettled(in: loginNotices, enabled: true, loginText),
+          "launch at login: the refused removal's notice stays while the item reads on")
+    check(Notice.loginSettled(in: loginNotices, enabled: false, loginText),
+          "launch at login: the refused removal's notice goes once the item reads off")
+    loginNotices.post(loginText.launchAtLoginNeedsApproval, subject: Notice.login)
+    check(Notice.loginSettled(in: loginNotices, enabled: true, loginText)
+            && !Notice.loginSettled(in: loginNotices, enabled: false, loginText),
+          "launch at login: the approval notice goes once the item reads on")
+}
+
 // MARK: Panel status counts only the AirPlay speakers it shows (StreamingPolicy.activeSpeakers)
 // covers: S360
 do {
@@ -15242,6 +15630,28 @@ do {
     let card = PanelChrome.height(notices: 0, permissionCard: true) - bare
     // covers: S406
     check(card >= 120, "panel chrome: the permission card's room is kept", "\(card)")
+}
+
+// MARK: Pairings the sender can't save get a notice (NativeAirPlay.pairingsNotSaved)
+do {
+    check(NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_FAILED)
+            && NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_NEWER),
+          "pairings notice: a file a newer AudioSync wrote, or a folder that couldn't be found, is told")
+    check(!NativeAirPlay.pairingsNotSaved(ASC_AIRPLAY_PAIRINGS_IGNORED),
+          "pairings notice: an ignored file, which the next pairing replaces, gets none")
+}
+
+// MARK: Main window opens one sheet at a time (MainWindowSheet.mayOpen)
+do {
+    check(!MainWindowSheet.castAdd.mayOpen(calibrateShown: true, castAddShown: false),
+          "main window sheets: the Cast address link does nothing while calibration shows")
+    check(!MainWindowSheet.calibrate.mayOpen(calibrateShown: false, castAddShown: true),
+          "main window sheets: calibrate refuses while the Cast address sheet is open")
+    check(MainWindowSheet.castAdd.mayOpen(calibrateShown: false, castAddShown: false)
+          && MainWindowSheet.calibrate.mayOpen(calibrateShown: false, castAddShown: false),
+          "main window sheets: either opens when none shows")
+    check(MainWindowSheet.calibrate.mayOpen(calibrateShown: true, castAddShown: false),
+          "main window sheets: a run starts in the calibration sheet already shown")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

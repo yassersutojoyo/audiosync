@@ -412,6 +412,7 @@ extension AppDelegate {
         clearNotices(wasRunning ? [Notice.capture, Notice.source] : [Notice.capture])
         clearNotices(stallRetry.lost.map { SpeakerKey.make(id: $0, airplay: false) })   // nothing retries them now
         clearNotices(runawayRetry.struggling.map { SpeakerKey.make(id: $0, airplay: false) })
+        clearNotices(goneNotices.stop().map { SpeakerKey.make(id: $0, airplay: false) })
         runawayRetry.reset()
         refreshStreamingViews()
     }

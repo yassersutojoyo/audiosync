@@ -440,6 +440,10 @@ pub enum Waiting {
     /// An AirPlay speaker that stopped announcing itself on the network; it
     /// plays once it is announced again (P215).
     NotOnNetwork,
+    /// Its password prompt is open or queued (S223).
+    ForPassword,
+    /// Its PIN pairing runs (S223).
+    ForPin,
 }
 
 /// Where a pairing's PIN prompt is.
@@ -664,6 +668,9 @@ pub enum NoticeMessage {
     CaptureFailed,
     /// Capture stopped working while streaming, so streaming stopped.
     CaptureLost,
+    /// Streaming is on but the source hasn't played anything yet (S350);
+    /// `app` names the one app captured, `None` for any other source.
+    WaitingForAudio { app: Option<String> },
     /// A speaker couldn't start, so it was turned off.
     SpeakerFailed { speaker: String },
     /// A speaker's device went away while it played. It stays on and plays
@@ -780,12 +787,14 @@ pub enum NoticeMessage {
 }
 
 impl NoticeMessage {
-    /// Whether the notice tells of a change AudioSync made or will make,
-    /// with nothing that failed, so it shows the info glyph.
+    /// Whether the notice tells of a change AudioSync made or will make, or
+    /// that it waits for audio, with nothing that failed, so it shows the
+    /// info glyph.
     pub fn reports_a_change(&self) -> bool {
         matches!(
             self,
             Self::SourceSwitched { .. }
+                | Self::WaitingForAudio { .. }
                 | Self::AirPlay2NextLaunch { .. }
                 | Self::GroupsBecameZones
                 | Self::Update(
@@ -1293,13 +1302,6 @@ impl AppState {
     /// (spec S246), so a Cast member the click leaves off counts toward
     /// neither. Playing, it waits when each member it counts waits.
     pub fn zone_state(&self, zone: &Zone) -> SpeakerState {
-        let switched: Vec<&Speaker> = self
-            .zone_members(zone)
-            .filter(|s| s.in_target.is_none())
-            .collect();
-        let (cast, others): (Vec<&Speaker>, Vec<&Speaker>) =
-            switched.iter().partition(|s| s.kind == SpeakerKind::Cast);
-        let cast_on: Vec<&Speaker> = cast.iter().copied().filter(|s| s.enabled).collect();
         let members: Vec<zones::Member> = self
             .zone_members(zone)
             .map(|s| zones::Member {
@@ -1330,17 +1332,30 @@ impl AppState {
         let on = zones::click_plan(&members, situation).action == ClickAction::TurnOff;
         match SpeakerState::new(on, self.running) {
             SpeakerState::Playing => {
-                let waiting: Option<Vec<Waiting>> = others
-                    .iter()
-                    .chain(cast_on.iter().take(1))
-                    .map(|s| s.waiting)
-                    .collect();
+                let waiting: Option<Vec<Waiting>> =
+                    self.zone_counted(zone).iter().map(|s| s.waiting).collect();
                 waiting
                     .and_then(|w| w.first().copied())
                     .map_or(SpeakerState::Playing, SpeakerState::Waiting)
             }
             state => state,
         }
+    }
+
+    /// The members a playing zone waits on: every switched member but Cast,
+    /// and the first Cast member on.
+    fn zone_counted<'a>(&'a self, zone: &'a Zone) -> Vec<&'a Speaker> {
+        let (cast, mut others): (Vec<&Speaker>, Vec<&Speaker>) = self
+            .zone_members(zone)
+            .filter(|s| s.in_target.is_none())
+            .partition(|s| s.kind == SpeakerKind::Cast);
+        others.extend(cast.into_iter().filter(|s| s.enabled).take(1));
+        others
+    }
+
+    /// The member whose wait a waiting zone shows, named in its note.
+    pub fn zone_waiter<'a>(&'a self, zone: &'a Zone) -> Option<&'a str> {
+        self.zone_counted(zone).first().map(|s| s.name.as_str())
     }
 
     /// Whether a hidden speaker that is present belongs under This PC
@@ -2194,6 +2209,12 @@ impl MockBackend {
         self.state.airplay_searching = on;
     }
 
+    /// How the Google Cast search goes while it lists no speaker.
+    #[cfg(test)]
+    pub fn set_cast_list(&mut self, list: CastList) {
+        self.state.cast_list = list;
+    }
+
     /// Streaming is on with every speaker off.
     #[cfg(test)]
     pub fn set_no_speaker_on(&mut self, on: bool) {
@@ -2212,6 +2233,16 @@ impl MockBackend {
     #[cfg(test)]
     pub fn retain_speakers(&mut self, keep: impl Fn(&Speaker) -> bool) {
         self.state.speakers.retain(keep);
+    }
+
+    /// Makes the example input the source, unplugged, last seen as `name`.
+    #[cfg(test)]
+    pub fn unplug_chosen_input(&mut self, name: &str) {
+        self.state.source_id = "input:line".into();
+        if let Some(input) = self.state.sources.iter_mut().find(|s| s.id == "input:line") {
+            input.name = name.into();
+            input.unplugged = true;
+        }
     }
 
     /// Adds preset `id` of the speakers `members` at the master and the

@@ -271,6 +271,7 @@ extern "C" {
 #define ASC_CAST_ERROR_ARTWORK 9      /* artwork that is not PNG or JPEG, or over 1280 by 720 */
 #define ASC_CAST_ERROR_GROUP 10       /* no longer reported: a Cast group plays like a device */
 #define ASC_CAST_ERROR_INTERNAL 11    /* a fault inside the sender; the next start runs (C107) */
+#define ASC_CAST_ERROR_NO_ADDRESS 12  /* no address to try: a group whose records list none yet (C81) */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1
@@ -415,19 +416,18 @@ double asc_output_gain(double local_position, double master_position);
 double asc_zone_output_gain(double local_position, double zone_position, double master_position);
 
 /* An AirPlay speaker's device level D, 0 to 100: min(100, own x k), with
- * k = zone x master as fractions (zone 100 outside a zone). The own volume
- * is stored unrounded and may pass 100 (S290). */
-double asc_airplay_device_level(double own_position, double zone_position, double master_position);
+ * k = zone as a fraction (zone 100 outside a zone); the master never enters
+ * it (S413). The own volume is stored unrounded and may pass 100 (S290). */
+double asc_airplay_device_level(double own_position, double zone_position);
 
 /* The whole number an AirPlay row shows for device level D: D rounded down. */
 double asc_airplay_row_level(double device_level);
 
 /* An AirPlay row moved to `row`: writes the own volume to store, row / k
  * unrounded and possibly above 100, and the device level to send, the row
- * itself. False, writing nothing, when zone x master is 0,
+ * itself. False, writing nothing, when the zone is 0,
  * row isn't finite or a pointer is NULL. */
-bool asc_airplay_row_move(double row, double zone_position, double master_position,
-                          double *own_position, double *device_level);
+bool asc_airplay_row_move(double row, double zone_position, double *own_position, double *device_level);
 
 /*
  * Multiplies frames x 2 interleaved samples by gain, in place. Gain 0 (or a
@@ -487,6 +487,13 @@ void asc_eq_process(AscEqualizer *eq, float *interleaved, size_t frames);
 
 /* Control thread: how often a channel produced NaN or infinity and was reset. */
 uint64_t asc_eq_nan_resets(const AscEqualizer *eq);
+
+/*
+ * Control thread: a local output's linear gain with the equalizer's headroom
+ * cut given back as far as unity allows (S26, S71). The dB given back goes to
+ * returned_db when it isn't NULL. A NULL eq gives gain unchanged.
+ */
+double asc_eq_returned_gain(const AscEqualizer *eq, double gain, double *returned_db);
 
 /* ---- Delay ring, writer and readers ------------------------------------- */
 
@@ -818,6 +825,14 @@ void asc_renderer_set_gain(AscRenderer *renderer, float gain);
 
 /* Any thread: the gain last set. */
 float asc_renderer_gain(const AscRenderer *renderer);
+
+/*
+ * Control thread: sets the renderer's linear gain with each headroom cut of
+ * eq given back from the ring frame it starts at, so the gain changes with
+ * the first frame equalized with that cut (S26, S71). A NULL eq sets gain
+ * as is.
+ */
+void asc_eq_give_back(const AscEqualizer *eq, AscRenderer *renderer, double gain);
 
 /*
  * Any thread: a new delay in capture-rate frames. A renderer that plays
@@ -1756,9 +1771,9 @@ bool asc_airplay_set_silenced(AscAirPlay *airplay, const char *id, bool silenced
 
 /*
  * Sets the zone position (0 to 100, 100 for no zone) of speaker `id`: it
- * plays at its own position times the zone's times the master, live once
- * added and from its start when added later, and a level read back from it
- * moves its own position by the zone and the master. Returns false, changing
+ * plays at its own position times the zone's, live once added and from its
+ * start when added later, and a level read back from it moves its own
+ * position by the zone. Returns false, changing
  * nothing, when the handle or id is NULL or zone isn't finite.
  */
 bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zone);
@@ -1778,12 +1793,18 @@ bool asc_airplay_set_zone_volume(AscAirPlay *airplay, const char *id, double zon
 void asc_airplay_read_volumes(AscAirPlay *airplay);
 
 /*
- * Sets the master position (0 to 100), which scales every speaker's volume,
- * live, and that of every speaker added later; a master that isn't finite is
- * ignored. A speaker plays at the product of both positions, spread evenly
- * over -30 to 0 dB, and muted at 0.
+ * Sets the master position (0 to 100), a gain on the stream every speaker
+ * hears, never a speaker's volume (S413); a master that isn't finite is
+ * ignored.
  */
 void asc_airplay_set_master(AscAirPlay *airplay, double master);
+
+/*
+ * Takes the equalizer's headroom cut (gains_db holds ASC_EQ_BANDS values, at
+ * 48 kHz), which the stream's gain gives back under the master as far as
+ * unity allows (S26, S413). Returns false when airplay or gains_db is NULL.
+ */
+bool asc_airplay_set_equalizer(AscAirPlay *airplay, bool enabled, const double *gains_db);
 
 /*
  * Holds every speaker back by hold_back_ms on top of L, live, and every
@@ -2281,29 +2302,40 @@ bool asc_cast_set_muted(AscCast *cast, bool muted);
 bool asc_cast_step_volume(AscCast *cast, bool up);
 
 /*
- * The host's master on a Cast speaker, all levels 0 to 1. The level to send
- * is the master times the speaker's own level, clamped; anything not finite
- * counts as 0. A reported level that answers none the host sent means the
- * own level reported / master, clamped, and leaves `own` as it is at master 0
- * or when a value isn't finite. A reported level answers a sent one within
- * half a percent. A session starts from `own` when has_own is true, whatever
- * its first status reports; without one, from that status's level read as
- * asc_cast_own_level reads it.
+ * Sets the master position (0 to 100): every session's audio is scaled by
+ * its gain on the volume curve, a change fading in over the next read, and
+ * no device is sent a volume (S415). A master that isn't finite is ignored.
  */
-double asc_cast_device_level(double master, double own);
-double asc_cast_own_level(double reported, double master, double own);
-double asc_cast_start_own_level(double master, bool has_own, double own, double reported);
+void asc_cast_set_master(AscCast *cast, double master);
 
 /*
- * The same three with the speaker's zone level (0 to 1, 1 outside a zone)
- * as a stage between the master and the own level: the level to send is
- * master * zone * own; a report means reported / (master * zone), and leaves
- * `own` as it is when master * zone is 0. At zone 1 each is bit-identical to
- * the function above without the zone.
+ * Takes the equalizer's headroom cut (gains_db holds ASC_EQ_BANDS values, at
+ * 48 kHz), which the master's gain gives back as far as unity allows (S26,
+ * S415). Returns false when cast or gains_db is NULL.
  */
-double asc_cast_zone_level(double master, double zone, double own);
-double asc_cast_zone_own_level(double reported, double master, double zone, double own);
-double asc_cast_zone_start_own_level(double master, double zone, bool has_own, double own, double reported);
+bool asc_cast_set_equalizer(AscCast *cast, bool enabled, const double *gains_db);
+
+/*
+ * The speaker's zone level (0 to 1, 1 outside a zone) on a Cast speaker's
+ * own level, which may pass 1. The level to send is zone * own, at most 1;
+ * anything not finite counts as 0. A reported level that answers none the
+ * host sent means the own level reported / zone, unclamped above, and
+ * leaves `own` as it is at zone 0 or when a value isn't finite. A reported
+ * level answers a sent one within half a percent. A session starts from
+ * `own` when has_own is true, whatever its first status reports; without
+ * one, from that status's level read as asc_cast_zone_own_level reads it.
+ */
+double asc_cast_zone_level(double zone, double own);
+double asc_cast_zone_own_level(double reported, double zone, double own);
+double asc_cast_zone_start_own_level(double zone, bool has_own, double own, double reported);
+
+/*
+ * A Cast row moved to `row`, 0 to 100 (S415): writes the own level to store,
+ * row / zone, possibly above 1, through `own`, so the device gets the row
+ * itself. False, writing nothing, at zone 0, when `row` isn't finite or
+ * `own` is NULL.
+ */
+bool asc_cast_row_move(double row, double zone, double *own);
 bool asc_cast_level_answers(double sent, double reported);
 
 /*

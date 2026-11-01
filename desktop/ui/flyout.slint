@@ -7,7 +7,7 @@
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
+import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
@@ -137,6 +137,7 @@ component FlyoutRow inherits HorizontalLayout {
         glyph: root.glyph;
         state: root.state;
         enabled: root.enabled;
+        name: root.name;
         label: root.label;
         description: root.description;
         value-text: root.value-text;
@@ -210,8 +211,8 @@ component FlyoutRow inherits HorizontalLayout {
             horizontal-stretch: 1;
         }
 
-        if Strings.speaker-caption(root.caption, Strings.row-note(root.state)) != "": QuietText {
-            text: Strings.speaker-caption(root.caption, Strings.row-note(root.state));
+        if Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name)) != "": QuietText {
+            text: Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name));
             horizontal-stretch: 1;
             horizontal-alignment: right;
             vertical-alignment: center;
@@ -240,7 +241,7 @@ component FlyoutZoneHeader inherits Rectangle {
     // keyboard focus.
     callback focus-changed(bool);
     property <bool> live: root.item.present > 0;
-    property <string> count: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state));
+    property <string> count: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state, root.item.waiting-name));
 
     border-radius: Fluent.radius-control;
     background: hover.has-hover ? Fluent.hover : transparent;
@@ -301,7 +302,7 @@ component FlyoutZoneHeader inherits Rectangle {
                 narrated: root.live;
                 label: Strings.zone-label(root.item.name);
                 value-text: Strings.zone-value(root.item.on, root.item.total, root.item.waiting);
-                description: Strings.row-note(root.item.state);
+                description: Strings.row-note(root.item.state, root.item.waiting-name);
                 expandable: true;
                 expanded: root.item.expanded;
                 toggled => {
@@ -372,6 +373,7 @@ export component TrayFlyout inherits Window {
     in property <bool> connected-all-hidden;
     // AirPlay discovery runs and has found no speaker yet, short of 20 s.
     in property <bool> airplay-searching;
+    in property <CastList> cast-list;
     // Streaming is on with every speaker off.
     in property <bool> no-speaker-on;
     // The newest notice only (or none); `notice-count` counts them all.
@@ -681,8 +683,12 @@ export component TrayFlyout inherits Window {
 
                     // "No speakers found" waits for 20 seconds of AirPlay discovery;
                     // until then it says it looks, as the main window's note does.
-                    if root.zones.length == 0 && root.speakers.length == 0 && root.this-pc.length == 0: SecondaryText {
-                        text: root.all-hidden ? Strings.flyout-all-hidden : root.airplay-none-found ? Strings.no-speakers : root.airplay-searching ? Strings.looking-for-speakers : Strings.connected-none;
+                    // Otherwise it is the main window's note itself.
+                    if root.zones.length == 0 && root.speakers.length == 0 && !(root.this-pc.length > 0 && root.connected-all-hidden): SecondaryText {
+                        property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
+                        property <string> list-note: root.airplay-none-found ? (self.both-none ? Strings.network-none-found : Strings.airplay-none-found) : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : Strings.connected-none;
+                        property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
+                        text: root.this-pc.length == 0 && root.all-hidden ? Strings.flyout-all-hidden : root.this-pc.length == 0 && root.airplay-none-found ? Strings.no-speakers : self.cast-note == "" ? self.list-note : self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
                     }
 
                     if root.zones.length > 0 || root.speakers.length > 0: ScrollView {

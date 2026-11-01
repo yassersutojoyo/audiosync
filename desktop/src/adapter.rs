@@ -1126,7 +1126,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         };
         match kept {
             Ok(Some(Retried::Read(read))) => self.restore_read_late(*read),
-            Ok(Some(Retried::KeptAside(kept))) => self.tell_kept_aside(&kept, ""),
+            Ok(Some(Retried::KeptAside(kept))) => {
+                self.tell_kept_aside(&kept, "");
+                true
+            }
             Ok(None) => false,
             Err(error) => {
                 if !due {
@@ -1192,10 +1195,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Logs that the settings file was kept aside (`when`, for the log),
-    /// and, for a file ignored at launch, tells the user once with the
-    /// copy's name: their settings were replaced by the defaults. Returns
-    /// whether a notice was posted.
-    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) -> bool {
+    /// and tells the user once with the copy's name: their settings were
+    /// replaced by the defaults.
+    fn tell_kept_aside(&mut self, kept: &KeptAside, when: &str) {
         let file = kept.file_name();
         self.log.log(|| match kept {
             KeptAside::Newer(_) => {
@@ -1205,14 +1207,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 format!("settings: the file ignored at launch was kept as {file}{when}")
             }
         });
-        if let KeptAside::Ignored(_) = kept {
-            self.post(
-                NoticeSubject::SettingsKeptAside,
-                NoticeMessage::SettingsKeptAside { file },
-            );
-            return true;
-        }
-        false
+        self.post(
+            NoticeSubject::SettingsKeptAside,
+            NoticeMessage::SettingsKeptAside { file },
+        );
     }
 
     /// Writes the settings file if anything changed since it was last read
@@ -1255,7 +1253,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         match saved {
             Ok(kept) if self.settings_file.path().is_some() => {
                 if let Some(Retried::KeptAside(kept)) = kept {
-                    notices_changed |= self.tell_kept_aside(&kept, " before saving over it");
+                    self.tell_kept_aside(&kept, " before saving over it");
+                    notices_changed = true;
                 }
                 self.log.log(|| "settings: saved".to_owned());
             }
@@ -1536,14 +1535,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .zip(&kept.members)
             .any(|(row, m)| match row.state {
                 RowState::Reference => reference.as_deref() != Some(m.id.as_str()),
-                // Against the L_s the run read, so a new L_s alone is no
-                // change, and a sender that stopped still compares.
-                _ if m.class == Class::AirPlay => !holds(
-                    m.offset_ms.map(|_| {
-                        native_airplay_latency_ms(m.sender_ms, self.audio.airplay_adjustment())
-                    }),
-                    m.offset_ms,
-                ),
+                // A, not L: a new L_s alone is no change, a sender that
+                // stopped still compares, and a change L clamps away still counts.
+                _ if m.class == Class::AirPlay => {
+                    !holds(Some(self.audio.airplay_adjustment()), Some(m.adjustment_ms))
+                }
                 _ => !holds(self.calibrated_now(m.class, &m.id), m.offset_ms),
             });
         if !moved {
@@ -1706,6 +1702,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     offset_ms,
                     latency_ms: 0.0,
                     sender_ms,
+                    adjustment_ms: self.audio.airplay_adjustment(),
                 })
             })
             .collect();
@@ -2758,11 +2755,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// What plays now as preset `id` named `name`.
-    /// A preset member's stored volume: an AirPlay speaker's own volume s,
-    /// which plays at s × zone × master (S290), any other row's volume.
+    /// A preset member's stored volume: an AirPlay or Cast speaker's own
+    /// volume s, which its device gets times its zone (S290, S415), any
+    /// other row's volume.
     fn set_preset_volume(&mut self, key: &SpeakerKey, volume: f64) {
         match key {
             SpeakerKey::AirPlay(airplay_id) => self.audio.set_airplay_volume(airplay_id, volume),
+            SpeakerKey::Cast(cast_id) => self.audio.set_cast_volume(cast_id, volume),
             _ => self.set_speaker_volume(&key.to_string(), volume),
         }
     }
@@ -2806,7 +2805,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             id,
             kind: SpeakerKind::Cast,
             enabled: speaker.enabled,
-            volume: speaker.volume,
+            volume: row_level(speaker.device_level),
             delay_ms: Some(speaker.offset_ms),
             auto_connect: false,
             availability: Availability::Open,
@@ -3801,10 +3800,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         Ok(())
     }
 
-    /// An AirPlay speaker the user switched on didn't turn on: an Apple TV
-    /// that asks for a PIN is paired (it turns on once paired), one that asks
-    /// for a password prompts for it (it turns on once typed); any other
-    /// stays off with a notice.
+    /// An AirPlay speaker the user switched on can't play yet: an Apple TV
+    /// that asks for a PIN is paired and one that asks for a password prompts
+    /// for it; any other stays off with a notice.
     fn airplay_switch_failed(&mut self, id: &str, problem: AirPlayProblem) {
         if problem == AirPlayProblem::NeedsPassword {
             self.log.log(|| {
@@ -4116,6 +4114,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.refresh_sources();
             }
             BackendEvent::HeardTwice { paths } => self.heard_twice_changed(paths),
+            BackendEvent::WaitingForAudio { waiting: true } => {
+                let app = match &self.chosen {
+                    Chosen::App { name, .. } => Some(name.clone()),
+                    _ => None,
+                };
+                self.post(
+                    NoticeSubject::Capture,
+                    NoticeMessage::WaitingForAudio { app },
+                );
+            }
+            BackendEvent::WaitingForAudio { waiting: false } => {
+                self.clear_if(NoticeSubject::Capture, |message| {
+                    matches!(message, NoticeMessage::WaitingForAudio { .. })
+                });
+            }
             BackendEvent::AirPlayChanged => self.airplay_listed(),
             BackendEvent::CastChanged => {
                 let mut names = std::mem::take(&mut self.cast_names);
@@ -4210,11 +4223,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     );
                 }
             }
-            BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
+            BackendEvent::AirPlayMemberNeedsPassword { id, member_id } => {
                 self.reconnecting.remove(&id);
+                let system = self.audio.airplay_listed_name(&member_id);
                 let message = NoticeMessage::AirPlayMemberNeedsPassword {
                     target: self.airplay_name(&id),
-                    member,
+                    member: self.custom_names.shown(
+                        &airplay_key(&member_id),
+                        system.as_deref().unwrap_or(&member_id),
+                    ),
                 };
                 self.airplay_off(&id, AirPlayProblem::NeedsPassword, message);
             }
@@ -4466,9 +4483,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // An AirPlay speaker's volume is its own slider (S192).
             device_volume: None,
             waiting: self
-                .reconnecting
-                .get(&speaker.id)
-                .copied()
+                .audio
+                .airplay_waiting_for_user()
+                .contains(&speaker.id)
+                .then_some(if speaker.pairing {
+                    Waiting::ForPin
+                } else {
+                    Waiting::ForPassword
+                })
+                .or_else(|| self.reconnecting.get(&speaker.id).copied())
                 .filter(|_| speaker.enabled),
             cast: None,
             group: speaker.group,
@@ -4938,7 +4961,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             Some(SpeakerKey::AirPlay(airplay_id)) => {
                 self.audio.move_airplay_row(&airplay_id, position);
             }
-            Some(SpeakerKey::Cast(cast_id)) => self.audio.set_cast_volume(&cast_id, position),
+            Some(SpeakerKey::Cast(cast_id)) => self.audio.move_cast_row(&cast_id, position),
             None => {}
         }
     }
@@ -5411,6 +5434,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         });
         self.airplay_on_by_hand.remove(&airplay_id);
         self.audio.cancel_airplay_pairing(&airplay_id);
+        self.stop_if_idle();
         self.take_events();
     }
 
@@ -8771,6 +8795,141 @@ mod tests {
         assert_eq!(heard_twice(&adapter), [twice(Some("Player"), &["TV"], &[])]);
     }
 
+    fn waiting(adapter: &AudioAdapter<MockBackend>) -> Vec<NoticeMessage> {
+        messages(adapter)
+            .into_iter()
+            .filter(|message| matches!(message, NoticeMessage::WaitingForAudio { .. }))
+            .collect()
+    }
+
+    fn waiting_for_player() -> Vec<NoticeMessage> {
+        vec![NoticeMessage::WaitingForAudio {
+            app: Some("Player".to_owned()),
+        }]
+    }
+
+    /// The player streaming to the speakers, nothing captured yet.
+    fn streaming_the_player() -> AudioAdapter<MockBackend> {
+        let mut adapter = adapter();
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        adapter
+    }
+
+    /// Runs the session's next check for sound and takes in what it reports.
+    fn check_audio(adapter: &mut AudioAdapter<MockBackend>) {
+        adapter.audio_mut().check_audio_now();
+        adapter.poll();
+    }
+
+    // covers: S350
+    #[test]
+    fn a_session_that_hears_only_silence_posts_the_waiting_notice_naming_the_app() {
+        let mut adapter = streaming_the_player();
+        adapter.poll();
+        assert!(waiting(&adapter).is_empty(), "not before the first check");
+        adapter.audio_mut().feed_capture(480);
+        check_audio(&mut adapter);
+        assert_eq!(waiting(&adapter), waiting_for_player());
+        assert_eq!(adapter.snapshot().notices[0].subject, "Capture");
+    }
+
+    // covers: S350
+    #[test]
+    fn the_waiting_notice_names_no_app_for_the_whole_system() {
+        let mut adapter = adapter();
+        adapter.select_source(SYSTEM_KEY);
+        turn_on(&mut adapter, SPEAKERS);
+        check_audio(&mut adapter);
+        assert_eq!(
+            waiting(&adapter),
+            [NoticeMessage::WaitingForAudio { app: None }]
+        );
+    }
+
+    // covers: S350
+    #[test]
+    fn sound_arriving_clears_the_waiting_notice_and_ends_the_checks() {
+        let mut adapter = streaming_the_player();
+        check_audio(&mut adapter);
+        assert_eq!(waiting(&adapter), waiting_for_player());
+        adapter.audio_mut().feed_capture_level(480, 0.25);
+        check_audio(&mut adapter);
+        assert!(waiting(&adapter).is_empty());
+        check_audio(&mut adapter);
+        assert!(waiting(&adapter).is_empty(), "no check after the sound");
+    }
+
+    // covers: S350
+    #[test]
+    fn a_dismissed_waiting_notice_stays_away_while_the_session_still_waits() {
+        let mut adapter = streaming_the_player();
+        check_audio(&mut adapter);
+        let id = adapter
+            .snapshot()
+            .notices
+            .iter()
+            .find(|notice| matches!(notice.message, NoticeMessage::WaitingForAudio { .. }))
+            .map(|notice| notice.id)
+            .expect("the waiting notice");
+        adapter.dismiss_notice(id);
+        check_audio(&mut adapter);
+        check_audio(&mut adapter);
+        assert!(waiting(&adapter).is_empty());
+    }
+
+    // covers: S350, S329
+    #[test]
+    fn an_input_device_away_while_streaming_gets_no_waiting_notice() {
+        let mut adapter = adapter();
+        adapter
+            .audio
+            .connect_input(MIC, "Microphone (USB Audio)", "USB");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.select_source(&mic());
+        adapter.set_running(true);
+        adapter.audio.disconnect_input(MIC);
+        for _ in 0..10 {
+            adapter.poll();
+        }
+        check_audio(&mut adapter);
+        assert!(adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::InputNotConnected {
+                source: "Microphone (USB Audio)".to_owned()
+            }]
+        );
+    }
+
+    // covers: S350, S329
+    #[test]
+    fn a_capture_waiting_for_its_reopen_gets_no_waiting_notice() {
+        let mut adapter = streaming_the_player();
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        adapter.poll();
+        check_audio(&mut adapter);
+        assert!(adapter.snapshot().running);
+        assert!(waiting(&adapter).is_empty());
+    }
+
+    // covers: S350
+    #[test]
+    fn streaming_stopping_clears_the_waiting_notice_and_a_new_session_posts_it_again() {
+        let mut adapter = streaming_the_player();
+        check_audio(&mut adapter);
+        assert_eq!(waiting(&adapter), waiting_for_player());
+        adapter.set_running(false);
+        adapter.poll();
+        assert!(!adapter.snapshot().running);
+        assert!(waiting(&adapter).is_empty());
+        adapter.set_running(true);
+        check_audio(&mut adapter);
+        assert_eq!(waiting(&adapter), waiting_for_player());
+    }
+
     const PASSWORD_TXT: &[&str] = &[
         "txtvers=1",
         "ch=2",
@@ -10602,7 +10761,7 @@ mod tests {
                 wrong: false,
             })
         );
-        assert!(!state.speaker(&ap(study)).unwrap().enabled);
+        assert!(state.speaker(&ap(study)).unwrap().enabled);
         assert!(!state.running);
         assert!(fake.take_calls().is_empty(), "nothing connects before it");
         assert!(messages(adapter).is_empty());
@@ -10685,6 +10844,117 @@ mod tests {
         let prompt = adapter.snapshot().password_prompt.expect("asked at once");
         assert!(!prompt.wrong);
         assert!(messages(&adapter).is_empty());
+    }
+
+    fn shown(adapter: &AudioAdapter<MockBackend>, device: &Device) -> String {
+        format!("{:?}", state_of(adapter, &ap(device)))
+    }
+
+    // covers: S223, S285
+    #[test]
+    fn a_password_speaker_switched_on_stays_on_and_waits_while_its_prompt_is_open() {
+        let (mut adapter, fake, kitchen, study) = airplay_adapter();
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+
+        adapter.set_speaker_enabled(&ap(&study), true);
+        assert!(adapter.snapshot().password_prompt.is_some());
+        assert_eq!(shown(&adapter, &study), "Waiting(ForPassword)");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+        adapter.cancel_password(&ap(&study));
+        assert_eq!(shown(&adapter, &study), "Off");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+
+        adapter.set_speaker_enabled(&ap(&study), true);
+        adapter.submit_password(&ap(&study), "hunter1");
+        fake.fail(&study, ErrorKind::WrongPassword);
+        adapter.poll();
+        assert!(
+            adapter
+                .snapshot()
+                .password_prompt
+                .expect("asked again")
+                .wrong
+        );
+        assert_eq!(shown(&adapter, &study), "Waiting(ForPassword)");
+        adapter.cancel_password(&ap(&study));
+        assert_eq!(shown(&adapter, &study), "Off");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+
+        adapter.set_speaker_enabled(&ap(&study), true);
+        adapter.submit_password(&ap(&study), "hunter2");
+        fake.state(&study, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().password_prompt, None);
+        assert_eq!(shown(&adapter, &study), "Playing");
+        assert!(
+            fake.take_calls()
+                .contains(&Call::Password(id_of(&study), "hunter2".to_owned()))
+        );
+        assert!(messages(&adapter).is_empty());
+    }
+
+    // covers: S223, S285
+    #[test]
+    fn an_apple_tv_switched_on_stays_on_and_waits_while_its_pin_prompt_is_open() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+
+        adapter.set_speaker_enabled(&ap(&tv), true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        assert!(adapter.snapshot().pin_prompt.is_some());
+        assert_eq!(shown(&adapter, &tv), "Waiting(ForPin)");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+        adapter.cancel_pairing(&ap(&tv));
+        fake.pairing(&tv, PairingEvent::Stopped);
+        adapter.poll();
+        assert_eq!(shown(&adapter, &tv), "Off");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+
+        adapter.set_speaker_enabled(&ap(&tv), true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        assert_eq!(shown(&adapter, &tv), "Waiting(ForPin)");
+        adapter.submit_pin(&ap(&tv), "4821");
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        adapter.poll();
+        fake.state(&tv, AirPlayState::Playing);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().pin_prompt, None);
+        assert_eq!(shown(&adapter, &tv), "Playing");
+        assert_eq!(shown(&adapter, &kitchen), "Playing");
+        assert!(messages(&adapter).is_empty());
+    }
+
+    // covers: S223
+    #[test]
+    fn cancelling_the_pin_prompt_of_the_only_speaker_left_stops_streaming() {
+        let (mut adapter, fake, kitchen, _) = airplay_adapter();
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        fake.appear(&tv);
+        adapter.set_speaker_enabled(&ap(&kitchen), true);
+        fake.state(&kitchen, AirPlayState::Playing);
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&tv), true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.set_speaker_enabled(&ap(&kitchen), false);
+        assert!(adapter.snapshot().running, "the waiting TV still counts");
+
+        adapter.cancel_pairing(&ap(&tv));
+        fake.pairing(&tv, PairingEvent::Stopped);
+        adapter.poll();
+        assert_eq!(shown(&adapter, &tv), "Off");
+        assert!(!adapter.snapshot().running);
     }
 
     // covers: S349
@@ -13515,11 +13785,15 @@ mod tests {
     }
 
     /// Keeps a run's results, its reference row's output made the reference
-    /// of S174 (built in), since a run starts only with one.
+    /// of S174 (built in), since a run starts only with one, read with the
+    /// AirPlay adjustment set now.
     fn keep(
         adapter: &mut AudioAdapter<MockBackend>,
-        (sheet, members, rate): (Sheet, Vec<Member>, u32),
+        (sheet, mut members, rate): (Sheet, Vec<Member>, u32),
     ) {
+        for member in &mut members {
+            member.adjustment_ms = adapter.audio.airplay_adjustment();
+        }
         let reference = members[0].id.clone();
         let name = adapter.output_name(&reference);
         adapter
@@ -13655,6 +13929,42 @@ mod tests {
             "Apply would undo the new AirPlay delay"
         );
         assert_eq!(adapter.audio.airplay_adjustment(), 120.0);
+    }
+
+    // covers: S238, S395
+    #[test]
+    fn an_airplay_adjustment_changed_under_the_20000_ms_clamp_refuses_apply() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        let fake = FakeAirPlay::new();
+        adapter.audio_mut().set_airplay(fake.link(), None);
+        fake.set_latency(std::time::Duration::from_millis(2000));
+        adapter.poll();
+        adapter.audio.set_airplay_adjustment(18_500.0);
+        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(20_000.0));
+        keep(
+            &mut adapter,
+            crate::audio::calibrate_all::tests::sheet_of(&[
+                (Class::Local, SPEAKERS, Some(0.0), 2010.0),
+                (Class::Local, HEADPHONES, Some(0.0), 2060.0),
+                (Class::AirPlay, "kitchen", Some(20_000.0), 20_050.0),
+            ]),
+        );
+        read_with_sender(&mut adapter, 2000.0);
+
+        fake.set_latency(std::time::Duration::from_millis(1750));
+        adapter.poll();
+        // A becomes 18 150 ms; against the run's L_s it still clamps to 20 000.
+        adapter.set_airplay_delay(19_900.0);
+        adapter.apply_calibrate_all();
+        let state = adapter.snapshot().calibrate_all;
+        assert!(state.sheet.is_some_and(|sheet| !sheet.applied));
+        assert_eq!(
+            state.phase,
+            AllPhase::Stale,
+            "Apply would undo the new AirPlay delay"
+        );
+        assert_eq!(adapter.audio.airplay_adjustment(), 18_150.0);
     }
 
     /// Applies an AirPlay row against a sender's L_s of 2000 ms, then a
@@ -14233,7 +14543,7 @@ mod tests {
             let nearest = |value: f64| (value * 1e6).round() / 1e6;
             (nearest(speaker.volume), speaker.own_volume.map(nearest))
         };
-        assert_eq!(row(&adapter), (20.0, Some(31.746032)));
+        assert_eq!(row(&adapter), (20.0, Some(20.0)), "the master leaves both");
         let preset = adapter
             .capture_preset("preset:1", "Evening")
             .expect("a speaker is on");
@@ -14244,8 +14554,8 @@ mod tests {
             .expect("stored");
         assert_eq!(
             member.volume.map(|volume| (volume * 1e6).round() / 1e6),
-            Some(31.746032),
-            "the own volume, not the row"
+            Some(20.0),
+            "the own volume"
         );
 
         adapter.set_master_volume(100.0);
@@ -14255,7 +14565,7 @@ mod tests {
         adapter
             .recall_preset("preset:1")
             .expect("the preset exists");
-        assert_eq!(row(&adapter), (20.0, Some(31.746032)));
+        assert_eq!(row(&adapter), (20.0, Some(20.0)));
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
@@ -14477,6 +14787,8 @@ mod tests {
         assert!(messages(&adapter).is_empty());
         // A Cast speaker that can't play is off, so it stops counting.
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        // The stopped capture ran on while the Cast tap faded (S189).
+        std::thread::sleep(crate::audio::controller::FEED_FADE);
         adapter.poll();
         assert_eq!(messages(&adapter), [NoticeMessage::NoSoundOutput]);
         fake.report(cast_ended(
@@ -14748,6 +15060,34 @@ mod tests {
             1
         );
         assert_eq!(SettingsFile::at(path).load().0.master_volume, 64.0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S385
+    #[test]
+    fn a_newer_settings_file_gets_its_notice_once_the_first_save_keeps_it_aside() {
+        let dir = test_dir("adapter-settings-newer-kept-aside");
+        let path = dir.join(settings::FILE_NAME);
+        let newer = r#"{"version": 5000000000, "master_volume": 40}"#;
+        std::fs::write(&path, newer).expect("written");
+        let mut adapter = launch(launch_audio(), &path);
+        assert!(messages(&adapter).is_empty(), "nothing kept aside yet");
+        adapter.set_master_volume(64.0);
+        assert!(adapter.poll(), "the notice shows");
+        let shown = messages(&adapter);
+        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+            panic!("{shown:?}");
+        };
+        assert!(file.starts_with("settings.newer-"), "{file}");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file)).expect("kept"),
+            newer
+        );
+        // Told once: dismissed, it stays away at the next saves.
+        adapter.dismiss_all_notices();
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -15764,8 +16104,8 @@ mod tests {
         adapter.set_master_volume(66.0);
         assert_eq!(
             speaker_of(&adapter, &id).volume,
-            37.0,
-            "40 x 66/70 = 37.71, rounded down"
+            40.0,
+            "the master leaves the row"
         );
         fake.take_calls();
         from_phone(&mut adapter, 37.0);
@@ -15816,9 +16156,8 @@ mod tests {
         assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
 
         cast_first_status(&mut adapter, &fake, 0.8);
-        // Master × own: 0.7 × 0.3.
         let level = *fake.state().volumes.last().expect("a Cast volume");
-        assert!((level - 0.21).abs() < 1e-9, "{level}");
+        assert!((level - 0.3).abs() < 1e-9, "{level}");
         assert_eq!(speaker_of(&adapter, &cc(CAST_KITCHEN)).volume, 30.0);
     }
 
@@ -15840,6 +16179,36 @@ mod tests {
 
         cast_first_status(&mut adapter, &fake, 0.8);
         assert!(kitchen(&adapter).is_some());
+    }
+
+    // covers: S251, S415
+    #[test]
+    fn a_cast_own_level_above_100_is_saved_and_recalled_whole() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![cc(CAST_KITCHEN)])],
+            speaker_presets: vec![saved_preset(&[(cc(CAST_KITCHEN), Some(125.0))])],
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        cast_first_status(&mut adapter, &fake, 0.4);
+        let last = |fake: &FakeCast| *fake.state().volumes.last().expect("a Cast volume");
+        // The row at 100 in a zone at 80: own 1.25.
+        adapter.set_speaker_volume(&cc(CAST_KITCHEN), 100.0);
+        assert!((last(&fake) - 1.0).abs() < 1e-9, "{}", last(&fake));
+        let preset = adapter.capture_preset("preset:2", "Loud").unwrap();
+        let volume = preset
+            .members
+            .iter()
+            .find(|member| member.key == cc(CAST_KITCHEN))
+            .and_then(|member| member.volume)
+            .expect("saved");
+        assert!((volume - 125.0).abs() < 1e-9, "saved {volume}");
+
+        // Own 1.25 × zone 0.45.
+        adapter.recall_preset("preset:1");
+        assert!((last(&fake) - 0.5625).abs() < 1e-9, "{}", last(&fake));
     }
 
     fn cast_first_status(adapter: &mut AudioAdapter<MockBackend>, fake: &FakeCast, level: f64) {
@@ -15944,7 +16313,7 @@ mod tests {
         assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
     }
 
-    // covers: S394
+    // covers: S394, S401 (the amount counts the AirPlay speaker's own receiver offset)
     #[test]
     fn airplay_speakers_at_the_sender_delay_limit_say_they_play_ahead_of_the_cast_speaker() {
         let (mut adapter, _airplay, kitchen, _) = airplay_adapter();
@@ -16301,15 +16670,17 @@ mod tests {
             output_gain(DEFAULT_LOCAL_POSITION, 50.0) as f32,
             "in no zone: the gain of before"
         );
-        // Master × zone × own: 1 × 0.8 × 0.5, then the master at 0.5.
-        assert_eq!(fake.state().volumes, [0.4, 0.2]);
+        // The row at 50 in the zone at 80; the master sends nothing (S415).
+        assert_eq!(fake.state().volumes, [0.5]);
 
         adapter.set_zone_volume("zone:1", 25.0);
         assert_eq!(
             gain(&adapter, SPEAKERS),
             zoned_output_gain(30.0, 25.0, 50.0) as f32
         );
-        assert_eq!(fake.state().volumes, [0.4, 0.2, 0.0625]);
+        let volumes = fake.state().volumes.clone();
+        assert_eq!(volumes.len(), 2);
+        assert!((volumes[1] - 0.25 * 0.625).abs() < 1e-9, "{volumes:?}");
         assert_eq!(adapter.snapshot().zones[0].volume, 25.0);
         let state = adapter.snapshot();
         assert_eq!(
@@ -16320,7 +16691,7 @@ mod tests {
         assert_eq!(state.master_volume, 50.0, "the master stays");
 
         adapter.set_zone_volume("zone:9", 10.0);
-        assert_eq!(fake.state().volumes.len(), 3, "no such zone: nothing");
+        assert_eq!(fake.state().volumes.len(), 2, "no such zone: nothing");
     }
 
     // covers: S246
@@ -16685,9 +17056,9 @@ mod tests {
                 .gain,
             zoned_output_gain(30.0, 45.0, 70.0) as f32
         );
-        // Master × zone × own: 0.7 × 0.45 × 0.5.
+        // Zone × own: 0.45 × 0.5.
         let cast = *fake.state().volumes.last().expect("a Cast volume");
-        assert!((cast - 0.1575).abs() < 1e-9, "{cast}");
+        assert!((cast - 0.225).abs() < 1e-9, "{cast}");
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
@@ -17164,6 +17535,36 @@ mod tests {
 
     // covers: S228
     #[test]
+    fn the_member_password_notice_names_a_renamed_member_by_its_new_name() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear(&right);
+        adapter.poll();
+        adapter.rename_speaker(&ap(&right), "Bedroom");
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        adapter.set_speaker_enabled("ap:pair:5f0c", true);
+        fake.fail(&right, ErrorKind::PasswordRequired);
+        adapter.poll();
+        adapter.submit_password(&ap(&right), "hunter2");
+        fake.state(&left, AirPlayState::Playing);
+        adapter.poll();
+
+        fake.fail(&right, ErrorKind::WrongPassword);
+        adapter.poll();
+        let notices = messages(&adapter);
+        assert!(
+            matches!(&notices[..], [NoticeMessage::AirPlayMemberNeedsPassword { member, .. }] if member == "Bedroom"),
+            "{notices:?}"
+        );
+    }
+
+    // covers: S228
+    #[test]
     fn the_airplay_ahead_notice_names_a_renamed_cast_speaker_by_its_new_name() {
         let (mut adapter, _airplay, kitchen, _) = airplay_adapter();
         let cast = FakeCast::default();
@@ -17551,7 +17952,7 @@ mod tests {
         );
     }
 
-    // covers: S246, S252, S266
+    // covers: S246, S252, S266, C43
     #[test]
     fn a_takeover_after_a_recall_keeps_its_notice_so_the_next_recall_sees_it_busy() {
         let (mut adapter, fake) = cast_adapter();

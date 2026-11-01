@@ -312,7 +312,9 @@ pub struct CastSession {
     stalled: Duration,
     stall_since: Option<Instant>,
     next_diagnostics: Instant,
-    error_recovered: bool,
+    /// When the recovery after an `IDLE` `ERROR` ended, on `clock`; another
+    /// within [`ReconnectPacer::HEALTHY`] of play ends the session (C86).
+    error_recovered: Option<Instant>,
     /// When the latest unrequested `FINISHED` arrived, on `clock` (C86).
     last_finished: Option<Instant>,
     finished_window: Duration,
@@ -479,7 +481,7 @@ impl CastSession {
             stalled: Duration::ZERO,
             stall_since: None,
             next_diagnostics: Instant::now(),
-            error_recovered: false,
+            error_recovered: None,
             last_finished: None,
             finished_window: FINISHED_WINDOW,
             clock: Arc::new(Instant::now),
@@ -550,6 +552,13 @@ impl CastSession {
     /// never scaled (C71).
     pub fn set_volume(&mut self, level: f64) -> Result<(), VolumeError> {
         self.client.set_volume(level)
+    }
+
+    /// Replaces the C70 interval on the current channel only; a reconnect's
+    /// channel keeps the default. For tests.
+    #[doc(hidden)]
+    pub fn set_volume_interval(&mut self, interval: Duration) {
+        self.client.set_volume_interval(interval);
     }
 
     pub fn set_muted(&mut self, muted: bool) -> Result<(), VolumeError> {
@@ -861,12 +870,18 @@ impl CastSession {
             }
             Event::PlaybackEnded(PlaybackEnd::Replaced) => self.end(SessionEnd::TakenOver),
             Event::PlaybackEnded(PlaybackEnd::Error(reason)) => {
-                if self.error_recovered {
+                let now = (self.clock)();
+                if self
+                    .error_recovered
+                    .is_some_and(|at| now.saturating_duration_since(at) < ReconnectPacer::HEALTHY)
+                {
                     let reason = reason.unwrap_or(IdleReason::Error);
                     self.end(SessionEnd::Failed(MediaError::Idle(reason).into()));
                 } else {
-                    self.error_recovered = true;
+                    // An ERROR during the recovery still ends the session.
+                    self.error_recovered = Some(now);
                     self.recover(EndReason::Io("playback error".to_owned()), true);
+                    self.error_recovered = Some((self.clock)());
                 }
             }
             Event::PlaybackEnded(PlaybackEnd::Finished) => {

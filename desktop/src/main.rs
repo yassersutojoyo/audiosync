@@ -275,6 +275,13 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
             log.flush(LOG_FLUSH_AT_EXIT);
         })
     });
+    #[cfg(windows)]
+    platform::on_console_quit(|| {
+        // Queued until the event loop runs, so a Ctrl-C before then still quits through it.
+        let _ = slint::invoke_from_event_loop(|| {
+            let _ = slint::quit_event_loop();
+        });
+    });
 
     // To look at both appearances without changing the Windows setting, only
     // while the debug log is on.

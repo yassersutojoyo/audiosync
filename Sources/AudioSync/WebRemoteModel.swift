@@ -184,11 +184,12 @@ struct RemoteSource: Equatable {
     var notice: String?
 
     /// `pickerID` is `AudioSource.defaultsValue`, as `SourceList.entries` gives it;
-    /// `notConnected` is the note of an unplugged chosen input, which the page greys out.
-    init(pickerID: String, name: String, notConnected: String? = nil) {
+    /// `notConnected` is the note of an unplugged chosen input, which the page greys out;
+    /// `available` is false for a chosen hands-free input, greyed with no note.
+    init(pickerID: String, name: String, notConnected: String? = nil, available: Bool = true) {
         id = Self.pageID(pickerID)
         self.name = name
-        available = notConnected == nil
+        self.available = available && notConnected == nil
         notice = notConnected
         kind = switch AudioSource(defaultsValue: pickerID) {
         case .system: .system
@@ -215,7 +216,7 @@ struct RemoteSource: Equatable {
         return nil
     }
 
-    /// Only an unplugged chosen input is unavailable, as the picker greys it.
+    /// Only an unplugged or hands-free chosen input is unavailable, as the picker greys it.
     var json: [String: Any] {
         ["id": id, "name": name, "kind": kind.rawValue, "available": available,
          "notice": notice.map { $0 as Any } ?? NSNull()]
@@ -407,6 +408,28 @@ struct RemoteVolumeLog {
     }
 
     func isLast(_ id: String, _ n: Int) -> Bool { steps[id] == n }
+}
+
+/// Who holds an AirPlay row's read-backs (S291): a window drag owns its hold
+/// until the mouse lets go, and a phone's pause ends only a hold its steps set.
+struct AirPlayVolumeHolds {
+    private var window: Set<String> = []
+    private var phone: Set<String> = []
+
+    /// Whether a hold or release from the window or the phone reaches the speaker.
+    mutating func sends(_ id: String, _ held: Bool, phone byPhone: Bool) -> Bool {
+        guard byPhone else {
+            phone.remove(id)
+            if held { window.insert(id) } else { window.remove(id) }
+            return true
+        }
+        guard !window.contains(id) else { return false }
+        if held {
+            phone.insert(id)
+            return true
+        }
+        return phone.remove(id) != nil
+    }
 }
 
 /// The port the user types in the setting.

@@ -2217,7 +2217,7 @@ mod tests {
         assert_eq!(keys(&value["zones"][0]), ["id", "volume"]);
     }
 
-    // covers: S23
+    // covers: S23, S24
     #[test]
     fn an_equalizer_with_another_band_count_loads_missing_bands_flat_and_drops_extra_ones() {
         let gains = |saved: &str| {

@@ -56,6 +56,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use audiosync_core::channels::InputPair;
 use audiosync_core::eq::{self, EqControl, EqProcessor, EqSettings};
+use audiosync_core::fade::FADE_MS;
 use audiosync_core::lead::HeldLead;
 use audiosync_core::policy::delay::{BRIEF_LOSS_HOLD, native_airplay_latency_ms};
 use audiosync_core::policy::source::AudioSource;
@@ -131,6 +132,18 @@ enum VolumeMove {
 /// that noticed: about a second later at the UI's two polls a second, so
 /// that the audio service is back.
 const RESTART_DELAY_POLLS: u32 = 2;
+
+/// A session's first check for sound comes this long after it starts, and
+/// the next ones this far apart until sound arrives (S350). Tests, whose
+/// rings stay silent, run each check by hand instead.
+#[cfg(not(test))]
+const FIRST_AUDIO_CHECK: Duration = Duration::from_secs(3);
+#[cfg(not(test))]
+const AUDIO_RECHECK: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const FIRST_AUDIO_CHECK: Duration = Duration::from_secs(3600);
+#[cfg(test)]
+const AUDIO_RECHECK: Duration = Duration::from_secs(3600);
 
 /// A capture lost that way is tried this many times, [`RESTART_DELAY_POLLS`]
 /// apart (about five seconds in all), before streaming stops: Windows audio
@@ -455,6 +468,13 @@ pub trait Driver {
     }
 }
 
+/// `gain` with `equalizer`'s headroom cut given back as far as unity allows,
+/// and the dB given back (S26, S71).
+fn returned_gain(equalizer: &EqControl, gain: f32) -> (f32, f64) {
+    let (played, db) = equalizer.returned_gain(f64::from(gain));
+    (played as f32, db)
+}
+
 /// Output `id`'s gain: 0 while a calibration lets only `solo` be heard.
 fn solo_gain(solo: Option<&str>, id: &str, gain: f32) -> f32 {
     match solo {
@@ -499,6 +519,10 @@ struct Session<D: Driver> {
     /// Whether a follow found none of the apps of an "only these" mix, whose
     /// quit then waits for the next follow.
     quit_held: bool,
+    /// When the next check for sound is due (S350); `None` once sound arrived.
+    audio_check: Option<Instant>,
+    /// Whether a check reported the session waiting for its first sound.
+    said_waiting: bool,
 }
 
 /// A single app captured whose process Windows won't open for a wait (an
@@ -766,7 +790,15 @@ struct Retiring<D: Driver> {
     session: Option<(Option<D::Capture>, Arc<Ring>)>,
     /// When the fade-outs were asked for.
     since: Instant,
+    /// The capture feeds a network sender, whose input fades out only on
+    /// the audio pushed after the request: the capture runs on for
+    /// [`FEED_FADE`], or until an output has played its fade, which takes
+    /// at least as long in real time.
+    feeds: bool,
 }
+
+/// F plus one 10 ms capture packet (S189).
+pub(crate) const FEED_FADE: Duration = Duration::from_millis(FADE_MS as u64 + 10);
 
 /// The double-audio check of the running session.
 #[derive(Default)]
@@ -1153,6 +1185,7 @@ impl<D: Driver> Controller<D> {
     ) {
         let mut airplay = AirPlaySpeakers::new(link, self.policy.master(), self.log.clone(), store);
         airplay.set_zones(self.zone_volumes.airplay.clone());
+        airplay.set_equalizer(&self.equalizer);
         self.log.log(|| {
             format!(
                 "AirPlay: the sender runs, L = {} ms; local outputs line up with each other \
@@ -1176,6 +1209,7 @@ impl<D: Driver> Controller<D> {
     pub fn set_cast(&mut self, link: Box<dyn CastLink>) {
         let mut cast = CastSpeakers::new(link, self.log.clone());
         cast.set_master(self.policy.master());
+        cast.set_equalizer(&self.equalizer);
         cast.set_zones(self.zone_volumes.cast.clone());
         cast.set_streaming(self.session.is_some());
         self.cast = Some(cast);
@@ -1725,6 +1759,7 @@ impl<D: Driver> Controller<D> {
                 outputs: switched_off,
                 session: None,
                 since: Instant::now(),
+                feeds: false,
             });
         }
 
@@ -1781,11 +1816,10 @@ impl<D: Driver> Controller<D> {
             reader.control().set_delay_frames(params.delay_frames);
             let control = RendererControl::new(&reader);
             control.set_bluetooth(endpoint.kind == OutputKind::Bluetooth);
-            let gain = Arc::new(SharedGain::new(solo_gain(
-                self.calibration_solo.as_deref(),
-                &endpoint.id,
-                params.gain,
-            )));
+            let (played, _) = returned_gain(&session.equalizer, params.gain);
+            let solo = solo_gain(self.calibration_solo.as_deref(), &endpoint.id, params.gain);
+            let gain = Arc::new(SharedGain::new(solo));
+            session.equalizer.give_back(f64::from(solo), &gain);
             let started =
                 self.driver
                     .start_renderer(&endpoint, reader, control.clone(), Arc::clone(&gain));
@@ -1856,7 +1890,7 @@ impl<D: Driver> Controller<D> {
                             setup,
                             self.policy.hold_back_ms(&endpoint.id),
                             self.policy.settings(&endpoint.id).volume,
-                            params.gain,
+                            played,
                             control.extra_lead_frames(),
                         )
                     });
@@ -2215,6 +2249,7 @@ impl<D: Driver> Controller<D> {
                 outputs: vec![playing],
                 session: None,
                 since,
+                feeds: false,
             });
         }
         self.log.log(|| {
@@ -2233,8 +2268,8 @@ impl<D: Driver> Controller<D> {
         );
     }
 
-    /// Ends the session (S186): every output and the AirPlay sender's input
-    /// fade out at once while the capture runs on, and once the outputs'
+    /// Ends the session (S186): every output, the AirPlay sender's input and
+    /// the Cast tap fade out at once while the capture runs on, and once the outputs'
     /// devices have played their fades (or [`STOP_FADE_CAP`] passed), the
     /// outputs stop, then the capture. The UI thread doesn't wait: a poll, a
     /// new start or the drop finishes it.
@@ -2247,8 +2282,14 @@ impl<D: Driver> Controller<D> {
             capture,
             ring,
             reopen,
+            audio_check,
+            said_waiting,
             ..
         } = session;
+        if said_waiting && audio_check.is_some() {
+            self.pending
+                .push(BackendEvent::WaitingForAudio { waiting: false });
+        }
         // A capture told busy, or waiting for its input device, no longer
         // waits (S333, S329).
         if reopen.is_some_and(|reopen| reopen.busy_since.is_some() || reopen.away) {
@@ -2277,10 +2318,16 @@ impl<D: Driver> Controller<D> {
         if let Some(feed) = &self.feed {
             feed.request_fade_out();
         }
+        if let Some(cast) = &self.cast {
+            cast.request_fade_out();
+        }
+        let feeds = self.feed.as_ref().is_some_and(|feed| !feed.is_free())
+            || self.cast.as_ref().is_some_and(|cast| !cast.is_free());
         self.retiring.push(Retiring {
             outputs,
             session: Some((capture, ring)),
             since: Instant::now(),
+            feeds,
         });
         self.last_status = None;
         self.reap(false);
@@ -2304,11 +2351,16 @@ impl<D: Driver> Controller<D> {
             let mut index = 0;
             while index < self.retiring.len() {
                 let entry = &self.retiring[index];
+                let waited = now.saturating_duration_since(entry.since);
                 let faded = entry
                     .outputs
                     .iter()
-                    .all(|playing| playing.handle.is_faded() || playing.handle.has_ended());
-                let waited = now.saturating_duration_since(entry.since);
+                    .all(|playing| playing.handle.is_faded() || playing.handle.has_ended())
+                    && (!entry.feeds
+                        || waited >= FEED_FADE
+                        || entry.outputs.iter().any(|playing| {
+                            playing.handle.is_faded() && !playing.handle.has_ended()
+                        }));
                 if faded || waited >= STOP_FADE_CAP {
                     let entry = self.retiring.remove(index);
                     self.retire(entry, faded, waited);
@@ -2383,11 +2435,11 @@ impl<D: Driver> Controller<D> {
             self.volume_moves.remove(&moved);
             match moved {
                 VolumeMove::Output(id) => self.log.log(|| {
+                    let (gain, returned_db) = self.played_gain(&id);
                     format!(
-                        "output {} volume: {} (gain {:.3})",
+                        "output {} volume: {} (gain {gain:.3}, EQ headroom returned {returned_db:.2} dB)",
                         label(&self.names, &id),
                         self.policy.settings(&id).volume,
-                        self.policy.params(&id).gain,
                     )
                 }),
                 VolumeMove::AirPlay(id) => {
@@ -2559,17 +2611,25 @@ impl<D: Driver> Controller<D> {
 
     /// Gives a playing output its current gain.
     fn apply_gain(&self, id: &str) {
-        if let Some(playing) = self.session.as_ref().and_then(|s| s.outputs.get(id)) {
-            playing.gain.set(self.gain_of(id));
+        if let Some(session) = self.session.as_ref()
+            && let Some(playing) = session.outputs.get(id)
+        {
+            let gain = solo_gain(
+                self.calibration_solo.as_deref(),
+                id,
+                self.policy.params(id).gain,
+            );
+            session.equalizer.give_back(f64::from(gain), &playing.gain);
         }
     }
 
-    fn gain_of(&self, id: &str) -> f32 {
-        solo_gain(
-            self.calibration_solo.as_deref(),
-            id,
-            self.policy.params(id).gain,
-        )
+    /// Output `id`'s gain with the session equalizer's headroom cut given
+    /// back, and the dB given back (S26, S71).
+    fn played_gain(&self, id: &str) -> (f32, f64) {
+        let gain = self.policy.params(id).gain;
+        self.session.as_ref().map_or((gain, 0.0), |session| {
+            returned_gain(&session.equalizer, gain)
+        })
     }
 
     /// Starts a session capturing `source`, or, while the last session's
@@ -3488,6 +3548,8 @@ impl<D: Driver> Controller<D> {
             unwatched,
             held_leads: BTreeMap::new(),
             quit_held: false,
+            audio_check: Some(Instant::now() + FIRST_AUDIO_CHECK),
+            said_waiting: false,
         });
         self.refresh_if_needed(false);
         let failures = self.sync_outputs();
@@ -3510,9 +3572,12 @@ impl<D: Driver> Controller<D> {
     ) -> Result<(D::Capture, EqControl, MissingFeeds), BackendError> {
         // The capture equalizes at the session rate, after any resampling
         // (a positive rate is always accepted).
-        let (mut equalizer, processor) = eq::equalizer();
+        let (mut equalizer, mut processor) = eq::equalizer();
         equalizer.set_sample_rate(f64::from(SESSION_RATE));
         equalizer.set_settings(self.equalizer);
+        // A reopened capture goes on writing a ring that has frames in it,
+        // equalized with the same curve, so the cut above covers them too.
+        processor.start_at(writer.ring().frames_written());
         let feed = self.feed.as_ref().and_then(FeedSlot::lease);
         let feeds_airplay = feed.is_some();
         let cast = self.cast.as_ref().and_then(CastSpeakers::lease);
@@ -3750,6 +3815,50 @@ impl<D: Driver> Controller<D> {
     pub fn check_routing_now(&mut self) {
         if self.session.is_some() {
             self.check_routing(Instant::now());
+        }
+    }
+
+    /// Runs the running session's next check for sound now, whenever it is
+    /// due (S350).
+    #[cfg(test)]
+    pub fn check_audio_now(&mut self) {
+        let now = Instant::now();
+        if let Some(due) = self
+            .session
+            .as_mut()
+            .and_then(|session| session.audio_check.as_mut())
+        {
+            *due = now;
+        }
+        self.check_audio(now);
+    }
+
+    /// Checks whether the running session has captured sound once its check
+    /// is due, until it has (S18, S350), and queues
+    /// [`BackendEvent::WaitingForAudio`] when the answer changed.
+    fn check_audio(&mut self, now: Instant) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        // A capture being reopened, or an input away or busy, has its own
+        // outcome or notice, which playing something won't answer.
+        if session.reopen.is_some() || session.audio_check.is_none_or(|due| now < due) {
+            return;
+        }
+        // Any sample other than zero is sound; the level meter of an input
+        // device takes the same peak, but only in silence could it hide it.
+        if session.ring.take_peak() > 0.0 {
+            session.audio_check = None;
+            if session.said_waiting {
+                self.pending
+                    .push(BackendEvent::WaitingForAudio { waiting: false });
+            }
+            return;
+        }
+        session.audio_check = Some(now + AUDIO_RECHECK);
+        if !std::mem::replace(&mut session.said_waiting, true) {
+            self.pending
+                .push(BackendEvent::WaitingForAudio { waiting: true });
         }
     }
 
@@ -4190,6 +4299,15 @@ impl<D: Driver> AudioBackend for Controller<D> {
         if let Some(session) = self.session.as_mut() {
             session.equalizer.set_settings(settings);
         }
+        if let Some(airplay) = self.airplay.as_mut() {
+            airplay.set_equalizer(&settings);
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_equalizer(&settings);
+        }
+        for id in self.playing_ids() {
+            self.apply_gain(&id);
+        }
     }
 
     fn airplay_speakers(&self) -> Vec<AirPlayInfo> {
@@ -4330,6 +4448,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn hold_airplay_volume_for_phone(&mut self, id: &str) {
         if let Some(airplay) = self.airplay.as_mut() {
+            // A window drag owns its hold until the mouse lets go (S291).
+            if airplay.volume_dragging(id) && !self.phone_holds.contains_key(id) {
+                return;
+            }
             airplay.set_volume_dragging(id, true);
             self.phone_holds.insert(id.to_owned(), Instant::now());
         }
@@ -4421,6 +4543,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
     fn set_cast_volume(&mut self, id: &str, position: f64) {
         if let Some(cast) = self.cast.as_mut() {
             cast.set_volume(id, position);
+        }
+    }
+
+    fn move_cast_row(&mut self, id: &str, row: f64) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.move_row(id, row);
         }
     }
 
@@ -4578,6 +4706,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.log_session_lead();
         self.log_clock_queues();
         self.log_rested_volumes(Instant::now());
+        self.check_audio(Instant::now());
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);
@@ -5105,7 +5234,11 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
     let buffer_ms = f64::from(setup.buffer_frames) * 1_000.0 / f64::from(format.rate.max(1));
     format!(
         "{}, {samples}; buffer {} frames ({buffer_ms:.1} ms)",
-        describe_format(Some(format)),
+        // Its samples part already says whether it converts.
+        describe_format(Some(RenderFormat {
+            convert: false,
+            ..format
+        })),
         setup.buffer_frames
     )
 }
@@ -5114,8 +5247,15 @@ fn describe_stream(setup: Option<StreamSetup>) -> String {
 fn describe_format(format: Option<RenderFormat>) -> String {
     match format {
         Some(format) => format!(
-            "{} Hz, {} ch (mask 0x{:x})",
-            format.rate, format.channels, format.channel_mask
+            "{} Hz, {} ch (mask 0x{:x}){}",
+            format.rate,
+            format.channels,
+            format.channel_mask,
+            if format.convert {
+                format!(", converted by {CONVERTER}")
+            } else {
+                String::new()
+            }
         ),
         None => "a format not known".to_owned(),
     }
@@ -5408,6 +5548,12 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
                 endpoints.join(", ")
             )
         }
+        BackendEvent::WaitingForAudio { waiting: true } => {
+            "the source played no sound in the session's first 3 s".to_owned()
+        }
+        BackendEvent::WaitingForAudio { waiting: false } => {
+            "no longer waiting for sound: it arrived, or the session ended".to_owned()
+        }
         BackendEvent::AirPlayChanged => "the AirPlay speakers changed".to_owned(),
         BackendEvent::AirPlayPlaying { id } => format!("AirPlay speaker ({id}) plays"),
         BackendEvent::AirPlayTrouble { id, problem } => {
@@ -5427,8 +5573,10 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::AirPlayFailed { id, problem } => {
             format!("AirPlay speaker ({id}) can't play ({problem:?}); it is turned off")
         }
-        BackendEvent::AirPlayMemberNeedsPassword { id, member } => {
-            format!("AirPlay target ({id}) turned off: its member {member} asks for a password")
+        BackendEvent::AirPlayMemberNeedsPassword { id, member_id } => {
+            format!(
+                "AirPlay target ({id}) turned off: its member ({member_id}) asks for a password"
+            )
         }
         BackendEvent::AirPlayPaired { id } => format!("AirPlay speaker ({id}) paired and on"),
         BackendEvent::AirPlayStopped => {
@@ -6154,6 +6302,157 @@ mod tests {
         );
     }
 
+    // covers: S186, S189
+    #[test]
+    fn with_only_a_cast_speaker_a_source_change_keeps_the_old_capture_until_its_tap_faded() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the old capture feeds the fade-out"
+        );
+        assert!(backend.driver().capture_feeds_cast());
+        thread::sleep(FEED_FADE);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_feeds_cast());
+    }
+
+    // covers: S186, S189
+    #[test]
+    fn a_source_change_after_every_output_ended_keeps_the_old_capture_until_the_cast_tap_faded() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.end_renderer(HEADPHONES);
+        backend.end_renderer(SPEAKERS);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "an ended output plays no fade the tap could ride on"
+        );
+        thread::sleep(FEED_FADE);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+    }
+
+    // covers: S186, S189
+    #[test]
+    fn with_only_an_airplay_speaker_a_source_change_keeps_the_old_capture_until_its_feed_faded() {
+        let mut backend = backend();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        let fake = FakeAirPlay::new();
+        let clock = SenderClock::new(Instant::now());
+        let (_stream, input) = Stream::new(StreamConfig::default(), clock, Instant::now());
+        let feed = FeedSlot::new(input);
+        backend.set_airplay(fake.link(), Some(feed.clone()));
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(
+            backend.driver().captures_started().len(),
+            1,
+            "the old capture feeds the fade-out"
+        );
+        assert!(feed.fading_out() && !feed.is_free());
+        thread::sleep(FEED_FADE);
+        backend.poll();
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        assert!(backend.driver().capture_feeds_airplay());
+    }
+
+    // covers: S189
+    #[test]
+    fn a_source_change_fades_the_cast_tap_out_on_the_old_capture_and_in_on_the_new() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        let mut backend = backend();
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let heard = |backend: &mut MockBackend| -> Vec<i16> {
+            backend.feed_cast(2 * fade, 0.5);
+            let mut bytes = Vec::new();
+            cast.state().readers[0].read_into(&mut bytes, 2 * fade);
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|frame| i16::from_le_bytes([frame[0], frame[1]]))
+                .collect()
+        };
+        let largest_step = |samples: &[i16]| {
+            samples
+                .windows(2)
+                .map(|pair| (i32::from(pair[1]) - i32::from(pair[0])).abs())
+                .max()
+                .unwrap_or(0)
+        };
+        let first = heard(&mut backend);
+        let full = i32::from(first[2 * fade - 1]);
+        assert!(full > 10_000, "{full}");
+        // S191 (b): no step above A × g × π / (2F), plus rounding.
+        let bound = full as f64 * std::f64::consts::PI / (2.0 * fade as f64) + 2.0;
+        assert_eq!(first[0], 0, "the first capture fades in from silence");
+        assert!(f64::from(largest_step(&first)) <= bound);
+
+        backend.driver().hold_fades(true);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        let last = heard(&mut backend);
+        assert!(
+            last[fade..].iter().all(|sample| *sample == 0),
+            "the old capture fades out to silence"
+        );
+        assert!(f64::from(largest_step(&last)) <= bound);
+
+        backend.driver().hold_fades(false);
+        backend.poll();
+        assert!(backend.driver().capture_feeds_cast());
+        let next = heard(&mut backend);
+        assert_eq!(next[0], 0, "the new capture fades in from silence");
+        assert!(i32::from(next[2 * fade - 1]) > 10_000, "up to full level");
+        assert!(f64::from(largest_step(&next)) <= bound);
+    }
+
     // covers: S186
     #[test]
     fn a_source_change_starts_the_new_capture_at_a_poll_once_the_old_outputs_faded() {
@@ -6278,6 +6577,120 @@ mod tests {
                 gain: 1.0,
             })
         );
+    }
+
+    // covers: S26, S71
+    #[test]
+    fn an_output_below_unity_gets_the_equalizer_cut_back() {
+        let mut backend = backend();
+        backend.set_output_volume(SPEAKERS, 50.0);
+        backend.set_output_volume(HEADPHONES, 100.0);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let gains_db = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let on = EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db,
+        };
+        backend.set_equalizer(on);
+        let gain = |backend: &MockBackend, id| backend.playing_params(id).unwrap().gain;
+        let back = 10f64.powf(eq::cascade_peak_db(&gains_db, 48_000.0) / 20.0);
+        assert!((f64::from(gain(&backend, SPEAKERS)) - 0.125 * back).abs() < 1e-6);
+        assert_eq!(gain(&backend, HEADPHONES), 1.0, "unity keeps the cut");
+        backend.set_equalizer(EqSettings {
+            enabled: false,
+            ..on
+        });
+        assert_eq!(gain(&backend, SPEAKERS), 0.125);
+    }
+
+    // covers: S26, S413
+    #[test]
+    fn the_airplay_stream_gets_the_equalizer_cut_back_under_the_master() {
+        let mut backend = backend();
+        let gains_db = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let on = EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db,
+        };
+        backend.set_equalizer(on);
+        backend.set_master_volume(50.0);
+        let fake = FakeAirPlay::new();
+        backend.set_airplay(fake.link(), None);
+        let last_gain = |fake: &FakeAirPlay| {
+            let calls = fake.take_calls();
+            calls.iter().rev().find_map(|call| match call {
+                Call::MasterGain(gain) => Some(*gain),
+                _ => None,
+            })
+        };
+        let back = 10f64.powf(eq::cascade_peak_db(&gains_db, 48_000.0) / 20.0);
+        let returned = last_gain(&fake).expect("a new sender gets the gain");
+        assert!((returned - 0.125 * back).abs() < 1e-9, "{returned}");
+        backend.set_equalizer(EqSettings {
+            enabled: false,
+            ..on
+        });
+        assert_eq!(last_gain(&fake), Some(0.125));
+        backend.set_equalizer(on);
+        backend.set_master_volume(100.0);
+        assert_eq!(last_gain(&fake), Some(1.0), "unity keeps the cut");
+    }
+
+    // covers: S26, S415
+    #[test]
+    fn the_cast_stream_gets_the_equalizer_cut_back_under_the_master() {
+        use crate::audio::cast::CastLease;
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        /// The first sample of a block read after a block of 0.5 went in.
+        fn level(fake: &FakeCast, lease: &mut CastLease) -> f64 {
+            lease.push(&[0.5; 64], 32);
+            let mut bytes = Vec::new();
+            fake.state().readers[0].read_into(&mut bytes, 32);
+            f64::from(i16::from_le_bytes([bytes[0], bytes[1]]))
+        }
+        let mut backend = backend();
+        let gains_db = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
+        let on = EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db,
+        };
+        let off = EqSettings {
+            enabled: false,
+            ..on
+        };
+        backend.set_equalizer(on);
+        backend.set_master_volume(50.0);
+        let fake = FakeCast::default();
+        fake.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(fake.link());
+        let cast = backend.cast.as_mut().expect("the Cast speakers");
+        cast.poll();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        // Past the lease's fade-in (S189).
+        let fade = audiosync_core::fade::fade_frames(SESSION_RATE);
+        lease.push(&vec![0.5; 2 * fade], fade);
+        fake.state().readers[0].read_into(&mut Vec::new(), fade);
+        let returned = level(&fake, &mut lease);
+        backend.set_equalizer(off);
+        level(&fake, &mut lease);
+        let plain = level(&fake, &mut lease);
+        let back = 10f64.powf(eq::cascade_peak_db(&gains_db, 48_000.0) / 20.0);
+        assert!(
+            (returned / plain - back).abs() < 0.01,
+            "{returned} with the cut given back, {plain} without"
+        );
+        backend.set_equalizer(on);
+        backend.set_master_volume(100.0);
+        level(&fake, &mut lease);
+        let full = level(&fake, &mut lease);
+        backend.set_equalizer(off);
+        level(&fake, &mut lease);
+        assert_eq!(level(&fake, &mut lease), full, "unity keeps the cut");
     }
 
     // covers: S232
@@ -7762,6 +8175,34 @@ mod tests {
         assert!(backend.driver().capture_running());
     }
 
+    // covers: S26, S71, S329
+    #[test]
+    fn a_reopened_capture_gives_the_cut_back_to_the_frames_already_in_the_ring() {
+        let mut backend = backend();
+        backend.set_output_volume(SPEAKERS, 50.0);
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            preamp_db: 0.5,
+            gains_db: [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0],
+        });
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let ring = backend.driver().capture_ring().expect("a ring");
+        backend.fail_capture(BackendError::DeviceGone);
+        poll_quietly(&mut backend, 1);
+        // Equalized by the lost capture, with the same curve.
+        let mut writer = ring.writer().expect("the mock capture let it go");
+        writer.write(&[0.0; 960], 480);
+        drop(writer);
+        poll_quietly(&mut backend, RESTART_DELAY_POLLS);
+        assert_eq!(backend.driver().captures_started().len(), 2);
+        backend.set_output_volume(SPEAKERS, 40.0);
+        let gain = &backend.session.as_ref().unwrap().outputs[SPEAKERS].gain;
+        assert!(gain.get() > 0.4f32.powi(3), "the cut comes back");
+        for frame in [0, 479, 480] {
+            assert_eq!(gain.gain_at(frame), Some(gain.get()), "frame {frame}");
+        }
+    }
+
     // covers: S329, S20, S140, S157 (another rate restarts the session on a new ring)
     #[test]
     fn a_capture_back_in_another_format_restarts_the_session() {
@@ -8237,6 +8678,42 @@ mod tests {
         poll_quietly(&mut backend, 2);
         assert_eq!(backend.driver().renderers_started(), [HEADPHONES, SPEAKERS]);
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S330 (a new channel mask or a mix format that turns integer reopens alone)
+    #[test]
+    fn a_format_notice_that_changes_only_the_mask_or_the_conversion_reopens_in_the_same_poll() {
+        let base = crate::audio::mock::MOCK_STREAM.format;
+        let masked = RenderFormat {
+            channel_mask: 0x603,
+            ..base
+        };
+        let converted = RenderFormat {
+            convert: true,
+            ..base
+        };
+        for (format, name) in [(masked, "channel mask"), (converted, "conversion")] {
+            let mut backend = backend();
+            backend.start(&SourceId::WholeSystem).unwrap();
+            backend.change_output_format(HEADPHONES, format);
+            assert!(backend.poll().is_empty(), "{name}: no notice");
+            assert_eq!(
+                backend.driver().renderers_started(),
+                [HEADPHONES, SPEAKERS, HEADPHONES],
+                "{name}"
+            );
+            assert_eq!(backend.playing_format(HEADPHONES), Some(format), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_format_that_converts_reads_apart_from_one_that_doesnt() {
+        let own = crate::audio::mock::MOCK_STREAM.format;
+        let converted = RenderFormat {
+            convert: !own.convert,
+            ..own
+        };
+        assert_ne!(describe_format(Some(own)), describe_format(Some(converted)));
     }
 
     // covers: S330, S177
@@ -9981,7 +10458,8 @@ mod tests {
         assert_eq!(
             logged(&log, &dir),
             [format!(
-                "output \"Headphones\" (headphones) volume: 50 (gain {gain:.3})"
+                "output \"Headphones\" (headphones) volume: 50 (gain {gain:.3}, \
+                 EQ headroom returned 0.00 dB)"
             )]
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -10025,6 +10503,17 @@ mod tests {
         backend.move_airplay_row(&id, 40.0);
         backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
         assert!(held(&backend), "a window drag holds until its release");
+
+        backend.set_airplay_volume_dragging(&id, false);
+        backend.set_airplay_volume_dragging(&id, true);
+        backend.hold_airplay_volume_for_phone(&id);
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
+        assert!(
+            held(&backend),
+            "a phone step during a window drag leaves the hold to the mouse"
+        );
+        backend.set_airplay_volume_dragging(&id, false);
+        assert!(!held(&backend), "the mouse release ends it");
     }
 
     #[test]
@@ -10049,7 +10538,10 @@ mod tests {
             messages[..3],
             [
                 "output \"Speakers\" (speakers) offset: 120 ms".to_owned(),
-                format!("output \"Headphones\" (headphones) volume: 50 (gain {gain:.3})"),
+                format!(
+                    "output \"Headphones\" (headphones) volume: 50 (gain {gain:.3}, \
+                     EQ headroom returned 0.00 dB)"
+                ),
                 "master volume: 80".to_owned(),
             ]
         );
@@ -10748,9 +11240,83 @@ mod tests {
         assert_eq!(fake.take_calls(), [Call::Delay(id, Duration::ZERO)]);
     }
 
+    // covers: S401, S394
+    #[test]
+    fn with_d_s_at_0_airplay_plays_ahead_of_a_cast_speaker_only_at_a_negative_airplay_delay() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        use audiosync_airplay::latency::LatencySources;
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        let den = device(2, "Den", OPEN_TXT);
+        fake.appear(&den);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        for speaker in [&kitchen, &den] {
+            backend.set_airplay_enabled(&id_of(speaker), true).unwrap();
+        }
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.set_cast_offset(KITCHEN, 20_000.0);
+        fake.report_latency(&kitchen, 1_000_000, LatencySources::AUDIO_LATENCY);
+        fake.report_latency(&den, 0, LatencySources::AUDIO_LATENCY);
+        backend.poll();
+        // L = L_s + E = 1750 + 1000: Den wants 1000 + 17 250, within the limit.
+        assert_eq!(backend.airplay_ahead_ms(), 0.0);
+        backend.set_airplay_adjustment(-2000.0);
+        // L = 750: Den wants 1000 + 19 250.
+        assert_eq!(backend.airplay_ahead_ms(), 250.0);
+    }
+
+    // covers: S401, S394, S283, P99
+    #[test]
+    fn how_far_airplay_plays_ahead_follows_e_a_receiver_offset_and_a_removed_speaker() {
+        use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        use audiosync_airplay::latency::LatencySources;
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        let den = device(2, "Den", OPEN_TXT);
+        fake.appear(&den);
+        let cast = FakeCast::default();
+        cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
+        backend.set_cast(cast.link());
+        backend.poll();
+        // The app never sets d_s (S180); 3 s here brings them past P99's limit.
+        for speaker in [&kitchen, &den] {
+            backend.set_airplay_enabled(&id_of(speaker), true).unwrap();
+            backend.set_airplay_delay(&id_of(speaker), 3000.0);
+        }
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_cast_enabled(KITCHEN, true).unwrap();
+        backend.set_cast_offset(KITCHEN, 20_000.0);
+        let report = |backend: &mut MockBackend, speaker: &Device, ms: u64| {
+            fake.report_latency(speaker, ms * 1000, LatencySources::AUDIO_LATENCY);
+            backend.poll();
+        };
+        report(&mut backend, &kitchen, 250);
+        report(&mut backend, &den, 250);
+        // E = 250 ms, L = 2000 ms: both want 3000 + 18 000 ms.
+        assert_eq!(backend.airplay_ahead_ms(), 1000.0);
+        report(&mut backend, &kitchen, 450);
+        // A new E holds them back 200 ms less and gives Den E − e_s = 200:
+        // a stale hold-back would say 1200, a stale offset 800.
+        assert_eq!(
+            backend.airplay_ahead_ms(),
+            1000.0,
+            "Den: 3000 + 200 + 17 800"
+        );
+        report(&mut backend, &den, 50);
+        assert_eq!(
+            backend.airplay_ahead_ms(),
+            1200.0,
+            "Den's offset alone: 400"
+        );
+        backend.set_airplay_enabled(&id_of(&den), false).unwrap();
+        assert_eq!(backend.airplay_ahead_ms(), 800.0, "Kitchen: 3000 + 17 800");
+    }
+
     // covers: C104
     #[test]
-    fn the_master_reaches_the_cast_speaker_as_its_device_volume() {
+    fn the_master_never_reaches_the_cast_speakers_device_volume() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
         let (mut backend, _fake, _kitchen) = local_delay_with_airplay();
         backend.set_master_volume(50.0);
@@ -10761,9 +11327,9 @@ mod tests {
         backend.start(&SourceId::WholeSystem).unwrap();
         backend.set_cast_enabled(KITCHEN, true).unwrap();
         backend.set_cast_volume(KITCHEN, 80.0);
-        assert_eq!(cast.state().volumes, [0.4]);
+        assert_eq!(cast.state().volumes, [0.8]);
         backend.set_master_volume(0.0);
-        assert_eq!(cast.state().volumes, [0.4, 0.0]);
+        assert_eq!(cast.state().volumes, [0.8]);
         assert!(cast.state().mutes.is_empty());
     }
 

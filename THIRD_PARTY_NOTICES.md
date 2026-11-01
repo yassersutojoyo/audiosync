@@ -361,14 +361,15 @@ OR Apache-2.0 OR MIT); native-tls uses the platform's TLS stack: `schannel`
 `core-foundation` and `core-foundation-sys` on macOS, and on Linux the system
 OpenSSL through `openssl` (Apache-2.0), `openssl-sys` (MIT), `openssl-macros`,
 `openssl-probe`, `foreign-types` and `foreign-types-shared`, with `vcpkg` (MIT
-OR Apache-2.0) at build time; `prost` and `prost-derive`
-(Apache-2.0) for the protocol buffer messages, with `bytes` (MIT), `anyhow`,
-`itertools` and `either`; `flacenc` (Apache-2.0) to encode the FLAC stream
-some devices need instead of WAV, with `crc`, `crc-catalog`, `heapless`,
-`hash32`, `stable_deref_trait`, `md-5`, `digest`, `block-buffer`,
+OR Apache-2.0) at build time; `prost` (Apache-2.0) for the protocol buffer
+messages, with `bytes` (MIT) and, at build time, `prost-derive` (Apache-2.0),
+`anyhow`, `itertools` and `either`; `flacenc` (Apache-2.0) to encode the
+FLAC stream some devices need instead of WAV, with `crc`, `crc-catalog`,
+`heapless`, `hash32`, `stable_deref_trait`, `md-5`, `digest`, `block-buffer`,
 `crypto-common`, `generic-array` (MIT), `byteorder` (Unlicense OR MIT),
-`num-traits`, `rustversion`, `seq-macro`, `version_check` and, at build time,
-`built` (MIT) and `autocfg` (Apache-2.0 OR MIT, through `num-traits`); `serde_json` (MIT OR Apache-2.0) for the
+`num-traits` and, at build time, `rustversion`, `seq-macro`, `version_check`,
+`built` (MIT) and `autocfg` (Apache-2.0 OR MIT, through `num-traits`);
+`serde_json` (MIT OR Apache-2.0) for the
 messages' JSON, with `serde_core`, `itoa` (MIT OR Apache-2.0), `zmij` (MIT)
 and `memchr`, in the macOS app as well as the Windows one; and on `mdns-sd`,
 `getrandom` and `sha2` with the crates they build on, listed above. The others are under MIT OR Apache-2.0. Its

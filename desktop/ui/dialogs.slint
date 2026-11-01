@@ -48,6 +48,10 @@ export component ZoneNameDialog inherits Dialog {
                 root.cancelled();
                 return accept;
             }
+            if !root.show-field && event.text == Key.Return {
+                root.confirmed(root.name);
+                return accept;
+            }
             return reject;
         }
 

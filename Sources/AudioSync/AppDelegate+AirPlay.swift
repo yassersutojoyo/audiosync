@@ -33,17 +33,28 @@ extension AppDelegate {
         menuBar?.close()   // the panel floats above alerts and would cover this one
         NSApp.activate(ignoringOtherApps: true)
         let (prompt, field) = makeCodePrompt(name: name, password: password, message: message)
+        // A password goes exactly as typed; a PIN loses stray spaces.
+        let code = { password ? field.stringValue : field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+        // Pair, and Return with it, waits for a code the receiver can take.
+        let pair = prompt.buttons[0]
+        pair.isEnabled = false
+        let typing = NotificationCenter.default.addObserver(
+            forName: NSControl.textDidChangeNotification, object: field, queue: nil
+        ) { _ in
+            MainActor.assumeIsolated {
+                pair.isEnabled = password ? !code().isEmpty : NativeAirPlayModel.isPin(code())
+            }
+        }
         codePromptWindow = prompt.window
         defer {
+            NotificationCenter.default.removeObserver(typing)
             codePromptWindow = nil
             promptWithdrawal.ended()   // a close still pending would hit the next prompt
             stopWatchingCodePromptKey()
         }
         // Closed by `closeCodePrompt`, it returns as cancelled.
         guard prompt.runModal() == .alertFirstButtonReturn else { return nil }
-        // A password goes exactly as typed; a PIN loses stray spaces.
-        let code = password ? field.stringValue : field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return code.isEmpty ? nil : code   // an empty code counts as cancelled
+        return code()
     }
 
     /// The prompt for `name`, with `message` under its title, and the field

@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
-use audiosync_cast::error::ConnectError;
+use audiosync_cast::error::{ConnectError, ReconnectPacer};
 use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::{IdleReason, MediaError, Metadata};
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
@@ -409,6 +409,38 @@ fn every_unrequested_finished_reloads_unless_the_previous_one_was_within_the_win
         thread::sleep(window * 2);
     }
     assert_eq!(count(&device, NS_MEDIA, "LOAD"), 3);
+    assert!(!session.is_ended());
+    session.stop();
+    device.join();
+}
+
+// covers: C86
+#[test]
+fn an_error_after_a_minute_of_play_since_the_last_recovery_recovers_again() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    let clock = fake_clock(&mut session);
+    for media_session_id in [1, 2] {
+        device.send(Command::Send(media_status(
+            "transport-1",
+            0,
+            media_session_id,
+            "IDLE",
+            Some("ERROR"),
+        )));
+        let seen = run_until(&mut session, Duration::from_secs(15), |event| {
+            matches!(
+                event,
+                SessionEvent::Recovered { .. } | SessionEvent::Ended(_)
+            )
+        });
+        assert!(
+            seen.iter()
+                .any(|event| matches!(event, SessionEvent::Recovered { .. })),
+            "{seen:?}"
+        );
+        *clock.lock().expect("clock") += ReconnectPacer::HEALTHY;
+    }
     assert!(!session.is_ended());
     session.stop();
     device.join();
@@ -1088,41 +1120,32 @@ fn device_volume_changes_never_touch_the_samples() {
 fn a_level_waiting_for_its_interval_reaches_the_device_after_a_reconnect() {
     let device = FakeDevice::start(Behavior::default());
     let (mut session, _feed) = start(&device);
-    let mut landed = false;
-    for (attempt, last) in [0.3, 0.5, 0.7].into_iter().enumerate() {
-        let first = Instant::now();
-        session.set_volume(last - 0.1).expect("sent");
-        session.set_volume(last).expect("waits for the interval");
-        device.send(Command::DropConnection);
-        assert!(device.wait_for_hangup(HANG_GUARD));
-        // Past the interval the old channel sends the level itself before it reads the drop.
-        let in_time = first.elapsed() < Duration::from_millis(80);
-        run_until(&mut session, Duration::from_secs(10), |event| {
-            matches!(event, SessionEvent::Recovered { .. })
-        });
-        if !in_time {
-            continue;
-        }
-        let last_sent = |device: &FakeDevice| {
-            device
-                .payloads(NS_RECEIVER, "SET_VOLUME")
-                .last()
-                .map(|payload| payload["volume"]["level"].clone())
-        };
-        let until = Instant::now() + Duration::from_secs(3);
-        while last_sent(&device) != Some(json!(last)) {
-            assert!(
-                Instant::now() < until,
-                "the level waiting at the drop never reached the device: {:?}",
-                device.payloads(NS_RECEIVER, "SET_VOLUME")
-            );
-            session.run_for(Duration::from_millis(50));
-        }
-        assert_eq!(device.connection_count() as usize, attempt + 2);
-        landed = true;
-        break;
+    // An interval that outlasts the drop holds the last level waiting on any runner.
+    session.set_volume_interval(Duration::from_secs(60));
+    session.set_volume(0.4).expect("sent");
+    session.set_volume(0.5).expect("waits for the interval");
+    device.send(Command::DropConnection);
+    assert!(device.wait_for_hangup(HANG_GUARD));
+    let last_sent = |device: &FakeDevice| {
+        device
+            .payloads(NS_RECEIVER, "SET_VOLUME")
+            .last()
+            .map(|payload| payload["volume"]["level"].clone())
+    };
+    assert_ne!(last_sent(&device), Some(json!(0.5)), "sent before the drop");
+    run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    let until = Instant::now() + Duration::from_secs(3);
+    while last_sent(&device) != Some(json!(0.5)) {
+        assert!(
+            Instant::now() < until,
+            "the level waiting at the drop never reached the device: {:?}",
+            device.payloads(NS_RECEIVER, "SET_VOLUME")
+        );
+        session.run_for(Duration::from_millis(50));
     }
-    assert!(landed, "no drop landed inside the 100 ms interval");
+    assert_eq!(device.connection_count(), 2);
     session.stop();
     device.join();
 }

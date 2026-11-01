@@ -286,7 +286,7 @@ struct UIStrings {
                 + "would switch the headset to call mode. Choose another input in System Settings → Sound, "
                 + "and try again."
         case .unsupportedRate:
-            return "The audio source runs at a sample rate calibration can't use."
+            return "The microphone runs at a sample rate calibration can't use."
         case .sourceSilent:
             return "The test sound couldn't start because streaming stalled. "
                 + "Turn streaming off and on, and try again."
@@ -642,9 +642,6 @@ struct UIStrings {
             return "\(name) asks for a password, so it's off. Turn it on again\(place) to enter it. "
                 + "To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) "
                 + "to “Anyone on the Same Network” and turn off Require Password."
-        case .cancelled:
-            return "Pairing with \(name) was cancelled, so it's off. "
-                + "To try again, turn it on and enter its PIN or password when AudioSync asks."
         case .stillNeedsCode:
             return "\(name) still asks for a PIN or password after pairing, so it's off. "
                 + "On the speaker (or in the Home app), check that Allow Speaker & TV Access is set to "
@@ -722,6 +719,10 @@ struct UIStrings {
     let nativeAirPlayPtpPortsTaken = "Another app is using port 319 or 320, so AirPlay speakers that need "
         + "PTP timing can't play. Close that app, then turn the speaker on again."
 
+    /// A newer AudioSync wrote the pairings file, or its folder couldn't be found.
+    let nativeAirPlayPairingsNotSaved = "AudioSync couldn't save your AirPlay pairings, so pairings you add or "
+        + "forget now won't be kept after AudioSync quits."
+
     /// Every AirPlay 2 place is taken: this one stays on and starts once
     /// one of them stops (P169, S285).
     func nativeAirPlayTooManyAirPlay2(name: String) -> String {
@@ -752,6 +753,12 @@ struct UIStrings {
     func nativeAirPlayReconnectingTitle(name: String) -> String { "\(name) reconnecting" }
     /// Under its name meanwhile.
     let reconnecting = "Reconnecting…"
+    /// Under the name of a speaker switched on whose password prompt is
+    /// queued or open (S223).
+    let waitingForPassword = "Waiting for the password"
+    /// Under the name of a speaker switched on whose PIN prompt is queued or
+    /// open: the speaker's name, as not every one is a TV (S223).
+    func enterCodeShown(on name: String) -> String { "Enter the code shown on \(name)" }
     /// Under the name of an AirPlay speaker that is not announced on the
     /// network right now; it starts by itself once it is again (P215).
     let notOnNetwork = "Not on the network right now, plays once it's back"
@@ -1195,6 +1202,7 @@ struct UIStrings {
     let autoConnect = "Auto-Connect When Available"
     let launchAtLogin = "Launch at Login"
     let launchAtLoginFailed = "macOS did not allow AudioSync to launch at login. You can add it in System Settings → General → Login Items & Extensions."
+    let launchAtLoginOffFailed = "macOS did not allow AudioSync to stop launching at login. You can remove it in System Settings → General → Login Items & Extensions."
     func automationDenied(_ app: String) -> String {
         "AudioSync isn't allowed to control \(app), so Now Playing can't show its track or controls, and AirPlay speakers with a screen can't show it either. Turn on \(app) under AudioSync in System Settings → Privacy & Security → Automation."
     }
@@ -1310,12 +1318,19 @@ struct UIStrings {
     // MARK: Google Cast speakers
 
     /// The note under a speaker's name, also read in its VoiceOver hint:
-    /// what a Cast speaker does, that an AirPlay 2 speaker waits, that an
+    /// what a Cast speaker does, what an AirPlay speaker's PIN or password
+    /// prompt waits for, that an AirPlay 2 speaker waits, that an
     /// AirPlay speaker is off the network, or what a stereo pair or home
     /// theater group is made of.
     func rowNote(cast: CastRow?, waitingForAirPlay2: Bool, waitingForPtp: Bool = false, reconnecting: Bool = false,
+                 codeWait: NativeCodeWait? = nil, name: String = "",
                  unannounced: Bool, target: AirPlayTargetRow?) -> String? {
         if let cast { return castNote(cast) }
+        switch codeWait {
+        case .password?: return waitingForPassword
+        case .pin?: return enterCodeShown(on: name)
+        case nil: break
+        }
         if waitingForPtp { return self.waitingForPtp }
         if waitingForAirPlay2 { return self.waitingForAirPlay2 }
         if reconnecting { return self.reconnecting }

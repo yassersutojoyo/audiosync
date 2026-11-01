@@ -207,15 +207,12 @@ pub extern "C" fn asc_zone_output_gain(
 }
 
 /// [`volume::device_level`]: an AirPlay speaker's device level, 0 to 100,
-/// for its own volume through its zone (100 outside one) and the master:
-/// min(100, own × k), the own volume unrounded and possibly above 100 (S290).
+/// for its own volume through its zone (100 outside one), never the master:
+/// min(100, own × k), the own volume unrounded and possibly above 100 (S290,
+/// S413).
 #[unsafe(no_mangle)]
-pub extern "C" fn asc_airplay_device_level(
-    own_position: f64,
-    zone_position: f64,
-    master_position: f64,
-) -> f64 {
-    volume::device_level(own_position, zone_position, master_position)
+pub extern "C" fn asc_airplay_device_level(own_position: f64, zone_position: f64) -> f64 {
+    volume::device_level(own_position, zone_position)
 }
 
 /// [`volume::row_level`]: the whole number an AirPlay row shows for a
@@ -228,7 +225,7 @@ pub extern "C" fn asc_airplay_row_level(device_level: f64) -> f64 {
 /// [`volume::row_move`]: an AirPlay row moved to `row` writes the own
 /// volume to store, row ÷ k unrounded and possibly above 100, and the device
 /// level to send, the row, through `own_position` and `device_level` (S290).
-/// False, writing nothing, when zone × master is 0, `row` isn't finite or a
+/// False, writing nothing, when the zone is 0, `row` isn't finite or a
 /// pointer is null.
 ///
 /// # Safety
@@ -238,14 +235,13 @@ pub extern "C" fn asc_airplay_row_level(device_level: f64) -> f64 {
 pub unsafe extern "C" fn asc_airplay_row_move(
     row: f64,
     zone_position: f64,
-    master_position: f64,
     own_position: *mut f64,
     device_level: *mut f64,
 ) -> bool {
     if own_position.is_null() || device_level.is_null() {
         return false;
     }
-    let Some(moved) = volume::row_move(row, zone_position, master_position) else {
+    let Some(moved) = volume::row_move(row, zone_position) else {
         return false;
     };
     // SAFETY: both checked non-null above; by the caller's contract writable.
@@ -444,6 +440,34 @@ pub unsafe extern "C" fn asc_eq_nan_resets(eq: *const AscEqualizer) -> u64 {
     // field, which the capture thread never touches.
     let control = unsafe { &(*eq).control };
     control.nan_resets()
+}
+
+/// Control thread: a local output's linear `gain` with the equalizer's
+/// headroom cut given back as far as unity allows (S26, S71); the dB given
+/// back goes to `returned_db` when it isn't null. A null handle gives `gain`.
+///
+/// # Safety
+///
+/// `eq` is null or a live handle, called under the threading contract (a
+/// control call); `returned_db` is null or points to a writable double.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_eq_returned_gain(
+    eq: *const AscEqualizer,
+    gain: f64,
+    returned_db: *mut f64,
+) -> f64 {
+    let (played, db) = if eq.is_null() {
+        (gain, 0.0)
+    } else {
+        // SAFETY: the handle is live; the control thread reads only the
+        // `control` field, which the capture thread never touches.
+        unsafe { &(*eq).control }.returned_gain(gain)
+    };
+    if !returned_db.is_null() {
+        // SAFETY: non-null, and by the caller's contract writable.
+        unsafe { *returned_db = db };
+    }
+    played
 }
 
 #[cfg(test)]
@@ -1576,6 +1600,10 @@ mod tests {
             ("ASC_CAST_ERROR_ARTWORK", CAST_ERROR_ARTWORK.to_string()),
             ("ASC_CAST_ERROR_GROUP", CAST_ERROR_GROUP.to_string()),
             ("ASC_CAST_ERROR_INTERNAL", CAST_ERROR_INTERNAL.to_string()),
+            (
+                "ASC_CAST_ERROR_NO_ADDRESS",
+                CAST_ERROR_NO_ADDRESS.to_string(),
+            ),
             ("ASC_CAST_FORMAT_WAV", CAST_FORMAT_WAV.to_string()),
             ("ASC_CAST_FORMAT_FLAC", CAST_FORMAT_FLAC.to_string()),
             ("ASC_REMOTE_DEFAULT_PORT", REMOTE_DEFAULT_PORT.to_string()),
@@ -1742,6 +1770,9 @@ mod tests {
             assert!(!asc_eq_set_sample_rate(std::ptr::null_mut(), 48_000.0));
             asc_eq_process(std::ptr::null_mut(), block.as_mut_ptr(), 4);
             assert_eq!(asc_eq_nan_resets(std::ptr::null()), 0);
+            let returned = asc_eq_returned_gain(std::ptr::null(), 0.5, std::ptr::null_mut());
+            assert_eq!(returned, 0.5);
+            asc_eq_give_back(std::ptr::null(), std::ptr::null_mut(), 0.5);
             asc_apply_gain(std::ptr::null_mut(), 4, 0.5);
         }
         assert_eq!(block, copy);
@@ -2346,6 +2377,7 @@ mod realtime {
                                     -1.0,
                                     gains.as_ptr(),
                                 );
+                                asc_eq_give_back(eq_h.get(), renderer_h.get(), 0.5);
                             }
                             if round % 777 == 0 {
                                 asc_reader_reset_prime(far_h.get());

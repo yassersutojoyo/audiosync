@@ -54,6 +54,9 @@ final class NativeAirPlay {
     private var explicitPause = ExplicitPause()
     /// While paused, checks whether the capture carries sound again (main queue).
     private var soundWatch: Timer?
+    /// The store this sender opened keeps pairings only until it goes
+    /// (main queue, set before `start` completes).
+    private(set) var pairingsNotSaved = false
     /// The hold-back last asked for (main queue), and the one the sender
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
@@ -61,6 +64,9 @@ final class NativeAirPlay {
     /// The zone position of every receiver in a zone, which the sender gets,
     /// also when it is created later (queue only, S249).
     private var zoneVolumes: [String: Double] = [:]
+    /// The equalizer, whose headroom cut the sender gives back under the
+    /// master, also when it is created later (queue only, S26, S413).
+    private var equalizer = Equalizer.Settings()
     /// The receivers added to the sender, in the order they were added, and
     /// the uptime of the last status line (queue only; `logStatusIfDue`).
     private var addedIDs: [String] = []
@@ -271,6 +277,22 @@ final class NativeAirPlay {
         }
     }
 
+    /// The equalizer settings, live: the stream's gain gives their headroom
+    /// cut back under the master (S26, S413). Main queue.
+    func setEqualizer(_ settings: Equalizer.Settings) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.equalizer = settings
+            if let handle = self.handle { Self.sendEqualizer(settings, to: handle) }
+        }
+    }
+
+    private static func sendEqualizer(_ settings: Equalizer.Settings, to handle: OpaquePointer) {
+        var gains = [Double](repeating: 0, count: Int(ASC_EQ_BANDS))
+        for band in 0..<min(gains.count, settings.gains.count) { gains[band] = settings.gains[band] }
+        _ = asc_airplay_set_equalizer(handle, settings.enabled, &gains)
+    }
+
     /// The zone position (0 to 100) of every receiver in a zone, live; the
     /// rest are in no zone (S249). Main queue.
     func setZones(_ zones: [String: Double]) {
@@ -384,6 +406,12 @@ final class NativeAirPlay {
         default:
             return "\(loaded) paired Apple TV(s) in the pairings file"
         }
+    }
+
+    /// Whether pairings made while the store opened with `loaded` is in use
+    /// are lost when AudioSync quits.
+    static func pairingsNotSaved(_ loaded: Int32) -> Bool {
+        loaded == ASC_AIRPLAY_PAIRINGS_FAILED || loaded == ASC_AIRPLAY_PAIRINGS_NEWER
     }
 
     /// How private the core found a pairing file, for the debug log; nil
@@ -550,6 +578,7 @@ final class NativeAirPlay {
                 DebugTrace.log("[AudioSync] native AirPlay: " + line)
             }
             DebugTrace.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
+            self.pairingsNotSaved = Self.pairingsNotSaved(loaded)
             if let airPlay2, airPlay2 != 0 {
                 DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: "
                     + (airPlay2 > 0 ? "\(airPlay2) paired receiver(s)" : "ignored or left as it is (code \(airPlay2))"))
@@ -565,6 +594,7 @@ final class NativeAirPlay {
             }
         }
         asc_airplay_set_master(created, master)
+        Self.sendEqualizer(equalizer, to: created)
         for (id, zone) in zoneVolumes { _ = asc_airplay_set_zone_volume(created, id, zone) }
         _ = asc_airplay_set_hold_back(created, queuedHoldBackMs)
         _ = asc_airplay_set_playback(created, playback.app, playback.state)

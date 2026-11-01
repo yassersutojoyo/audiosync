@@ -125,7 +125,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         didSet {
             guard masterVolume != oldValue else { return }
             store.save(master: masterVolume)
-            airplayHeldLevel = [:]   // the rows show min(100, s × k) again (S290)
         }
     }
     /// Slider positions (0…100) of local speakers, by device UID.
@@ -151,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// A level set on an AirPlay speaker while its k was 0, by output ID,
     /// which its row shows until s, its zone or the master moves (S290).
     var airplayHeldLevel: [String: Double] = [:]
+    var airPlayVolumeLog = RemoteVolumeLog()
     var groups: [SpeakerGroup] {
         didSet { if groups != oldValue { store.save(groups: groups) } }
     }
@@ -268,6 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var runawayRetry = OutputRunawayRetry()
     /// Local outputs whose listed device refuses to start, until one starts (S331).
     var refusalRetry = OutputRefusalRetry()
+    var goneNotices = OutputGoneNotices()
     /// The microphone calibration under way, if any (S232).
     var calibrationRun: CalibrationRun?
     /// Calibrate All Speakers under way, its sheet and the Undo of its Apply (S235 to S240).
@@ -354,7 +355,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         super.init()
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
-        _ = castModel.setMaster(saved.master)
         _ = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast))
         castModel.savedOn = saved.castOnAtLaunch
     }
@@ -464,6 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 self.devicesChanged()
             case .deviceGone:
                 self.noteRelinked(lostUID)   // it may return inside one rescan, never missing from a list
+                self.goneNotices.deviceGone(lostUID)
                 DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
                 self.devicesChanged()
             }

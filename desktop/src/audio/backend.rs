@@ -424,8 +424,12 @@ pub struct CastInfo {
     pub offline: bool,
     /// Whether the user turned it on.
     pub enabled: bool,
-    /// The device's volume as it last reported it, 0 to 100.
+    /// Its own level, at least 0 and possibly above 100, which its zone
+    /// scales (spec S415).
     pub volume: f64,
+    /// The level it gets, 0 to 100, which its row shows rounded down
+    /// (spec S415).
+    pub device_level: f64,
     /// A status reported a level or the user set one; else `volume` is 100.
     pub volume_known: bool,
     pub muted: bool,
@@ -590,6 +594,10 @@ pub enum BackendEvent {
         /// stopped.
         paths: Vec<DirectPath>,
     },
+    /// Whether the running session still waits for its first sound (S350):
+    /// `true` once, when a check 3 s after it started heard none; `false`
+    /// when sound arrives after that, or the session ends.
+    WaitingForAudio { waiting: bool },
     /// AirPlay speakers appeared, changed, went away, or started or stopped
     /// playing: list them again.
     AirPlayChanged,
@@ -633,9 +641,9 @@ pub enum BackendEvent {
     AirPlayMemberNeedsPassword {
         /// The target's ID.
         id: String,
-        /// The member's name, which the notice gives: a member that is part
-        /// of its target has no row of its own.
-        member: String,
+        /// The member's ID; the notice gives its name, as a member that is
+        /// part of its target has no row of its own.
+        member_id: String,
     },
     /// An Apple TV the user switched on was paired, and is on now.
     AirPlayPaired {
@@ -1092,8 +1100,11 @@ pub trait AudioBackend {
         None
     }
 
-    /// Sets a Cast speaker's device volume, 0 to 100.
+    /// Sets a Cast speaker's own volume, at least 0 (spec S415).
     fn set_cast_volume(&mut self, _id: &str, _position: f64) {}
+
+    /// A Cast speaker's row moved to `row`, its device level (spec S415).
+    fn move_cast_row(&mut self, _id: &str, _row: f64) {}
 
     fn set_cast_muted(&mut self, _id: &str, _muted: bool) {}
 

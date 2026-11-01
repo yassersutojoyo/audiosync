@@ -336,6 +336,7 @@ final class StreamEngine {
                 frames: renderer.framesRendered.load(ordering: .relaxed),
                 starvedRenders: counted.starvedRenders, starvedFrames: counted.starvedFrames,
                 driftSkips: counted.driftSkips, driftSilences: counted.driftSilences,
+                rejectedCopies: counted.rejectedCopies,
                 lateCallbacks: renderer.lateCallbacks, overloads: renderer.ioOverloads,
                 anchor: renderer.takeAnchorSpan())
         }
@@ -624,7 +625,8 @@ final class StreamEngine {
         guard let renderer = parts.makeRenderer(captureRate: capture.sampleRate) else {
             throw OutputRenderer.StartFailure.coreUnavailable
         }
-        renderer.setGain(linear: gain)
+        let (played, returnedDb) = parts.equalizer.returnedGain(gain)
+        renderer.setGain(linear: gain, givingBack: parts.equalizer)
         renderer.onDeviceGone = { [weak self, weak renderer] in
             guard let self, let renderer else { return }
             self.handleOutputLost(uid, renderer, .deviceGone)
@@ -636,7 +638,8 @@ final class StreamEngine {
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
         attachTokens.attached(uid)
-        DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(gain)")
+        DebugTrace.log("[AudioSync] output added: \(uid) on device \(device), delay \(delayMs) ms, gain \(played), "
+            + "EQ headroom returned \(String(format: "%.2f", returnedDb)) dB")
         if DebugTrace.enabled {
             DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak self, weak renderer] in
                 guard let self, let renderer, self.renderers[uid] === renderer else { return }
@@ -716,9 +719,10 @@ final class StreamEngine {
             + "(\(counted.driftSilenceFrames) frames)"
     }
 
-    /// A new linear gain for output `uid`, applied from its next callback (S64).
+    /// A new linear gain for output `uid`, with the equalizer's headroom cut
+    /// given back (S26, S71), applied from its next callback (S64).
     func setGain(uid: String, g: Double) {
-        renderers[uid]?.setGain(linear: g)
+        renderers[uid]?.setGain(linear: g, givingBack: parts?.equalizer)
     }
 
     /// The device of output `uid` is gone (S68), its render callback stopped
@@ -811,6 +815,7 @@ struct SessionTally: Equatable {
         var starvedFrames: Int64 = 0
         var driftSkips: Int64 = 0
         var driftSilences: Int64 = 0
+        var rejectedCopies: Int64 = 0
         var lateCallbacks: Int64 = 0
         var overloads: Int64 = 0
         /// Not a count: the span since the previous line (`AnchorSpan`).
@@ -849,10 +854,11 @@ struct SessionTally: Equatable {
             let starvedFrames = change(now.starvedFrames, since: before.starvedFrames)
             let skips = change(now.driftSkips, since: before.driftSkips)
             let silences = change(now.driftSilences, since: before.driftSilences)
+            let rejected = change(now.rejectedCopies, since: before.rejectedCopies)
             let late = change(now.lateCallbacks, since: before.lateCallbacks)
             let overloads = change(now.overloads, since: before.overloads)
             text += "; output \(now.number): \(rendered) frames, starved \(starved) (\(starvedFrames) frames), "
-            text += "drift skips \(skips), drift silences \(silences), "
+            text += "drift skips \(skips), drift silences \(silences), rejected copies \(rejected), "
             text += "late callbacks \(late), IO overloads \(overloads)"
             if let anchor = now.anchor { text += ", " + anchor.text }
         }

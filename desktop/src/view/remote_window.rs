@@ -7,7 +7,7 @@
 //! window's own controls (`crate::remote::actions`) and the result shown and
 //! published again. The poll timer also takes commands, in case a wake-up
 //! was missed, and writes what the server reports to the debug log, which
-//! never sees a pairing code or a device token.
+//! gets each new pairing code only while it is on (S287), never a device token.
 //!
 //! While the server listens, a thread reads the networks' profiles, and the
 //! window and a notice say so when one is Public.
@@ -199,7 +199,10 @@ impl RowText for StringsText<'_> {
             return note.into();
         }
         self.0
-            .invoke_row_note(row_state(state.speaker_state(speaker)))
+            .invoke_row_note(
+                row_state(state.speaker_state(speaker)),
+                speaker.name.as_str().into(),
+            )
             .into()
     }
 }

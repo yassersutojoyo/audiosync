@@ -66,7 +66,7 @@ S263 Hosts only: the presets' empty state; the Mac logic suite and the Windows t
 S264 Hosts only: where the current-preset mark shows; its rule is S253's, which the core covers.
 S265 Hosts only: carrying out a recall and its notice; the plan is S252's, which the core covers.
 S266 Hosts only: a recall's focus and the phone's start origin; the Mac logic suite and the Windows tests check it.
-S267 Hosts only: keyboard reach and focus of the preset controls; the Windows tests check it, the Mac by hand.
+S267 Hosts only: keyboard reach and focus of the preset controls; the Windows tests check it, the Mac logic suite its Control-Command-1 to 9 keys and the rest by hand.
 S268 Hosts only: the preset controls' colors in light and dark; the Windows contrast tests and the Mac logic suite (the Presets card's tokens and their 4.5:1 contrast) check it.
 S269 Hosts only: the preset wording in UIStrings (Mac) and strings.slint (Windows); the Mac logic suite's "presets: the preset texts" and view.rs the_preset_texts_come_from_strings check it.
 S280 Hosts only: keeping each speaker's reported latency and setting the session's L; the rule is the AirPlay crate's (AirPlay spec P200); the Windows tests and the Mac logic suite check it.
@@ -126,7 +126,7 @@ S350 Hosts only: the Waiting for audio notice when a capture session starts and 
 S351 Hosts only: the end of the user session runs the quit steps; the Windows host's tests check it, and the Mac runs its quit steps from applicationWillTerminate.
 S353 Web remote and hosts only: the apps the phone may mix, the mix route and the host building the mix from it; to be checked by the remote crate's and the Windows host's tests and the Mac logic suite.
 S354 Hosts only: each host keeping the last source of several apps and listing it in the picker and on the phone; to be checked by the Windows host's tests and the Mac logic suite.
-S355 Hosts only: the Windows host's input device source (listing, format, privacy, the unplugged input in the picker); the Windows tests named in the test map check it, three rows pending.
+S355 Hosts only: the Windows host's input device source (listing, format, privacy, the unplugged input in the picker); the Windows tests named in the test map check it.
 S356 Mac and Windows hosts only: the notices of an AirPlay speaker off for want of a code, busy or declining; the Mac logic suite and the Windows tests check them.
 S357 Mac host only: the menu bar icon's clicks, the panel's Reduce Motion and its contrast; the Mac logic suite checks them.
 S358 Mac and Windows hosts only: the notice that the PTP ports are taken; the Mac logic suite and the Windows tests check it.
@@ -155,7 +155,7 @@ S380 Windows and Linux hosts only: an app source followed by its executable and 
 S381 Hosts only: the Windows and Linux output lists, output kinds and the This PC section; the Windows tests named in the test map check them.
 S382 Hosts only: the Windows and Linux double-audio check and its notice; the Windows tests named in the test map check them.
 S383 Windows host only: auto-connect speakers switching on and starting streaming; the Windows tests named in the test map check it.
-S384 Windows host only: a local output's settings following it to a new endpoint ID; the Windows tests named in the test map check it.
+S384 Hosts only: a local output's settings following it to a new device ID; the Windows tests and the Mac logic suite named in the test map check it.
 S385 Hosts only: the Windows and Linux settings and Cast speakers files kept aside and written whole; the Windows tests named in the test map check them.
 S386 Windows host only: how one source's app loopbacks are mixed; the Windows tests named in the test map check it.
 S387 Windows and Linux hosts only: the pairing files' encryption on Windows and owner-only mode on Linux; the desktop tests named in the test map check them.
@@ -182,4 +182,5 @@ S407 Mac host only: the in-app guide's text, layout and illustrations; the Mac l
 S409 Mac host only: why a volume slider in the main window is dimmed; the Mac logic suite checks it.
 S410 Mac host only: the About panel's version and license lines; the Mac logic suite checks it.
 S411 Mac host only: Sparkle itself runs the check schedule, the permission prompt, skipped versions and the install at quit; the Mac logic suite checks the Info.plist key that turns off its automatic download and install ("updates: Info.plist turns off Sparkle's automatic download and install").
-S412 Hosts only: no AirPlay session starting while the PC or the Mac sleeps, and the reconnecting count held meanwhile on both hosts; the Windows test named in the clause checks it, the Mac logic check "native airplay: a retried error while the Mac sleeps counts nothing toward reconnecting" checks the Mac's count, and the Mac's session guard sits in AppDelegate (reconcileAirPlaySpeakers), which the Mac logic suite can't reach beyond its check that nothing is scheduled while the Mac sleeps.
+S412 Hosts only: no AirPlay session starting while the PC or the Mac sleeps, and the reconnecting count held meanwhile on both hosts; the Windows test named in the clause checks it, the Mac logic check "native airplay: a retried error while the Mac sleeps counts nothing toward reconnecting" checks the Mac's count, and the Mac logic checks "native airplay: a reconcile while the Mac sleeps starts no session, the one at the wake starts it" and "native airplay: a speaker switched on or found while the Mac sleeps starts no session" check the Mac's session hold.
+S414 Windows host only: the console control handler that turns Ctrl-C or Ctrl-Break into Quit; the Windows test named in the clause checks it.

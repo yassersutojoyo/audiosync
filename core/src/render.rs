@@ -909,6 +909,10 @@ pub struct Renderer {
     resampler: Resampler,
     stage: GainStage,
     gain: Arc<SharedGain>,
+    /// The gain the latest callback ramped to.
+    target_gain: f32,
+    /// The ring frame after the latest read; `i64::MAX` before the first.
+    next_frame: i64,
     shared: Arc<Shared>,
     channels: usize,
     capture_rate: u32,
@@ -1110,6 +1114,8 @@ impl Renderer {
             reader_control: control.reader.clone(),
             resampler,
             stage: GainStage::new(),
+            target_gain: gain.get(),
+            next_frame: i64::MAX,
             gain,
             shared: Arc::clone(&control.shared),
             channels,
@@ -1393,7 +1399,12 @@ impl Renderer {
         // Before the trim, so a shortage shows as the slack it was.
         self.observe(frames, time, drop_ns);
         self.keep_reader_off_w(frames, now);
-        let ramp = self.stage.begin(self.gain.get(), frames);
+        // The gain for the frame this callback goes on from, so one that
+        // answers an equalizer change lands with its first equalized frame.
+        if let Some(gain) = self.gain.gain_at(self.next_frame) {
+            self.target_gain = gain;
+        }
+        let ramp = self.stage.begin(self.target_gain, frames);
         let read_capacity = self.stereo.len() / 2;
         let mut done = 0;
         let mut starved = false;
@@ -2286,6 +2297,7 @@ impl Renderer {
         } else {
             self.reader.read_target(block, need)
         };
+        self.next_frame = report.start + report.frames as i64;
         if !hold {
             // The first read after a held correction's fade-out, which made
             // it if it was still due.

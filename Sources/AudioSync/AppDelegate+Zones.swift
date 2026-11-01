@@ -422,7 +422,7 @@ extension AppDelegate {
             if on { try service.register() } else { try service.unregister() }
         } catch {
             DebugTrace.log("[AudioSync] login item: \(error)")
-            if on { notify(text.launchAtLoginFailed, origin: .user, subject: Notice.login) }
+            notify(Notice.loginRefused(turningOn: on, text), origin: .user, subject: Notice.login)
         }
         if on && service.status == .requiresApproval {
             notify(text.launchAtLoginNeedsApproval, origin: .user, subject: Notice.login, style: .informational)

@@ -71,9 +71,22 @@ pub fn apply_gain(frames: &mut [Frame], gain: f64) {
         return;
     }
     for frame in frames.iter_mut() {
-        for sample in frame.iter_mut() {
-            let scaled = (f64::from(*sample) * gain).round();
-            *sample = scaled.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
-        }
+        scale(frame, gain);
+    }
+}
+
+/// Fades the gain linearly from `from` to `to` across `frames`, the last
+/// frame at `to` (P80).
+pub fn ramp_gain(frames: &mut [Frame], from: f64, to: f64) {
+    let count = frames.len() as f64;
+    for (index, frame) in frames.iter_mut().enumerate() {
+        scale(frame, from + (to - from) * (index + 1) as f64 / count);
+    }
+}
+
+fn scale(frame: &mut Frame, gain: f64) {
+    for sample in frame.iter_mut() {
+        let scaled = (f64::from(*sample) * gain).round();
+        *sample = scaled.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16;
     }
 }

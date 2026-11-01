@@ -21,7 +21,9 @@
 
 use std::f64::consts::PI;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
+
+use crate::volume::{GAIN_STEPS, SharedGain};
 
 #[cfg(not(target_has_atomic = "64"))]
 compile_error!(
@@ -480,6 +482,15 @@ struct Shared {
     version: AtomicU64,
     /// Channels reset after a non-finite cascade output, for diagnostics (S131).
     nan_resets: AtomicU64,
+    /// Odd while the capture thread picks up a block's coefficients and
+    /// updates the three fields below (a sequence lock).
+    pick: AtomicU64,
+    /// The version the capture thread equalizes with.
+    seen: AtomicU64,
+    /// The ring frame that version started at.
+    curve_start: AtomicI64,
+    /// The ring frame the capture thread's next block starts at.
+    next_start: AtomicI64,
 }
 
 /// Creates an equalizer: the control half for the main thread and the processing
@@ -494,13 +505,19 @@ pub fn equalizer() -> (EqControl, EqProcessor) {
         reading: AtomicUsize::new(NOT_READING),
         version: AtomicU64::new(0),
         nan_resets: AtomicU64::new(0),
+        pick: AtomicU64::new(0),
+        seen: AtomicU64::new(0),
+        curve_start: AtomicI64::new(i64::MIN),
+        next_start: AtomicI64::new(0),
     });
-    let control = EqControl {
+    let mut control = EqControl {
         shared: Arc::clone(&shared),
         settings,
         sample_rate: DEFAULT_SAMPLE_RATE,
         epoch: 0,
+        cuts: Vec::with_capacity(GAIN_STEPS),
     };
+    control.cuts.push((i64::MIN, 0.0));
     let processor = EqProcessor {
         shared,
         current: snapshot,
@@ -508,6 +525,8 @@ pub fn equalizer() -> (EqControl, EqProcessor) {
         running: false,
         wet_frames: 0,
         seen_version: 0,
+        position: 0,
+        curve_start: i64::MIN,
         #[cfg(test)]
         biquad_steps: 0,
     };
@@ -523,6 +542,10 @@ pub struct EqControl {
     settings: EqSettings,
     sample_rate: f64,
     epoch: u64,
+    /// The headroom cut of S26 in dB (0 while disabled) by the ring frame it
+    /// starts at, oldest first, at most [`GAIN_STEPS`]; the first also
+    /// covers every frame before it. Allocated once, so control calls don't.
+    cuts: Vec<(i64, f64)>,
 }
 
 impl EqControl {
@@ -544,7 +567,9 @@ impl EqControl {
     /// Publishes new settings. They take effect at the next block boundary,
     /// all ten bands, the preamp and the enabled flag together; filter state is
     /// kept (S31). Any finite gain is applied as given (S23); a non-finite gain
-    /// or preamp counts as 0 dB.
+    /// or preamp counts as 0 dB. The new cut is given back from the ring
+    /// frame the capture thread starts equalizing with them
+    /// ([`EqControl::give_back`], S26, S71).
     pub fn set_settings(&mut self, settings: EqSettings) {
         let settings = EqSettings {
             enabled: settings.enabled,
@@ -555,7 +580,7 @@ impl EqControl {
             return;
         }
         self.settings = settings;
-        self.publish();
+        self.publish(false);
     }
 
     /// Sets the design rate, called only while capture is stopped (S30, S114):
@@ -571,7 +596,7 @@ impl EqControl {
         }
         self.sample_rate = sample_rate;
         self.epoch += 1;
-        self.publish();
+        self.publish(true);
         true
     }
 
@@ -581,9 +606,65 @@ impl EqControl {
         self.shared.nan_resets.load(Ordering::Relaxed)
     }
 
-    fn publish(&mut self) {
+    /// A local output's linear `gain` with the headroom cut of S26 given back
+    /// as far as unity allows (S71): the gain to play and the dB given back.
+    pub fn returned_gain(&self, gain: f64) -> (f64, f64) {
+        returned(gain, self.cuts.last().map_or(0.0, |&(_, cut)| cut))
+    }
+
+    /// Sets a local output's `shared` gain to `gain` with each cut given back
+    /// from the ring frame it starts at, so the renderer changes it with the
+    /// first frame equalized with that cut (S26, S71).
+    pub fn give_back(&self, gain: f64, shared: &SharedGain) {
+        let mut steps = [(i64::MIN, 0.0f32); GAIN_STEPS];
+        for (step, &(from, cut)) in steps.iter_mut().zip(&self.cuts) {
+            *step = (from, returned(gain, cut).0 as f32);
+        }
+        shared.set_steps(&steps[..self.cuts.len()]);
+    }
+
+    /// Publishes the settings; a `fresh` cut covers every frame.
+    fn publish(&mut self, fresh: bool) {
+        let cut = headroom_cut_db(&self.settings, self.sample_rate);
         let snapshot = Snapshot::design(&self.settings, self.sample_rate, self.epoch);
         self.publish_snapshot(&snapshot);
+        let from = if fresh { i64::MIN } else { self.adopted_from() };
+        let newest = self.cuts.last().map_or(i64::MIN, |&(start, _)| start);
+        if from == i64::MIN {
+            self.cuts.clear();
+            self.cuts.push((i64::MIN, cut));
+        } else if let Some(last) = self.cuts.last_mut().filter(|_| from <= newest) {
+            last.1 = cut;
+        } else {
+            if self.cuts.len() == GAIN_STEPS {
+                self.cuts.remove(0);
+                self.cuts[0].0 = i64::MIN;
+            }
+            self.cuts.push((from, cut));
+        }
+    }
+
+    /// The ring frame the capture thread equalizes the newest published
+    /// settings from: where it picked them up, or else where its next block
+    /// starts. Waits out a pick-up in progress, a few dozen loads (S31).
+    fn adopted_from(&self) -> i64 {
+        let shared = &*self.shared;
+        let version = shared.version.load(Ordering::SeqCst);
+        loop {
+            let pick = shared.pick.load(Ordering::SeqCst);
+            if pick % 2 == 0 {
+                let seen = shared.seen.load(Ordering::SeqCst);
+                let from = if seen == version {
+                    shared.curve_start.load(Ordering::SeqCst)
+                } else {
+                    shared.next_start.load(Ordering::SeqCst)
+                };
+                if shared.pick.load(Ordering::SeqCst) == pick {
+                    return from;
+                }
+            }
+            std::thread::yield_now();
+        }
     }
 
     fn publish_snapshot(&mut self, snapshot: &Snapshot) {
@@ -597,6 +678,26 @@ impl EqControl {
         shared.sets[idle].store(snapshot);
         shared.active.store(idle, Ordering::SeqCst);
         shared.version.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// The headroom cut of S26 in dB that `settings` take at `sample_rate`: 0
+/// while disabled. Non-finite gains count as 0 dB.
+pub fn headroom_cut_db(settings: &EqSettings, sample_rate: f64) -> f64 {
+    if settings.enabled {
+        cascade_peak_db(&settings.gains_db.map(finite_or_zero), sample_rate).max(0.0)
+    } else {
+        0.0
+    }
+}
+
+/// `gain` with `cut_db` given back as far as unity allows, and the dB given back.
+pub fn returned(gain: f64, cut_db: f64) -> (f64, f64) {
+    let db = cut_db.min(-20.0 * gain.log10()).max(0.0);
+    if db > 0.0 && gain > 0.0 {
+        ((gain * 10f64.powf(db / 20.0)).min(1.0), db)
+    } else {
+        (gain, 0.0)
     }
 }
 
@@ -644,6 +745,10 @@ pub struct EqProcessor {
     /// Position in the on/off ramp: 0 is dry, `fade_frames` is fully equalized.
     wet_frames: u64,
     seen_version: u64,
+    /// The ring frame the next block starts at.
+    position: i64,
+    /// The ring frame the coefficients of `seen_version` started at.
+    curve_start: i64,
     /// Biquad steps taken, to check the O(20·N) bound (S127).
     #[cfg(test)]
     biquad_steps: u64,
@@ -660,7 +765,7 @@ impl EqProcessor {
     /// per frame (S127). State too small to hear is cleared after each block,
     /// so silence never leaves the filters working on subnormal numbers.
     pub fn process(&mut self, interleaved: &mut [f32]) {
-        self.pick_up();
+        self.pick_up_block(interleaved.len() / 2);
         let enabled = self.current.enabled;
         if !enabled && self.wet_frames == 0 {
             self.running = false;
@@ -743,6 +848,32 @@ impl EqProcessor {
         self.process(block);
         to_ring(block);
         to_airplay(block);
+    }
+
+    /// Counts ring frames from `frame` on: the writer's position when this
+    /// capture takes it over.
+    pub fn start_at(&mut self, frame: u64) {
+        self.position = frame as i64;
+        self.shared
+            .next_start
+            .store(self.position, Ordering::SeqCst);
+    }
+
+    /// [`EqProcessor::pick_up`] for a block of `frames` ring frames, telling
+    /// the control half the ring frame its curve started at (S26, S71).
+    fn pick_up_block(&mut self, frames: usize) {
+        self.shared.pick.fetch_add(1, Ordering::SeqCst);
+        let seen = self.seen_version;
+        self.pick_up();
+        if self.seen_version != seen {
+            self.curve_start = self.position;
+        }
+        self.position += frames as i64;
+        let shared = &*self.shared;
+        shared.seen.store(self.seen_version, Ordering::SeqCst);
+        shared.curve_start.store(self.curve_start, Ordering::SeqCst);
+        shared.next_start.store(self.position, Ordering::SeqCst);
+        shared.pick.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Copies the active coefficient set if a new one was published (S31).

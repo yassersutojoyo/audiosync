@@ -91,6 +91,7 @@ pub(crate) enum Command {
     ReadVolume(DeviceKey),
     SetNowPlaying(NowPlaying),
     SetLatency(u32),
+    SetMasterGain(f64),
     RestartTimeline,
     Pause,
     Resume,
@@ -1822,6 +1823,7 @@ impl Driver {
                 }
             }
             Command::SetLatency(frames) => self.stream.set_latency(frames, now),
+            Command::SetMasterGain(gain) => self.stream.set_master_gain(gain),
             Command::RestartTimeline => self.stream.restart(now),
             Command::Pause => {
                 self.stream.pause(now);

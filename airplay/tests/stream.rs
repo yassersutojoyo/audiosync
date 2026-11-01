@@ -642,6 +642,54 @@ fn per_speaker_delay() {
     assert!(matched > 400, "{matched}");
 }
 
+// covers: P84, P99
+#[test]
+fn a_delay_past_20_s_sends_packets_20_s_late() {
+    let mut rig = Rig::with_host();
+    let near = rig.add(speaker(1, Codec::Alac));
+    let mut config = speaker(2, Codec::Alac);
+    config.delay = Duration::from_secs(25);
+    let capped = rig.add(config);
+    rig.run_for(Duration::from_secs(24));
+
+    let near_audio = rig.audio(near);
+    let mut matched = 0;
+    for packet in rig.audio(capped) {
+        let j = packet_of(&rig, capped, packet.header.timestamp);
+        assert!((packet.at - due(&rig, j, packet.margin, 20.0)).abs() <= 0.005);
+        if let Some(same) = near_audio
+            .iter()
+            .find(|a| packet_of(&rig, near, a.header.timestamp) == j)
+        {
+            assert!((packet.at - same.at - 20.0).abs() <= 0.005, "packet {j}");
+            matched += 1;
+        }
+    }
+    assert!(matched > 400, "{matched}");
+}
+
+// covers: P99, P111
+#[test]
+fn every_payload_at_the_20_s_delay_decodes_to_its_host_frames() {
+    for codec in [Codec::Alac, Codec::Pcm] {
+        let mut rig = Rig::with_host();
+        let mut config = speaker(1, codec);
+        config.delay = MAX_DELAY;
+        let id = rig.add(config);
+        rig.run_for(Duration::from_secs(23));
+        let audio = rig.audio(id);
+        assert!(audio.len() > 300, "{codec:?}");
+        for packet in &audio {
+            let n = rig.frame_of(id, packet.header.timestamp) as u64;
+            let frames = decode(codec, &packet.payload);
+            assert_eq!(frames.len(), FRAMES_PER_PACKET);
+            for (i, frame) in frames.into_iter().enumerate() {
+                assert_eq!(frame, host_frame(n + i as u64), "{codec:?} frame {n}+{i}");
+            }
+        }
+    }
+}
+
 // covers: P100
 #[test]
 fn delay_change_flushes_one_speaker() {
@@ -1232,6 +1280,81 @@ fn a_muted_sm_speaker_joining_a_running_stream_sends_only_silence() {
 
 fn half(sample: i16) -> i16 {
     (f64::from(sample) * 0.5).round() as i16
+}
+
+// covers: P80
+#[test]
+fn the_master_gain_scales_the_shared_payload_for_every_speaker() {
+    let mut rig = Rig::with_host();
+    rig.stream.set_master_gain(0.5);
+    let pcm = rig.add(speaker(1, Codec::Pcm));
+    let alac = rig.add(speaker(2, Codec::Alac));
+    rig.run_for(Duration::from_secs(2));
+    for (id, codec) in [(pcm, Codec::Pcm), (alac, Codec::Alac)] {
+        let audio = rig.audio(id);
+        assert!(!audio.is_empty());
+        for packet in &audio {
+            let n = rig.frame_of(id, packet.header.timestamp) as u64;
+            let expected: Vec<Frame> = (n..n + PACKET)
+                .map(host_frame)
+                .map(|f| [half(f[0]), half(f[1])])
+                .collect();
+            assert_eq!(decode(codec, &packet.payload), expected, "{codec:?}");
+        }
+    }
+    // Back to 1: the packets cut from then on are the input bit for bit.
+    rig.stream.set_master_gain(1.0);
+    let before = rig.audio(pcm).len();
+    rig.run_for(Duration::from_secs(3));
+    let audio = rig.audio(pcm);
+    let last = audio.last().expect("audio");
+    assert!(audio.len() > before);
+    let n = rig.frame_of(pcm, last.header.timestamp) as u64;
+    let expected: Vec<Frame> = (n..n + PACKET).map(host_frame).collect();
+    assert_eq!(decode(Codec::Pcm, &last.payload), expected);
+}
+
+fn gained(frame: Frame, gain: f64) -> Frame {
+    frame.map(|sample| (f64::from(sample) * gain).round() as i16)
+}
+
+// covers: P80
+#[test]
+fn a_master_gain_change_fades_over_one_packet() {
+    let mut rig = Rig::with_host();
+    let pcm = rig.add(speaker(1, Codec::Pcm));
+    rig.run_for(Duration::from_secs(2));
+    rig.stream.set_master_gain(0.25);
+    rig.run_for(Duration::from_secs(3));
+    let ramp = |n: u64, i: u64| {
+        gained(
+            host_frame(n + i),
+            1.0 - 0.75 * (i + 1) as f64 / PACKET as f64,
+        )
+    };
+    let mut stage = 0;
+    for packet in &rig.audio(pcm) {
+        let n = rig.frame_of(pcm, packet.header.timestamp) as u64;
+        let got = decode(Codec::Pcm, &packet.payload);
+        let at = |gain: f64| {
+            (n..n + PACKET)
+                .map(|f| gained(host_frame(f), gain))
+                .collect::<Vec<_>>()
+        };
+        let faded: Vec<Frame> = (0..PACKET).map(|i| ramp(n, i)).collect();
+        stage = match stage {
+            0 if got == at(1.0) => 0,
+            0 => {
+                assert_eq!(got, faded, "the first packet after the change fades");
+                1
+            }
+            _ => {
+                assert_eq!(got, at(0.25), "after the fade");
+                2
+            }
+        };
+    }
+    assert_eq!(stage, 2, "the fade and the new gain both played");
 }
 
 // covers: P143

@@ -137,6 +137,8 @@ final class OutputRenderer: FadingOutput {
     /// so the counters stay readable.
     private var target: RenderTarget?
     private var gain: Double = 1
+    /// The equalizer whose headroom cut the gain gives back (S71).
+    private var equalizer: CoreEqualizer?
     /// The device's and its output stream's latency plus the unit's own,
     /// added to a fade's last output time (S185), a Bluetooth device's
     /// within S231's window.
@@ -179,11 +181,13 @@ final class OutputRenderer: FadingOutput {
     }
 
     /// Linear gain; set before `start` it applies from the first callback,
-    /// later from the next one (S64). A non-finite gain is ignored.
-    func setGain(linear g: Double) {
+    /// later from the next one (S64), each cut of `equalizer` given back from
+    /// the frame it starts at (S71). A non-finite gain is ignored.
+    func setGain(linear g: Double, givingBack equalizer: CoreEqualizer? = nil) {
         guard g.isFinite else { return }
         gain = g
-        target?.renderer.setGain(g)
+        self.equalizer = equalizer
+        target?.renderer.setGain(g, givingBack: equalizer)
     }
 
     /// How far this output's reader trails the newest captured frame after
@@ -425,16 +429,10 @@ final class OutputRenderer: FadingOutput {
                                       &deviceFormat, &size)
         let deviceChannels = status == noErr ? Int(deviceFormat.mChannelsPerFrame) : 0
         let deviceRate = status == noErr ? deviceFormat.mSampleRate : 0
-        let rate = CoreRate.hz(deviceRate).map(Double.init) ?? captureRate
-        var channels = deviceChannels > 0 ? deviceChannels : 2
-        status = Self.setClientFormat(unit, rate: rate, channels: channels)
-        if status != noErr && channels != 2 {
-            // Plain stereo as a last resort; the unit then places L and R itself.
-            let stereo = Self.setClientFormat(unit, rate: rate, channels: 2)
-            if stereo == noErr { channels = 2 }
-            status = stereo == noErr ? noErr : status
+        let (rate, channels) = try Self.clientFormat(deviceRate: deviceRate, deviceChannels: deviceChannels,
+                                                     captureRate: captureRate) {
+            Self.setClientFormat(unit, rate: $0, channels: $1)
         }
-        guard status == noErr else { throw StartFailure.formatRefused(status) }
 
         guard let renderer = CoreRenderer(ring: delayRing, captureRate: captureRate, deviceRate: rate,
                                           channels: channels, gain: gain) else {
@@ -442,6 +440,7 @@ final class OutputRenderer: FadingOutput {
         }
         // Before the first callback, which publishes the start lead (S208).
         renderer.setBluetooth(bluetooth)
+        renderer.setGain(gain, givingBack: equalizer)
         // Closed until its first audio, so the reader takes the delay at once
         // and primes on it (S45, S187).
         renderer.setDelay(ms: delayMs)
@@ -470,6 +469,24 @@ final class OutputRenderer: FadingOutput {
             mBytesPerPacket: frameBytes, mFramesPerPacket: 1, mBytesPerFrame: frameBytes,
             mChannelsPerFrame: UInt32(channels), mBitsPerChannel: 32, mReserved: 0)
         return setProperty(unit, kAudioUnitProperty_StreamFormat, scope: kAudioUnitScope_Input, to: format)
+    }
+
+    /// The rate and channel count `set` accepts for the callback: the
+    /// device's channels (2 when it reports none) at the device's rate, or
+    /// at `captureRate` when the core doesn't convert to it (S62).
+    static func clientFormat(deviceRate: Double, deviceChannels: Int, captureRate: Double,
+                             set: (Double, Int) -> OSStatus) throws -> (rate: Double, channels: Int) {
+        let rate = CoreRate.hz(deviceRate).map(Double.init) ?? captureRate
+        var channels = deviceChannels > 0 ? deviceChannels : 2
+        var status = set(rate, channels)
+        if status != noErr && channels != 2 {
+            // Plain stereo as a last resort; the unit then places L and R itself.
+            let stereo = set(rate, 2)
+            if stereo == noErr { channels = 2 }
+            status = stereo == noErr ? noErr : status
+        }
+        guard status == noErr else { throw StartFailure.formatRefused(status) }
+        return (rate, channels)
     }
 
     /// Sets `property` of `unit`'s element 0 in `scope` to `value`, passed by
