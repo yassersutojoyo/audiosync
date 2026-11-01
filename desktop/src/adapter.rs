@@ -18169,6 +18169,28 @@ mod tests {
 
     // covers: S394
     #[test]
+    fn a_settings_save_that_works_keeps_the_notice_while_the_cast_file_cant_be_written() {
+        let dir = test_dir("cast-memory-unsaved-settings-saved");
+        let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
+        let cast_blocked = crate::data_folder::temporary_path(&dir.join("cast-speakers.json"));
+        std::fs::create_dir(&cast_blocked).expect("blocked");
+        let path = dir.join(settings::FILE_NAME);
+        let blocked = crate::data_folder::temporary_path(&path);
+        std::fs::create_dir(&blocked).expect("blocked");
+        adapter.set_master_volume(64.0);
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 250.0);
+        adapter.poll();
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        std::fs::remove_dir(&blocked).expect("unblocked");
+        adapter.set_master_volume(65.0);
+        adapter.poll();
+        assert_eq!(SettingsFile::at(path).load().0.master_volume, 65.0);
+        assert_eq!(messages(&adapter), [NoticeMessage::SettingsNotSaved]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S394
+    #[test]
     fn the_last_save_tells_a_cast_offset_is_unsaved_when_its_file_cant_be_written() {
         let dir = test_dir("cast-memory-last-save");
         let (mut adapter, _fake) = cast_adapter_saving_to(&dir);
