@@ -1244,6 +1244,11 @@ pub unsafe extern "C" fn asc_cast_memory_reads(memory_json: *const c_char) -> bo
     unsafe { host_text(memory_json) }.is_some_and(|text| DeviceMemory::read_json(text).is_some())
 }
 
+#[cfg(test)]
+fn certificates_book(_folder: Option<&std::path::Path>) -> audiosync_cast::client::FingerprintBook {
+    audiosync_cast::client::FingerprintBook::new()
+}
+
 fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
     note_panic_locations();
     let panics_before = PANICS.load(Ordering::SeqCst);
@@ -2282,7 +2287,7 @@ mod tests {
     use std::net::{Ipv4Addr, TcpListener};
     use std::time::Instant;
 
-    use audiosync_cast::client::Fingerprint;
+    use audiosync_cast::client::{Fingerprint, FingerprintChange};
     use audiosync_cast::discovery::{MAX_DEVICES, ServiceRecord};
 
     thread_local! {
@@ -2676,6 +2681,24 @@ mod tests {
         assert_eq!(pending.kind, CAST_EVENT_CERTIFICATE_CHANGED);
         assert_eq!(pending.detail, format!("{before} to {after}"));
         assert!(pending.detail.starts_with("AB:AB:") && pending.detail.ends_with(":CD:CD"));
+    }
+
+    // covers: C21
+    #[test]
+    fn a_certificate_recorded_in_the_data_folder_is_known_after_a_relaunch() {
+        let folder = crate::test_scratch().join("cast-certificates");
+        let _ = std::fs::remove_dir_all(&folder);
+        let kitchen = DeviceId::parse(KITCHEN).expect("id");
+        let fingerprint = Fingerprint([7; 32]);
+        let mut first = certificates_book(Some(&folder));
+        assert_eq!(first.record(kitchen, fingerprint), FingerprintChange::First);
+        drop(first);
+        let mut relaunched = certificates_book(Some(&folder));
+        assert_eq!(
+            relaunched.record(kitchen, fingerprint),
+            FingerprintChange::Same
+        );
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     // CAST_SPEC: C80, C81
