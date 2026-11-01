@@ -642,9 +642,6 @@ struct UIStrings {
             return "\(name) asks for a password, so it's off. Turn it on again\(place) to enter it. "
                 + "To use it without a password, set Allow Speaker & TV Access on the speaker (or in the Home app) "
                 + "to “Anyone on the Same Network” and turn off Require Password."
-        case .cancelled:
-            return "Pairing with \(name) was cancelled, so it's off. "
-                + "To try again, turn it on and enter its PIN or password when AudioSync asks."
         case .stillNeedsCode:
             return "\(name) still asks for a PIN or password after pairing, so it's off. "
                 + "On the speaker (or in the Home app), check that Allow Speaker & TV Access is set to "

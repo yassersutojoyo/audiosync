@@ -807,9 +807,9 @@ struct NativeAirPlayModel {
             .union(promptTargets.values.map(NativeAirPlayID.app))
     }
 
-    /// A PIN as the sender takes it: ASCII digits, at least one.
+    /// A PIN as the Apple TV shows it: four ASCII digits.
     static func isPin(_ code: String) -> Bool {
-        !code.isEmpty && code.unicodeScalars.allSatisfy { ("0"..."9").contains($0) }
+        code.unicodeScalars.count == 4 && code.unicodeScalars.allSatisfy { ("0"..."9").contains($0) }
     }
 
     /// The user turned the receiver `id` on: a new attempt. One that asks
