@@ -272,7 +272,7 @@ impl Graph {
 
     /// The input node named `name`, to capture as the source.
     pub fn capture_input(&self, name: &str) -> Result<&Node, BackendError> {
-        let (_, node) = self.named(name).ok_or(BackendError::DeviceGone)?;
+        let (_, node) = self.named(name).ok_or(BackendError::InputGone)?;
         // The listing leaves a hands-free node out, so one saved anyway counts as not connected.
         (!node.hands_free())
             .then_some(node)
@@ -901,7 +901,7 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_hands_free_input_is_refused_as_not_connected() {
+    fn a_saved_input_that_is_hands_free_or_missing_is_refused_as_not_connected() {
         let mut graph = Graph::default();
         graph.add(
             1,
@@ -924,7 +924,7 @@ mod tests {
         );
         assert_eq!(
             graph.capture_input("gone").err(),
-            Some(BackendError::DeviceGone)
+            Some(BackendError::InputGone)
         );
     }
 
