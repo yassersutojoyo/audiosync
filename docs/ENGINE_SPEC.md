@@ -2889,6 +2889,10 @@ The checks for the delay reader (S41 to S59, S158, S159), in `core/src/reader.rs
 | bass_boost_on_a_full_scale_33_hz_sine_never_reaches_the_clamp (`core/tests/eq.rs`) | S26 |
 | flat_stays_bit_transparent (`core/tests/eq.rs`) | S25, S26 |
 | the_engine_takes_the_cascade_peak_off_the_user_preamp (`core/tests/eq.rs`) | S26, S33 |
+| the_master_gain_gives_the_equalizer_cut_back_under_the_master (`core/src/ffi/cast.rs`) | S26, S415 |
+| a_curve_set_while_a_block_is_equalized_gives_its_cut_back_from_the_next_block (`core/tests/eq.rs`) | S26, S71 |
+| a_local_output_below_unity_gets_the_headroom_cut_back (`core/tests/eq.rs`) | S26, S71 |
+| the_cut_comes_back_when_the_first_equalized_frame_plays (`core/tests/eq.rs`) | S26, S71 |
 | toggling_bass_boost_on_a_steady_tone_never_steps_further_than_the_tone (`core/tests/eq.rs`) | S27, S28 |
 | turning_off_again_within_the_on_ramp_turns_back_smoothly_and_ends_dry (`core/tests/eq.rs`) | S27, S28 |
 | the_preset_table_matches_the_spec (`core/tests/spec_tables.rs`) | S22, S33 |
@@ -2973,6 +2977,7 @@ The decisions the hosts take from the core: sources and capture, session start a
 | the_tray_tooltip_follows_the_newest_notice (`desktop/src/view.rs`) | S153 |
 | the_announcer_picks_each_new_notice_once (`desktop/src/view.rs`) | S153 |
 | a_repost_of_the_same_notice_is_not_announced_again (`desktop/src/view.rs`) | S153 |
+| a_newer_notice_about_the_same_subject_replaces_the_older_one (`desktop/src/ui_model.rs`) | S153 |
 
 ### Streaming start and stop: Windows (`cargo test` in `desktop/`)
 
@@ -2980,9 +2985,13 @@ The decisions the hosts take from the core: sources and capture, session start a
 |---|---|
 | one_capture_writes_one_equalized_ring_that_each_output_on_reads (`desktop/src/audio/controller.rs`) | S6 |
 | the_whole_system_excludes_audiosyncs_own_tree (`desktop/src/audio/capture.rs`) | S10 |
+| the_whole_system_needs_no_process_snapshot (`desktop/src/audio/capture.rs`) | S10 |
+| the_whole_system_is_captured_without_audiosync (`desktop/src/audio/controller.rs`) | S10 |
+| the_whole_system_leaves_out_audiosyncs_own_tree (`desktop/src/audio/pipewire/graph.rs`) | S10 |
 | a_failed_start_leaves_nothing_running_and_every_feed_free (`desktop/src/audio/controller.rs`) | S114 |
 | a_start_that_fails_before_its_capture_never_tries_one_and_holds_no_feed (`desktop/src/audio/controller.rs`) | S114 |
 | each_start_captures_into_a_fresh_ring_through_an_equalizer_already_set (`desktop/src/audio/controller.rs`) | S114 |
+| the_equalizer_set_while_stopped_applies_at_the_start_then_live (`desktop/src/audio/controller.rs`) | S31, S114 |
 | a_second_stop_is_safe_and_no_capture_runs_once_a_stop_finished (`desktop/src/audio/controller.rs`) | S115 |
 | a_new_output_starts_off_at_volume_60_and_no_delay (`desktop/src/audio/outputs.rs`) | S71 |
 | the_gain_follows_the_cubic_curve_times_the_master (`desktop/src/audio/outputs.rs`) | S70, S71 |
@@ -2994,13 +3003,16 @@ The decisions the hosts take from the core: sources and capture, session start a
 | a_capture_that_cant_start_starts_nothing (`desktop/src/audio/controller.rs`) | S121 |
 | capture_that_cant_start_leaves_streaming_off_with_a_notice (`desktop/src/adapter.rs`) | S121 |
 | start_problems_name_the_chosen_app (`desktop/src/adapter.rs`) | S121 |
+| an_app_that_quit_before_the_start_is_gone (`desktop/src/audio/controller.rs`) | S121 |
 | switching_streaming_off_keeps_the_speakers_on (`desktop/src/adapter.rs`) | S122 |
 | a_device_removed_and_added_again_plays_again_with_its_settings (`desktop/src/audio/controller.rs`) | S137, S138 |
 | a_headset_back_at_another_rate_plays_in_it_with_the_delay_it_had (`desktop/src/audio/controller.rs`) | S138 |
 | an_unplugged_output_is_reported_until_it_is_back (`desktop/src/adapter.rs`) | S137 |
+| an_output_a_refresh_no_longer_lists_is_reported (`desktop/src/adapter.rs`) | S137 |
 | the_session_ends_when_the_captured_app_quits (`desktop/src/audio/controller.rs`) | S142 |
 | an_app_that_quits_ends_the_session_without_a_restart (`desktop/src/audio/controller.rs`) | S142 |
 | an_app_that_quits_stops_streaming_and_stays_chosen (`desktop/src/adapter.rs`) | S142 |
+| an_app_that_quit_while_its_capture_waits_to_start_again_stops_streaming_at_once (`desktop/src/audio/controller.rs`) | S142 |
 | all_speakers_off_then_one_on_starts_a_new_session_with_the_saved_settings (`desktop/src/adapter.rs`; local speakers only; AirPlay deselect is S118's test) | S144 |
 | notices_can_be_dismissed_one_by_one_or_all_at_once (`desktop/src/adapter.rs`) | S153 |
 | enabled_connected_outputs_play_sorted_by_id (`desktop/src/audio/outputs.rs`) | S161 |
@@ -3015,7 +3027,20 @@ The decisions the hosts take from the core: sources and capture, session start a
 | an_enabled_output_that_is_not_connected_waits (`desktop/src/audio/outputs.rs`) | S117, S161 |
 | a_device_removed_and_added_again_plays_again (`desktop/src/audio/outputs.rs`) | S161 |
 | settings_of_a_disconnected_output_are_kept (`desktop/src/audio/outputs.rs`) | S161 |
+| a_start_plays_every_enabled_connected_output (`desktop/src/audio/controller.rs`) | S161 |
+| enabled_outputs_count_the_ones_not_connected (`desktop/src/audio/controller.rs`) | S161 |
+| settings_made_while_stopped_are_kept_for_the_start (`desktop/src/audio/controller.rs`) | S161 |
 | turning_a_speaker_on_starts_streaming_to_it (`desktop/src/adapter.rs`) | S119, S122 |
+| outputs_turned_on_and_off_while_playing_follow_at_once (`desktop/src/audio/controller.rs`) | S119, S161 |
+| turning_a_speaker_on_starts_streaming (`desktop/src/ui_model.rs`) | S119 |
+| streaming_stops_when_the_only_cast_speaker_on_ends_its_session (`desktop/src/adapter.rs`) | S162 |
+| a_cast_speaker_that_leaves_the_list_while_reconnecting_keeps_streaming (`desktop/src/adapter.rs`) | S162 |
+| a_config_from_before_turns_nothing_on (`desktop/src/adapter.rs`) | S162 |
+| a_first_install_turns_the_pc_speakers_on_once (`desktop/src/adapter.rs`) | S162 |
+| a_session_with_no_speaker_yet_waits_through_a_source_switch (`desktop/src/adapter.rs`) | S162 |
+| a_speaker_that_fails_to_start_leaves_a_session_with_no_speaker_waiting (`desktop/src/adapter.rs`) | S162 |
+| an_airplay_speaker_alone_starts_and_stops_streaming (`desktop/src/adapter.rs`) | S162 |
+| streaming_starts_with_every_speaker_off_and_the_first_one_on_plays (`desktop/src/adapter.rs`) | S162 |
 
 ### local delay model: core (`cargo test` in `core/`)
 
@@ -3084,22 +3109,33 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | no_built_in_output_means_no_reference | S174 |
 | hold_backs_follow_the_offsets_of_the_outputs_taking_part | S174, S176 |
 | the_bus_tells_bluetooth_usb_and_software_devices (`desktop/src/audio/outputs.rs`) | S174 |
+| the_reference_is_always_an_output_the_microphone_hears (`desktop/src/audio/outputs.rs`) | S174, S235 |
 | an_airplay_speaker_chosen_adds_the_sender_latency_on_top | S176, S178 |
 | live_input_waits_for_an_airplay_speaker_like_any_source | S176, S177, S244 |
 | live_input_waits_for_a_cast_speaker_and_a_source_switch_re_times_nothing | S176, S177, S244 |
+| turning_an_airplay_speaker_on_and_off_lines_local_outputs_up_and_back (`desktop/src/adapter.rs`) | S176 |
+| each_output_plays_at_its_own_delay_and_volume (`desktop/src/audio/controller.rs`) | S71, S176 |
+| each_output_has_its_own_delay_and_volume (`desktop/src/audio/outputs.rs`) | S71, S176 |
+| with_no_airplay_speaker_chosen_outputs_play_at_their_own_delay (`desktop/src/audio/outputs.rs`) | S176 |
 | the_airplay_delay_is_an_adjustment_on_top_of_the_sender_latency | S178 |
 | the_airplay_adjustment_moves_l | S178 |
 | the_airplay_delay_field_shows_l_plus_a_and_follows_a_new_l | S178, S181 |
 | a_late_speaker_switched_on_or_off_retimes_the_running_others | S177 |
 | editing_the_lowest_offset_retimes_the_others | S177 |
 | a_late_speaker_that_cant_start_doesnt_hold_the_others_back | S177 |
+| an_airplay_speaker_that_needs_a_password_is_turned_off_and_outputs_follow (`desktop/src/audio/controller.rs`) | S177 |
 | old_trims_become_offsets_relative_to_the_reference | S180 |
 | the_references_old_trim_becomes_the_airplay_adjustment_and_airplay_delays_stay | S180 |
 | a_late_airplay_speaker_lined_up_by_the_references_trim_stays_lined_up | S180 |
 | an_older_settings_file_is_migrated_once_and_saved_in_the_new_version | S180 |
 | an_older_file_waits_for_an_output_list_before_it_is_migrated | S180 |
 | auto_connect_at_the_first_launch_after_the_upgrade_starts_at_the_migrated_delays | S180 |
+| a_stored_airplay_speaker_delay_never_reaches_the_sender (`desktop/src/adapter.rs`) | S180 |
 | offsets_and_the_airplay_adjustment_are_kept_in_their_ranges | S175, S178 |
+| an_airplay_speaker_on_moves_local_outputs_to_l_plus_their_delay_and_off_back (`desktop/src/audio/controller.rs`) | S176, S178 |
+| an_offset_is_not_held_to_3000_ms_with_an_airplay_speaker_chosen (`desktop/src/audio/outputs.rs`) | S178 |
+| the_airplay_delay_base_is_the_last_sender_latency_known (`desktop/src/audio/outputs.rs`) | S178 |
+| with_an_airplay_speaker_chosen_outputs_play_at_l_plus_their_offset (`desktop/src/audio/outputs.rs`) | S176, S178 |
 | the_reference_row_has_no_delay_and_the_others_show_a_signed_offset | S181 |
 | an_offset_takes_a_leading_plus_or_minus_and_other_text_is_ignored | S175, S181 |
 | the_sync_hint_names_the_reference_and_says_which_way_to_move_a_value (`desktop/src/view.rs`) | S181 |
@@ -3114,6 +3150,10 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | a_speaker_on_that_wasnt_listed_since_launch_doesnt_count_as_on (`desktop/src/adapter.rs`) | S162 |
 | offsets_of_an_absent_output_and_the_reference_survive_two_launches (`desktop/src/adapter.rs`) | S175 |
 | an_offset_set_on_an_output_unplugged_before_any_save_is_kept (`desktop/src/adapter.rs`) | S175 |
+| volumes_delays_and_the_master_reach_the_audio_backend (`desktop/src/adapter.rs`) | S71, S175, S176 |
+| delay_and_volume_changes_apply_live (`desktop/src/audio/controller.rs`) | S71, S175, S177 |
+| delays_are_clamped_and_non_finite_ones_ignored (`desktop/src/audio/outputs.rs`) | S175, S176 |
+| with_airplay_a_new_output_still_starts_with_no_delay (`desktop/src/audio/outputs.rs`) | S175 |
 
 ### local delay model: Mac
 
@@ -3151,6 +3191,7 @@ The checks for S182 to S191 in the Rust core, test functions with `// covers:` m
 | an_input_fade_leaves_the_callers_block_alone (`core/src/fade.rs`) | S189 |
 | fading_allocates_and_locks_nothing_on_the_audio_thread | S126, S127, S190 |
 | no_step_across_a_start_a_stop_or_a_delay_change_exceeds_the_ramps_slope | S191 |
+| a_stop_fades_the_cast_feed_out_once_whatever_the_hold_back (`core/src/ffi/cast.rs`) | S189, S191 |
 | a_renderer_through_the_c_interface_renders_like_the_rust_one (`core/src/ffi/render.rs`) | S183, S187 |
 | a_c_renderer_fades_in_publishes_its_fade_end_and_counts_as_faded_after_the_latency (`core/src/ffi/render.rs`) | S184, S185 |
 
@@ -3189,6 +3230,10 @@ The checks for S187's large increases and for S47 and S48 at the largest hold-ba
 | a_shut_down_fades_every_output_and_the_airplay_input_once_within_the_fade_cap | S351, S186 |
 | a_delay_change_fades_out_first_and_in_after | S187 |
 | the_fade_cap_and_the_quit_waits_fit_in_5_s | S186 |
+| a_new_start_replaces_the_running_session (`desktop/src/audio/controller.rs`) | S114, S186 |
+| a_source_change_starts_the_new_capture_at_a_poll_once_the_old_outputs_faded (`desktop/src/audio/controller.rs`) | S186 |
+| a_stop_ends_every_output_after_asking_them_to_fade_out (`desktop/src/audio/controller.rs`) | S186 |
+| quitting_drops_the_app_so_the_backend_runs_its_shut_down (`desktop/src/view.rs`) | S186 |
 | with_a_clock_reading_a_stop_waits_on_the_padding_not_the_stream_latency (`desktop/src/audio/render.rs`) | S185 |
 | the_end_of_a_windows_session_tears_the_airplay_and_cast_senders_down (`desktop/src/view.rs`) | S351 |
 | an_exit_signal_on_linux_runs_the_quit_steps_of_a_windows_session_end (`desktop/src/view.rs`) | S351 |
@@ -3304,6 +3349,9 @@ The checks for S206 and S207 (`core/tests/render_start.rs`). The capture writes 
 | unusable_mix_formats_are_refused (`desktop/src/audio/outputs.rs`) | S62 |
 | the_render_buffer_holds_two_periods_within_bounds (`desktop/src/audio/outputs.rs`) | S62 |
 | an_output_past_64_channels_plays_on_its_first_64 (`desktop/src/audio/pipewire/graph.rs`) | S62 |
+| another_mix_format_gets_float_converted_by_windows_at_its_own_rate (`desktop/src/audio/outputs.rs`) | S62 |
+| an_output_plays_at_its_own_format_or_its_properties (`desktop/src/audio/pipewire/graph.rs`) | S62 |
+| at_the_session_rate_frames_play_at_the_delay (`desktop/src/audio/render.rs`) | S45, S62 |
 
 ### render start: Mac (the logic suite)
 
@@ -3425,6 +3473,7 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | the_thresholds_leave_room_on_both_sides | S233, S234 |
 | the_signal_is_a_quiet_faded_sweep_that_sounds_the_same_at_any_rate | S233 |
 | the_signal_and_the_estimate_cross_the_boundary | S232, S233 |
+| three_measurements_cross_the_boundary_agreed_or_not (`core/src/ffi/calibrate.rs`) | S232 |
 | a_recording_is_measured_across_the_boundary | S234 |
 
 ### calibration: Windows (`cargo test` in `desktop/`)
@@ -3438,6 +3487,27 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | a_shown_result_goes_once_its_context_moves_or_the_offset_is_set_by_hand (`desktop/src/audio/calibration.rs`) | S232 |
 | a_play_from_the_ui_thread_mid_block_waits_for_the_next_block (`desktop/src/audio/calibration.rs`) | S232 |
 | a_device_held_by_another_app_is_told_apart_from_a_missing_one (`desktop/src/audio/wasapi/microphone.rs`) | S232 |
+| a_calibration_solo_mutes_the_other_speakers_until_it_ends (`desktop/src/audio/airplay.rs`) | S232 |
+| calibration_hears_a_playing_pair_as_one_airplay_speaker (`desktop/src/audio/airplay.rs`) | S232 |
+| a_blocked_microphone_refuses_before_the_music_fades (`desktop/src/audio/calibration.rs`) | S232 |
+| a_calibration_needs_streaming_the_speaker_and_the_reference (`desktop/src/audio/calibration.rs`) | S232 |
+| a_recorded_sweep_sets_the_offset_from_the_difference (`desktop/src/audio/calibration.rs`) | S232 |
+| a_recording_starts_where_the_signal_entered_the_ring (`desktop/src/audio/calibration.rs`) | S232 |
+| a_speaker_added_mid_run_that_re_times_the_two_cancels_it (`desktop/src/audio/calibration.rs`) | S232 |
+| a_speaker_turned_off_mid_run_cancels_it (`desktop/src/audio/calibration.rs`) | S232 |
+| a_third_output_stopping_mid_run_still_ends_done (`desktop/src/audio/calibration.rs`) | S232 |
+| an_offset_typed_during_the_estimate_wins (`desktop/src/audio/calibration.rs`) | S232 |
+| an_uncertain_measurement_changes_nothing (`desktop/src/audio/calibration.rs`) | S232, S234 |
+| each_run_hears_only_its_own_output (`desktop/src/audio/calibration.rs`) | S232 |
+| the_chosen_run_must_use_the_references_microphone_and_a_rate_that_fits (`desktop/src/audio/calibration.rs`) | S232 |
+| the_reference_turned_off_mid_run_cancels_it (`desktop/src/audio/calibration.rs`) | S232 |
+| the_tap_fades_the_music_out_and_adds_the_signal_from_a_block_start (`desktop/src/audio/calibration.rs`) | S232 |
+| a_calibration_silences_the_music_and_adds_its_signal_from_a_block_start (`desktop/src/audio/capture.rs`) | S232 |
+| a_signal_for_a_network_speaker_stays_out_of_the_ring_and_waits_for_silence (`desktop/src/audio/capture.rs`) | S232, S241 |
+| a_calibration_lets_one_output_be_heard_and_then_all_again (`desktop/src/audio/controller.rs`) | S232 |
+| a_calibration_sees_a_restarted_session_as_another (`desktop/src/audio/controller.rs`) | S232 |
+| the_default_input_is_found_by_name (`desktop/src/audio/pipewire/graph.rs`) | S232 |
+| another_calibration_holding_the_outputs_is_named_under_a_rows_button (`desktop/src/view.rs`) | S232 |
 | a_calibration_that_cant_run_says_why_and_leaves_the_delay (`desktop/src/adapter.rs`) | S362 |
 | calibrate_all_says_why_it_cant_start (`desktop/src/adapter.rs`) | S362 |
 | headphones_that_are_on_are_listed_left_out_until_included_anyway (`desktop/src/adapter.rs`) | S362 |
@@ -3445,6 +3515,7 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | a_calibration_that_cannot_start_names_only_what_is_off (`desktop/src/view.rs`) | S362 |
 | outputs_left_out_by_kind_show_why_on_the_card_and_in_their_delay_controls (`desktop/src/view.rs`) | S362 |
 | the_calibrate_all_card_says_what_holds_it_and_when_nothing_was_clear (`desktop/src/view.rs`) | S362 |
+| include_anyway_acts_on_the_output_its_row_showed_after_the_list_changed (`desktop/src/view.rs`) | S362 |
 
 ### AirPlay speakers, passwords, PINs and the pairing file: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -3514,14 +3585,100 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | a_file_another_account_owns_is_reported_unread (`core/tests/airplay_pairings.rs`) | S224 |
 | a_folder_in_the_files_place_is_never_written_over (`core/src/airplay_pairings.rs`) | S224 |
 | a_file_that_cant_be_read_keeps_every_pairing_it_holds (`core/tests/airplay_pairings.rs`) | S224 |
+| an_unreadable_pairings_file_is_told_apart_from_one_in_the_wrong_format (`core/src/ffi/airplay.rs`) | S224 |
+| a_forgotten_airplay2_pairing_the_file_cant_take_is_reported (`desktop/src/audio/airplay.rs`) | S224 |
+| a_pairing_the_store_cant_write_is_reported_once_until_a_write_works (`desktop/src/audio/airplay.rs`) | S224 |
+| a_pinned_speaker_asking_for_a_code_every_time_keeps_forget_pairing (`desktop/src/audio/airplay.rs`) | S224 |
+| forgetting_a_pairing_turns_the_speaker_off_and_asks_for_a_pin_again (`desktop/src/audio/airplay.rs`) | S224 |
+| forgetting_a_session_paired_speaker_reaches_only_the_sender_that_paired_it (`desktop/src/audio/airplay.rs`) | S224 |
+| forgetting_an_airplay2_pairing_reaches_the_senders_copy_once_the_speaker_is_gone (`desktop/src/audio/airplay.rs`) | S224 |
+| a_pairing_written_once_the_file_reads_again_keeps_no_copy_of_a_speaker_forgotten_before (`desktop/src/audio/pairings.rs`) | S224 |
+| a_speaker_forgotten_while_the_file_cant_be_read_is_left_out_once_it_is_kept_aside (`desktop/src/audio/pairings.rs`) | S224 |
+| an_unreadable_entry_costs_only_its_own_pairing_and_the_file_is_kept_aside_first (`desktop/src/audio/pairings.rs`) | S224 |
+| pairings_unreadable_at_two_launches_in_a_row_are_never_lost (`desktop/src/audio/pairings.rs`) | S224 |
 | a_speaker_asking_every_time_saved_on_with_stored_credentials_stays_on_at_a_launch (`desktop/src/adapter.rs`) | S222, S223 |
 | a_speaker_saved_on_that_now_asks_for_a_pin_goes_off_with_a_notice_at_a_launch (`desktop/src/adapter.rs`) | S222, S223, S349 |
 | an_every_time_speaker_turned_on_by_hand_goes_off_with_a_notice_when_the_pc_sleeps (`desktop/src/adapter.rs`) | S223 |
 | an_every_time_pairing_under_way_at_a_sleep_that_fails_after_the_wake_says_pairing_failed (`desktop/src/adapter.rs`) | S223 |
+| a_failed_pairing_closes_the_prompt_with_a_notice (`desktop/src/adapter.rs`) | S223 |
+| a_listed_speaker_on_by_itself_goes_off_once_it_asks_every_time (`desktop/src/adapter.rs`) | S223 |
+| a_listed_speaker_on_by_itself_that_plays_keeps_its_session_when_it_asks_every_time (`desktop/src/adapter.rs`) | S223 |
+| a_listed_speaker_turned_on_by_hand_keeps_its_session_when_it_starts_asking_every_time (`desktop/src/adapter.rs`) | S223 |
+| a_password_changed_on_the_speaker_prompts_on_the_next_switch_on (`desktop/src/adapter.rs`) | S223 |
+| a_password_discovery_didnt_announce_prompts_on_the_first_switch_on (`desktop/src/adapter.rs`) | S223 |
+| a_password_speaker_asks_for_its_password_and_plays_with_it (`desktop/src/adapter.rs`) | S223 |
+| a_second_apple_tv_waits_to_pair_while_the_first_has_the_prompt (`desktop/src/adapter.rs`) | S223 |
+| a_speaker_switched_on_while_its_pairing_runs_ends_off_when_the_pairing_ends_unpaired (`desktop/src/adapter.rs`) | S223 |
+| a_speaker_that_asks_for_a_code_every_time_never_auto_connects (`desktop/src/adapter.rs`) | S223 |
+| a_speaker_that_asks_for_a_code_once_still_auto_connects (`desktop/src/adapter.rs`) | S223, S383 |
+| a_wrong_password_asks_again_and_cancel_leaves_the_speaker_off (`desktop/src/adapter.rs`) | S223 |
+| a_wrong_pin_keeps_the_prompt_and_cancel_leaves_the_speaker_off (`desktop/src/adapter.rs`) | S223 |
+| an_airplay2_speaker_asks_for_a_pin_and_plays_once_paired (`desktop/src/adapter.rs`) | S223 |
+| an_airplay2_speaker_that_turns_its_stored_key_down_asks_for_a_pin_again (`desktop/src/adapter.rs`) | S223 |
+| an_apple_tv_that_turns_its_stored_key_down_asks_for_a_pin_again (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_speaker_turned_on_by_hand_stays_on_when_it_appears_again (`desktop/src/adapter.rs`) | S223 |
+| an_every_time_speaker_whose_pin_prompt_is_open_keeps_it_when_it_appears_again (`desktop/src/adapter.rs`) | S223 |
+| cancelling_the_pin_prompt_of_the_only_speaker_left_stops_streaming (`desktop/src/adapter.rs`) | S223 |
+| no_session_starts_for_a_speaker_whose_pin_pairing_runs (`desktop/src/adapter.rs`) | S223 |
+| switching_on_an_apple_tv_pairs_it_and_then_it_streams (`desktop/src/adapter.rs`) | S223 |
+| a_cancelled_pairings_late_failure_leaves_the_next_pairing_alone (`desktop/src/audio/airplay.rs`) | S223 |
+| a_cancelled_pairings_late_pin_request_shows_no_prompt (`desktop/src/audio/airplay.rs`) | S223 |
+| a_cancelled_pairings_late_success_pairs_the_next_pairing_without_a_pin (`desktop/src/audio/airplay.rs`) | S223 |
+| a_cancelled_pairings_late_success_with_nothing_waiting_leaves_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
+| a_cancelled_pairings_late_wrong_pin_starts_nothing_again (`desktop/src/audio/airplay.rs`) | S223 |
+| a_failed_pairing_turns_the_speaker_off_with_a_notice (`desktop/src/audio/airplay.rs`) | S223 |
+| a_member_that_wants_a_password_is_asked_for_by_name (`desktop/src/audio/airplay.rs`) | S223 |
+| a_new_sender_drops_the_password_prompt_of_a_pairing (`desktop/src/audio/airplay.rs`) | S223 |
+| a_new_sender_starts_a_pairing_at_once_after_a_cancel (`desktop/src/audio/airplay.rs`) | S223 |
+| a_paired_tv_reads_as_refusing_only_when_its_pairing_failure_waits_to_retry (`desktop/src/audio/airplay.rs`) | S223 |
+| a_pairing_cancelled_before_it_started_never_starts (`desktop/src/audio/airplay.rs`) | S223 |
+| a_pairing_in_the_attempt_that_fails_stops_with_the_notice (`desktop/src/audio/airplay.rs`) | S223 |
+| a_pairing_lost_on_the_network_or_to_an_odd_answer_says_so_not_to_enter_the_pin (`desktop/src/audio/airplay.rs`) | S223 |
+| a_pairing_starts_at_once_after_the_sender_stopped_during_a_cancel (`desktop/src/audio/airplay.rs`) | S223 |
+| a_password_discovery_didnt_announce_prompts_at_once_on_the_users_switch_on (`desktop/src/audio/airplay.rs`) | S223 |
+| a_password_turned_down_after_playing_turns_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
+| a_password_typed_switches_the_speaker_on_and_is_kept_until_quit (`desktop/src/audio/airplay.rs`) | S223 |
+| a_sender_that_stops_during_a_password_prompt_turns_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
+| a_speaker_that_cant_play_stays_off_and_is_never_added (`desktop/src/audio/airplay.rs`) | S223 |
+| a_tv_that_asks_every_time_plays_after_its_pin_and_stores_nothing (`desktop/src/audio/airplay.rs`) | S223 |
+| a_wrong_password_asks_again_and_cancel_turns_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
+| a_wrong_pin_starts_a_new_pairing_and_keeps_the_prompt (`desktop/src/audio/airplay.rs`) | S223 |
+| an_airplay2_session_that_asks_for_a_pairing_turns_into_a_pin_request (`desktop/src/audio/airplay.rs`) | S223 |
+| an_airplay2_speaker_that_turns_its_key_down_pairs_again_in_the_same_attempt (`desktop/src/audio/airplay.rs`) | S223 |
+| an_apple_tv_pairs_once_and_its_credentials_come_back_on_every_add (`desktop/src/audio/airplay.rs`) | S223 |
+| an_apple_tv_that_asks_for_a_password_pairs_again_with_it (`desktop/src/audio/airplay.rs`) | S223 |
+| cancel_stops_the_pairing_and_leaves_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
+| credentials_the_apple_tv_turns_down_are_forgotten (`desktop/src/audio/airplay.rs`) | S223 |
+| forget_password_drops_the_typed_password_and_turns_the_speaker_off (`desktop/src/audio/airplay.rs`) | S223 |
+| switching_off_closes_the_password_prompt (`desktop/src/audio/airplay.rs`) | S223 |
+| the_prompt_stays_with_the_apple_tv_that_asked_first (`desktop/src/audio/airplay.rs`) | S223 |
+| the_same_refusal_in_the_users_attempt_pairs_with_a_pin (`desktop/src/audio/airplay.rs`) | S223 |
+| a_speaker_that_cant_play_right_now_shows_waiting_not_playing (`desktop/src/view.rs`) | S223 |
+| a_zone_whose_speaker_waits_for_a_pin_names_the_speaker_not_the_zone (`desktop/src/view.rs`) | S223 |
 | a_lost_airplay_speaker_says_reconnecting_from_its_second_failed_retry (`desktop/src/adapter.rs`) | S222 |
 | the_reconnecting_notice_is_posted_once_and_goes_when_nothing_retries_the_speaker (`desktop/src/adapter.rs`) | S222 |
 | a_reconnecting_airplay_speaker_is_off_the_network_once_its_records_lapse (`desktop/src/adapter.rs`) | S222 |
 | a_speaker_playing_on_after_its_announcement_lapsed_stays_in_the_sender_once_its_session_restarts (`desktop/src/audio/airplay.rs`) | S222 |
+| a_discovery_failure_leaves_a_notice (`desktop/src/adapter.rs`) | S222 |
+| a_discovery_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_a_sender (`desktop/src/adapter.rs`) | S222 |
+| a_retry_whose_sender_cant_start_keeps_the_notice (`desktop/src/adapter.rs`) | S222 |
+| a_retrying_airplay_speaker_row_says_reconnecting_until_it_plays (`desktop/src/adapter.rs`) | S222 |
+| a_sender_that_cant_start_at_launch_leaves_a_notice_whose_retry_starts_one (`desktop/src/adapter.rs`) | S222 |
+| a_sender_that_stops_running_leaves_a_notice (`desktop/src/adapter.rs`) | S222 |
+| a_speaker_lost_after_its_wait_keeps_its_reconnecting_label (`desktop/src/adapter.rs`) | S222, S285 |
+| airplay_errors_become_notices (`desktop/src/adapter.rs`) | S222 |
+| an_airplay_receiver_that_appears_becomes_a_connected_speaker_row (`desktop/src/adapter.rs`) | S222 |
+| an_airplay_speaker_auto_connect_brings_back_to_play_clears_the_notice_that_turned_it_off (`desktop/src/adapter.rs`) | S222 |
+| a_listed_speaker_that_cant_play_doesnt_hold_local_outputs_back (`desktop/src/audio/airplay.rs`) | S222 |
+| a_loopback_receiver_is_listed_and_plays_through_the_real_sender (`desktop/src/audio/airplay.rs`) | S176, S222 |
+| a_lost_speaker_stays_on_and_one_that_needs_the_user_is_turned_off (`desktop/src/audio/airplay.rs`) | S222 |
+| a_pair_gone_while_playing_keeps_its_row_and_its_members (`desktop/src/audio/airplay.rs`) | S222 |
+| a_receiver_that_appears_is_listed_with_whether_it_can_play (`desktop/src/audio/airplay.rs`) | S222 |
+| a_retrying_speaker_whose_receiver_is_gone_stays_in_the_sender_until_switched_off (`desktop/src/audio/airplay.rs`) | S222 |
+| a_speaker_counts_as_chosen_while_listed_or_playing (`desktop/src/audio/airplay.rs`) | S222 |
+| a_speaker_playing_on_after_its_announcement_lapsed_stays_in_the_sender_once_it_is_lost (`desktop/src/audio/airplay.rs`) | S222 |
+| a_tv_that_fails_its_signature_check_goes_off_and_keeps_its_credentials (`desktop/src/audio/airplay.rs`) | S222 |
+| a_two_service_speaker_that_loses_its_raop_record_first_stays_on (`desktop/src/audio/airplay.rs`) | S167, S222 |
 
 ### The observer: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -3534,6 +3691,12 @@ The checks for S232 to S234 in the Rust core, test functions with `// covers:` m
 | a_mix_marks_frames_whose_every_lane_gave_flagged_or_filled_silence (`desktop/src/audio/mix.rs`) | S229 |
 | an_output_on_a_fast_clock_without_stamps_shows_its_shortages_as_slack_below_zero (`core/tests/observer.rs`) | S206, S229 |
 | callbacks_earlier_than_at_the_anchor_show_as_the_floors_drop (`core/tests/observer.rs`) | S209, S229 |
+| a_hole_split_across_packets_and_partly_flagged_counts_once_as_flagged (`desktop/src/audio/capture.rs`) | S229 |
+| long_silence_short_gaps_and_leading_silence_are_no_holes (`desktop/src/audio/capture.rs`) | S229 |
+| the_converter_publishes_the_holes_in_what_it_captures (`desktop/src/audio/capture.rs`) | S229 |
+| the_counters_see_each_discontinuity_and_the_silence_a_jump_puts_in (`desktop/src/audio/capture.rs`) | S229 |
+| the_silence_up_to_a_packet_after_a_pause_is_not_counted (`desktop/src/audio/capture.rs`) | S229 |
+| a_wake_counts_as_late_past_half_a_period_and_as_empty_with_nothing_queued (`desktop/src/audio/render.rs`) | S229 |
 
 ### Calibrate All Speakers: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -3614,6 +3777,11 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | a_speaker_that_leaves_after_apply_keeps_its_delay_and_undo_stays (`desktop/src/adapter.rs`) | S238 |
 | calibrate_all_results_go_once_the_reference_changes_before_apply (`desktop/src/adapter.rs`) | S238 |
 | an_apply_before_the_next_poll_writes_nothing_once_the_reference_changed (`desktop/src/adapter.rs`) | S238 |
+| a_new_sender_latency_after_apply_keeps_undo_and_undo_restores_the_adjustment (`desktop/src/adapter.rs`) | S238 |
+| an_airplay_delay_changed_after_apply_still_drops_undo (`desktop/src/adapter.rs`) | S238 |
+| apply_without_a_sender_stores_the_airplay_delay_for_the_next_one (`desktop/src/adapter.rs`) | S238 |
+| calibrate_all_applies_every_clear_row_at_once_and_one_undo_puts_them_back (`desktop/src/adapter.rs`) | S238 |
+| undo_puts_back_a_cast_speaker_without_a_stored_offset_as_none (`desktop/src/adapter.rs`) | S238 |
 | each_speaker_is_heard_alone_on_its_own_path_and_the_sheet_has_every_class (`desktop/src/audio/calibrate_all.rs`) | S235 |
 | a_cast_speaker_without_an_offset_is_searched_for_first (`desktop/src/audio/calibrate_all.rs`) | S235 |
 | an_airplay_speaker_later_than_another_stays_muted_until_their_sweeps_played_out (`desktop/src/audio/calibrate_all.rs`) | S235 |
@@ -3627,6 +3795,7 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | cancel_fades_the_sweep_out_and_gives_every_speaker_back (`desktop/src/audio/calibrate_all.rs`) | S240 |
 | a_microphone_that_changes_between_sweeps_stops_the_run (`desktop/src/audio/calibrate_all.rs`) | S232 |
 | a_run_that_cant_start_says_why_and_leaves_the_music_alone (`desktop/src/audio/calibrate_all.rs`) | S235 |
+| microphone_calibration_hears_external_speakers_only (`desktop/src/audio/outputs.rs`) | S235 |
 | an_unplugged_microphone_ends_the_run_at_once (`desktop/src/audio/calibrate_all.rs`) | S232 |
 | cancel_while_estimating_ends_the_run_once_the_estimate_is_back (`desktop/src/audio/calibrate_all.rs`) | S240 |
 | measure_again_replaces_its_row_alone (`desktop/src/audio/calibrate_all.rs`) | S239 |
@@ -3635,6 +3804,7 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | a_source_that_sends_nothing_fails_as_silent (`desktop/src/audio/calibrate_all.rs`) | S240 |
 | a_cancelled_sweep_fades_and_plays_out_before_the_outputs_return (`desktop/src/audio/calibration.rs`) | S240 |
 | a_cancel_before_the_sweep_gives_the_outputs_back_at_once (`desktop/src/audio/calibration.rs`) | S240 |
+| a_source_switched_mid_run_cancels_it (`desktop/src/audio/calibration.rs`) | S240 |
 | measure_again_of_a_speaker_turned_off_since_is_refused (`desktop/src/audio/calibrate_all.rs`) | S239 |
 | measure_again_while_stopped_names_the_speaker_only_when_its_switch_is_off (`desktop/src/audio/calibrate_all.rs`) | S239 |
 
@@ -3645,6 +3815,13 @@ The checks for S235 to S241 in the Rust core (`core/tests/calibrate_all.rs`, syn
 | the_double_audio_notice_leaves_the_all_except_wording_to_the_ui (`desktop/src/adapter.rs`) | S242 |
 | every_app_but_some_is_moved_and_kept_unmuted_like_one_app (`desktop/src/guide.rs`) | S242 |
 | double_audio_from_all_apps_except_some_names_the_source_in_the_uis_words (`desktop/src/view.rs`) | S242 |
+| all_except_keeps_one_app_as_a_mix_and_switching_mode_carries_the_checked_apps (`desktop/src/adapter.rs`) | S242 |
+| all_except_mixes_every_other_app_with_a_session_and_never_audiosync (`desktop/src/audio/capture.rs`) | S242 |
+| an_only_these_mix_takes_in_later_instances_of_its_apps_with_a_session (`desktop/src/audio/capture.rs`) | S242 |
+| several_apps_are_one_loopback_each_and_audiosync_or_a_quit_app_is_skipped (`desktop/src/audio/capture.rs`) | S242 |
+| a_mix_tries_again_an_app_whose_stream_it_lost (`desktop/src/audio/controller.rs`) | S242 |
+| an_all_except_mix_takes_in_an_app_that_starts_playing_without_a_new_session (`desktop/src/audio/controller.rs`) | S242 |
+| an_only_these_mix_takes_in_a_second_instance_of_its_app (`desktop/src/audio/controller.rs`) | S242 |
 
 ### Speaker keys: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -3669,6 +3846,7 @@ The checks for S149 and S243 in the Rust core (`core/tests/policy_speakers.rs`) 
 | a_browse_moves_the_own_level_of_an_idle_speaker_added_by_address_but_not_over_the_ids (`desktop/src/audio/cast.rs`) | S341 |
 | a_browse_moves_the_reported_volume_of_a_speaker_added_by_address (`desktop/src/audio/cast.rs`) | S341 |
 | a_browse_keeps_the_reported_volume_of_a_session_playing_under_the_id (`desktop/src/audio/cast.rs`) | S341 |
+| another_device_at_a_saved_address_does_not_take_the_saved_devices_offset (`desktop/src/audio/cast.rs`) | S341 |
 
 ### Zones: core and Windows (`cargo test` in `core/` and `desktop/`)
 
@@ -3715,6 +3893,9 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | the_cast_level_is_zone_times_own (`cast/tests/master_volume.rs`) | S249, C104, S415 |
 | a_row_move_stores_the_row_over_the_zone (`cast/tests/master_volume.rs`) | S415 |
 | the_master_scales_the_frames_read_and_a_change_fades_over_one_read (`cast/tests/audio.rs`) | S415 |
+| a_cast_row_move_stores_row_over_zone_past_1 (`core/src/ffi/cast.rs`) | S415 |
+| a_level_held_at_zone_0_goes_once_the_session_ends_or_the_zone_moves (`desktop/src/audio/cast.rs`) | S415 |
+| the_master_scales_the_audio_the_session_hears (`desktop/src/audio/cast.rs`) | S415 |
 | a_read_back_at_zone_50_restores_the_own_volume | S250 |
 | a_read_back_with_zone_0_leaves_the_own_volume | S250, S290 |
 | a_device_volume_near_the_sent_level_is_ignored_for_3_s_only (core) | S276, S271 |
@@ -3775,6 +3956,8 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_master_move_sends_a_speaker_no_volume_and_its_own_volume_is_its_level (`core/src/ffi/airplay.rs`) | S413 |
 | a_master_move_scales_the_stream_and_sends_no_volume (`desktop/src/audio/airplay.rs`) | S413 |
 | the_airplay_stream_gets_the_equalizer_cut_back_under_the_master (`desktop/src/audio/controller.rs`) | S26, S413 |
+| an_output_below_unity_gets_the_equalizer_cut_back (`desktop/src/audio/controller.rs`) | S26, S71 |
+| the_cast_stream_gets_the_equalizer_cut_back_under_the_master (`desktop/src/audio/controller.rs`) | S26, S415 |
 | k1_keep_a_row_at_40_comes_back_at_40_after_a_restart (`core/src/ffi/airplay.rs`) | S290, S291 |
 | a_target_reads_its_volume_through_a_member (`core/src/ffi/airplay.rs`) | S291 |
 | the_zoned_cast_levels_cross_the_boundary_as_the_sender_makes_them (`core/src/ffi/cast.rs`) | S249, S250 |
@@ -3793,24 +3976,51 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_recall_leaves_on_the_stereo_pair_that_holds_a_member (`desktop/src/adapter.rs`) | S252 |
 | a_recall_names_an_unplugged_member_by_its_last_listed_name (`desktop/src/adapter.rs`) | S228, S265 |
 | a_recall_names_a_gone_cast_member_by_its_last_listed_name (`desktop/src/adapter.rs`) | S228, S265 |
+| a_renamed_cast_speaker_shows_and_is_named_by_its_new_name (`desktop/src/adapter.rs`) | S228 |
+| a_renamed_speaker_keeps_its_name_across_a_restart_until_it_is_cleared (`desktop/src/adapter.rs`) | S228 |
+| a_speaker_gone_mid_rename_still_takes_the_typed_name (`desktop/src/adapter.rs`) | S228 |
+| the_member_password_notice_names_a_renamed_member_by_its_new_name (`desktop/src/adapter.rs`) | S228 |
+| the_password_prompt_names_a_renamed_speaker_by_its_new_name (`desktop/src/adapter.rs`) | S228 |
+| the_pin_prompt_names_a_renamed_apple_tv_by_its_new_name (`desktop/src/adapter.rs`) | S228 |
+| the_sync_hint_names_a_renamed_reference_by_its_new_name (`desktop/src/adapter.rs`) | S228 |
+| speaker_names_are_kept_cleared_and_unusable_entries_skipped (`desktop/src/settings.rs`) | S228 |
 | a_recall_leaves_a_taken_over_cast_member_off_after_its_notice_goes (`desktop/src/adapter.rs`) | S246, S265 |
-| streaming_stops_when_the_only_cast_speaker_on_ends_its_session (`desktop/src/adapter.rs`) | S162 |
-| a_cast_speaker_that_leaves_the_list_while_reconnecting_keeps_streaming (`desktop/src/adapter.rs`) | S162 |
 | a_device_volume_or_mute_from_the_remote_moves_the_own_volume_and_is_sent (`desktop/src/audio/airplay.rs`) | S276, S277 |
 | a_slider_set_with_no_release_stops_holding_the_row_once_idle (`desktop/src/audio/airplay.rs`) | S271, S291 |
 | a_reading_during_a_calibration_moves_the_row_and_the_speaker_stays_silent (`desktop/src/audio/airplay.rs`) | S291 |
 | a_pair_reads_through_its_leader_and_keeps_the_level_in_the_sender (`desktop/src/audio/airplay.rs`) | S291 |
+| a_level_past_the_wire_range_is_kept_once_as_its_nearest (`desktop/src/audio/airplay.rs`) | S291 |
+| a_level_set_on_the_speaker_never_goes_back_to_it (`desktop/src/audio/airplay.rs`) | S291 |
+| a_volume_changed_on_the_speaker_moves_its_slider_without_an_echo (`desktop/src/audio/airplay.rs`) | S250, S291 |
+| a_phone_hold_ends_once_its_steps_rest_and_a_window_drag_holds_on (`desktop/src/audio/controller.rs`) | S291 |
+| a_phone_volume_step_holds_its_row_as_a_slider_drag_does (`desktop/src/view/remote_window.rs`) | S291 |
 | a_slider_moved_in_a_zone_at_0_keeps_holding_the_row (`desktop/src/audio/airplay.rs`) | S271, S290 |
 | the_echo_of_a_level_held_at_k_0_changes_nothing (`desktop/src/audio/airplay.rs`) | S271, S276, S290 |
+| a_read_counts_only_when_asked_after_the_last_set (`desktop/src/audio/airplay.rs`) | S271 |
+| a_retrying_speaker_takes_new_records_with_its_own_level_and_delay (`desktop/src/audio/airplay.rs`) | S271, S291 |
+| speakers_that_cant_answer_are_not_asked (`desktop/src/audio/airplay.rs`) | S271 |
 | the_tv_keeps_a_level_held_at_zone_0_through_calibrate_all (`desktop/src/audio/airplay.rs`) | S290 |
 | the_tv_lets_a_level_held_at_zone_0_go_once_the_zone_moves (`desktop/src/audio/airplay.rs`) | S290 |
+| the_sender_keeps_the_speakers_own_level_whatever_the_zone (`desktop/src/audio/airplay.rs`) | S290, S291 |
+| a_cast_row_shows_the_level_the_tv_gets_and_a_master_move_changes_neither (`desktop/src/audio/cast.rs`) | S290, S415 |
 | a_zone_with_an_unreadable_volume_member_or_name_keeps_the_rest (`desktop/src/settings.rs`) | S245, S212 |
 | zone_member_rows_say_why_they_dont_play (`desktop/src/view.rs`) | S246, S247 |
+| a_zone_switches_its_present_members_together (`desktop/src/adapter.rs`) | S246 |
+| zones_and_auto_connect_hold_airplay_speakers (`desktop/src/adapter.rs`) | S246, S383 |
+| targets_are_not_listed_with_the_airplay2_switch_off (`desktop/src/audio/airplay.rs`) | S246 |
+| a_zone_is_on_when_all_its_present_members_are (`desktop/src/ui_model.rs`) | S246 |
+| a_zone_waits_when_all_its_present_members_wait (`desktop/src/ui_model.rs`) | S246 |
+| a_zone_with_a_cast_member_is_on_with_one_cast_speaker (`desktop/src/ui_model.rs`) | S246 |
+| only_this_speaker_frees_the_cast_place_before_a_cast_member_comes_on (`desktop/src/ui_model.rs`) | S246 |
+| only_this_speaker_leaves_hidden_members_alone (`desktop/src/ui_model.rs`) | S246 |
+| only_this_speaker_turns_the_zones_others_off_and_keeps_them_in_it (`desktop/src/ui_model.rs`) | S246 |
 | a_new_zones_name_is_cleaned_as_a_renamed_ones (`desktop/src/adapter.rs`) | S150 |
 | a_zone_member_its_pair_holds_plays_as_part_of_it_and_can_be_swapped (`desktop/src/adapter.rs`) | S247 |
 | use_target_instead_moves_the_pair_here_and_drops_its_other_members (`desktop/src/adapter.rs`) | S247 |
 | use_target_instead_drops_a_hidden_member_of_the_pair (`desktop/src/adapter.rs`) | S247 |
 | a_zone_volume_reaches_a_playing_speaker_and_its_read_back_goes_through_it (`desktop/src/audio/airplay.rs`) | S249 |
+| the_slider_spreads_over_30_db (`desktop/src/audio/airplay.rs`) | S249 |
+| volume_and_delay_go_to_the_sender_live (`desktop/src/audio/airplay.rs`) | S249 |
 | use_target_instead_puts_the_pair_in_its_members_place (`desktop/src/ui_model.rs`) | S247 |
 | use_target_instead_swaps_the_member_for_its_pair (`desktop/src/view.rs`) | S247 |
 | the_zone_name_field_stops_at_sixty_characters_while_typing (`desktop/src/view.rs`) | S150 |
@@ -3819,6 +4029,10 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | a_flyout_zone_header_folds_and_unfolds_through_its_accessibility_actions (`desktop/src/view.rs`) | S359 |
 | folding_a_zone_in_the_flyout_removes_its_member_rows (`desktop/src/view.rs`) | S359 |
 | speakers_move_between_zones_and_back_from_their_menus (`desktop/src/view.rs`) | S150, S245, S359 |
+| a_new_zone_needs_a_speaker_that_is_on_and_names_can_change (`desktop/src/adapter.rs`) | S150, S245 |
+| a_speaker_moves_between_zones_from_its_menu (`desktop/src/adapter.rs`) | S150, S245 |
+| a_new_zone_needs_a_speaker_that_is_on_and_takes_it_from_its_zone (`desktop/src/ui_model.rs`) | S245 |
+| move_to_zone_lists_only_the_zones_the_speaker_is_not_in (`desktop/src/view.rs`) | S245 |
 
 ### Remote commands from AirPlay speakers: core and hosts (`cargo test` in `core/` and `desktop/`, the Mac logic suite)
 
@@ -3904,6 +4118,7 @@ The checks for S251 to S254 in the Rust core (`core/tests/policy_presets.rs`, `c
 | a_recall_switches_off_an_unplugged_output_that_is_on (`desktop/src/adapter.rs`) | S252 |
 | a_hidden_speaker_is_never_saved_and_a_recall_names_it_hidden (`desktop/src/adapter.rs`) | S251, S265 |
 | a_preset_skips_the_volume_of_a_cast_speaker_that_never_reported_one (`desktop/src/adapter.rs`) | S251 |
+| a_cast_own_level_above_100_is_saved_and_recalled_whole (`desktop/src/adapter.rs`) | S251, S415 |
 | a_volume_set_before_the_session_is_kept_and_set_at_its_first_status (`desktop/src/audio/cast.rs`) | S252 |
 | a_preset_notice_calls_a_member_with_no_known_name_unknown_device (`desktop/src/view.rs`) | S252 |
 
@@ -3998,6 +4213,13 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | web remote: the core accepts the snapshots | S343 |
 | the_snapshot_lists_what_the_window_lists_in_its_order (`desktop/src/remote.rs`) | S343 |
 | each_speaker_carries_its_switch_kind_delay_range_and_note (`desktop/src/remote.rs`) | S343 |
+| a_speaker_that_will_play_shows_off_and_turning_it_on_is_an_action (`desktop/src/remote.rs`) | S343, S376 |
+| an_airplay_speaker_carries_the_shared_airplay_delay_and_sets_it (`desktop/src/remote.rs`) | S343, S376 |
+| a_bad_snapshot_is_refused (`remote/src/state.rs`) | S343 |
+| a_bad_source_list_is_refused (`remote/src/state.rs`) | S343 |
+| a_snapshot_reads_and_writes_back_with_its_revision (`remote/src/state.rs`) | S343 |
+| the_computer_name_is_optional_text_and_never_quoted_in_an_error (`remote/src/state.rs`) | S343 |
+| the_volume_step_defaults_to_1_and_takes_above_0_up_to_100 (`remote/src/state.rs`) | S343 |
 | the_remote_page_gets_the_cast_step_rounded_and_1_without_a_usable_one (`desktop/src/remote.rs`) | C69 |
 | web remote: the page lists the picker's entries in its order, each with an ID the core takes | S344 |
 | web remote: a page ID maps back to the picker's ID; one that names no source maps to nothing | S344 |
@@ -4014,6 +4236,8 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | a_source_pick_is_the_pickers_a_repeat_included_and_an_unknown_one_does_nothing (`desktop/src/remote.rs`) | S344 |
 | a_phone_pick_of_the_source_still_playing_clears_the_failed_switch_notice (`desktop/src/adapter.rs`) | S344 |
 | the_phone_gets_an_unplugged_chosen_input_greyed_under_its_plain_name (`desktop/src/adapter.rs`) | S344, S355 |
+| a_snapshot_without_sources_or_with_an_unlisted_current_one_has_none (`remote/src/state.rs`) | S344 |
+| sources_keep_their_order_kind_and_the_current_one (`remote/src/state.rs`) | S344 |
 | web remote: commands read as the core sends them; anything else is dropped | S345 |
 | web remote: turning a speaker on with a volume flips the switch, then moves the slider | S345 |
 | a_phone_switch_on_with_a_volume_flips_the_switch_first (`desktop/src/remote.rs`) | S345 |
@@ -4021,6 +4245,8 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | a_phone_volume_for_a_speaker_that_is_off_or_an_idle_cast_one_is_kept (`desktop/src/remote.rs`) | S348 |
 | a_phone_volume_for_an_off_airplay_speaker_or_at_its_rows_number_is_sent (`desktop/src/adapter.rs`) | S348 |
 | a_web_remote_volume_for_an_idle_cast_speaker_is_set_at_its_first_status (`desktop/src/adapter.rs`) | S348 |
+| a_volume_drag_is_logged_once_after_its_last_step (`desktop/src/audio/controller.rs`) | S348 |
+| an_unknown_hidden_or_unavailable_speaker_is_refused (`desktop/src/remote.rs`) | S348, S376 |
 | web remote: a Cast speaker turned on with a volume keeps it for its session | S348 |
 | web remote: each delay carries the range its field in the window takes | S175 |
 | web remote: a Cast group plays from the phone; a speaker that would ask for a code on the Mac can't | S257 |
@@ -4058,8 +4284,11 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | picking_a_source_after_a_failed_automatic_start_lets_auto_connect_start_again (`desktop/src/adapter.rs`) | S120 |
 | picking_an_input_pair_ends_the_hold_of_a_failed_automatic_start (`desktop/src/adapter.rs`) | S120 |
 | picking_the_pair_a_saved_pair_fell_back_to_keeps_the_hold_of_a_failed_automatic_start (`desktop/src/adapter.rs`) | S120, S14 |
+| an_input_channel_pair_restarts_capture_and_is_kept_per_device (`desktop/src/adapter.rs`) | S14 |
 | a_phone_command_that_panics_midway_still_ends_the_phone_mark (`desktop/src/adapter.rs`) | S257 |
 | a_pairing_forgotten_mid_attempt_leaves_a_phone_switch_on_unpaired (`desktop/src/audio/airplay.rs`) | S257 |
+| a_phone_recall_whose_every_member_asks_for_a_code_posts_no_preset_notice (`desktop/src/adapter.rs`) | S257, S265 |
+| a_speaker_that_asks_for_a_code_is_turned_on_at_the_pc_not_from_the_page (`desktop/src/remote.rs`) | S257, S376 |
 
 ### Web remote pairing, paired devices, requests and connections: remote crate and Windows (`cargo test` in `remote/` and `desktop/`)
 
@@ -4079,10 +4308,19 @@ The checks for S368 to S379, and the busy-port check of S337, in the remote crat
 | a_head_parses_into_method_path_and_headers, a_bad_head_is_refused (`remote/src/http.rs`), request_heads_from_any_bytes_parse_or_refuse, requests_read_the_same_however_they_arrive_and_stay_in_limits, request_edges_get_the_documented_answers, the_head_limit_holds_wherever_the_bytes_split, an_endless_peer_is_cut_off_at_the_limits, hosts_and_origins_from_any_text_are_judged_without_panic, json_bodies_from_any_bytes_parse_or_refuse (`remote/src/never_panics.rs`), a_foreign_host_gets_403_everywhere, a_head_over_8_kib_gets_431, a_chunked_body_is_refused, an_unreadable_body_length_gets_a_json_400_and_pairs_nothing, a_request_that_takes_too_long_is_closed_unanswered, a_body_at_the_limit_is_read_and_one_byte_more_gets_413, a_declared_length_over_the_limit_is_refused_before_the_body_arrives (`remote/tests/server.rs`) | S374 |
 | every_response_carries_the_security_headers (`remote/src/http.rs`), the_page_and_its_assets_carry_the_hash_policy, every_api_route_needs_a_paired_token, each_endpoint_answers_and_hands_over_exactly_what_was_posted, every_route_answers_a_wrong_method_with_405_and_its_allow, unknown_paths_get_a_json_404_with_or_without_a_token, a_foreign_host_is_refused_first_even_with_a_matching_origin_and_a_token (`remote/tests/server.rs`) | S375 |
 | json_bodies_from_any_bytes_parse_or_refuse (`remote/src/never_panics.rs`), speaker_ids_are_percent_decoded (`remote/src/server.rs`), each_endpoint_answers_and_hands_over_exactly_what_was_posted, a_source_pick_reaches_the_app_and_a_refused_one_says_why, a_speaker_change_needs_a_published_speaker_and_an_id (`remote/tests/server.rs`) | S376 |
+| a_delay_must_stay_in_the_speakers_range (`desktop/src/remote.rs`) | S376 |
+| switching_maps_to_the_rows_switch_and_a_repeat_does_nothing (`desktop/src/remote.rs`) | S376 |
+| volume_and_master_volume_take_0_to_100 (`desktop/src/remote.rs`) | S376 |
+| a_command_carries_only_what_was_posted (`remote/src/state.rs`) | S376 |
+| bodies_read_only_the_fields_they_know (`remote/src/state.rs`) | S376 |
+| ranges_include_both_ends (`remote/src/state.rs`) | S376 |
 | a_stream_gets_each_revision_once (`remote/src/server.rs`), each_endpoint_answers_and_hands_over_exactly_what_was_posted, the_event_stream_delivers_each_revision_once_and_heartbeats, a_snapshot_after_a_command_streams_even_when_nothing_changed, a_device_keeps_two_event_streams_and_a_third_ends_the_oldest, a_reloaded_page_does_not_end_the_devices_other_live_stream, devices_survive_a_restart_and_can_all_be_forgotten (`remote/tests/server.rs`) | S377 |
 | every_address_is_a_peer_of_its_own (`remote/src/net.rs`), two_ipv6_hosts_in_one_64_have_a_connection_cap_each, unpaired_connections_leave_the_reserved_slots_to_paired_devices, a_host_with_many_addresses_cannot_hold_every_reserved_slot, paired_connections_leave_the_shared_slots_open (`remote/src/server.rs`), one_address_holds_eight_connections_at_most, reserved_slots_let_in_only_a_paired_device, a_full_server_makes_room_by_closing_the_oldest_reserved_waiter, a_busy_answer_arrives_after_a_request_the_server_never_read (`remote/tests/server.rs`) | S378 |
 | a_config_reads_from_json_with_defaults (`remote/src/server.rs`), after_stop_the_port_is_free_and_no_command_arrives, stop_returns_at_once_while_a_stream_is_stuck_sending, the_pairing_code_switch_reads_from_json_and_is_off_by_default (`remote/tests/server.rs`) | S379 |
 | quit_stops_the_remote_before_the_settings_are_saved (`desktop/src/view/remote_window.rs`), the_end_of_a_windows_session_stops_the_remote_before_the_settings_are_saved (`desktop/src/view/remote_window.rs`) | S379 |
+| the_setting_keeps_a_usable_port (`desktop/src/remote.rs`) | S379 |
+| use_port_takes_only_a_valid_port_that_changes_or_retries (`desktop/src/remote.rs`) | S379 |
+| the_web_remote_is_off_by_default_and_keeps_a_usable_port (`desktop/src/settings.rs`) | S379 |
 | web_remote_chosen_again_while_its_window_shows_keeps_the_code (`desktop/src/view/remote_window.rs`) | S368 |
 
 ### App mixes from the phone: remote crate, Windows and Mac (pending; `cargo test` in `remote/` and `desktop/`, the logic suite)
@@ -4094,6 +4332,9 @@ The checks for S368 to S379, and the busy-port check of S337, in the remote crat
 | a_mix_post_that_is_not_a_list_of_up_to_63_app_ids_answers_400_and_waits_out_a_run (`remote/tests/server.rs`) | S353 |
 | a_mix_post_passes_on_the_running_apps_once_each_in_the_order_sent (`remote/tests/server.rs`) | S353 |
 | a_phone_mix_selects_the_apps_as_the_several_apps_list_would (`desktop/src/adapter.rs`) | S353 |
+| checking_apps_builds_a_mix_and_unchecking_them_goes_back_to_one_app_or_the_system (`desktop/src/adapter.rs`) | S242, S353 |
+| the_phone_gets_an_app_by_its_executable_the_same_after_it_starts_again (`desktop/src/adapter.rs`) | S353 |
+| two_processes_of_one_app_are_one_page_entry_that_picks_the_one_in_use (`desktop/src/adapter.rs`) | S353 |
 | Windows: the last mix is kept across a switch to another source and a relaunch, listed once in the picker and on the phone, and only another mix replaces it (pending) | S354 |
 | Windows: a pick of the last mix with one app gone captures the others, and with none running fails as the window's pick does (pending) | S354, S242 |
 | web remote: the snapshot offers the several-apps list in its order, a checked app that isn't running as not running | S353 |
@@ -4128,12 +4369,18 @@ The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suit
 | a_new_airplay_latency_retimes_the_local_outputs_and_keeps_the_adjustment | S281, S178, S177 |
 | a_new_airplay_latency_beside_a_cast_speaker_waits_for_the_longer_of_the_two | S281 |
 | a_raise_during_the_inserted_silence_lengthens_it_and_a_later_one_inserts_more (`desktop/src/audio/render.rs`) | S281 |
+| a_new_l_from_the_sender_re_anchors_the_playing_outputs (`desktop/src/audio/controller.rs`) | S281 |
+| a_new_l_re_anchors_the_outputs (`desktop/src/audio/outputs.rs`) | S281 |
+| outputs_wait_for_the_cast_offset_and_for_the_longer_of_it_and_l (`desktop/src/audio/outputs.rs`) | S281 |
 | a_reported_latency_is_the_speakers_starting_estimate (one speaker at 220 ms: d′ = d_s, L = L_s + 220 + A; two at 220 and 50 ms: the second gets d_s + 170) | S283 |
 | a_receiver_reporting_nothing_starts_at_zero_without_a_warning | S283, S282 |
 | the_estimate_waits_while_an_airplay_speaker_sounds (a joiner at 300 ms with E = 220 plays 80 ms late until the stream is empty) | S283 |
 | calibrate_all_measures_relative_to_the_reported_latency (the AirPlay delay moves only by the measured excess over L_s + E + d_s) | S283, S237 |
 | a_speaker_above_a_held_estimate_keeps_its_own_delay (`desktop/src/audio/airplay.rs`) | S283 |
+| how_far_airplay_plays_ahead_follows_e_a_receiver_offset_and_a_removed_speaker (`desktop/src/audio/controller.rs`) | S283, S394, S401 |
 | calibrate_all_window_grows_with_the_reported_latency (core, `airplay_wait_ms` with R_s 220: 220 ms longer) | S235 |
+| an_airplay_speaker_at_l_1750_with_delay_0_gets_a_calibration_window_of_at_least_l (`desktop/src/audio/controller.rs`) | S235 |
+| an_airplay_speaker_joins_calibration_at_the_paths_upper_bound_while_the_sender_reports_no_latency (`desktop/src/audio/controller.rs`) | S235 |
 | several_airplay2_receivers_share_lf_and_e_and_a_target_uses_its_largest_member (members at 220 and 50 ms: the target's e_s is 220 and both members get the same d′_s) | S284 |
 | an_airplay2_receiver_leaving_while_others_sound_changes_no_delay (E and every d′_s held until the stream is empty; the sender holds Lf) | S284 |
 | a_target_member_leaving_while_others_sound_changes_no_delay (`desktop/src/audio/airplay.rs`) | S284 |
@@ -4142,6 +4389,10 @@ The hosts (Windows in `desktop/`, test names as below; the Mac in the logic suit
 | one_airplay2_speaker_failing_leaves_the_others_playing (a password prompt, a PIN pairing and an unreachable speaker; the Windows test adds a wrong password) | S285 |
 | every_airplay_2_speaker_switched_on_plays_and_only_a_17th_or_one_needing_ptp_on_another_network_waits (`desktop/src/adapter.rs`) | S285 |
 | one_airplay_2_speaker_failing_leaves_the_others_playing (`desktop/src/adapter.rs`) | S285 |
+| a_speaker_waiting_for_the_airplay2_slot_says_so_not_reconnecting (`desktop/src/adapter.rs`) | S285 |
+| a_waiting_speaker_drops_its_wait_once_the_sender_starts_it (`desktop/src/adapter.rs`) | S285 |
+| a_speaker_waiting_for_the_airplay2_slot_stays_on_and_one_without_ptp_is_off (`desktop/src/audio/airplay.rs`) | S222, S285 |
+| the_log_says_a_waiting_speaker_waits_not_that_it_is_turned_off (`desktop/src/audio/airplay.rs`) | S222, S285 |
 
 The Mac (logic suite):
 
@@ -4178,6 +4429,20 @@ Windows (`desktop/src/audio/explicit_pause.rs` unless named):
 | only_a_session_that_plays_or_pauses_has_a_player_state (`desktop/src/audio/now_playing.rs`) | S292 |
 | the_debug_log_names_what_resumed_a_pause (`desktop/src/audio/airplay.rs`) | S292 |
 | the_debug_log_names_a_button_remote_capture_or_stop_resume (`desktop/src/audio/airplay.rs`) | S292 |
+| a_first_reading_paused_or_an_app_that_quits_never_pauses_the_speakers (`desktop/src/audio/airplay.rs`) | S292 |
+| a_new_capture_or_the_stream_stopping_resumes_a_paused_stream (`desktop/src/audio/airplay.rs`) | S292 |
+| a_remote_pause_of_a_playing_app_pauses_the_speakers_and_play_resumes (`desktop/src/audio/airplay.rs`) | S292 |
+| a_remote_pause_with_no_reading_or_an_app_paused_sends_no_flush (`desktop/src/audio/airplay.rs`) | S292 |
+| a_remote_play_pause_follows_the_reading_both_ways (`desktop/src/audio/airplay.rs`) | S292 |
+| a_window_play_pause_the_reading_does_not_confirm_sends_no_flush (`desktop/src/audio/airplay.rs`) | S292 |
+| an_app_that_stops_or_changes_tracks_never_pauses_the_speakers (`desktop/src/audio/airplay.rs`) | S292 |
+| sound_in_the_capture_resumes_a_pause_the_app_took (`desktop/src/audio/airplay.rs`) | S292 |
+| sound_in_the_capture_resumes_a_pause_the_reading_still_holds (`desktop/src/audio/airplay.rs`) | S292 |
+| the_app_pausing_itself_pauses_the_speakers_once_and_playing_resumes (`desktop/src/audio/airplay.rs`) | S292 |
+| the_app_pausing_while_nothing_streams_never_pauses_the_speakers (`desktop/src/audio/airplay.rs`) | S292 |
+| the_app_playing_again_after_a_pause_resumes_the_speakers (`desktop/src/audio/airplay.rs`) | S292 |
+| the_feed_counts_the_sound_it_hands_over (`desktop/src/audio/airplay.rs`) | S292 |
+| the_window_play_pause_of_the_followed_playing_app_pauses_and_resumes (`desktop/src/audio/airplay.rs`) | S292 |
 
 The Mac (logic suite):
 
@@ -4244,6 +4509,16 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | a_settings_file_read_late_keeps_the_hold_of_a_failed_automatic_start (`desktop/src/adapter.rs`) | S120, S212 |
 | a_field_this_build_does_not_know_survives_a_load_and_a_save (`desktop/src/adapter.rs`) | S212 |
 | the_poll_keeps_the_main_windows_new_frame_without_a_close (`desktop/src/view.rs`) | S212 |
+| a_settings_field_that_does_not_read_is_logged_by_name_never_by_value (`desktop/src/adapter.rs`) | S212 |
+| airplay_speakers_get_their_settings_back_when_found (`desktop/src/adapter.rs`) | S212 |
+| settings_that_cant_be_saved_get_one_notice_until_a_save_works (`desktop/src/adapter.rs`) | S212 |
+| the_users_choices_survive_a_restart_without_streaming (`desktop/src/adapter.rs`) | S212 |
+| a_field_that_does_not_read_is_named_and_falls_back_alone (`desktop/src/settings.rs`) | S212 |
+| a_huge_file_is_cut_to_the_limits (`desktop/src/settings.rs`) | S212 |
+| a_maximized_window_is_kept_with_its_last_normal_frame (`desktop/src/settings.rs`) | S212 |
+| a_mix_of_apps_survives_a_round_trip_and_an_old_single_app_source_loads_unchanged (`desktop/src/settings.rs`) | S212 |
+| every_stored_field_is_named_when_it_does_not_read (`desktop/src/settings.rs`) | S212 |
+| input_channel_pairs_survive_a_round_trip_and_odd_entries_are_skipped (`desktop/src/settings.rs`) | S212 |
 | equalizer_curves_are_read_leniently_and_left_out_while_none_is (`desktop/src/settings.rs`) | S270 |
 | the_picker_lists_the_presets_then_the_saved_curves (`desktop/src/ui_model.rs`) | S270 |
 | a_picked_saved_curve_shows_beside_a_curve_with_the_same_gains (`desktop/src/ui_model.rs`) | S270 |
@@ -4273,8 +4548,13 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | the_reader_learns_which_app_played_last_until_the_source_changes | S218 |
 | with_none_playing_the_app_that_played_last_is_read_or_none (`desktop/src/audio/media_sessions.rs`) | S218 |
 | a_remote_button_goes_to_the_paused_session_the_receivers_read (`desktop/src/audio/media_sessions.rs`) | S218, S274 |
+| a_button_goes_to_the_session_that_counts (`desktop/src/audio/media_sessions.rs`) | S274 |
 | another_image_for_the_same_track_goes_out_once | S219 |
 | a_restarted_sender_gets_the_track_and_its_artwork_again | S219 |
+| a_new_sender_gets_what_is_playing_from_the_last (`desktop/src/audio/airplay.rs`) | S219 |
+| a_restart_on_a_track_without_artwork_waits_for_it_again (`desktop/src/audio/now_playing.rs`) | S219 |
+| artwork_that_arrives_during_the_wait_goes_out (`desktop/src/audio/now_playing.rs`) | S219 |
+| without_an_icon_no_artwork_goes_in_its_place (`desktop/src/audio/now_playing.rs`) | S219 |
 | a_busy_cover_takes_a_lower_quality_before_a_smaller_side | S217, S272 |
 | a_larger_picture_gets_a_large_and_a_small_image (`desktop/src/audio/now_playing.rs`) | S272 |
 | a_cast_device_gets_a_cover_of_up_to_720_px_and_256_kib (`desktop/src/audio/now_playing.rs`) | C53 |
@@ -4337,8 +4617,29 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | the_airplay_ahead_notice_names_a_renamed_cast_speaker_by_its_new_name (`desktop/src/adapter.rs`) | S228 |
 | a_cast_groups_renamed_member_shows_its_new_name (`desktop/src/adapter.rs`) | S228 |
 | whole_system_a_paused_track_survives_a_poll_with_no_answer (`desktop/src/audio/now_playing.rs`) | S218 |
+| an_input_device_source_names_the_device_to_airplay_receivers (`desktop/src/audio/controller.rs`) | S218 |
+| an_input_device_that_cant_be_named_gets_the_unnamed_source_label (`desktop/src/audio/controller.rs`) | S218 |
+| the_playing_track_reaches_airplay_receivers_while_they_play (`desktop/src/audio/controller.rs`) | S218 |
+| one_listing_and_one_thumbnail_serve_both_readers (`desktop/src/audio/media_sessions.rs`) | S218 |
+| a_new_source_waits_for_its_own_reading (`desktop/src/audio/now_playing.rs`) | S218 |
+| a_paused_track_counts_only_when_its_app_is_the_source (`desktop/src/audio/now_playing.rs`) | S218 |
+| a_playing_session_wins_over_a_paused_one_listed_first (`desktop/src/audio/now_playing.rs`) | S218 |
+| an_app_source_only_follows_its_own_session (`desktop/src/audio/now_playing.rs`) | S218 |
+| missing_artwork_waits_then_the_icon_takes_its_place (`desktop/src/audio/now_playing.rs`) | S218, S219 |
+| with_no_reading_at_all_the_labels_go_out_after_the_reading_wait (`desktop/src/audio/now_playing.rs`) | S218 |
+| with_no_track_the_source_name_stands_in_for_the_artist (`desktop/src/audio/now_playing.rs`) | S218 |
 | the_log_names_the_host_it_runs_on (`desktop/src/platform.rs`) | S170 |
 | the_linux_summary_gives_the_os_version_and_local_time (`desktop/src/platform.rs`) | S170 |
+| a_debug_launch_without_auto_connect_holds_the_speakers_on_off_and_saves_nothing (`desktop/src/adapter.rs`) | S170 |
+| a_debug_launch_without_auto_connect_lists_every_speaker_and_switches_none_on (`desktop/src/adapter.rs`) | S170 |
+| a_log_whose_file_cant_be_made_is_off (`desktop/src/debug_log.rs`) | S170 |
+| a_second_launch_adds_to_the_running_copys_log (`desktop/src/debug_log.rs`) | S170 |
+| every_day_follows_the_one_before (`desktop/src/debug_log.rs`) | S170 |
+| lines_are_appended_in_order_each_with_a_time_stamp (`desktop/src/debug_log.rs`) | S170 |
+| the_log_file_is_private_to_this_user_and_a_symlink_is_refused (`desktop/src/debug_log.rs`) | S170 |
+| the_log_stops_growing_at_its_limit (`desktop/src/debug_log.rs`) | S170 |
+| times_are_utc_to_the_millisecond (`desktop/src/debug_log.rs`) | S170 |
+| the_check_comes_before_the_log_and_the_app_start (`desktop/src/single_instance.rs`) | S170, S215 |
 
 ### Windows updater: Windows (`cargo test` in `desktop/`)
 
@@ -4453,6 +4754,9 @@ The release side:
 | an_airplay2_speaker_row_says_airplay_2_only_with_the_switch_on (`desktop/src/adapter.rs`) | S312 |
 | under_the_airplay2_flag_only_the_switch_moves_a_dual_receiver_to_airplay2 (`desktop/src/adapter.rs`) | S312 |
 | with_nothing_switched_the_path_is_on_and_airplay1_comes_first (`desktop/src/audio/airplay.rs`) | S312 |
+| the_airplay2_flag_keeps_the_path_on_and_the_switch_prefers_airplay2 (`desktop/src/audio/airplay.rs`) | S312 |
+| the_airplay2_switch_is_off_unless_the_setting_or_the_variable_turns_it_on (`desktop/src/audio/airplay.rs`) | S312 |
+| airplay2_is_off_in_a_file_that_does_not_name_it (`desktop/src/settings.rs`) | S312 |
 | a_dual_receiver_is_listed_on_the_path_its_session_takes (`core/src/ffi/airplay.rs`) | S313 |
 | a_dual_receiver_reads_the_path_its_session_takes (`desktop/src/adapter.rs`) | S313 |
 | a_stopped_or_new_sender_forgets_the_path_a_session_took (`desktop/src/audio/airplay.rs`) | S313 |
@@ -4465,6 +4769,9 @@ The release side:
 | a_speaker_playing_with_no_row_off_for_ptp_clears_the_port_notice (`desktop/src/adapter.rs`) | S358 |
 | a_session_refused_before_any_pairing_step_names_no_code (`desktop/src/audio/airplay.rs`) | S356 |
 | an_airplay_row_names_which_airplay (`desktop/src/view.rs`) | S313 |
+| a_pair_switched_off_forgets_what_its_members_airplay1_said (`desktop/src/audio/airplay.rs`) | S313 |
+| a_speaker_airplay1_refuses_follows_the_sender_to_airplay2 (`desktop/src/audio/airplay.rs`) | S313 |
+| a_stopped_or_new_sender_tries_airplay1_first_again (`desktop/src/audio/airplay.rs`) | S313 |
 
 ### Start steps and late Windows wakes: core (`cargo test` in `core/`)
 
@@ -4546,6 +4853,9 @@ The release side:
 | an_only_these_mix_quits_when_only_another_app_on_its_apps_process_id_runs (`desktop/src/audio/controller.rs`) | S327 |
 | a_capture_lost_after_a_resume_keeps_trying_until_60_s_after_it (`desktop/src/audio/controller.rs`) | S332 |
 | a_capture_still_failing_60_s_after_a_resume_stops_as_before (`desktop/src/audio/controller.rs`) | S21, S329, S332 |
+| capture_that_fails_while_streaming_stops_it_with_a_notice (`desktop/src/adapter.rs`) | S21 |
+| airplay_speakers_join_with_the_capture_and_leave_when_streaming_stops (`desktop/src/audio/controller.rs`) | S21 |
+| the_session_ends_when_capture_fails (`desktop/src/audio/controller.rs`) | S21 |
 | a_capture_lost_as_the_resume_window_ends_gets_the_usual_tries (`desktop/src/audio/controller.rs`) | S329, S332, S139 |
 | a_poll_10_s_of_wall_time_after_the_last_counts_as_a_resume (`desktop/src/audio/controller.rs`) | S332 |
 | polls_held_by_starts_that_dont_answer_are_no_resume (`desktop/src/audio/controller.rs`) | S329, S332 |
@@ -4567,6 +4877,8 @@ The release side:
 | a_wake_hours_after_the_last_read_starts_the_stall_span_over (`desktop/src/audio/wasapi/endpoint.rs`) | S326, S332 |
 | a_jump_or_a_discontinuity_gets_silence_for_the_time_between (`desktop/src/audio/capture.rs`) | S332 |
 | a_packet_whose_position_windows_flags_follows_the_last_one (`desktop/src/audio/capture.rs`) | S332 |
+| a_capture_restart_that_times_out_is_the_last_try (`desktop/src/audio/controller.rs`) | S332 |
+| a_capture_restart_whose_thread_doesnt_answer_is_the_last_try (`desktop/src/audio/controller.rs`) | S332 |
 | no_airplay_session_starts_while_the_pc_sleeps_and_its_failures_post_no_notice (`desktop/src/audio/controller.rs`) | S412 |
 | a_cast_speakers_connect_failures_while_the_pc_sleeps_count_nothing_toward_turning_it_off (`desktop/src/audio/controller.rs`) | S412 |
 | a_format_notice_for_a_playing_output_reopens_it_in_the_new_format_in_the_same_poll (`desktop/src/audio/controller.rs`) | S330, S138, S140 |
@@ -4577,6 +4889,7 @@ The release side:
 | a_format_reopen_never_moves_another_outputs_hold_back (`desktop/src/audio/controller.rs`) | S177, S330 |
 | a_session_disconnected_with_its_device_unplugged_is_lost (`desktop/src/audio/controller.rs`) | S68, S330 |
 | a_format_reopen_keeps_the_outputs_lead_in_the_session_lead (`desktop/src/audio/controller.rs`) | S328, S330 |
+| a_format_notice_that_changes_only_the_mask_or_the_conversion_reopens_in_the_same_poll (`desktop/src/audio/controller.rs`) | S330 |
 | an_input_held_exclusively_is_busy_at_initialize_and_at_start (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
 | an_input_blocked_by_privacy_settings_stays_microphone_blocked (`desktop/src/audio/wasapi/loopback.rs`) | S141, S333 |
 | a_source_switch_under_a_sounding_airplay_speaker_sends_the_sender_nothing (`desktop/src/audio/controller.rs`) | S141 |
@@ -4585,11 +4898,13 @@ The release side:
 | an_input_or_channel_pair_that_cant_start_gives_way_to_the_old_one (`desktop/src/adapter.rs`) | S141 |
 | the_switch_notice_goes_when_the_last_airplay_speaker_drops (`desktop/src/adapter.rs`) | S141 |
 | the_switch_notice_goes_when_the_last_local_output_fails_to_start (`desktop/src/adapter.rs`) | S141 |
+| a_source_switch_keeps_airplay_speakers_in_the_stream (`desktop/src/adapter.rs`) | S141 |
 | picking_the_playing_input_again_keeps_the_busy_input_notice (`desktop/src/adapter.rs`) | S163 |
 | another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped (`desktop/src/adapter.rs`) | S163 |
 | picking_the_playing_source_again_keeps_the_speaker_and_pairing_notices (`desktop/src/adapter.rs`) | S163 |
 | picking_the_stopped_source_again_keeps_the_notice_that_its_app_quit (`desktop/src/adapter.rs`) | S163 |
 | picking_the_whole_system_again_after_the_app_quit_clears_the_switch_notice (`desktop/src/adapter.rs`) | S163 |
+| a_new_source_while_streaming_starts_capture_again (`desktop/src/adapter.rs`) | S163 |
 | a_capture_start_on_a_busy_input_fails_with_the_busy_reason (`desktop/src/audio/controller.rs`) | S333 |
 | a_lost_capture_whose_input_is_busy_keeps_trying_every_3_s (`desktop/src/audio/controller.rs`) | S329, S333 |
 | a_busy_capture_is_told_free_when_streaming_stops (`desktop/src/audio/controller.rs`) | S333 |
@@ -4599,20 +4914,59 @@ The release side:
 | a_capture_whose_device_went_away_after_initialize_is_gone (`desktop/src/audio/wasapi/loopback.rs`) | S333 |
 | dropping_a_capture_stops_its_stream_before_the_ring_can_go (`desktop/src/audio/wasapi/loopback.rs`) | S134 (stop before free; Windows has no ring reset or FIFO writer) |
 | an_output_whose_device_leaves_as_its_restart_rest_ends_is_lost (`desktop/src/audio/controller.rs`) | S325, S68 |
+| a_bluetooth_output_back_mid_session_restarts_again_305_s_after_its_return (`desktop/src/audio/controller.rs`) | S325 |
+| a_new_return_starts_the_second_restarts_clock_over (`desktop/src/audio/controller.rs`) | S325 |
+| a_switch_off_a_loss_the_sessions_end_or_a_sleep_cancels_the_second_restart (`desktop/src/audio/controller.rs`) | S325, S332 |
+| an_output_that_plays_again_after_a_reset_is_lost_once_when_unplugged (`desktop/src/audio/controller.rs`) | S68 |
+| an_output_the_ui_saw_disappear_is_lost_at_the_next_poll (`desktop/src/audio/controller.rs`) | S68 |
+| an_unplugged_output_whose_stream_never_notices_is_lost_and_comes_back (`desktop/src/audio/controller.rs`) | S68, S137 |
 | a_busy_input_that_goes_away_gets_the_usual_tries (`desktop/src/audio/controller.rs`) | S333, S329 |
 | an_app_that_quits_as_its_capture_comes_back_in_another_format_gives_way_when_set (`desktop/src/audio/controller.rs`) | S227, S329 |
+| a_capture_waiting_for_its_reopen_gets_no_waiting_notice (`desktop/src/adapter.rs`) | S329, S350 |
+| an_input_device_away_while_streaming_gets_no_waiting_notice (`desktop/src/adapter.rs`) | S329, S350 |
+| capture_lost_to_a_windows_audio_restart_comes_back_without_a_notice (`desktop/src/adapter.rs`) | S329 |
+| a_capture_lost_to_a_windows_audio_restart_starts_again_a_moment_later (`desktop/src/audio/controller.rs`) | S329 |
+| a_capture_that_cant_start_again_after_windows_audio_restarted_stops_streaming (`desktop/src/audio/controller.rs`) | S21, S329 |
+| a_capture_that_cant_start_again_at_first_is_tried_again_for_a_few_seconds (`desktop/src/audio/controller.rs`) | S329 |
+| a_reopened_capture_gives_the_cut_back_to_the_frames_already_in_the_ring (`desktop/src/audio/controller.rs`) | S26, S71, S329 |
+| a_restarted_capture_that_fails_again_soon_stops_streaming (`desktop/src/audio/controller.rs`) | S329 |
+| a_restarted_capture_that_ran_a_while_is_restarted_again_after_the_next_loss (`desktop/src/audio/controller.rs`) | S329 |
 | an_output_whose_listed_device_keeps_refusing_stays_on_and_is_tried_every_3_s (`desktop/src/audio/controller.rs`) | S331 |
 | a_refused_try_that_doesnt_answer_waits_10_s_and_the_next_refusal_3_s (`desktop/src/audio/controller.rs`) | S326, S331 |
 | a_refused_output_that_then_fails_hard_is_turned_off_at_once (`desktop/src/audio/controller.rs`) | S69, S331 |
+| an_output_that_cant_start_is_turned_off_with_a_notice (`desktop/src/adapter.rs`) | S69 |
+| streaming_stops_when_the_only_output_cant_start (`desktop/src/adapter.rs`) | S69 |
+| an_output_that_cant_start_is_turned_off_and_reported (`desktop/src/audio/controller.rs`) | S69 |
+| turning_on_an_output_that_cant_start_returns_the_error (`desktop/src/audio/controller.rs`) | S69 |
 | a_busy_output_whose_device_then_refuses_to_open_is_no_longer_busy (`desktop/src/audio/controller.rs`) | S331 |
 | switching_off_a_refused_output_ends_its_tries_and_its_notice (`desktop/src/audio/controller.rs`) | S331 |
 | a_stalled_output_that_opens_after_a_refusal_keeps_its_notice_until_five_seconds_of_play (`desktop/src/audio/controller.rs`) | S326, S331 |
 | a_stalled_output_keeps_its_lead_in_the_session_lead_until_it_reopens (`desktop/src/audio/controller.rs`) | S326, S328 |
 | a_second_stall_keeps_the_outputs_lead_in_the_session_lead_through_its_retry (`desktop/src/audio/controller.rs`) | S326, S328 |
+| an_output_that_stops_while_its_device_stays_plays_again_unreported (`desktop/src/audio/controller.rs`) | S326 |
 | a_speaker_windows_keeps_refusing_shows_the_lost_notice_until_it_plays (`desktop/src/adapter.rs`) | S331 |
 | once_a_start_doesnt_answer_the_other_starts_of_that_pass_wait_their_turn (`desktop/src/audio/controller.rs`) | S331 |
 | a_healthy_output_isnt_kept_waiting_behind_one_that_keeps_hanging (`desktop/src/audio/controller.rs`) | S331 |
 | an_output_that_answers_again_isnt_starved_behind_one_that_still_hangs (`desktop/src/audio/controller.rs`) | S331 |
+| a_busy_speaker_row_waits_for_its_device_until_it_plays_or_is_turned_off (`desktop/src/adapter.rs`) | S331 |
+| a_speaker_another_app_holds_stays_on_with_a_notice_until_it_is_free (`desktop/src/adapter.rs`) | S331 |
+| a_speaker_whose_stream_dies_before_its_device_leaves_the_list_is_reported (`desktop/src/adapter.rs`) | S68, S331 |
+| a_stream_that_resets_while_its_device_stays_gets_no_notice (`desktop/src/adapter.rs`) | S330, S331 |
+| the_only_speaker_being_busy_keeps_streaming_on (`desktop/src/adapter.rs`) | S331 |
+| a_busy_output_is_tried_again_every_few_seconds_not_at_every_poll (`desktop/src/audio/controller.rs`) | S331 |
+| a_busy_output_that_then_fails_another_way_is_told_busy_again_later (`desktop/src/audio/controller.rs`) | S69, S331 |
+| a_busy_output_whose_device_goes_away_no_longer_waits (`desktop/src/audio/controller.rs`) | S331 |
+| a_device_that_vanishes_while_starting_stays_on (`desktop/src/audio/controller.rs`) | S331 |
+| a_session_that_ends_by_itself_ends_the_wait_for_a_busy_output (`desktop/src/audio/controller.rs`) | S117, S331 |
+| an_output_lost_while_still_listed_is_lost_again_once_the_listing_drops_it (`desktop/src/audio/controller.rs`) | S68, S331 |
+| an_output_refused_for_a_moment_gets_the_whole_wait_again_next_time (`desktop/src/audio/controller.rs`) | S331 |
+| an_output_taken_over_by_another_app_while_playing_waits_for_it (`desktop/src/audio/controller.rs`) | S331 |
+| an_output_that_cant_start_for_a_vanishing_device_is_lost_once_the_listing_drops_it (`desktop/src/audio/controller.rs`) | S68, S331 |
+| an_output_whose_device_another_app_holds_stays_on_and_plays_once_free (`desktop/src/audio/controller.rs`) | S331 |
+| an_output_whose_device_doesnt_answer_stays_on_and_is_tried_again_seconds_later (`desktop/src/audio/controller.rs`) | S331 |
+| stopping_ends_the_wait_for_a_busy_output (`desktop/src/audio/controller.rs`) | S117, S331 |
+| stopping_ends_the_wait_for_an_output_that_didnt_answer (`desktop/src/audio/controller.rs`) | S117, S331 |
+| turning_on_an_output_whose_device_is_busy_keeps_it_on (`desktop/src/audio/controller.rs`) | S331 |
 | an_output_running_away_reopens_once_and_the_second_within_30_s_posts_the_struggling_notice (`desktop/src/audio/controller.rs`) | S347 |
 | a_struggling_output_posts_its_notice_and_unlisting_it_clears_it (`desktop/src/adapter.rs`) | S347 |
 
@@ -4643,7 +4997,13 @@ The release side:
 | a_device_past_64_channels_is_captured_on_its_first_64 (`desktop/src/audio/pipewire/format.rs`) | S14 |
 | inputs_offer_every_channel_and_skip_hands_free (`desktop/src/audio/pipewire/graph.rs`) | S14 |
 | inputs_offer_at_most_64_channels (`desktop/src/audio/pipewire/graph.rs`) | S14 |
+| a_converter_reading_a_pair_plays_its_two_channels (`desktop/src/audio/capture.rs`) | S14 |
+| a_mono_capture_feeds_both_channels (`desktop/src/audio/capture.rs`) | S14 |
+| an_input_device_is_captured_with_the_pair_saved_for_it (`desktop/src/audio/capture.rs`) | S14 |
+| a_named_input_plays_its_channels_in_order (`desktop/src/audio/pipewire/live_tests.rs`) | S14 |
+| an_input_plays_the_channel_pair_chosen (`desktop/src/audio/pipewire/live_tests.rs`) | S14 |
 | an_equalizer_with_another_band_count_loads_missing_bands_flat_and_drops_extra_ones (`desktop/src/settings.rs`) | S23, S24 |
+| the_equalizer_is_quantized_and_reaches_the_capture (`desktop/src/adapter.rs`) | S23 |
 | the_equalizer_starts_off_flat_at_0_db_and_comes_back_from_the_saved_json (`desktop/src/settings.rs`) | S24 |
 | the_equalizer_is_quantized_and_matches_presets (`desktop/src/ui_model.rs`) | S33 |
 | turning_the_equalizer_off_ramps_to_the_dry_signal_over_10_ms_across_blocks (`desktop/src/audio/controller.rs`) | S27 |
@@ -4658,6 +5018,11 @@ The release side:
 | a_retry_while_a_restart_waits_starts_the_sender_once (`desktop/src/audio/controller.rs`) | S101 |
 | an_airplay_sender_whose_discovery_cant_start_is_started_again_every_ten_seconds (`desktop/src/audio/controller.rs`) | S101 |
 | restarts_whose_discovery_still_cant_start_leave_a_running_capture_alone (`desktop/src/audio/controller.rs`) | S101 |
+| retry_starts_a_new_sender_and_the_speakers_that_were_on_come_back (`desktop/src/adapter.rs`) | S101, S222 |
+| a_retry_whose_discovery_still_cant_start_is_reported_again (`desktop/src/audio/controller.rs`) | S101 |
+| a_retry_whose_sender_still_cant_start_is_reported_again (`desktop/src/audio/controller.rs`) | S101 |
+| an_airplay_sender_that_cant_start_at_launch_is_reported_and_retry_starts_one (`desktop/src/audio/controller.rs`) | S101 |
+| an_airplay_sender_whose_discovery_cant_start_is_reported_and_retry_starts_a_new_one (`desktop/src/audio/controller.rs`) | S101 |
 | an_automatic_start_with_no_speaker_on_asks_for_one_first (`desktop/src/adapter.rs`) | S116, S136 |
 | frames_captured_count_from_each_start (`desktop/src/audio/controller.rs`) | S133, S17 |
 | hidden_speakers_sort_numbers_by_value (`desktop/src/adapter.rs`) | S152 |
@@ -4669,10 +5034,30 @@ The release side:
 | a_chosen_app_that_quits_is_listed_by_name_among_the_apps (`desktop/src/adapter.rs`) | S211 |
 | the_source_list_starts_with_the_whole_system (`desktop/src/audio/capture.rs`) | S211 |
 | input_devices_are_listed_after_the_apps (`desktop/src/audio/controller.rs`) | S211 |
+| apps_are_sorted_by_name (`desktop/src/audio/capture.rs`) | S211 |
+| sources_list_the_whole_system_then_apps (`desktop/src/audio/controller.rs`) | S211 |
 | the_background_flag_opens_no_window_only_with_a_tray (`desktop/src/launch_at_login.rs`) | S215 |
 | a_shown_window_ends_the_launch_without_retrying (`desktop/src/single_instance.rs`) | S215 |
 | a_launch_during_the_old_copys_teardown_starts_once_it_is_gone (`desktop/src/single_instance.rs`) | S215 |
 | an_answered_request_means_the_window_was_shown (`desktop/src/single_instance.rs`) | S215 |
+| a_copy_that_never_answers_or_isnt_listening_ends_the_hand_over (`desktop/src/os/xdg/instance.rs`) | S215 |
+| a_held_lock_makes_every_other_launch_the_second_copy (`desktop/src/os/xdg/instance.rs`) | S215 |
+| a_second_launch_gets_the_window_shown_and_passes_its_token (`desktop/src/os/xdg/instance.rs`) | S215 |
+| a_socket_left_by_a_crash_is_replaced_by_the_next_first_copy (`desktop/src/os/xdg/instance.rs`) | S215 |
+| a_socket_path_too_long_to_bind_still_runs_the_app (`desktop/src/os/xdg/instance.rs`) | S215 |
+| only_show_is_a_request_and_a_token_rides_along_as_one_word (`desktop/src/os/xdg/instance.rs`) | S215 |
+| a_copy_that_never_goes_away_ends_the_launch_after_the_relaunch_wait (`desktop/src/single_instance.rs`) | S215 |
+| a_hung_copy_leaves_the_request_unanswered_and_the_launch_still_ends (`desktop/src/single_instance.rs`) | S215 |
+| a_launch_runs_unless_another_copy_holds_the_mutex (`desktop/src/single_instance.rs`) | S215 |
+| a_launch_waits_out_the_longest_teardown_of_a_quitting_copy (`desktop/src/single_instance.rs`) | S215 |
+| a_mutex_held_by_an_elevated_copy_hands_over_instead_of_running_twice (`desktop/src/single_instance.rs`) | S215 |
+| a_request_that_cannot_be_sent_also_waits_for_the_old_copy (`desktop/src/single_instance.rs`) | S215 |
+| a_request_that_cannot_be_sent_is_not_waited_for (`desktop/src/single_instance.rs`) | S215 |
+| any_other_mutex_failure_still_runs_the_app (`desktop/src/single_instance.rs`) | S215 |
+| the_answer_wait_is_about_two_seconds (`desktop/src/single_instance.rs`) | S215 |
+| the_listener_shows_the_window_once_per_request_until_waiting_fails (`desktop/src/single_instance.rs`) | S215 |
+| the_relaunch_poll_matches_the_mac (`desktop/src/single_instance.rs`) | S215 |
+| the_second_copy_logs_one_line_per_outcome (`desktop/src/single_instance.rs`) | S215 |
 | a_bth_enumerator_makes_a_bluetooth_output_whose_start_lead_is_a_block_longer (`desktop/src/audio/controller.rs`) | S230 |
 | the_stream_latency_counts_only_for_a_stop_without_a_clock (`desktop/src/audio/render.rs`) | S231 |
 | a_signal_for_a_local_output_leaves_the_network_feeds_silent (`desktop/src/audio/capture.rs`) | S232 |
@@ -4713,6 +5098,17 @@ The release side:
 | sessions_of_processes_that_quit_are_skipped (`desktop/src/audio/capture.rs`) | S380 |
 | pulse_apps_are_owned_by_the_process_they_name (`desktop/src/audio/pipewire/graph.rs`) | S380 |
 | one_app_takes_its_tree_only (`desktop/src/audio/pipewire/graph.rs`) | S380 |
+| a_process_audiosync_started_is_refused (`desktop/src/audio/capture.rs`) | S380 |
+| a_process_id_that_another_program_got_is_not_the_app (`desktop/src/audio/capture.rs`) | S380 |
+| a_running_app_is_found_without_an_audio_session (`desktop/src/audio/capture.rs`) | S380 |
+| an_app_includes_its_own_tree (`desktop/src/audio/capture.rs`) | S380 |
+| an_app_with_several_audio_processes_is_listed_once_by_its_top_process (`desktop/src/audio/capture.rs`) | S380 |
+| audiosync_is_refused_even_when_the_snapshot_misses_it (`desktop/src/audio/capture.rs`) | S380 |
+| audiosync_its_helpers_and_its_ancestors_are_not_offered (`desktop/src/audio/capture.rs`) | S380 |
+| audiosync_picked_by_mistake_is_refused (`desktop/src/audio/capture.rs`) | S380 |
+| the_app_that_started_audiosync_is_refused (`desktop/src/audio/capture.rs`) | S380 |
+| an_app_is_captured_with_its_tree (`desktop/src/audio/controller.rs`) | S380 |
+| audiosync_itself_is_never_captured (`desktop/src/audio/controller.rs`) | S380 |
 | the_setting_for_a_quitting_app_is_saved_and_restored (`desktop/src/adapter.rs`) | S227 |
 | the_form_factor_tells_the_rest (`desktop/src/audio/outputs.rs`) | S174, S381 |
 | bluetooth_hands_free_endpoints_are_left_out_and_noted (`desktop/src/audio/outputs.rs`) | S381 |
@@ -4808,7 +5204,12 @@ The release side:
 | a_cast_speakers_file_that_didnt_read_is_kept_aside_once_before_it_is_saved_over (`desktop/src/adapter.rs`) | S385 |
 | a_cast_speakers_file_unread_at_launch_keeps_its_entries_when_it_reads_by_the_first_save (`desktop/src/adapter.rs`) | S385 |
 | a_cast_speakers_file_with_a_stray_byte_the_launch_reads_isnt_kept_aside (`desktop/src/adapter.rs`) | S385 |
+| a_bad_settings_file_is_logged_and_ignored_then_replaced (`desktop/src/adapter.rs`) | S385 |
+| a_failed_write_keeps_the_old_file_whole (`desktop/src/data_folder.rs`) | S385 |
+| a_corrupted_file_is_ignored_and_replaced_by_the_next_save (`desktop/src/settings.rs`) | S385 |
+| a_save_that_fails_keeps_the_last_file_whole (`desktop/src/settings.rs`) | S385 |
 | this_pc_comes_first_then_the_rest_by_name (`desktop/src/ui_model.rs`) | S381 |
+| the_snapshot_shows_the_sources_and_outputs_listed (`desktop/src/adapter.rs`) | S211, S381 |
 
 ### Input device source: Windows (`cargo test` in `desktop/`)
 
@@ -4830,6 +5231,9 @@ The release side:
 | an_input_device_plugged_in_is_offered_at_the_next_source_poll (`desktop/src/adapter.rs`) | S355 |
 | sources_are_listed_again_every_few_polls_and_on_refresh (`desktop/src/adapter.rs`) | S355 |
 | an_unplugged_chosen_input_is_listed_last_as_not_connected (`desktop/src/view.rs`) | S355, S211 |
+| a_44_1_khz_capture_is_resampled_to_the_session_rate (`desktop/src/audio/capture.rs`) | S355 |
+| sixteen_bit_samples_are_scaled_to_float (`desktop/src/audio/capture.rs`) | S355 |
+| the_first_capture_attempt_needs_no_conversion (`desktop/src/audio/capture.rs`) | S355 |
 ### App mixes, the pairing files, Launch at Sign-In, the Windows version and Public networks: Windows and Linux (`cargo test` in `desktop/`)
 
 | Test | Clauses |
@@ -4846,6 +5250,7 @@ The release side:
 | a_mix_of_no_app_writes_silence_in_real_time (`desktop/src/audio/mix.rs`) | S386 |
 | a_plan_is_read_once_per_change (`desktop/src/audio/mix.rs`) | S386 |
 | a_lane_input_converts_to_stereo_at_the_session_rate (`desktop/src/audio/mix.rs`) | S386 |
+| a_format_without_channels_is_refused (`desktop/src/audio/capture.rs`) | S386 |
 | credentials_survive_a_restart_and_are_encrypted_on_disk (`desktop/src/audio/pairings.rs`) | S387 |
 | the_airplay2_identity_survives_a_restart_sealed_and_only_once_asked_for (`desktop/src/audio/pairings.rs`) | S387 |
 | an_airplay2_identity_that_cant_be_opened_is_kept_aside_and_replaced (`desktop/src/audio/pairings.rs`) | S387 |
@@ -4853,6 +5258,8 @@ The release side:
 | the_plaintext_is_checked_field_by_field (`desktop/src/audio/pairings.rs`) | S387 |
 | the_load_summary_never_holds_a_secret (`desktop/src/audio/pairings.rs`) | S387 |
 | a_file_others_may_read_is_made_owner_only_and_still_loaded (`desktop/src/audio/pairings.rs`) | S387 |
+| a_corrupted_or_foreign_file_is_ignored_and_replaced_by_the_next_pairing (`desktop/src/audio/pairings.rs`) | S387 |
+| forgetting_the_last_pairing_removes_the_file (`desktop/src/audio/pairings.rs`) | S387 |
 | the_command_quotes_the_path_and_asks_for_the_background (`desktop/src/launch_at_login.rs`) | S388 |
 | a_command_without_quotes_names_what_comes_before_the_first_space (`desktop/src/launch_at_login.rs`) | S388 |
 | no_run_value_reads_as_off (`desktop/src/launch_at_login.rs`) | S388 |
@@ -4917,6 +5324,8 @@ The release side:
 | the_last_save_tells_a_cast_offset_is_unsaved_when_its_file_cant_be_written (`desktop/src/adapter.rs`) | S394 |
 | a_settings_save_that_works_keeps_the_notice_while_the_cast_file_cant_be_written (`desktop/src/adapter.rs`) | S394 |
 | a_cast_offset_set_back_to_the_one_in_its_file_clears_the_not_saved_notice (`desktop/src/adapter.rs`) | S394 |
+| the_airplay_ahead_notice_stays_when_the_cast_speaker_starts_playing (`desktop/src/adapter.rs`) | S394 |
+| with_d_s_at_0_airplay_plays_ahead_of_a_cast_speaker_only_at_a_negative_airplay_delay (`desktop/src/audio/controller.rs`) | S394, S401 |
 | a_delay_step_past_the_maximum_keeps_the_calibrations_line (`desktop/src/adapter.rs`) | S395 |
 | a_calibrations_line_goes_once_its_speaker_is_turned_off (`desktop/src/adapter.rs`) | S395 |
 | a_measured_delay_changed_before_apply_keeps_the_results_and_apply_writes_nothing (`desktop/src/adapter.rs`) | S238, S395 |
@@ -4943,6 +5352,54 @@ The release side:
 | late_packets_inside_one_fill_are_never_written_twice (`desktop/src/audio/capture.rs`) | S398 |
 | an_hour_of_gap_fills_exactly_the_frames_of_an_hour (`desktop/src/audio/capture.rs`) | S398 |
 | an_idle_wake_two_hours_on_writes_21_s_and_keeps_pace_from_now (`desktop/src/audio/capture.rs`) | S332, S398 |
+
+### Hidden speakers, the waiting notice, track progress, output channels and the level meter: core and Windows (`cargo test` in `core/` and `desktop/`)
+
+Tests in `desktop/src/adapter.rs` unless named.
+
+| Test | Clauses |
+|---|---|
+| the_airplay_sender_gets_the_equalized_audio_at_44_1_khz (`desktop/src/audio/capture.rs`) | S7 |
+| a_loopback_that_delivers_nothing_past_the_grace_period_writes_only_silence (`desktop/src/audio/capture.rs`) | S18 |
+| a_resampled_capture_is_equalized_at_the_session_rate (`desktop/src/audio/capture.rs`) | S30 |
+| the_equalizer_applies_from_the_next_packet (`desktop/src/audio/capture.rs`) | S31 |
+| before_enough_audio_arrived_the_output_plays_silence (`desktop/src/audio/render.rs`) | S45 |
+| a_mono_device_gets_the_average_of_both_channels (`desktop/src/audio/render.rs`) | S63 |
+| stereo_feeds_the_first_two_channels_and_the_rest_stay_silent (`desktop/src/audio/render.rs`) | S63 |
+| a_new_default_output_leaves_playing_outputs_alone (`desktop/src/audio/controller.rs`) | S145 |
+| a_dismissed_waiting_notice_stays_away_while_the_session_still_waits | S350 |
+| a_session_that_hears_only_silence_posts_the_waiting_notice_naming_the_app | S350 |
+| sound_arriving_clears_the_waiting_notice_and_ends_the_checks | S350 |
+| streaming_stopping_clears_the_waiting_notice_and_a_new_session_posts_it_again | S350 |
+| the_waiting_notice_names_no_app_for_the_whole_system | S350 |
+| the_waiting_notice_names_the_app_when_one_is_captured_and_reads_generic_otherwise (`desktop/src/view.rs`) | S350 |
+| a_hidden_airplay_speaker_stays_hidden_when_it_appears_again | S360 |
+| a_hidden_auto_connect_speaker_isnt_turned_on_when_it_appears | S360 |
+| a_hidden_cast_speaker_stays_hidden_when_it_announces_again | S360 |
+| a_speaker_saved_on_and_hidden_isnt_turned_on_at_a_launch | S360 |
+| a_zone_switches_only_its_members_that_arent_hidden | S360 |
+| hidden_speakers_survive_a_restart_with_what_was_set_for_them | S360 |
+| hiding_a_speaker_that_is_on_turns_it_off_and_lists_it_nowhere | S360 |
+| the_reference_output_cant_be_hidden | S360 |
+| hidden_speakers_are_read_leniently_and_left_out_while_none_is (`desktop/src/settings.rs`) | S360 |
+| a_zone_counts_its_members_but_the_hidden_ones (`desktop/src/ui_model.rs`) | S360 |
+| hide_speaker_takes_the_row_out_and_hidden_speakers_brings_it_back (`desktop/src/view.rs`) | S360 |
+| a_live_or_paused_track_or_the_labels_go_out_without_progress (`desktop/src/audio/now_playing.rs`) | S361 |
+| a_playing_track_with_a_length_goes_out_with_its_progress (`desktop/src/audio/now_playing.rs`) | S361 |
+| a_position_outside_the_track_is_held_to_its_bounds (`desktop/src/audio/now_playing.rs`) | S361 |
+| a_seek_sends_the_new_position (`desktop/src/audio/now_playing.rs`) | S361 |
+| a_timeline_gives_the_elapsed_time_and_length_as_of_its_update (`desktop/src/audio/now_playing.rs`) | S361 |
+| a_track_change_after_a_pause_still_drops_the_previous_tracks_timeline (`desktop/src/audio/now_playing.rs`) | S361 |
+| a_track_change_drops_the_previous_tracks_timeline (`desktop/src/audio/now_playing.rs`) | S361 |
+| an_old_timeline_with_a_fresh_update_time_is_still_the_old_one (`desktop/src/audio/now_playing.rs`) | S361 |
+| an_unknown_or_zero_length_gives_no_timeline (`desktop/src/audio/now_playing.rs`) | S361 |
+| progress_that_runs_on_as_sent_is_not_sent_again (`desktop/src/audio/now_playing.rs`) | S361 |
+| stopping_clears_the_progress_with_the_rest (`desktop/src/audio/now_playing.rs`) | S361 |
+| wall_ticks_count_from_1601 (`desktop/src/audio/now_playing.rs`) | S361 |
+| without_an_update_time_the_position_is_current_when_read (`desktop/src/audio/now_playing.rs`) | S361 |
+| a_speakers_receiver_offset_counts_in_how_far_airplay_plays_ahead (`desktop/src/audio/airplay.rs`) | S401 |
+| the_bar_follows_the_peak_in_db_and_falls_back_slowly (`core/src/meter.rs`) | S408 |
+| the_input_level_meter_reads_only_while_the_main_window_shows (`desktop/src/view.rs`) | S408 |
 
 ## 19. Windows updater
 
