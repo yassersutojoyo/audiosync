@@ -158,10 +158,11 @@ struct UIStrings {
         count == 1 ? "1 notice" : "\(count) notices"
     }
 
-    /// The menu bar icon's accessibility value: streaming on or off, then the
-    /// notices waiting.
-    func statusItemValue(running: Bool, notices: Int) -> String {
-        let streaming = streamingSwitch + " " + (running ? on : off).lowercased()
+    /// The menu bar icon's accessibility value: streaming on or off, the
+    /// speakers switched on, then the notices waiting.
+    func statusItemValue(running: Bool, speakers: Int, notices: Int) -> String {
+        let streaming = streamingSwitch + " " + (running ? on : off).lowercased() + ", "
+            + (speakers == 0 ? "no speaker on" : speakers == 1 ? "1 speaker on" : "\(speakers) speakers on")
         return notices > 0 ? streaming + ", " + noticesWaiting(notices) : streaming
     }
 

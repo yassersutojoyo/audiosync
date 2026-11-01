@@ -675,6 +675,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var closingPress: TimeInterval?
     private var running = false
     private var noticeCount = 0
+    private var speakerCount = 0
     private var quietQueue = QuietQueue()
     /// The rows were last built before the panel's latest close.
     private var rowsStale = false
@@ -702,6 +703,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private weak var revealed: CALayer?
     private var revealSteps: (began: CFTimeInterval, scales: [Double])?
     private var noticeWatch: AnyCancellable?
+    private var speakerWatch: AnyCancellable?
     let model: AppModel
 
     /// What the popover's arrow and its gap under the menu bar take from the
@@ -737,6 +739,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             self.noticeCount = list.count
             self.refreshIcon()
         }
+        // Received on the next main-queue turn, after the change is set.
+        speakerWatch = model.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            guard let self, self.model.activeSpeakers != self.speakerCount else { return }
+            self.speakerCount = self.model.activeSpeakers
+            self.refreshIcon()
+        }
         // The first build and drawing of the rows is the slowest; it happens once launch settles.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.prewarm() }
         DebugTrace.log("[AudioSync] status item visible=\(statusItem.isVisible) button=\(statusItem.button != nil)")
@@ -755,7 +763,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // The badge sits beside the mark, so the item widens while it shows.
         statusItem.length = badge ? NSStatusItem.variableLength : NSStatusItem.squareLength
         button.image = Self.statusImage(running: running, badge: badge)
-        button.setAccessibilityValue(model.text.statusItemValue(running: running, notices: noticeCount))
+        button.setAccessibilityValue(model.text.statusItemValue(running: running, speakers: speakerCount,
+                                                                     notices: noticeCount))
     }
 
     /// The brand mark as a template image (the menu bar tints it), dimmed while

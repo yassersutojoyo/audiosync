@@ -7631,10 +7631,13 @@ do {
     // covers: S357
     check(!pressed(CGPoint(x: 1154, y: 888), icon, 3), "menu bar icon: Escape with the pointer resting on the icon is no press")
     // covers: S357
-    check(UIStrings().statusItemValue(running: false, notices: 0) == "Streaming off"
-            && UIStrings().statusItemValue(running: true, notices: 2) == "Streaming on, 2 notices",
-          "menu bar icon: VoiceOver hears streaming on/off, then the notice count",
-          UIStrings().statusItemValue(running: true, notices: 2))
+    check(UIStrings().statusItemValue(running: false, speakers: 0, notices: 0) == "Streaming off, no speaker on"
+            && UIStrings().statusItemValue(running: true, speakers: 1, notices: 1)
+                == "Streaming on, 1 speaker on, 1 notice"
+            && UIStrings().statusItemValue(running: true, speakers: 3, notices: 2)
+                == "Streaming on, 3 speakers on, 2 notices",
+          "menu bar icon: VoiceOver hears streaming on/off, the speakers on, then the notice count",
+          UIStrings().statusItemValue(running: true, speakers: 3, notices: 2))
     let addRow = CastAddRow.state
     // covers: S406
     check(addRow(true, .searching) == .reserved && addRow(true, .noneFound) == .shown,
