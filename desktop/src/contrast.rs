@@ -1003,7 +1003,7 @@ fn linux_texts_name_no_windows_places() {
             "Volume mixer",
             "Start menu",
             "notification area",
-            "quick settings",
+            "tray panel",
         ] {
             assert!(!text.contains(windows_only), "{windows_only} in: {text}");
         }

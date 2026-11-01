@@ -20,6 +20,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
+- On Windows, a speaker row whose device another app holds says "In use by another app", the tray flyout is called the AudioSync tray panel, and a window that fails to open says so in a plain sentence, with the system's reason in the debug log.
 - AirPlay 2 speakers, stereo pairs and home theater groups play without turning on AirPlay 2 (Experimental) first. A speaker that plays both AirPlay 1 and AirPlay 2 still uses AirPlay 1 unless that setting is on. On the Mac and on Windows.
 - On the Mac, a speaker row in the menu bar panel shows its note, such as "Reconnecting…", "Waiting for the password", "Not on the network" or why a zone member doesn't play, as the main window does. Before, only VoiceOver read most of them.
 - On Windows, the tray panel slides up and fades in as it opens, as Windows 11's own panels do.

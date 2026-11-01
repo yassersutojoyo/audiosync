@@ -1766,7 +1766,7 @@ export component SpeakerRow inherits Rectangle {
     }
 
     // The note after the name and kind: why a speaker can't simply play, or
-    // why one that is on can't play right now ("Waiting for device",
+    // why one that is on can't play right now ("In use by another app",
     // "Reconnecting…").
     property <string> availability-note: Strings.speaker-availability(root.item.availability, root.item.code-every-time, root.item.state);
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : Strings.speaker-note(root.item);
@@ -2974,7 +2974,7 @@ export component ZoneHeader inherits Rectangle {
                             }
 
                             // The count, and the note of a zone whose members all
-                            // wait ("Waiting for device", "Reconnecting…").
+                            // wait ("In use by another app", "Reconnecting…").
                             count-text := QuietText {
                                 text: root.item.total == 0 ? Strings.zone-empty : Strings.speaker-caption(Strings.zone-count(root.item.on, root.item.total, root.item.waiting, root.item.present), Strings.row-note(root.item.state, root.item.waiting-name));
                                 wrap: no-wrap;

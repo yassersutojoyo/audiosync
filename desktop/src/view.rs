@@ -4389,11 +4389,14 @@ impl App {
     }
 
     fn show_window_error(&self, error: &slint::PlatformError) {
-        let text = self
-            .strings()
-            .invoke_window_failed(error.to_string().into());
+        let text = self.window_error_text(error);
         // The box is modal: on the UI thread it would stop the poll timer until closed.
         std::thread::spawn(move || crate::platform::show_error(&text));
+    }
+
+    fn window_error_text(&self, error: &slint::PlatformError) -> String {
+        self.log.log(|| format!("a window didn't open: {error}"));
+        self.strings().get_window_failed().into()
     }
 
     /// While a note says no speaker was found, watches the networks'
@@ -6399,6 +6402,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_tray_panel_is_named_so_it_isnt_taken_for_windows_quick_settings() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(strings.get_flyout_title(), "AudioSync tray panel");
+        for text in [strings.get_help_start(), strings.get_help_notices()] {
+            assert!(text.contains("AudioSync tray panel"), "{text}");
+            assert!(!text.contains("quick settings"), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_window_that_fails_to_open_says_so_plainly_and_logs_the_reason() {
+        use crate::debug_log;
+        let path = debug_log::test_dir("view-window-failed").join(debug_log::FILE_NAME);
+        let log = DebugLog::new(Some(path.clone()));
+        let app = app_logging(MockBackend::new(), log.clone());
+        let error = slint::PlatformError::Other("the raw reason".into());
+        assert_eq!(
+            app.window_error_text(&error),
+            "AudioSync couldn't open this window. Try again, or exit AudioSync and open it again."
+        );
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(written.contains("the raw reason"), "{written}");
+    }
+
     // covers: S212
     #[test]
     fn a_late_read_keeps_the_window_frame_and_logs_no_unchanged_airplay2_choice() {
@@ -6548,7 +6578,7 @@ mod tests {
             )
         };
         let turn_off = strings.get_turn_off().to_string();
-        let waiting = "Waiting for device".to_owned();
+        let waiting = "In use by another app".to_owned();
         assert_eq!(
             read(RowState::WaitingForDevice),
             (waiting.clone(), turn_off.clone(), waiting)

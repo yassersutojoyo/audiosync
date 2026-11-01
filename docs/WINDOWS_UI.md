@@ -51,7 +51,7 @@ A speaker row shows one of four states. Off: a grey toggle. On while
 streaming is off: an outlined toggle, "Will play" to Narrator. Playing: a
 filled toggle, a teal row and a bold name. On while streaming but unable to
 play right now: an outlined toggle, a plain row and name, and a note under the
-name that Narrator also reads as the toggle's value, "Waiting for device" when
+name that Narrator also reads as the toggle's value, "In use by another app" when
 another app holds the output's device for itself, "Reconnecting…" while
 AudioSync keeps trying to reach an AirPlay speaker, from its second failed
 retry (about 3 s in, so a blip its first retry heals shows nothing), "Waiting:

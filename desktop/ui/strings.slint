@@ -28,7 +28,7 @@ export global Strings {
     // another app holds its device, AudioSync keeps trying to reach an
     // AirPlay speaker, or the speaker isn't announced on the network. Its
     // row says so instead of showing it as playing.
-    out property <string> waiting-for-device: @tr("Waiting for device");
+    out property <string> waiting-for-device: @tr("In use by another app");
     out property <string> reconnecting: @tr("Reconnecting…");
     out property <string> waiting-for-airplay2: @tr("Waiting: too many AirPlay 2 speakers");
     out property <string> waiting-for-ptp: @tr("Waiting: AirPlay 2 speakers on another network");
@@ -480,7 +480,7 @@ export global Strings {
     out property <string> open-app: @tr("Open AudioSync");
     out property <string> exit-app: @tr("Exit AudioSync");
     out property <string> exit-short: @tr("Exit");
-    out property <string> flyout-title: @tr("AudioSync quick settings");
+    out property <string> flyout-title: @tr("AudioSync tray panel");
 
     // Equalizer
     out property <string> equalizer-title: @tr("Equalizer");
@@ -509,10 +509,8 @@ export global Strings {
         return @tr("Version {}", version);
     }
 
-    // A window or dialog that failed to open; `detail` is the system's reason.
-    public pure function window-failed(detail: string) -> string {
-        return @tr("AudioSync couldn't open a window: {}", detail);
-    }
+    // A window or dialog that failed to open; the system's reason goes to the debug log.
+    out property <string> window-failed: @tr("AudioSync couldn't open this window. Try again, or exit AudioSync and open it again.");
 
     // The buttons of the updater's notice.
     public pure function update-button(button: UpdateButton) -> string {
@@ -1023,7 +1021,7 @@ export global Strings {
     out property <string> help-title: @tr("AudioSync Guide");
     out property <string> help-intro: @tr("AudioSync plays your PC's sound on AirPlay and Google Cast speakers and on the outputs connected to this PC at the same time, and lines them up with a delay for each speaker.");
     out property <string> help-start-title: @tr("First Steps");
-    out property <string> help-start: @tr("The main window holds every control. The AudioSync icon in the notification area opens AudioSync quick settings, with the Streaming switch, the source, the volume and the speakers. Closing the window keeps AudioSync running there, and streaming goes on. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, or an input device, such as a microphone or line in. If Windows blocks microphone access for desktop apps, a notice says so, with a button that opens those privacy settings.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your zones, each with its speakers under it, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with a small icon after its name for its kind; point to the icon to read the kind.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
+    out property <string> help-start: @tr("The main window holds every control. The AudioSync icon in the notification area opens the AudioSync tray panel, with the Streaming switch, the source, the volume and the speakers. Closing the window keeps AudioSync running there, and streaming goes on. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, or an input device, such as a microphone or line in. If Windows blocks microphone access for desktop apps, a notice says so, with a button that opens those privacy settings.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your zones, each with its speakers under it, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with a small icon after its name for its kind; point to the icon to read the kind.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
     out property <string> help-start-linux: @tr("The main window holds every control. Where your desktop shows tray icons, the AudioSync icon there opens the main window, and its menu turns streaming on or off, turns Launch at Sign-In on or off, and quits AudioSync. Closing the window keeps AudioSync running in the tray, and streaming goes on. On a desktop without tray icons, closing the window quits AudioSync. To quit, choose File > Exit.\n\nUnder Audio Source, pick what to play: All System Audio, one app that plays sound, or an input device, such as a microphone or line in. AudioSync captures it through PipeWire and plays to the outputs PipeWire lists.\n\nThe speakers are listed under This PC (the PC's own speakers or line out, and headphones on its jack), then your zones, each with its speakers under it, then Connected Speakers: AirPlay and Google Cast speakers and every other output, such as USB, Bluetooth or HDMI, with a small icon after its name for its kind; point to the icon to read the kind.\n\nSelect a speaker's round button to turn it on; streaming starts with it. Select it again to turn it off. When you turn the Streaming switch off, your speakers stay chosen with an outlined button, and they play again when you turn streaming on or select any speaker.");
     out property <string> help-sync-title: @tr("Sync");
     out property <string> help-sync: @tr("The PC's own speakers are the reference and have no delay. Every other local speaker shows its delay relative to them. Without a reference, the speaker with the lowest value plays first and the others wait by the difference.\n\nTo change a delay, select the speaker's row or its value. The −100, −10, +10 and +100 buttons apply at once. You can also type a number, with + or − in front if you like, and apply it with Enter or Ctrl+S (File > Apply Typed Delay); the controls stay open. Selecting the row again, or clicking outside every speaker row, applies what you typed and closes the controls. Escape drops what you typed. A number out of range gets a red outline and a line that gives the range.\n\nHeard a speaker before the others? Raise its delay. Heard it late? Lower it, below 0 if needed.\n\nThe AirPlay Delay card under Connected Speakers sets how long the speakers on this PC wait for the AirPlay speakers. If the AirPlay speakers sound late, raise it; if they sound early, lower it. AudioSync keeps the AirPlay speakers in step with each other, so they have no delay of their own.");
@@ -1058,7 +1056,7 @@ export global Strings {
     out property <string> help-remote: @tr("A phone on the same network as this PC can switch your speakers on and off, and set their volume, their delay and the master volume. It also shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen before you enter the code, then open AudioSync from the new icon and pair there: on iPhone, a pairing made in Safari doesn't carry over to the Home Screen app. The window shows these steps for iPhone and Android. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. On a network Windows calls Public, the window and a notice say so. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
     out property <string> help-remote-linux: @tr("A phone on the same network as this PC can switch your speakers on and off, and set their volume, their delay and the master volume. It also shows what's playing. Choose File > Web Remote…, turn Web Remote on, and open the address it shows on the phone (or scan its QR code). Add the page to the Home Screen before you enter the code, then open AudioSync from the new icon and pair there: on iPhone, a pairing made in Safari doesn't carry over to the Home Screen app. The window shows these steps for iPhone and Android. Each code works once and for 10 minutes; the window shows the next one, and New Code makes a fresh one.\n\nThe page uses plain HTTP, so use the web remote only on your home network. Forget All Remote Devices unpairs every phone, also while the remote is off. If another app already uses the port, the window says so and lets you pick another one.");
     out property <string> help-notices-title: @tr("Notices");
-    out property <string> help-notices: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in quick settings. Use its close button to dismiss it, or Dismiss All. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on File > Switch to All System Audio When the Source App Quits: AudioSync then moves to All System Audio, and stays there when the app opens again.");
+    out property <string> help-notices: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window, and the newest one in the AudioSync tray panel. Use its close button to dismiss it, or Dismiss All. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on File > Switch to All System Audio When the Source App Quits: AudioSync then moves to All System Audio, and stays there when the app opens again.");
     out property <string> help-notices-linux: @tr("When something needs your attention, such as a speaker that was disconnected or an app that quit, a notice appears at the top of the main window. Use its close button to dismiss it, or Dismiss All. Many notices also clear themselves once the cause is gone.\n\nWhen the app you picked as the source quits, streaming stops and a notice says so. To keep playing instead, turn on File > Switch to All System Audio When the Source App Quits: AudioSync then moves to All System Audio, and stays there when the app opens again.");
 
     // A notice's dismiss button, for Narrator: it names the notice in a few
@@ -1509,7 +1507,7 @@ export global Strings {
         return @tr("{}. {}", group-note, description);
     }
 
-    // Two parts of a row's note joined ("2 of 3 on · Waiting for device");
+    // Two parts of a row's note joined ("2 of 3 on · In use by another app");
     // either may be empty.
     public pure function speaker-caption(kind: string, note: string) -> string {
         if kind == "" {
