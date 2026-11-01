@@ -522,7 +522,7 @@ mod tests {
         );
     }
 
-    const CTRL_Q: &str = "if event.modifiers.control && event.text.to-lowercase() == \"q\" {\n                root.exit-requested();";
+    const CTRL_Q: &str = "if event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == \"q\" {\n                root.exit-requested();";
 
     /// A checkout on Windows can have CRLF line endings; the snippets above
     /// are written with LF.
