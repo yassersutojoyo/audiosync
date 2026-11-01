@@ -4838,7 +4838,7 @@ The release side:
 | windows_answers_with_the_connected_networks (`desktop/src/network_profile.rs`) | S390 |
 | a_public_network_shows_in_the_window_and_as_a_notice_until_dismissed (`desktop/src/view/remote_window.rs`) | S390 |
 | only_a_public_network_names_the_firewall (`desktop/src/network_profile.rs`) | S391 |
-| the_none_found_notes_leave_the_firewall_out_off_a_public_network (`desktop/src/view.rs`) | S391 |
+| the_none_found_notes_suggest_private_only_on_a_public_network (`desktop/src/view.rs`) | S391 |
 | the_none_found_note_takes_a_public_reading_on_a_quiet_poll (`desktop/src/view.rs`) | S391 |
 
 ### Gone speakers' names, search state, notices, Cast speakers and the calibration line: Windows (`cargo test` in `desktop/`)
