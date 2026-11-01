@@ -1884,6 +1884,7 @@ impl App {
                         on: count(counts.on),
                         total: count(counts.total),
                         waiting: count(counts.waiting),
+                        waiting_name: state.zone_waiter(zone).unwrap_or_default().into(),
                         present: count(counts.present),
                         volume: zone.volume as f32,
                         expanded: !ui.collapsed.contains(&zone.id),
