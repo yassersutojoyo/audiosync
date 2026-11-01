@@ -20,7 +20,7 @@
 //! works again, and count as no track.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -104,6 +104,25 @@ pub trait SessionList {
     /// AudioSync's icon fitted as receiver artwork; `None`, logged, when it
     /// can't be.
     fn icon(&self, log: &DebugLog) -> Option<FittedArtwork>;
+
+    /// Has `changed` told whenever the system reports a session changed, so
+    /// the thread reads the sessions then rather than at the next poll. A
+    /// system that reports nothing keeps this and is only polled.
+    fn watch(&mut self, _changed: Changed) {}
+}
+
+/// Wakes the reading thread to read the sessions now; any thread may call
+/// it, and after the thread has ended it does nothing.
+#[derive(Clone)]
+pub struct Changed(Weak<Shared>);
+
+impl Changed {
+    pub fn notify(&self) {
+        if let Some(shared) = self.0.upgrade() {
+            shared.lock().changed = true;
+            shared.wake.notify_all();
+        }
+    }
 }
 
 #[derive(Default)]
@@ -125,6 +144,8 @@ struct State {
     remote: Vec<Transport>,
     /// The readers not dropped yet.
     readers: u8,
+    /// The system reported a change since the sessions were last read.
+    changed: bool,
 }
 
 #[derive(Default)]
@@ -677,6 +698,10 @@ mod tests {
         /// The app IDs of the sessions sent to.
         sent_to: Mutex<Vec<String>>,
         ended: AtomicBool,
+        /// What the thread watches the sessions with.
+        changed: Mutex<Option<Changed>>,
+        /// Every session lists as paused from now on.
+        paused: AtomicBool,
     }
 
     impl Counts {
@@ -709,10 +734,18 @@ mod tests {
 
         fn list(&mut self) -> Result<Vec<(MediaSession, String)>, String> {
             self.counts.lists.fetch_add(1, Ordering::SeqCst);
+            let paused = self.counts.paused.load(Ordering::SeqCst);
             Ok(self
                 .sessions
                 .iter()
-                .map(|s| (s.clone(), s.app_id.clone()))
+                .map(|s| {
+                    let mut s = s.clone();
+                    if paused {
+                        (s.playing, s.paused) = (false, true);
+                    }
+                    let app_id = s.app_id.clone();
+                    (s, app_id)
+                })
                 .collect())
         }
 
@@ -754,6 +787,10 @@ mod tests {
 
         fn icon(&self, _: &DebugLog) -> Option<FittedArtwork> {
             Some(FittedArtwork::single(JPEG.into()))
+        }
+
+        fn watch(&mut self, changed: Changed) {
+            *self.counts.changed.lock().unwrap() = Some(changed);
         }
     }
 
@@ -911,6 +948,36 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(*counts.sent_to.lock().unwrap(), ["Spotify.exe"]);
+    }
+
+    #[test]
+    fn a_change_the_system_reports_is_read_at_once_not_at_the_next_poll() {
+        let (fake, counts) = fake(Thumbnail::Image);
+        let (mut track, _card) = spawn(
+            move || Ok(fake),
+            Duration::from_secs(10),
+            DebugLog::default(),
+        );
+        track.follow(Some(Follow::AnyApp));
+        let reads = |track: &mut MediaSessionReader, playing: bool| {
+            track
+                .take_reading()
+                .and_then(|reading| reading.track)
+                .is_some_and(|read| read.session.playing == playing)
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !reads(&mut track, true) {
+            assert!(Instant::now() < deadline, "no first reading");
+            thread::sleep(Duration::from_millis(5));
+        }
+        counts.paused.store(true, Ordering::SeqCst);
+        let changed = counts.changed.lock().unwrap().clone();
+        changed.expect("the thread watches the sessions").notify();
+        let deadline = Instant::now() + Duration::from_millis(100);
+        while !reads(&mut track, false) {
+            assert!(Instant::now() < deadline, "the pause waited for the poll");
+            thread::sleep(Duration::from_millis(2));
+        }
     }
 
     #[test]
