@@ -11381,6 +11381,41 @@ do {
           "calibration reference: no readable volume and not muted is unknown")
 }
 
+// MARK: Calibrate All: the volume row under "Before you start" (CalibrationFlow.swift)
+do {
+    let t = UIStrings()
+    func volumeRow(_ volume: Double?, _ muted: Bool?) -> CalibrationVolumeCheck? {
+        CalibrationVolumeCheck(DeviceVolumeReading(volume: volume, muted: muted))
+    }
+    check(t.calibrateBeforeStart == "Before you start" && t.calibrateMicrophoneCheck == "Microphone where you listen"
+            && t.calibrateMicrophoneCheckDetail == "Keep the room quiet. Nothing changes until you click Apply.",
+          "before you start: the microphone row says where it goes and that nothing changes before Apply")
+    let muted = volumeRow(0.4, true), mutedLow = volumeRow(0.12, true), mutedUnknown = volumeRow(nil, true)
+    check(muted?.warning == .muted && muted?.percent == 40 && mutedLow?.warning == .mutedAndLow(percent: 12)
+            && mutedUnknown?.warning == .muted && mutedUnknown?.percent == nil,
+          "before you start: muted warns at any volume, with the meter only when the volume is known")
+    let mutedWhy: String = "Calibration plays a sweep on the Mac's built-in speakers, "
+        + "and the microphone can't hear them while they're muted."
+    check(muted.map(t.calibrateVolumeTitle) == "Your Mac is muted" && mutedLow.map(t.calibrateVolumeTitle) == "Your Mac is muted"
+            && muted.map(t.calibrateVolumeDetail) == mutedWhy,
+          "before you start: the muted warning says why")
+    check((muted?.warning).map(t.deviceVolumeFix) == "Unmute" && (mutedLow?.warning).map(t.deviceVolumeFix) == "Unmute at 75%",
+          "before you start: the muted warning offers the main window's fix")
+    let quiet = volumeRow(0.12, false)
+    let quietWhy: String = "The microphone may barely hear the sweep on the built-in speakers. "
+        + "Turn it up before you calibrate."
+    check(quiet?.warning == .low(percent: 12) && quiet.map(t.calibrateVolumeTitle) == "Your Mac's volume is 12%"
+            && quiet.map(t.calibrateVolumeDetail) == quietWhy && (quiet?.warning).map(t.deviceVolumeFix) == "Set to 75%",
+          "before you start: 25 % or less warns with the percent and offers Set to 75%")
+    let fine = volumeRow(0.62, false)
+    check(fine?.warning == nil && fine?.percent == 62 && fine.map(t.calibrateVolumeTitle) == "Mac volume: 62%"
+            && fine.map(t.calibrateVolumeDetail) == "Loud enough for the microphone to hear the built-in speakers.",
+          "before you start: a fine volume shows a check with its percent, no warning")
+    check(volumeRow(nil, nil) == nil && volumeRow(nil, false) == nil && volumeRow(Double.nan, nil) == nil,
+          "before you start: an unknown volume shows no row")
+    check(CalibrationVolumeCheck.lowPercent == 25, "before you start: the meter marks the core's low line, 25 %")
+}
+
 // MARK: Calibrate All Speakers: the plan, the stops and the sheet (CalibrateAllFlow.swift, S235-S240)
 do {
     let t = UIStrings()

@@ -183,6 +183,28 @@ enum CalibrationReferenceLevel: Equatable {
     }
 }
 
+/// The reference's row under "Before you start": a warning with the main
+/// window's fix when it is muted or quiet, a check when it is fine; nil when
+/// the level is unknown, so nothing alarming shows.
+struct CalibrationVolumeCheck: Equatable {
+    let warning: DeviceVolumeHint?
+    /// The whole percent the meter shows; nil when the volume is unknown.
+    let percent: Int?
+
+    /// The core's low line as a whole percent, where the meter marks it.
+    static let lowPercent: Int = (0...100).last { n in
+        let reading = AscDeviceVolume(has_volume: true, volume: Double(n) / 100, has_mute: false, muted: false)
+        return asc_device_volume_decide(reading).decision == UInt32(ASC_DEVICE_VOLUME_LOW)
+    } ?? 0
+
+    init?(_ reading: DeviceVolumeReading) {
+        guard CalibrationReferenceLevel(reading) != .unknown else { return nil }
+        let verdict = reading.verdict
+        warning = verdict.hint
+        percent = verdict.percent
+    }
+}
+
 enum CalibrationFlow {
     /// Why calibration won't record from the default input, nil when it may:
     /// a Bluetooth hands-free input is refused before anything plays, for one

@@ -297,7 +297,16 @@ extension AppDelegate {
         if appModel.calibrateAll.blocker != blocker { appModel.calibrateAll.blocker = blocker }
         let leftOut = CalibrateAllFlow.leftOut(inputs)
         if appModel.calibrateAll.leftOut != leftOut { appModel.calibrateAll.leftOut = leftOut }
+        followCalibrateVolume()
         followCalibrateAllUndo()
+    }
+
+    /// Also on a device volume change. Only a reference that is on is
+    /// followed, so only then does the row's fix reach it (S197).
+    func followCalibrateVolume() {
+        let on = localReference.map(enabledLocal.contains) ?? false
+        let volume = appModel.calibrateAll.shown && on ? CalibrationVolumeCheck(calibrationReferenceReading()) : nil
+        if appModel.calibrateAll.volume != volume { appModel.calibrateAll.volume = volume }
     }
 
     /// Undo goes once a value Apply wrote changed, so it can't overwrite that change (S238).

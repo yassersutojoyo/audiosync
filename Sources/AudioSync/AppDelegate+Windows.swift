@@ -414,6 +414,9 @@ extension AppDelegate {
             self?.pushModel()
         }
         a.fixDeviceVolume = { [weak self] uid in self?.fixDeviceVolume(uid) }
+        a.fixCalibrationVolume = { [weak self] in
+            if let uid = self?.localReference { self?.fixDeviceVolume(uid) }
+        }
         return a
     }
 

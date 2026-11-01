@@ -381,8 +381,30 @@ struct UIStrings {
         + "on the built-in speakers and then on each other speaker that is on, one at a time, twice each, "
         + "and fades the music back in. Headphones and virtual outputs are left out. "
         + "Nothing changes until you click Apply."
-    let calibrateAllIntro = "Put the microphone where you listen and keep the room quiet. "
-        + "Nothing changes until you click Apply."
+    let calibrateBeforeStart = "Before you start"
+    let calibrateMicrophoneCheck = "Microphone where you listen"
+    let calibrateMicrophoneCheckDetail = "Keep the room quiet. Nothing changes until you click Apply."
+    let calibrateMusicFadesBack = "The music fades back in when it's done."
+    let calibrateLeftOutTitle = "Left out"
+
+    /// The reference's row under "Before you start".
+    func calibrateVolumeTitle(_ check: CalibrationVolumeCheck) -> String {
+        switch check.warning {
+        case .muted, .mutedAndLow: return "Your Mac is muted"
+        case .low(let n): return "Your Mac's volume is \(percent(n))"
+        case nil: return "Mac volume: \(percent(check.percent ?? 0))"
+        }
+    }
+
+    func calibrateVolumeDetail(_ check: CalibrationVolumeCheck) -> String {
+        switch check.warning {
+        case .muted, .mutedAndLow:
+            return "Calibration plays a sweep on the Mac's built-in speakers, "
+                + "and the microphone can't hear them while they're muted."
+        case .low: return "The microphone may barely hear the sweep on the built-in speakers. Turn it up before you calibrate."
+        case nil: return "Loud enough for the microphone to hear the built-in speakers."
+        }
+    }
 
     // MARK: Calibrate Zone (S255)
 
@@ -463,9 +485,7 @@ struct UIStrings {
         }
     }
 
-    let calibrateAllSpeakerColumn = "Speaker"
     let calibrateAllCurrentColumn = "Current"
-    let calibrateAllNewColumn = "New"
     let calibrateAllNone = "None"
     let calibrateAllApply = "Apply"
     let calibrateAllApplyHelp = "Sets the new delays of the speakers that were measured clearly. Undo puts them all back."
@@ -509,12 +529,36 @@ struct UIStrings {
             return "Not measured."
         case .certain(let ms, let u, let clamped):
             let value = calibrateAllMeasured(ms, uncertaintyMs: u, kind: kind)
-            return clamped ? value + ". The end of the range, so this speaker stays a little out of sync." : value
+            return clamped ? value + ". " + calibrateAllClamped : value
         case .uncertain(let ms, let u):
-            return calibrateAllMeasured(ms, uncertaintyMs: u, kind: kind)
-                + ". The two sweeps differ too much, so the delay stays. Click Measure Again."
+            return calibrateAllMeasured(ms, uncertaintyMs: u, kind: kind) + ". " + calibrateAllUncertain
         case .refused(let failure):
             return calibrateAllRefusal(failure) + " The delay stays."
+        }
+    }
+
+    let calibrateAllClamped = "The end of the range, so this speaker stays a little out of sync."
+    let calibrateAllUncertain = "The two sweeps differ too much, so the delay stays. Click Measure Again."
+    let calibrateAllMeasuredClearly = "Measured clearly"
+    let calibrateAllNotClear = "Not clear"
+
+    /// Under a result card's new delay: "± 2 ms · was +12 ms".
+    func calibrateAllWas(uncertaintyMs: Double, was current: String) -> String {
+        "± \(Int(uncertaintyMs.rounded())) \(millisecondsUnit) · was \(current)"
+    }
+
+    /// A card's note when nothing new was measured: "Not measured. · was +12 ms".
+    func calibrateAllNote(_ note: String, was current: String) -> String {
+        "\(note) · was \(current)"
+    }
+
+    /// The line under a result card's new delay, nil for a plain clear one.
+    func calibrateAllCardNote(_ row: CalibrateAllSheet.Row) -> String? {
+        if row.off { return calibrateAllOff }
+        switch row.result {
+        case .certain(_, _, let clamped): return clamped ? calibrateAllClamped : nil
+        case .uncertain: return calibrateAllUncertain
+        default: return calibrateAllResult(row)
         }
     }
 

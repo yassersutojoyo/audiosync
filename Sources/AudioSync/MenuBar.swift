@@ -228,6 +228,8 @@ final class AppModel: ObservableObject {
         var retryAirPlay: () -> Void = {}
         /// The device volume fix the user clicked under a local output (S197).
         var fixDeviceVolume: (String) -> Void = { _ in }
+        /// The same fix on the calibration reference, from "Before you start".
+        var fixCalibrationVolume: () -> Void = {}
         /// Calibrate this local speaker with the microphone (S232), and cancel it.
         var calibrate: (String) -> Void = { _ in }
         var cancelCalibration: () -> Void = {}
