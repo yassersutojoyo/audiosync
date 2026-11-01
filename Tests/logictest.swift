@@ -5613,6 +5613,16 @@ do {
           "EC2 Bluetooth: a disconnected headset waits; the other speaker keeps playing")
     check(LocalOutputSync.plan(enabled: ["bt", "usb"], active: ["usb"], available: ["bt", "usb"]) == P(attach: ["bt"], detach: []),
           "EC2 Bluetooth: a reconnected headset is attached again")
+    // covers: S138 (a headset back at another rate is converted; the hold-back takes no rate, so that half is by construction)
+    do {
+        let handsFree = try? OutputRenderer.clientFormat(deviceRate: 16_000, deviceChannels: 1, captureRate: 48_000,
+                                                         set: { _, _ in noErr })
+        let holds = LocalDelay.holdBacks(takingPart: ["builtin", "bt"], reference: "builtin", offsets: ["bt": -150],
+                                         airPlayChosen: false, latencyMs: 0)
+        check(handsFree?.rate == 16_000 && handsFree?.channels == 1 && holds == ["builtin": 150, "bt": 0],
+              "EC2 Bluetooth: a headset back in its 16 kHz profile is filled at 16 kHz for the core to convert to; its offset alone sets its hold-back",
+              "\(String(describing: handsFree)) \(holds)")
+    }
 
     // covers: S325 (a Bluetooth speaker that starts on a link that just came up restarts once)
     do {
@@ -5920,6 +5930,48 @@ do {
     check(!StreamingPolicy.hasSpeaker(enabledAirPlay: [], enabledLocal: [])
           && StreamingPolicy.hasSpeaker(enabledAirPlay: [], enabledLocal: ["usb"]),
           "EC8 all off: an automatic start with no speaker on asks for one first")
+    // covers: S144 (the new session takes the saved per-speaker delays and volumes)
+    do {
+        final class Outputs: LocalOutputEngine {
+            var activeOutputUIDs: [String] = []
+            var started: [String: [Double]] = [:]
+            func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {
+                activeOutputUIDs.append(uid)
+                started[uid] = [delayMs, gain]
+            }
+            func detachOutput(uid: String) { activeOutputUIDs.removeAll { $0 == uid } }
+            func detachOutputs(uids: [String], keepingLeads: Bool) { for uid in uids { detachOutput(uid: uid) } }
+            func setGain(uid: String, g: Double) {}
+        }
+        final class Saved { var values: [String: Any] = [:] }
+        let saved = Saved()
+        let store = SettingsStore(read: { saved.values[$0] }, write: { value, key in saved.values[key] = value })
+        store.save(levels: ["usb": 40, "bt": -120], forKey: AppSettings.Keys.localOffsets)
+        store.save(levels: ["usb": 80, "bt": 35], forKey: AppSettings.Keys.localVolumes)
+        store.save(levels: ["A1": 60], forKey: AppSettings.Keys.airplayVolumes)
+        let listing = [AudioDevices.Device(id: 52, name: "USB DAC", uid: "usb", transport: kAudioDeviceTransportTypeUSB),
+                       AudioDevices.Device(id: 61, name: "Headphones", uid: "bt", transport: kAudioDeviceTransportTypeBluetooth)]
+        func startSession(on engine: Outputs) {
+            let settings = store.load()
+            _ = LocalOutputSync.apply(
+                enabled: ["usb", "bt"], listing: listing, to: engine,
+                holdBacks: LocalDelay.holdBacks(takingPart: ["usb", "bt"], reference: nil, offsets: settings.localOffsets,
+                                                airPlayChosen: false, latencyMs: 0),
+                gain: { LocalOutputGain.gain($0, solo: nil, volumes: settings.localVolumes, zones: [], master: settings.master) })
+        }
+        let first = Outputs()
+        startSession(on: first)
+        let allOff = LocalOutputSync.apply(enabled: [], listing: listing, to: first, holdBacks: [:], gain: { _ in 0 })
+        let second = Outputs()
+        startSession(on: second)
+        let reloaded = store.load()
+        let usbGain = LocalOutputGain.gain("usb", solo: nil, volumes: ["usb": 80], zones: [], master: reloaded.master)
+        check(first.activeOutputUIDs.isEmpty && Set(allOff.detached) == ["usb", "bt"]
+                && second.started["usb"] == [160, usbGain] && second.started["bt"]?.first == 0
+                && reloaded.localVolumes == ["usb": 80, "bt": 35] && reloaded.airplayVolumes == ["A1": 60],
+              "EC8 all off: the saved delays and volumes survive a reload into a fresh session's outputs",
+              "\(second.started) \(usbGain) \(reloaded.airplayVolumes)")
+    }
 
     // EC10: many speakers.
     typealias S = (name: String, tag: SpeakerTag)

@@ -1296,6 +1296,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | EC1 new ID: a speaker switched off is detached, not restarted | S161 |
 | EC2 Bluetooth: a disconnected headset waits; the other speaker keeps playing | S138, S161 |
 | EC2 Bluetooth: a reconnected headset is attached again | S138, S161 |
+| EC2 Bluetooth: a headset back in its 16 kHz profile is filled at 16 kHz for the core to convert to; its offset alone sets its hold-back | S138 |
 | EC2 Bluetooth fresh link: a device listed at launch starts as is | S325 |
 | EC2 Bluetooth fresh link: a wired device that just appeared starts as is | S325 |
 | EC2 Bluetooth fresh link: one that starts 0.5 s after it appeared restarts once | S325 |
@@ -1461,6 +1462,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | EC8 all off: turning a speaker on again starts streaming | S119, S144, S162 |
 | EC8 all off: only a switch-on while stopped starts streaming | S119, S162 |
 | EC8 all off: an automatic start with no speaker on asks for one first | S116, S136, S162 |
+| EC8 all off: the saved delays and volumes survive a reload into a fresh session's outputs | S144 |
 | EC10 many speakers: sixteen speakers all listed, in name order | S146, S152, S165 |
 | EC10 many speakers: eight local speakers are attached together | S146, S161, S165 |
 | EC11 long names: names that differ only at the end still sort and stay whole | S147, S152, S166 |
