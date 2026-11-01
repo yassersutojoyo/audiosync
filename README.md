@@ -69,7 +69,7 @@ The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
-- Source: all system audio, one app, or an input device (mic, audio interface).
+- Source: all system audio, one app, several apps (or every app except the ones you check), or an input device (mic, audio interface).
 - Outputs: AirPlay speakers, Apple TVs, Google Cast speakers, and anything macOS can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
 - A delay per local speaker (−2 to +20 s), plus one AirPlay delay.
 - Volume per speaker and master, a 10-band EQ, zones that switch on and off together, each with its own volume, auto-connect, launch at login, Now Playing for Spotify and Music.

@@ -5,10 +5,10 @@ with a [Slint](https://slint.dev) interface. The audio work comes from
 `audiosync-core` in [`../core`](../core), the crate the macOS app links too.
 
 **Status: in development, ready for a first try on a real PC.** It has the Mac
-app's screens (the main window, the equalizer, a tray icon with a tray panel, the
+app's screens (the main window, the equalizer, a tray icon and its panel, the
 About dialog), and on Windows they drive the real audio backend: it captures
-one app, everything the PC plays except AudioSync itself, or an input device
-such as a microphone or line in, and plays it on
+one app, several apps, everything the PC plays except AudioSync itself, or an
+input device such as a microphone or line in, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
 equalizer. AirPlay speakers on your network show up under Connected Speakers,
 through AudioSync's own sender ([`../airplay`](../airplay)); that part hasn't
@@ -49,9 +49,10 @@ build you make yourself, you write that file as shown below), and run it.
 - **Closing and quitting:** closing the window keeps AudioSync running in the
   notification area, next to the clock. To quit, right-click the tray icon and
   choose Exit AudioSync, or use File > Exit in the main window.
-- **Where your stuff is:** your choices (source, speakers with their delays
-  and volumes, master volume, groups, auto-connect, the equalizer, where the
-  window was) are saved in `%LOCALAPPDATA%\AudioSync\settings.json`. Next to
+- **Where your stuff is:** your choices (source, the last mix of apps, speakers
+  with their delays and volumes, master volume, groups, auto-connect, the
+  equalizer, where the window was) are saved in
+  `%LOCALAPPDATA%\AudioSync\settings.json`. Next to
   it sit `airplay-pairings.dat`, the Apple TV pairings, encrypted for your
   Windows account; `cast-speakers.json`, each Google Cast speaker's offset;
   `cast-certificates.txt`, each Cast speaker's last certificate fingerprint;
