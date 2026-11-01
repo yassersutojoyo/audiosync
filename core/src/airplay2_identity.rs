@@ -610,7 +610,7 @@ mod tests {
         let path = scratch("link.dat");
         std::os::unix::fs::symlink(&target, &path).expect("a symbolic link");
         let (store, loaded) = IdentityStore::open(path.clone());
-        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert!(matches!(loaded, Loaded::Unreadable(_)), "{loaded:?}");
         assert_eq!(store.access(), Access::Unread);
         let mode = fs::metadata(&target)
             .expect("metadata")
