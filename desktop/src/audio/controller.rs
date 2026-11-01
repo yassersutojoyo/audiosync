@@ -11042,7 +11042,7 @@ mod tests {
         assert_eq!(fake.take_calls(), [Call::Delay(id, Duration::ZERO)]);
     }
 
-    // covers: S401, S394, P99
+    // covers: S401, S394, S283, P99
     #[test]
     fn how_far_airplay_plays_ahead_follows_e_a_receiver_offset_and_a_removed_speaker() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
@@ -11054,6 +11054,7 @@ mod tests {
         cast.announce(KITCHEN, "Kitchen", audiosync_cast::discovery::DEVICE_PORT);
         backend.set_cast(cast.link());
         backend.poll();
+        // The app never sets d_s (S180); 3 s here brings them past P99's limit.
         for speaker in [&kitchen, &den] {
             backend.set_airplay_enabled(&id_of(speaker), true).unwrap();
             backend.set_airplay_delay(&id_of(speaker), 3000.0);
