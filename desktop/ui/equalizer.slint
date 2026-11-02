@@ -72,8 +72,11 @@ component Band inherits VerticalLayout {
                         root.press-gain-set = true;
                         root.press-gain = round(value * 2) / 2;
                     }
-                    // The keyboard and the pointer both land on 0.5 dB steps.
-                    root.changed(round(value * 2) / 2);
+                    // The keyboard and the pointer both land on 0.5 dB steps;
+                    // a drag isn't snapped to `step`, so the knob, number and
+                    // Narrator follow the step too.
+                    self.value = round(value * 2) / 2;
+                    root.changed(self.value);
                 }
                 // Two clicks within the system's double-click time set 0 dB, as on the Mac.
                 released => {

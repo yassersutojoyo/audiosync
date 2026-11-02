@@ -13048,6 +13048,43 @@ mod tests {
     }
 
     #[test]
+    fn a_dragged_equalizer_band_reads_the_gain_it_applies() {
+        use i_slint_backend_testing::ElementHandle;
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        let (x, y) = first_band_point(&app);
+        let window = app.equalizer.window();
+        let shown = || {
+            let value = ElementHandle::find_by_accessible_label(&app.equalizer, "32 Hz")
+                .find_map(|band| band.accessible_value())
+                .expect("the 32 Hz band");
+            value
+                .trim_end_matches(" dB")
+                .replace('−', "-")
+                .replace('+', "")
+                .parse::<f64>()
+                .expect("a gain")
+        };
+        let button = PointerEventButton::Left;
+        let from = slint::LogicalPosition::new(x, y);
+        window.dispatch_event(WindowEvent::PointerMoved { position: from });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: from,
+            button,
+        });
+        for step in 1..=40 {
+            let position = slint::LogicalPosition::new(x, y - step as f32);
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+            draw_frames();
+            assert_eq!(shown(), first_band_gain(&app), "{step} px up");
+        }
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position: slint::LogicalPosition::new(x, y - 40.0),
+            button,
+        });
+    }
+
+    #[test]
     fn a_delete_while_a_rename_is_open_keeps_the_curve_being_renamed() {
         let app = app_over(MockBackend::new());
         let eq_window = &app.equalizer;
