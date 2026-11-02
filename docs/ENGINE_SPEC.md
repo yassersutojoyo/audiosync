@@ -2501,6 +2501,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | menu bar panel source: the open scales the whole panel and its own shadow on the same discrete steps, never through a rasterized copy, so its outer edges stay on the pixel grid | S405 |
 | menu bar panel: the popover frame's focus ring is no part of its material, so the stand-in never hides it and handing the background back never shows a stale ring | S405 |
 | menu bar panel source: before the panel settles for a fade, the popover draws once, so the first open after launch finds the frame's material too | S405 |
+| menu bar panel source: the open and close step the popover window's own frame around content laid out once, never scaling a picture of the panel, so its corners stay round at every step | S405 |
+| menu bar panel source: the panel keeps the system's shadow throughout, with no shadow of its own to hand back to it | S405 |
 | zone rename: the zone menu item reads like the speaker's | S228 |
 | main window zone header: Rename… edits the name in place like a speaker's, with no alert, and VoiceOver has the action | S228 |
 | In zones row: a double-click on the name renames the speaker in place, VoiceOver has the Rename action | S228 |

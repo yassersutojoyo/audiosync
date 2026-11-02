@@ -8129,6 +8129,21 @@ do {
           "menu bar panel source: before the panel settles for a fade, the popover draws once, so the first open after launch finds the frame's material too")
 }
 
+// MARK: The panel opens and closes as its own window (MenuBar.swift)
+do {
+    let windowSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let placeSource = windowSource.components(separatedBy: "private func place(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
+    check(placeSource.contains("window.setFrame(") && placeSource.contains("PanelReveal.content(")
+            && !placeSource.contains("layoutSubtreeIfNeeded") && !windowSource.contains("CATransform3DMakeScale"),
+          "menu bar panel source: the open and close step the popover window's own frame around content laid out once, never scaling a picture of the panel, so its corners stay round at every step")
+    // covers: S405
+    check(!windowSource.contains("PanelShadowWindow") && !windowSource.contains("hasShadow = ")
+            && !windowSource.contains("addChildWindow("),
+          "menu bar panel source: the panel keeps the system's shadow throughout, with no shadow of its own to hand back to it")
+}
+
 // MARK: Settings kept between launches (AppSettings.swift)
 // covers: S212
 do {
