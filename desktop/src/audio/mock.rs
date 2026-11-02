@@ -241,12 +241,28 @@ pub struct MockRenderer {
     /// How its stream was opened: in its device's format then.
     setup: StreamSetup,
     invalidated: Arc<AtomicBool>,
+    parts: Arc<Mutex<StreamParts>>,
 }
 
 impl Drop for MockRenderer {
     fn drop(&mut self) {
         self.dropped.store(true, Ordering::Relaxed);
+        release(&self.parts);
     }
+}
+
+/// What a mock stream renders with: what its renderer is made of until
+/// [`MockBackend::render_output`] first renders it, then the renderer.
+#[derive(Default)]
+struct StreamParts {
+    unstarted: Option<(Reader, RendererControl, Arc<SharedGain>)>,
+    renderer: Option<Renderer>,
+}
+
+/// Lets a stream's renderer go as its render thread ends, so its start
+/// lead leaves the session lead (S208).
+fn release(parts: &Mutex<StreamParts>) {
+    *parts.lock().unwrap_or_else(PoisonError::into_inner) = StreamParts::default();
 }
 
 /// What the driver keeps of each output started.
@@ -254,10 +270,7 @@ struct RendererLink {
     id: String,
     /// The ring its reader reads.
     ring: Arc<Ring>,
-    /// What its renderer is made of until [`MockBackend::render_output`]
-    /// first renders it.
-    unstarted: Option<(Reader, RendererControl, Arc<SharedGain>)>,
-    renderer: Option<Renderer>,
+    parts: Arc<Mutex<StreamParts>>,
     ended: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
     stall: Arc<StallSlot>,
@@ -271,6 +284,33 @@ impl RendererLink {
     /// Whether it still plays: neither ended by itself nor dropped.
     fn plays(&self) -> bool {
         !self.ended.load(Ordering::Relaxed) && !self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Runs `f` on its renderer, made as its first render needs it; not
+    /// once its stream ended or was dropped.
+    fn with_renderer(&self, f: impl FnOnce(&mut Renderer)) {
+        let mut parts = self.parts.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((reader, control, gain)) = parts.unstarted.take() {
+            let channels = usize::from(self.format.channels);
+            parts.renderer = Renderer::new(
+                reader,
+                &control,
+                gain,
+                SESSION_RATE,
+                self.format.rate,
+                channels,
+            )
+            .ok();
+        }
+        if let Some(renderer) = parts.renderer.as_mut() {
+            f(renderer);
+        }
+    }
+
+    /// Ends its stream as its render thread would.
+    fn end(&self) {
+        self.ended.store(true, Ordering::Relaxed);
+        release(&self.parts);
     }
 }
 
@@ -549,7 +589,7 @@ impl MockDriver {
     fn end_renderers_of(&mut self, id: &str) {
         for renderer in &self.renderers {
             if renderer.id == id {
-                renderer.ended.store(true, Ordering::Relaxed);
+                renderer.end();
             }
         }
     }
@@ -850,11 +890,14 @@ impl Driver for MockDriver {
             }
             None => Some((reader, control, gain)),
         };
+        let parts = Arc::new(Mutex::new(StreamParts {
+            unstarted,
+            renderer: None,
+        }));
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
             ring,
-            unstarted,
-            renderer: None,
+            parts: Arc::clone(&parts),
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
             stall: Arc::clone(&stall),
@@ -874,6 +917,7 @@ impl Driver for MockDriver {
                 ..MOCK_STREAM
             },
             invalidated,
+            parts,
         })
     }
 }
@@ -1165,23 +1209,45 @@ impl Controller<MockDriver> {
             if link.id != id || !link.plays() {
                 continue;
             }
-            if let Some((reader, control, gain)) = link.unstarted.take() {
-                let channels = usize::from(link.format.channels);
-                link.renderer = Renderer::new(
-                    reader,
-                    &control,
-                    gain,
-                    SESSION_RATE,
-                    link.format.rate,
-                    channels,
-                )
-                .ok();
-            }
-            if let Some(renderer) = link.renderer.as_mut() {
+            link.with_renderer(|renderer| {
                 let mut out = vec![0.0; frames * renderer.channels()];
                 renderer.render(&mut out);
-            }
+            });
         }
+    }
+
+    /// Plays the output on `id` for 10 s of its device frames on a device
+    /// that takes frames twice as fast as the capture writes them, as one on
+    /// a runaway clock (S347): its reads run dry while the capture's stamps
+    /// stay fresh, so its callbacks starve.
+    pub fn starve_output(&mut self, id: &str) {
+        let driver = self.driver_mut();
+        let Some(capture) = driver.capture.clone() else {
+            return;
+        };
+        let mut capture = lock(&capture);
+        let Some(writer) = capture.writer.as_mut() else {
+            return;
+        };
+        let Some(link) = (driver.renderers.iter()).find(|link| link.id == id && link.plays())
+        else {
+            return;
+        };
+        // Every 5 ms, a block of 5 ms and a callback of 10 ms.
+        let (block, callback) = (SESSION_RATE as usize / 200, link.format.rate as usize / 100);
+        link.with_renderer(|renderer| {
+            let mut out = vec![0.0; callback * renderer.channels()];
+            let silence = vec![0.0; block * 2];
+            let start = writer
+                .ring()
+                .stamp()
+                .map_or(1_000_000_000, |stamp| stamp.time_ns);
+            for tick in 1..=1000 {
+                let now = start + tick * 5_000_000;
+                writer.write_at(&silence, block, now);
+                renderer.render_at(&mut out, now);
+            }
+        });
     }
 
     /// Ends the output playing on `id` as a render thread ends a stream
@@ -1190,7 +1256,7 @@ impl Controller<MockDriver> {
         for renderer in &self.driver().renderers {
             if renderer.id == id && renderer.plays() {
                 renderer.stall.record(stall);
-                renderer.ended.store(true, Ordering::Relaxed);
+                renderer.end();
             }
         }
     }
@@ -1277,6 +1343,12 @@ impl Controller<MockDriver> {
     /// PC sleeps that long.
     pub fn pass_wall_time(&mut self, span: Duration) {
         self.driver_mut().wall_clock += span;
+    }
+
+    /// The system clock is set back by `span` before the next poll, as a
+    /// time sync can.
+    pub fn set_wall_clock_back(&mut self, span: Duration) {
+        self.driver_mut().wall_clock -= span;
     }
 
     /// The UI loop is held `span` before the next poll while the PC stays
