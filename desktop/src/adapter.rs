@@ -2177,6 +2177,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.cast_saved = self.audio.cast_memory_json();
         self.cast_file_checked = false;
         self.cast_unread_at_launch = unread_at_launch;
+        self.audio.set_cast_file_unread(unread_at_launch);
     }
 
     /// Writes the Cast speakers' offsets and formats to their file when they
@@ -2202,6 +2203,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             match keep_unread_cast_file_aside(path, self.cast_unread_at_launch) {
                 Ok((kept, read_late)) => {
                     self.cast_file_checked = true;
+                    self.audio.set_cast_file_unread(false);
                     if let Some(copy) = kept {
                         self.log.log(|| {
                             format!(
@@ -19267,6 +19269,26 @@ mod tests {
         let saved = DeviceMemory::from_json(&std::fs::read_to_string(&file).expect("written"));
         assert_eq!(saved.offset(&cast_device(CAST_LIVING)), Some(ms(120)));
         assert_eq!(kept().len(), 1, "one copy a run");
+    }
+
+    // covers: S385 (0 set before the late read wins over the file's offset)
+    #[test]
+    fn an_offset_set_to_zero_before_an_unread_cast_file_reads_wins_over_the_file() {
+        let (mut adapter, _fake) = cast_adapter();
+        let folder = test_dir("cast-memory-zero-before-late-read");
+        let file = folder.join("cast-speakers.json");
+        let earlier = format!(r#"{{"{}":{{"offsetMs":200}}}}"#, cast_device(CAST_KITCHEN));
+        std::fs::write(&file, &earlier).expect("written");
+        adapter.set_cast_file(Some(file.clone()), true);
+        adapter.poll();
+
+        adapter.set_speaker_delay(&cc(CAST_KITCHEN), 0.0);
+        adapter.save_settings();
+        let saved = DeviceMemory::from_json(&std::fs::read_to_string(&file).expect("written"));
+        assert_eq!(
+            saved.offset(&cast_device(CAST_KITCHEN)).unwrap_or_default(),
+            std::time::Duration::ZERO
+        );
     }
 
     // covers: S385
