@@ -5,7 +5,7 @@
 
 mod common;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::ap2::framing::{Framing, MAX_FRAME_PLAINTEXT, frame_nonce};
@@ -1248,4 +1248,19 @@ fn a_session_back_to_connecting_for_a_pairing_retry_doesnt_start_again() {
     }
     assert_eq!(rig.session.state(), Ap2State::Connecting);
     assert!(!rig.session.restarts_on(&[first, added]));
+}
+
+// covers: P23
+#[test]
+fn ap2_request_uri_brackets_an_ipv6_address() {
+    let uri = |local: IpAddr| {
+        let now = Instant::now();
+        let mut session = Ap2Session::new(ap2_config(), ids(), Box::new(TestEntropy(1)), now);
+        session.handle_connected(connection(local), now);
+        session.uri()
+    };
+    let link_local = IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0x10));
+    assert_eq!(uri(link_local), "rtsp://[fe80::10]/3141592653");
+    let mapped = IpAddr::V6(Ipv4Addr::new(192, 0, 2, 10).to_ipv6_mapped());
+    assert_eq!(uri(mapped), "rtsp://192.0.2.10/3141592653");
 }
