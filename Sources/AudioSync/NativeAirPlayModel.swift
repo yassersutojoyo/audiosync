@@ -646,13 +646,20 @@ struct NativeAirPlayModel {
     func homeTheaterConflict(_ id: String, enabled: Set<String>) -> Bool {
         let control = receivers[id]?.control ?? ""
         let others = (control.isEmpty ? [] : [control]) + receivers.values.filter { $0.control == id }.map(\.id)
+        func able(_ id: String) -> Bool {
+            switch receivers[id]?.availability {
+            case .available?: return true
+            case .needsPassword?: return passwords.contains(id)
+            default: return false
+            }
+        }
         return others.contains { other in
             guard enabled.contains(NativeAirPlayID.app(other)) else { return false }
-            switch availability(other) {
-            case .available?: return true
-            case .needsPassword?: return passwords.contains(other) || isPlaying(other)
-            default: return isPlaying(other)
-            }
+            guard receivers[other]?.isTarget == true else { return able(other) || isPlaying(other) }
+            // A group plays as a whole, as on Windows: a member whose password wasn't typed holds it back.
+            let inView = members(of: other).filter { receivers[$0] != nil }
+            let waiting = inView.contains { receivers[$0]?.availability == .needsPassword && !passwords.contains($0) }
+            return (!waiting && (inView.isEmpty || inView.contains(where: able))) || isPlaying(other)
         }
     }
 

@@ -5493,6 +5493,24 @@ do {
     // covers: P229
     check(!deafTheater.homeTheaterConflict(tv, enabled: [app(den)]),
           "P229 native airplay: a home theater group left on whose speakers can't play doesn't keep its Apple TV off")
+    var lockedTheater = NativeAirPlayModel()
+    lockedTheater.apply(.appeared(NativeReceiver(id: tv, name: "Den TV", model: "AppleTV11,1", availability: .available,
+                                                 reason: nil, hints: ["airplay", "apple-tv"])))
+    lockedTheater.apply(.appeared(member(left, "Left", of: den, .needsPassword)))
+    lockedTheater.apply(.appeared(member(right, "Right", of: den, .needsPassword)))
+    var lockedGroup = target(den, "Den")
+    lockedGroup.control = tv
+    lockedTheater.apply(.appeared(lockedGroup))
+    // covers: P229
+    check(!lockedTheater.homeTheaterConflict(tv, enabled: [app(den)]),
+          "P229 native airplay: a home theater group left on whose speakers ask for a password not typed this run "
+            + "doesn't keep its Apple TV off")
+    var mixedTheater = lockedTheater
+    mixedTheater.apply(.appeared(member(left, "Left", of: den)))
+    // covers: P229
+    check(mixedTheater.availability(left) == .available && !mixedTheater.homeTheaterConflict(tv, enabled: [app(den)]),
+          "P229 native airplay: a home theater group left on with one speaker asking for a password not typed this run "
+            + "doesn't keep its Apple TV off, though its other speaker can play")
 
     var pw = NativeAirPlayModel()
     pw.apply(.appeared(member(left, "Left", of: pair)))

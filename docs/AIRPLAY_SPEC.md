@@ -631,6 +631,8 @@ The crate's tests run against a fake receiver in the same process: an RTSP serve
 | P176 native airplay: a pair with no playable member reads its first member's reason, so it has no row and auto-connect leaves it off; one member that can play is enough | P176, P181 |
 | P176 native airplay: a pair with no playable member left on from the last run starts no session and holds no local output back | P176, P181 |
 | P229 native airplay: a home theater group left on whose speakers can't play doesn't keep its Apple TV off | P229 |
+| P229 native airplay: a home theater group left on whose speakers ask for a password not typed this run doesn't keep its Apple TV off | P229 |
+| P229 native airplay: a home theater group left on with one speaker asking for a password not typed this run doesn't keep its Apple TV off, though its other speaker can play | P229 |
 | P176 native airplay: the pair's row knows a member asks for a password | P176 |
 | P176 native airplay: switched on, a pair asks for its member's password by the member's name and waits for it | P176 |
 | P176 native airplay: once the member's password is in, the pair starts | P176 |
