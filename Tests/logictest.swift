@@ -8103,6 +8103,15 @@ do {
             && cutShort.first == 0.98 && cutShort.last == closeMotion.scale,
           "menu bar panel: the close shrinks from where the panel is to its end scale on an ease-in curve, one step per 120 Hz frame",
           "\(closeSteps)")
+    let arrowFrames = (revealSteps + closeSteps).map { scale -> (window: CGRect, arrow: CGRect) in
+        let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
+        return (step, PanelArrow.frame(in: step))
+    }
+    // covers: S405
+    check(arrowFrames.allSatisfy { step in
+        step.arrow.midX == step.window.midX && step.arrow.maxY == step.window.maxY && step.arrow.size == PanelArrow.size
+    }, "menu bar panel: the arrow drawn over the popover's own has its apex where the system draws it, the window's top middle, at every open and close step",
+          "\(arrowFrames.map { $0.arrow })")
 }
 
 // MARK: The panel opens and closes as its own window (MenuBar.swift)

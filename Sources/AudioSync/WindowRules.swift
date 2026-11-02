@@ -371,6 +371,20 @@ enum PanelReveal {
     }
 }
 
+/// The arrow the panel draws over the popover's own, which the system edges
+/// in its bare material, so the arrow reads in the panel's backing like the box.
+enum PanelArrow {
+    /// The system arrow's size, which AppKit does not publish: 13 pt is the
+    /// popover's top safe area inset; the debug log measures the drawn base.
+    static let size = CGSize(width: 28, height: 13)
+
+    /// Where the arrow goes on screen for the popover window at `window`:
+    /// apex on the window's top edge at its middle, where the system draws its own.
+    static func frame(in window: CGRect) -> CGRect {
+        CGRect(x: window.minX, y: window.maxY - size.height, width: size.width, height: size.height)
+    }
+}
+
 /// How a zone folds or unfolds in the menu bar panel: the rows fade, the
 /// arrow turns and the panel resizes as one motion that starts with the
 /// click, on one ease-in-out curve. With Reduce Motion it all changes at once.
