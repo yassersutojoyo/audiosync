@@ -13135,6 +13135,43 @@ mod tests {
     }
 
     #[test]
+    fn the_equalizer_preamp_moves_with_left_and_right_and_a_double_click_sets_it_to_0_db() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        let preamp = || app.snapshot().equalizer.preamp_db;
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_take_focus();
+        draw_frames();
+        let window = app.equalizer.window();
+        // The switch, the curve picker, then the preamp.
+        tab(window, 3);
+        press(window, Key::UpArrow);
+        assert_eq!(preamp(), 0.5, "the preamp has the focus");
+        press(window, Key::RightArrow);
+        assert_eq!(preamp(), 1.0, "Right moves it up");
+        press(window, Key::LeftArrow);
+        press(window, Key::LeftArrow);
+        assert_eq!(preamp(), 0.0, "Left moves it down");
+
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        let y = 250.0;
+        let x = (0..1000)
+            .step_by(8)
+            .map(|x| x as f32)
+            .find(|&x| {
+                click(window, x, y);
+                advance_clock(Duration::from_secs(1));
+                draw_frames();
+                preamp() > 0.0
+            })
+            .expect("a click raises the preamp");
+        click(window, x, y);
+        click(window, x, y);
+        assert_eq!(preamp(), 0.0, "a double-click sets it to 0 dB");
+    }
+
+    #[test]
     fn two_slow_clicks_or_a_drag_and_a_click_leave_an_equalizer_band_where_it_is() {
         hold_clock();
         let app = app_over(MockBackend::new());
