@@ -1031,8 +1031,6 @@ mod tests {
         gate.send(()).expect("the thread waits");
         assert_eq!(watcher.watch("speakers"), Ok(()));
         let quitting = Instant::now();
-        // Quitting is held up, as a loaded PC holds a thread.
-        thread::sleep(STUCK_GRACE * 4);
         drop(watcher);
         let waited = quitting.elapsed();
         // Half its own answer timeout: load stretches a grace, not that far.
