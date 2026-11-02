@@ -619,6 +619,8 @@ pub struct CastSpeakers {
     /// Whether each speaker added by address answers: it is listed offline
     /// until a check reaches it.
     reach: Reachability,
+    /// See [`CastSpeakers::set_file_unread`].
+    file_unread: bool,
 }
 
 impl CastSpeakers {
@@ -656,6 +658,7 @@ impl CastSpeakers {
             // Unit tests never reach the network; one that needs an answer sets a probe.
             #[cfg(test)]
             reach: Reachability::new(|_| false),
+            file_unread: false,
         }
     }
 
@@ -978,6 +981,13 @@ impl CastSpeakers {
 
     pub fn memory_json(&self) -> Option<String> {
         self.link.as_ref().map(|link| link.memory().to_json())
+    }
+
+    /// Whether the speakers' file was there at launch but isn't read into
+    /// the memory yet, so setting 0 on a device without an offset stores
+    /// the 0 the file's offset would otherwise replace.
+    pub fn set_file_unread(&mut self, unread: bool) {
+        self.file_unread = unread;
     }
 
     /// Takes the entries of `json`, a speakers' file, for each device
@@ -1685,7 +1695,12 @@ impl CastSpeakers {
             return false;
         }
         let ms = offset_ms.clamp(0.0, MAX_HOLD_BACK_MS).round();
-        if self.memory().offset(&device).unwrap_or_default() == Duration::from_millis(ms as u64) {
+        // A missing offset reads as 0 only once the memory holds the file's.
+        let stored = self
+            .memory()
+            .offset(&device)
+            .or((!self.file_unread).then_some(Duration::ZERO));
+        if stored == Some(Duration::from_millis(ms as u64)) {
             return false;
         }
         if let Some(link) = self.link.as_mut() {
