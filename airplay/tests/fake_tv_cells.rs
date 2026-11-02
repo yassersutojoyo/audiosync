@@ -7,7 +7,8 @@ mod common;
 mod television;
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
@@ -271,6 +272,109 @@ fn d1_once_passes_against_a_television_that_asks_for_a_pin_once() {
         .count();
     let cell = cells::d1_once(SWITCH_ONS, prompts, pairings.0, pairings.1, playing);
     assert_eq!(cell.status, Status::Pass, "{}", cell.line());
+    sender.shutdown();
+}
+
+/// D1.giveup: a television that asks for a PIN every time closes the
+/// connection while the sender waits for the PIN. The prompt is withdrawn
+/// once, nothing pairs again on its own, and the next switch-on starts one
+/// new PIN pairing that asks for the PIN again. `scripts/fake_tv_cells.sh`
+/// prints its line.
+// covers: P136
+#[test]
+fn d1_giveup_a_television_closing_under_the_pin_prompt_withdraws_it_once() {
+    const CODE: &str = "4821";
+    let _serial = serial();
+    let server = Ap2Server::start(television(
+        "AudioSync Test TV",
+        Pin::EveryTime,
+        CODE,
+        television::FEATURES_METADATA,
+        television::DEVICE_ID,
+    ));
+    let record = ServiceRecord {
+        kind: ServiceKind::AirPlay,
+        instance: "AudioSync Test TV".to_owned(),
+        host: format!("{}.local", television::HOST_LABEL),
+        port: server.address.port(),
+        txt: television::txt(Pin::EveryTime, television::DEVICE_ID)
+            .into_iter()
+            .map(|(key, value)| format!("{key}={value}").into_bytes())
+            .collect(),
+        addresses: vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST))],
+    };
+    let key = DeviceKey::Id(DeviceId(television::DEVICE_ID));
+    let device = Device::from_records(key, None, Some(&record)).expect("its record");
+    let (sender, writer) = Sender::start(SenderConfig {
+        airplay2: true,
+        airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        ptp_ports: free_ptp_ports(),
+        ..SenderConfig::default()
+    })
+    .expect("the sender starts");
+    let _audio = HostAudio::start(writer);
+    let mut events = Events::default();
+    let prompt = |event: &SenderEvent| {
+        matches!(
+            event,
+            SenderEvent::Pairing {
+                event: PairingEvent::PinRequested,
+                ..
+            }
+        )
+    };
+    let withdrawn = |event: &SenderEvent| {
+        matches!(
+            event,
+            SenderEvent::Pairing {
+                event: PairingEvent::Failed { error, .. },
+                ..
+            } if error.kind == ErrorKind::PairingCancelled
+        )
+    };
+    let pin_starts = || {
+        (server.fake().keys().iter())
+            .filter(|key| *key == "POST /pair-pin-start")
+            .count()
+    };
+    let count = |events: &Events, wanted: &dyn Fn(&SenderEvent) -> bool| {
+        events.seen.iter().filter(|(_, event)| wanted(event)).count()
+    };
+
+    sender.start_pairing(device.clone());
+    assert!(
+        events.wait_for(&sender, LONG, prompt).is_some(),
+        "no PIN prompt"
+    );
+    let first = pin_starts();
+    server.cut();
+    assert!(
+        events.wait_for(&sender, LONG, withdrawn).is_some(),
+        "the prompt stayed: {:?}",
+        events.seen.last()
+    );
+    // The row goes off with the failed pairing and on again.
+    sender.start_pairing(device);
+    let until = Instant::now() + LONG;
+    while count(&events, &prompt) < 2 && Instant::now() < until {
+        events.drain(&sender);
+        thread::sleep(Duration::from_millis(10));
+    }
+    // A late withdrawal or pairing still counts.
+    thread::sleep(Duration::from_secs(1));
+    events.drain(&sender);
+
+    let got = (
+        count(&events, &withdrawn),
+        pin_starts() - first,
+        count(&events, &prompt),
+    );
+    let measured = format!(
+        "{} prompt withdrawn, {} new pin-start, {} PIN prompts",
+        got.0, got.1, got.2
+    );
+    assert_eq!(got, (1, 1, 2), "{measured}");
+    eprintln!("CELL D1.giveup {measured}");
     sender.shutdown();
 }
 

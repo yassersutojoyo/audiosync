@@ -11180,12 +11180,14 @@ pub mod tests {
 
     /// A receiver on 127.0.0.1 that answers every RTSP request with
     /// success, as an open AirPlay 1 speaker does, and notes the methods it
-    /// got. Its audio, control and timing sockets are bound and never read.
-    /// Like the measured television, it holds the last volume set and
-    /// answers a volume read with it (S289, S291).
+    /// got. It keeps the audio packets it gets; its control and timing
+    /// sockets are bound and never read. Like the measured television, it
+    /// holds the last volume set and answers a volume read with it (S289,
+    /// S291).
     struct LoopbackReceiver {
         port: u16,
         methods: Arc<Mutex<Vec<String>>>,
+        audio: Arc<Mutex<Vec<Vec<u8>>>>,
         level: Arc<Mutex<Option<f64>>>,
         stop: Arc<AtomicBool>,
         thread: Option<JoinHandle<()>>,
@@ -11209,6 +11211,26 @@ pub mod tests {
             let methods = Arc::new(Mutex::new(Vec::new()));
             let level = Arc::new(Mutex::new(None));
             let stop = Arc::new(AtomicBool::new(false));
+            let audio = Arc::new(Mutex::new(Vec::new()));
+            {
+                let (socket, audio, stop) = (
+                    udp[0].try_clone().expect("its audio port"),
+                    Arc::clone(&audio),
+                    Arc::clone(&stop),
+                );
+                socket
+                    .set_read_timeout(Some(Duration::from_millis(50)))
+                    .unwrap();
+                thread::spawn(move || {
+                    let mut buf = [0u8; 2048];
+                    while !stop.load(Ordering::SeqCst) {
+                        if let Ok(len) = socket.recv(&mut buf) {
+                            let mut audio = audio.lock().unwrap_or_else(PoisonError::into_inner);
+                            audio.push(buf[..len].to_vec());
+                        }
+                    }
+                });
+            }
             let thread = {
                 let (methods, level, stop) =
                     (Arc::clone(&methods), Arc::clone(&level), Arc::clone(&stop));
@@ -11225,6 +11247,7 @@ pub mod tests {
             LoopbackReceiver {
                 port,
                 methods,
+                audio,
                 level,
                 stop,
                 thread: Some(thread),
@@ -11248,6 +11271,17 @@ pub mod tests {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone()
+        }
+
+        /// The left channel of the PCM audio it got, in order: each packet
+        /// a 12-byte RTP header and big-endian frames (P76).
+        fn left_channel(&self) -> Vec<i16> {
+            let audio = self.audio.lock().unwrap_or_else(PoisonError::into_inner);
+            audio
+                .iter()
+                .flat_map(|packet| packet.get(12..).unwrap_or_default().chunks_exact(4))
+                .map(|frame| i16::from_be_bytes([frame[0], frame[1]]))
+                .collect()
         }
 
         /// The level it holds, in dB, once it has one.
@@ -11444,6 +11478,205 @@ pub mod tests {
         }
         assert!(receiver.methods().iter().any(|m| m == "TEARDOWN"));
         backend.stop();
+    }
+
+    /// How the audio a receiver got ends, from its last frame at full level.
+    #[derive(Debug)]
+    struct Tail {
+        /// The highest sample it got.
+        level: i32,
+        /// The largest fall from one frame to the next after it.
+        step: i32,
+        /// The largest rise from one frame to the next after it.
+        rise: i32,
+    }
+
+    fn tail_of(samples: &[i16]) -> Tail {
+        let samples: Vec<i32> = samples.iter().copied().map(i32::from).collect();
+        let level = samples.iter().copied().max().unwrap_or(0);
+        let full = samples
+            .iter()
+            .rposition(|&sample| sample >= level - level / 100)
+            .unwrap_or(0);
+        let (mut step, mut rise) = (0, 0);
+        for pair in samples[full..].windows(2) {
+            step = step.max(pair[0] - pair[1]);
+            rise = rise.max(pair[1] - pair[0]);
+        }
+        Tail { level, step, rise }
+    }
+
+    /// Plays 0.5 on every channel through the capture's feed and the real
+    /// sender to a loopback receiver, then stops streaming or quits, and
+    /// gives how the audio the receiver got ends and whether a TEARDOWN came.
+    fn tail_at(quit: bool) -> (Tail, bool) {
+        let receiver = LoopbackReceiver::start();
+        let (link, input) = SenderLink::start(false).expect("the sender starts");
+        let mut record = receiver.record();
+        // PCM only, so the receiver's packets read as they are.
+        record.txt.retain(|entry| !entry.starts_with(b"cn="));
+        record.txt.push(b"cn=0".to_vec());
+        link.sender
+            .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(record)))));
+        let mut backend = MockBackend::empty();
+        backend.connect_output("speakers", "Speakers");
+        backend.set_output_enabled("speakers", true).unwrap();
+        backend.list_outputs().unwrap();
+        backend.set_airplay(Box::new(link), Some(FeedSlot::new(input)));
+        assert!(poll_until(&mut backend, |backend, _| !backend
+            .airplay_speakers()
+            .is_empty()));
+        let id = backend.airplay_speakers()[0].id.clone();
+        backend.set_airplay_enabled(&id, true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert!(backend.driver().capture_feeds_airplay());
+        let feeding = backend.feed_airplay_live(0.5);
+        assert!(
+            poll_until(&mut backend, |_, events| events
+                .contains(&BackendEvent::AirPlayPlaying { id: id.clone() })),
+            "it plays: {:?}",
+            receiver.methods()
+        );
+        let until = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < until {
+            backend.poll();
+            thread::sleep(Duration::from_millis(20));
+        }
+        if quit {
+            backend.shut_down();
+        } else {
+            backend.stop();
+            let until = Instant::now() + Duration::from_secs(1);
+            while Instant::now() < until {
+                backend.poll();
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+        feeding.join().expect("the feed's thread");
+        // Packets and a TEARDOWN sent late still count.
+        thread::sleep(Duration::from_secs(1));
+        let teardown = receiver.methods().iter().any(|m| m == "TEARDOWN");
+        (tail_of(&receiver.left_channel()), teardown)
+    }
+
+    /// At a stop and at a quit the television gets no jump and no rise up to
+    /// its TEARDOWN: the level falls by at most 1.5 times the largest step
+    /// of a 20 ms raised cosine between frames (S182). How much of the fade
+    /// arrives before the TEARDOWN drops what it holds is not shaped (S189).
+    // covers: S186, S189
+    #[test]
+    fn s186_the_tv_gets_no_jump_or_rise_and_a_teardown_at_stop_and_quit() {
+        // The fade's frames at 44.1 kHz (S182).
+        let fade = 882.0;
+        let mut measured = Vec::new();
+        for (quit, at) in [(false, "stop"), (true, "quit")] {
+            let (tail, teardown) = tail_at(quit);
+            let largest = f64::from(tail.level) * 1.5 * std::f64::consts::PI / (2.0 * fade);
+            let line = format!(
+                "{at}: level {}, largest fall {} (at most {largest:.0}), rise {}, {}",
+                tail.level,
+                tail.step,
+                tail.rise,
+                if teardown { "TEARDOWN" } else { "no TEARDOWN" }
+            );
+            assert!(
+                tail.level > 8_000
+                    && f64::from(tail.step) <= largest
+                    && tail.rise <= 8
+                    && teardown,
+                "{line}"
+            );
+            measured.push(line);
+        }
+        cell("S186.end", &measured.join("; "));
+    }
+
+    /// A stop request makes the feed's last frames, as the sender cuts them
+    /// into packets, fall smoothly to 0 within the fade's F frames (S182),
+    /// 960 at 48 kHz and 882 at the sender's 44.1 kHz, and stay at 0.
+    // covers: S186
+    #[test]
+    fn a_stop_request_fades_the_feed_to_zero_within_its_fade() {
+        use audiosync_airplay::session::{MediaDestinations, ReceiverPorts};
+        use audiosync_airplay::stream::{PacketKind, SpeakerConfig};
+
+        let start = Instant::now();
+        let (mut stream, input) = Stream::new(
+            StreamConfig::default(),
+            SenderClock::new(start),
+            start,
+        );
+        let ports = ReceiverPorts {
+            server_port: 50_000,
+            control_port: 50_001,
+            timing_port: 50_002,
+        };
+        let receiver = SocketAddr::from((Ipv4Addr::new(192, 0, 2, 20), 7000));
+        stream.add_speaker(
+            SpeakerConfig::new(
+                audiosync_airplay::sdp::Codec::Pcm,
+                MediaDestinations::new(receiver, ports),
+                0x5EED_1000,
+                7,
+                99,
+            ),
+            start,
+        );
+        let slot = FeedSlot::new(input);
+        let mut lease = slot.lease().expect("the feed is free");
+        let block = vec![0.5_f32; 480 * 2];
+        let (mut now, mut packets) = (start, Vec::new());
+        // 10 ms blocks at 48 kHz on a fake clock, the sender running between
+        // them; the stop request comes after 400 ms, the last block at 600.
+        for index in 0..=100u32 {
+            let at = start + Duration::from_millis(10) * index;
+            while now < at {
+                let due = stream.poll_timeout().map_or(at, |due| due.min(at));
+                now = if due > now {
+                    due
+                } else {
+                    (now + Duration::from_micros(1)).min(at)
+                };
+                stream.handle_timeout(now);
+                while let Some(sent) = stream.poll_transmit() {
+                    if sent.kind == PacketKind::Audio {
+                        packets.push(sent.bytes);
+                    }
+                }
+                while stream.poll_event().is_some() {}
+            }
+            if index == 40 {
+                slot.request_fade_out();
+            }
+            if index <= 60 {
+                lease.push(&block, 480, at);
+            }
+        }
+        let left: Vec<i16> = (packets.iter())
+            .flat_map(|packet| packet[12..].chunks_exact(4))
+            .map(|frame| i16::from_be_bytes([frame[0], frame[1]]))
+            .collect();
+        let tail = tail_of(&left);
+        let full = (left.iter())
+            .rposition(|&sample| i32::from(sample) >= tail.level - tail.level / 100)
+            .expect("the level");
+        let ramp = (left[full..].iter())
+            .position(|&sample| sample == 0)
+            .expect("it reaches 0");
+        let largest = f64::from(tail.level) * 1.5 * std::f64::consts::PI / (2.0 * 882.0);
+        let measured = format!(
+            "level {}, {ramp} frames to 0, largest fall {} (at most {largest:.0}), rise {}, \
+             {} frames after it",
+            tail.level,
+            tail.step,
+            tail.rise,
+            left.len() - full - ramp
+        );
+        assert!(tail.level > 16_000, "{measured}");
+        assert!((700..=950).contains(&ramp), "{measured}");
+        assert!(f64::from(tail.step) <= largest && tail.rise <= 8, "{measured}");
+        assert!(left.len() > full + ramp + 4410, "{measured}");
+        assert!(left[full + ramp..].iter().all(|&sample| sample == 0), "{measured}");
     }
 
     /// A passed dry-run cell for `scripts/fake_tv_cells.sh`, which runs

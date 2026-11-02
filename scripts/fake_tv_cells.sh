@@ -73,11 +73,12 @@ cells_from_tests --lib \
     "$core::the_s290_vector_cases_land_on_the_television=S290.row100,S290.tv80.z64,S290.row100.z50,S290.tv80.cap,DV.100.z63,DV.80-99.z63,DV.40.z0,S413.held.z0,S413.master" \
     "$core::a_withdrawn_receiver_loses_only_its_row_and_comes_back_when_announced=Stale.row"
 
-# Calibrate All and zones live in the Windows host's speaker list, so these cells run there;
+# Calibrate All, zones and how a stop ends the stream live in the Windows host, so these cells run there;
 # elsewhere the desktop crate lacks the system libraries it links (fontconfig on Linux).
 held=(
     "audio::airplay::tests::the_tv_keeps_a_level_held_at_zone_0_through_calibrate_all=S290.held.z0"
     "audio::airplay::tests::the_tv_lets_a_level_held_at_zone_0_go_once_the_zone_moves=S290.held.z0.release"
+    "audio::airplay::tests::s186_the_tv_gets_no_jump_or_rise_and_a_teardown_at_stop_and_quit=S186.end"
 )
 if [ "$windows" = 1 ]; then
     cd "$root/desktop"
@@ -99,6 +100,7 @@ cells_from_tests "--test ap2_samsung" \
     "progress_stays_on_the_track_time_across_a_pause_and_a_seek=Progress" \
     "l341_a_busy_or_refusing_samsung_reports_an_error_and_retries_on_the_back_off=L341" \
     "g9_the_latency_the_samsung_reports_reaches_the_host_as_r_s=G9"
+cells_from_tests "--test fake_tv_cells" "d1_giveup_a_television_closing_under_the_pin_prompt_withdraws_it_once=D1.giveup"
 
 cd "$root/cast"
 cells_from_tests "--test fake_cells" \
