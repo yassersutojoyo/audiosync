@@ -2498,6 +2498,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | menu bar panel: the arrow's tip stays on the same whole screen point at every step, so the content never drifts as the window's edges snap to the pixel grid | S405 |
 | menu bar panel: the close shrinks from where the panel is to its end scale on an ease-in curve, one step per 120 Hz frame | S405 |
 | menu bar panel source: a close that cuts the open short shrinks from the step the open has shown | S405 |
+| menu bar panel source: ending the steps always hands the content back at its laid-out scale, even once the window is gone | S405 |
 | zone rename: the zone menu item reads like the speaker's | S228 |
 | main window zone header: Rename… edits the name in place like a speaker's, with no alert, and VoiceOver has the action | S228 |
 | In zones row: a double-click on the name renames the speaker in place, VoiceOver has the Rename action | S228 |

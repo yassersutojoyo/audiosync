@@ -8127,6 +8127,11 @@ do {
     // covers: S405
     check(dismissSource.contains("PanelReveal.shrinks(from: steps?.scale ?? 1"),
           "menu bar panel source: a close that cuts the open short shrinks from the step the open has shown")
+    let endSource = windowSource.components(separatedBy: "private func endSteps(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
+    check(endSource.contains("\n        host.view.layer?.removeAnimation(forKey: Self.stepKey)"),
+          "menu bar panel source: ending the steps always hands the content back at its laid-out scale, even once the window is gone")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)

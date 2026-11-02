@@ -1039,6 +1039,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         stepLink = nil
         guard let run = steps else { return }
         if let window = host.view.window { place(window, scale: 1) }
+        // Also with no window, as when a step finds it gone.
+        host.view.layer?.removeAnimation(forKey: Self.stepKey)
         host.view.autoresizingMask = run.mask
         steps = nil
     }
