@@ -1277,6 +1277,8 @@ fn certificates_book(folder: Option<&Path>) -> FingerprintBook {
         |path| std::fs::read(path),
         write_atomically,
     );
+    #[cfg(test)]
+    let book = tests::record_on_open(book);
     book
 }
 
@@ -2332,6 +2334,21 @@ mod tests {
     }
 
     thread_local! {
+        /// A fingerprint each book opened on this thread records, as a played
+        /// start would, and what each record gave.
+        static RECORD_ON_OPEN: std::cell::RefCell<Option<(DeviceId, Fingerprint)>> = const { std::cell::RefCell::new(None) };
+        static RECORDED: std::cell::RefCell<Vec<FingerprintChange>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn record_on_open(mut book: FingerprintBook) -> FingerprintBook {
+        if let Some((id, fingerprint)) = RECORD_ON_OPEN.with(|record| *record.borrow()) {
+            let change = book.record(id, fingerprint);
+            RECORDED.with(|recorded| recorded.borrow_mut().push(change));
+        }
+        book
+    }
+
+    thread_local! {
         /// The sessions' addresses at each announcement this thread made.
         static ANNOUNCED_WITH: std::cell::RefCell<Vec<Vec<SocketAddr>>> = const { std::cell::RefCell::new(Vec::new()) };
     }
@@ -2733,6 +2750,32 @@ mod tests {
         assert_eq!(
             relaunched.record(kitchen, fingerprint),
             FingerprintChange::Same
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_sender_made_with_a_folder_keeps_its_certificates_there_across_a_relaunch() {
+        let folder = crate::test_scratch().join("cast-certificates-ffi");
+        let _ = std::fs::remove_dir_all(&folder);
+        let kitchen = DeviceId::parse(KITCHEN).expect("id");
+        let fingerprint = Fingerprint([7; 32]);
+        let c_folder = CString::new(folder.to_str().expect("UTF-8")).expect("no NUL");
+        RECORD_ON_OPEN.with(|record| *record.borrow_mut() = Some((kitchen, fingerprint)));
+        for _ in 0..2 {
+            // SAFETY: a null memory text and a NUL-terminated folder.
+            let mut handle = unsafe { asc_cast_create_in(ptr::null(), c_folder.as_ptr()) };
+            assert!(!handle.is_null());
+            // SAFETY: a live handle, destroyed once.
+            unsafe { asc_cast_destroy(&mut handle) };
+        }
+        RECORD_ON_OPEN.with(|record| record.borrow_mut().take());
+        let text = std::fs::read_to_string(folder.join("cast-certificates.txt")).expect("kept");
+        assert_eq!(text, format!("{kitchen} {fingerprint}\n"));
+        assert_eq!(
+            RECORDED.with(|recorded| recorded.take()),
+            [FingerprintChange::First, FingerprintChange::Same]
         );
         let _ = std::fs::remove_dir_all(&folder);
     }
