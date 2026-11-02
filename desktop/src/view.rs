@@ -5745,6 +5745,16 @@ fn source_name(strings: &Strings<'_>, source: &SourceName) -> SharedString {
     }
 }
 
+/// `source_name` for the middle of a sentence.
+fn inline_source_name(strings: &Strings<'_>, source: &SourceName) -> SharedString {
+    match source {
+        SourceName::AllAppsExcept(names) => {
+            strings.invoke_source_all_except_inline(joined(strings, names))
+        }
+        _ => source_name(strings, source),
+    }
+}
+
 /// A source or channel pair as the source picker names it.
 fn switch_name(strings: &Strings<'_>, name: &SwitchName) -> SharedString {
     match name {
@@ -5840,11 +5850,14 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         }
         NoticeMessage::SwitchFailed { new, old } => strings
             .invoke_notice_switch_failed(switch_name(strings, new), switch_name(strings, old)),
+        NoticeMessage::SourceNotRunning {
+            source: SourceName::Apps(names),
+        } if names.len() > 1 => strings.invoke_notice_sources_not_running(joined(strings, names)),
         NoticeMessage::SourceNotRunning { source } => {
             strings.invoke_notice_source_not_running(source_name(strings, source))
         }
         NoticeMessage::SourceRefused { source } => {
-            strings.invoke_notice_source_refused(source_name(strings, source))
+            strings.invoke_notice_source_refused(inline_source_name(strings, source))
         }
         NoticeMessage::InputNotConnected { source } => {
             strings.invoke_notice_input_not_connected(name_or_unknown(strings, source))
@@ -6042,8 +6055,10 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
                 .invoke_notice_title(NoticeKind::SourceNotRunning, source_name(strings, source));
         }
         NoticeMessage::SourceRefused { source } => {
-            return strings
-                .invoke_notice_title(NoticeKind::SourceRefused, source_name(strings, source));
+            return strings.invoke_notice_title(
+                NoticeKind::SourceRefused,
+                inline_source_name(strings, source),
+            );
         }
         NoticeMessage::InputNotConnected { source } => {
             return strings.invoke_notice_title(
@@ -6462,7 +6477,7 @@ mod tests {
         let strings = app.main.global::<Strings>();
         assert_eq!(
             notice_item(&strings, &notices[0]).message,
-            "AirPlay 2 (Experimental) is on. Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
+            "AirPlay 2 (Experimental) is on. Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you exit AudioSync and open it again."
         );
         let mut off = notices[0].clone();
         off.message = NoticeMessage::AirPlay2NextLaunch {
@@ -6471,7 +6486,7 @@ mod tests {
         };
         assert_eq!(
             notice_item(&strings, &off).message,
-            "AirPlay 2 (Experimental) is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
+            "AirPlay 2 (Experimental) is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you exit AudioSync and open it again."
         );
         // Under the AirPlay 2 flag the item is Prefer AirPlay 2 (spec S313).
         let mut preferred = notices[0].clone();
@@ -6481,7 +6496,7 @@ mod tests {
         };
         assert_eq!(
             notice_item(&strings, &preferred).message,
-            "Prefer AirPlay 2 is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
+            "Prefer AirPlay 2 is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you exit AudioSync and open it again."
         );
 
         app.main.invoke_airplay2_experimental_toggled(false);
@@ -13664,6 +13679,37 @@ mod tests {
         assert_eq!(
             text,
             "Den TV stopped AudioSync's stream, so it's off. Turn it on again to stream to it."
+        );
+    }
+
+    #[test]
+    fn source_notices_agree_with_several_apps_and_lowercase_all_apps_except_mid_sentence() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let several = NoticeMessage::SourceNotRunning {
+            source: SourceName::Apps(vec!["Chrome".into(), "Spotify".into()]),
+        };
+        assert_eq!(
+            notice_text(&strings, &several),
+            "Chrome and Spotify are not running. Open them first, or pick another source."
+        );
+        let one = NoticeMessage::SourceNotRunning {
+            source: SourceName::Apps(vec!["Chrome".into()]),
+        };
+        assert_eq!(
+            notice_text(&strings, &one),
+            "Chrome is not running. Open it first, or pick another source."
+        );
+        let refused = NoticeMessage::SourceRefused {
+            source: SourceName::AllAppsExcept(vec!["Chrome".into()]),
+        };
+        assert!(
+            notice_text(&strings, &refused)
+                .starts_with("AudioSync can't capture all apps except Chrome without")
+        );
+        assert_eq!(
+            notice_title(&strings, &refused),
+            "can't capture all apps except Chrome"
         );
     }
 

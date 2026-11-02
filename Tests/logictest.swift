@@ -1605,6 +1605,8 @@ do {
             && text.nativeAirPlayRefused(name: "Den") == text.castProblem(.refused, name: "Den")
             && text.nativeAirPlayBusy(name: "Den") != unreachableOff && text.nativeAirPlayRefused(name: "Den") != unreachableOff,
           "native off: a busy speaker names the other device and a refusing one says it declined, neither sends the user to the network")
+    check(text.nativeAirPlayPairingsNotSaved.hasSuffix(" If the disk is full, free up some space."),
+          "native pairings: the not-saved notice says what to do next, as on Windows")
 }
 
 // MARK: Device volume — a turned-down or muted output shows a hint and a one-click fix (S192 to S202)
