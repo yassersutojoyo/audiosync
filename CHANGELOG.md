@@ -31,6 +31,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the "Waiting for audio" notice no longer stays up while sound comes in because the level meter read that sound first.
 - On Windows, the row of a stereo pair or home theater lists its speakers, and the ones missing, sorted by name, as on the Mac.
 - On Windows, the saved settings are read once at launch. Before, they were read twice, so a settings file another program held during one read could leave a stereo pair or home theater on without the notice that the AirPlay 2 choice applies at the next launch, or turn one away for the whole run though AirPlay 2 was on, and each held read added half a second to the launch.
+- On Windows, stopping streaming clears the notice that the app you streamed quit and AudioSync switched to All System Audio, as on the Mac. Before, the notice stayed up after the stop.
 
 ## [0.8.0] - 2026-11-02
 

@@ -3993,20 +3993,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.log
                 .log(|| "streaming stops: no speaker is on anymore".to_owned());
             self.audio.stop();
-            self.clear_switch_failed();
+            self.clear_switch_notices();
         }
     }
 
     /// A stop clears the switch notice, which says the old source still plays (S141).
     fn stop_streaming(&mut self) {
         self.audio.stop();
-        self.clear_switch_failed();
+        self.clear_switch_notices();
     }
 
-    /// The notice of a switch that couldn't start goes when streaming stops.
-    fn clear_switch_failed(&mut self) {
+    /// Both switch notices describe a stream that a stop has ended.
+    fn clear_switch_notices(&mut self) {
         self.clear_if(NoticeSubject::Source, |message| {
-            matches!(message, NoticeMessage::SwitchFailed { .. })
+            matches!(
+                message,
+                NoticeMessage::SwitchFailed { .. } | NoticeMessage::SourceSwitched { .. }
+            )
         });
     }
 
@@ -4937,7 +4940,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 self.gate.user_switched_off();
                 self.audio.stop();
             }
-            self.clear_switch_failed();
+            self.clear_switch_notices();
             self.forget_stale_waits();
             return;
         }
@@ -7680,6 +7683,40 @@ mod tests {
         adapter.poll();
         assert_eq!(adapter.snapshot().source_id, "system");
         assert_eq!(captures(&adapter).len(), 2);
+    }
+
+    // covers: S141, S163, S227
+    #[test]
+    fn stopping_clears_the_notice_that_the_quit_app_gave_way_to_the_whole_system() {
+        let mut adapter = adapter();
+        adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.poll();
+        assert_eq!(messages(&adapter).len(), 1, "the switch notice is up");
+
+        adapter.set_running(false);
+        assert!(!adapter.snapshot().running);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S141
+    #[test]
+    fn turning_the_last_speaker_off_clears_the_notice_that_the_quit_app_gave_way() {
+        let mut adapter = adapter();
+        adapter.set_when_source_quits(WhenSourceQuits::SwitchToSystem);
+        adapter.select_source(&player());
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.poll();
+        assert_eq!(messages(&adapter).len(), 1, "the switch notice is up");
+
+        adapter.set_speaker_enabled(&key(SPEAKERS), false);
+        assert!(!adapter.snapshot().running);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
     // covers: S227
