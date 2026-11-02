@@ -818,7 +818,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             if StatusItemClick.pressDuringClose(press, closeEndsAt) {
                 DebugTrace.log("[AudioSync] status item click: ignored, the panel is still closing")
             } else {
-                show()
+                show(pressedAt: press)
             }
         case .close: dismiss(); closingPress = nil   // this click closed it; the next one opens it
         case .stayClosed: DebugTrace.log("[AudioSync] status item click: the press already closed the panel")
@@ -832,7 +832,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             - CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown)
     }
 
-    func show() {
+    func show(pressedAt press: TimeInterval? = nil) {
         guard !presented, let button = statusItem.button, let item = button.window else { return }
         let finishNow = host.sizing.show(onScreen: popover.isShown)
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
@@ -870,9 +870,11 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         takeKey()
         DispatchQueue.main.async { button.highlight(true) }
         watchForOutsideClicks()
-        DebugTrace.log(String(format: "[AudioSync] panel show: %.0f ms after the press; model refresh %.1f ms, "
+        // Only a show that no status item press started logs no press.
+        let sincePress = press.map { String(format: "%.0f ms after the press", (start - $0) * 1000) } ?? "no press"
+        DebugTrace.log(String(format: "[AudioSync] panel show: %@; model refresh %.1f ms, "
                               + "layout %.1f ms, popover %.1f ms, rest %.1f ms",
-                              (start - Self.latestPress) * 1000, (refreshed - start) * 1000,
+                              sincePress, (refreshed - start) * 1000,
                               (measured - refreshed) * 1000, (shown - measured) * 1000, (Self.uptime - shown) * 1000))
     }
 
