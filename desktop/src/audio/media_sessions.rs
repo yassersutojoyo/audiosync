@@ -27,8 +27,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::audio::now_playing::{
-    FittedArtwork, Follow, MediaSession, RawTimeline, Reading, Timeline, Track, TrackReader, pick,
-    wall_ticks,
+    DROP_AFTER, FittedArtwork, Follow, MediaSession, RawTimeline, Reading, Timeline, Track,
+    TrackReader, pick, wall_ticks,
 };
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{
@@ -427,9 +427,10 @@ struct Reader<L> {
     /// The last tracks read, for the log.
     last_track: Option<MediaSession>,
     last_card: Option<MediaSession>,
-    /// The app the card last showed playing, kept while its session is
-    /// listed (S218).
+    /// The app the card last showed playing, kept until it has given no
+    /// track for [`DROP_AFTER`] (S218), counted from `card_idle_since`.
     card_played_last: Option<String>,
+    card_idle_since: Option<Instant>,
 }
 
 /// One listing of the sessions, which both readers' readings come from.
@@ -450,6 +451,7 @@ impl<L: SessionList> Reader<L> {
             last_track: None,
             last_card: None,
             card_played_last: None,
+            card_idle_since: None,
         }
     }
 
@@ -522,17 +524,24 @@ impl<L: SessionList> Reader<L> {
         follow: &Follow,
         log: &DebugLog,
     ) -> Option<CardTrack> {
-        let played_last = self.card_played_last.take().filter(|app_id| {
-            listing
-                .listed
-                .iter()
-                .any(|(session, _)| session.app_id == *app_id)
-        });
-        let index = self.counting(&listing.listed, follow, played_last.as_deref());
-        self.card_played_last = match index.map(|index| &listing.listed[index].0) {
-            Some(session) if session.playing => Some(session.app_id.clone()),
-            _ => played_last,
-        };
+        let mut index = self.counting(&listing.listed, follow, self.card_played_last.as_deref());
+        if index.is_some() {
+            self.card_idle_since = None;
+        } else if self.card_played_last.is_some()
+            && self
+                .card_idle_since
+                .get_or_insert_with(Instant::now)
+                .elapsed()
+                >= DROP_AFTER
+        {
+            (self.card_played_last, self.card_idle_since) = (None, None);
+            index = self.sessions.pick(&listing.listed, follow);
+        }
+        if let Some(session) = index.map(|index| &listing.listed[index].0)
+            && session.playing
+        {
+            self.card_played_last = Some(session.app_id.clone());
+        }
         self.log_card(index.map(|index| &listing.listed[index].0), log);
         let index = index?;
         let session = listing.listed[index].0.clone();
