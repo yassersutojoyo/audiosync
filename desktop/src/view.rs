@@ -4070,7 +4070,12 @@ impl App {
             .airplay_delay_draft
             .commit(Some(current));
         let base = typed.map_or(current, |ms| ms.clamp(0.0, ui_model::MAX_DELAY_MS));
-        self.update(|b| b.set_airplay_delay(base + f64::from(delta)));
+        let ms = (base + f64::from(delta)).clamp(0.0, ui_model::MAX_DELAY_MS);
+        if ms == current {
+            self.refresh();
+        } else {
+            self.update(|b| b.set_airplay_delay(ms));
+        }
         self.say_airplay_delay_set();
     }
 
@@ -4092,7 +4097,7 @@ impl App {
         let shown = self.snapshot().airplay_delay_ms;
         let typed = self.ui.borrow_mut().airplay_delay_draft.commit(shown);
         match typed {
-            Some(ms) => self.update(|b| b.set_airplay_delay(ms)),
+            Some(ms) => self.update(|b| b.set_airplay_delay(ms.clamp(0.0, ui_model::MAX_DELAY_MS))),
             None => self.refresh(),
         }
         typed.is_some()
@@ -9682,6 +9687,31 @@ mod tests {
             1,
             "a focus loss after Return applies nothing"
         );
+    }
+
+    // covers: S220
+    #[test]
+    fn an_airplay_delay_out_of_range_applies_its_end_and_a_step_past_it_nothing() {
+        let backend = MockBackend::new();
+        let applied = backend.airplay_delays.clone();
+        let app = app_over(backend);
+        app.main.invoke_airplay_delay_edited("25000".into());
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(applied.borrow().last(), Some(&ui_model::MAX_DELAY_MS));
+        let said = || app.main.get_notice_announcement().to_string();
+        app.clear_announcement();
+        app.main.invoke_airplay_delay_stepped(100);
+        assert_eq!(applied.borrow().len(), 1, "a step past 20 000 ms");
+        assert_eq!(said(), "AirPlay Delay set to 20000 ms", "and it is said");
+
+        app.main.invoke_airplay_delay_edited("-500".into());
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(applied.borrow().last(), Some(&0.0), "typed -500 applies 0");
+        app.clear_announcement();
+        app.main.invoke_airplay_delay_stepped(-100);
+        assert_eq!(applied.borrow().len(), 2, "a step below 0 ms");
+        assert_eq!(said(), "AirPlay Delay set to 0 ms", "and it is said");
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(0.0));
     }
 
     #[test]
