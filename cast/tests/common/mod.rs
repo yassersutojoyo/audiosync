@@ -228,6 +228,9 @@ pub enum Command {
     Stall,
     /// Do nothing for this long, as a device thread starved of the CPU.
     Pause(Duration),
+    /// Leave the receiver's `GET_STATUS` unanswered on the current
+    /// connection; PING and the media namespace still answer.
+    SilenceStatus,
     Disconnect,
 }
 
@@ -327,6 +330,7 @@ impl FakeDevice {
             fetches: Arc::clone(&fetches),
             stop_fetching: Arc::clone(&stop_fetching),
             ipv4_closed: false,
+            status_silent: false,
         };
         let thread_log = Arc::clone(&log);
         let thread_connections = Arc::clone(&connections);
@@ -527,6 +531,7 @@ struct Device {
     fetches: Arc<Mutex<Vec<Fetch>>>,
     stop_fetching: Arc<AtomicBool>,
     ipv4_closed: bool,
+    status_silent: bool,
 }
 
 impl Device {
@@ -558,7 +563,9 @@ impl Device {
                 NS_HEARTBEAT,
                 json!({"type": "PONG"}),
             )],
-            (NS_RECEIVER, "GET_STATUS") if self.behavior.answer_status => vec![self.status(id)],
+            (NS_RECEIVER, "GET_STATUS") if self.behavior.answer_status && !self.status_silent => {
+                vec![self.status(id)]
+            }
             (NS_RECEIVER, "LAUNCH") => {
                 self.launches += 1;
                 let error = |reason: &str| {
@@ -833,6 +840,7 @@ fn serve(
     let mut reader = FrameReader::new();
     let mut buffer = vec![0u8; 16 * 1024];
     let mut stalled = false;
+    device.status_silent = false;
     let mut suite_recorded = false;
     let mut last_ping = Instant::now();
     // The oldest PING since the last PONG: a device thread starved of the CPU
@@ -878,6 +886,7 @@ fn serve(
                 Ok(Command::SetApps(apps)) => device.apps = apps,
                 Ok(Command::Stall) => stalled = true,
                 Ok(Command::Pause(time)) => thread::sleep(time),
+                Ok(Command::SilenceStatus) => device.status_silent = true,
                 Ok(Command::DropConnection) => {
                     let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
                     return false;
