@@ -20,7 +20,7 @@ use windows::Win32::Media::KernelStreaming::KSNODETYPE_DISPLAYPORT_INTERFACE;
 use windows::Win32::System::Com::StructuredStorage::PropVariantClear;
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance, STGM_READ};
 use windows::Win32::System::Threading::{INFINITE, WaitForSingleObject};
-use windows::Win32::System::Variant::{VT_BLOB, VT_LPWSTR, VT_UI4};
+use windows::Win32::System::Variant::{VT_BLOB, VT_BOOL, VT_LPWSTR, VT_UI4};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::core::{GUID, PCWSTR};
 use windows_core::implement;
@@ -122,6 +122,33 @@ pub(super) fn properties(device: &IMMDevice) -> Result<EndpointProperties, Strin
             == Some(KSNODETYPE_DISPLAYPORT_INTERFACE),
         channels: format_channels(&store, &PKEY_AudioEngine_DeviceFormat),
     })
+}
+
+/// System.Devices.AudioDevice.RawProcessingSupported, as Microsoft documents
+/// it; declared here so the large module that defines it stays out.
+const RAW_PROCESSING_SUPPORTED: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x8943b373_388c_4395_b557_bc6dbaffafdb),
+    pid: 2,
+};
+
+/// Whether `device` offers its signal without its effects (raw mode); no
+/// when its store or the property can't be read.
+pub(super) fn raw_processing_supported(device: &IMMDevice) -> bool {
+    // SAFETY: opens the endpoint's own property store for reading, and reads
+    // one property into a PROPVARIANT this function owns and clears; its
+    // flag is read only when the variant says it holds one.
+    unsafe {
+        let Ok(store) = device.OpenPropertyStore(STGM_READ) else {
+            return false;
+        };
+        let Ok(mut value) = store.GetValue(&RAW_PROCESSING_SUPPORTED) else {
+            return false;
+        };
+        let supported = value.Anonymous.Anonymous.vt == VT_BOOL
+            && value.Anonymous.Anonymous.Anonymous.boolVal.0 != 0;
+        let _ = PropVariantClear(&mut value);
+        supported
+    }
 }
 
 /// The channels of a `WAVEFORMATEX` held as raw bytes: its `nChannels`,
