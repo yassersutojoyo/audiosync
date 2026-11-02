@@ -5847,13 +5847,13 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             strings.invoke_notice_source_refused(source_name(strings, source))
         }
         NoticeMessage::InputNotConnected { source } => {
-            strings.invoke_notice_input_not_connected(source.as_str().into())
+            strings.invoke_notice_input_not_connected(name_or_unknown(strings, source))
         }
         NoticeMessage::InputDisconnected { source } => {
-            strings.invoke_notice_input_disconnected(source.as_str().into())
+            strings.invoke_notice_input_disconnected(name_or_unknown(strings, source))
         }
         NoticeMessage::MicrophoneBlocked { source } => {
-            strings.invoke_notice_microphone_blocked(source.as_str().into())
+            strings.invoke_notice_microphone_blocked(name_or_unknown(strings, source))
         }
         NoticeMessage::CaptureFailed => strings.get_notice_capture_failed(),
         NoticeMessage::CaptureLost => strings.get_notice_capture_lost(),
@@ -6046,10 +6046,16 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
                 .invoke_notice_title(NoticeKind::SourceRefused, source_name(strings, source));
         }
         NoticeMessage::InputNotConnected { source } => {
-            (NoticeKind::InputNotConnected, source.as_str())
+            return strings.invoke_notice_title(
+                NoticeKind::InputNotConnected,
+                name_or_unknown(strings, source),
+            );
         }
         NoticeMessage::InputDisconnected { source } => {
-            (NoticeKind::InputDisconnected, source.as_str())
+            return strings.invoke_notice_title(
+                NoticeKind::InputDisconnected,
+                name_or_unknown(strings, source),
+            );
         }
         NoticeMessage::MicrophoneBlocked { .. } => (NoticeKind::MicrophoneBlocked, ""),
         NoticeMessage::CaptureFailed => (NoticeKind::CaptureFailed, ""),
@@ -14780,6 +14786,40 @@ mod tests {
         assert_eq!(
             notice_text(&app.strings(), &pair_first),
             "Unknown device stayed off. Pair it on this PC first."
+        );
+    }
+
+    #[test]
+    fn an_input_notice_calls_an_input_with_no_name_unknown_device() {
+        let app = app_over(MockBackend::new());
+        let not_connected = NoticeMessage::InputNotConnected {
+            source: String::new(),
+        };
+        assert_eq!(
+            notice_text(&app.strings(), &not_connected),
+            "Unknown device is not connected. Plug it in, or pick another source."
+        );
+        assert_eq!(
+            notice_title(&app.strings(), &not_connected),
+            "Unknown device not connected"
+        );
+        let disconnected = NoticeMessage::InputDisconnected {
+            source: String::new(),
+        };
+        assert_eq!(
+            notice_text(&app.strings(), &disconnected),
+            "Unknown device was disconnected, so streaming has stopped. Plug it in again, or pick another source."
+        );
+        assert_eq!(
+            notice_title(&app.strings(), &disconnected),
+            "Unknown device was disconnected, streaming stopped"
+        );
+        let blocked = NoticeMessage::MicrophoneBlocked {
+            source: String::new(),
+        };
+        assert_eq!(
+            notice_text(&app.strings(), &blocked),
+            "Windows is blocking microphone access for desktop apps, so AudioSync can't capture Unknown device. Open Privacy Settings and turn on “Let desktop apps access your microphone” and “Microphone access”."
         );
     }
 
