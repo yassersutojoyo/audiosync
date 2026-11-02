@@ -6102,6 +6102,10 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::GroupsBecameZones => (NoticeKind::GroupsBecameZones, ""),
         NoticeMessage::Update(_) => (NoticeKind::Update, ""),
         NoticeMessage::DialogMessage { title, .. } => return title.as_str().into(),
+        NoticeMessage::PresetLeftOff {
+            nothing_changed: true,
+            ..
+        } => (NoticeKind::PresetsNothingChanged, ""),
         NoticeMessage::PresetLeftOff { .. } => (NoticeKind::PresetsLeftOff, ""),
         NoticeMessage::HeardTwice { .. } => (NoticeKind::HeardTwice, ""),
     };
@@ -14795,6 +14799,11 @@ mod tests {
         assert_eq!(
             notice_text(&app.strings(), &notices[0].message),
             "Nothing changed: no speaker in “Desk” can play now. Desk Speaker (Hidden)."
+        );
+        assert_eq!(
+            notice_title(&app.strings(), &notices[0].message),
+            "nothing changed",
+            "no speaker stayed off where none went on"
         );
         assert_eq!(app.snapshot().master_volume, 40.0);
     }
