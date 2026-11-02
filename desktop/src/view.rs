@@ -13015,6 +13015,29 @@ mod tests {
         );
     }
 
+    // covers: S353, S354
+    #[test]
+    fn an_app_only_the_last_mix_holds_is_listed_as_not_running() {
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.add_app(2000, "Spotify.exe");
+        audio.add_app(3000, "Chrome.exe");
+        let mut adapter =
+            crate::adapter::AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.toggle_mix_app("Spotify.exe");
+        adapter.toggle_mix_app("Chrome.exe");
+        adapter.select_source("system");
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_devices();
+        let app = app_over(adapter);
+        let names: Vec<String> = app
+            .main
+            .get_mix_apps()
+            .iter()
+            .map(|app| app.name.to_string())
+            .collect();
+        assert_eq!(names, ["Spotify", "Chrome (not running)"]);
+    }
+
     #[test]
     fn a_several_apps_source_that_quits_is_named_in_the_uis_words() {
         use audiosync_core::policy::source_quit::WhenSourceQuits;
