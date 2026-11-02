@@ -4716,7 +4716,7 @@ Windows (`desktop/src/audio/now_playing.rs` unless named):
 | an_airplay_delay_over_its_range_applies_clamped_once (`desktop/src/view.rs`) | S220 |
 | an_airplay_delay_out_of_range_applies_its_end_and_a_step_past_it_nothing (`desktop/src/view.rs`) | S220 |
 | narrator_hears_a_delay_set_by_a_step_or_enter_and_a_refused_character (`desktop/src/view.rs`) | S220 |
-| narrator_hears_every_delay_step_at_the_range_end (`desktop/src/view.rs`) | S220 |
+| narrator_hears_nothing_from_a_delay_step_that_leaves_the_delay_as_it_is (`desktop/src/view.rs`) | S220 |
 | a_typed_speaker_delay_applies_only_on_enter (`desktop/src/view.rs`) | S220 |
 | an_airplay_delay_step_builds_on_the_typed_value (`desktop/src/view.rs`) | S220 |
 | a_cast_delay_step_floors_the_typed_value_first (`desktop/src/view.rs`) | S220 |
