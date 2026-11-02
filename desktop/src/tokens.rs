@@ -91,11 +91,6 @@ pub const COLORS: &[ColorToken] = &[
         light: [196, 43, 28],
         dark: [255, 153, 164],
     },
-    ColorToken {
-        name: "activeBlue",
-        light: [0, 98, 204],
-        dark: [94, 174, 255],
-    },
 ];
 
 /// Opacities by name (brand/tokens.json `opacity`).
