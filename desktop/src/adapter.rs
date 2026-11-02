@@ -4497,6 +4497,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 unplugged: false,
             })
             .collect();
+        // A mix goes first under the apps, right after System, as on the Mac (S344).
+        let first_app = |rows: &[Source]| {
+            rows.iter()
+                .position(|row| row.kind != SourceKind::System)
+                .unwrap_or(rows.len())
+        };
         let chosen = self.chosen.key();
         if !rows.iter().any(|row| row.id == chosen) {
             let kind = match self.chosen {
@@ -4517,6 +4523,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             let by_name = matches!(self.chosen, Chosen::App { .. }).then(|| name.to_lowercase());
             let at = match kind {
                 SourceKind::Input => rows.len(),
+                _ if matches!(self.chosen, Chosen::Mix { .. }) => first_app(&rows),
                 _ => rows
                     .iter()
                     .position(|row| {
@@ -4542,12 +4549,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if let Some(mix @ Chosen::Mix { mode, apps }) = self.kept_mix()
             && !rows.iter().any(|row| row.id == mix.key())
         {
-            let at = rows
-                .iter()
-                .position(|row| row.kind == SourceKind::Input)
-                .unwrap_or(rows.len());
             rows.insert(
-                at,
+                first_app(&rows),
                 Source {
                     id: mix.key(),
                     name: String::new(),
@@ -13023,6 +13026,28 @@ mod tests {
         }
     }
 
+    // covers: S344
+    #[test]
+    fn a_chosen_mix_is_listed_first_under_the_apps_in_the_window_and_on_the_phone() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        for mode in ["only", "all apps except"] {
+            let ids = source_ids(&adapter);
+            let mix = adapter.snapshot().source_id;
+            assert_eq!(ids[..2], [SYSTEM_KEY.to_owned(), mix], "{mode}: {ids:?}");
+            let phone: Vec<String> = page(&adapter)
+                .sources
+                .into_iter()
+                .map(|source| source.id)
+                .collect();
+            assert_eq!(phone[..2], ids[..2], "{mode}: {phone:?}");
+            adapter.set_mix_all_except(true);
+        }
+    }
+
     // covers: S354
     #[test]
     fn the_last_mix_is_kept_across_a_switch_and_a_relaunch_and_only_another_mix_replaces_it() {
@@ -13045,11 +13070,7 @@ mod tests {
         let ids = source_ids(&adapter);
         assert_eq!(once(&ids, LAST_MIX), 1, "kept after a switch: {ids:?}");
         let at = ids.iter().position(|id| id == LAST_MIX).unwrap();
-        assert_eq!(
-            ids.get(at + 1),
-            Some(&mic()),
-            "after the apps, before the inputs"
-        );
+        assert_eq!(at, 1, "right after System, before the apps: {ids:?}");
         adapter.save_settings();
 
         let mut adapter = launch(world(), &path);
