@@ -103,6 +103,8 @@ struct CaptureNoticeGate {
         case post(CaptureCheck, String?)
         /// The notice for this verdict was already posted, or the capture is closed: check again.
         case keep
+        /// The capture closed while the waiting notice showed: clear it; check again.
+        case withdraw
     }
 
     let session: Int
@@ -116,7 +118,11 @@ struct CaptureNoticeGate {
                        app: @autoclosure () -> String?) -> Step {
         guard current == session, running else { return .end }
         // The try or the input notice (S329, S333) settles a closed capture; playing something wouldn't.
-        guard !captureClosed else { return .keep }
+        if captureClosed {
+            guard said == .waiting else { return .keep }
+            said = nil
+            return .withdraw
+        }
         if verdict == .flowing { return .clear }
         // Only a changed verdict posts, so a notice the user dismissed stays dismissed.
         guard verdict != said else { return .keep }

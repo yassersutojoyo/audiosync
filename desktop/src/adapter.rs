@@ -9174,6 +9174,19 @@ mod tests {
         assert!(waiting(&adapter).is_empty());
     }
 
+    // covers: S350, S329
+    #[test]
+    fn a_waiting_notice_showing_clears_when_the_capture_closes_for_its_reopen() {
+        let mut adapter = streaming_the_player();
+        check_audio(&mut adapter);
+        assert_eq!(waiting(&adapter), waiting_for_player());
+        adapter.audio_mut().fail_capture(BackendError::DeviceGone);
+        adapter.poll();
+        check_audio(&mut adapter);
+        assert!(adapter.snapshot().running);
+        assert!(waiting(&adapter).is_empty());
+    }
+
     // covers: S350
     #[test]
     fn streaming_stopping_clears_the_waiting_notice_and_a_new_session_posts_it_again() {

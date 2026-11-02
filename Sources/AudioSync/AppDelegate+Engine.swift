@@ -457,6 +457,8 @@ extension AppDelegate {
             case .post(_, let app):
                 notify(text.captureNotWorking(app), origin: .automatic, subject: Notice.capture,
                        settings: Permission.needed(for: audioSource).pane)
+            case .withdraw:
+                clearNotices([Notice.capture])
             case .keep:
                 break
             }
