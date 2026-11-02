@@ -2,50 +2,13 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
-## [Unreleased]
+## [0.8.0] - unreleased
 
 ### Added
 
 - On Windows, while no AirPlay speaker is found, the note in the main window and the tray panel offers Open Network Settings, which opens Settings > Network & internet, as the Mac offers Open Local Network Settings.
 - On Windows, the Calibrate All card shows Before you start while the reference output's volume is low or muted, with a link that fixes it, as on the Mac.
 - On Windows, clicking the logo or the name at the top of the tray panel opens the main window, and pointing at the panel's streaming switch shows Turn On or Turn Off, as in the Mac panel.
-
-### Changed
-
-- On Windows, the source menu, in the main window and on the web remote, lists the mix of several apps in use, or your last mix, right after the whole system, as on the Mac. Before, it came after the apps.
-- On Windows, Several Apps… is a link under the tray panel's source menu instead of its last entry, so arrowing or scrolling through the sources no longer lands on it and closes the panel.
-- An app in the list of several apps that only your last mix keeps there reads "(not running)" after its name. On the Mac and on Windows.
-- On Windows, when a newer version of AudioSync wrote your settings, the notice, its dismiss button, the tray tooltip and Narrator say so, and the notice adds that updating AudioSync gets them back. Before, they said AudioSync couldn't read them.
-- On Windows, the notice about blocked microphone access and the calibration name both switches to turn on: "Let desktop apps access your microphone" and "Microphone access".
-- On the Mac, an equalizer curve name matches a saved one by the same rule as on Windows: ignoring case only. A name typed with a ready-made accented letter and one typed with a separate accent mark are now two curves.
-- On Windows, a preset holds the reference output like any other speaker, as on the Mac: recalling a preset without it switches it off, and a preset can hold it alone. A preset saved before this version leaves it as it is until you change something and choose Update to Current Settings for it.
-- On Windows, folding a zone in the tray panel leaves it as it was in the main window, and the other way around, as on the Mac.
-- On Windows, the tray panel no longer draws a line above its source menu, as in the Mac panel.
-- On Windows, the Web Remote window shows its port whenever the remote is on, and the note that the remote uses plain HTTP also while it's off, as on the Mac. When the PC's name can't be used in a link, the QR code holds its IP address instead.
-
-### Fixed
-
-- On Windows, Tab reaches a zone's arrow, in the main window and the tray panel, and Space or Enter on it shows or hides the zone's speakers. A zone's volume now works while none of its speakers is found, as on the Mac. Before, Tab skipped the arrow while a speaker was found, and the volume was greyed out while none was.
-- On Windows, a zone name, zone count or stereo pair line that fits no longer shows a tooltip repeating it. Only one cut to an ellipsis does, and a name in the In zones list keeps its tooltip, which holds the device name and the rename hint.
-- On the Mac, the menu bar panel no longer stalls at the end of its grow when it opens.
-- On the Mac, the menu bar panel keeps its round corners and its shadow while it opens and closes. Before, the top corners turned square mid-grow and the shadow changed shape, then snapped once the panel was open.
-- On the Mac, Escape closes the Web Remote window, also while the cursor is in its port field.
-- On the Mac, Right unfolds a zone and Left folds it, in the main window and the menu bar panel, as on Windows.
-- On Windows, Narrator now says a delay set with a step button or Enter, and a character the delay field doesn't take. In the Web Remote window it says a new or expired pairing code, a lockout and a forget that couldn't be saved, and the equalizer's Rename and Delete buttons name the curve, as VoiceOver does on the Mac.
-- On Windows, when AudioSync turns off an AirPlay speaker that couldn't be reached or stayed busy with another device, the notice says it's off and how to turn it on again, as on the Mac. Before, it said AudioSync keeps trying.
-- On the Mac, when an app you capture starts playing from a new process and AudioSync can't capture that one at first, it keeps trying for a few seconds, longer right after the Mac wakes, as Windows does. Before, streaming stopped with a notice about the source.
-- On the Mac, a preset whose stereo pair or home theater you hid says it stayed off because it's hidden, as on Windows. Before, the notice said it needs AirPlay 2.
-- On Windows, Narrator says every delay step you press, including one at the end of the range, which repeats the last delay, as VoiceOver does on the Mac. Before, a step that repeated the last delay said nothing.
-- On Windows, when AudioSync couldn't start looking for Google Cast speakers, the speaker list says so, and Add by Address says it found no speaker, as on the Mac. Before, the list said nothing about Google Cast.
-- On Windows, an AirPlay speaker that still asks for a code or password right after pairing turns off with a notice that points to its Allow Speaker & TV Access setting, as on the Mac. Before, the notice asked you to pair it again.
-- On Windows, a dragged equalizer slider stops on its 0.5 dB steps, so the number, the knob and what Narrator says match the gain you hear.
-- On Windows, a typed AirPlay delay above 20 000 ms applies 20 000 ms, one below 0 applies 0, and a step past either end changes nothing, as on the Mac.
-- On Windows, the Calibrate Zone card shows a renamed zone's new name at once, and a deleted zone no longer comes back there, as on the Mac.
-
-## [0.8.0] - unreleased
-
-### Added
-
 - On Windows, the update notice has Skip This Version, as on the Mac. The automatic checks then stay quiet about that version until a newer one comes out, and Help > Check for Updates… still offers it.
 - Several AirPlay 2 speakers play at once, up to 16. A speaker past that limit stays on, and its row says "Waiting: too many AirPlay 2 speakers" until another one stops. On the Mac and on Windows.
 - A speaker that needs PTP timing while AudioSync plays to AirPlay 2 speakers on another network stays on, its row says "Waiting: AirPlay 2 speakers on another network", and it starts once those speakers are off. On the Mac and on Windows.
@@ -59,15 +22,28 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay speaker you turn on stays on while it asks for its password or code, and Cancel turns it off. While other speakers play, its row says "Waiting for the password" or "Enter the code shown on" followed by its name. Before, Windows left it off until you typed the code and the Mac row said nothing. On the Mac and on Windows.
 - With the debug log on, each playing speaker on this computer logs its peak and RMS level every 10 seconds, after volume and equalizer, and every volume or master change logs the gain it plays at. On the Mac and on Windows.
 - On the Mac, Calibrate All Speakers opens with a "Before you start" list: the microphone where you listen, the Mac's own volume, with an Unmute or Set to button when it's muted or quiet, and the outputs it leaves out. Each result shows as a card with the new delay, the one it replaces and whether it was measured clearly.
-- The source menu keeps your last mix of several apps after you switch to another source or quit and reopen AudioSync, and lists it as one entry under the name it plays with, so you can pick it again, from the web remote too. On the Mac it sits right after the whole system, on Windows after the apps. Picking it captures the apps in it that are running and skips the rest. On the Mac and on Windows. While no mix is in use, the Several Apps list keeps each app of the last mix that isn't running, once and as not running, so you can check or uncheck it there and on the phone.
+- The source menu keeps your last mix of several apps after you switch to another source or quit and reopen AudioSync, and lists it as one entry under the name it plays with, so you can pick it again, from the web remote too. It sits right after the whole system, as a mix in use does. Picking it captures the apps in it that are running and skips the rest. On the Mac and on Windows. While no mix is in use, the Several Apps list keeps each app of the last mix that isn't running, once and as not running, so you can check or uncheck it there and on the phone.
 - The web remote has Several Apps… under the source picker, while an app the main window's list of several apps offers is running. Check the apps you want and tap Play to send them as one source; an app that isn't running shows greyed out. On the Mac and on Windows.
 - On Windows, while more than one notice waits, the tray panel has Dismiss All beside "n more notices…", as on the Mac.
-- On Windows, the tray panel's source menu ends in Several Apps…, which opens the main window with its list of apps to send.
+- On Windows, the tray panel has Several Apps… under its source menu, which opens the main window with its list of apps to send.
 - On Windows, while the Google Cast search finds no speaker, the tray panel offers Add by Address… under its list, as on the Mac.
 - On the Mac, when every speaker that's on in a zone waits, such as for too many AirPlay 2 speakers or for AirPlay 2 speakers on another network, the zone's header in the main window and the menu bar panel shows the first one's reason and an outlined icon, and VoiceOver reads the reason, as on Windows.
 
 ### Changed
 
+- An app in the list of several apps that only your last mix keeps there reads "(not running)" after its name. On the Mac and on Windows.
+- On Windows, when a newer version of AudioSync wrote your settings, the notice, its dismiss button, the tray tooltip and Narrator say so, and the notice adds that updating AudioSync gets them back. Before, they said AudioSync couldn't read them.
+- On Windows, the notice about blocked microphone access and the calibration name both switches to turn on: "Let desktop apps access your microphone" and "Microphone access".
+- On the Mac, an equalizer curve name matches a saved one by the same rule as on Windows: ignoring case only, over the whole name, also past a NUL character in it. A name typed with a ready-made accented letter and one typed with a separate accent mark are now two curves.
+- On Windows, a preset holds the reference output like any other speaker, as on the Mac: recalling a preset without it switches it off, and a preset can hold it alone. A preset saved before this version leaves it as it is until you change something and choose Update to Current Settings for it.
+- On Windows, folding a zone in the tray panel leaves it as it was in the main window, and the other way around, as on the Mac.
+- On Windows, the tray panel no longer draws a line above its source menu, as in the Mac panel.
+- On Windows, the Web Remote window shows its port whenever the remote is on, and the note that the remote uses plain HTTP also while it's off, as on the Mac. When the PC's name can't be used in a link, the QR code holds its IP address instead.
+- On Windows, the list of several apps is sorted by name, with an app that isn't running among the running ones, as on the Mac.
+- The Guide's AirPlay section says AirPlay 2 speakers play by default, and the note under the AirPlay 2 (Experimental) switch on the Mac, or its notice on Windows, says it only moves speakers that play both AirPlay 1 and AirPlay 2. On the Mac, on Windows and in the Linux preview.
+- On the Mac, the Guide says that at launch AudioSync starts streaming only when a speaker set to auto-connect is there, and that right-clicking a speaker offers Rename… and Hide Speaker.
+- On the Mac, a renamed speaker's name tooltip in the menu bar panel gives its device name, and a zone member's short row in the main window has the name tooltip, as on Windows.
+- On Windows and in the Linux preview, the Guide describes Several Apps and the last mix it keeps, which track the Now Playing card shows, and that Dismiss All shows when more than one notice waits, as the Mac Guide does.
 - On Windows, a source that captures every app but some reads "All Apps Except" followed by their names in the source menu, the main window, the notices and the web remote, as on the Mac.
 - On Windows, a speaker row whose device another app holds says "In use by another app", the tray flyout is called the AudioSync tray panel, and a window that fails to open says so in a plain sentence, with the system's reason in the debug log.
 - On the Mac, the main window opens narrower: the speaker column on the right starts at about two thirds of its old width and widens with the window up to its old width, which is also as wide as the window goes. The window opens at the new size once, centered, even if it was moved or resized before.
@@ -115,6 +91,23 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, Tab reaches a zone's arrow, in the main window and the tray panel, and Space or Enter on it shows or hides the zone's speakers. A zone's volume now works while none of its speakers is found, as on the Mac. Before, Tab skipped the arrow while a speaker was found, and the volume was greyed out while none was.
+- On Windows, a zone name, zone count or stereo pair line that fits no longer shows a tooltip repeating it. Only one cut to an ellipsis does, and a name in the In zones list keeps its tooltip, which holds the device name and the rename hint.
+- On the Mac, Escape closes the Web Remote window, also while the cursor is in its port field.
+- On the Mac, Right unfolds a zone and Left folds it, in the main window and the menu bar panel, as on Windows.
+- On Windows, Narrator now says a delay set with a step button or Enter, and a character the delay field doesn't take. In the Web Remote window it says a new or expired pairing code, a lockout and a forget that couldn't be saved, and the equalizer's Rename and Delete buttons name the curve, as VoiceOver does on the Mac.
+- On Windows, when AudioSync turns off an AirPlay speaker that couldn't be reached or stayed busy with another device, the notice says it's off and how to turn it on again, as on the Mac. Before, it said AudioSync keeps trying.
+- On the Mac, when an app you capture starts playing from a new process and AudioSync can't capture that one at first, it keeps trying for a few seconds, longer right after the Mac wakes, as Windows does. Before, streaming stopped with a notice about the source.
+- On the Mac, a preset whose stereo pair or home theater you hid says it stayed off because it's hidden, as on Windows. Before, the notice said it needs AirPlay 2.
+- On Windows, Narrator says every delay step you press, including one at the end of the range, which repeats the last delay, as VoiceOver does on the Mac. Before, a step that repeated the last delay said nothing.
+- On Windows, when AudioSync couldn't start looking for Google Cast speakers, the speaker list says so, and Add by Address says it found no speaker, as on the Mac. Before, the list said nothing about Google Cast.
+- On Windows, an AirPlay speaker that still asks for a code or password right after pairing turns off with a notice that points to its Allow Speaker & TV Access setting, as on the Mac. Before, the notice asked you to pair it again.
+- On Windows, a dragged equalizer slider stops on its 0.5 dB steps, so the number, the knob and what Narrator says match the gain you hear.
+- On Windows, a typed AirPlay delay above 20 000 ms applies 20 000 ms, one below 0 applies 0, and a step past either end changes nothing, as on the Mac.
+- On Windows, the Calibrate Zone card shows a renamed zone's new name at once, and a deleted zone no longer comes back there, as on the Mac.
+- On Windows, the notice that a speaker on this PC was disconnected goes away once streaming stops or you switch the speaker off, by its switch, its zone or a preset, as on the Mac. Before, it stayed.
+- When AudioSync's AirPlay sending is held up for a moment, an answer a speaker already sent no longer counts as missing, so the speaker isn't dropped with a timeout. On the Mac and on Windows.
+- On the Mac, the Hidden Speakers menu sorts numbers in names by value, as the speaker list does: Room 2 comes before Room 10.
 - On the Mac, the debug log says when a Google Cast speaker's certificate changed since AudioSync last ran, as on Windows and in the Linux preview. Before, the Mac caught a change only while the app stayed open.
 - On the Mac, the debug log says when the file of Google Cast certificates can't be read, and the first time saving it fails, as on Windows.
 - On Windows and in the Linux preview, when the app the Now Playing card shows pauses, the card keeps its track as paused, as on the Mac. Before, another app's paused track could take its place right away.
@@ -282,7 +275,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A pairing step that never gets an answer no longer leaves the speaker on Connecting. It fails and tries again like any other failed start. On the Mac and on Windows.
 - An AirPlay speaker that first shows up with only some of its addresses, say only an IPv6 one it can't be reached on, no longer sits on Connecting while AudioSync waits out each of them. Once the rest of its addresses show up, a start that hasn't connected yet begins again on them. On the Mac and on Windows.
 - On the Mac, while macOS asks for microphone access for a new input, picking the source that's already playing cancels the switch.
-- On the Mac, the menu bar panel's separator lines and edges stay sharp while it opens. Before, they blurred as the panel grew and snapped sharp at the end. It now unfolds from its arrow at its own size instead of scaling up.
+- On the Mac, the menu bar panel opens and closes by growing from the tip of its arrow, its content growing with it, and keeps its round corners and shadow throughout. The arrow stays on the tip under the icon, in the panel's own color, and the grow doesn't stall at the end.
 - On the Mac, the menu bar panel's first open after launch grows in from the menu bar like every open after it. Before, that first one just faded in at full size.
 - On the Mac, while none of a zone's speakers is found, Tab in the main window skips the zone's greyed round icon and stops on its arrow, which shows or hides the zone's speakers, as in the menu bar panel. Before, the focus stopped on the icon, which VoiceOver doesn't read.
 - On the Mac, while an AirPlay problem is showing, the "no speakers found" note asks you to check Local Network access only once macOS has refused it, not while AudioSync merely can't tell yet.
@@ -799,7 +792,6 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.8.0...HEAD
 [0.8.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.8.0
 [0.7.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.1
 [0.7.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.0
