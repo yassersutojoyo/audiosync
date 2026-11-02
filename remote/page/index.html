@@ -425,6 +425,9 @@ let sourceList = "";
 let switchingTo = null;
 let switchTimer = null;
 let shownSource = null;
+// From a touch or click on the source picker until it is left or picked from. A flag, not the focus,
+// since a select that loses focus with its window still is document.activeElement.
+let pickerOpen = false;
 // The checked apps' names while a mix waits, else null.
 let mixing = null;
 let mixAppsShown = "";
@@ -1152,6 +1155,7 @@ function fillSources(list, listed) {
 }
 
 function showCurrentSource() {
+  if (pickerOpen) { return; }
   const wanted = switchingTo || (snapshot && snapshot.source_id) || "";
   if (ui.source.value !== wanted) { ui.source.value = wanted; }
 }
@@ -1194,6 +1198,7 @@ function showSources(next) {
   ui.source.hidden = empty;
   ui.sourceEmpty.hidden = !empty;
   fillSources(list, listed);
+  if (pickerOpen) { ui.source.selectedIndex = -1; }
   showCurrentSource();
 }
 
@@ -1220,9 +1225,18 @@ const mixSender = sender((apps) => post("/api/mix", { apps }), (problem, settled
   if (settled && switchingTo === null) { endSwitch(problem ? problem.message : ""); }
 });
 
+// A native select fires change only for a pick that differs from the selection it opened with, so a
+// touch or click opens it with none selected and a pick of the source shown is sent again.
+ui.source.addEventListener("pointerdown", () => { pickerOpen = true; ui.source.selectedIndex = -1; });
+ui.source.addEventListener("blur", () => { pickerOpen = false; showCurrentSource(); });
+// A picker closed without a pick keeps the focus, so no blur comes.
+ui.source.addEventListener("keydown", (event) => { if (event.key === "Escape") { pickerOpen = false; showCurrentSource(); } });
+document.addEventListener("pointerdown", (event) => { if (pickerOpen && event.target !== ui.source) { pickerOpen = false; showCurrentSource(); } });
+
 ui.source.addEventListener("change", () => {
+  pickerOpen = false;
   const id = ui.source.value;
-  if (!snapshot || id === "" || (id === snapshot.source_id && switchingTo === null)) { return; }
+  if (!snapshot || id === "") { return; }
   showError(ui.sourceError, "");
   if (id === snapshot.source_id) {
     // Back to the source in use: no snapshot will name a change, so nothing waits for one.

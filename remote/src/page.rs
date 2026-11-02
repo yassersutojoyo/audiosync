@@ -478,6 +478,42 @@ mod tests {
         assert!(branch.contains("return;"));
     }
 
+    // covers: S344
+    #[test]
+    fn picking_the_shown_source_again_sends_it_again() {
+        let script = only_element(PAGE, "script").unwrap();
+        // A native select fires change only for a pick that differs from the selection it opened
+        // with, so it opens with none selected and leaving it shows the source again.
+        assert!(script.contains(
+            "ui.source.addEventListener(\"pointerdown\", () => { pickerOpen = true; ui.source.selectedIndex = -1; });"
+        ));
+        assert!(script.contains(
+            "ui.source.addEventListener(\"blur\", () => { pickerOpen = false; showCurrentSource(); });"
+        ));
+        // A picker closed without a pick keeps the focus: Escape or a touch elsewhere ends it.
+        assert!(script.contains(
+            "ui.source.addEventListener(\"keydown\", (event) => { if (event.key === \"Escape\") { pickerOpen = false; showCurrentSource(); } });"
+        ));
+        assert!(script.contains(
+            "document.addEventListener(\"pointerdown\", (event) => { if (pickerOpen && event.target !== ui.source) { pickerOpen = false; showCurrentSource(); } });"
+        ));
+        // While it is open, no snapshot, list rebuild or switch wait writes the shown value back.
+        let shown = &script[script.find("function showCurrentSource() {").unwrap()..];
+        assert!(
+            shown.starts_with("function showCurrentSource() {\n  if (pickerOpen) { return; }\n")
+        );
+        assert!(script.contains(
+            "  fillSources(list, listed);\n  if (pickerOpen) { ui.source.selectedIndex = -1; }\n  showCurrentSource();\n}"
+        ));
+        // The source in use is sent again, not dropped.
+        let picked = &script[script
+            .find("ui.source.addEventListener(\"change\"")
+            .unwrap()..];
+        let picked = &picked[..picked.find("\n});\n").unwrap()];
+        assert!(picked.contains("  pickerOpen = false;\n"));
+        assert!(picked.contains("if (!snapshot || id === \"\") { return; }"));
+    }
+
     // covers: S353
     #[test]
     fn several_apps_lists_the_mix_apps_as_checkboxes_and_play_reports_as_a_pick() {
