@@ -236,8 +236,6 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
-    /// The sources, then Several Apps…, which opens the main window's list.
-    flyout_sources: Rc<VecModel<SharedString>>,
     /// The chosen input device's channel pairs; empty up to two channels.
     input_pairs: Rc<VecModel<SharedString>>,
     mix_apps: Rc<VecModel<MixAppItem>>,
@@ -1001,7 +999,6 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
-            flyout_sources: Rc::new(VecModel::default()),
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -1729,8 +1726,7 @@ impl App {
             .set_calibrate_all_rows(ModelRc::from(m.calibration_rows.clone()));
         self.main
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
-        self.flyout
-            .set_sources(ModelRc::from(m.flyout_sources.clone()));
+        self.flyout.set_sources(ModelRc::from(m.sources.clone()));
         self.flyout
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
@@ -2129,9 +2125,6 @@ impl App {
             connected_zoned,
             ..
         } = main_lists;
-        let mut flyout_sources = sources.clone();
-        flyout_sources.push(strings.get_source_mix_more());
-        sync_model(&m.flyout_sources, flyout_sources);
         sync_model(&m.sources, sources);
         sync_model(&m.input_pairs, input_pairs);
         self.main.set_input_pair_index(input_pair_index);
@@ -2914,17 +2907,13 @@ impl App {
         let w = weak.clone();
         flyout.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
         let w = weak.clone();
-        flyout.on_source_selected(move |index| {
+        flyout.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
+        let w = weak.clone();
+        flyout.on_several_apps_requested(move || {
             with_app(&w, |app| {
-                // The shown list's last row: the snapshot may have grown since.
-                let shown = app.models.flyout_sources.row_count();
-                if usize::try_from(index).is_ok_and(|i| i + 1 == shown) {
-                    app.hide_flyout();
-                    app.show_main();
-                    app.main.set_mix_open(true);
-                } else {
-                    app.select_source(index);
-                }
+                app.hide_flyout();
+                app.show_main();
+                app.main.set_mix_open(true);
             })
         });
         let w = weak.clone();
@@ -6245,7 +6234,6 @@ mod tests {
             let mut backend = MockBackend::new();
             backend.unplug_chosen_input(name);
             let app = app_over(backend);
-            // The flyout's Several Apps… comes after it.
             let last = app.main.get_sources().row_count() - 1;
             for (sources, index) in [
                 (app.main.get_sources(), app.main.get_source_index()),
@@ -13413,47 +13401,27 @@ mod tests {
         assert!(!app.main.get_mix_open(), "a refresh never reopens it");
     }
 
-    /// The flyout's source drop-down ends in Several Apps…, as the Mac
-    /// panel's source menu ends in its submenu: it opens the main window's
-    /// list and leaves the source as it was.
+    /// Several Apps… is a link under the flyout's source drop-down, as the
+    /// Mac panel's source menu ends in its submenu: the drop-down holds the
+    /// sources only, and the link opens the main window's list and leaves the
+    /// source as it was.
     #[test]
-    fn several_apps_at_the_end_of_the_flyout_sources_opens_the_main_windows_list() {
+    fn several_apps_under_the_flyout_sources_opens_the_main_windows_list() {
+        use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         let sources = app.snapshot().sources.len();
-        let chosen = app.flyout.get_source_index();
-        let shown = app.flyout.get_sources();
-        assert_eq!(shown.row_count(), sources + 1);
-        assert_eq!(shown.row_data(sources).unwrap(), "Several Apps…");
+        let chosen = app.snapshot().source_id;
+        assert_eq!(app.flyout.get_sources().row_count(), sources);
         assert_eq!(app.main.get_sources().row_count(), sources);
 
         app.flyout.show().unwrap();
-        app.flyout.invoke_source_selected(sources as i32);
+        let links: Vec<_> =
+            ElementHandle::find_by_accessible_label(&app.flyout, "Several Apps…").collect();
+        assert_eq!(links.len(), 1);
+        links[0].invoke_accessible_default_action();
         assert!(app.main.get_mix_open());
         assert!(app.main.window().is_visible());
         assert!(!app.flyout.window().is_visible());
-        assert_eq!(app.flyout.get_source_index(), chosen);
-    }
-
-    /// An app that starts playing after the flyout's list was built doesn't
-    /// turn the Several Apps… row into a pick of that app.
-    #[test]
-    fn several_apps_in_the_flyout_opens_the_list_while_a_new_app_waits_for_the_refresh() {
-        let backend = MockBackend::new();
-        let late = backend.late_sources.clone();
-        let app = app_over(backend);
-        let chosen = app.snapshot().source_id;
-        let last = app.flyout.get_sources().row_count() - 1;
-        late.borrow_mut().push(ui_model::Source {
-            id: "app:late".into(),
-            name: "Late App".into(),
-            kind: SourceKind::App,
-            channels: 0,
-            apps: Vec::new(),
-            unplugged: false,
-        });
-
-        app.flyout.invoke_source_selected(last as i32);
-        assert!(app.main.get_mix_open());
         assert_eq!(app.snapshot().source_id, chosen);
     }
 

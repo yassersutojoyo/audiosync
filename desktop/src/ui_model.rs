@@ -1976,9 +1976,6 @@ pub struct MockBackend {
     /// Window settings the next poll takes in, as a settings file read
     /// after launch brings them.
     pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
-    /// Sources each snapshot lists last, as an app that starts playing
-    /// between two refreshes.
-    pub late_sources: std::rc::Rc<std::cell::RefCell<Vec<Source>>>,
     /// The window settings each save found.
     pub saved_views: std::rc::Rc<std::cell::RefCell<Vec<ViewSettings>>>,
     /// While `Some`, an input device is captured, and it counts the level
@@ -2170,7 +2167,6 @@ impl MockBackend {
             includes: std::rc::Rc::default(),
             volume_editing: std::rc::Rc::default(),
             late_view: std::rc::Rc::default(),
-            late_sources: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
             input_peak_reads: std::rc::Rc::default(),
             refreshes: std::rc::Rc::default(),
@@ -2523,9 +2519,6 @@ impl Backend for MockBackend {
 
     fn snapshot(&self) -> AppState {
         let mut state = self.state.clone();
-        state
-            .sources
-            .extend(self.late_sources.borrow().iter().cloned());
         state.cast_on = state
             .speakers
             .iter()

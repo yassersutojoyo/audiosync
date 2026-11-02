@@ -389,6 +389,8 @@ export component TrayFlyout inherits Window {
     in property <string> notice-announcement;
     callback power-toggled(bool);
     callback source-selected(int);
+    // Several Apps… under the source: opens the main window's list.
+    callback several-apps-requested();
     callback input-pair-selected(int);
     callback master-volume-changed(float);
     callback speaker-toggled(string);
@@ -628,6 +630,19 @@ export component TrayFlyout inherits Window {
                         selected => {
                             root.source-selected(self.current-index);
                             self.current-index = root.source-index;
+                        }
+                    }
+
+                    // A link, not a drop-down entry, so arrowing or wheeling
+                    // through the sources never lands on it and closes the panel.
+                    HorizontalLayout {
+                        alignment: start;
+                        LinkButton {
+                            text: Strings.source-mix-more;
+                            label: Strings.source-mix-more;
+                            clicked => {
+                                root.several-apps-requested();
+                            }
                         }
                     }
 
