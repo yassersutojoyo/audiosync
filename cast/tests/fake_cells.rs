@@ -38,6 +38,8 @@ struct Feed {
     late: Arc<AtomicU64>,
     /// Runs of late writes, one per stall of the feed thread.
     stalls: Arc<AtomicU64>,
+    /// While set, the feed thread writes nothing, as one starved of the CPU.
+    held: Arc<AtomicBool>,
 }
 
 /// How late a block may be written before the pump plays silence for it
@@ -55,6 +57,10 @@ impl Feed {
 
     fn stalls(&self) -> u64 {
         self.stalls.load(Ordering::SeqCst)
+    }
+
+    fn hold(&self, held: bool) {
+        self.held.store(held, Ordering::SeqCst);
     }
 }
 
@@ -77,12 +83,18 @@ fn feed(writer: AudioWriter) -> Feed {
     let late_count = Arc::clone(&late);
     let stalls = Arc::new(AtomicU64::new(0));
     let stall_count = Arc::clone(&stalls);
+    let held = Arc::new(AtomicBool::new(false));
+    let hold = Arc::clone(&held);
     let thread = thread::spawn(move || {
         let block = vec![9i16; 960];
         let start = Instant::now();
         let mut written = 0u32;
         let mut stalled = false;
         while !flag.load(Ordering::SeqCst) {
+            if hold.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
             let slot = start + Duration::from_millis(10) * written;
             let is_late = slot.elapsed() > LATE;
             if is_late {
@@ -105,6 +117,7 @@ fn feed(writer: AudioWriter) -> Feed {
         frames,
         late,
         stalls,
+        held,
     }
 }
 
@@ -564,9 +577,17 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
         session.run_for(Duration::from_millis(50));
         while let Some(event) = session.poll_event() {
             if let SessionEvent::Diagnostics(line) = &event {
+                // A loaded PC: the test thread reads the third line late, and
+                // the feed thread starves from a half full queue until it is
+                // full.
+                if lines.len() == 2 {
+                    thread::sleep(Duration::from_millis(1300));
+                }
                 let read = device.bytes_read() as f64 / WAV_BYTES_PER_SECOND;
                 let at = started.elapsed().as_secs_f64();
                 lines.push((at, line.clone(), read, feed.seconds()));
+                let filled = lines.iter().any(|(_, line, _, _)| line.queued >= full);
+                feed.hold(!filled && line.queued >= cap / 2);
             }
             seen.push(event);
         }
