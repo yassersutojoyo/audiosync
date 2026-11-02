@@ -14,11 +14,11 @@
 //! channel to one writer thread, which appends them and flushes whenever the
 //! channel runs empty, so the file stays complete when the app is killed.
 //! The UI thread and the calibration estimate threads log; threads with no
-//! handle on that log (the microphone's, power and single-copy notices)
-//! append through one of their own.
-//! The capture and render threads never log (spec S131): the UI thread logs
-//! what they report, and reads the counters they keep for a status line
-//! every few seconds while streaming.
+//! handle on that log (the microphone's, power and single-copy notices, the
+//! driver thread's one-time Pro Audio refusal at setup) append through one
+//! of their own. The capture and render threads never log while streaming
+//! (spec S131): the UI thread logs what they report, and reads the counters
+//! they keep for a status line every few seconds.
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
