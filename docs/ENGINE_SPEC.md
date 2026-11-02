@@ -1259,6 +1259,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | native airplay: the kind's tooltip and VoiceOver label say AirPlay 2 for such a row, AirPlay for the rest | S346 |
 | native airplay: the PIN prompt reads as on Windows, for an Apple TV and an AirPlay 2 receiver alike | S346 |
 | S312 AirPlay 2 switch: AirPlay 2 is on by default and the switch keeps its label | S312, S313 |
+| S312 Guide: AirPlay 2 speakers play by default, and the switch keeps its label | S312, S313 |
 | S285 native airplay: the notice's title and the row's note for each reason, as on Windows | S285 |
 | native airplay: a click on an AirPlay 2 receiver asking for a PIN pairs and prompts, as for an Apple TV | S223 |
 | native airplay: a retrying speaker whose receiver is gone stays in the sender until switched off | S222 |
@@ -1609,6 +1610,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | speaker names: clearing an unrenamed speaker changes nothing; a long name is cut to 60 characters | S228 |
 | speaker names: a name is cut at 60 Unicode scalars, the same count on both hosts | S228 |
 | speaker names: a stored entry that isn't a name is skipped | S228 |
+| speaker names: the panel tooltip names the device only for a renamed speaker | S228 |
 | speaker rename: starting a rename shows the name; starting it again keeps the typing | S228 |
 | speaker rename: renaming another speaker applies the open rename first | S228 |
 | speaker rename: Return applies the speaker's own rename once, never another's | S228 |
