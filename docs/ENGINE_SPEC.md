@@ -51,9 +51,9 @@ A clause that a later one replaces keeps its ID and its text and starts with *Su
 
 ## 3. Equalizer
 
-- **S22** *Observed* (`Equalizer.swift:12`). Ten bands, centered at 32, 64, 125, 250, 500, 1000, 2000, 4000, 8000 and 16 000 Hz (band indices 0–9).
-- **S23** *Observed* (`Equalizer.swift:13`; `EqualizerWindow.swift:96`, `:107-118`, `:169`). Band gains and the preamp range from −12 to +12 dB in 0.5 dB steps (the host quantizes and clamps). *Required:* the DSP applies any finite value it is given. Saved settings read back put the preamp and every gain on these steps, so a value out of range loads clamped. Saved settings with another band count than the equalizer's keep their bands, on the Mac and on Windows: a missing band loads flat (0 dB) and an extra one is dropped.
-- **S24** *Observed* (`Equalizer.swift:15-19`; `AppSettings.swift:40`). Settings: `enabled` (default false), `preamp` in dB (default 0), `gains[10]` in dB (default all 0). The host persists them as JSON.
+- **S22** *Observed* (`Equalizer.swift` `frequencies`, :9). Ten bands, centered at 32, 64, 125, 250, 500, 1000, 2000, 4000, 8000 and 16 000 Hz (band indices 0–9).
+- **S23** *Observed* (`Equalizer.swift` `maxGain`, `gainStep`, `quantized`, :10-11, :48-51; `EqualizerWindow.swift` `VerticalSlider`; `WindowRules.swift` `StoredEqualizer.decode`). Band gains and the preamp range from −12 to +12 dB in 0.5 dB steps (the host quantizes and clamps). *Required:* the DSP applies any finite value it is given. Saved settings read back put the preamp and every gain on these steps, so a value out of range loads clamped. Saved settings with another band count than the equalizer's keep their bands, on the Mac and on Windows: a missing band loads flat (0 dB) and an extra one is dropped.
+- **S24** *Observed* (`Equalizer.swift` `Settings`, :13-24; `AppSettings.swift` `Keys.equalizer`, `WindowRules.swift` `StoredEqualizer`). Settings: `enabled` (default false), `preamp` in dB (default 0), `gains[10]` in dB (default all 0). The host persists them as JSON.
 - **S25** *Observed* (`core/src/eq.rs` `Biquad::peaking`, `design_bands`, used by both hosts). Each band is an RBJ-cookbook peaking biquad with Q = 1.41 (about one octave). With fs = Rc, G = band gain in dB and f = min(center, 0.45 × fs):
   `A = 10^(G/40)`, `w0 = 2π f / fs`, `alpha = sin(w0) / (2 × 1.41)`, `a0 = 1 + alpha/A`;
   `b0 = (1 + alpha·A)/a0`, `b1 = −2·cos(w0)/a0`, `b2 = (1 − alpha·A)/a0`, `a1 = −2·cos(w0)/a0`, `a2 = (1 − alpha/A)/a0`. *Now covered by the core.*
