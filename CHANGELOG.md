@@ -20,6 +20,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On Windows, a zone name, zone count or stereo pair line that fits no longer shows a tooltip repeating it. Only one cut to an ellipsis does, and a name in the In zones list keeps its tooltip, which holds the device name and the rename hint.
 - On the Mac, the menu bar panel no longer stalls at the end of its grow when it opens.
+- On the Mac, the menu bar panel keeps its round corners and its shadow while it opens and closes. Before, the top corners turned square mid-grow and the shadow changed shape, then snapped once the panel was open.
 - On the Mac, Escape closes the Web Remote window, also while the cursor is in its port field.
 - On the Mac, Right unfolds a zone and Left folds it, in the main window and the menu bar panel, as on Windows.
 - On Windows, when AudioSync turns off an AirPlay speaker that couldn't be reached or stayed busy with another device, the notice says it's off and how to turn it on again, as on the Mac. Before, it said AudioSync keeps trying.

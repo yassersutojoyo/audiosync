@@ -7765,45 +7765,6 @@ do {
     // covers: S357
     check(fold.moves && fold.duration == 0.2 && !stillFold.moves && stillFold.duration == 0,
           "menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once")
-
-    // The panel's own shadow while it grows in or shrinks away (PanelShadow).
-    let body = CGRect(x: 0, y: 0, width: 306, height: 400), tip = CGPoint(x: 153, y: 412)
-    let outline = PanelShadow.outline(body: body, tip: tip)
-    // covers: S405
-    check(outline.contains(CGPoint(x: 153, y: 200)) && outline.contains(CGPoint(x: 153, y: 410))
-            && !outline.contains(CGPoint(x: 0.5, y: 399.5)) && !outline.contains(CGPoint(x: 100, y: 405)),
-          "menu bar panel shadow: its shape is the rounded body with the arrow up to the icon, not the window's rectangle")
-    let room = body.insetBy(dx: -30, dy: -30)
-    let outside = PanelShadow.outside(outline, in: room)
-    // covers: S405
-    check(!outside.contains(CGPoint(x: 153, y: 200), using: .evenOdd) && !outside.contains(CGPoint(x: 153, y: 410), using: .evenOdd)
-            && outside.contains(CGPoint(x: -10, y: 200), using: .evenOdd)
-            && outside.contains(CGPoint(x: 0.5, y: 399.5), using: .evenOdd),
-          "menu bar panel shadow: it shows only outside the panel, never darkening the translucent panel")
-    let light = PanelShadow.style(dark: false), dark = PanelShadow.style(dark: true)
-    // covers: S405
-    check(dark.opacity > light.opacity && light.opacity > 0 && dark.opacity <= 1 && light.offsetY < 0
-            && light.margin >= light.radius * 2 + abs(light.offsetY) && dark.margin >= dark.radius * 2 + abs(dark.offsetY),
-          "menu bar panel shadow: darker in the dark theme, falling downward, with room to spread in")
-    let barSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    // covers: S405
-    check(barSource.components(separatedBy: ".invalidateShadow()").count - 1 == 1
-            && barSource.components(separatedBy: "hasShadow = on").count - 1 == 1,
-          "menu bar panel source: the system shadow is switched in one place and recomputed once, never per frame")
-    // covers: S405
-    check(barSource.contains("grow(own.panel, about: tip)") && barSource.contains("shrink(own.panel, about: tip)")
-            && barSource.contains("window.addChildWindow(shadow, ordered: .below)"),
-          "menu bar panel source: the own shadow scales with the panel, in a window under it")
-    let resizeBody = barSource.components(separatedBy: "private func animateResize(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    // covers: S405
-    check(resizeBody.contains("dropOwnShadow()") && resizeBody.contains("setShadow(window, true)"),
-          "menu bar panel source: a resize hands the shadow back to the system, so the own one never keeps an old size")
-    let ownBody = barSource.components(separatedBy: "private func ownShadow(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    // covers: S405
-    check(ownBody.contains("window.effectiveAppearance.bestMatch") && !ownBody.contains("NSApp.effectiveAppearance"),
-          "menu bar panel source: the own shadow takes the panel window's theme")
     let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
@@ -7825,41 +7786,6 @@ do {
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
-    let ownShadowBody = bar.components(separatedBy: "private func ownShadow(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    let dropBody = bar.components(separatedBy: "private func dropOwnShadow(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    // covers: S405
-    check(ownShadowBody.contains("standInBackground(") && dropBody.contains("restoreBackground("),
-          "menu bar panel source: while the panel scales, its background is a stand-in that scales with it, handed back to the system's with the shadow")
-    final class Pane {
-        let name: String, background: Bool, children: [Pane]
-        init(_ name: String, background: Bool = false, _ children: [Pane] = []) {
-            self.name = name; self.background = background; self.children = children
-        }
-    }
-    let content = Pane("content", background: true, [Pane("row blur", background: true)])
-    let tree = Pane("theme frame", [Pane("popover frame", background: true,
-                                         [Pane("blur", background: true), Pane("content view", [content]),
-                                          Pane("stand-in", background: true)])])
-    let hidden = PanelBackdrop.hidden(in: tree, children: { $0.children }, isContent: { $0 === content },
-                                      isStandIn: { $0.name == "stand-in" }, isBackground: { $0.background })
-    // covers: S405
-    check(hidden.map(\.name) == ["blur"],
-          "menu bar panel: the stand-in hides only background views beside the content, never one holding it, its own rows or itself",
-          "\(hidden.map(\.name))")
-    let blurLayer = NSObject(), contentLayer = NSObject(), standInLayer = NSObject()
-    let material = PanelBackdrop.material(in: [blurLayer, contentLayer, standInLayer], keeping: [contentLayer, standInLayer])
-    // covers: S405
-    check(material.count == 1 && material.first === blurLayer,
-          "menu bar panel: in a background view that holds the content, only the layers no subview owns are its material")
-    let openBody = bar.components(separatedBy: "private func animateOpen(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    // covers: S405
-    check(!bar.contains("panel resize layers") && openBody.contains("ownShadow(window)")
-            && (openBody.range(of: "ownShadow(window)")?.lowerBound ?? openBody.endIndex)
-                < (openBody.range(of: "growInSteps(layer")?.lowerBound ?? openBody.startIndex),
-          "menu bar panel source: the panel grows only once its background can scale with it; otherwise it fades in at full size")
 
     // The open panel moved by AppKit (another display, a status item shifting).
     let shifted = window.offsetBy(dx: -40, dy: -24)
@@ -7924,15 +7850,17 @@ do {
     check(!PanelMotion.open(reduceMotion: true).grows && !PanelMotion.close(reduceMotion: true).grows
             && PanelMotion.open(reduceMotion: true).duration > 0,
           "menu bar panel: with Reduce Motion it only fades")
-    let pinned = PanelMotion.pin(CGPoint(x: 140, y: 420), scale: grow.scale)
+    let iconX = window.midX + 20
+    let pinned = PanelReveal.body(window, scale: grow.scale, about: CGPoint(x: iconX, y: window.maxY), pixel: 0)
     // covers: S405
-    check(abs(140 * grow.scale + Double(pinned.x) - 140) < 1e-9 && abs(420 * grow.scale + Double(pinned.y) - 420) < 1e-9,
-          "menu bar panel: the point under the icon stays put while the panel grows")
+    check(pinned.maxY == window.maxY && abs(Double(iconX - pinned.minX) - Double(iconX - window.minX) * grow.scale) < 1e-9
+            && abs(Double(pinned.maxX - iconX) - Double(window.maxX - iconX) * grow.scale) < 1e-9,
+          "menu bar panel: the point under the icon stays put while the panel grows", "\(pinned)")
     let openQuiet = PanelQuiet.duration(.open, system: false)
-    // The open's last 120 Hz step, then the stand-in background's 0.12 s fade into the system's.
+    // The open's last 120 Hz step.
     let lastStepShown = Double(PanelReveal.scales(grow, step: 1.0 / 120).count) / 120
     // covers: S406
-    check(near(openQuiet, lastStepShown + 0.12) && shrink == shrinkBack.duration,
+    check(near(openQuiet, lastStepShown) && shrink == shrinkBack.duration,
           "menu bar panel: deferred work waits exactly for the panel's own motion", "\(openQuiet)")
     // covers: S405
     check(PanelMotion.tail * (1 - grow.scale) * 600 < 0.5,
@@ -8082,51 +8010,29 @@ do {
             && abs(revealSteps[12] - 1) < abs(revealSteps[6] - 1),
           "menu bar panel: the reveal follows the open's spring, one step per 120 Hz frame, from 0.92 to exactly 1",
           "\(revealSteps.count) \(revealSteps.first ?? 0) \(revealSteps.last ?? 0)")
-    let growBodies = revealSteps.map { PanelReveal.body(revealBody, scale: $0, about: revealTip, pixel: 0.5) }
-    let growLaid = growBodies.allSatisfy { step in
-        let laid = revealBody.applying(PanelReveal.stretch(revealBody, onto: step))
-        return [laid.minX - step.minX, laid.minY - step.minY, laid.maxX - step.maxX, laid.maxY - step.maxY]
-            .allSatisfy { abs($0) < 1e-9 }
+    let restWindow = CGRect(x: 1000, y: 543, width: 306, height: 412)
+    let restContent = CGRect(x: 13, y: 0, width: 280, height: 400)
+    let contentHeld = revealSteps.allSatisfy { scale in
+        let step = PanelReveal.body(restWindow, scale: scale, about: CGPoint(x: 1153, y: restWindow.maxY), pixel: 0.5)
+        let placed = PanelReveal.content(restContent, rest: restWindow, step: step)
+        return placed.size == restContent.size && step.maxY == restWindow.maxY
+            && placed.minX + step.minX == restContent.minX + restWindow.minX
+            && placed.minY + step.minY == restContent.minY + restWindow.minY
     }
     // covers: S405
-    check(growLaid && growBodies.first != revealBody
-            && PanelReveal.stretch(revealBody, onto: growBodies.last ?? .zero) == .identity,
-          "menu bar panel: each step of the open lays the whole body's outer edges exactly on its pixel-aligned step and ends with no transform")
-    let revealSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    let revealOpen = revealSource.components(separatedBy: "private func animateOpen(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
+    check(contentHeld && PanelReveal.content(restContent, rest: restWindow, step: restWindow) == restContent,
+          "menu bar panel: at each step the window grows from under the icon while the content stays where it rests on screen, at its full size, so the window only clips it")
+    let closeMotion = PanelMotion.close(reduceMotion: false)
+    let closeSteps = PanelReveal.shrinks(from: 1, closeMotion, step: 1.0 / 120)
+    let cutShort = PanelReveal.shrinks(from: 0.98, closeMotion, step: 1.0 / 120)
+    let closeHalf = closeSteps.count / 2
     // covers: S405
-    check(revealOpen.contains("growInSteps(") && revealOpen.contains("if PanelSwitches.revealContent")
-            && revealSource.contains("shadow.add(steps(")
-            && revealSource.contains("calculationMode = .discrete") && !revealSource.contains("shouldRasterize"),
-          "menu bar panel source: the open scales the whole panel and its own shadow on the same discrete steps, never through a rasterized copy, so its outer edges stay on the pixel grid")
-    // covers: S405
-    check(revealOpen.contains("asyncAfter(deadline: .now() + PanelReveal.handBack(motion))"),
-          "menu bar panel source: the panel goes back to the system's background and shadow only once its last step has shown, never mid-step")
-}
-
-// MARK: The panel's stand-in on the first open after launch (MenuBar.swift, WindowRules.swift)
-do {
-    final class FrameSublayer {
-        let name: String?
-        init(_ name: String?) { self.name = name }
-    }
-    let frameBackdrop = FrameSublayer("kCUIVariantPopoverMaterial"), frameRing = FrameSublayer("NSAutomaticFocusRing"),
-        frameHosted = FrameSublayer("NSViewBackingLayer")
-    let frameMaterial = PanelBackdrop.material(in: [frameBackdrop, frameHosted, frameRing], keeping: [frameHosted],
-                                               name: { $0.name })
-    // covers: S405
-    check(frameMaterial.count == 1 && frameMaterial.first === frameBackdrop,
-          "menu bar panel: the popover frame's focus ring is no part of its material, so the stand-in never hides it and handing the background back never shows a stale ring",
-          "\(frameMaterial.map { $0.name ?? "nil" })")
-    let panelSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    let standInBody = panelSource.components(separatedBy: "private func standInBackground(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    let drawPass = standInBody.range(of: "displayIfNeeded()")?.lowerBound
-    let fadeOnly = standInBody.range(of: "no part of it can be hidden")?.lowerBound
-    // covers: S405
-    check(drawPass != nil && fadeOnly != nil && drawPass! < fadeOnly!,
-          "menu bar panel source: before the panel settles for a fade, the popover draws once, so the first open after launch finds the frame's material too")
+    check(closeSteps.count == Int((closeMotion.duration * 120).rounded(.up)) + 1 && closeSteps.first == 1
+            && closeSteps.last == closeMotion.scale && zip(closeSteps, closeSteps.dropFirst()).allSatisfy { $1 <= $0 }
+            && 1 - closeSteps[closeHalf] < closeSteps[closeHalf] - closeMotion.scale
+            && cutShort.first == 0.98 && cutShort.last == closeMotion.scale,
+          "menu bar panel: the close shrinks from where the panel is to its end scale on an ease-in curve, one step per 120 Hz frame",
+          "\(closeSteps)")
 }
 
 // MARK: The panel opens and closes as its own window (MenuBar.swift)
@@ -8142,6 +8048,11 @@ do {
     check(!windowSource.contains("PanelShadowWindow") && !windowSource.contains("hasShadow = ")
             && !windowSource.contains("addChildWindow("),
           "menu bar panel source: the panel keeps the system's shadow throughout, with no shadow of its own to hand back to it")
+    let dismissSource = windowSource.components(separatedBy: "private func dismiss(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
+    check(dismissSource.contains("PanelReveal.shrinks(from: steps?.scale ?? 1"),
+          "menu bar panel source: a close that cuts the open short shrinks from the step the open has shown")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
