@@ -145,6 +145,8 @@ struct State {
     card: Option<CardSource>,
     card_generation: u64,
     card_reading: Option<Option<CardTrack>>,
+    /// Told whenever a card reading is ready.
+    card_wake: Option<Arc<dyn Fn() + Send + Sync>>,
     commands: Vec<Transport>,
     /// Controls a speaker's remote asked for, sent to the session that
     /// counts for `track`.
@@ -236,6 +238,10 @@ impl MediaControls for MediaCardReader {
 
     fn take_reading(&mut self) -> Option<Option<CardTrack>> {
         self.shared.lock().card_reading.take()
+    }
+
+    fn on_reading(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        self.shared.lock().card_wake = Some(wake);
     }
 
     fn send(&mut self, command: Transport) {
@@ -351,9 +357,17 @@ fn run<L: SessionList>(
         }
         if let Some(follow) = &card {
             let card = reader.card(&mut listing, follow, log);
-            let mut state = shared.lock();
-            if state.card_generation == card_generation {
-                state.card_reading = Some(card);
+            let wake = {
+                let mut state = shared.lock();
+                if state.card_generation == card_generation {
+                    state.card_reading = Some(card);
+                    state.card_wake.clone()
+                } else {
+                    None
+                }
+            };
+            if let Some(wake) = wake {
+                wake();
             }
         }
         let state = shared.lock();
@@ -1002,6 +1016,42 @@ mod tests {
             assert!(Instant::now() < deadline, "the pause waited for the poll");
             thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    #[test]
+    fn a_reported_change_wakes_the_card_with_its_reading_long_before_the_poll() {
+        let (fake, counts) = fake(Thumbnail::Image);
+        let (_track, mut card) = spawn(
+            move || Ok(fake),
+            Duration::from_secs(10),
+            DebugLog::default(),
+        );
+        let (woken, wakes) = std::sync::mpsc::channel();
+        card.on_reading(Arc::new(move || {
+            let _ = woken.send(());
+        }));
+        card.follow(Some(CardSource::AnyApp));
+        let shows = |card: &mut MediaCardReader, playing: bool| {
+            card.take_reading()
+                .flatten()
+                .is_some_and(|read| read.playing == playing)
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !shows(&mut card, true) {
+            assert!(Instant::now() < deadline, "no first reading");
+            thread::sleep(Duration::from_millis(5));
+        }
+        wakes
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the first reading woke the card");
+        while wakes.try_recv().is_ok() {}
+        counts.paused.store(true, Ordering::SeqCst);
+        let changed = counts.changed.lock().unwrap().clone();
+        changed.expect("the thread watches the sessions").notify();
+        wakes
+            .recv_timeout(Duration::from_millis(100))
+            .expect("the card was woken for the pause");
+        assert!(shows(&mut card, false), "the wake came before the reading");
     }
 
     #[test]

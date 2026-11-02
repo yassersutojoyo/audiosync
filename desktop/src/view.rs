@@ -1109,7 +1109,11 @@ impl App {
     /// The media sessions the Now Playing card reads and drives; without
     /// them the card never shows.
     #[cfg_attr(not(windows), allow(dead_code))]
-    pub fn set_media_controls(&self, controls: Box<dyn MediaControls>) {
+    pub fn set_media_controls(&self, mut controls: Box<dyn MediaControls>) {
+        let main = self.main.as_weak();
+        controls.on_reading(std::sync::Arc::new(move || {
+            let _ = main.upgrade_in_event_loop(|main| main.invoke_now_playing_read());
+        }));
         self.now_playing.borrow_mut().set_controls(controls);
         let _ = self.sync_now_playing();
     }
@@ -1332,8 +1336,17 @@ impl App {
                 self.main.invoke_focus_source();
             }
             self.main.set_now_playing_shown(false);
+            self.log
+                .log(|| "now playing card: the window hides the card".to_owned());
             return true;
         };
+        self.log.log(|| {
+            format!(
+                "now playing card: the window shows \"{}\" ({})",
+                track.title,
+                if track.playing { "playing" } else { "paused" }
+            )
+        });
         self.main.set_now_playing_title(track.title.as_str().into());
         self.main
             .set_now_playing_subtitle(track.subtitle().as_str().into());
@@ -2483,6 +2496,14 @@ impl App {
         main.on_equalizer_requested(move || with_app(&w, App::show_equalizer));
         let w = weak.clone();
         main.on_now_playing_transport(move |button| with_app(&w, |app| app.send_transport(button)));
+        let w = weak.clone();
+        main.on_now_playing_read(move || {
+            with_app(&w, |app| {
+                if app.sync_now_playing() {
+                    app.publish_remote(&app.snapshot());
+                }
+            })
+        });
         let w = weak.clone();
         main.on_speaker_toggled(move |id| with_app(&w, |app| app.toggle_speaker(&id)));
         let w = weak.clone();
@@ -6303,6 +6324,32 @@ mod tests {
         app.main.hide().expect("the main window hides");
         app.poll();
         assert_eq!(fake.following(), None, "nothing is read while hidden");
+    }
+
+    #[test]
+    fn a_reading_the_sessions_report_shows_in_the_window_before_the_poll_and_is_logged() {
+        use crate::debug_log;
+        use crate::now_playing_card::fake::{FakeControls, track};
+        let path = debug_log::test_dir("view-now-playing-read").join(debug_log::FILE_NAME);
+        let log = DebugLog::new(Some(path.clone()));
+        let app = app_logging(MockBackend::new(), log.clone());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        fake.read(Some(track("Spotify.exe", "Song", "", true)));
+        app.main.invoke_now_playing_read();
+        assert!(app.main.get_now_playing_playing());
+
+        fake.read(Some(track("Spotify.exe", "Song", "", false)));
+        app.main.invoke_now_playing_read();
+        assert!(!app.main.get_now_playing_playing());
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            written.contains(r#"now playing card: the window shows "Song" (paused)"#),
+            "{written}"
+        );
     }
 
     // covers: S408
