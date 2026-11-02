@@ -848,8 +848,8 @@ impl Driver for MockDriver {
             }
             return Err(error.clone());
         }
-        self.renderers
-            .retain(|renderer| !renderer.ended.load(Ordering::Relaxed));
+        // A dropped stream's renderer, and its start lead, go with its thread.
+        self.renderers.retain(RendererLink::plays);
         let ended = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicBool::new(false));
         let stall = Arc::new(StallSlot::default());
