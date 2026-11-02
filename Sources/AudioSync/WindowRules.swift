@@ -317,13 +317,15 @@ enum PanelReveal {
     /// The arrow's tip on screen, which the window and its content scale
     /// about: under the icon's middle `icon`, on the window's top edge `top`.
     static func tip(icon: CGFloat, top: CGFloat) -> CGPoint {
-        CGPoint(x: icon, y: top)
+        // A whole point, so the window's pixel-snapped steps never move the content's anchor.
+        CGPoint(x: icon.rounded(), y: top.rounded())
     }
 
     /// The transform that scales the content by `scale` about `tip`, for a
     /// layer whose transform acts about `pivot`; both in the layer's coordinates.
     static func contentScale(_ scale: Double, about tip: CGPoint, pivot: CGPoint) -> CGAffineTransform {
-        .identity
+        let s = CGFloat(scale)
+        return CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: (1 - s) * (tip.x - pivot.x), ty: (1 - s) * (tip.y - pivot.y))
     }
 
     /// The open's spring, one scale per `step` from `motion.scale` to exactly 1

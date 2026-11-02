@@ -8062,7 +8062,7 @@ do {
     }
     // covers: S405
     check(contentHeld && PanelReveal.content(restContent, rest: restWindow, step: restWindow) == restContent,
-          "menu bar panel: at each step the window grows from under the icon while the content stays where it rests on screen, at its full size, so the window only clips it")
+          "menu bar panel: at each step the window grows from under the icon while the content's frame stays where it rests on screen, at its full size, its layer scaled about the arrow's tip")
     let growRest = CGRect(x: 1000.25, y: 543.5, width: 306, height: 412)
     let growContent = CGRect(x: 13, y: 0, width: 280, height: 400)
     let growTip = PanelReveal.tip(icon: 1153.3, top: growRest.maxY)
