@@ -8996,6 +8996,56 @@ mod tests {
         shows_in_full(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
     }
 
+    /// With a long zone name, the "in <zone>" link in an In zones row gives
+    /// way before the speaker's name does: the name keeps 80 px and the link
+    /// ends before the options button.
+    #[test]
+    fn a_long_zone_name_leaves_the_in_zones_name_room() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        let tv = long_named_speaker(&backend, "airplay:tv");
+        let name = tv.name.clone();
+        backend.add_speaker(tv);
+        let zone = "The long living room zone by the window and the bookshelf";
+        backend.add_zone("zone:long", zone, &["airplay:tv"]);
+        let app = narrow_app(backend);
+        let list = element(&app, "MainWindow::scroll").expect("the speaker list");
+        let (at, size) = (list.absolute_position(), list.size());
+        scroll(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+            -3000.0,
+        );
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        let strings = app.main.global::<Strings>();
+        let by_label = |label: SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+        };
+        let badge = by_label(strings.invoke_in_zone_label(name.into(), zone.into()));
+        let row_y = badge.absolute_position().y + badge.size().height / 2.0;
+        let in_row = |id: &str| {
+            ElementHandle::find_by_element_id(&app.main, id)
+                .find(|e| {
+                    let y = e.absolute_position().y;
+                    y <= row_y && row_y <= y + e.size().height
+                })
+                .unwrap_or_else(|| panic!("{id} in the TV's In zones row"))
+        };
+        let width = in_row("ZoneMemberRow::name-label").size().width;
+        assert!(width >= 80.0, "the name is {width} px wide");
+        let link = by_label(strings.invoke_go_to_zone_label(zone.into()));
+        let options = in_row("ZoneMemberRow::options");
+        assert!(
+            link.absolute_position().x + link.size().width <= options.absolute_position().x,
+            "the link runs into the options button"
+        );
+    }
+
     // covers: S228
     #[test]
     fn a_renamed_row_shows_its_device_name_in_the_name_tooltip() {
