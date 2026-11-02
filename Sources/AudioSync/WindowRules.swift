@@ -380,17 +380,18 @@ enum PanelReveal {
 /// The arrow the panel draws over the popover's own, which the system edges
 /// in its bare material, so the arrow reads in the panel's backing like the box.
 enum PanelArrow {
-    /// The system arrow's size, which AppKit does not publish: 13 pt is the
-    /// popover's top safe area inset; the debug log measures the drawn base.
-    /// A point wider on each side than the 28 pt base taken for it, to cover its soft edge.
+    /// 13 pt high, the popover's top safe area inset; 2 pt wider than a 28 pt base, to cover its soft edge.
     static let size = CGSize(width: 30, height: 13)
     /// What the arrow's base keeps clear of the window's side edges for its rounded corners.
     static let cornerRoom: CGFloat = 10
 
     /// Where the arrow goes on screen for the popover window at `window`:
-    /// apex on the window's top edge at its middle, where the system draws its own.
+    /// apex on the window's top edge at the arrow's `tip`, where the system
+    /// draws its own, kept clear of the window's corners.
     static func frame(in window: CGRect, tip: CGPoint) -> CGRect {
-        CGRect(x: window.midX - size.width / 2, y: window.maxY - size.height, width: size.width, height: size.height)
+        let inset = size.width / 2 + cornerRoom
+        let apex = min(max(tip.x, window.minX + inset), window.maxX - inset)
+        return CGRect(x: apex - size.width / 2, y: window.maxY - size.height, width: size.width, height: size.height)
     }
 }
 
