@@ -725,7 +725,7 @@ Removed on 2026-10-19 with the Swift engine's ring (`Tests/ringtest.swift`). Wha
 
 The bundled engine's checks were removed with it on 2026-10-20: its config file (`config: …`), process states (`engine: …`), output list (`outputs: …`), pipe playback and track info (`pipe: …`, `track info: …`), reconcile, pairing and volume writes (`reconcile: …`, `pairing: …`, `pairing queue: …`, `volume writes: …` and the AirPlay `volume: …` checks), quit sequence (`shutdown: …`), its sleep and restart cases (`EC3 sleep: …`, `EC3 wake: …`, `EC7 engine restart: …`), its EC10, EC11 and EC12 checks, and the bundled engine's AirPlay delay field. Their clauses are retired (see the note at the top).
 
-The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and while stopped, true after a frame with sound) has no logic check: it lives in the capture IOProc's sink, private to `ProcessTapCapture.swift` and fed a Core Audio buffer list, so the suite checks its parts in the "capture: …" rows (`CaptureChannels.hasSound`, `CaptureCheck.verdict`).
+The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and while stopped, true after a frame with sound) has no logic check: it lives in the capture IOProc's sink, private to `ProcessTapCapture.swift` and fed a Core Audio buffer list, so the suite checks its parts in the "capture: …" rows (`CaptureChannels.hasSound`, `CaptureCheck.verdict`). The flag itself is checked on hardware by the engine test's "loopback capture: heard flag …" rows (`--hardware`), which capture a virtual loopback device named by `AUDIOSYNC_TEST_LOOPBACK` while the test writes a signal to its output.
 
 | Check | Clauses |
 |---|---|
@@ -2741,6 +2741,10 @@ Removed on 2026-10-19 with the Swift engine (`Tests/paritytest.swift`): with one
 | \<device\>: delay change fades out and in without restarting the output | S187 |
 | \<device\>: 44.1 kHz output at hold-back 0 never starves after start | S206 |
 | default output change leaves a running output alone | S145 |
+| loopback capture: heard flag false at a session's start | S17, S133 |
+| loopback capture: heard flag true after a frame with sound | S17, S133 |
+| loopback capture: heard flag false while stopped | S17, S133 |
+| loopback capture: heard flag false at the next session's start | S17, S133 |
 
 ### pipe start (`--hardware`, `Tests/pipestart.swift`)
 

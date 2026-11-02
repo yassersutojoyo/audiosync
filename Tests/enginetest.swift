@@ -196,6 +196,68 @@ if !ranAt44k {
     print("   SKIP  44.1 kHz output at hold-back 0 never starves after start: no output device runs at 44.1 kHz")
 }
 
+// covers: S17, S133 (the Mac's heard flag, read on the main thread; the sound is a constant
+// test signal written to a virtual loopback device's output, which reaches no speaker)
+let toneOn = Atomic<Bool>(false)
+let loopbackName = ProcessInfo.processInfo.environment["AUDIOSYNC_TEST_LOOPBACK"] ?? ""
+if loopbackName.isEmpty {
+    print("   SKIP  loopback capture: heard flag: AUDIOSYNC_TEST_LOOPBACK (a virtual loopback device's name) is not set")
+} else if let loopback = devices.first(where: { $0.name == loopbackName && $0.transport == kAudioDeviceTransportTypeVirtual }),
+          let heardParts = EngineParts.make() {
+    var toneProc: AudioDeviceIOProcID?
+    let toneStatus = AudioDeviceCreateIOProcIDWithBlock(&toneProc, loopback.id, nil) { _, _, _, output, _ in
+        let level: Float = toneOn.load(ordering: .relaxed) ? 0.25 : 0
+        for buffer in UnsafeMutableAudioBufferListPointer(output) {
+            guard let samples = buffer.mData?.assumingMemoryBound(to: Float.self) else { continue }
+            for index in 0..<Int(buffer.mDataByteSize) / MemoryLayout<Float>.size { samples[index] = level }
+        }
+    }
+    let capture = SourceCapture()
+    if toneStatus == noErr, let toneProc, AudioDeviceStart(loopback.id, toneProc) == noErr {
+        let heardBeforeStart = capture.sessionHeard
+        Thread.sleep(forTimeInterval: 0.5)   // the loopback's input carries the signal's zeros by now
+        var stage = "loopback capture: heard flag false at a session's start"
+        do {
+            try capture.start(source: .input(uid: loopback.uid), parts: heardParts)
+            Thread.sleep(forTimeInterval: 0.3)
+            check(!heardBeforeStart && capture.isReading && !capture.sessionHeard,
+                  "loopback capture: heard flag false at a session's start",
+                  "before start \(heardBeforeStart), reading \(capture.isReading), heard \(capture.sessionHeard)")
+
+            toneOn.store(true, ordering: .relaxed)
+            let toneStart = Date()
+            while !capture.sessionHeard && Date().timeIntervalSince(toneStart) < 2 { usleep(10_000) }
+            check(capture.sessionHeard, "loopback capture: heard flag true after a frame with sound",
+                  capture.sessionHeard
+                      ? String(format: "heard after %.0f ms", Date().timeIntervalSince(toneStart) * 1000)
+                      : "nothing heard in 2 s; does the terminal have microphone access?")
+
+            capture.halt()
+            check(!capture.sessionHeard, "loopback capture: heard flag false while stopped")
+
+            toneOn.store(false, ordering: .relaxed)
+            Thread.sleep(forTimeInterval: 0.5)
+            stage = "loopback capture: heard flag false at the next session's start"
+            try capture.start(source: .input(uid: loopback.uid), parts: heardParts)
+            Thread.sleep(forTimeInterval: 0.3)
+            check(capture.isReading && !capture.sessionHeard,
+                  "loopback capture: heard flag false at the next session's start",
+                  "reading \(capture.isReading), heard \(capture.sessionHeard)")
+        } catch {
+            check(false, stage, "\(loopbackName): capture start: \(error)")
+        }
+        capture.halt()
+        _ = AudioDeviceStop(loopback.id, toneProc)
+    } else {
+        check(false, "loopback capture: heard flag false at a session's start",
+              "\(loopbackName): the test signal did not start (\(toneStatus))")
+    }
+    if let toneProc { _ = AudioDeviceDestroyIOProcID(loopback.id, toneProc) }
+} else {
+    check(false, "loopback capture: heard flag false at a session's start",
+          "no virtual output device named \(loopbackName), or the engine parts could not be made")
+}
+
 func setDefaultOutput(_ id: AudioDeviceID) -> Bool {
     var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
                                              mScope: kAudioObjectPropertyScopeGlobal,
