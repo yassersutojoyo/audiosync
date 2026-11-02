@@ -835,7 +835,9 @@ fn serve(
     let mut stalled = false;
     let mut suite_recorded = false;
     let mut last_ping = Instant::now();
-    let mut last_pong = Instant::now();
+    // The oldest PING since the last PONG: a device thread starved of the CPU
+    // sent none, so its own wait is not the sender's silence.
+    let mut unanswered: Option<Instant> = None;
     loop {
         if !suite_recorded
             && !stream.conn.is_handshaking()
@@ -845,12 +847,13 @@ fn serve(
             suite_recorded = true;
         }
         if let Some((every, close_after)) = device.behavior.device_ping {
-            if last_pong.elapsed() > close_after {
+            if unanswered.is_some_and(|since| since.elapsed() > close_after) {
                 let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
                 return false;
             }
             if last_ping.elapsed() >= every {
                 last_ping = Instant::now();
+                unanswered.get_or_insert(last_ping);
                 let ping = json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PING"}));
                 write(&mut stream, &ping);
             }
@@ -911,7 +914,7 @@ fn serve(
                             .as_deref()
                             .is_some_and(|text| text.contains("\"PONG\""))
                     {
-                        last_pong = Instant::now();
+                        unanswered = None;
                     }
                     log.lock().expect("log").push(message.clone());
                     for reply in device.answer(&message) {

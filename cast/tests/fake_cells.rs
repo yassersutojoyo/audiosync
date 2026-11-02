@@ -351,17 +351,27 @@ fn a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on() {
     let (mut session, _feed) = start(&device);
     // A loaded PC: the device thread starts its pings late.
     device.send(Command::Pause(Duration::from_millis(1800)));
-    let seen = run(&mut session, Duration::from_secs(3));
+    let mut seen = run(&mut session, Duration::from_secs(3));
+    let pongs = || {
+        device
+            .received()
+            .into_iter()
+            .filter(|(destination, _, payload)| {
+                destination == PLATFORM && payload["type"] == "PONG"
+            })
+            .count()
+    };
+    // The device's pings come as late as its thread runs.
+    let until = Instant::now() + Duration::from_secs(10);
+    while pongs() < 4 && Instant::now() < until {
+        seen.extend(run(&mut session, Duration::from_millis(100)));
+    }
     assert_eq!(
         device.connection_count(),
         1,
         "answered pings keep the channel: {seen:?}"
     );
-    let pongs = device
-        .received()
-        .into_iter()
-        .filter(|(destination, _, payload)| destination == PLATFORM && payload["type"] == "PONG")
-        .count();
+    let pongs = pongs();
     assert!(pongs >= 4, "{pongs} PONGs");
 
     // Suspended: the session is not driven, so no PONG goes out.
@@ -526,9 +536,12 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
             seen.extend(run(&mut session, Duration::from_millis(100)));
         }
     }
-    let tail = run_until(&mut session, Duration::from_secs(3), |event| {
-        matches!(event, SessionEvent::Diagnostics(_))
-    });
+    // The last status shows once the device's thread has sent it.
+    let tail = run_until(
+        &mut session,
+        Duration::from_secs(10),
+        |event| matches!(event, SessionEvent::Diagnostics(line) if line.current_time == Some(42.25)),
+    );
     seen.extend(tail);
     assert!(
         !seen.iter().any(|event| matches!(
@@ -548,12 +561,13 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     // stalls. A feed thread starved on a loaded machine catches up past the
     // ring backlog and drops some (up to 0.9 s seen under 16 busy loops), so
     // drops may only cover audio the feed wrote late, plus per stall up to
-    // the 100 ms ring backlog that filled before a block counted late; with
-    // no stall, none.
+    // the 100 ms ring backlog that filled before a block counted late, plus
+    // what the full ring refused while the pump was starved, which the pump
+    // pays in underrun silence on waking; with no stall, none.
     assert_eq!(diagnostics.rebuffers, 0);
     let backlog = 48_000 * LATE.as_millis() as u64 / 1000;
     assert!(
-        diagnostics.frames_dropped <= late + stalls * backlog,
+        diagnostics.frames_dropped <= late + stalls * backlog + diagnostics.underrun_frames,
         "{late} late in {stalls} stalls: {diagnostics:?}"
     );
     assert_eq!(
