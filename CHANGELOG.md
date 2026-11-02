@@ -7,6 +7,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Added
 
 - On Windows, while no AirPlay speaker is found, the note in the main window and the tray panel offers Open Network Settings, which opens Settings > Network & internet, as the Mac offers Open Local Network Settings.
+- On Windows, the Calibrate All card shows Before you start while the reference output's volume is low or muted, with a link that fixes it, as on the Mac.
+- On Windows, clicking the logo or the name at the top of the tray panel opens the main window, and pointing at the panel's streaming switch shows Turn On or Turn Off, as in the Mac panel.
 
 ### Changed
 
@@ -17,6 +19,9 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the notice about blocked microphone access and the calibration name both switches to turn on: "Let desktop apps access your microphone" and "Microphone access".
 - On the Mac, an equalizer curve name matches a saved one by the same rule as on Windows: ignoring case only. A name typed with a ready-made accented letter and one typed with a separate accent mark are now two curves.
 - On Windows, a preset holds the reference output like any other speaker, as on the Mac: recalling a preset without it switches it off, and a preset can hold it alone. A preset saved before this version leaves it as it is until you change something and choose Update to Current Settings for it.
+- On Windows, folding a zone in the tray panel leaves it as it was in the main window, and the other way around, as on the Mac.
+- On Windows, the tray panel no longer draws a line above its source menu, as in the Mac panel.
+- On Windows, the Web Remote window shows its port whenever the remote is on, and the note that the remote uses plain HTTP also while it's off, as on the Mac. When the PC's name can't be used in a link, the QR code holds its IP address instead.
 
 ### Fixed
 
@@ -31,6 +36,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, when an app you capture starts playing from a new process and AudioSync can't capture that one at first, it keeps trying for a few seconds, longer right after the Mac wakes, as Windows does. Before, streaming stopped with a notice about the source.
 - On the Mac, a preset whose stereo pair or home theater you hid says it stayed off because it's hidden, as on Windows. Before, the notice said it needs AirPlay 2.
 - On Windows, Narrator says every delay step you press, including one at the end of the range, which repeats the last delay, as VoiceOver does on the Mac. Before, a step that repeated the last delay said nothing.
+- On Windows, when AudioSync couldn't start looking for Google Cast speakers, the speaker list says so, and Add by Address says it found no speaker, as on the Mac. Before, the list said nothing about Google Cast.
+- On Windows, an AirPlay speaker that still asks for a code or password right after pairing turns off with a notice that points to its Allow Speaker & TV Access setting, as on the Mac. Before, the notice asked you to pair it again.
+- On Windows, a dragged equalizer slider stops on its 0.5 dB steps, so the number, the knob and what Narrator says match the gain you hear.
+- On Windows, a typed AirPlay delay above 20 000 ms applies 20 000 ms, one below 0 applies 0, and a step past either end changes nothing, as on the Mac.
+- On Windows, when a newer version of AudioSync wrote your settings, the notice's dismiss button, the tray tooltip and Narrator say so too. Before, they said AudioSync couldn't read your settings.
+- On Windows, the Calibrate Zone card shows a renamed zone's new name at once, and a deleted zone no longer comes back there, as on the Mac.
 
 ## [0.8.0] - unreleased
 
