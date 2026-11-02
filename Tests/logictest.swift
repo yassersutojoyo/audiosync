@@ -8112,6 +8112,18 @@ do {
         step.arrow.midX == step.window.midX && step.arrow.maxY == step.window.maxY && step.arrow.size == PanelArrow.size
     }, "menu bar panel: the arrow drawn over the popover's own has its apex where the system draws it, the window's top middle, at every open and close step",
           "\(arrowFrames.map { $0.arrow })")
+    let centredRest = CGRect(x: 933, y: 422, width: 306, height: 507)
+    let centredTip = PanelReveal.tip(icon: 1086.4, rest: centredRest)
+    let centredSteps = [0.5, 1].flatMap { pixel in
+        (revealSteps + closeSteps).map { PanelReveal.body(centredRest, scale: $0, about: centredTip, pixel: pixel) }
+    }
+    // covers: S405
+    check(centredSteps.allSatisfy { step in
+        step.minX + step.width / 2 == centredTip.x && step.minX == step.minX.rounded()
+            && PanelArrow.frame(in: step).midX == centredTip.x
+    } && PanelReveal.body(centredRest, scale: 1, about: centredTip, pixel: 0.5) == centredRest,
+          "menu bar panel: every step's window is an even width on whole points centred on the arrow's tip, so the system's arrow, drawn at the window's middle, stays on the tip",
+          "\(centredSteps.filter { $0.minX + $0.width / 2 != centredTip.x })")
 }
 
 // MARK: The panel opens and closes as its own window (MenuBar.swift)
