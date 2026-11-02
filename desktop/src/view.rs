@@ -10114,6 +10114,10 @@ mod tests {
             assert_eq!(notice.buttons(), buttons, "{notice:?}");
         }
         assert_eq!(
+            N::BrokenDownload.buttons(),
+            [ui_model::UpdaterButton::OpenReleasePage]
+        );
+        assert_eq!(
             notice_text(
                 &strings,
                 &NoticeMessage::Update(N::Downloading { percent: Some(42) })
@@ -13657,7 +13661,10 @@ mod tests {
                 problem: ui_model::CastProblem::TakenOver,
             },
         );
-        assert_eq!(text, "Den TV stopped AudioSync's stream, so it's off.");
+        assert_eq!(
+            text,
+            "Den TV stopped AudioSync's stream, so it's off. Turn it on again to stream to it."
+        );
     }
 
     // covers: S242
@@ -15539,24 +15546,22 @@ mod tests {
         for speaker in &mut state.speakers {
             speaker.enabled = false;
         }
-        assert_eq!(tooltip(&state), "AudioSync – Streaming off, no speaker on");
+        assert_eq!(tooltip(&state), "AudioSync: Streaming off, no speaker on");
         state.speakers[0].enabled = true;
-        assert_eq!(tooltip(&state), "AudioSync – Streaming off, 1 speaker on");
+        assert_eq!(tooltip(&state), "AudioSync: Streaming off, 1 speaker on");
         state.running = true;
         state.speakers[1].enabled = true;
-        assert_eq!(tooltip(&state), "AudioSync – Streaming on, 2 speakers on");
+        assert_eq!(tooltip(&state), "AudioSync: Streaming on, 2 speakers on");
 
         backend.post("source", NoticeMessage::CaptureLost, "09.40");
         state.notices = backend.snapshot().notices;
         let title = notice_title(&strings, &NoticeMessage::CaptureLost);
         assert_eq!(
             tooltip(&state),
-            format!("AudioSync – Streaming on, 2 speakers on, 1 notice\nNotice: {title}")
+            format!("AudioSync: Streaming on, 2 speakers on, 1 notice\nNotice: {title}")
         );
         backend.post("start", NoticeMessage::NoSpeaker, "09.41");
         state.notices = backend.snapshot().notices;
-        assert!(
-            tooltip(&state).starts_with("AudioSync – Streaming on, 2 speakers on, 2 notices\n")
-        );
+        assert!(tooltip(&state).starts_with("AudioSync: Streaming on, 2 speakers on, 2 notices\n"));
     }
 }

@@ -1025,6 +1025,28 @@ fn windows_texts_with_a_linux_twin_are_unchanged() {
     }
 }
 
+/// A notice that leaves the user stuck says what to do next, and Resync
+/// names the Cast offset it restores.
+#[test]
+fn stuck_notices_say_what_to_do_next() {
+    let strings = include_str!("../ui/strings.slint");
+    for text in [
+        "AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits. If the disk is full, free up some space.",
+        "AudioSync couldn't save your AirPlay pairings, so pairings you add or forget now won't be kept after AudioSync quits. If the disk is full, free up some space.",
+        "The download is broken, so nothing was installed. The running version stays. You can download the new version from the release page.",
+        "There isn't enough disk space for the update, so nothing was installed. The running version stays. Free up some space, then try again.",
+        "{} needs PTP timing, which isn't available, so it's off. If another app is using port 319 or 320, close it, then turn the speaker on again.",
+        "Streaming, the speakers or their delays changed during the measurement. Leave them as they are while it measures, and try again.",
+        "The two speakers were too far apart to measure. Make sure the microphone can hear both speakers, and try again.",
+        "Restarts the stream, with a short gap, so this speaker plays at its offset again",
+    ] {
+        assert!(
+            strings.contains(&format!("@tr(\"{text}\"")),
+            "missing: {text}"
+        );
+    }
+}
+
 /// Pairing texts ask for the code a speaker shows, the word its row uses,
 /// never a PIN, as on the Mac.
 // covers: S422

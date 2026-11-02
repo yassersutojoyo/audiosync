@@ -161,11 +161,11 @@ export global Strings {
     out property <string> notice-waiting-for-audio: @tr("Waiting for audio. Play something and it streams right away.");
     out property <string> notice-airplay-stopped: @tr("AirPlay stopped or couldn't start. Select Retry to try again. If it keeps happening, restart AudioSync.");
     // The settings file in the app's data folder couldn't be written.
-    out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits.");
+    out property <string> notice-settings-not-saved: @tr("AudioSync couldn't save your settings, so changes you make now won't be kept after AudioSync quits. If the disk is full, free up some space.");
     // Another app holds a PTP port, so AirPlay 2 speakers that need PTP timing can't play.
     out property <string> notice-airplay-ptp-ports-taken: @tr("Another app is using port 319 or 320, so AirPlay speakers that need PTP timing can't play. Close that app, then turn the speaker on again.");
     // The file with the AirPlay pairings couldn't be written.
-    out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your AirPlay pairings, so pairings you add or forget now won't be kept after AudioSync quits.");
+    out property <string> notice-pairings-not-saved: @tr("AudioSync couldn't save your AirPlay pairings, so pairings you add or forget now won't be kept after AudioSync quits. If the disk is full, free up some space.");
     // Launch at Sign-In: Windows refused to add AudioSync to its startup
     // apps, refused to remove it, or has it turned off in Task Manager or
     // Settings (AudioSync then opens Settings > Apps > Startup).
@@ -579,8 +579,8 @@ export global Strings {
     out property <string> notice-update-unreachable: @tr("AudioSync couldn't reach the update server. Check your connection, then try again.");
     out property <string> notice-update-download-failed: @tr("The update didn't download completely, so nothing was installed. The running version stays.");
     out property <string> notice-update-bad-signature: @tr("The download didn't pass its check, so nothing was installed. The running version stays. Try again later, or download the new version from the release page.");
-    out property <string> notice-update-broken: @tr("The download is broken, so nothing was installed. The running version stays.");
-    out property <string> notice-update-disk-full: @tr("There isn't enough disk space for the update, so nothing was installed. The running version stays.");
+    out property <string> notice-update-broken: @tr("The download is broken, so nothing was installed. The running version stays. You can download the new version from the release page.");
+    out property <string> notice-update-disk-full: @tr("There isn't enough disk space for the update, so nothing was installed. The running version stays. Free up some space, then try again.");
     out property <string> notice-update-read-only: @tr("AudioSync can't write to its own folder, so it can't install the update. The running version stays. You can download the new version from the release page.");
     out property <string> notice-update-in-use: @tr("Another copy of AudioSync is using its files, for example in another user's session. Close the other copies, then try again. The running version stays.");
     out property <string> notice-update-failed: @tr("The update couldn't be installed. The running version stays. Try again later, or download the new version from the release page.");
@@ -639,9 +639,9 @@ export global Strings {
     // menu bar icon: streaming on or off, the speakers on, the notices.
     public pure function tray-tooltip(running: bool, speakers: int, notices: int) -> string {
         if notices == 0 {
-            return @tr("{} – {}", root.app-name, root.tray-streaming(running, speakers));
+            return @tr("{}: {}", root.app-name, root.tray-streaming(running, speakers));
         }
-        return @tr("{} – {}, {}", root.app-name, root.tray-streaming(running, speakers), root.tray-notices(notices));
+        return @tr("{}: {}, {}", root.app-name, root.tray-streaming(running, speakers), root.tray-notices(notices));
     }
 
     pure function tray-streaming(running: bool, speakers: int) -> string {
@@ -866,7 +866,7 @@ export global Strings {
             return @tr("{} plays only AirPlay 2, so it's off. Turn on File > AirPlay 2 (Experimental), then quit and reopen AudioSync.", speaker);
         }
         if problem == AirPlayProblem.timing-unavailable {
-            return @tr("{} needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.", speaker);
+            return @tr("{} needs PTP timing, which isn't available, so it's off. If another app is using port 319 or 320, close it, then turn the speaker on again.", speaker);
         }
         if problem == AirPlayProblem.too-many-airplay2-speakers {
             return @tr("AudioSync plays up to {0} AirPlay 2 speakers at once, so {1} waits. It starts once one of them stops.", root.airplay2-sessions, speaker);
@@ -909,7 +909,7 @@ export global Strings {
             return @tr("{} declined the stream, so it's off. Turn it on again to try once more.", speaker);
         }
         if problem == CastProblem.taken-over {
-            return @tr("{} stopped AudioSync's stream, so it's off.", speaker);
+            return @tr("{} stopped AudioSync's stream, so it's off. Turn it on again to stream to it.", speaker);
         }
         if problem == CastProblem.blocked {
             if Platform.os == OperatingSystemType.linux {
@@ -1451,7 +1451,7 @@ export global Strings {
     out property <string> cast-mute-help: @tr("Mutes the speaker itself");
     out property <string> cast-unmute-help: @tr("Unmutes the speaker itself");
     out property <string> cast-resync: @tr("Resync");
-    out property <string> cast-resync-help: @tr("Restarts the stream, with a short gap, so this speaker plays at its delay again");
+    out property <string> cast-resync-help: @tr("Restarts the stream, with a short gap, so this speaker plays at its offset again");
 
     // What Narrator reads for those buttons: what the button shows, so speech
     // input finds it by its text, then the speaker ("Mute, Kitchen").
@@ -1745,7 +1745,7 @@ export global Strings {
     out property <string> calibration-no-microphone: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't record from the microphone. Check the input in Sound settings.") : @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");
     out property <string> calibration-unsupported-rate: Platform.os == OperatingSystemType.linux ? @tr("The microphone runs at a sample rate calibration can't use. Choose another input in Sound settings, and try again.") : @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.");
     out property <string> calibration-source-silent: @tr("The test sound couldn't start because streaming stalled. Turn streaming off and on, and try again.");
-    out property <string> calibration-interrupted: @tr("Streaming, the speakers or their delays changed during the measurement.");
+    out property <string> calibration-interrupted: @tr("Streaming, the speakers or their delays changed during the measurement. Leave them as they are while it measures, and try again.");
     out property <string> calibration-microphone-changed: @tr("The microphone changed during the calibration. Keep one microphone as the default input, and try again.");
     out property <string> calibration-microphone-skipped: @tr("The microphone dropped audio during the measurement, so its timing can't be trusted. Try again.");
     out property <string> calibration-hands-free: Platform.os == OperatingSystemType.linux ? @tr("The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Sound settings, and try again.") : @tr("The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Settings > System > Sound, and try again.");
@@ -1753,7 +1753,7 @@ export global Strings {
     out property <string> calibration-unfinished: @tr("AudioSync couldn't finish working out the delay. Try again.");
     out property <string> calibration-too-short: @tr("The recording was too short. Try again.");
     out property <string> calibration-too-long: Platform.os == OperatingSystemType.linux ? @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, and try again.") : @tr("The delays are too long to measure in one recording at the microphone's sample rate. Lower the largest delay, or set the microphone's format to 48 kHz in Settings > System > Sound, and try again.");
-    out property <string> calibration-implausible: @tr("The two speakers were too far apart to measure.");
+    out property <string> calibration-implausible: @tr("The two speakers were too far apart to measure. Make sure the microphone can hear both speakers, and try again.");
 
     public pure function calibrate-label(name: string) -> string {
         return @tr("Calibrate with Microphone, {}", name);

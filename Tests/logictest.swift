@@ -3910,7 +3910,8 @@ do {
           "P56 native airplay: a receiver that fails its signature check goes off with its own notice, as on Windows")
     // covers: S346
     check(UIStrings().nativeAirPlayTimingUnavailable(name: "Loft")
-            == "Loft needs PTP timing, which isn't available, so it's off. Another app may be using ports 319 and 320.",
+            == "Loft needs PTP timing, which isn't available, so it's off. "
+                + "If another app is using port 319 or 320, close it, then turn the speaker on again.",
           "native airplay: the PTP text reads as on Windows")
     var titled = NoticeList()
     titled.post("body", subject: "s", title: "Loft waiting")
@@ -12978,8 +12979,14 @@ do {
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
     // covers: C43, C114
-    check(t.castProblem(.takenOver, name: "Den") == "Den stopped AudioSync's stream, so it's off.",
+    check(t.castProblem(.takenOver, name: "Den") == "Den stopped AudioSync's stream, so it's off. Turn it on again to stream to it.",
           "cast: a stream the TV's own controls or another app stopped reads as stopped, naming no other app")
+    check(t.castResyncHelp == "Restarts the stream, with a short gap, so this speaker plays at its offset again"
+            && t.calibrationFailure(.interrupted) == "Streaming, the speakers or their delays changed during the measurement. "
+                + "Leave them as they are while it measures, and try again."
+            && t.calibrationFailure(.implausible) == "The two speakers were too far apart to measure. "
+                + "Make sure the microphone can hear both speakers, and try again.",
+          "Resync says offset, and an interrupted or implausible measurement says what to do next, as on Windows")
     let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
     // covers: S401
     check(bothNone.hasPrefix("No AirPlay or Google Cast speakers found yet.") && bothNone.contains("same network")
