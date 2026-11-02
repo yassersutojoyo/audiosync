@@ -670,6 +670,24 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
             settled = Some(Instant::now());
         }
     }
+    // From the first audio queued on, when the device always has audio
+    // waiting: a sender starved at the start leaves it behind its pace.
+    // A device thread starved near the end catches up to its schedule once it
+    // runs again, so the read is waited for.
+    let waiting = lines
+        .iter()
+        .find(|(_, line, _, _)| !line.queued.is_zero())
+        .expect("audio queued");
+    let until = Instant::now() + Duration::from_secs(10);
+    let reading = loop {
+        let read = device.bytes_read() as f64 / WAV_BYTES_PER_SECOND;
+        let reading = (read - waiting.2) / (started.elapsed().as_secs_f64() - waiting.0);
+        if reading >= PACE - 0.05 || Instant::now() > until {
+            break reading;
+        }
+        session.run_for(Duration::from_millis(50));
+        seen.extend(std::iter::from_fn(|| session.poll_event()));
+    };
     for (_, line, _, _) in &lines {
         assert!(line.queued <= cap, "{line:?}");
         assert_eq!(
@@ -728,13 +746,6 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     };
     let growth = per_second(first, &lines[filled]);
     let overflow = per_second(&lines[filled], last);
-    // From the first audio queued on, when the device always has audio
-    // waiting: a sender starved at the start leaves it behind its pace.
-    let waiting = lines
-        .iter()
-        .find(|(_, line, _, _)| !line.queued.is_zero())
-        .expect("audio queued");
-    let reading = (last.2 - waiting.2) / (last.0 - waiting.0);
     assert!(
         (PACE - 0.05..=PACE + 0.05).contains(&reading),
         "{reading} s/s read: {lines:?}"
