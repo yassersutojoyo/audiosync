@@ -15352,6 +15352,7 @@ mod tests {
 
     /// The tray icon's tooltip reads what VoiceOver reads on the Mac's menu
     /// bar icon: streaming on or off, the speakers on, then the notices.
+    // covers: S153
     #[test]
     fn the_tray_tooltip_reads_streaming_speakers_and_notices_as_on_the_mac() {
         let mut backend = MockBackend::new();

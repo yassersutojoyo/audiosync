@@ -1109,6 +1109,7 @@ mod tests {
         );
     }
 
+    // covers: S218
     #[test]
     fn a_change_the_system_reports_is_read_at_once_not_at_the_next_poll() {
         let (fake, counts) = fake(Thumbnail::Image);
@@ -1139,6 +1140,7 @@ mod tests {
         }
     }
 
+    // covers: S218, S274
     #[test]
     fn a_reported_change_wakes_the_card_with_its_reading_long_before_the_poll() {
         let (fake, counts) = fake(Thumbnail::Image);
@@ -1175,6 +1177,7 @@ mod tests {
         assert!(shows(&mut card, false), "the wake came before the reading");
     }
 
+    // covers: S218
     #[test]
     fn a_burst_of_changes_is_read_once_until_the_gap_passes() {
         let (fake, counts) = fake(Thumbnail::Image);
