@@ -15461,6 +15461,7 @@ do {
           && HiddenSpeakers().menu(present: [:], text: t).isEmpty,
           "hidden speakers: the menu is sorted by shown name, uses the current name when present, says not found otherwise",
           menu.map(\.title).joined(separator: " | "))
+    // covers: S360 (numbers in names sort by value)
     var roomsHidden = HiddenSpeakers()
     roomsHidden.hide(key: "lc:room10", name: "Room 10", kind: "USB")
     roomsHidden.hide(key: "lc:room2", name: "room 2", kind: "USB")
@@ -16568,6 +16569,7 @@ do {
     check(!tips.isEmpty && !tips.contains(" ms") && !tips.contains("if it plays late, lower it")
             && tips.contains("one by one") && tips.contains("hands-free microphone"),
           "guide: Tips keep their advice without an unsourced delay range or More Controls' raise/lower rule", tips)
+    // covers: S407
     let flatGuide = guide.helpText.replacingOccurrences(of: "\n  ", with: " ")
     check(flatGuide.contains("appears. At launch, AudioSync starts streaming only when such a speaker is there.")
             && flatGuide.contains("- Rename: double-click a speaker's name, or right-click it or use its ⋯ button and choose Rename…;")

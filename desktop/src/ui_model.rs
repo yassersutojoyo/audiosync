@@ -1268,7 +1268,14 @@ impl AppState {
             total: rows.len(),
             present: rows
                 .iter()
-                .filter(|row| matches!(row, ZoneRow::Listed(_)))
+                .filter(|row| matches!(row, ZoneRow::Listed(s) if s.in_target.is_none()))
+                .count(),
+            in_pair: rows
+                .iter()
+                .filter(|row| match row {
+                    ZoneRow::Listed(s) => s.in_target.is_some(),
+                    ZoneRow::NotFound(id) => self.member_target(id).is_some(),
+                })
                 .count(),
             on: on.len(),
             waiting: if self.running {
@@ -1556,8 +1563,11 @@ impl CastAddressCheck {
 pub struct ZoneCounts {
     /// Its members but the hidden ones.
     pub total: usize,
-    /// Those listed right now.
+    /// Those listed right now, but the ones playing as part of a stereo pair
+    /// or home theater, which the Mac doesn't list.
     pub present: usize,
+    /// Those playing as part of a stereo pair or home theater, listed or not.
+    pub in_pair: usize,
     /// Those switched on.
     pub on: usize,
     /// Those on that can't play right now, while streaming is on.
@@ -3469,6 +3479,7 @@ mod tests {
             ZoneCounts {
                 total: 5,
                 present: 4,
+                in_pair: 0,
                 on: 2,
                 waiting: 1
             },

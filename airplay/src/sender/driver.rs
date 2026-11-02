@@ -499,6 +499,8 @@ pub(crate) struct Driver {
     connects: ConnectQueue<Turn>,
     /// The pairings the host asked for that wait for their turn.
     queued_pairings: BTreeMap<DeviceKey, (Box<Device>, Option<Secret>)>,
+    /// Inputs handled since the last flush, against [`INPUTS_PER_TURN`].
+    turn_inputs: usize,
 }
 
 impl Driver {
@@ -564,6 +566,7 @@ impl Driver {
             airplay1_outcomes: BTreeMap::new(),
             connects: ConnectQueue::new(),
             queued_pairings: BTreeMap::new(),
+            turn_inputs: 0,
         }
     }
 
@@ -644,6 +647,7 @@ impl Driver {
             let now = Instant::now();
             self.run_timers(now);
             self.flush(now);
+            self.turn_inputs = 0;
             self.remote_turn(now);
             self.report_missing_members();
             if self.finished(Instant::now()) {
@@ -698,14 +702,15 @@ impl Driver {
     /// Handles what is waiting, or waits until `deadline` for something.
     fn wait(&mut self, deadline: Instant) {
         let mut handled = 0;
-        while handled < INPUTS_PER_TURN {
+        while self.turn_inputs < INPUTS_PER_TURN {
             let Ok(input) = self.inputs.try_recv() else {
                 break;
             };
             self.handle(input);
+            self.turn_inputs += 1;
             handled += 1;
         }
-        if handled > 0 {
+        if handled > 0 || self.turn_inputs == INPUTS_PER_TURN {
             return;
         }
         let left = deadline.saturating_duration_since(Instant::now());
@@ -715,6 +720,7 @@ impl Driver {
         if left > PRECISE_WAIT {
             if let Ok(input) = self.inputs.recv_timeout(left - PRECISE_WAIT) {
                 self.handle(input);
+                self.turn_inputs += 1;
             }
             return;
         }
@@ -3684,6 +3690,33 @@ mod tests {
             .expect("the driver runs");
         run.join().expect("the driver ends");
         timed_out || emitted.try_iter().any(|event| timeout(&event))
+    }
+
+    // A turn's closing wait and the next turn's first drain share one
+    // budget, so a flood never runs more than it between two flushes.
+    #[test]
+    fn a_flood_of_inputs_runs_one_budget_between_two_flushes() {
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _emitted) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs.clone(), events, latency);
+        let flood = 3 * INPUTS_PER_TURN;
+        for _ in 0..flood {
+            inputs
+                .send(Input::Io(IoEvent::RtspClosed {
+                    session: SessionKey(99),
+                    attempt: 1,
+                }))
+                .expect("the driver's queue");
+        }
+
+        // As in `run`: one turn's closing wait, then the next turn's first.
+        driver.wait(now + Duration::from_secs(1));
+        driver.wait(Instant::now());
+        let left = driver.inputs.try_iter().count();
+        assert_eq!(flood - left, INPUTS_PER_TURN);
     }
 
     // An AirPlay 2 only receiver first listed with its IPv6 address alone:

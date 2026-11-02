@@ -1150,6 +1150,10 @@ pub trait AudioBackend {
     /// field the Cast memory holds none of.
     fn fill_cast_memory(&mut self, _json: &str) {}
 
+    /// Whether the Cast speakers' file was there at launch but isn't read
+    /// into the Cast memory yet, so a device the memory lacks may be in it.
+    fn set_cast_file_unread(&mut self, _unread: bool) {}
+
     /// What a session does when the app it captures quits (spec S227).
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
 

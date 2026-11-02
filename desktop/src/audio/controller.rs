@@ -4694,6 +4694,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
         }
     }
 
+    fn set_cast_file_unread(&mut self, unread: bool) {
+        if let Some(cast) = self.cast.as_mut() {
+            cast.set_file_unread(unread);
+        }
+    }
+
     fn calibration_engine(&self) -> Engine {
         let playing = self.playing_ids();
         Engine {
