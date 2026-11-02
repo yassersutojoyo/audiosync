@@ -895,14 +895,9 @@ struct UIStrings {
     /// sentence only once the user turns off AirPlay 2 that this launch runs.
     func airPlay2Note(on: Bool, onAtLaunch: Bool) -> String {
         let stops = !on && onAtLaunch
-        if airPlay2Auto {
-            return stops
-                ? "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
-                : "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
-        }
         return stops
-            ? "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
-            : "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+            ? "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
+            : "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
     }
 
     // MARK: AirPlay pairing prompt

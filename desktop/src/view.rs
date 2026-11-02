@@ -6449,7 +6449,16 @@ mod tests {
         let strings = app.main.global::<Strings>();
         assert_eq!(
             notice_item(&strings, &notices[0]).message,
-            "AirPlay 2 (Experimental) is on. AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+            "AirPlay 2 (Experimental) is on. Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
+        );
+        let mut off = notices[0].clone();
+        off.message = NoticeMessage::AirPlay2NextLaunch {
+            on: false,
+            prefer: false,
+        };
+        assert_eq!(
+            notice_item(&strings, &off).message,
+            "AirPlay 2 (Experimental) is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
         );
         // Under the AirPlay 2 flag the item is Prefer AirPlay 2 (spec S313).
         let mut preferred = notices[0].clone();

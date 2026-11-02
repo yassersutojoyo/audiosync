@@ -176,8 +176,8 @@ export global Strings {
     // off) while a network speaker is on: apps have nowhere to play.
     // File > AirPlay 2 (Experimental) was turned on or off; the AirPlay
     // sender keeps the mode it started with until the next launch.
-    out property <string> notice-airplay2-on-next-launch: @tr("AirPlay 2 (Experimental) is on. AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
-    out property <string> notice-airplay2-off-next-launch: @tr("AirPlay 2 (Experimental) is off. AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it.");
+    out property <string> notice-airplay2-on-next-launch: @tr("AirPlay 2 (Experimental) is on. Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync.");
+    out property <string> notice-airplay2-off-next-launch: @tr("AirPlay 2 (Experimental) is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync.");
     // The same item under the AirPlay 2 flag (spec S313), which moves only
     // speakers that also play AirPlay 1.
     out property <string> notice-airplay2-prefer-on-next-launch: @tr("Prefer AirPlay 2 is on. Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync.");
