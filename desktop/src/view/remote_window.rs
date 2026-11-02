@@ -107,6 +107,8 @@ pub(super) struct RemoteHost {
     public: PublicNetworkWarning,
     /// When the Public network notice last appeared.
     public_since: String,
+    /// Its repost mark, taken with `public_since`.
+    public_post: u64,
     /// The last reading failed and the log says so; repeats aren't logged.
     profiles_unread: bool,
     /// The port the debug switch started this run's remote on; kept out of
@@ -139,6 +141,7 @@ impl Default for RemoteHost {
             watch: None,
             public: PublicNetworkWarning::default(),
             public_since: String::new(),
+            public_post: 0,
             debug_port: None,
             profiles_unread: false,
         }
@@ -622,6 +625,7 @@ impl App {
             }
             if host.public.notice() && !was.notice() {
                 host.public_since = crate::platform::notice_time();
+                host.public_post = crate::ui_model::next_post();
             }
             (host.public.public() != was.public()).then_some(host.public.public())
         };
@@ -644,6 +648,7 @@ impl App {
             subject: "web remote on a public network".to_owned(),
             message: NoticeMessage::RemoteOnPublicNetwork,
             time: host.public_since.clone(),
+            post: host.public_post,
         })
     }
 

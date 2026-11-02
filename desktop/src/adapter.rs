@@ -4909,6 +4909,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     subject: format!("{subject:?}"),
                     message: posted.message.clone(),
                     time: posted.time.clone(),
+                    post: 0,
                 })
                 .collect(),
             pin_prompt: pin_prompt.map(|prompt| self.pin_prompt(prompt)),

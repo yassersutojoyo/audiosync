@@ -114,6 +114,8 @@ pub struct Updater {
     notice: Option<UpdaterNotice>,
     /// When the notice was set, as the notice list shows it.
     notice_time: String,
+    /// Changes with `notice_time`, as the notice list's repost mark.
+    notice_post: u64,
     offered: Option<Update>,
     work: Work,
     /// A manual check asked while a launch check ran; that check answers it.
@@ -144,6 +146,7 @@ impl Updater {
             events,
             notice: None,
             notice_time: String::new(),
+            notice_post: 0,
             offered: None,
             work: Work::Idle,
             manual_waiting: false,
@@ -175,12 +178,17 @@ impl Updater {
         &self.notice_time
     }
 
+    pub fn notice_post(&self) -> u64 {
+        self.notice_post
+    }
+
     /// Stamps the time only when the kind of notice changes, so a download's
     /// percentage doesn't move it.
     fn set_notice(&mut self, notice: Option<UpdaterNotice>) {
         let kind = |notice: &Option<UpdaterNotice>| notice.as_ref().map(std::mem::discriminant);
         if notice.is_some() && kind(&notice) != kind(&self.notice) {
             self.notice_time = crate::platform::notice_time();
+            self.notice_post = crate::ui_model::next_post();
         }
         self.notice = notice;
     }

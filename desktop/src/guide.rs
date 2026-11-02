@@ -393,6 +393,7 @@ mod tests {
             subject: "subject".to_owned(),
             message,
             time: "09.41".to_owned(),
+            post: 0,
         };
         let mut notices = vec![
             notice(1, NoticeMessage::NoSpeaker),
@@ -422,6 +423,7 @@ mod tests {
             subject: "subject".to_owned(),
             message,
             time: "09.41".to_owned(),
+            post: 0,
         };
         let mut notices = vec![notice(4, NoticeMessage::NoSpeaker)];
         assert_eq!(notice_with_guide(&notices), None);

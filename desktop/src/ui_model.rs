@@ -525,6 +525,16 @@ pub struct Notice {
     /// Local time it was posted, in the user's short time format ("09.40",
     /// "9:40 AM").
     pub time: String,
+    /// The window posts its own notices again under their fixed ids, so a
+    /// new number from [`next_post`] marks a repost; the backend's take a
+    /// new id instead and keep 0.
+    pub post: u64,
+}
+
+/// A number no earlier notice post took.
+pub fn next_post() -> u64 {
+    static POSTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    POSTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// A source other than the whole system, as a notice names it.
@@ -2232,6 +2242,7 @@ impl MockBackend {
                 subject: subject.into(),
                 message,
                 time: time.into(),
+                post: 0,
             },
         );
         self.next_id += 1;
@@ -2431,6 +2442,7 @@ impl MockBackend {
             subject: "Zones".into(),
             message: NoticeMessage::GroupsBecameZones,
             time: "09.40".into(),
+            post: 0,
         });
         mock.next_id = 2;
         mock.zones_mut(|zones| {

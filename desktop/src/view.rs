@@ -327,6 +327,7 @@ struct Listed {
     id: u64,
     subject: String,
     title: SharedString,
+    post: u64,
 }
 
 /// What the live regions should do after a refresh.
@@ -352,6 +353,8 @@ struct NoticeAnnouncer {
     posted: Option<Vec<u64>>,
     /// The subject and title of each notice listed at the last refresh.
     listed: Vec<(String, SharedString)>,
+    /// The id and repost mark of each notice listed at the last refresh.
+    posts: Vec<(u64, u64)>,
     /// The subject of the notice last said, until it leaves the list.
     said: Option<String>,
 }
@@ -363,17 +366,23 @@ impl NoticeAnnouncer {
     }
 
     /// What to announce for `notices`. A notice whose id wasn't listed at
-    /// the last refresh was posted since.
+    /// the last refresh was posted since, and so was one whose repost mark
+    /// changed: the window's own notices keep their id when posted again.
     fn next(&mut self, notices: &[Listed]) -> Announcement {
         let repeats = |n: &Listed| {
             self.listed
                 .iter()
                 .any(|(subject, title)| *subject == n.subject && *title == n.title)
         };
+        let reposted = |n: &Listed| {
+            self.posts
+                .iter()
+                .any(|&(id, post)| id == n.id && post != n.post)
+        };
         let known = self.posted.take();
         let mut new: Vec<&Listed> = notices
             .iter()
-            .filter(|n| !known.as_ref().is_some_and(|ids| ids.contains(&n.id)))
+            .filter(|n| !known.as_ref().is_some_and(|ids| ids.contains(&n.id)) || reposted(n))
             .collect();
         new.sort_by_key(|n| n.id);
         let fresh = known
@@ -381,13 +390,14 @@ impl NoticeAnnouncer {
             .then(|| new.iter().rev().find(|n| !repeats(n)).copied())
             .flatten();
         let mut posted = known.unwrap_or_default();
-        posted.retain(|id| notices.iter().any(|n| n.id == *id));
+        posted.retain(|id| notices.iter().any(|n| n.id == *id) && !new.iter().any(|n| n.id == *id));
         posted.extend(new.iter().map(|n| n.id));
         self.posted = Some(posted);
         self.listed = notices
             .iter()
             .map(|n| (n.subject.clone(), n.title.clone()))
             .collect();
+        self.posts = notices.iter().map(|n| (n.id, n.post)).collect();
         if let Some(notice) = fresh {
             self.said = Some(notice.subject.clone());
             return Announcement::Say(notice.title.clone());
@@ -2023,6 +2033,7 @@ impl App {
                 id: notice.id,
                 subject: notice.subject.clone(),
                 title: item.title.clone(),
+                post: notice.post,
             })
             .collect();
         let announcement = self.notice_announcer.borrow_mut().next(&listed);
@@ -3467,6 +3478,7 @@ impl App {
                 subject: "update".to_owned(),
                 message: NoticeMessage::Update(notice.clone()),
                 time: updater.notice_time().to_owned(),
+                post: updater.notice_post(),
             })
         });
         #[cfg(not(windows))]
@@ -3653,6 +3665,7 @@ impl App {
                 subject: "AirPlay 2 (Experimental)".to_owned(),
                 message: NoticeMessage::AirPlay2NextLaunch { on, prefer },
                 time: crate::platform::notice_time(),
+                post: ui_model::next_post(),
             });
         }
         self.log.log(|| {
@@ -4283,6 +4296,7 @@ impl App {
                     text: message.to_string(),
                 },
                 time: crate::platform::notice_time(),
+                post: ui_model::next_post(),
             });
             self.refresh();
             self.announce(message);
@@ -10157,6 +10171,7 @@ mod tests {
                     subject: "update".to_owned(),
                     message,
                     time: String::new(),
+                    post: 0,
                 },
             );
             assert_eq!(item.update_buttons.row_count(), notice.buttons().len());
@@ -10298,6 +10313,7 @@ mod tests {
                     last: None,
                 }),
                 time: String::new(),
+                post: 0,
             },
         );
         assert_eq!(
@@ -11051,6 +11067,7 @@ mod tests {
                     subject: "update".to_owned(),
                     message: NoticeMessage::Update(notice),
                     time: String::new(),
+                    post: 0,
                 },
             );
             app.flyout
@@ -13984,6 +14001,7 @@ mod tests {
                 subject: "test".into(),
                 message,
                 time: "09.40".into(),
+                post: 0,
             };
             let item = notice_item(&strings, &notice);
             strings.invoke_dismiss_notice(item.title).to_string()
@@ -15394,6 +15412,7 @@ mod tests {
                 id,
                 subject: subject.into(),
                 title: title.into(),
+                post: 0,
             })
             .collect();
         match announcer.next(&listed) {
@@ -15487,6 +15506,7 @@ mod tests {
                     id: n.id,
                     subject: n.subject.clone(),
                     title: notice_title(strings, &n.message),
+                    post: n.post,
                 })
                 .collect();
             announcer.next(&listed);
@@ -15507,6 +15527,7 @@ mod tests {
             subject: subject.into(),
             message,
             time: "09.40".into(),
+            post: 0,
         };
         let airplay2 = notice(
             AIRPLAY2_NOTICE_ID,
@@ -15599,6 +15620,7 @@ mod tests {
                 prefer: false,
             },
             time: "09.41".to_owned(),
+            post: 0,
         });
         app.refresh();
         let id = |item: Option<NoticeItem>| item.map(|n| n.id as u64);
@@ -15610,6 +15632,67 @@ mod tests {
         assert_eq!(
             id(app.flyout.get_notices().row_data(0)),
             Some(AIRPLAY2_NOTICE_ID)
+        );
+    }
+
+    /// The notice the main window and the flyout list first after a window
+    /// notice posted at `times[0]`, one posted after it at `times[1]` and
+    /// the first one posted again at `times[2]`.
+    fn first_after_a_window_repost(times: [&str; 3]) -> (Option<u64>, Option<u64>) {
+        let app = app_over(MockBackend::new());
+        let airplay2 = |time: &str| ui_model::Notice {
+            id: AIRPLAY2_NOTICE_ID,
+            subject: "AirPlay 2 (Experimental)".to_owned(),
+            message: NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false,
+            },
+            time: time.to_owned(),
+            post: ui_model::next_post(),
+        };
+        app.ui.borrow_mut().airplay2_notice = Some(airplay2(times[0]));
+        app.refresh();
+        app.ui.borrow_mut().dialog_notice = Some(ui_model::Notice {
+            id: DIALOG_NOTICE_ID,
+            subject: "dialog".to_owned(),
+            message: NoticeMessage::DialogMessage {
+                title: "Rename".to_owned(),
+                text: "Taken".to_owned(),
+            },
+            time: times[1].to_owned(),
+            post: ui_model::next_post(),
+        });
+        app.refresh();
+        app.ui.borrow_mut().airplay2_notice = Some(airplay2(times[2]));
+        app.refresh();
+        let id = |item: Option<NoticeItem>| item.map(|n| n.id as u64);
+        (
+            id(app.main.get_notices().row_data(0)),
+            id(app.flyout.get_notices().row_data(0)),
+        )
+    }
+
+    /// A window notice keeps its fixed id when it is posted again, so its
+    /// repost mark is what moves it above the notices posted since.
+    // covers: S153
+    #[test]
+    fn a_window_notice_reposted_after_another_moves_to_the_top() {
+        let first = Some(AIRPLAY2_NOTICE_ID);
+        assert_eq!(
+            first_after_a_window_repost(["09.40", "09.41", "09.42"]),
+            (first, first)
+        );
+    }
+
+    /// The notice time counts minutes, so a repost in the same minute moves
+    /// up too.
+    // covers: S153
+    #[test]
+    fn a_window_notice_reposted_in_the_same_minute_moves_to_the_top() {
+        let first = Some(AIRPLAY2_NOTICE_ID);
+        assert_eq!(
+            first_after_a_window_repost(["09.41", "09.41", "09.41"]),
+            (first, first)
         );
     }
 
@@ -15630,6 +15713,7 @@ mod tests {
                 prefer: false,
             },
             time: "09.40".to_owned(),
+            post: 0,
         });
         app.refresh();
         let id = |item: Option<NoticeItem>| item.map(|n| n.id as u64);

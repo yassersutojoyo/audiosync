@@ -323,6 +323,7 @@ impl LaunchAtLogin {
             subject: "launch at sign-in".to_owned(),
             message,
             time: time(),
+            post: crate::ui_model::next_post(),
         });
         outcome
     }
