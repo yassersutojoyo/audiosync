@@ -218,8 +218,9 @@ export struct ZoneTarget {
 }
 
 // A zone: its header and its members' rows. Hidden members are left out
-// of `total` and get no row; `present` counts the members listed now, `on`
-// those switched on and `waiting` those on that can't play right now.
+// of `total` and get no row; `present` counts the members listed now,
+// leaving out those `in-pair`, `on` those switched on and `waiting` those
+// on that can't play right now.
 export struct ZoneItem {
     id: string,
     name: string,
@@ -230,6 +231,8 @@ export struct ZoneItem {
     // The member a waiting zone's note names.
     waiting-name: string,
     present: int,
+    // Its members playing as part of a stereo pair or home theater.
+    in-pair: int,
     volume: float,
     expanded: bool,
     members: [SpeakerItem],

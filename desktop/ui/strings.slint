@@ -1980,10 +1980,11 @@ export global Strings {
     }
 
     // Under a zone's name: how many of its members are on, and how many of
-    // those wait; with none of them listed, how many it has.
-    public pure function zone-count(on: int, total: int, waiting: int, present: int) -> string {
+    // those wait; with none of them listed, how many it has, and that they
+    // play in a pair when all of them do.
+    public pure function zone-count(on: int, total: int, waiting: int, present: int, in-pair: int) -> string {
         if present == 0 && total > 0 {
-            return @tr("None of {} found", total);
+            return in-pair == total ? @tr("{} playing in a pair", total) : @tr("None of {} found", total);
         }
         if waiting > 0 {
             return @tr("{} of {} on, {} waiting", on, total, waiting);

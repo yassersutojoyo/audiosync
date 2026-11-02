@@ -1936,6 +1936,7 @@ impl App {
                         waiting: count(counts.waiting),
                         waiting_name: state.zone_waiter(zone).unwrap_or_default().into(),
                         present: count(counts.present),
+                        in_pair: count(counts.in_pair),
                         volume: zone.volume as f32,
                         expanded: !ui.collapsed.contains(&zone.id),
                         can_calibrate: state.offers_zone_run(zone),
@@ -11177,8 +11178,13 @@ mod tests {
                 "{}",
                 zone.name
             );
+            // A row only its pair moves plays as part of the pair, which
+            // the Mac doesn't list.
             assert_eq!(
-                zone.members.iter().filter(|row| !row.missing).count(),
+                zone.members
+                    .iter()
+                    .filter(|row| !row.missing && row.zone_movable)
+                    .count(),
                 zone.present as usize,
                 "{}",
                 zone.name
@@ -11281,11 +11287,16 @@ mod tests {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         assert_eq!(
-            strings.invoke_zone_count(2, 5, 1, 4),
+            strings.invoke_zone_count(2, 5, 1, 4, 0),
             "2 of 5 on, 1 waiting"
         );
-        assert_eq!(strings.invoke_zone_count(1, 3, 0, 2), "1 of 3 on");
-        assert_eq!(strings.invoke_zone_count(0, 3, 0, 0), "None of 3 found");
+        assert_eq!(strings.invoke_zone_count(1, 3, 0, 2, 0), "1 of 3 on");
+        assert_eq!(strings.invoke_zone_count(0, 3, 0, 0, 0), "None of 3 found");
+        assert_eq!(strings.invoke_zone_count(0, 3, 0, 0, 2), "None of 3 found");
+        assert_eq!(
+            strings.invoke_zone_count(0, 1, 0, 0, 1),
+            "1 playing in a pair"
+        );
         assert_eq!(
             strings.invoke_zone_value(2, 5, 1),
             "2 of 5 speakers on, 1 waiting"
@@ -11299,6 +11310,41 @@ mod tests {
             strings.invoke_zone_label("Living Room".into()),
             "Living Room, zone"
         );
+    }
+
+    // covers: S247
+    #[test]
+    fn a_zone_whose_members_all_play_in_a_pair_says_so() {
+        use i_slint_backend_testing::ElementHandle;
+        let pair = MockBackend::zones_preview()
+            .snapshot()
+            .speaker("airplay:left")
+            .and_then(|s| s.in_target.clone());
+        let mut backend = MockBackend::new();
+        let state = backend.snapshot();
+        let members = ["airplay:kitchen", "airplay:bedroom"];
+        backend.retain_speakers(|s| !members.contains(&s.id.as_str()));
+        for id in members {
+            let mut member = state.speaker(id).unwrap().clone();
+            member.enabled = false;
+            member.in_target = pair.clone();
+            backend.add_speaker(member);
+        }
+        backend.add_zone("zone:upstairs", "Upstairs", &members);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        // What Narrator reads from the zone's arrow, folded or not.
+        fn arrow_values(window: &impl ComponentHandle) -> Vec<String> {
+            ["Hide speakers in Upstairs", "Show speakers in Upstairs"]
+                .into_iter()
+                .flat_map(|label| ElementHandle::find_by_accessible_label(window, label))
+                .map(|arrow| arrow.accessible_value().unwrap_or_default().into())
+                .collect()
+        }
+        assert_eq!(arrow_values(&app.main), ["2 playing in a pair"]);
+        assert_eq!(arrow_values(&app.flyout), ["2 playing in a pair"]);
     }
 
     // covers: S223
