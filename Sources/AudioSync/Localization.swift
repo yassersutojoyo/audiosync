@@ -93,7 +93,7 @@ struct UIStrings {
             return error is StreamEngine.StartError ? nil : captureFailedNoticeName
         }
         switch reason {
-        case .appNotRunning(let bundleID): return "\(SourceApps.name(for: bundleID)) not running"
+        case .appNotRunning(let bundleID): return "\(SourceApps.name(for: bundleID)) \(sourceNotRunningNote)"
         case .inputNotFound, .inputDisconnected: return "\(input) not connected"
         case .inputHandsFree: return nil
         default: return captureFailedNoticeName
@@ -676,8 +676,12 @@ struct UIStrings {
     /// The chosen input device while it is unplugged; `name` is the one it
     /// had when last seen, nil when none was remembered.
     func sourceNotConnected(_ name: String?) -> String { "\(name ?? sourceInputDevice) (\(sourceNotConnectedNote))" }
-    /// An app in the several-apps menu that only the last mix keeps there.
-    func sourceNotRunning(_ name: String) -> String { "\(name) (not running)" }
+    let sourceNotRunningNote = "not running"
+    /// An app in the several-apps menu; one that isn't running is there only
+    /// because the last mix keeps it.
+    func sourceMixAppName(_ name: String, running: Bool) -> String {
+        running ? name : "\(name) (\(sourceNotRunningNote))"
+    }
     let inputChannelsLabel = "Input Channels"
     /// One channel pair of an input device, counted from 1 as the device's
     /// own settings count them.
@@ -1050,7 +1054,7 @@ struct UIStrings {
     private func captureFailureText(_ error: SourceCapture.CaptureError) -> String {
         switch error {
         case .appNotRunning(let bundleID):
-            return "\(SourceApps.name(for: bundleID)) is not running. Open it first, or pick another source."
+            return "\(SourceApps.name(for: bundleID)) is \(sourceNotRunningNote). Open it first, or pick another source."
         case .ownProcessUnknown:
             return "AudioSync couldn't capture its own sound to leave it out. Quit AudioSync and open it again."
         case .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:

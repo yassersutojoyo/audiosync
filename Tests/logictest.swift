@@ -416,7 +416,9 @@ do {
 do {
     let mixMenuSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     // covers: S353
-    check(mixMenuSource.contains("Text(app.available ? app.name : t.sourceNotRunning(app.name))"),
+    check(UIStrings().sourceMixAppName("Safari", running: false) == "Safari (not running)"
+            && UIStrings().sourceMixAppName("Safari", running: true) == "Safari"
+            && mixMenuSource.contains("sourceMixAppName(app.name, running: app.available)"),
           "last mix: the several-apps list names an app that isn't running as not running")
 }
 

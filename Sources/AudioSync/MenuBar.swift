@@ -2290,7 +2290,7 @@ struct SourcePicker: View {
                     Toggle(isOn: Binding(get: { model.mixChecked.contains(app.id) },
                                          set: { _ in model.actions.toggleMixApp(app.id) })) {
                         if let icon = app.icon { Image(nsImage: icon) }
-                        Text(app.available ? app.name : t.sourceNotRunning(app.name))
+                        Text(t.sourceMixAppName(app.name, running: app.available))
                     }
                 }
             } label: {
