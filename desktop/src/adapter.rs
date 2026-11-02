@@ -2014,9 +2014,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// The apps the several-apps list offers: the listed apps, then the
-    /// checked ones and the last mix's (S354) that aren't listed, so each
-    /// can still be unchecked or picked again.
+    /// The apps the several-apps list offers, by name as the picker sorts
+    /// them: the listed apps and the checked ones and the last mix's (S354)
+    /// that aren't listed, so each can still be unchecked or picked again.
     fn mix_apps(&self) -> Vec<MixApp> {
         let checked = mix_checked(&self.chosen, mix_mode(&self.chosen, self.mix_mode));
         let is_checked = |executable: &str| {
@@ -2061,6 +2061,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 });
             }
         }
+        apps.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        });
         apps
     }
 
@@ -12863,6 +12869,25 @@ mod tests {
             .collect();
         let phone: serde_json::Value = serde_json::from_str(&page(&adapter).to_json(1)).unwrap();
         assert_eq!(phone["mix_apps"], serde_json::Value::Array(expected));
+    }
+
+    // covers: S211 (the several-apps list sorts an app that isn't running by name)
+    #[test]
+    fn the_several_apps_list_sorts_an_app_that_is_not_running_among_the_others() {
+        let mut adapter = adapter();
+        adapter.audio_mut().add_app(3000, "alpha.exe");
+        adapter.audio_mut().add_app(4000, "zebra.exe");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("alpha.exe");
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_sources();
+        let names: Vec<String> = adapter
+            .snapshot()
+            .mix_apps
+            .into_iter()
+            .map(|app| app.name)
+            .collect();
+        assert_eq!(names, ["Alpha", "Player", "Zebra"]);
     }
 
     // covers: S353, S354
