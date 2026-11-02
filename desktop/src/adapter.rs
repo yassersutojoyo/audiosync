@@ -686,22 +686,30 @@ impl<A: AudioBackend> AudioAdapter<A> {
         log: DebugLog,
         settings_file: SettingsFile,
     ) -> AudioAdapter<A> {
-        AudioAdapter::launched(audio, clock, log, settings_file, false)
+        AudioAdapter::launched(
+            audio,
+            clock,
+            log,
+            settings_file.load(),
+            settings_file,
+            false,
+        )
     }
 
-    /// The adapter over `audio` with the settings in `settings_file`,
-    /// stopped unless an auto-connect speaker is there, with the sources and
-    /// outputs listed now. `clock` gives the time a notice shows; what
-    /// happens goes to `log`. With `skip_auto_connect`, no speaker is
-    /// switched on by itself in this run and nothing is saved.
+    /// The adapter over `audio` with the settings `read` from
+    /// `settings_file`, stopped unless an auto-connect speaker is there, with
+    /// the sources and outputs listed now. `clock` gives the time a notice
+    /// shows; what happens goes to `log`. With `skip_auto_connect`, no
+    /// speaker is switched on by itself in this run and nothing is saved.
     pub fn launched(
         audio: A,
         clock: fn() -> String,
         log: DebugLog,
+        read: (Settings, settings::Loaded),
         settings_file: SettingsFile,
         skip_auto_connect: bool,
     ) -> AudioAdapter<A> {
-        let (saved, loaded) = settings_file.load();
+        let (saved, loaded) = read;
         let settings_file_has_path = settings_file.path().is_some();
         if settings_file_has_path {
             log.log(|| format!("settings: {loaded}"));
@@ -15080,6 +15088,7 @@ mod tests {
             audio(),
             || "09.41".to_owned(),
             DebugLog::default(),
+            file.load(),
             file,
             true,
         );
@@ -15141,6 +15150,7 @@ mod tests {
             audio(),
             || "09.41".to_owned(),
             DebugLog::default(),
+            file.load(),
             file,
             true,
         );
@@ -15589,6 +15599,7 @@ mod tests {
             launch_audio(),
             || "09.41".to_owned(),
             DebugLog::default(),
+            file.load(),
             file,
             true,
         );
@@ -15976,6 +15987,33 @@ mod tests {
 
     // covers: S212
     #[test]
+    fn the_airplay2_path_is_the_one_the_sender_read_even_if_the_file_is_held_after() {
+        let dir = test_dir("adapter-settings-airplay2-read-once");
+        let path = dir.join(settings::FILE_NAME);
+        let on = Settings {
+            airplay2_experimental: true,
+            ..Settings::default()
+        };
+        std::fs::write(&path, on.to_json()).expect("written");
+        let file = SettingsFile::at(path.clone());
+        let sender_read = file.load();
+        std::fs::remove_file(&path).expect("removed");
+        std::fs::create_dir(&path).expect("held");
+        let adapter = AudioAdapter::launched(
+            launch_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+            sender_read,
+            file,
+            true,
+        );
+        assert!(adapter.airplay2_at_launch, "as the sender started");
+        assert!(adapter.view_settings().airplay2_experimental);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S212
+    #[test]
     fn a_session_running_when_held_settings_are_read_moves_to_their_source() {
         use crate::data_folder::KEEP_ASIDE_RETRY_POLLS;
         let (mut adapter, dir, path) = launch_with_settings_held("adapter-settings-held-running");
@@ -16175,8 +16213,14 @@ mod tests {
         audio.set_cast(fake.link());
         let file = SettingsFile::at(path.to_path_buf());
         let clock = || "09.41".to_owned();
-        let mut adapter =
-            AudioAdapter::launched(audio, clock, DebugLog::default(), file, skip_auto_connect);
+        let mut adapter = AudioAdapter::launched(
+            audio,
+            clock,
+            DebugLog::default(),
+            file.load(),
+            file,
+            skip_auto_connect,
+        );
         adapter.poll();
         (adapter, fake)
     }

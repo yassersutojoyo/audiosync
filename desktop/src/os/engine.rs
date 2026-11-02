@@ -27,7 +27,8 @@ pub fn backend<D: Driver + 'static>(
         settings::SettingsFile::at,
     );
     // Read at launch only, like the Mac: a change applies at the next launch.
-    let airplay2 = settings_file.load().0.airplay2_experimental;
+    let read = settings_file.load();
+    let airplay2 = read.0.airplay2_experimental;
     start_airplay(&mut audio, airplay2, log);
     let (cast_file, cast_unread) = start_cast(&mut audio, log);
     audio.set_track_reader(track_reader);
@@ -36,6 +37,7 @@ pub fn backend<D: Driver + 'static>(
         audio,
         super::notice_time,
         log.clone(),
+        read,
         settings_file,
         debug_log::env_skips_auto_connect(),
     );
