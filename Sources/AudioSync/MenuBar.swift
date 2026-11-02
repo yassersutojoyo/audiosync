@@ -981,12 +981,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             place(window, scale: run.scale)
             if DebugTrace.enabled {
                 let tip = window.convertPoint(toScreen: host.view.convert(run.anchor, to: nil))
-                let held = (host.view.layer?.animation(forKey: Self.stepKey) as? CABasicAnimation)?.toValue as? NSValue
+                let held = ((host.view.layer?.animation(forKey: Self.stepKey) as? CABasicAnimation)?.toValue as? NSValue)?
+                    .caTransform3DValue ?? CATransform3DIdentity
                 DebugTrace.log(String(format: "[AudioSync] panel %@ step: %.1f ms, step %ld of %ld, scale %.4f, frame %@, "
-                                      + "tip %@, content scale %.4f of frame %.4f",
+                                      + "tip %@, content scale %.4f x %.4f of frame %.4f",
                                       run.closes ? "close" : "open", (CACurrentMediaTime() - run.began) * 1000, due,
                                       run.scales.count - 1, run.scale, NSStringFromRect(window.frame), NSStringFromPoint(tip),
-                                      Double(held?.caTransform3DValue.m11 ?? 1), Double(window.frame.height / run.rest.height)))
+                                      Double(held.m11), Double(held.m22),
+                                      Double(window.frame.height / run.rest.height)))
             }
         }
         guard due == run.scales.count - 1 else { return }
@@ -1001,27 +1003,27 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     /// Sets the window to its rest frame scaled by `scale` about the arrow's
     /// tip, and the content's frame where it is at rest on screen, its layer
-    /// scaled by `scale` about the same tip.
+    /// scaled as far as the snapped window reaches about the same tip.
     private func place(_ window: NSWindow, scale: Double) {
         guard let run = steps, let holder = host.view.superview else { return }
         let frame = PanelReveal.body(run.rest, scale: scale, about: run.tip, pixel: 1 / max(window.backingScaleFactor, 1))
         window.setFrame(frame, display: false)
         host.view.frame = holder.convert(PanelReveal.content(run.content, rest: run.rest, step: frame), from: nil)
-        scaleContent(scale, about: run.anchor)
+        scaleContent(scale == 1 ? nil : PanelReveal.contentScales(rest: run.rest, step: frame, tip: run.tip), about: run.anchor)
         window.displayIfNeeded()
     }
 
     private static let stepKey = "panelStep"
 
-    /// Scales the content's layer by `scale` about `anchor` (the content's
-    /// coordinates); at 1 the live content shows as laid out.
-    private func scaleContent(_ scale: Double, about anchor: CGPoint) {
+    /// Scales the content's layer by `scales` about `anchor` (the content's
+    /// coordinates); with none the live content shows as laid out.
+    private func scaleContent(_ scales: CGSize?, about anchor: CGPoint) {
         guard let layer = host.view.layer else { return }
-        guard scale != 1 else { return layer.removeAnimation(forKey: Self.stepKey) }
+        guard let scales else { return layer.removeAnimation(forKey: Self.stepKey) }
         let bounds = layer.bounds
         let pivot = CGPoint(x: bounds.minX + layer.anchorPoint.x * bounds.width,
                             y: bounds.minY + layer.anchorPoint.y * bounds.height)
-        let scaling = PanelReveal.contentScale(scale, about: host.view.convertToLayer(anchor), pivot: pivot)
+        let scaling = PanelReveal.contentScale(scales, about: host.view.convertToLayer(anchor), pivot: pivot)
         // A held animation, not the layer's transform, which AppKit owns and resets as it lays the view out.
         let hold = CABasicAnimation(keyPath: "transform")
         hold.fromValue = NSValue(caTransform3D: CATransform3DMakeAffineTransform(scaling))

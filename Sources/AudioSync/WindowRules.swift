@@ -321,11 +321,19 @@ enum PanelReveal {
         CGPoint(x: icon.rounded(), y: top.rounded())
     }
 
-    /// The transform that scales the content by `scale` about `tip`, for a
+    /// How far the content scales across and down at `step`, the window's
+    /// `rest` frame scaled about `tip` and snapped: as far as the snapped
+    /// edges reach from the tip, so the content's backing covers every one.
+    static func contentScales(rest: CGRect, step: CGRect, tip: CGPoint) -> CGSize {
+        CGSize(width: max((tip.x - step.minX) / (tip.x - rest.minX), (step.maxX - tip.x) / (rest.maxX - tip.x)),
+               height: (tip.y - step.minY) / (tip.y - rest.minY))
+    }
+
+    /// The transform that scales the content by `scales` about `tip`, for a
     /// layer whose transform acts about `pivot`; both in the layer's coordinates.
-    static func contentScale(_ scale: Double, about tip: CGPoint, pivot: CGPoint) -> CGAffineTransform {
-        let s = CGFloat(scale)
-        return CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: (1 - s) * (tip.x - pivot.x), ty: (1 - s) * (tip.y - pivot.y))
+    static func contentScale(_ scales: CGSize, about tip: CGPoint, pivot: CGPoint) -> CGAffineTransform {
+        let sx = scales.width, sy = scales.height
+        return CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: (1 - sx) * (tip.x - pivot.x), ty: (1 - sy) * (tip.y - pivot.y))
     }
 
     /// The open's spring, one scale per `step` from `motion.scale` to exactly 1

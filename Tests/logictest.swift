@@ -8070,23 +8070,25 @@ do {
                                y: growTip.y - growRest.minY - growContent.minY)
     let growPivot = CGPoint(x: growContent.width / 2, y: growContent.height / 2)
     let growCorner = CGPoint(x: growRest.minX + growContent.minX, y: growRest.minY + growContent.minY)
-    let grown = revealSteps.map { scale -> (tip: CGPoint, corner: CGPoint, scale: CGFloat) in
+    let grown = revealSteps.map { scale -> (tip: CGPoint, covers: Bool, scale: CGSize) in
         let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
         let placed = PanelReveal.content(growContent, rest: growRest, step: step)
-        let scaling = PanelReveal.contentScale(scale, about: tipInContent, pivot: growPivot)
+        let scales = PanelReveal.contentScales(rest: growRest, step: step, tip: growTip)
+        let scaling = PanelReveal.contentScale(scales, about: tipInContent, pivot: growPivot)
         func onScreen(_ point: CGPoint) -> CGPoint {
             let moved = CGPoint(x: point.x - growPivot.x, y: point.y - growPivot.y).applying(scaling)
             return CGPoint(x: step.minX + placed.minX + growPivot.x + moved.x,
                            y: step.minY + placed.minY + growPivot.y + moved.y)
         }
-        return (onScreen(tipInContent), onScreen(.zero), scaling.a)
+        let low = onScreen(CGPoint(x: growRest.minX - growCorner.x, y: growRest.minY - growCorner.y))
+        let high = onScreen(CGPoint(x: growRest.maxX - growCorner.x, y: growRest.maxY - growCorner.y))
+        return (onScreen(tipInContent),
+                low.x <= step.minX + 1e-9 && high.x >= step.maxX - 1e-9 && abs(low.y - step.minY) < 1e-9, scales)
     }
     // covers: S405
     check(zip(grown, revealSteps).allSatisfy { point, scale in
-        let s = CGFloat(scale)
-        return abs(point.scale - s) < 1e-9 && abs(point.corner.x - (growTip.x + s * (growCorner.x - growTip.x))) < 1e-6
-            && abs(point.corner.y - (growTip.y + s * (growCorner.y - growTip.y))) < 1e-6
-    }, "menu bar panel: at each step the content scales with the window about the arrow's tip, so its text grows with the panel",
+        point.covers && abs(point.scale.width - CGFloat(scale)) < 0.005 && abs(point.scale.height - CGFloat(scale)) < 0.005
+    }, "menu bar panel: at each step the content scales with the pixel-snapped window about the arrow's tip, so its text grows with the panel and its backing reaches every edge",
           "\(grown.map { $0.scale })")
     // covers: S405
     check(grown.allSatisfy { abs($0.tip.x - grown[0].tip.x) < 1e-9 && abs($0.tip.y - grown[0].tip.y) < 1e-9 }
