@@ -1685,7 +1685,7 @@ impl CastSpeakers {
             return false;
         }
         let ms = offset_ms.clamp(0.0, MAX_HOLD_BACK_MS).round();
-        if self.memory().offset(&device) == Some(Duration::from_millis(ms as u64)) {
+        if self.memory().offset(&device).unwrap_or_default() == Duration::from_millis(ms as u64) {
             return false;
         }
         if let Some(link) = self.link.as_mut() {
@@ -3027,6 +3027,15 @@ pub mod tests {
         assert_eq!(cast.anchor(), None);
     }
 
+    // covers: C77, S401 (no stored offset reads as 0, so setting 0 stores nothing)
+    #[test]
+    fn setting_zero_on_a_device_with_no_stored_offset_is_no_change() {
+        let (fake, mut cast) = listed();
+        assert!(!cast.set_offset(KITCHEN, 0.0));
+        assert_eq!(fake.state().memory.offset(&id(KITCHEN)), None);
+        assert!(!cast.poll().contains(&BackendEvent::CastMemoryChanged));
+    }
+
     // covers: C105, C79 (the Resync control reaches only a session)
     #[test]
     fn volume_mute_and_resync_reach_only_the_speaker_in_a_session() {
@@ -4085,6 +4094,7 @@ pub mod tests {
         for (text, id, own) in [("192.0.2.31", KITCHEN, 0.0), ("192.0.2.32", LIVING, 100.0)] {
             cast.add_address(address(text));
             assert!(cast.set_offset(&address(text).device_id().to_string(), 400.0));
+            assert!(cast.set_offset(id, 50.0));
             assert!(cast.set_offset(id, own));
         }
         fake.announce_at(
