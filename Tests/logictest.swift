@@ -15377,6 +15377,13 @@ do {
           && HiddenSpeakers().menu(present: [:], text: t).isEmpty,
           "hidden speakers: the menu is sorted by shown name, uses the current name when present, says not found otherwise",
           menu.map(\.title).joined(separator: " | "))
+    var roomsHidden = HiddenSpeakers()
+    roomsHidden.hide(key: "lc:room10", name: "Room 10", kind: "USB")
+    roomsHidden.hide(key: "lc:room2", name: "room 2", kind: "USB")
+    let roomsMenu = roomsHidden.menu(present: [:], text: t).map(\.name)
+    check(roomsMenu == ["room 2", "Room 10"],
+          "hidden speakers: the menu sorts numbers in names by value, ignoring case",
+          roomsMenu.joined(separator: " | "))
 
     // Shown again: back in the rows; nothing else was touched, so its saved values stay.
     var store: [String: Any] = [AppSettings.Keys.localOffsets: ["teams": 120.0]]
