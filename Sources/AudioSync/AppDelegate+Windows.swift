@@ -614,7 +614,7 @@ extension AppDelegate {
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
                                          chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName,
-                                         unpluggedInputName: text.sourceNotConnected(inputName))
+                                         unpluggedInputName: text.sourceNotConnected(inputName), lastMix: lastMix)
         let icons = Dictionary(running.compactMap { app in app.icon.map { (app.bundleID, $0) } },
                                uniquingKeysWith: { first, _ in first })
         let sources = entries.map { entry -> AppModel.Source in
@@ -637,7 +637,7 @@ extension AppDelegate {
         let mode = SourceMix.mode(of: audioSource, remembered: rememberedMixMode)
         let checked = SourceMix.checked(audioSource, mode: mode)
         let mixApps = SourceList.mixApps(running.map { (bundleID: $0.bundleID, name: $0.name) }, checked: checked,
-                                         chosenAppName: SourceApps.name(for:))
+                                         chosenAppName: SourceApps.name(for:), chosen: audioSource, lastMix: lastMix)
         publish(\.mixMode, mode)
         publish(\.mixChecked, checked)
         publish(\.mixApps, mixApps.map { entry in

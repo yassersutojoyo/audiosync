@@ -469,6 +469,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     chosen: Chosen,
     /// The mode the several-apps list shows while no mix is chosen.
     mix_mode: MixMode,
+    /// The last mix that was in use, while another source is (S354).
+    last_mix: Option<Chosen>,
     /// The endpoint IDs of the last listing, to tell which outputs appeared.
     listed: BTreeSet<String>,
     /// The last name of every output listed, for a notice about one that is
@@ -719,6 +721,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }],
             chosen: Chosen::WholeSystem,
             mix_mode: MixMode::Only,
+            last_mix: None,
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             kinds: BTreeMap::new(),
@@ -930,6 +933,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         {
             self.cast_unrestored = Some(id.clone());
         }
+        self.last_mix = saved
+            .last_mix
+            .as_ref()
+            .map(|mix| mix_choice(mix.mode, mix.apps.clone()))
+            .filter(|mix| matches!(mix, Chosen::Mix { .. }));
         self.chosen = match (&saved.input_device, &saved.source) {
             (None, _) if let Some(mix) = &saved.source_mix => {
                 mix_choice(mix.mode, mix.apps.clone())
@@ -1061,6 +1069,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             input_pairs: self.input_pairs.clone(),
             source_mix: match &self.chosen {
                 Chosen::Mix { mode, apps } => Some(SavedMix {
+                    mode: *mode,
+                    apps: apps.clone(),
+                }),
+                _ => None,
+            },
+            last_mix: match self.kept_mix() {
+                Some(Chosen::Mix { mode, apps }) => Some(SavedMix {
                     mode: *mode,
                     apps: apps.clone(),
                 }),
@@ -1887,6 +1902,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.log
             .log(|| format!("source chosen: {} ({})", picked.shown_name(), picked.key()));
         self.note_switch_from();
+        self.keep_mix();
         self.chosen = picked;
         self.notices
             .clear(&[NoticeSubject::Source, NoticeSubject::Capture]);
@@ -1899,6 +1915,21 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .is_some_and(|origin| self.start_session(origin));
         if switch.stop_keeping_airplay && !started && self.running() {
             self.audio.stop();
+        }
+    }
+
+    /// Keeps the mix in use as the last mix, before another source replaces it.
+    fn keep_mix(&mut self) {
+        if matches!(self.chosen, Chosen::Mix { .. }) {
+            self.last_mix = Some(self.chosen.clone());
+        }
+    }
+
+    /// The last mix: the one in use, else the one kept (S354).
+    fn kept_mix(&self) -> Option<&Chosen> {
+        match self.chosen {
+            Chosen::Mix { .. } => Some(&self.chosen),
+            _ => self.last_mix.as_ref(),
         }
     }
 
@@ -1973,7 +2004,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// The apps the several-apps list offers: the listed apps, then the
-    /// checked ones that aren't listed, so each can still be unchecked.
+    /// checked ones and the last mix's (S354) that aren't listed, so each
+    /// can still be unchecked or picked again.
     fn mix_apps(&self) -> Vec<MixApp> {
         let checked = mix_checked(&self.chosen, mix_mode(&self.chosen, self.mix_mode));
         let is_checked = |executable: &str| {
@@ -1997,7 +2029,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 });
             }
         }
-        for app in &checked {
+        let kept: &[SavedMixApp] = match self.kept_mix() {
+            Some(Chosen::Mix { apps, .. }) => apps,
+            _ => &[],
+        };
+        for app in checked.iter().chain(kept) {
             if !apps
                 .iter()
                 .any(|listed| listed.id.eq_ignore_ascii_case(&app.executable))
@@ -2009,7 +2045,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     } else {
                         app.name.clone()
                     },
-                    checked: true,
+                    checked: is_checked(&app.executable),
                     running: false,
                 });
             }
@@ -4164,6 +4200,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendEvent::SwitchedToSystem => {
                 let source = self.chosen_notice_name();
                 self.heard_twice_dismissed.remove(&self.chosen.key());
+                self.keep_mix();
                 self.chosen = Chosen::WholeSystem;
                 self.notices.clear(&[NoticeSubject::Capture]);
                 self.post(
@@ -4502,6 +4539,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 },
             );
         }
+        if let Some(mix @ Chosen::Mix { mode, apps }) = self.kept_mix()
+            && !rows.iter().any(|row| row.id == mix.key())
+        {
+            let at = rows
+                .iter()
+                .position(|row| row.kind == SourceKind::Input)
+                .unwrap_or(rows.len());
+            rows.insert(
+                at,
+                Source {
+                    id: mix.key(),
+                    name: String::new(),
+                    kind: match mode {
+                        MixMode::Only => SourceKind::App,
+                        MixMode::AllExcept => SourceKind::AppsExcept,
+                    },
+                    channels: 0,
+                    apps: mix_names(apps),
+                    unplugged: false,
+                },
+            );
+        }
         rows
     }
 
@@ -4817,6 +4876,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             .iter()
             .find(|source| source_key(source) == id)
             .map(Chosen::from_source)
+            .or_else(|| self.kept_mix().filter(|mix| mix.key() == id).cloned())
         else {
             return;
         };
@@ -12712,6 +12772,31 @@ mod tests {
         assert_eq!(phone["mix_apps"], serde_json::Value::Array(expected));
     }
 
+    // covers: S353, S354
+    #[test]
+    fn the_phone_gets_an_app_only_the_last_mix_holds_once_as_not_running() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        adapter.select_source(SYSTEM_KEY);
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_sources();
+        let phone: serde_json::Value = serde_json::from_str(&page(&adapter).to_json(1)).unwrap();
+        let running = |id: &str| -> Vec<bool> {
+            phone["mix_apps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|app| app["id"] == id)
+                .map(|app| app["running"].as_bool().unwrap())
+                .collect()
+        };
+        assert_eq!(running("player.exe"), [true], "{}", phone["mix_apps"]);
+        assert_eq!(running("browser.exe"), [false], "{}", phone["mix_apps"]);
+    }
+
     fn phone_mix(adapter: &mut AudioAdapter<MockBackend>, apps: &[&str]) {
         let mix = audiosync_remote::Command::Mix {
             apps: apps.iter().map(|app| (*app).to_owned()).collect(),
@@ -12915,6 +13000,142 @@ mod tests {
 
     fn speaker_of(adapter: &AudioAdapter<MockBackend>, id: &str) -> Speaker {
         adapter.snapshot().speaker(id).cloned().expect("listed")
+    }
+
+    const LAST_MIX: &str = "mix:only:player.exe,browser.exe";
+
+    /// The picker's IDs, in order.
+    fn source_ids(adapter: &AudioAdapter<MockBackend>) -> Vec<String> {
+        adapter
+            .snapshot()
+            .sources
+            .into_iter()
+            .map(|source| source.id)
+            .collect()
+    }
+
+    /// A pick of `id` from the phone.
+    fn phone_select(adapter: &mut AudioAdapter<MockBackend>, id: &str) {
+        for action in phone_pick(adapter, id) {
+            if let crate::remote::Action::Source { id } = action {
+                adapter.select_source(&id);
+            }
+        }
+    }
+
+    // covers: S354
+    #[test]
+    fn the_last_mix_is_kept_across_a_switch_and_a_relaunch_and_only_another_mix_replaces_it() {
+        let path = test_dir("adapter-last-mix").join(settings::FILE_NAME);
+        let world = || {
+            let mut audio = launch_audio();
+            audio.add_app(3000, "browser.exe");
+            audio.add_app(4000, "chat.exe");
+            audio.connect_input(MIC, "Interface (USB Audio)", "USB");
+            audio
+        };
+        let mut adapter = launch(world(), &path);
+        adapter.poll();
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        let once = |ids: &[String], id: &str| ids.iter().filter(|listed| *listed == id).count();
+        assert_eq!(once(&source_ids(&adapter), LAST_MIX), 1, "in use");
+
+        adapter.select_source(&player());
+        let ids = source_ids(&adapter);
+        assert_eq!(once(&ids, LAST_MIX), 1, "kept after a switch: {ids:?}");
+        let at = ids.iter().position(|id| id == LAST_MIX).unwrap();
+        assert_eq!(
+            ids.get(at + 1),
+            Some(&mic()),
+            "after the apps, before the inputs"
+        );
+        adapter.save_settings();
+
+        let mut adapter = launch(world(), &path);
+        adapter.poll();
+        assert_eq!(
+            once(&source_ids(&adapter), LAST_MIX),
+            1,
+            "kept across a relaunch"
+        );
+        phone_select(&mut adapter, LAST_MIX);
+        assert_eq!(
+            adapter.snapshot().source_id,
+            LAST_MIX,
+            "picked from the phone"
+        );
+        adapter.select_source(SYSTEM_KEY);
+        assert_eq!(once(&source_ids(&adapter), LAST_MIX), 1);
+
+        adapter.toggle_mix_app("browser.exe");
+        adapter.toggle_mix_app("chat.exe");
+        adapter.select_source(SYSTEM_KEY);
+        let ids = source_ids(&adapter);
+        assert_eq!(once(&ids, LAST_MIX), 0, "replaced: {ids:?}");
+        assert_eq!(once(&ids, "mix:only:browser.exe,chat.exe"), 1, "{ids:?}");
+    }
+
+    // covers: S354, S344
+    #[test]
+    fn a_pick_of_the_mix_still_playing_clears_the_failed_switch_notice() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        adapter.audio.refuse_next_capture(BackendError::DeviceGone);
+        adapter.select_source(&player());
+        assert_eq!(adapter.snapshot().source_id, LAST_MIX, "the mix plays on");
+        assert_eq!(messages(&adapter).len(), 1, "the failed switch's notice");
+        let started = captures(&adapter).len();
+
+        adapter.select_source(LAST_MIX);
+        assert!(messages(&adapter).is_empty());
+        assert!(adapter.snapshot().running, "streaming goes on");
+        assert_eq!(captures(&adapter).len(), started, "with no capture restart");
+    }
+
+    // covers: S354, S242
+    #[test]
+    fn a_pick_of_the_last_mix_captures_the_apps_that_run_and_with_none_fails_as_the_windows_pick() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        adapter.select_source(SYSTEM_KEY);
+        adapter.audio_mut().quit_app(3000);
+        adapter.poll();
+
+        let before = captures(&adapter).len();
+        adapter.select_source(LAST_MIX);
+        assert_eq!(adapter.snapshot().source_id, LAST_MIX);
+        assert!(adapter.snapshot().running);
+        let started: Vec<u32> = captures(&adapter)[before..]
+            .iter()
+            .map(|(_, pid)| *pid)
+            .collect();
+        assert_eq!(started, [PLAYER_PID], "the app gone is skipped");
+
+        adapter.select_source(SYSTEM_KEY);
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        adapter.poll();
+        adapter.select_source(LAST_MIX);
+        let window = messages(&adapter);
+        assert!(
+            matches!(window.as_slice(), [NoticeMessage::SourceNotRunning { .. }]),
+            "{window:?}"
+        );
+        assert!(!adapter.snapshot().running);
+
+        adapter.select_source(SYSTEM_KEY);
+        adapter.set_running(true);
+        phone_select(&mut adapter, LAST_MIX);
+        assert_eq!(messages(&adapter), window, "the phone's pick fails alike");
+        assert!(!adapter.snapshot().running);
     }
 
     // covers: S175

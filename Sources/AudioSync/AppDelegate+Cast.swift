@@ -88,7 +88,7 @@ extension AppDelegate {
                 postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id),
                            shortName: text.cantPlayNoticeName(name))
             }
-            if let level = castModel.takeLevelDue() { castSender?.setVolume(level) }
+            if let level = castModel.takeLevelDue() { sendCastVolume(level) }
             if let address = castModel.takeRelistDue(), let sender = castSender {
                 addStoredCastAddress(address, to: sender, relisting: change.id)
             }
@@ -153,7 +153,7 @@ extension AppDelegate {
         case .changed, .memoryChanged:
             break
         case .setVolume(let level):
-            castSender?.setVolume(level)
+            sendCastVolume(level)
         case .playing(let id):
             clearNotices([Notice.cast(id)])
         case .turnedOff(let id, let problem):
@@ -235,7 +235,7 @@ extension AppDelegate {
     /// The row moved to `position`, 0 to 100: the level the device gets (S415).
     func setCastVolume(_ appID: String, _ position: Double) {
         guard let id = CastID.device(appID) else { return }
-        if let level = castModel.moveRow(id, row: position) { castSender?.setVolume(level) }
+        if let level = castModel.moveRow(id, row: position) { sendCastVolume(level) }
         pushModel()
     }
 
@@ -243,8 +243,15 @@ extension AppDelegate {
     /// times the zone (C104, S415).
     func setCastOwnVolume(_ appID: String, _ position: Double) {
         guard let id = CastID.device(appID) else { return }
-        if let level = castModel.setVolume(id, position: position) { castSender?.setVolume(level) }
+        if let level = castModel.setVolume(id, position: position) { sendCastVolume(level) }
         pushModel()
+    }
+
+    /// Sends the level the model handed out last and tells the model the
+    /// sender's ask id for it, which a report that no status answers names (C70).
+    func sendCastVolume(_ level: Double) {
+        let send = castModel.sends
+        castSender?.setVolume(level) { [weak self] ask in self?.castModel.volumeAsked(send: send, ask: ask) }
     }
 
     /// An arrow key on the slider: the device's own step, or the fallback
@@ -253,7 +260,7 @@ extension AppDelegate {
         guard let id = CastID.device(appID), let step = castModel.stepVolume(id, up: up) else { return }
         switch step {
         case .device(let up): castSender?.stepVolume(up: up)
-        case .level(let level): castSender?.setVolume(level)
+        case .level(let level): sendCastVolume(level)
         }
         pushModel()
     }
@@ -428,7 +435,7 @@ extension AppDelegate {
         case .volume(let a, let v, _):
             return "attempt \(a): volume \(Int((v.level * 100).rounded()))" + (v.muted ? ", muted" : "")
                 + (v.fixed ? ", fixed" : "")
-        case .volumeUnanswered(let a, let level):
+        case .volumeUnanswered(let a, let level, _):
             return "attempt \(a): volume \(Int((level * 100).rounded())) gets no answer"
         case .commandFailed(let a, let error): return "attempt \(a): a request failed (\(String(describing: error)))"
         case .ended(let a, .failed(_, let detail)): return "attempt \(a) ended: failed: \(detail)"

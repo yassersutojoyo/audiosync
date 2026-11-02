@@ -78,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var nativeStarts = NativeSenderStarts()
     /// Whether the PTP port notice shows; each new sender starts it afresh.
     var ptpPortNotice = PtpPortNotice()
-    /// Whether the pairings file's last write failed; each new sender starts it afresh.
+    /// Whether the pairings file's last write failed, across senders.
     var pairingsWrites = PairingsWriteNotice()
 
     // MARK: - Google Cast speakers (`+Cast`)
@@ -106,6 +106,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
     var audioSource: AudioSource {
         didSet { if audioSource != oldValue { store.save(source: audioSource) } }
+    }
+    /// The last mix left for another source (`LastMix`, S354), which the picker still offers.
+    var lastMix: AudioSource? {
+        didSet { if let lastMix, lastMix != oldValue { store.save(lastMix: lastMix) } }
     }
     /// AirPlay speakers the user wants on, by app ID (`NativeAirPlayID`).
     var enabledAirPlay: Set<String> {
@@ -332,6 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         freshInstall = !LaunchAutoConnect.skipped && !PermissionAsks.usedBefore { readStore($0) != nil }
         let saved = store.load().atLaunch(holdingSpeakersOff: LaunchAutoConnect.skipped)
         audioSource = saved.source
+        lastMix = saved.lastMix
         // A hidden speaker is never switched on, not even by the saved on-state.
         enabledAirPlay = saved.enabledAirPlay.filter { !saved.hiddenSpeakers.contains(SpeakerKey.make(id: $0, airplay: true)) }
         enabledLocal = saved.enabledLocal.filter { !saved.hiddenSpeakers.contains(SpeakerKey.make(id: $0, airplay: false)) }

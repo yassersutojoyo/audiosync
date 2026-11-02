@@ -33,12 +33,14 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, CString, c_char};
 use std::net::{IpAddr, SocketAddr};
 use std::panic::{self, AssertUnwindSafe};
+use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, Codec, MasterGain, audio_ring};
+use audiosync_cast::client::FingerprintBook;
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
@@ -56,6 +58,7 @@ use audiosync_cast::stream::StreamError;
 
 use super::airplay::{LATEST_PANIC, PANICS, caught_panic_location, note_panic_locations};
 use super::{host_slice, stereo_samples};
+use crate::airplay_pairings::write_atomically;
 use crate::delay_line::DelayLine;
 use crate::eq::{self, BAND_COUNT, EqSettings};
 use crate::fade::InputFade;
@@ -144,8 +147,8 @@ pub const CAST_EVENT_GROUP_LOG: i32 = 18;
 /// The device's certificate changed since its last connect, for the debug
 /// log: `detail` is "<before> to <after>" (C21).
 pub const CAST_EVENT_CERTIFICATE_CHANGED: i32 = 19;
-/// A level asked for that no status will answer, in `level`, once per ask
-/// (C70, C104).
+/// A level asked for that no status will answer, in `level`, once per ask,
+/// which `ask` names (C70, C104).
 pub const CAST_EVENT_VOLUME_UNANSWERED: i32 = 20;
 /// Someone paused the device itself; [`CAST_EVENT_PLAYING`] follows once
 /// its next `PLAYING` loaded the stream again (C113).
@@ -273,6 +276,9 @@ pub struct AscCastEvent {
     pub answers_mute: bool,
     /// The device's volume step; 0 when it reports none (C69).
     pub step: f64,
+    /// A volume-unanswered event's ask id, as [`asc_cast_set_volume`]
+    /// returned it (C70).
+    pub ask: u64,
     /// Diagnostics: dropped audio plus rebuffering since the `LOAD` (C79).
     pub drift_ms: f64,
     /// Diagnostics: audio waiting in the sender's queue (C64).
@@ -331,6 +337,7 @@ struct Pending {
     has_level: bool,
     answers_mute: bool,
     step: f64,
+    ask: u64,
     drift_ms: f64,
     queued_ms: f64,
     underrun_frames: u64,
@@ -355,6 +362,7 @@ impl Pending {
             has_level: false,
             answers_mute: false,
             step: 0.0,
+            ask: 0,
             drift_ms: 0.0,
             queued_ms: 0.0,
             underrun_frames: 0,
@@ -1071,6 +1079,7 @@ impl AscCast {
             has_level: pending.has_level,
             answers_mute: pending.answers_mute,
             step: pending.step,
+            ask: pending.ask,
             drift_ms: pending.drift_ms,
             queued_ms: pending.queued_ms,
             underrun_frames: pending.underrun_frames,
@@ -1105,9 +1114,10 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending.step = volume.step_interval.unwrap_or(0.0);
             pending
         }
-        SessionEvent::VolumeUnanswered { level, .. } => {
+        SessionEvent::VolumeUnanswered { level, ask } => {
             let mut pending = Pending::new(CAST_EVENT_VOLUME_UNANSWERED);
             pending.level = level;
+            pending.ask = ask;
             pending
         }
         SessionEvent::ConnectFailed { error, retry_in } => {
@@ -1227,7 +1237,27 @@ unsafe fn live<T>(cast: *mut AscCast, failed: T, body: impl FnOnce(&mut AscCast)
 pub unsafe extern "C" fn asc_cast_create(memory_json: *const c_char) -> *mut AscCast {
     // SAFETY: as the caller's.
     let text = unsafe { host_text(memory_json) }.unwrap_or_default();
-    create_with(text, live_browser)
+    create_with(text, None, live_browser)
+}
+
+/// As [`asc_cast_create`], keeping the certificate fingerprints (C21) in
+/// `cast-certificates.txt` in `folder`, so a certificate changed across a
+/// relaunch is logged too. A null or empty `folder` keeps them in memory.
+///
+/// # Safety
+///
+/// `memory_json` and `folder` are null or NUL-terminated strings, unchanged
+/// during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_create_in(
+    memory_json: *const c_char,
+    folder: *const c_char,
+) -> *mut AscCast {
+    // SAFETY: as the caller's.
+    let text = unsafe { host_text(memory_json) }.unwrap_or_default();
+    // SAFETY: as the caller's.
+    let folder = unsafe { host_text(folder) }.filter(|folder| !folder.is_empty());
+    create_with(text, folder.map(Path::new), live_browser)
 }
 
 /// Whether [`asc_cast_create`] reads `memory_json` as device memory: a JSON
@@ -1244,12 +1274,32 @@ pub unsafe extern "C" fn asc_cast_memory_reads(memory_json: *const c_char) -> bo
     unsafe { host_text(memory_json) }.is_some_and(|text| DeviceMemory::read_json(text).is_some())
 }
 
-fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
+fn certificates_book(folder: Option<&Path>) -> FingerprintBook {
+    let Some(folder) = folder else {
+        return FingerprintBook::new();
+    };
+    // Diagnostics only: a file that can't be read starts an empty book.
+    let (book, _) = FingerprintBook::open(
+        folder.join("cast-certificates.txt"),
+        |path| std::fs::read(path),
+        write_atomically,
+    );
+    #[cfg(test)]
+    let book = tests::record_on_open(book);
+    book
+}
+
+fn create_with(
+    memory_json: &str,
+    folder: Option<&Path>,
+    open_browser: OpenBrowser,
+) -> *mut AscCast {
     note_panic_locations();
     let panics_before = PANICS.load(Ordering::SeqCst);
     let created = panic::catch_unwind(|| {
         injected_panic();
-        let Ok(host) = CastHost::new(DeviceMemory::from_json(memory_json)) else {
+        let memory = DeviceMemory::from_json(memory_json);
+        let Ok(host) = CastHost::with_fingerprints(memory, certificates_book(folder)) else {
             return ptr::null_mut();
         };
         Box::into_raw(Box::new(AscCast {
@@ -1605,24 +1655,25 @@ unsafe fn with_session(cast: *mut AscCast, send: impl FnOnce(&CastHost)) -> bool
 /// Sets the device's volume, 0 to 1, clamped (C65, C67). The level shown is
 /// the one volume events report (C69, C70); the sender sends at most one
 /// every 100 ms and reports each level it won't get an answer for, so a
-/// host passes every level asked for. False, sending nothing, for a null or dead
-/// handle, a level that isn't finite, or when no session runs; a refusal
-/// (a locked volume, C68) comes as a command-failed event.
+/// host passes every level asked for. Returns the ask id that a
+/// volume-unanswered event on this ask names; 0, sending nothing, for a null
+/// or dead handle, a level that isn't finite, or when no session runs; a
+/// refusal (a locked volume, C68) comes as a command-failed event.
 ///
 /// # Safety
 ///
 /// `cast` is null or a live handle, called under the threading contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn asc_cast_set_volume(cast: *mut AscCast, level: f64) -> bool {
+pub unsafe extern "C" fn asc_cast_set_volume(cast: *mut AscCast, level: f64) -> u64 {
     if !level.is_finite() {
-        return false;
+        return 0;
     }
+    let mut ask = 0;
     // SAFETY: as the caller's.
     unsafe {
-        with_session(cast, |host| {
-            host.set_volume(level.clamp(0.0, 1.0));
-        })
+        with_session(cast, |host| ask = host.set_volume(level.clamp(0.0, 1.0)));
     }
+    ask
 }
 
 /// Mutes or unmutes the device, apart from its level (C65). False, sending
@@ -2282,12 +2333,27 @@ mod tests {
     use std::net::{Ipv4Addr, TcpListener};
     use std::time::Instant;
 
-    use audiosync_cast::client::Fingerprint;
+    use audiosync_cast::client::{Fingerprint, FingerprintChange};
     use audiosync_cast::discovery::{MAX_DEVICES, ServiceRecord};
 
     thread_local! {
         /// The next guarded call on this thread panics inside its guard.
         pub(super) static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    thread_local! {
+        /// A fingerprint each book opened on this thread records, as a played
+        /// start would, and what each record gave.
+        static RECORD_ON_OPEN: std::cell::RefCell<Option<(DeviceId, Fingerprint)>> = const { std::cell::RefCell::new(None) };
+        static RECORDED: std::cell::RefCell<Vec<FingerprintChange>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn record_on_open(mut book: FingerprintBook) -> FingerprintBook {
+        if let Some((id, fingerprint)) = RECORD_ON_OPEN.with(|record| *record.borrow()) {
+            let change = book.record(id, fingerprint);
+            RECORDED.with(|recorded| recorded.borrow_mut().push(change));
+        }
+        book
     }
 
     thread_local! {
@@ -2463,7 +2529,7 @@ mod tests {
     }
 
     fn create() -> *mut AscCast {
-        let handle = create_with("", quiet);
+        let handle = create_with("", None, quiet);
         assert!(!handle.is_null());
         handle
     }
@@ -2544,6 +2610,7 @@ mod tests {
             has_level: false,
             answers_mute: false,
             step: 0.0,
+            ask: 0,
             drift_ms: 0.0,
             queued_ms: 0.0,
             underrun_frames: 0,
@@ -2667,6 +2734,21 @@ mod tests {
         }
     }
 
+    // CAST_SPEC: C70
+    #[test]
+    fn an_unanswered_volume_event_names_its_ask() {
+        let handle = create();
+        let unanswered = SessionEvent::VolumeUnanswered { level: 0.4, ask: 7 };
+        let pending = session_event(unanswered, |_| {});
+        inside(handle).events.push_back(pending);
+        let mut event = blank_event();
+        // SAFETY: a live handle, used by this thread only.
+        assert!(unsafe { asc_cast_next_event(handle, &mut event) });
+        assert_eq!(event.kind, CAST_EVENT_VOLUME_UNANSWERED);
+        assert_eq!((event.level, event.ask), (0.4, 7));
+        destroy(handle);
+    }
+
     // CAST_SPEC: C21
     #[test]
     fn a_changed_certificate_reaches_the_app_as_a_log_line() {
@@ -2676,6 +2758,50 @@ mod tests {
         assert_eq!(pending.kind, CAST_EVENT_CERTIFICATE_CHANGED);
         assert_eq!(pending.detail, format!("{before} to {after}"));
         assert!(pending.detail.starts_with("AB:AB:") && pending.detail.ends_with(":CD:CD"));
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_certificate_recorded_in_the_data_folder_is_known_after_a_relaunch() {
+        let folder = crate::test_scratch().join("cast-certificates");
+        let _ = std::fs::remove_dir_all(&folder);
+        let kitchen = DeviceId::parse(KITCHEN).expect("id");
+        let fingerprint = Fingerprint([7; 32]);
+        let mut first = certificates_book(Some(&folder));
+        assert_eq!(first.record(kitchen, fingerprint), FingerprintChange::First);
+        drop(first);
+        let mut relaunched = certificates_book(Some(&folder));
+        assert_eq!(
+            relaunched.record(kitchen, fingerprint),
+            FingerprintChange::Same
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_sender_made_with_a_folder_keeps_its_certificates_there_across_a_relaunch() {
+        let folder = crate::test_scratch().join("cast-certificates-ffi");
+        let _ = std::fs::remove_dir_all(&folder);
+        let kitchen = DeviceId::parse(KITCHEN).expect("id");
+        let fingerprint = Fingerprint([7; 32]);
+        let c_folder = CString::new(folder.to_str().expect("UTF-8")).expect("no NUL");
+        RECORD_ON_OPEN.with(|record| *record.borrow_mut() = Some((kitchen, fingerprint)));
+        for _ in 0..2 {
+            // SAFETY: a null memory text and a NUL-terminated folder.
+            let mut handle = unsafe { asc_cast_create_in(ptr::null(), c_folder.as_ptr()) };
+            assert!(!handle.is_null());
+            // SAFETY: a live handle, destroyed once.
+            unsafe { asc_cast_destroy(&mut handle) };
+        }
+        RECORD_ON_OPEN.with(|record| record.borrow_mut().take());
+        let text = std::fs::read_to_string(folder.join("cast-certificates.txt")).expect("kept");
+        assert_eq!(text, format!("{kitchen} {fingerprint}\n"));
+        assert_eq!(
+            RECORDED.with(|recorded| recorded.take()),
+            [FingerprintChange::First, FingerprintChange::Same]
+        );
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     // CAST_SPEC: C80, C81
@@ -2715,7 +2841,7 @@ mod tests {
             assert_eq!(asc_cast_start(no_handle, id, &mut refused), 0);
             assert_eq!(refused, CAST_REFUSED_CLOSED);
             asc_cast_stop(no_handle);
-            assert!(!asc_cast_set_volume(no_handle, 0.5));
+            assert_eq!(asc_cast_set_volume(no_handle, 0.5), 0);
             assert!(!asc_cast_set_muted(no_handle, true));
             assert!(!asc_cast_step_volume(no_handle, true));
             asc_cast_set_master(no_handle, 50.0);
@@ -2750,7 +2876,7 @@ mod tests {
             assert!(!asc_cast_add_device(handle, c"not an address".as_ptr()));
             assert!(!asc_cast_remove_device(handle, ptr::null()));
             assert!(!asc_cast_remove_device(handle, c"\xff".as_ptr()));
-            assert!(!asc_cast_set_volume(handle, f64::NAN));
+            assert_eq!(asc_cast_set_volume(handle, f64::NAN), 0);
             assert!(!asc_cast_set_artwork(handle, ptr::null(), 3));
             assert!(!asc_cast_set_metadata(
                 handle,
@@ -2778,7 +2904,7 @@ mod tests {
         // Nothing plays: volume, mute, step and Resync send nothing.
         // SAFETY: as above.
         unsafe {
-            assert!(!asc_cast_set_volume(handle, 0.5));
+            assert_eq!(asc_cast_set_volume(handle, 0.5), 0);
             assert!(!asc_cast_set_muted(handle, false));
             assert!(!asc_cast_step_volume(handle, false));
             assert!(!asc_cast_resync(handle));
@@ -3709,7 +3835,7 @@ mod tests {
     // covers: S352
     #[test]
     fn starting_discovery_again_browses_afresh_and_keeps_the_list() {
-        let handle = create_with("", kitchen_and_den);
+        let handle = create_with("", None, kitchen_and_den);
         let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
         browse(handle, vec![BrowseEvent::Resolved(kitchen)], false);
         let first: Vec<(i32, String)> = devices(handle)
@@ -3745,7 +3871,7 @@ mod tests {
     // covers: S352
     #[test]
     fn starting_discovery_again_first_takes_in_what_the_old_browser_held() {
-        let handle = create_with("", den_only);
+        let handle = create_with("", None, den_only);
         let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
         let fullname = kitchen.fullname.clone();
         browse(handle, vec![BrowseEvent::Resolved(kitchen)], false);
@@ -3811,7 +3937,12 @@ mod tests {
         assert!(start(handle, &id).0 > 0);
         // SAFETY: a live handle, used by this thread only.
         unsafe {
-            assert!(asc_cast_set_volume(handle, 0.4));
+            // C70: each ask gets its own id, which a report on it names.
+            let asks = [
+                asc_cast_set_volume(handle, 0.4),
+                asc_cast_set_volume(handle, 0.4),
+            ];
+            assert!(asks[0] > 0 && asks[1] > 0 && asks[0] != asks[1]);
             assert!(asc_cast_set_muted(handle, true));
             assert!(asc_cast_step_volume(handle, true));
             assert!(asc_cast_resync(handle));

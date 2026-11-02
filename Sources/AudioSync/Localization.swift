@@ -1192,6 +1192,8 @@ struct UIStrings {
     /// A zone header's count; `zoneWaiting` follows it when a member waits.
     func zoneCount(on: Int, of total: Int) -> String { "\(on) of \(total) on" }
     func zoneWaiting(_ n: Int) -> String { ", \(n) waiting" }
+    /// Ends the count of a zone whose members that are on all wait: " · Waiting: …".
+    func zoneWaitNote(_ note: String) -> String { " · \(note)" }
     /// A zone none of whose members is here.
     func zoneNoneHere(_ total: Int) -> String { "None of \(total) found" }
     /// A zone none of whose members is here because they all play as a stereo pair.
@@ -1750,7 +1752,8 @@ struct UIStrings {
            volume and the speakers. Closing the window keeps AudioSync running in
            the menu bar, and streaming continues.
         2. Pick a source under Audio Source: All System Audio, a specific app,
-           or an input device.
+           Several Apps, or an input device. AudioSync keeps your last mix of
+           apps, so you can switch back to it later.
            Keep the macOS sound output on a local device. Don't pick a HomePod in
            Control Center or in the player app: AudioSync streams to AirPlay itself.
         3. For AirPlay, check HomePod access in the Home app:

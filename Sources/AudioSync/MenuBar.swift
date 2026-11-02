@@ -503,6 +503,20 @@ final class AppModel: ObservableObject {
         SpeakerState(enabled: zone.allOn, streaming: running)
     }
 
+    /// The note `zone`'s header shows while each of its members that is on
+    /// waits: the first waiting member's row note (S246).
+    func waitNote(of zone: Zone) -> String? {
+        let waiter = zone.members.lazy.compactMap { self.speaker(of: $0) }
+            .first { $0.enabled && ($0.waitingForAirPlay2 || $0.waitingForPtp) }
+        let note = waiter.flatMap { speaker in
+            text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                         waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                         codeWait: speaker.codeWait, name: speaker.name,
+                         unannounced: speaker.unannounced, target: speaker.airPlayTarget)
+        }
+        return ZoneLayout.waitNote(state: state(of: zone), on: zone.on, waiting: zone.waiting, note: note)
+    }
+
     func countText(of zone: Zone) -> String {
         ZoneLayout.count(on: zone.on, waiting: zone.waiting, present: zone.present, total: zone.total, inPair: zone.inPair, text: text)
     }

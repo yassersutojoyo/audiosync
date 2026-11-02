@@ -38,6 +38,8 @@ struct Feed {
     late: Arc<AtomicU64>,
     /// Runs of late writes, one per stall of the feed thread.
     stalls: Arc<AtomicU64>,
+    /// While set, the feed thread writes nothing, as one starved of the CPU.
+    held: Arc<AtomicBool>,
 }
 
 /// How late a block may be written before the pump plays silence for it
@@ -56,6 +58,10 @@ impl Feed {
     fn stalls(&self) -> u64 {
         self.stalls.load(Ordering::SeqCst)
     }
+
+    fn hold(&self, held: bool) {
+        self.held.store(held, Ordering::SeqCst);
+    }
 }
 
 impl Drop for Feed {
@@ -67,8 +73,9 @@ impl Drop for Feed {
     }
 }
 
-/// The host's capture: 10 ms of a constant sample every 10 ms.
-fn feed(writer: AudioWriter) -> Feed {
+/// The host's capture: 10 ms of a constant sample every 10 ms, from the
+/// first block written.
+fn feed(writer: AudioWriter, held: bool) -> Feed {
     let stop = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&stop);
     let frames = Arc::new(AtomicU64::new(0));
@@ -77,12 +84,19 @@ fn feed(writer: AudioWriter) -> Feed {
     let late_count = Arc::clone(&late);
     let stalls = Arc::new(AtomicU64::new(0));
     let stall_count = Arc::clone(&stalls);
+    let held = Arc::new(AtomicBool::new(held));
+    let hold = Arc::clone(&held);
     let thread = thread::spawn(move || {
         let block = vec![9i16; 960];
-        let start = Instant::now();
+        let mut clock = None;
         let mut written = 0u32;
         let mut stalled = false;
         while !flag.load(Ordering::SeqCst) {
+            if hold.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            let start = *clock.get_or_insert_with(Instant::now);
             let slot = start + Duration::from_millis(10) * written;
             let is_late = slot.elapsed() > LATE;
             if is_late {
@@ -105,21 +119,23 @@ fn feed(writer: AudioWriter) -> Feed {
         frames,
         late,
         stalls,
+        held,
     }
 }
 
 fn start(device: &FakeDevice) -> (CastSession, Feed) {
-    start_as(device, None)
+    start_as(device, None, false)
 }
 
 /// A session to `device` as a group's leader.
 fn start_group(device: &FakeDevice) -> (CastSession, Feed) {
-    start_as(device, Some(GroupRecords::new(vec![device.address])))
+    start_as(device, Some(GroupRecords::new(vec![device.address])), false)
 }
 
-fn start_as(device: &FakeDevice, group: Option<GroupRecords>) -> (CastSession, Feed) {
+/// With `held`, the feed writes nothing until [`Feed::hold`] releases it.
+fn start_as(device: &FakeDevice, group: Option<GroupRecords>, held: bool) -> (CastSession, Feed) {
     let (writer, reader) = audio_ring(48_000);
-    let feed = feed(writer);
+    let feed = feed(writer, held);
     let config = SessionConfig {
         addresses: vec![device.address],
         format: StreamFormat::wav(48_000).expect("rate"),
@@ -542,7 +558,7 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
         read_pace: Some(PACE),
         ..Behavior::default()
     });
-    let (mut session, feed) = start(&device);
+    let (mut session, feed) = start_as(&device, None, true);
     let started = Instant::now();
     // Seconds since start, the line, the audio the device has read and the
     // audio the feed made.
@@ -556,6 +572,13 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     // restart is caught.
     let until = started + Duration::from_secs(75);
     let mut settled: Option<Instant> = None;
+    let accounted = |line: &Diagnostics| {
+        (line.sent + line.queued).as_secs_f64()
+            + (line.frames_dropped as f64 - line.underrun_frames as f64) / 48_000.0
+    };
+    // A line counts the queue whole but the rest from Playing on, so the
+    // silence queued before Playing shows as audio.
+    let mut silence = 0.0;
     while settled.is_none_or(|at| at.elapsed() < Duration::from_secs(5)) {
         assert!(
             Instant::now() < until,
@@ -563,10 +586,22 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
         );
         session.run_for(Duration::from_millis(50));
         while let Some(event) = session.poll_event() {
+            if matches!(event, SessionEvent::Playing) {
+                silence = accounted(&session.diagnostics());
+                feed.hold(false);
+            }
             if let SessionEvent::Diagnostics(line) = &event {
+                // A loaded PC: the test thread reads the third line late, and
+                // the feed thread starves from a half full queue until it is
+                // full.
+                if lines.len() == 2 {
+                    thread::sleep(Duration::from_millis(1300));
+                }
                 let read = device.bytes_read() as f64 / WAV_BYTES_PER_SECOND;
                 let at = started.elapsed().as_secs_f64();
                 lines.push((at, line.clone(), read, feed.seconds()));
+                let filled = lines.iter().any(|(_, line, _, _)| line.queued >= full);
+                feed.hold(!filled && line.queued >= cap / 2);
             }
             seen.push(event);
         }
@@ -585,25 +620,31 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
             "{line:?}"
         );
     }
-    // Everything the feed made, plus the silence sent when it ran late, is
-    // sent, queued or dropped and counted (C64, C79); only the ring between
-    // them, 1 s at most, may hold some back. Checked on totals, not rates:
-    // TCP flow control releases the socket in bursts whose size depends on
-    // the system (on Linux CI, sent stood still for 6 s once its buffers
-    // filled), and a starved feed catches up in bursts too.
-    let accounted = |line: &Diagnostics| {
-        (line.sent + line.queued).as_secs_f64()
-            + (line.frames_dropped as f64 - line.underrun_frames as f64) / 48_000.0
-    };
-    let first = &lines[0];
+    // All the feed made is counted (C64, C79), but a starved pump counts late,
+    // so totals meet only once the feed stops; two blocks in flight at Playing.
     for sample in &lines {
-        let missing = (sample.3 - first.3) - (accounted(&sample.1) - accounted(&first.1));
+        let uncounted = sample.3 - (accounted(&sample.1) - silence);
         assert!(
-            (-1.15..=1.15).contains(&missing),
-            "{missing} s unaccounted at {} s: {lines:?}",
+            uncounted > -0.041,
+            "{uncounted} s counted twice at {} s: {lines:?}",
             sample.0
         );
     }
+    feed.hold(true);
+    let until = Instant::now() + Duration::from_secs(10);
+    let uncounted = loop {
+        session.run_for(Duration::from_millis(50));
+        let line = session.diagnostics();
+        let uncounted = feed.seconds() - (accounted(&line) - silence);
+        if uncounted < 0.035 || Instant::now() > until {
+            break uncounted;
+        }
+    };
+    assert!(
+        (-0.041..0.035).contains(&uncounted),
+        "{uncounted} s not counted after the feed stopped: {lines:?}"
+    );
+    let first = &lines[0];
 
     // A stalled feed or pump also drops ring backlog (C64), so the queue
     // reaching its cap marks where the overflow drops begin.
@@ -625,19 +666,17 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
         "the drift went down: {lines:?}"
     );
     let per_second = |from: &(f64, Diagnostics, f64, f64), to: &(f64, Diagnostics, f64, f64)| {
-        ((to.3 - to.2) - (from.3 - from.2)) / (to.0 - from.0)
+        ((to.0 - to.2) - (from.0 - from.2)) / (to.0 - from.0)
     };
     let growth = per_second(first, &lines[filled]);
     let overflow = per_second(&lines[filled], last);
-    // The feed runs in real time and the device reads at PACE, so audio made
-    // but not yet read grows at 1 - PACE. Both totals are counted outside the
-    // socket, so TCP bursts do not move them; the margin covers a feed that
-    // runs late and catches up.
-    assert!(
-        (1.0 - PACE - 0.15..=1.0 - PACE + 0.15).contains(&growth),
-        "{growth} s/s piled up before the queue filled: {lines:?}"
-    );
-    let reading = (last.2 - first.2) / (last.0 - first.0);
+    // From the first audio queued on, when the device always has audio
+    // waiting: a sender starved at the start leaves it behind its pace.
+    let waiting = lines
+        .iter()
+        .find(|(_, line, _, _)| !line.queued.is_zero())
+        .expect("audio queued");
+    let reading = (last.2 - waiting.2) / (last.0 - waiting.0);
     assert!(
         (PACE - 0.05..=PACE + 0.05).contains(&reading),
         "{reading} s/s read: {lines:?}"

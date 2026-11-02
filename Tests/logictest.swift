@@ -363,6 +363,57 @@ do {
     check(offered.map(\.id) == [music, safari], "mix: a checked app that isn't running stays in the menu to be unchecked")
 }
 
+// MARK: The last mix
+// covers: S354
+do {
+    let music = "com.apple.Music", safari = "com.apple.Safari", chat = "com.example.chat"
+    let both = AudioSource.mixed(.only, bundleIDs: [music, safari])
+    let except = AudioSource.mixed(.allExcept, bundleIDs: [chat])
+    check(LastMix.kept(nil, leaving: both, for: .app(bundleID: music)) == both
+            && LastMix.kept(nil, leaving: except, for: .system) == except
+            && LastMix.kept(both, leaving: .system, for: .input(uid: "mic")) == both
+            && LastMix.kept(both, leaving: except, for: .system) == except
+            && LastMix.kept(both, leaving: both, for: both) == both,
+          "last mix: a mix left for another source is kept, and only another mix left replaces it")
+    check(LastMix.kept(both, leaving: .system, for: except) == both && LastMix.kept(nil, leaving: .app(bundleID: music), for: both) == nil,
+          "last mix: picking a mix never makes it the last mix by itself, so a failed pick that puts the old source back keeps the one kept")
+    let stored: [String: Any] = ["lastMixSource": both.defaultsValue]
+    let single: [String: Any] = ["lastMixSource": "apps:" + music + ",,"]
+    let storedExcept: [String: Any] = ["lastMixSource": except.defaultsValue]
+    check(AppSettings.load { stored[$0] }.lastMix == both && AppSettings.load { _ in nil }.lastMix == nil
+            && AppSettings.load { single[$0] }.lastMix == nil
+            && AppSettings.load { storedExcept[$0] }.lastMix == except,
+          "last mix: a stored last mix is read as the source in use is; one that reads back as no mix is dropped")
+
+    let apps = [(bundleID: chat, name: "Chat"), (bundleID: music, name: "Music")]
+    func listed(_ chosen: AudioSource, _ lastMix: AudioSource?) -> [SourceList.Entry] {
+        SourceList.entries(systemName: "All System Audio", apps: apps,
+                           inputs: [SourceList.Input(uid: "mic", name: "Mic", transport: 0)],
+                           chosen: chosen, chosenAppName: { _ in "Safari" }, mixName: { $1.joined(separator: " + ") },
+                           lastMix: lastMix)
+    }
+    let kept = listed(.app(bundleID: music), both)
+    check(kept.map(\.id) == ["", both.defaultsValue, chat, music, "input:mic"] && kept[1].name == "Music + Safari"
+            && listed(.system, nil).map(\.id) == ["", chat, music, "input:mic"],
+          "last mix: the picker lists the last mix once, right after the whole system, an app that isn't running under its kept name",
+          "\(kept)")
+    check(listed(except, both).map(\.id) == ["", except.defaultsValue, chat, music, "input:mic"]
+            && listed(both, both).filter { $0.id == both.defaultsValue }.count == 1,
+          "last mix: while a mix is in use the picker lists that one alone, never the kept one beside it")
+    let phone = kept.map { RemoteSource(pickerID: $0.id, name: $0.name) }
+    check(phone[1].id == both.defaultsValue && phone[1].kind == .app && phone[1].name == "Music + Safari"
+            && RemoteSource.pickerID(phone[1].id) == both.defaultsValue,
+          "last mix: the phone lists the last mix as an app under the picker's name, and its pick maps back to it")
+    let offeredKept = SourceList.mixApps(apps, checked: [], chosenAppName: { _ in "Safari" }, lastMix: both)
+    let offeredInUse = SourceList.mixApps(apps, checked: [chat], chosenAppName: { _ in "Safari" }, chosen: except,
+                                          lastMix: both)
+    // covers: S353
+    check(offeredKept.map(\.id) == [chat, music, safari] && offeredKept.map(\.available) == [true, true, false]
+            && offeredInUse.map(\.id) == [chat, music],
+          "last mix: the several-apps list keeps an app only the last mix holds, once and as not running, while no mix is in use",
+          "\(offeredKept)")
+}
+
 // MARK: Source apps — display names and the picker's app list
 // covers: S12 (the picker's apps and their names)
 check(SourceApps.displayName(running: "Music", installed: "Apple Music", bundleID: "com.apple.Music") == "Music",
@@ -7217,6 +7268,15 @@ do {
     // covers: S246
     check(zoneCount(on: 2, waiting: 1, present: 2, total: 3) == "2 of 3 on, 1 waiting",
           "zones: a member waiting for the AirPlay 2 place counts as on and is named as waiting")
+    let airPlay2Wait = zoneText.waitingForAirPlay2
+    // covers: S246
+    check(ZoneLayout.waitNote(state: .playing, on: 2, waiting: 2, note: airPlay2Wait) == airPlay2Wait,
+          "zones: a playing zone whose members that are on all wait shows its first waiting member's note")
+    // covers: S246
+    check(ZoneLayout.waitNote(state: .playing, on: 2, waiting: 1, note: airPlay2Wait) == nil
+            && ZoneLayout.waitNote(state: .willPlay, on: 2, waiting: 2, note: airPlay2Wait) == nil
+            && ZoneLayout.waitNote(state: .playing, on: 0, waiting: 0, note: nil) == nil,
+          "zones: a zone with a member still playing, with streaming off or with no member on shows no wait")
 
     let zoned: Set<String> = ["lc:usb", "ap:native:den"]
     // covers: S404
@@ -9840,6 +9900,49 @@ do {
         }
     }
 
+    // covers: S66, S187 (the Mac's renderer applies the new delay after its fade-out)
+    // A running output at 48 kHz with 512-frame callbacks goes from 100 to 50 ms: the fade-out
+    // takes the first callback and 448 frames of the second, and the third reads at the new delay.
+    do {
+        let name = "delay change: a running output takes a new delay after its fade-out, "
+            + "within 20 ms and one buffer of its next callback"
+        if let ring = CoreDelayRing(capacityFrames: 48_000 * 24),
+           let renderer = CoreRenderer(ring: ring, captureRate: 48_000, deviceRate: 48_000, channels: 2, gain: 1) {
+            renderer.setDelay(ms: 100)
+            let history = [Float](repeating: 0.5, count: 9_600 * 2)
+            history.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 9_600) }
+            let block = [Float](repeating: 0.5, count: 512 * 2)
+            var out = [Float](repeating: 0, count: 512 * 2)
+            var k: UInt64 = 0
+            func delayCallback() {
+                block.withUnsafeBufferPointer { ring.write(interleaved: $0.baseAddress!, frames: 512) }
+                out.withUnsafeMutableBufferPointer {
+                    renderer.render(into: $0.baseAddress!, frames: 512, outputTimeNs: 5_000_000_000 + k * 10_666_667)
+                }
+                k += 1
+            }
+            for _ in 0..<20 { delayCallback() }
+            let wasOpen = renderer.fadeState == .open
+            let lagAtRequest = renderer.lagFrames
+            let resyncsAtRequest = renderer.counters.resyncs
+            renderer.setDelay(ms: 50)
+            var takenLags: [Int64] = []
+            var takenStates: [CoreRenderer.FadeState] = []
+            for _ in 0..<6 {
+                delayCallback()
+                takenLags.append(renderer.lagFrames)
+                takenStates.append(renderer.fadeState)
+            }
+            check(wasOpen && renderer.fadeFrames == 960 && takenStates.first == .fadingOut
+                    && takenLags[0] == lagAtRequest && takenLags[1] == lagAtRequest
+                    && takenLags[2...].allSatisfy { $0 == lagAtRequest - 2_400 }
+                    && renderer.counters.resyncs - resyncsAtRequest == 1, name,
+                  "open \(wasOpen), lag \(lagAtRequest) then \(takenLags), states \(takenStates)")
+        } else {
+            check(false, name, "the core's renderer could not be made")
+        }
+    }
+
     // covers: S230
     // S230: an output the host marks as Bluetooth adds a capture block of
     // 512 frames to its start lead, which its start line logs in ms.
@@ -10179,6 +10282,21 @@ do {
             && twice?.notices.map(\.uid) == ["bt", "usb"],
           "S69 start failure: two failures share one alert and get a notice each",
           "\(String(describing: twice))")
+
+    // covers: S60
+    // The Mac's speakers come first in the list, as the default output does, and are off.
+    let macSpeakers = AudioDevices.Device(id: 73, name: "MacBook Speakers", uid: "builtin",
+                                          transport: kAudioDeviceTransportTypeBuiltIn)
+    let perOutput = RefusingEngine(active: [], refusing: [])
+    let firstSync = LocalOutputSync.apply(enabled: ["usb", "bt", "tv"], listing: [macSpeakers, usb, bt, usbAgain],
+                                          to: perOutput, holdBacks: [:], gain: { _ in 1 })
+    let secondSync = LocalOutputSync.apply(enabled: ["usb", "bt", "tv"], listing: [macSpeakers, usb, bt],
+                                           to: perOutput, holdBacks: [:], gain: { _ in 1 })
+    check(perOutput.tried == ["bt", "usb"] && perOutput.activeOutputUIDs == ["bt", "usb"]
+            && perOutput.deviceIDs == ["usb": 52, "bt": 61] && firstSync.devices == ["usb": 52, "bt": 61]
+            && secondSync == LocalOutputSync.Applied(),
+          "S60 outputs: one renderer per output that is on and listed, keyed by its UID and bound to its device",
+          "tried \(perOutput.tried), devices \(perOutput.deviceIDs), second sync \(secondSync)")
 
     // S36: a capture rate the ring can't hold names the rate and Audio MIDI Setup, not exclusive use.
     let tooFast = LocalOutputSync.apply(
@@ -13011,6 +13129,11 @@ do {
         CastVolume(level: level, muted: false, fixed: fixed)
     }
     func near(_ level: Double?, _ expected: Double) -> Bool { level.map { approx($0, expected, 1e-9) } == true }
+    // The user sets `position`; the sender's ask id comes back, here the send's own number.
+    func ask(_ m: inout CastModel, _ position: Double) {
+        _ = m.setVolume(tv, position: position)
+        m.volumeAsked(send: m.sends, ask: m.sends)
+    }
     func appeared() -> CastModel {
         var m = CastModel()
         m.apply(.appeared(CastDevice(id: tv, name: "Living room TV"), offsetMs: nil))
@@ -13081,11 +13204,12 @@ do {
           "cast master: a status answers the oldest level it matches, so 30, 50, 30 sent never jumps the slider to 50 (C70)")
 
     var resent = session(attempt: 10)
-    _ = resent.setVolume(tv, position: 30)
+    ask(&resent, 30)
     // covers: C105
     check(resent.apply(.volume(attempt: 10, reported(0.8))) == .setVolume(0.3),
           "cast master: the level set while starting goes again at the first status")
-    _ = resent.apply(.volumeUnanswered(attempt: 10, level: 0.3))
+    resent.volumeAsked(send: 2, ask: 2)
+    _ = resent.apply(.volumeUnanswered(attempt: 10, level: 0.3, ask: 2))
     for level in [0.3, 0.7, 0.3] { _ = resent.apply(.volume(attempt: 10, reported(level))) }
     // covers: C70, C105
     check(approx(resent.volume(of: tv), 30, 1e-9),
@@ -13176,10 +13300,10 @@ do {
     // covers: C70, C104 (the TV answered 0.55 before the sender sent it again)
     var dragBack = session(attempt: 8)
     _ = dragBack.apply(.volume(attempt: 8, reported(0.5)))
-    for position in [55.0, 60.0, 55.0] { _ = dragBack.setVolume(tv, position: position) }
-    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.6))
+    for position in [55.0, 60.0, 55.0] { ask(&dragBack, position) }
+    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.6, ask: 2))
     _ = dragBack.apply(.volume(attempt: 8, reported(0.55)))
-    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.55))
+    _ = dragBack.apply(.volumeUnanswered(attempt: 8, level: 0.55, ask: 3))
     _ = dragBack.apply(.volume(attempt: 8, reported(0.6)))
     check(approx(dragBack.volume(of: tv), 60, 1e-9),
           "cast master: after a drag back to the level the TV reports, the TV's remote moves the slider")
@@ -13187,8 +13311,8 @@ do {
     // covers: C70, C104 (the sender sent 0.55 twice, 0.6 never went out)
     var twice = session(attempt: 9)
     _ = twice.apply(.volume(attempt: 9, reported(0.5)))
-    for position in [55.0, 60.0, 55.0] { _ = twice.setVolume(tv, position: position) }
-    for level in [0.6, 0.55] { _ = twice.apply(.volumeUnanswered(attempt: 9, level: level)) }
+    for position in [55.0, 60.0, 55.0] { ask(&twice, position) }
+    for (id, level) in [(2, 0.6), (3, 0.55)] { _ = twice.apply(.volumeUnanswered(attempt: 9, level: level, ask: UInt64(id))) }
     _ = twice.apply(.volume(attempt: 9, reported(0.55)))
     _ = twice.apply(.volume(attempt: 9, reported(0.6)))
     check(approx(twice.volume(of: tv), 60, 1e-9),
@@ -13197,8 +13321,8 @@ do {
     // covers: C70, C104 (0.55, 0.6 and 0.55 went out, then 0.55 again; the second 0.6 never did)
     var wobble = session(attempt: 10)
     _ = wobble.apply(.volume(attempt: 10, reported(0.5)))
-    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { _ = wobble.setVolume(tv, position: position) }
-    for level in [0.6, 0.55] { _ = wobble.apply(.volumeUnanswered(attempt: 10, level: level)) }
+    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { ask(&wobble, position) }
+    for (id, level) in [(4, 0.6), (5, 0.55)] { _ = wobble.apply(.volumeUnanswered(attempt: 10, level: level, ask: UInt64(id))) }
     var wobbleShown: [Double] = []
     for answer in [0.55, 0.6, 0.55] {
         _ = wobble.apply(.volume(attempt: 10, reported(answer)))
@@ -13210,8 +13334,10 @@ do {
     // covers: C70, C104 (0.55 went out, the next three waited and were replaced, then 0.55 went out again)
     var replaced = session(attempt: 11)
     _ = replaced.apply(.volume(attempt: 11, reported(0.5)))
-    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { _ = replaced.setVolume(tv, position: position) }
-    for level in [0.6, 0.55, 0.6, 0.55] { _ = replaced.apply(.volumeUnanswered(attempt: 11, level: level)) }
+    for position in [55.0, 60.0, 55.0, 60.0, 55.0] { ask(&replaced, position) }
+    for (id, level) in [(2, 0.6), (3, 0.55), (4, 0.6), (5, 0.55)] {
+        _ = replaced.apply(.volumeUnanswered(attempt: 11, level: level, ask: UInt64(id)))
+    }
     _ = replaced.apply(.volume(attempt: 11, reported(0.55)))
     _ = replaced.apply(.volume(attempt: 11, reported(0.6)))
     check(approx(replaced.volume(of: tv), 60, 1e-9),
@@ -13220,8 +13346,8 @@ do {
     // covers: C70, C104 (0.98 and 1.0 went out, 1.0 asked again waited and 0.9 replaced it)
     var again = session(attempt: 13)
     _ = again.apply(.volume(attempt: 13, reported(0.5)))
-    for position in [98.0, 100.0, 100.0, 90.0] { _ = again.setVolume(tv, position: position) }
-    _ = again.apply(.volumeUnanswered(attempt: 13, level: 1))
+    for position in [98.0, 100.0, 100.0, 90.0] { ask(&again, position) }
+    _ = again.apply(.volumeUnanswered(attempt: 13, level: 1, ask: 3))
     for answer in [0.98, 1, 0.9] { _ = again.apply(.volume(attempt: 13, reported(answer))) }
     check(approx(again.volume(of: tv), 90, 1e-9),
           "cast master: a level asked again while it waits is awaited again, so the slider follows the TV to 90")
@@ -13229,11 +13355,33 @@ do {
     // covers: C70, C104 (0.3, 0.6 and 0.3 went out, 0.35 was replaced, then 0.3 went out again)
     var strand = session(attempt: 12)
     _ = strand.apply(.volume(attempt: 12, reported(0.5)))
-    for position in [30.0, 60.0, 30.0, 35.0, 30.0] { _ = strand.setVolume(tv, position: position) }
-    for level in [0.35, 0.3] { _ = strand.apply(.volumeUnanswered(attempt: 12, level: level)) }
+    for position in [30.0, 60.0, 30.0, 35.0, 30.0] { ask(&strand, position) }
+    for (id, level) in [(4, 0.35), (5, 0.3)] { _ = strand.apply(.volumeUnanswered(attempt: 12, level: level, ask: UInt64(id))) }
     for answer in [0.3, 0.6, 0.3] { _ = strand.apply(.volume(attempt: 12, reported(answer))) }
     check(approx(strand.volume(of: tv), 30, 1e-9),
           "cast master: a repeat of a level sent earlier never strands the slider on another level")
+
+    // covers: C70, C104 (the TV answered 0.6, then 0.55 and 0.6 go out before any echo)
+    var inFlight = session(attempt: 15)
+    _ = inFlight.apply(.volume(attempt: 15, reported(0.6)))
+    for position in [55.0, 60.0] { ask(&inFlight, position) }
+    var inFlightShown: [Double] = []
+    for answer in [0.55, 0.6] {
+        _ = inFlight.apply(.volume(attempt: 15, reported(answer)))
+        inFlightShown.append(inFlight.volume(of: tv).rounded())
+    }
+    check(inFlightShown == [60, 60],
+          "cast master: asking the level the TV reports while another level is in flight awaits it, so the earlier echo never moves the slider")
+
+    // covers: C70, C104 (0.6 goes out, 0.7 replaces the waiting 0.55, then 0.55 and 0.8 go out; the
+    // report on the replaced 0.55 arrives after the second 0.55 was asked)
+    var lateReport = session(attempt: 16)
+    _ = lateReport.apply(.volume(attempt: 16, reported(0.5)))
+    for position in [60.0, 55.0, 70.0, 55.0, 80.0] { ask(&lateReport, position) }
+    _ = lateReport.apply(.volumeUnanswered(attempt: 16, level: 0.55, ask: 2))
+    for answer in [0.6, 0.7, 0.55, 0.8] { _ = lateReport.apply(.volume(attempt: 16, reported(answer))) }
+    check(approx(lateReport.volume(of: tv), 80, 1e-9),
+          "cast master: a late report on a replaced level leaves a newer ask of that level awaited, so the slider ends at 80")
 
     // covers: S415
     var row = session(attempt: 11)
@@ -13398,10 +13546,12 @@ do {
     _ = dropped.started(tv, attempt: 1, refusal: ASC_CAST_REFUSED_NONE)
     _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.4, muted: false, fixed: false, step: 0.02)))
     _ = dropped.setVolume(tv, position: 50)
+    dropped.volumeAsked(send: 1, ask: 1)
     // 60 still waits for its 100 ms when the step comes, so the sender steps from 60 and never sends 60.
     _ = dropped.setVolume(tv, position: 60)
+    dropped.volumeAsked(send: 2, ask: 2)
     _ = dropped.stepVolume(tv, up: true)
-    _ = dropped.apply(.volumeUnanswered(attempt: 1, level: 0.6))
+    _ = dropped.apply(.volumeUnanswered(attempt: 1, level: 0.6, ask: 2))
     _ = dropped.apply(.volume(attempt: 1, CastVolume(level: 0.5, muted: false, fixed: false, step: 0.02)))
     // covers: C69, C70
     check(approx(dropped.volume(of: tv), 62, 1e-9),
@@ -13419,16 +13569,18 @@ do {
     _ = stepBack.started(tv, attempt: 1, refusal: ASC_CAST_REFUSED_NONE)
     _ = stepBack.apply(.volume(attempt: 1, CastVolume(level: 0.3, muted: false, fixed: false, step: 0.02)))
     _ = stepBack.setVolume(tv, position: 40)
+    stepBack.volumeAsked(send: 1, ask: 1)
     _ = stepBack.stepVolume(tv, up: true)
     _ = stepBack.setVolume(tv, position: 40)
-    // The sender steps from 0.4 unrounded, replaces that step with the drag back to 40, and sends 40 again.
-    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4 + 0.02))
-    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4))
+    stepBack.volumeAsked(send: 2, ask: 2)
+    // The sender steps from 0.4 under an ask of its own (3), replaces that step with the drag back to 40, and sends 40 again.
+    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4 + 0.02, ask: 3))
+    _ = stepBack.apply(.volumeUnanswered(attempt: 1, level: 0.4, ask: 2))
     _ = stepBack.apply(.volume(attempt: 1, CastVolume(level: 0.4, muted: false, fixed: false, step: 0.02)))
     _ = stepBack.apply(.volume(attempt: 1, CastVolume(level: 0.42, muted: false, fixed: false, step: 0.02)))
     // covers: C69, C70
     check(approx(stepBack.volume(of: tv), 42, 1e-9),
-          "cast step: a step the sender reports unanswered at its own unrounded level stops waiting, so the TV's remote moves the slider")
+          "cast step: a step the sender takes on its own is not awaited, so after a drag back the TV's remote moves the slider")
 
     var raw = AscCastEvent()
     raw.kind = ASC_CAST_EVENT_VOLUME
@@ -13521,12 +13673,14 @@ do {
     // Cast at its offset plus the feed's, a local output at its hold-back
     // minus its offset (its own lateness, negated).
     func heard(l: Double, cast: Double) -> (airPlay: Double, cast: Double, locals: [Double]) {
-        let wait = CastModel.networkWaitMs(airPlay: l, cast: cast) ?? 0
+        var castModel = CastModel()
+        castModel.apply(.appeared(CastDevice(id: "heard-cast", name: "Cast"), offsetMs: cast))
+        _ = castModel.turnOn("heard-cast")
+        let targets = NetworkHoldBack.Targets(airPlayChosen: true, latencyMs: l, cast: castModel)
         let offsets = ["builtin": 0.0, "usb": 40.0, "bluetooth": 180.0]
-        let holds = LocalDelay.holdBacks(takingPart: ["builtin", "usb", "bluetooth"], reference: "builtin",
-                                         offsets: ["usb": 40, "bluetooth": 180], airPlayChosen: true, latencyMs: wait)
-        return (l + NetworkHoldBack.airPlayAppliedMs(NetworkHoldBack.airPlayMs(airPlay: l, cast: cast)),
-                cast + NetworkHoldBack.castMs(airPlay: l, cast: cast),
+        let holds = targets.localHoldBacks(takingPart: ["builtin", "usb", "bluetooth"], reference: "builtin",
+                                           offsets: ["usb": 40, "bluetooth": 180])
+        return (l + NetworkHoldBack.airPlayAppliedMs(targets.airPlayMs), cast + targets.castMs,
                 offsets.keys.sorted().map { (holds[$0] ?? .nan) - offsets[$0]! })
     }
     // Cast later than L by 1.25 s, 3 s and 13 s, earlier by 0.75 s and by
@@ -13629,6 +13783,47 @@ do {
     // covers: S401
     check(castOnes.count == 2 && Notice.castSubjects(in: castOnes) == [Notice.cast(kitchen)],
           "cast+airplay: the notice never replaces a problem with the Cast speaker")
+}
+
+// MARK: What the host hands the AirPlay sender, the Cast feed and local outputs (C77, C101)
+do {
+    let holdGroup = "group-hold"
+    var castOn = CastModel()
+    castOn.apply(.appeared(CastDevice(id: holdGroup, name: "Group", group: true), offsetMs: 650))
+    _ = castOn.turnOn(holdGroup)
+    var castOff = castOn
+    castOff.turnOff(holdGroup)
+    let localWaits: (NetworkHoldBack.Targets) -> [Double] = { targets in
+        let holds = targets.localHoldBacks(takingPart: ["builtin", "usb"], reference: "builtin", offsets: [:])
+        return ["builtin", "usb"].map { holds[$0] ?? .nan }
+    }
+    let castOnly = NetworkHoldBack.Targets(airPlayChosen: false, latencyMs: 400, cast: castOn)
+    // covers: C77, C101
+    check(castOnly.waitMs == 650 && castOnly.airPlayMs == 0 && castOnly.castMs == 0
+            && localWaits(castOnly).allSatisfy { approx($0, 650, 1e-6) },
+          "network hold-backs: local outputs wait for a Cast group's 650 ms offset", "\(localWaits(castOnly))")
+    let bothOn = NetworkHoldBack.Targets(airPlayChosen: true, latencyMs: 400, cast: castOn)
+    // covers: C77, C101
+    check(bothOn.waitMs == 650 && approx(400 + bothOn.airPlayMs, 650, 1e-6) && bothOn.castMs == 0
+            && localWaits(bothOn).allSatisfy { approx($0, 650, 1e-6) },
+          "network hold-backs: AirPlay at L 400 ms and local outputs both wait for the 650 ms Cast offset",
+          "airPlay \(bothOn.airPlayMs), locals \(localWaits(bothOn))")
+    let castLater = NetworkHoldBack.Targets(airPlayChosen: true, latencyMs: 1750, cast: castOn)
+    // covers: C77
+    check(castLater.waitMs == 1750 && castLater.airPlayMs == 0 && approx(castLater.castMs, 1100, 1e-6)
+            && localWaits(castLater).allSatisfy { approx($0, 1750, 1e-6) },
+          "network hold-backs: the Cast feed waits for a longer L and local outputs for L")
+    let idle = NetworkHoldBack.Targets(airPlayChosen: false, latencyMs: 1750, cast: castOff)
+    let airPlayOnly = NetworkHoldBack.Targets(airPlayChosen: true, latencyMs: 400, cast: castOff)
+    // covers: C77
+    check(idle.cast == nil && idle.waitMs == nil && idle.airPlayMs == 0 && idle.castMs == 0
+            && localWaits(idle) == [0, 0],
+          "network hold-backs: with the Cast speaker off and no AirPlay speaker, nothing waits", "\(localWaits(idle))")
+    // covers: C77
+    check(airPlayOnly.waitMs == 400 && airPlayOnly.airPlayMs == 0 && airPlayOnly.castMs == 0
+            && localWaits(airPlayOnly).allSatisfy { approx($0, 400, 1e-6) },
+          "network hold-backs: with the Cast speaker off, AirPlay waits for nothing and local outputs wait for L only",
+          "\(localWaits(airPlayOnly))")
 }
 
 // MARK: Google Cast device memory: saved atomically, read back by a new sender
@@ -14066,6 +14261,17 @@ do {
     check(!willPlayLocked.available
             && RemoteAction.plan(.speaker(id: "tv", on: true, volume: nil, delayMs: nil), rows: [willPlayLocked]).isEmpty,
           "web remote: a speaker that will play but would ask for a code can't be turned on from the phone")
+    let onLocked = RemoteRow(Facts(id: "tv", name: "TV", kind: "AirPlay", on: true, volume: 50, isAirPlay: true,
+                                   needsCode: true, paired: false), text: t)
+    let offLocked = RemoteRow(Facts(id: "tv", name: "TV", kind: "AirPlay", on: false, volume: 50, isAirPlay: true,
+                                    needsCode: true, paired: false), text: t)
+    // covers: S257, S376
+    check(onLocked.available
+            && RemoteAction.plan(.speaker(id: "tv", on: false, volume: nil, delayMs: nil), rows: [onLocked])
+            == [.setEnabled(id: "tv", on: false)]
+            && !offLocked.available
+            && RemoteAction.plan(.speaker(id: "tv", on: true, volume: nil, delayMs: nil), rows: [offLocked]).isEmpty,
+          "web remote: a speaker that is on and would ask for a code can be switched off from the phone, not on")
     // covers: S348
     check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"volume\":70}") == [.setVolume(id: "usb", position: 70)]
             && plan("{\"type\":\"speaker\",\"id\":\"cast\",\"volume\":70}") == [.setVolume(id: "cast", position: 70)],
@@ -16135,6 +16341,16 @@ do {
     check(memoryOnlyWrite == nil,
           "pairings notice: a write into a store opened as one that keeps nothing leaves the launch notice",
           String(describing: memoryOnlyWrite))
+    var restartedWrites = PairingsWriteNotice()
+    _ = restartedWrites.written(false, openedUnsaved: false)
+    let keptAtRestart = restartedWrites.atStart(openedUnsaved: false)
+    let launchAtRestart = restartedWrites.atStart(openedUnsaved: true)
+    _ = restartedWrites.written(true, openedUnsaved: false)
+    let clearedAtRestart = restartedWrites.atStart(openedUnsaved: false)
+    // covers: S224
+    check(keptAtRestart == nil && launchAtRestart == .post && clearedAtRestart == .clear,
+          "pairings notice: a new sender keeps it while the last write failed, or when its store keeps nothing",
+          "\(String(describing: keptAtRestart)) \(String(describing: launchAtRestart)) \(String(describing: clearedAtRestart))")
     var rawPairedEvent = AscAirPlayEvent()
     rawPairedEvent.kind = ASC_AIRPLAY_EVENT_PAIRED
     let pairedAndStored = NativeAirPlay.event(rawPairedEvent)

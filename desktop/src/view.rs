@@ -236,6 +236,8 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
+    /// The sources, then Several Apps…, which opens the main window's list.
+    flyout_sources: Rc<VecModel<SharedString>>,
     /// The chosen input device's channel pairs; empty up to two channels.
     input_pairs: Rc<VecModel<SharedString>>,
     mix_apps: Rc<VecModel<MixAppItem>>,
@@ -427,14 +429,16 @@ const NATIVE_WINDOW_TRIES: u8 = 100;
 const MAIN_WINDOW_CHROME: (f64, f64) = (16.0, 64.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
-/// in them: the listed notice, the button for more notices, the zone rows
-/// and the speaker rows (a zone's members among them).
+/// in them: the listed notice, the button for more notices, the zone rows,
+/// the speaker rows (a zone's members among them) and the Add by Address
+/// link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutParts {
     notices: bool,
     more_notices: bool,
     zones: bool,
     speakers: bool,
+    add_address: bool,
 }
 
 impl FlyoutParts {
@@ -444,13 +448,14 @@ impl FlyoutParts {
             || (self.more_notices && other.more_notices)
             || (self.zones && other.zones)
             || (self.speakers && other.speakers)
+            || (self.add_address && other.add_address)
     }
 }
 
 /// What the tray flyout shows: how many notices there are and how many of
 /// them it lists, how many zones, how many of this PC's and connected
 /// speakers in no zone, and the shape of the zones' member lists
-/// ([`zone_shape`]).
+/// ([`zone_shape`]), and whether it shows the Add by Address link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutCounts {
     notices: usize,
@@ -459,6 +464,7 @@ struct FlyoutCounts {
     this_pc: usize,
     speakers: usize,
     zone_members: u64,
+    add_address: bool,
 }
 
 impl FlyoutCounts {
@@ -478,6 +484,7 @@ impl FlyoutCounts {
             speakers: self.this_pc != next.this_pc
                 || self.speakers != next.speakers
                 || self.zone_members != next.zone_members,
+            add_address: self.add_address && !next.add_address,
         }
     }
 }
@@ -989,6 +996,7 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
+            flyout_sources: Rc::new(VecModel::default()),
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -1109,7 +1117,11 @@ impl App {
     /// The media sessions the Now Playing card reads and drives; without
     /// them the card never shows.
     #[cfg_attr(not(windows), allow(dead_code))]
-    pub fn set_media_controls(&self, controls: Box<dyn MediaControls>) {
+    pub fn set_media_controls(&self, mut controls: Box<dyn MediaControls>) {
+        let main = self.main.as_weak();
+        controls.on_reading(std::sync::Arc::new(move || {
+            let _ = main.upgrade_in_event_loop(|main| main.invoke_now_playing_read());
+        }));
         self.now_playing.borrow_mut().set_controls(controls);
         let _ = self.sync_now_playing();
     }
@@ -1332,8 +1344,17 @@ impl App {
                 self.main.invoke_focus_source();
             }
             self.main.set_now_playing_shown(false);
+            self.log
+                .log(|| "now playing card: the window hides the card".to_owned());
             return true;
         };
+        self.log.log(|| {
+            format!(
+                "now playing card: the window shows \"{}\" ({})",
+                track.title,
+                if track.playing { "playing" } else { "paused" }
+            )
+        });
         self.main.set_now_playing_title(track.title.as_str().into());
         self.main
             .set_now_playing_subtitle(track.subtitle().as_str().into());
@@ -1703,7 +1724,8 @@ impl App {
             .set_calibrate_all_rows(ModelRc::from(m.calibration_rows.clone()));
         self.main
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
-        self.flyout.set_sources(ModelRc::from(m.sources.clone()));
+        self.flyout
+            .set_sources(ModelRc::from(m.flyout_sources.clone()));
         self.flyout
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
@@ -1927,12 +1949,16 @@ impl App {
         self.flyout.set_airplay_searching(state.airplay_searching);
         self.main.set_no_speaker_on(state.no_speaker_on);
         self.flyout.set_no_speaker_on(state.no_speaker_on);
+        // Read before the flyout takes the new state, for `flyout_shown`.
+        let add_address_shown =
+            self.flyout.get_cast_by_address() && self.flyout.get_cast_list() == CastList::NoneFound;
         self.main.set_cast_list(cast_list(state.cast_list));
         self.flyout.set_cast_list(cast_list(state.cast_list));
         self.watch_network(
             state.airplay_none_found || state.cast_list == ui_model::CastList::NoneFound,
         );
         self.main.set_cast_by_address(state.cast_by_address);
+        self.flyout.set_cast_by_address(state.cast_by_address);
         self.main.set_this_pc_all_hidden(state.hidden_in(true));
         self.main.set_connected_all_hidden(state.hidden_in(false));
         self.flyout.set_all_hidden(state.all_hidden());
@@ -2050,6 +2076,7 @@ impl App {
             this_pc: m.flyout_this_pc.row_count(),
             speakers: m.flyout_connected.row_count(),
             zone_members: self.zone_shape_shown(),
+            add_address: add_address_shown,
         };
         let flyout_removed = flyout_shown.removed_by(FlyoutCounts {
             notices: notices.len(),
@@ -2062,6 +2089,7 @@ impl App {
                     .iter()
                     .map(|zone| listed_members(zone.item.expanded, zone.members.len())),
             ),
+            add_address: state.cast_by_address && state.cast_list == ui_model::CastList::NoneFound,
         });
         let main_lists = MainLists {
             notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
@@ -2090,6 +2118,9 @@ impl App {
             connected_zoned,
             ..
         } = main_lists;
+        let mut flyout_sources = sources.clone();
+        flyout_sources.push(strings.get_source_mix_more());
+        sync_model(&m.flyout_sources, flyout_sources);
         sync_model(&m.sources, sources);
         sync_model(&m.input_pairs, input_pairs);
         self.main.set_input_pair_index(input_pair_index);
@@ -2331,6 +2362,7 @@ impl App {
             more_notices: flyout.get_more_notices_focused(),
             zones: flyout.get_zone_focused(),
             speakers: flyout.get_speaker_focused(),
+            add_address: flyout.get_add_address_focused(),
         };
         if focused.overlaps(removed) && flyout.window().is_visible() {
             flyout.invoke_take_focus();
@@ -2483,6 +2515,14 @@ impl App {
         main.on_equalizer_requested(move || with_app(&w, App::show_equalizer));
         let w = weak.clone();
         main.on_now_playing_transport(move |button| with_app(&w, |app| app.send_transport(button)));
+        let w = weak.clone();
+        main.on_now_playing_read(move || {
+            with_app(&w, |app| {
+                if app.sync_now_playing() {
+                    app.publish_remote(&app.snapshot());
+                }
+            })
+        });
         let w = weak.clone();
         main.on_speaker_toggled(move |id| with_app(&w, |app| app.toggle_speaker(&id)));
         let w = weak.clone();
@@ -2856,7 +2896,19 @@ impl App {
         let w = weak.clone();
         flyout.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
         let w = weak.clone();
-        flyout.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
+        flyout.on_source_selected(move |index| {
+            with_app(&w, |app| {
+                // The shown list's last row: the snapshot may have grown since.
+                let shown = app.models.flyout_sources.row_count();
+                if usize::try_from(index).is_ok_and(|i| i + 1 == shown) {
+                    app.hide_flyout();
+                    app.show_main();
+                    app.main.set_mix_open(true);
+                } else {
+                    app.select_source(index);
+                }
+            })
+        });
         let w = weak.clone();
         flyout.on_input_pair_selected(move |index| {
             with_app(&w, |app| app.select_input_pair(index));
@@ -2897,6 +2949,13 @@ impl App {
         let w = weak.clone();
         flyout.on_notice_update_button_pressed(move |button| {
             with_app(&w, |app| app.press_update_button(button))
+        });
+        let w = weak.clone();
+        flyout.on_cast_add_address_requested(move || {
+            with_app(&w, |app| {
+                app.hide_flyout();
+                app.main.invoke_cast_add_address_requested();
+            })
         });
         let w = weak.clone();
         flyout.on_open_app(move || {
@@ -6152,11 +6211,12 @@ mod tests {
             let mut backend = MockBackend::new();
             backend.unplug_chosen_input(name);
             let app = app_over(backend);
+            // The flyout's Several Apps… comes after it.
+            let last = app.main.get_sources().row_count() - 1;
             for (sources, index) in [
                 (app.main.get_sources(), app.main.get_source_index()),
                 (app.flyout.get_sources(), app.flyout.get_source_index()),
             ] {
-                let last = sources.row_count() - 1;
                 assert_eq!(index, last as i32, "{shown}: still chosen");
                 assert_eq!(
                     sources.row_data(last).map(String::from).as_deref(),
@@ -6303,6 +6363,32 @@ mod tests {
         app.main.hide().expect("the main window hides");
         app.poll();
         assert_eq!(fake.following(), None, "nothing is read while hidden");
+    }
+
+    #[test]
+    fn a_reading_the_sessions_report_shows_in_the_window_before_the_poll_and_is_logged() {
+        use crate::debug_log;
+        use crate::now_playing_card::fake::{FakeControls, track};
+        let path = debug_log::test_dir("view-now-playing-read").join(debug_log::FILE_NAME);
+        let log = DebugLog::new(Some(path.clone()));
+        let app = app_logging(MockBackend::new(), log.clone());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        fake.read(Some(track("Spotify.exe", "Song", "", true)));
+        app.main.invoke_now_playing_read();
+        assert!(app.main.get_now_playing_playing());
+
+        fake.read(Some(track("Spotify.exe", "Song", "", false)));
+        app.main.invoke_now_playing_read();
+        assert!(!app.main.get_now_playing_playing());
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            written.contains(r#"now playing card: the window shows "Song" (paused)"#),
+            "{written}"
+        );
     }
 
     // covers: S408
@@ -8906,7 +8992,13 @@ mod tests {
     fn shows_in_full(app: &App, label: &str, tip: &str) {
         let width = element(app, label).map_or(0.0, |label| label.size().width);
         let (_, shown) = rest_on(app, label, tip);
-        let shown = shown.unwrap_or_else(|| panic!("a tooltip on {label}"));
+        let shown = shown
+            .and_then(|tip| {
+                tip.query_descendants()
+                    .match_id("LabelTip::tip-text")
+                    .find_first()
+            })
+            .unwrap_or_else(|| panic!("a tooltip on {label}"));
         assert!(
             shown.size().width > width,
             "{label}: tip {} wide, label {width}",
@@ -8994,6 +9086,56 @@ mod tests {
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
         shows_in_full(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
+    }
+
+    /// With a long zone name, the "in <zone>" link in an In zones row gives
+    /// way before the speaker's name does: the name keeps 80 px and the link
+    /// ends before the options button.
+    #[test]
+    fn a_long_zone_name_leaves_the_in_zones_name_room() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        let tv = long_named_speaker(&backend, "airplay:tv");
+        let name = tv.name.clone();
+        backend.add_speaker(tv);
+        let zone = "The long living room zone by the window and the bookshelf";
+        backend.add_zone("zone:long", zone, &["airplay:tv"]);
+        let app = narrow_app(backend);
+        let list = element(&app, "MainWindow::scroll").expect("the speaker list");
+        let (at, size) = (list.absolute_position(), list.size());
+        scroll(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+            -3000.0,
+        );
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        let strings = app.main.global::<Strings>();
+        let by_label = |label: SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+        };
+        let badge = by_label(strings.invoke_in_zone_label(name.into(), zone.into()));
+        let row_y = badge.absolute_position().y + badge.size().height / 2.0;
+        let in_row = |id: &str| {
+            ElementHandle::find_by_element_id(&app.main, id)
+                .find(|e| {
+                    let y = e.absolute_position().y;
+                    y <= row_y && row_y <= y + e.size().height
+                })
+                .unwrap_or_else(|| panic!("{id} in the TV's In zones row"))
+        };
+        let width = in_row("ZoneMemberRow::name-label").size().width;
+        assert!(width >= 80.0, "the name is {width} px wide");
+        let link = by_label(strings.invoke_go_to_zone_label(zone.into()));
+        let options = in_row("ZoneMemberRow::options");
+        assert!(
+            link.absolute_position().x + link.size().width <= options.absolute_position().x,
+            "the link runs into the options button"
+        );
     }
 
     // covers: S228
@@ -11256,11 +11398,25 @@ mod tests {
         this_pc: 1,
         speakers: 3,
         zone_members: 1,
+        add_address: false,
     };
 
     #[test]
     fn a_refresh_removes_the_flyout_lists_whose_length_changes() {
         assert_eq!(FLYOUT.removed_by(FLYOUT), FlyoutParts::default());
+        // A Google Cast speaker is found: the Add by Address link goes.
+        let add_address = FlyoutCounts {
+            add_address: true,
+            ..FLYOUT
+        };
+        assert_eq!(
+            add_address.removed_by(FLYOUT),
+            FlyoutParts {
+                add_address: true,
+                ..FlyoutParts::default()
+            }
+        );
+        assert_eq!(FLYOUT.removed_by(add_address), FlyoutParts::default());
         let unplugged = FlyoutCounts {
             speakers: 2,
             ..FLYOUT
@@ -11371,6 +11527,7 @@ mod tests {
                 more_notices: true,
                 zones: true,
                 speakers: false,
+                add_address: true,
             }),
             "a focused speaker row keeps its focus when other parts change"
         );
@@ -13072,6 +13229,50 @@ mod tests {
         assert!(!app.main.get_mix_open());
         app.refresh();
         assert!(!app.main.get_mix_open(), "a refresh never reopens it");
+    }
+
+    /// The flyout's source drop-down ends in Several Apps…, as the Mac
+    /// panel's source menu ends in its submenu: it opens the main window's
+    /// list and leaves the source as it was.
+    #[test]
+    fn several_apps_at_the_end_of_the_flyout_sources_opens_the_main_windows_list() {
+        let app = app_over(MockBackend::new());
+        let sources = app.snapshot().sources.len();
+        let chosen = app.flyout.get_source_index();
+        let shown = app.flyout.get_sources();
+        assert_eq!(shown.row_count(), sources + 1);
+        assert_eq!(shown.row_data(sources).unwrap(), "Several Apps…");
+        assert_eq!(app.main.get_sources().row_count(), sources);
+
+        app.flyout.show().unwrap();
+        app.flyout.invoke_source_selected(sources as i32);
+        assert!(app.main.get_mix_open());
+        assert!(app.main.window().is_visible());
+        assert!(!app.flyout.window().is_visible());
+        assert_eq!(app.flyout.get_source_index(), chosen);
+    }
+
+    /// An app that starts playing after the flyout's list was built doesn't
+    /// turn the Several Apps… row into a pick of that app.
+    #[test]
+    fn several_apps_in_the_flyout_opens_the_list_while_a_new_app_waits_for_the_refresh() {
+        let backend = MockBackend::new();
+        let late = backend.late_sources.clone();
+        let app = app_over(backend);
+        let chosen = app.snapshot().source_id;
+        let last = app.flyout.get_sources().row_count() - 1;
+        late.borrow_mut().push(ui_model::Source {
+            id: "app:late".into(),
+            name: "Late App".into(),
+            kind: SourceKind::App,
+            channels: 0,
+            apps: Vec::new(),
+            unplugged: false,
+        });
+
+        app.flyout.invoke_source_selected(last as i32);
+        assert!(app.main.get_mix_open());
+        assert_eq!(app.snapshot().source_id, chosen);
     }
 
     #[test]

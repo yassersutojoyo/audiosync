@@ -27,8 +27,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::audio::now_playing::{
-    FittedArtwork, Follow, MediaSession, RawTimeline, Reading, Timeline, Track, TrackReader, pick,
-    wall_ticks,
+    DROP_AFTER, FittedArtwork, Follow, MediaSession, RawTimeline, Reading, Timeline, Track,
+    TrackReader, pick, wall_ticks,
 };
 use crate::debug_log::DebugLog;
 use crate::now_playing_card::{
@@ -145,6 +145,8 @@ struct State {
     card: Option<CardSource>,
     card_generation: u64,
     card_reading: Option<Option<CardTrack>>,
+    /// Told whenever a card reading is ready.
+    card_wake: Option<Arc<dyn Fn() + Send + Sync>>,
     commands: Vec<Transport>,
     /// Controls a speaker's remote asked for, sent to the session that
     /// counts for `track`.
@@ -238,6 +240,10 @@ impl MediaControls for MediaCardReader {
         self.shared.lock().card_reading.take()
     }
 
+    fn on_reading(&mut self, wake: Arc<dyn Fn() + Send + Sync>) {
+        self.shared.lock().card_wake = Some(wake);
+    }
+
     fn send(&mut self, command: Transport) {
         self.shared.lock().commands.push(command);
         self.shared.wake.notify_all();
@@ -298,6 +304,7 @@ fn run<L: SessionList>(
     sessions.watch(Changed(Arc::downgrade(shared)));
     shared.lock().icon = sessions.icon(log);
     let mut reader = Reader::new(sessions);
+    let mut card_seen = 0;
     loop {
         let woken_by_change;
         let (track, track_generation, played_last, card, card_generation, commands, remote) = {
@@ -323,6 +330,10 @@ fn run<L: SessionList>(
                 remote,
             )
         };
+        if card_generation != card_seen {
+            card_seen = card_generation;
+            reader.card_played_last = None;
+        }
         // The host logged the command already (S279), so the send stays quiet.
         if let Some(track) = &track {
             for command in &remote {
@@ -335,8 +346,9 @@ fn run<L: SessionList>(
             }
         }
         if let Some(card) = &card {
+            let played_last = reader.card_played_last.clone();
             for command in &commands {
-                reader.send(card, None, *command, log);
+                reader.send(card, played_last.as_deref(), *command, log);
             }
         }
         let mut listing = reader.listing(log);
@@ -351,9 +363,17 @@ fn run<L: SessionList>(
         }
         if let Some(follow) = &card {
             let card = reader.card(&mut listing, follow, log);
-            let mut state = shared.lock();
-            if state.card_generation == card_generation {
-                state.card_reading = Some(card);
+            let wake = {
+                let mut state = shared.lock();
+                if state.card_generation == card_generation {
+                    state.card_reading = Some(card);
+                    state.card_wake.clone()
+                } else {
+                    None
+                }
+            };
+            if let Some(wake) = wake {
+                wake();
             }
         }
         let state = shared.lock();
@@ -407,6 +427,10 @@ struct Reader<L> {
     /// The last tracks read, for the log.
     last_track: Option<MediaSession>,
     last_card: Option<MediaSession>,
+    /// The app the card last showed playing, kept until it has given no
+    /// track for [`DROP_AFTER`] (S218), counted from `card_idle_since`.
+    card_played_last: Option<String>,
+    card_idle_since: Option<Instant>,
 }
 
 /// One listing of the sessions, which both readers' readings come from.
@@ -426,6 +450,8 @@ impl<L: SessionList> Reader<L> {
             failing: false,
             last_track: None,
             last_card: None,
+            card_played_last: None,
+            card_idle_since: None,
         }
     }
 
@@ -498,7 +524,24 @@ impl<L: SessionList> Reader<L> {
         follow: &Follow,
         log: &DebugLog,
     ) -> Option<CardTrack> {
-        let index = self.sessions.pick(&listing.listed, follow);
+        let mut index = self.counting(&listing.listed, follow, self.card_played_last.as_deref());
+        if index.is_some() {
+            self.card_idle_since = None;
+        } else if self.card_played_last.is_some()
+            && self
+                .card_idle_since
+                .get_or_insert_with(Instant::now)
+                .elapsed()
+                >= DROP_AFTER
+        {
+            (self.card_played_last, self.card_idle_since) = (None, None);
+            index = self.sessions.pick(&listing.listed, follow);
+        }
+        if let Some(session) = index.map(|index| &listing.listed[index].0)
+            && session.playing
+        {
+            self.card_played_last = Some(session.app_id.clone());
+        }
         self.log_card(index.map(|index| &listing.listed[index].0), log);
         let index = index?;
         let session = listing.listed[index].0.clone();
@@ -722,6 +765,8 @@ mod tests {
         changed: Mutex<Option<Changed>>,
         /// Every session lists as paused from now on.
         paused: AtomicBool,
+        /// When the last thumbnail read was asked for, and its deadline.
+        thumbnail_asked: Mutex<Option<(Instant, Instant)>>,
     }
 
     impl Counts {
@@ -774,7 +819,9 @@ mod tests {
             match self.thumbnail {
                 Thumbnail::Image => Ok(Some(IMAGE.to_vec())),
                 Thumbnail::Hung => {
-                    thread::sleep(deadline.saturating_duration_since(Instant::now()));
+                    *self.counts.thumbnail_asked.lock().unwrap() = Some((Instant::now(), deadline));
+                    // Woken a wait late, as a loaded PC wakes a thread.
+                    thread::sleep(deadline.saturating_duration_since(Instant::now()) + APP_WAIT);
                     Err("the app didn't answer in time".to_owned())
                 }
             }
@@ -882,8 +929,8 @@ mod tests {
         let mut reader = Reader::new(fake);
         let started = Instant::now();
         let (track, card) = poll(&mut reader);
-        let took = started.elapsed();
-        assert!(took >= APP_WAIT && took < APP_WAIT * 2, "took {took:?}");
+        let (asked, deadline) = counts.thumbnail_asked.lock().unwrap().expect("it was read");
+        assert!(deadline >= started + APP_WAIT && deadline <= asked + APP_WAIT);
         assert_eq!(counts.thumbnails(), 1, "one wait covers both readers");
         let track = track.expect("the track still shows");
         assert_eq!((track.session, track.artwork), (playing(), None));
@@ -970,6 +1017,98 @@ mod tests {
         assert_eq!(*counts.sent_to.lock().unwrap(), ["Spotify.exe"]);
     }
 
+    // covers: S218, S274
+    #[test]
+    fn the_card_keeps_the_app_just_paused_over_a_paused_one_listed_first() {
+        let probe = |plays: bool| MediaSession {
+            app_id: "Probe.exe".to_owned(),
+            title: "Probe".to_owned(),
+            playing: plays,
+            paused: !plays,
+            ..playing()
+        };
+        let (mut fake, _) = fake(Thumbnail::Image);
+        let spotify = MediaSession {
+            playing: false,
+            paused: true,
+            ..playing()
+        };
+        fake.sessions = vec![spotify, probe(true)];
+        let mut reader = Reader::new(fake);
+        let shown = |card: Option<CardTrack>| card.map(|card| (card.app_id, card.playing));
+        assert_eq!(
+            shown(poll(&mut reader).1),
+            Some(("Probe.exe".to_owned(), true))
+        );
+        reader.sessions.sessions[1] = probe(false);
+        assert_eq!(
+            shown(poll(&mut reader).1),
+            Some(("Probe.exe".to_owned(), false)),
+            "another app's paused track took the place of the one just paused"
+        );
+        let (mut second, counts) = self::fake(Thumbnail::Image);
+        second.sessions = vec![reader.sessions.sessions[0].clone(), probe(true)];
+        let (_track, mut card) = spawn(
+            move || Ok(second),
+            Duration::from_millis(10),
+            DebugLog::default(),
+        );
+        card.follow(Some(CardSource::AnyApp));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut wait_for = |playing: bool| {
+            while !card
+                .take_reading()
+                .flatten()
+                .is_some_and(|read| read.app_id == "Probe.exe" && read.playing == playing)
+            {
+                assert!(Instant::now() < deadline, "the card never read the probe");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait_for(true);
+        counts.paused.store(true, Ordering::SeqCst);
+        wait_for(false);
+        card.send(Transport::PlayPause);
+        while counts.sends.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "nothing was sent");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(*counts.sent_to.lock().unwrap(), ["Probe.exe"]);
+    }
+
+    // covers: S218, S274
+    #[test]
+    fn the_card_lets_go_of_an_app_whose_session_stays_untitled_for_the_drop_time() {
+        let (mut fake, _) = fake(Thumbnail::Image);
+        let spotify = MediaSession {
+            playing: false,
+            paused: true,
+            ..playing()
+        };
+        let probe = MediaSession {
+            app_id: "Probe.exe".to_owned(),
+            title: "Probe".to_owned(),
+            ..playing()
+        };
+        fake.sessions = vec![spotify, probe];
+        let mut reader = Reader::new(fake);
+        let shown = |card: Option<CardTrack>| card.map(|card| card.app_id);
+        assert_eq!(shown(poll(&mut reader).1).as_deref(), Some("Probe.exe"));
+        let untitled = &mut reader.sessions.sessions[1];
+        (untitled.title, untitled.playing, untitled.paused) = (String::new(), false, true);
+        assert_eq!(
+            shown(poll(&mut reader).1),
+            None,
+            "held while it may come back"
+        );
+        thread::sleep(crate::audio::now_playing::DROP_AFTER + Duration::from_millis(100));
+        assert_eq!(
+            shown(poll(&mut reader).1).as_deref(),
+            Some("Spotify.exe"),
+            "an untitled session kept the card hidden past the drop time"
+        );
+    }
+
     #[test]
     fn a_change_the_system_reports_is_read_at_once_not_at_the_next_poll() {
         let (fake, counts) = fake(Thumbnail::Image);
@@ -998,6 +1137,42 @@ mod tests {
             assert!(Instant::now() < deadline, "the pause waited for the poll");
             thread::sleep(Duration::from_millis(2));
         }
+    }
+
+    #[test]
+    fn a_reported_change_wakes_the_card_with_its_reading_long_before_the_poll() {
+        let (fake, counts) = fake(Thumbnail::Image);
+        let (_track, mut card) = spawn(
+            move || Ok(fake),
+            Duration::from_secs(10),
+            DebugLog::default(),
+        );
+        let (woken, wakes) = std::sync::mpsc::channel();
+        card.on_reading(Arc::new(move || {
+            let _ = woken.send(());
+        }));
+        card.follow(Some(CardSource::AnyApp));
+        let shows = |card: &mut MediaCardReader, playing: bool| {
+            card.take_reading()
+                .flatten()
+                .is_some_and(|read| read.playing == playing)
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !shows(&mut card, true) {
+            assert!(Instant::now() < deadline, "no first reading");
+            thread::sleep(Duration::from_millis(5));
+        }
+        wakes
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the first reading woke the card");
+        while wakes.try_recv().is_ok() {}
+        counts.paused.store(true, Ordering::SeqCst);
+        let changed = counts.changed.lock().unwrap().clone();
+        changed.expect("the thread watches the sessions").notify();
+        wakes
+            .recv_timeout(Duration::from_millis(100))
+            .expect("the card was woken for the pause");
+        assert!(shows(&mut card, false), "the wake came before the reading");
     }
 
     #[test]

@@ -11,6 +11,9 @@ struct PanelZoneHeader: View {
     @StateObject private var hover = HoverState()
 
     private var state: SpeakerState { model.state(of: zone) }
+    private var waitNote: String? { model.waitNote(of: zone) }
+    // A waiting zone's icon is outlined, as while streaming is off; a click still switches it off.
+    private var shownState: SpeakerState { waitNote == nil ? state : .willPlay }
     private var expanded: Bool { disclosure.isExpanded(zone.id) }
     // The icon greys out and folds then: unfolding still lists the missing speakers.
     private var nonePresent: Bool { zone.present == 0 }
@@ -40,7 +43,7 @@ struct PanelZoneHeader: View {
             .help(foldTitle)
 
             Button { hit(.zoneIcon) } label: {
-                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 24)
+                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: shownState, size: 24)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -51,16 +54,25 @@ struct PanelZoneHeader: View {
             .accessibilityLabel(t.zoneLabel(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
-            .accessibilityHint(t.rowHint(state, note: nil))
+            .accessibilityHint(t.rowHint(state, note: waitNote))
             .help(t.help(state))
 
             Button { hit(.name) } label: {
                 HStack(spacing: 0) {
                     Text(zone.name)
-                        .font(.callout.weight(state == .playing ? .semibold : .regular))
+                        .font(.callout.weight(shownState == .playing ? .semibold : .regular))
                         .lineLimit(1)
                         .opacity(nonePresent ? 0.45 : 1)
+                        .layoutPriority(1)
                     Spacer(minLength: 4)
+                    // Placed and styled as a panel row's note; VoiceOver reads it in the icon's hint.
+                    if let waitNote {
+                        Text(waitNote)
+                            .font(.caption)
+                            .foregroundStyle(Brand.secondaryText)
+                            .lineLimit(1)
+                            .help(waitNote)
+                    }
                 }
                 .padding(.leading, 9)
                 .padding(.trailing, 6)

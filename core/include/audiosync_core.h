@@ -256,7 +256,7 @@ extern "C" {
 #define ASC_CAST_EVENT_MEMBERS 17          /* the playing group's members changed: asc_cast_member_count, asc_cast_member */
 #define ASC_CAST_EVENT_GROUP_LOG 18        /* a line about a Cast group for the debug log in .detail */
 #define ASC_CAST_EVENT_CERTIFICATE_CHANGED 19 /* the device's certificate changed since its last connect: "<before> to <after>" in .detail, for the debug log */
-#define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level */
+#define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level, .ask */
 #define ASC_CAST_EVENT_PAUSED 21           /* someone paused the device itself; PLAYING follows once its next play loaded the stream again */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
@@ -1969,8 +1969,10 @@ bool asc_airplay_set_playback(AscAirPlay *airplay, const char *app, int32_t play
  * ASC_AIRPLAY_NEEDS_PIN. The file is versioned, mode 0600, written through a
  * temporary file created new and renamed over it, and removed once nothing
  * is paired; it never holds a password. Listed receivers are reported again
- * as changed. Returns how many receivers it holds credentials for, or an
- * ASC_AIRPLAY_PAIRINGS_* code.
+ * as changed. A store whose last write failed, left by a handle destroyed
+ * this run, is taken back instead of reading the file; for a file its first
+ * open ignored, that code is returned again. Returns how many receivers it
+ * holds credentials for, or an ASC_AIRPLAY_PAIRINGS_* code.
  */
 int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
 
@@ -1981,9 +1983,11 @@ int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
  * the receivers it paired with, which later sessions verify with; new ones
  * are written to it as pairings give them. Kept like the pairings file
  * (versioned, mode 0600, replaced through a temporary file); it never holds
- * a password and its credentials never cross this interface. With the hidden
- * AirPlay 2 switch off it reads and writes nothing and returns 0, and only
- * asc_airplay_forget_pairing opens the file, to drop the receiver from it,
+ * a password and its credentials never cross this interface. An identity
+ * whose last write failed comes back as asc_airplay_open_pairings says for
+ * such a store. With the hidden AirPlay 2 switch off it reads and writes
+ * nothing and returns 0, and only asc_airplay_forget_pairing opens the
+ * file, to drop the receiver from it,
  * and writes it only when it reads as this build's own: one it can't read
  * or parse, or that another account owns, is left as it is.
  * Returns how many receivers it holds credentials for, or an
@@ -2173,6 +2177,7 @@ typedef struct AscCastEvent {
     bool has_level;      /* the status gave the level; .level means nothing without it */
     bool answers_mute;   /* a volume event's status is the first since a mute was sent */
     double step;         /* the device's volume step; 0 when it reports none */
+    uint64_t ask;        /* a volume-unanswered event's ask id, as asc_cast_set_volume returned it */
     double drift_ms;     /* dropped audio plus rebuffering since the stream was loaded */
     double queued_ms;    /* audio waiting in the sender's queue */
     uint64_t underrun_frames; /* silent frames sent since the stream was loaded because the input ran dry */
@@ -2188,6 +2193,13 @@ typedef struct AscCastEvent {
  * asc_cast_start_discovery. Returns NULL when the thread can't start.
  */
 AscCast *asc_cast_create(const char *memory_json);
+
+/*
+ * As asc_cast_create, keeping the certificate fingerprints in
+ * cast-certificates.txt in folder, so a certificate changed across a
+ * relaunch is logged too. NULL or an empty folder keeps them in memory.
+ */
+AscCast *asc_cast_create_in(const char *memory_json, const char *folder);
 
 /*
  * Whether asc_cast_create reads memory_json as device memory: a JSON object
@@ -2295,11 +2307,12 @@ void asc_cast_stop(AscCast *cast);
 /*
  * Sets the device's volume, 0 to 1, clamped. Show the level volume events
  * report, and while the user drags a slider send at most one every 100 ms.
- * Returns false, sending nothing, for a NULL or dead handle, a level that
- * isn't finite, or when no session runs or starts; a locked volume comes as
+ * Returns the ask id that ASC_CAST_EVENT_VOLUME_UNANSWERED names for this
+ * ask; 0, sending nothing, for a NULL or dead handle, a level that isn't
+ * finite, or when no session runs or starts; a locked volume comes as
  * ASC_CAST_EVENT_COMMAND_FAILED with ASC_CAST_ERROR_VOLUME_FIXED.
  */
-bool asc_cast_set_volume(AscCast *cast, double level);
+uint64_t asc_cast_set_volume(AscCast *cast, double level);
 
 /*
  * Mutes or unmutes the device, apart from its level. Returns false, sending

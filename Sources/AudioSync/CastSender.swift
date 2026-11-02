@@ -63,7 +63,8 @@ final class CastSender {
         queue.async { [weak self] in
             guard let self else { return }
             self.memory = self.memoryURL.map(CastMemoryStore.init(url:))
-            guard let created = asc_cast_create(self.memory?.json) else {
+            guard let created = asc_cast_create_in(self.memory?.json,
+                                                   self.memoryURL?.deletingLastPathComponent().path) else {
                 DispatchQueue.main.async { completion(false, false) }
                 return
             }
@@ -115,11 +116,13 @@ final class CastSender {
     }
 
     /// The device's own volume, 0 to 1. Every level goes to the sender,
-    /// which paces a drag and reports each level it won't get an answer for (C70).
-    func setVolume(_ level: Double) {
+    /// which paces a drag and reports each ask it won't get an answer for (C70);
+    /// `asked` gets the ask's id on the main queue, before any report on it.
+    func setVolume(_ level: Double, asked: @escaping (UInt64) -> Void) {
         queue.async { [weak self] in
             guard let handle = self?.handle else { return }
-            _ = asc_cast_set_volume(handle, level)
+            let ask = asc_cast_set_volume(handle, level)
+            DispatchQueue.main.async { asked(ask) }
         }
     }
 

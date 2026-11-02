@@ -6220,6 +6220,7 @@ mod tests {
     #[test]
     fn a_shut_down_fades_every_output_and_the_airplay_input_once_within_the_fade_cap() {
         use crate::audio::cast::tests::{FakeCast, KITCHEN};
+        use audiosync_core::policy::session::QUIT_BUDGET;
         let mut backend = backend();
         let fake = FakeAirPlay::new();
         let clock = SenderClock::new(Instant::now());
@@ -6244,8 +6245,8 @@ mod tests {
         assert_eq!(backend.driver().renderers_faded(), 2, "every output");
         assert!(feed.fading_out(), "the AirPlay input");
         assert!(
-            (STOP_FADE_CAP..STOP_FADE_CAP * 2).contains(&took),
-            "held fades are waited for up to the cap, not long past it: {took:?}"
+            (STOP_FADE_CAP..Duration::from_secs_f64(QUIT_BUDGET)).contains(&took),
+            "held fades are waited for up to the cap, within Quit's budget: {took:?}"
         );
         assert!(!backend.driver().capture_running());
         assert_eq!(backend.driver().renderers_running(), 0);

@@ -27,7 +27,7 @@ extension AppDelegate {
     func applyZoneVolumes() {
         reapplyLocalGains()
         nativeAirPlay?.setZones(nativeZoneVolumes())
-        if let level = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast)) { castSender?.setVolume(level) }
+        if let level = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast)) { sendCastVolume(level) }
     }
 
     /// The zone volume of every AirPlay speaker in a zone, by receiver ID.
@@ -170,35 +170,33 @@ extension AppDelegate {
     /// one is, and for the longer of the two when both are, whatever the
     /// source (S244).
     func localHoldBackTargets() -> [String: Double] {
-        let wait = networkWaitMs
         let takingPart = localListed.filter(enabledLocal.contains) + briefLoss.held.filter(enabledLocal.contains).sorted()
-        return LocalDelay.holdBacks(takingPart: takingPart, reference: localReference,
-                                    offsets: localOffsetMs, airPlayChosen: wait != nil,
-                                    latencyMs: wait ?? airPlayLatencyMs)
+        return networkHoldBacks.localHoldBacks(takingPart: takingPart, reference: localReference, offsets: localOffsetMs)
+    }
+
+    var networkHoldBacks: NetworkHoldBack.Targets {
+        NetworkHoldBack.Targets(airPlayChosen: airPlayChosenAndListed, latencyMs: airPlayLatencyMs, cast: castModel)
     }
 
     /// What the network speakers play at: L while an AirPlay speaker is
     /// chosen, the Cast speaker's offset while one is on, the longer of both.
-    var networkWaitMs: Double? {
-        CastModel.networkWaitMs(airPlay: airPlayChosenAndListed ? airPlayLatencyMs : nil, cast: castModel.anchorMs)
-    }
+    var networkWaitMs: Double? { networkHoldBacks.waitMs }
 
     /// Holds the AirPlay speakers or the Cast feed back, live, so both play
     /// at the longer of L and the Cast offset (C77), and says so in a notice
     /// when the AirPlay sender's delay limit leaves its speakers ahead.
     func syncNetworkHoldBacks() {
-        let airPlay = airPlayChosenAndListed ? airPlayLatencyMs : nil
-        let cast = castModel.anchorMs
-        let wanted = NetworkHoldBack.airPlayMs(airPlay: airPlay, cast: cast)
+        let targets = networkHoldBacks
+        let wanted = targets.airPlayMs
         if let native = nativeAirPlay, native.setHoldBack(wanted) {
             DebugTrace.log("[AudioSync] AirPlay speakers held back \(Int(NetworkHoldBack.airPlayAppliedMs(wanted).rounded())) ms "
                 + "for the Google Cast speaker (asked \(Int(wanted.rounded())) ms)")
         }
-        let castWait = NetworkHoldBack.castMs(airPlay: airPlay, cast: cast)
+        let castWait = targets.castMs
         if let sender = castSender, sender.setHoldBack(castWait) {
             DebugTrace.log("[AudioSync] Cast: the feed is held back \(Int(castWait.rounded())) ms to meet L")
         }
-        let device = cast == nil ? nil : castModel.enabled
+        let device = targets.cast == nil ? nil : castModel.enabled
         let aheadMs = NetworkHoldBack.airPlayAheadMs(wanted, offsetsMs: nativeAirPlay?.speakerOffsetsMs ?? [])
         guard let step = airPlayAheadNotice.update(device: device, aheadMs: aheadMs) else { return }
         if let cleared = step.clear { clearNotices([Notice.airPlayAhead(cleared)]) }
@@ -318,6 +316,7 @@ extension AppDelegate {
         }
         microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
         let old = audioSource
+        lastMix = LastMix.kept(lastMix, leaving: old, for: source)
         audioSource = source
         updateNowPlayingTarget()
         // The tap is built for one source; switching rebuilds only it, under

@@ -266,12 +266,7 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     #[cfg(target_os = "linux")]
     platform::on_exit_signal(session_ending(&app, log, "exit signal"));
     #[cfg(windows)]
-    platform::on_console_quit(|| {
-        // Queued until the event loop runs, so a Ctrl-C before then still quits through it.
-        let _ = slint::invoke_from_event_loop(|| {
-            let _ = slint::quit_event_loop();
-        });
-    });
+    platform::on_console_quit(quit_through_event_loop);
 
     // To look at both appearances without changing the Windows setting, only
     // while the debug log is on.
@@ -346,6 +341,14 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn quit_through_event_loop() {
+    // Queued until the event loop runs, so a Ctrl-C before then still quits through it.
+    let _ = slint::invoke_from_event_loop(|| {
+        let _ = slint::quit_event_loop();
+    });
+}
+
 /// The quit steps for an end that may come before the event loop ends, or
 /// instead of it (S351).
 fn session_ending(
@@ -380,6 +383,39 @@ mod tests {
     #[ignore = "crashes the test process on purpose"]
     fn deliberate_crash_writes_a_minidump() {
         unsafe { std::ptr::null_mut::<u8>().write_volatile(1) };
+    }
+
+    // covers: S414
+    #[cfg(windows)]
+    #[test]
+    fn a_ctrl_c_before_the_event_loop_runs_ends_it_as_soon_as_it_starts() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        // The app's own backend: it drops a quit sent before its loop runs.
+        // Slint's proxy is per process, so a view test's quit can end this loop: a false pass, never a false fail.
+        slint::BackendSelector::new()
+            .backend_name("winit".to_owned())
+            .select()
+            .expect("the winit backend");
+        super::quit_through_event_loop();
+        let (ended, wait) = mpsc::channel::<()>();
+        // Ends a loop the Ctrl-C left running, so the test fails instead of hanging.
+        let watchdog = std::thread::spawn(move || {
+            let late = wait.recv_timeout(Duration::from_secs(10)).is_err();
+            if late {
+                let _ = slint::invoke_from_event_loop(|| {
+                    let _ = slint::quit_event_loop();
+                });
+            }
+            late
+        });
+        slint::run_event_loop_until_quit().expect("the event loop runs");
+        let _ = ended.send(());
+        assert!(
+            !watchdog.join().unwrap(),
+            "the Ctrl-C ends the event loop once it starts"
+        );
     }
 
     /// The Wayland app id, the .desktop file's window class and name, and
@@ -621,6 +657,47 @@ mod tests {
         );
     }
 
+    /// While other notices wait behind the newest, Dismiss All sits beside
+    /// the button for them, as in the Mac panel, and dismisses every notice.
+    #[test]
+    fn the_flyout_offers_dismiss_all_beside_the_more_notices_button() {
+        let flyout = include_str!("../ui/flyout.slint");
+        let row = &flyout[flyout
+            .find("if root.notice-count > root.notices.length: HorizontalLayout {")
+            .expect("the more-notices row is there")..];
+        let row = &row[..row.find("Divider { }").expect("the row ends")];
+        assert!(row.contains("text: Strings.dismiss-all-notices;"), "{row}");
+        let body = handler_body(row, "text: Strings.dismiss-all-notices;", "clicked");
+        assert!(body.contains("root.notices-dismissed-all();"), "{body}");
+    }
+
+    /// While the Google Cast search finds nothing, the flyout offers Add by
+    /// Address… under the list, as the Mac panel does, and it opens the
+    /// main window's dialog.
+    #[test]
+    fn the_flyout_offers_add_by_address_while_no_cast_speaker_is_found() {
+        let flyout = include_str!("../ui/flyout.slint");
+        assert!(flyout.contains(
+            "if root.cast-by-address && root.cast-list == CastList.none-found: HorizontalLayout {"
+        ));
+        let body = handler_body(flyout, "text: Strings.cast-add-address;", "clicked");
+        assert!(
+            body.contains("root.cast-add-address-requested();"),
+            "{body}"
+        );
+
+        let view = include_str!("view.rs");
+        let wiring = &view[view
+            .find("flyout.on_cast_add_address_requested(")
+            .expect("the flyout's link is wired")..];
+        let wiring = &wiring[..wiring.find("});").expect("the wiring ends")];
+        assert!(wiring.contains("app.hide_flyout();"), "{wiring}");
+        assert!(
+            wiring.contains("app.main.invoke_cast_add_address_requested();"),
+            "{wiring}"
+        );
+    }
+
     /// A dismiss button names its notice in a few words: after a dismiss the
     /// next notice's button takes the focus, and Narrator then says which
     /// notice it is without reading the whole notice again.
@@ -731,6 +808,11 @@ mod tests {
                 "for speaker in root.speakers: FlyoutRow {",
                 "focus-changed(focused)",
                 "speaker-focused",
+            ),
+            (
+                "text: Strings.cast-add-address;",
+                "changed keyboard-focused",
+                "add-address-focused",
             ),
         ] {
             let body = handler_body(flyout, element, handler);
