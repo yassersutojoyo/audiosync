@@ -577,13 +577,14 @@ struct Recorder {
     got: Arc<Mutex<Vec<Datagram>>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    source: Mutex<Option<SocketAddr>>,
 }
 
 impl Recorder {
     fn bind() -> Recorder {
         let socket = UdpSocket::bind("127.0.0.1:0").expect("a socket");
-        // About 20 s of audio for a reader that load holds up; the default
-        // on Windows, 64 KiB, lasts a third of a second.
+        // Over a second of audio for a reader that load holds up (Linux caps
+        // the size near 416 KiB); the default on Windows, 64 KiB, lasts a third.
         socket2::SockRef::from(&socket)
             .set_recv_buffer_size(4 << 20)
             .expect("a receive buffer");
@@ -614,7 +615,28 @@ impl Recorder {
             got,
             stop,
             thread: Some(thread),
+            source: Mutex::new(None),
         }
+    }
+
+    /// From now on only datagrams from where the first one that `ours`
+    /// matches came from: an earlier session, or a test that held this port
+    /// before, sends from another socket.
+    fn keep_sender(&self, ours: impl Fn(&Datagram) -> bool) {
+        *self.source.lock().expect("source") = None;
+        let (_, from, _) = self.wait_for(ours).expect("a packet of the session");
+        *self.source.lock().expect("source") = Some(from);
+    }
+
+    fn kept(&self, (_, from, _): &Datagram) -> bool {
+        self.source
+            .lock()
+            .expect("source")
+            .is_none_or(|kept| kept == *from)
+    }
+
+    fn keep_sender_of(&self, key: &[u8; 32]) {
+        self.keep_sender(|(_, _, bytes)| open_packet(key, bytes).is_some());
     }
 
     fn port(&self) -> u16 {
@@ -623,12 +645,32 @@ impl Recorder {
 
     /// Everything received since the last `take`.
     fn take(&self) -> Vec<Datagram> {
-        std::mem::take(&mut *self.got.lock().expect("datagrams"))
+        let got = std::mem::take(&mut *self.got.lock().expect("datagrams"));
+        got.into_iter()
+            .filter(|datagram| self.kept(datagram))
+            .collect()
+    }
+
+    /// Returns once the reader has caught up with what reached the port so
+    /// far, which a reader that load holds up would otherwise hand a later `take`.
+    fn settle(&self) {
+        let marker = UdpSocket::bind("127.0.0.1:0").expect("a socket");
+        let from = marker.local_addr().expect("address");
+        marker
+            .send_to(&[], ("127.0.0.1", self.port()))
+            .expect("the marker");
+        assert!(wait_until(LONG, || {
+            let mut got = self.got.lock().expect("datagrams");
+            let before = got.len();
+            got.retain(|(_, sent_from, _)| *sent_from != from);
+            got.len() < before
+        }));
     }
 
     /// Everything received since the last `take` and within `span` more.
     fn after(&self, span: Duration) -> Vec<Datagram> {
         std::thread::sleep(span);
+        self.settle();
         self.take()
     }
 
@@ -648,7 +690,7 @@ impl Recorder {
                 .lock()
                 .expect("datagrams")
                 .iter()
-                .find(|datagram| matches(datagram))
+                .find(|datagram| self.kept(datagram) && matches(datagram))
                 .cloned();
             found.is_some()
         });
@@ -659,11 +701,19 @@ impl Recorder {
 impl Drop for Recorder {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        // The reader blocks without a timeout, so join only once the wake went out.
-        let woken = UdpSocket::bind("127.0.0.1:0")
-            .and_then(|waker| waker.send_to(&[], ("127.0.0.1", self.port())))
-            .is_ok();
-        if let Some(thread) = self.thread.take().filter(|_| woken) {
+        let Some(thread) = self.thread.take() else {
+            return;
+        };
+        // The reader blocks without a timeout and a wake can be lost, so it
+        // goes out again until the reader ends; a reader still blocked is left.
+        let waker = UdpSocket::bind("127.0.0.1:0");
+        let ended = wait_until(Duration::from_secs(5), || {
+            if let Ok(waker) = &waker {
+                let _ = waker.send_to(&[], ("127.0.0.1", self.port()));
+            }
+            thread.is_finished()
+        });
+        if ended {
             let _ = thread.join();
         }
     }
@@ -801,8 +851,9 @@ fn ap2_audio_reaches_the_receiver() {
         server.fake().keys()
     );
 
-    let audio = udp.data.after(Duration::from_millis(1_500));
     let shk = stream_key(&server.fake()).expect("shk");
+    udp.data.keep_sender_of(&shk);
+    let audio = udp.data.after(Duration::from_millis(1_500));
     assert_ne!(shk, [0; 32]);
     assert!(audio.len() > 100, "{}", audio.len());
     let (first_seq, first_rtptime) = rtp_info(&server);
@@ -828,11 +879,16 @@ fn ap2_audio_reaches_the_receiver() {
 
     // Sync packets under NTP come from the control socket, which takes
     // retransmission requests; a resend is the packet as first sent.
+    // Another stream's sync can reach this port too; this stream's names
+    // an RTP time of its own.
+    let ours = |(_, _, bytes): &Datagram| {
+        bytes.len() == 20
+            && bytes[1] == 0xD4
+            && u32_at(bytes, 16).wrapping_sub(first_rtptime) < 44_100 * 60
+    };
     udp.control.take();
-    let (_, sender_control, sync) = udp
-        .control
-        .wait_for(|(_, _, bytes)| bytes.len() == 20 && bytes[1] == 0xD4)
-        .expect("a sync packet");
+    udp.control.keep_sender(ours);
+    let (_, sender_control, sync) = udp.control.wait_for(ours).expect("a sync packet");
     assert_eq!(sync.len(), 20);
     let wanted = seq_of(&audio[3].2);
     let request = ResendRequest {
@@ -846,11 +902,11 @@ fn ap2_audio_reaches_the_receiver() {
         .socket
         .send_to(&request, sender_control)
         .expect("a resend request");
-    let reply = udp
+    let (_, _, reply) = udp
         .control
         .wait_for(|(_, _, bytes)| bytes.len() > 4 && bytes[1] == 0xD6)
         .expect("a resend");
-    assert_eq!(&reply.2[RESEND_PREFIX_BYTES..], &audio[3].2[..]);
+    assert_eq!(&reply[RESEND_PREFIX_BYTES..], &audio[3].2[..]);
 
     // A new session: a new stream SETUP, a new key, a counter from 0.
     sender.remove_speaker(&key);
@@ -869,8 +925,9 @@ fn ap2_audio_reaches_the_receiver() {
         "{:?}",
         events.of(&key)
     );
-    let (_, _, again) = udp.data.wait_for(|_| true).expect("audio again");
     let second = stream_key(&server.fake()).expect("shk");
+    udp.data.keep_sender_of(&second);
+    let (_, _, again) = udp.data.wait_for(|_| true).expect("audio again");
     assert_ne!(second, shk);
     assert_eq!(open_packet(&second, &again).expect("opens").counter, 0);
     assert!(open_packet(&shk, &again).is_none());
@@ -934,10 +991,12 @@ fn ap2_a_pair_sends_every_member_the_same_full_stereo_audio() {
         );
     }
 
-    let heard_a = udp_a.data.after(Duration::from_millis(1_500));
-    let heard_b = udp_b.data.take();
     let shk_a = stream_key(&a.fake()).expect("shk");
     let shk_b = stream_key(&b.fake()).expect("shk");
+    udp_a.data.keep_sender_of(&shk_a);
+    udp_b.data.keep_sender_of(&shk_b);
+    let heard_a = udp_a.data.after(Duration::from_millis(1_500));
+    let heard_b = udp_b.data.take();
     assert_ne!(shk_a, shk_b, "every member keeps its own key");
     let (frames_a, frames_b) = (
         member_frames(&shk_a, &heard_a),
@@ -1118,31 +1177,47 @@ fn ap2_ptp_session() {
     // sender's ports 319 and 320 (here the test's own), by unicast. The
     // window starts at a fresh Announce and lasts their 1 s period, so the
     // next one, late from a loaded sender, may land just past it.
-    let kinds = |got: &[(Instant, SocketAddr, Vec<u8>)], kind: u8| {
-        got.iter().filter(|(_, _, b)| b[0] & 0x0F == kind).count()
+    let is = |kind: u8| move |(_, _, b): &Datagram| b[0] & 0x0F == kind;
+    let stamp = |b: &[u8]| {
+        let (seconds, nanos) = timestamp(&b[34..44]);
+        seconds as f64 + f64::from(nanos) / 1e9
     };
+    udp.general
+        .keep_sender(|(_, from, _)| from.port() == local.general);
+    udp.event
+        .keep_sender(|(_, from, _)| from.port() == local.event);
     udp.general.take();
+    assert!(udp.general.wait_for(is(0xB)).is_some());
+    udp.general.take();
+    // The second is the sender's own, by its Follow_Up times, so a reader
+    // that load holds up neither shortens nor shifts it.
+    let start = stamp(&udp.general.wait_for(is(0x8)).expect("Follow_Up").2);
     assert!(
         udp.general
-            .wait_for(|(_, _, b)| b[0] & 0x0F == 0xB)
+            .wait_for(|d| is(0x8)(d) && stamp(&d.2) >= start + 1.0)
             .is_some()
     );
-    udp.general.take();
-    udp.event.take();
-    std::thread::sleep(Duration::from_millis(1_000));
-    let (general, event) = (udp.general.take(), udp.event.take());
+    let general = udp.general.take();
+    let window: Vec<u16> = general
+        .iter()
+        .filter(|d| is(0x8)(d) && stamp(&d.2) < start + 1.0)
+        .map(|d| header(&d.2).seq)
+        .collect();
+    // Each Sync leaves before its Follow_Up.
+    let last = *window.last().expect("Follow_Up");
     assert!(
-        udp.general
-            .wait_for(|(_, _, b)| b[0] & 0x0F == 0xB)
-            .is_some(),
-        "Announce"
+        udp.event
+            .wait_for(|d| is(0x0)(d) && header(&d.2).seq == last)
+            .is_some()
     );
-    assert!(
-        kinds(&general, 0x8) >= 6,
-        "Follow_Up x{} in 1 s",
-        kinds(&general, 0x8)
-    );
-    assert!((6..=10).contains(&kinds(&event, 0x0)), "Sync");
+    let event = udp.event.take();
+    let syncs = event
+        .iter()
+        .filter(|d| is(0x0)(d) && window.contains(&header(&d.2).seq))
+        .count();
+    assert!(udp.general.wait_for(is(0xB)).is_some(), "Announce");
+    assert!(window.len() >= 6, "Follow_Up x{} in 1 s", window.len());
+    assert!((6..=10).contains(&syncs), "Sync");
     for (_, from, bytes) in general.iter().chain(&event) {
         assert_eq!(&bytes[20..28], &identity);
         assert!(from.ip().is_loopback());
@@ -1153,15 +1228,14 @@ fn ap2_ptp_session() {
             .iter()
             .all(|(_, from, _)| from.port() == local.general)
     );
-    // The Follow_Up time is the sender clock's PTP time (P163).
-    let (arrived, _, follow) = general
+    // The Follow_Up time is the sender clock's PTP time (P163); the first
+    // to arrive is the one a held-up reader stamped least late.
+    let gap = general
         .iter()
-        .rfind(|(_, _, b)| b[0] & 0x0F == 0x8)
-        .expect("Follow_Up");
-    let (seconds, nanos) = timestamp(&follow[34..44]);
-    let stated = seconds as f64 + f64::from(nanos) / 1e9;
-    let actual = arrived.duration_since(origin).as_secs_f64();
-    assert!((actual - stated).abs() < 0.1, "{actual} {stated}");
+        .filter(|d| is(0x8)(d))
+        .map(|(arrived, _, b)| arrived.duration_since(origin).as_secs_f64() - stamp(b))
+        .fold(f64::INFINITY, f64::min);
+    assert!(gap.abs() < 0.1, "{gap}");
 
     // A Delay_Req from the receiver gets its Delay_Resp on port 320.
     let request = message(0x1, [0x02, 0, 0, 0xFF, 0xFE, 0, 0, 0x02], 77, 44);
@@ -1170,25 +1244,22 @@ fn ap2_ptp_session() {
         .socket
         .send_to(&request, (Ipv4Addr::LOCALHOST, local.event))
         .expect("Delay_Req");
-    let answers = udp.general.after(Duration::from_millis(400));
-    let resp = answers
-        .iter()
-        .find(|(_, _, b)| b[0] & 0x0F == 0x9)
-        .expect("Delay_Resp");
-    assert_eq!(header(&resp.2).seq, 77);
+    let (_, _, resp) = udp.general.wait_for(is(0x9)).expect("Delay_Resp");
+    assert_eq!(header(&resp).seq, 77);
 
     // Time announces take the place of sync packets, with the clock identity.
-    let control = udp.control.fresh(Duration::from_millis(1_200));
-    let announces: Vec<_> = control
-        .iter()
-        .filter(|(_, _, b)| b.len() == 28 && b[1] == 0xD7)
-        .collect();
-    assert!(!announces.is_empty());
+    let announce = |(_, _, b): &Datagram| b.len() == 28 && b[1] == 0xD7;
+    udp.control
+        .keep_sender(|d| announce(d) && d.2[20..28] == identity);
+    udp.control.take();
+    let control = udp.control.after(Duration::from_millis(1_200));
+    assert!(control.iter().any(announce));
     assert!(control.iter().all(|(_, _, b)| b[1] != 0xD4));
-    assert_eq!(&announces[0].2[20..28], &identity);
     let shk = stream_key(&server.fake()).expect("shk");
-    let audio = udp.data.fresh(Duration::from_millis(300));
-    assert!(open_packet(&shk, &audio[0].2).is_some());
+    udp.data.keep_sender_of(&shk);
+    udp.data.take();
+    let (_, _, audio) = udp.data.wait_for(|_| true).expect("audio");
+    assert!(open_packet(&shk, &audio).is_some());
 
     // The session ends: the PTP traffic stops.
     sender.remove_speaker(&key);
@@ -1200,9 +1271,13 @@ fn ap2_ptp_session() {
         .count()
         == 2));
     std::thread::sleep(Duration::from_millis(300));
+    udp.event.settle();
+    udp.general.settle();
     udp.event.take();
     udp.general.take();
     std::thread::sleep(Duration::from_millis(400));
+    udp.event.settle();
+    udp.general.settle();
     assert!(udp.event.take().is_empty());
     assert!(udp.general.take().is_empty());
     assert!(wait_until(LONG, || ports_free(local)));
@@ -1233,11 +1308,11 @@ fn ap2_ntp_lets_the_ptp_ports_go() {
     assert_eq!(keys.iter().filter(|k| *k == "SETUP session").count(), 1);
     // The receiver took NTP, so another PTP stack may have 319 and 320.
     assert!(wait_until(LONG, || ports_free(local)));
-    let control = udp.control.fresh(Duration::from_millis(1_200));
+    udp.control.take();
     assert!(
-        control
-            .iter()
-            .any(|(_, _, b)| b.len() == 20 && b[1] == 0xD4)
+        udp.control
+            .wait_for(|(_, _, b)| b.len() == 20 && b[1] == 0xD4)
+            .is_some()
     );
     assert!(udp.event.take().is_empty());
     assert!(udp.general.take().is_empty());
