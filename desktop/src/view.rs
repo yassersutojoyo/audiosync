@@ -139,6 +139,9 @@ struct UiState {
     /// The equalizer curve last picked or saved, so the picker tells it from
     /// a curve with the same gains (spec S270).
     chosen_curve: Option<CurveMatch>,
+    /// The gains when Save Curve opened its dialog, which Save stores even
+    /// if the picker, bands or Reset change them meanwhile.
+    save_curve_gains: [f64; eq::BAND_COUNT],
 }
 
 /// The virtual outputs the speaker lists have shown this session. With Show
@@ -4216,26 +4219,19 @@ impl App {
             Some(CurveMatch::User(index)) => Some(&state.equalizer_curves[index]),
             _ => None,
         };
-        if shown.is_none() && state.equalizer_curves.len() >= eq::MAX_USER_CURVES {
-            *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
-            dialog.set_heading(strings.get_save_curve_title());
-            dialog.set_message(strings.invoke_curves_full(count(eq::MAX_USER_CURVES)));
-            dialog.set_show_field(false);
-            dialog.set_confirm_label(strings.get_ok());
-        } else {
-            let name = shown.map_or_else(
-                || strings.invoke_numbered_curve(count(state.equalizer_curves.len() + 1)),
-                |curve| curve.name.as_str().into(),
-            );
-            *self.dialog_purpose.borrow_mut() = DialogPurpose::SaveCurve;
-            dialog.set_heading(strings.get_save_curve_title());
-            dialog.set_message(strings.get_save_curve_message());
-            dialog.set_placeholder(strings.get_curve_name_field_label());
-            dialog.set_field_label(strings.get_curve_name_field_label());
-            dialog.set_name(name);
-            dialog.set_show_field(true);
-            dialog.set_confirm_label(strings.get_save());
-        }
+        let name = shown.map_or_else(
+            || strings.invoke_numbered_curve(count(state.equalizer_curves.len() + 1)),
+            |curve| curve.name.as_str().into(),
+        );
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::SaveCurve;
+        self.ui.borrow_mut().save_curve_gains = state.equalizer.gains_db;
+        dialog.set_heading(strings.get_save_curve_title());
+        dialog.set_message(strings.get_save_curve_message());
+        dialog.set_placeholder(strings.get_curve_name_field_label());
+        dialog.set_field_label(strings.get_curve_name_field_label());
+        dialog.set_name(name);
+        dialog.set_show_field(true);
+        dialog.set_confirm_label(strings.get_save());
         self.open_dialog();
     }
 
@@ -4527,13 +4523,13 @@ impl App {
             DialogPurpose::SavePreset => self.save_preset(name),
             DialogPurpose::RenamePreset(id) => self.update(|b| b.rename_preset(&id, name)),
             DialogPurpose::SaveCurve => {
-                let state = self.snapshot();
-                let mut curves = state.equalizer_curves;
+                let mut curves = self.snapshot().equalizer_curves;
                 // An empty name saves nothing (spec S270).
                 if eq::curve_name(name).is_none() {
                     return;
                 }
-                if let Some(index) = eq::save_curve(&mut curves, name, &state.equalizer.gains_db) {
+                let gains_db = self.ui.borrow().save_curve_gains;
+                if let Some(index) = eq::save_curve(&mut curves, name, &gains_db) {
                     self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
                     self.update(|b| b.set_equalizer_curves(curves));
                 } else {
@@ -12844,6 +12840,77 @@ mod tests {
             .dispatch_event(slint::platform::WindowEvent::CloseRequested);
         assert!(!app.zone_dialog.window().is_visible());
         assert_enabled(true, "after the dialog's close button");
+    }
+
+    // covers: S270
+    #[test]
+    fn a_full_list_still_saves_over_a_curve_from_a_preset_and_refuses_a_new_name() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let curves = (1..=eq::MAX_USER_CURVES)
+            .map(|n| eq::UserCurve {
+                name: if n == 1 {
+                    "Warm".into()
+                } else {
+                    format!("Curve {n}")
+                },
+                gains_db: [0.0; eq::BAND_COUNT],
+            })
+            .collect();
+        app.update(|b| b.set_equalizer_curves(curves));
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
+        eq_window.invoke_preset_selected(rock as i32);
+
+        eq_window.invoke_save_curve();
+        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
+        app.zone_dialog.invoke_confirmed("warm".into());
+        let state = app.snapshot();
+        assert_eq!(state.equalizer_curves.len(), eq::MAX_USER_CURVES);
+        assert_eq!(
+            state.equalizer_curves[0].gains_db,
+            eq::PRESETS[rock].gains_db
+        );
+
+        eq_window.invoke_preset_selected(0);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Late night".into());
+        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
+        assert_eq!(
+            app.zone_dialog.get_message(),
+            app.strings().invoke_curves_full(count(eq::MAX_USER_CURVES))
+        );
+        let state = app.snapshot();
+        assert_eq!(state.equalizer_curves.len(), eq::MAX_USER_CURVES);
+        assert!(
+            state
+                .equalizer_curves
+                .iter()
+                .all(|c| c.name != "Late night")
+        );
+    }
+
+    // covers: S270
+    #[test]
+    fn the_curve_saved_has_the_gains_shown_when_save_was_chosen() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let warm = [3.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0];
+        for (band, gain) in warm.iter().enumerate() {
+            eq_window.invoke_gain_changed(band as i32, *gain as f32);
+        }
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("Warm".into());
+
+        eq_window.invoke_save_curve();
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
+        eq_window.invoke_preset_selected(rock as i32);
+        eq_window.invoke_gain_changed(0, -6.0);
+        eq_window.invoke_reset();
+        app.zone_dialog.invoke_confirmed("Warm".into());
+        let state = app.snapshot();
+        assert_eq!(state.equalizer_curves.len(), 1);
+        assert_eq!(state.equalizer_curves[0].gains_db, warm);
+        assert_eq!(state.equalizer.gains_db, [0.0; eq::BAND_COUNT]);
     }
 
     // covers: S270

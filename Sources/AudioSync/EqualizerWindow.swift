@@ -31,10 +31,6 @@ final class EqualizerWindowController {
     private func promptSaveCurve() {
         let text = UIStrings()
         let shown = model.shownSavedIndex.map { model.curves[$0].name }
-        guard shown != nil || model.curves.count < Equalizer.maxCurves else {
-            inform(text.saveCurveTitle, text.curvesFull(Equalizer.maxCurves))
-            return
-        }
         guard let typed = promptName(title: text.saveCurveTitle, message: text.saveCurveMessage,
                                      name: shown ?? text.numberedCurve(model.curves.count + 1),
                                      confirm: text.save) else { return }
