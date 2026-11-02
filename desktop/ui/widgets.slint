@@ -413,6 +413,35 @@ export component QuietText inherits HorizontalLayout {
     }
 }
 
+// The body of a Tooltip over a label; text wider than `max-tip-width`
+// wraps inside it.
+component LabelTip inherits Rectangle {
+    in property <string> text;
+    in property <length> max-tip-width;
+
+    width: min(tip-text.preferred-width + 16px, root.max-tip-width);
+    height: tip-text.preferred-height + 10px;
+    border-radius: Fluent.radius-control;
+    border-width: 1px;
+    border-color: Fluent.stroke;
+    background: Tokens.surface;
+    drop-shadow-blur: 8px;
+    drop-shadow-offset-y: 2px;
+    drop-shadow-color: Tokens.text.with-alpha(0.18);
+    accessible-role: none;
+
+    tip-text := Text {
+        x: 8px;
+        width: parent.width - 16px;
+        text: root.text;
+        font-size: Tokens.font-size-caption;
+        color: Tokens.text;
+        vertical-alignment: center;
+        wrap: word-wrap;
+        accessible-role: none;
+    }
+}
+
 // A speaker's kind as a small glyph after its name, as on the Mac. The
 // tooltip names the kind; Narrator reads it from the row's toggle.
 export component KindIcon inherits Rectangle {
@@ -2016,28 +2045,9 @@ export component SpeakerRow inherits Rectangle {
                                             // instead of under them. Narrator reads the
                                             // device name from the toggle instead.
                                             if root.tip-allowed: Tooltip {
-                                                Rectangle {
-                                                    width: min(tip-text.preferred-width + 16px, root.width);
-                                                    height: tip-text.preferred-height + 10px;
-                                                    border-radius: Fluent.radius-control;
-                                                    border-width: 1px;
-                                                    border-color: Fluent.stroke;
-                                                    background: Tokens.surface;
-                                                    drop-shadow-blur: 8px;
-                                                    drop-shadow-offset-y: 2px;
-                                                    drop-shadow-color: Tokens.text.with-alpha(0.18);
-                                                    accessible-role: none;
-
-                                                    tip-text := Text {
-                                                        x: 8px;
-                                                        width: parent.width - 16px;
-                                                        text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
-                                                        font-size: Tokens.font-size-caption;
-                                                        color: Tokens.text;
-                                                        vertical-alignment: center;
-                                                        wrap: word-wrap;
-                                                        accessible-role: none;
-                                                    }
+                                                LabelTip {
+                                                    text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
+                                                    max-tip-width: root.width;
                                                 }
                                             }
                                             clicked => {
@@ -2108,28 +2118,9 @@ export component SpeakerRow inherits Rectangle {
                                             }
 
                                             Tooltip {
-                                                Rectangle {
-                                                    width: min(help-text.preferred-width + 16px, root.width);
-                                                    height: help-text.preferred-height + 10px;
-                                                    border-radius: Fluent.radius-control;
-                                                    border-width: 1px;
-                                                    border-color: Fluent.stroke;
-                                                    background: Tokens.surface;
-                                                    drop-shadow-blur: 8px;
-                                                    drop-shadow-offset-y: 2px;
-                                                    drop-shadow-color: Tokens.text.with-alpha(0.18);
-                                                    accessible-role: none;
-
-                                                    help-text := Text {
-                                                        x: 8px;
-                                                        width: parent.width - 16px;
-                                                        text: root.note-help;
-                                                        font-size: Tokens.font-size-caption;
-                                                        color: Tokens.text;
-                                                        vertical-alignment: center;
-                                                        wrap: word-wrap;
-                                                        accessible-role: none;
-                                                    }
+                                                LabelTip {
+                                                    text: root.note-help;
+                                                    max-tip-width: root.width;
                                                 }
                                             }
                                         }
@@ -2173,28 +2164,9 @@ export component SpeakerRow inherits Rectangle {
                                         }
 
                                         if root.tip-allowed: Tooltip {
-                                            Rectangle {
-                                                width: min(group-tip.preferred-width + 16px, root.width);
-                                                height: group-tip.preferred-height + 10px;
-                                                border-radius: Fluent.radius-control;
-                                                border-width: 1px;
-                                                border-color: Fluent.stroke;
-                                                background: Tokens.surface;
-                                                drop-shadow-blur: 8px;
-                                                drop-shadow-offset-y: 2px;
-                                                drop-shadow-color: Tokens.text.with-alpha(0.18);
-                                                accessible-role: none;
-
-                                                group-tip := Text {
-                                                    x: 8px;
-                                                    width: parent.width - 16px;
-                                                    text: root.item.group-note;
-                                                    font-size: Tokens.font-size-caption;
-                                                    color: Tokens.text;
-                                                    vertical-alignment: center;
-                                                    wrap: word-wrap;
-                                                    accessible-role: none;
-                                                }
+                                            LabelTip {
+                                                text: root.item.group-note;
+                                                max-tip-width: root.width;
                                             }
                                         }
                                     }
@@ -2340,28 +2312,9 @@ export component SpeakerRow inherits Rectangle {
                                     }
 
                                     Tooltip {
-                                        Rectangle {
-                                            width: min(volume-tip.preferred-width + 16px, root.width);
-                                            height: volume-tip.preferred-height + 10px;
-                                            border-radius: Fluent.radius-control;
-                                            border-width: 1px;
-                                            border-color: Fluent.stroke;
-                                            background: Tokens.surface;
-                                            drop-shadow-blur: 8px;
-                                            drop-shadow-offset-y: 2px;
-                                            drop-shadow-color: Tokens.text.with-alpha(0.18);
-                                            accessible-role: none;
-
-                                            volume-tip := Text {
-                                                x: 8px;
-                                                width: parent.width - 16px;
-                                                text: root.volume-hint;
-                                                font-size: Tokens.font-size-caption;
-                                                color: Tokens.text;
-                                                vertical-alignment: center;
-                                                wrap: word-wrap;
-                                                accessible-role: none;
-                                            }
+                                        LabelTip {
+                                            text: root.volume-hint;
+                                            max-tip-width: root.width;
                                         }
                                     }
                                 }
@@ -2679,28 +2632,9 @@ export component ZoneMemberRow inherits Rectangle {
                                 }
 
                                 if root.tip-allowed: Tooltip {
-                                    Rectangle {
-                                        width: min(tip-text.preferred-width + 16px, root.width);
-                                        height: tip-text.preferred-height + 10px;
-                                        border-radius: Fluent.radius-control;
-                                        border-width: 1px;
-                                        border-color: Fluent.stroke;
-                                        background: Tokens.surface;
-                                        drop-shadow-blur: 8px;
-                                        drop-shadow-offset-y: 2px;
-                                        drop-shadow-color: Tokens.text.with-alpha(0.18);
-                                        accessible-role: none;
-
-                                        tip-text := Text {
-                                            x: 8px;
-                                            width: parent.width - 16px;
-                                            text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
-                                            font-size: Tokens.font-size-caption;
-                                            color: Tokens.text;
-                                            vertical-alignment: center;
-                                            wrap: word-wrap;
-                                            accessible-role: none;
-                                        }
+                                    tip-text := LabelTip {
+                                        text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
+                                        max-tip-width: root.width;
                                     }
                                 }
                                 clicked => {
@@ -3053,28 +2987,9 @@ export component ZoneHeader inherits Rectangle {
                                         }
 
                                         if root.tip-allowed: Tooltip {
-                                            Rectangle {
-                                                width: min(name-tip.preferred-width + 16px, root.width);
-                                                height: name-tip.preferred-height + 10px;
-                                                border-radius: Fluent.radius-control;
-                                                border-width: 1px;
-                                                border-color: Fluent.stroke;
-                                                background: Tokens.surface;
-                                                drop-shadow-blur: 8px;
-                                                drop-shadow-offset-y: 2px;
-                                                drop-shadow-color: Tokens.text.with-alpha(0.18);
-                                                accessible-role: none;
-
-                                                name-tip := Text {
-                                                    x: 8px;
-                                                    width: parent.width - 16px;
-                                                    text: root.item.name;
-                                                    font-size: Tokens.font-size-caption;
-                                                    color: Tokens.text;
-                                                    vertical-alignment: center;
-                                                    wrap: word-wrap;
-                                                    accessible-role: none;
-                                                }
+                                            name-tip := LabelTip {
+                                                text: root.item.name;
+                                                max-tip-width: root.width;
                                             }
                                         }
                                         clicked => {
@@ -3145,28 +3060,9 @@ export component ZoneHeader inherits Rectangle {
                                     }
 
                                     if root.tip-allowed: Tooltip {
-                                        Rectangle {
-                                            width: min(count-tip.preferred-width + 16px, root.width);
-                                            height: count-tip.preferred-height + 10px;
-                                            border-radius: Fluent.radius-control;
-                                            border-width: 1px;
-                                            border-color: Fluent.stroke;
-                                            background: Tokens.surface;
-                                            drop-shadow-blur: 8px;
-                                            drop-shadow-offset-y: 2px;
-                                            drop-shadow-color: Tokens.text.with-alpha(0.18);
-                                            accessible-role: none;
-
-                                            count-tip := Text {
-                                                x: 8px;
-                                                width: parent.width - 16px;
-                                                text: count-text.text;
-                                                font-size: Tokens.font-size-caption;
-                                                color: Tokens.text;
-                                                vertical-alignment: center;
-                                                wrap: word-wrap;
-                                                accessible-role: none;
-                                            }
+                                        count-tip := LabelTip {
+                                            text: count-text.text;
+                                            max-tip-width: root.width;
                                         }
                                     }
                                 }

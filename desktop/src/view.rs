@@ -8953,7 +8953,13 @@ mod tests {
     fn shows_in_full(app: &App, label: &str, tip: &str) {
         let width = element(app, label).map_or(0.0, |label| label.size().width);
         let (_, shown) = rest_on(app, label, tip);
-        let shown = shown.unwrap_or_else(|| panic!("a tooltip on {label}"));
+        let shown = shown
+            .and_then(|tip| {
+                tip.query_descendants()
+                    .match_id("LabelTip::tip-text")
+                    .find_first()
+            })
+            .unwrap_or_else(|| panic!("a tooltip on {label}"));
         assert!(
             shown.size().width > width,
             "{label}: tip {} wide, label {width}",
