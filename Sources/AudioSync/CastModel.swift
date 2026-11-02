@@ -213,6 +213,8 @@ enum CastEvent: Equatable {
     case members(attempt: UInt64, [CastMember])
     /// A line about a Cast group for the debug log.
     case groupLog(String)
+    /// A line for the debug log: the certificates file couldn't be read or written.
+    case log(String)
     case memoryChanged
     case discoveryStopped
     /// The sender stopped working; `detail` names where it panicked, or "".
@@ -224,7 +226,7 @@ enum CastEvent: Equatable {
              .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _, _), .commandFailed(let a, _),
              .volumeUnanswered(let a, _, _), .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
-        case .groupLog, .memoryChanged, .discoveryStopped, .failed:
+        case .groupLog, .log, .memoryChanged, .discoveryStopped, .failed:
             return nil
         }
     }
@@ -279,6 +281,7 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_STREAM: self = .note(attempt: a, "stream: " + detail)
         case ASC_CAST_EVENT_MEMBERS: self = .members(attempt: a, members())
         case ASC_CAST_EVENT_GROUP_LOG: self = .groupLog(detail)
+        case ASC_CAST_EVENT_LOG: self = .log(detail)
         case ASC_CAST_EVENT_CERTIFICATE_CHANGED:
             self = .note(attempt: a, "the device's certificate changed from " + detail)
         case ASC_CAST_EVENT_MEMORY_CHANGED: self = .memoryChanged
@@ -892,7 +895,7 @@ struct CastModel {
     mutating func apply(_ event: CastEvent, now: Date = Date()) -> CastOutcome? {
         switch event {
         case .memoryChanged: return .memoryChanged
-        case .groupLog: return nil
+        case .groupLog, .log: return nil
         case .discoveryStopped:
             discovery = .failed
             // The sender keeps the device in a session, a start included, and those added by address.
@@ -969,7 +972,7 @@ struct CastModel {
             attempt?.reportedMute = nil
             volumes[id]?.muted = muted
             return .changed
-        case .commandFailed, .note, .groupLog, .memoryChanged, .discoveryStopped, .failed:
+        case .commandFailed, .note, .groupLog, .log, .memoryChanged, .discoveryStopped, .failed:
             return nil
         }
     }
