@@ -1055,49 +1055,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         arrowLayer.removeFromSuperlayer()
     }
 
-    /// Debug log only: where the popover draws its arrow's apex on screen at
-    /// this step, the middle of the topmost narrow run under the tip, with the
-    /// base and height it draws and where and how big the arrow over it is.
+    /// Debug log only: where the arrow over the popover's own has its apex on
+    /// screen at this step, and how big it is.
     private func traceArrow(_ window: NSWindow, step: Int, tip: CGPoint) {
-        var apex = "unknown", base = "unknown"
-        if let frame = window.contentView?.superview {
-            let bounds = frame.bounds
-            let strip = CGRect(x: bounds.minX, y: frame.isFlipped ? bounds.minY : bounds.maxY - Self.arrowRoom,
-                               width: bounds.width, height: Self.arrowRoom)
-            if let rep = frame.bitmapImageRepForCachingDisplay(in: strip), rep.bitsPerSample == 8, let data = rep.bitmapData {
-                frame.cacheDisplay(in: strip, to: rep)
-                let alpha = rep.bitmapFormat.contains(.alphaFirst) ? 0 : rep.samplesPerPixel - 1
-                let perPoint = CGFloat(rep.pixelsWide) / strip.width
-                let column = Int(((tip.x - window.frame.minX - bounds.minX) * perPoint).rounded(.down))
-                var top: Int?, bottom = 0, widest = 0
-                // Bitmap rows run from the strip's top edge, the window's top.
-                for row in 0..<rep.pixelsHigh where (0..<rep.pixelsWide).contains(column) {
-                    func lit(_ x: Int) -> Bool { data[row * rep.bytesPerRow + x * rep.samplesPerPixel + alpha] > 127 }
-                    if !lit(column) {
-                        if top != nil { break }
-                        continue
-                    }
-                    var first = column, last = column
-                    while first > 0, lit(first - 1) { first -= 1 }
-                    while last < rep.pixelsWide - 1, lit(last + 1) { last += 1 }
-                    // A run across most of the strip is a hairline above the arrow or the box below it.
-                    if last - first + 1 > rep.pixelsWide / 2 {
-                        if top != nil { break }
-                        continue
-                    }
-                    if top == nil {
-                        top = row
-                        apex = NSStringFromPoint(CGPoint(x: window.frame.minX + bounds.minX + CGFloat(first + last + 1) / 2 / perPoint,
-                                                         y: window.frame.maxY - CGFloat(row) / perPoint))
-                    }
-                    bottom = row
-                    widest = max(widest, last - first + 1)
-                }
-                if let top {
-                    base = String(format: "%.1f x %.1f", CGFloat(widest) / perPoint, CGFloat(bottom - top + 1) / perPoint)
-                }
-            }
-        }
         let frameView = window.contentView?.superview
         var overlay = frameView == nil ? "none, no frame view" : frameView?.layer == nil ? "none, no layer" : "none, not added"
         var overlaySize = "none"
@@ -1109,7 +1069,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             overlay = NSStringFromPoint(ends[0].y > ends[1].y ? ends[0] : ends[1])
             overlaySize = String(format: "%.1f x %.1f", box.width, box.height)
         }
-        DebugTrace.log("[AudioSync] panel arrow step: step \(step), apex \(apex), base \(base), overlay apex \(overlay), "
+        DebugTrace.log("[AudioSync] panel arrow step: step \(step), overlay apex \(overlay), "
                        + "overlay \(overlaySize), tip \(NSStringFromPoint(tip)), frame \(NSStringFromRect(window.frame))")
     }
 
