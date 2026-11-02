@@ -7478,6 +7478,30 @@ do {
     check(heldOutside == ["lc:den"],
           "presets: a recall leaves on the stereo pair or home theater that holds a stored member", "\(heldOutside)")
 
+    // covers: S251, S252
+    let macSpeakersKey = "lc:BuiltInSpeakerDevice", usbOutKey = "lc:usb:out"
+    let savedSpeakersOff = PresetEdit.saving("Desk", scene: PresetScene(on: [.init(key: usbOutKey, volume: 40)],
+                                                                        zones: [], master: 80, gains: presetFlat),
+                                             id: "p7", to: [], numbered: numbered)?.first
+    let speakersOffOutside = PresetRecall.outside([macSpeakersKey, usbOutKey],
+                                                  stored: Set(savedSpeakersOff?.members.map(\.key) ?? []), holders: [])
+    let speakersOffRecall = PresetRecall.plan([.init(kind: .local, found: true, on: true)],
+                                              others: speakersOffOutside.map { _ in true }, streaming: true)
+    check(speakersOffOutside == [macSpeakersKey] && speakersOffRecall.action == .apply
+            && speakersOffRecall.switchOff == [true],
+          "presets: a preset saved with the MacBook speakers off switches them off on recall",
+          "\(speakersOffOutside) \(speakersOffRecall)")
+    let savedSpeakersOn = PresetEdit.saving("Desk", scene: PresetScene(on: [.init(key: macSpeakersKey, volume: 30),
+                                                                            .init(key: usbOutKey, volume: 40)],
+                                                                       zones: [], master: 80, gains: presetFlat),
+                                            id: "p8", to: [], numbered: numbered)?.first
+    let speakersOnRecall = PresetRecall.plan([.init(kind: .local, found: true), .init(kind: .local, found: true, on: true)],
+                                             others: [], streaming: true)
+    check(savedSpeakersOn?.members.map(\.key) == [macSpeakersKey, usbOutKey]
+            && speakersOnRecall.action == .apply && speakersOnRecall.steps == [.on, .on],
+          "presets: a preset saved with the MacBook speakers on switches them on on recall",
+          "\(String(describing: savedSpeakersOn)) \(speakersOnRecall)")
+
     // covers: S265
     var goneCast = CastModel()
     goneCast.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))

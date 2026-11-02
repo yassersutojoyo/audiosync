@@ -1290,7 +1290,7 @@ uint32_t asc_preset_recall_plan(const AscPresetMember *members, size_t count, co
 
 /*
  * Whether the host plays a preset exactly (S253): `on_now` speakers are on,
- * the reference output left out; the gains are ten each. False for a NULL
+ * on Windows the reference output left out; the gains are ten each. False for a NULL
  * array with a count above 0, or NULL gains. Pure function for the control
  * thread.
  */

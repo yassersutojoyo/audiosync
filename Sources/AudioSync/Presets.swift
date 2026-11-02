@@ -286,8 +286,8 @@ enum PresetRecall {
         var leavesOff: Bool { steps.contains { if case .leftOff = $0 { return true } else { return false } } }
     }
 
-    /// `others`: whether each speaker outside the preset is on. The Mac has
-    /// no output the user can't switch off, so none is a reference here.
+    /// `others`: whether each speaker outside the preset is on. The Mac stores
+    /// and recalls its reference like any member (S252).
     static func plan(_ members: [Member], others: [Bool], streaming: Bool) -> Plan {
         let raw = members.map { member in
             AscPresetMember(kind: code(member.kind), found: member.found, hidden: member.hidden, on: member.on,
