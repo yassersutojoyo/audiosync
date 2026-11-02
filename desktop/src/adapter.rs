@@ -162,7 +162,6 @@ struct CalibrateAll {
 /// The zone of a Calibrate Zone run as it was at the start.
 struct MeasuredZone {
     id: String,
-    name: String,
     /// Its member keys then: losing one ends the run (spec S240).
     members: Vec<String>,
 }
@@ -1644,12 +1643,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             zone: all
                 .zone
                 .as_ref()
-                .filter(|measured| self.zones.get(&measured.id).is_some())
-                .map(|measured| self.zone_sheet(measured)),
+                .and_then(|measured| self.zones.get(&measured.id))
+                .map(|zone| self.zone_sheet(zone)),
         }
     }
 
-    fn zone_sheet(&self, measured: &MeasuredZone) -> ZoneSheet {
+    fn zone_sheet(&self, zone: &zones::Zone) -> ZoneSheet {
         let off_rows = self
             .calibrate_all
             .sheet
@@ -1668,13 +1667,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .filter(|key| !self.is_hidden(key))
             .collect();
         ZoneSheet {
-            name: measured.name.clone(),
+            name: zone.name.clone(),
             off_rows,
-            airplay_moves: airplay_moves(
-                &self.zones,
-                &measured.id,
-                listed.iter().map(String::as_str),
-            ),
+            airplay_moves: airplay_moves(&self.zones, &zone.id, listed.iter().map(String::as_str)),
         }
     }
 
@@ -5402,6 +5397,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn delete_zone(&mut self, id: &str) {
         if self.zones.delete(id) {
             self.log.log(|| format!("zone {id} deleted"));
+            // A run ends on the zone going (S240) before the card lets go of it (S255).
+            self.stop_calibrate_all_for_zones(false);
+            self.calibrate_all
+                .zone
+                .take_if(|measured| measured.id == id);
             self.push_zone_volumes();
         }
     }
@@ -5767,7 +5767,6 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         );
         let measured = MeasuredZone {
             id: zone.id,
-            name: zone.name,
             members: zone.members,
         };
         self.calibrate_all_started(started, Some(measured));
@@ -17154,12 +17153,47 @@ mod tests {
         );
     }
 
+    // covers: S255
+    #[test]
+    fn a_zone_renamed_while_its_results_show_takes_its_new_name_on_the_card() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibrate_zone("zone:1");
+        adapter.rename_zone("zone:1", "Upstairs");
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.zone.expect("the zone's sheet").name, "Upstairs");
+    }
+
+    // covers: S240, S255
+    #[test]
+    fn a_deleted_measured_zone_leaves_the_card_even_when_its_id_comes_back() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibrate_zone("zone:1");
+        adapter.delete_zone("zone:1");
+        // A settings file read late still holds the zone under its old ID.
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key("bluetooth"), key("tv")])],
+            ..Settings::default()
+        });
+        assert!(
+            adapter.snapshot().calibrate_all.zone.is_none(),
+            "the card's button reads Calibrate All for good"
+        );
+
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        zone_running(&mut adapter);
+        adapter.delete_zone("zone:1");
+        ended_as_a_change(&mut adapter);
+    }
+
     /// A Calibrate Zone run over zone:1 that has just started.
     fn zone_running(adapter: &mut AudioAdapter<MockBackend>) {
         adapter.calibrate_all.run = Some(crate::audio::calibrate_all::tests::zone_run());
         adapter.calibrate_all.zone = Some(MeasuredZone {
             id: "zone:1".to_owned(),
-            name: "Downstairs".to_owned(),
             members: vec![key("bluetooth"), key("tv")],
         });
         adapter.stop_calibrate_all_for_zones(false);
