@@ -1190,6 +1190,9 @@ export global Strings {
         if kind == NoticeKind.settings-kept-aside {
             return @tr("settings unreadable, copy kept");
         }
+        if kind == NoticeKind.settings-from-newer {
+            return @tr("settings from a newer version");
+        }
         if kind == NoticeKind.pairings-kept-aside {
             return @tr("pairings unreadable, copy kept");
         }

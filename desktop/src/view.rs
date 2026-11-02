@@ -5930,7 +5930,10 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::AirPlayPtpPortsTaken => (NoticeKind::AirplayPtpPortsTaken, ""),
         NoticeMessage::SettingsNotSaved => (NoticeKind::SettingsNotSaved, ""),
         NoticeMessage::PairingsNotSaved => (NoticeKind::PairingsNotSaved, ""),
-        NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
+        NoticeMessage::SettingsKeptAside { newer: false, .. } => {
+            (NoticeKind::SettingsKeptAside, "")
+        }
+        NoticeMessage::SettingsKeptAside { newer: true, .. } => (NoticeKind::SettingsFromNewer, ""),
         NoticeMessage::PairingsKeptAside { .. } => (NoticeKind::PairingsKeptAside, ""),
         NoticeMessage::NoSoundOutput => (NoticeKind::NoSoundOutput, ""),
         NoticeMessage::LaunchAtLoginFailed => (NoticeKind::LaunchAtLoginFailed, ""),
@@ -13214,6 +13217,14 @@ mod tests {
             }),
             "Dismiss: settings unreadable, copy kept"
         );
+        // A file a newer AudioSync wrote reads fine; Narrator must not call it unreadable.
+        assert_eq!(
+            dismiss_label(NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: true,
+            }),
+            "Dismiss: settings from a newer version"
+        );
         assert_eq!(
             dismiss_label(NoticeMessage::PairingsKeptAside { file: "f".into() }),
             "Dismiss: pairings unreadable, copy kept"
@@ -13262,6 +13273,10 @@ mod tests {
             NoticeMessage::SettingsKeptAside {
                 file: "f".into(),
                 newer: false,
+            },
+            NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: true,
             },
             NoticeMessage::PairingsKeptAside { file: "f".into() },
             NoticeMessage::NoSoundOutput,
