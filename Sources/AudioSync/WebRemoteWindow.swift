@@ -21,7 +21,7 @@ final class WebRemoteWindowController {
         if window == nil {
             let view = WebRemoteView(settings: remote.settings, text: text, announcer: announcer)
             let host = NSHostingController(rootView: view)
-            let panel = NSWindow(contentViewController: host)
+            let panel = WebRemotePanel(contentViewController: host)
             panel.title = text.webRemoteTitle
             panel.styleMask = [.titled, .closable]
             panel.isReleasedWhenClosed = false
@@ -35,6 +35,17 @@ final class WebRemoteWindowController {
         }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// Escape closes the Web Remote window, as it does the equalizer.
+private final class WebRemotePanel: NSWindow {
+    override func cancelOperation(_ sender: Any?) {
+        performClose(sender)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        closeOnEscape(event) || super.performKeyEquivalent(with: event)
     }
 }
 
