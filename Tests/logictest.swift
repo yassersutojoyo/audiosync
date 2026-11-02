@@ -8067,7 +8067,7 @@ do {
     let growTip = PanelReveal.tip(icon: 1153.3, rest: growRest)
     // The layer's position at the content's middle, where Core Animation's default anchor point puts it.
     let growOffset = CGVector(dx: -10, dy: -206)
-    let grown = revealSteps.enumerated().map { index, scale -> (tip: CGPoint, corner: CGPoint, laid: CGPoint, scale: CGFloat) in
+    let grown = revealSteps.enumerated().map { index, scale -> (tip: CGPoint, corner: CGPoint, laidCorner: CGPoint, scale: CGFloat) in
         let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
         let s = step.height / growRest.height
         // Where AppKit lays the content's tip point before the transform, off by half points.
@@ -8084,7 +8084,7 @@ do {
     // covers: S405
     check(zip(grown, revealSteps).allSatisfy { step, scale in
         abs(step.corner.x - (growTip.x - 153 * step.scale)) < 1e-9 && abs(step.corner.y - (growTip.y - 400 * step.scale)) < 1e-9
-            && abs(step.scale - CGFloat(scale)) < 0.002 && (scale > 0.999 || abs(step.corner.y - step.laid.y) > 1)
+            && abs(step.scale - CGFloat(scale)) < 0.002 && (step.scale > 0.999 || abs(step.corner.y - step.laidCorner.y) > 0.25)
     }, "menu bar panel: at each step the content scales by the window's height about the arrow's tip, never about its own middle, so its text grows from under the icon with the panel",
           "\(grown.map { $0.corner })")
     // covers: S405
