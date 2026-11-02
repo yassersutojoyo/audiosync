@@ -1250,6 +1250,33 @@ enum NetworkHoldBack {
     static func airPlayAheadMs(_ wantedMs: Double, offsetsMs: [Double]) -> Double {
         offsetsMs.map { wantedMs + $0 - airPlayLimitMs }.reduce(0, max)
     }
+
+    /// What the host hands the AirPlay sender, the Cast feed and the local
+    /// outputs for one state of the speakers (C77, C101, S244).
+    struct Targets: Equatable {
+        /// L while an AirPlay speaker is chosen and listed, else nil.
+        let airPlay: Double?
+        /// The offset of the Cast device or group that is on, else nil.
+        let cast: Double?
+
+        init(airPlayChosen: Bool, latencyMs: Double, cast: CastModel) {
+            airPlay = airPlayChosen ? latencyMs : nil
+            self.cast = cast.anchorMs
+        }
+
+        /// What the network speakers play at, nil while none is chosen.
+        var waitMs: Double? { CastModel.networkWaitMs(airPlay: airPlay, cast: cast) }
+        var airPlayMs: Double { NetworkHoldBack.airPlayMs(airPlay: airPlay, cast: cast) }
+        var castMs: Double { NetworkHoldBack.castMs(airPlay: airPlay, cast: cast) }
+
+        /// The local outputs wait for `waitMs` while a network speaker is
+        /// chosen, whichever kind (the core reads the latency only then).
+        func localHoldBacks(takingPart uids: [String], reference: String?, offsets: [String: Double]) -> [String: Double] {
+            let wait = waitMs
+            return LocalDelay.holdBacks(takingPart: uids, reference: reference, offsets: offsets,
+                                        airPlayChosen: wait != nil, latencyMs: wait ?? 0)
+        }
+    }
 }
 
 /// The notice that the AirPlay speakers play ahead of the Cast device that

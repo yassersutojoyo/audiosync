@@ -13775,6 +13775,47 @@ do {
           "cast+airplay: the notice never replaces a problem with the Cast speaker")
 }
 
+// MARK: What the host hands the AirPlay sender, the Cast feed and local outputs (C77, C101)
+do {
+    let holdGroup = "group-hold"
+    var castOn = CastModel()
+    castOn.apply(.appeared(CastDevice(id: holdGroup, name: "Group", group: true), offsetMs: 650))
+    _ = castOn.turnOn(holdGroup)
+    var castOff = castOn
+    castOff.turnOff(holdGroup)
+    let localWaits: (NetworkHoldBack.Targets) -> [Double] = { targets in
+        let holds = targets.localHoldBacks(takingPart: ["builtin", "usb"], reference: "builtin", offsets: [:])
+        return ["builtin", "usb"].map { holds[$0] ?? .nan }
+    }
+    let castOnly = NetworkHoldBack.Targets(airPlayChosen: false, latencyMs: 400, cast: castOn)
+    // covers: C77, C101
+    check(castOnly.waitMs == 650 && castOnly.airPlayMs == 0 && castOnly.castMs == 0
+            && localWaits(castOnly).allSatisfy { approx($0, 650, 1e-6) },
+          "network hold-backs: local outputs wait for a Cast group's 650 ms offset", "\(localWaits(castOnly))")
+    let bothOn = NetworkHoldBack.Targets(airPlayChosen: true, latencyMs: 400, cast: castOn)
+    // covers: C77, C101
+    check(bothOn.waitMs == 650 && approx(400 + bothOn.airPlayMs, 650, 1e-6) && bothOn.castMs == 0
+            && localWaits(bothOn).allSatisfy { approx($0, 650, 1e-6) },
+          "network hold-backs: AirPlay at L 400 ms and local outputs both wait for the 650 ms Cast offset",
+          "airPlay \(bothOn.airPlayMs), locals \(localWaits(bothOn))")
+    let castLater = NetworkHoldBack.Targets(airPlayChosen: true, latencyMs: 1750, cast: castOn)
+    // covers: C77
+    check(castLater.waitMs == 1750 && castLater.airPlayMs == 0 && approx(castLater.castMs, 1100, 1e-6)
+            && localWaits(castLater).allSatisfy { approx($0, 1750, 1e-6) },
+          "network hold-backs: the Cast feed waits for a longer L and local outputs for L")
+    let idle = NetworkHoldBack.Targets(airPlayChosen: false, latencyMs: 1750, cast: castOff)
+    let airPlayOnly = NetworkHoldBack.Targets(airPlayChosen: true, latencyMs: 400, cast: castOff)
+    // covers: C77
+    check(idle.cast == nil && idle.waitMs == nil && idle.airPlayMs == 0 && idle.castMs == 0
+            && localWaits(idle) == [0, 0],
+          "network hold-backs: with the Cast speaker off and no AirPlay speaker, nothing waits", "\(localWaits(idle))")
+    // covers: C77
+    check(airPlayOnly.waitMs == 400 && airPlayOnly.airPlayMs == 0 && airPlayOnly.castMs == 0
+            && localWaits(airPlayOnly).allSatisfy { approx($0, 400, 1e-6) },
+          "network hold-backs: with the Cast speaker off, AirPlay waits for nothing and local outputs wait for L only",
+          "\(localWaits(airPlayOnly))")
+}
+
 // MARK: Google Cast device memory: saved atomically, read back by a new sender
 // covers: S367
 do {
