@@ -472,7 +472,10 @@ fn a_desktop_marker_keeps_its_cast_ids_around_engine_ids_and_notes() {
     let found = |list: &str| host_ids(list).into_iter().collect::<Option<Vec<Id>>>();
     assert_eq!(found("C77a, S241"), Some(ids(&["C77a"])));
     assert_eq!(found("S246 (a note, with a comma), C2"), Some(ids(&["C2"])));
-    assert_eq!(found("C70 (0.55 (twice)), C104, P99"), Some(ids(&["C70", "C104"])));
+    assert_eq!(
+        found("C70 (0.55 (twice)), C104, P99"),
+        Some(ids(&["C70", "C104"]))
+    );
     assert_eq!(found("S112 (a note that runs on,"), Some(Vec::new()));
     assert_eq!(found("C2, X9"), None);
 }
