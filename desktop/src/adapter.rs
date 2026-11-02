@@ -2127,7 +2127,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// The speaker list's note about Google Cast discovery.
     fn cast_list(&self) -> CastList {
         match self.audio.cast_discovery() {
-            CastDiscovery::Off => CastList::Quiet,
+            // Without a host the search never started, as on the Mac.
+            CastDiscovery::Off => CastList::Failed,
             // A dead browser leaves browsed rows listed; the Mac keeps only these two (S339).
             CastDiscovery::Failed
                 if self.audio.cast_speakers().iter().any(|speaker| {
@@ -5186,6 +5187,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 .log(|| "Cast: Add by Address turned down what was typed".to_owned());
             return Err(CastAddressError::Invalid);
         };
+        if self.audio.cast_discovery() == CastDiscovery::Off {
+            self.log
+                .log(|| "Cast: Add by Address found no Cast host to add to".to_owned());
+            return Err(CastAddressError::NotFound);
+        }
         Ok(CastAddressCheck {
             address,
             answers: self.cast_probe,
@@ -16287,6 +16293,21 @@ mod tests {
     fn without_a_cast_sender_add_by_address_is_off() {
         let adapter = AudioAdapter::new(launch_audio(), || "09.41".to_owned(), DebugLog::default());
         assert!(!adapter.snapshot().cast_by_address);
+    }
+
+    // covers: S393, S394
+    #[test]
+    fn without_a_cast_host_the_list_says_the_search_failed_and_add_by_address_finds_nothing() {
+        let mut adapter =
+            AudioAdapter::new(launch_audio(), || "09.41".to_owned(), DebugLog::default());
+        adapter.set_cast_probe(|_| true);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().cast_list, CastList::Failed);
+        assert_eq!(
+            adapter.add_cast_address("192.0.2.20"),
+            Err(CastAddressError::NotFound)
+        );
+        assert!(adapter.current_settings().cast_addresses.is_empty());
     }
 
     // covers: C18
