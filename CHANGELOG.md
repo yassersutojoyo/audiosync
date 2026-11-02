@@ -2,7 +2,7 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
-## [0.8.0] - unreleased
+## [0.8.0] - 2026-11-02
 
 ### Added
 
@@ -90,7 +90,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On Windows, Tab reaches a zone's arrow, in the main window and the tray panel, and Space or Enter on it shows or hides the zone's speakers. A zone's volume now works while none of its speakers is found, as on the Mac. Before, Tab skipped the arrow while a speaker was found, and the volume was greyed out while none was.
-- On Windows, a zone name, zone count or stereo pair line that fits no longer shows a tooltip repeating it. Only one cut to an ellipsis does, and a name in the In zones list keeps its tooltip, which holds the device name and the rename hint.
 - On the Mac, Escape closes the Web Remote window, also while the cursor is in its port field.
 - On the Mac, Right unfolds a zone and Left folds it, in the main window and the menu bar panel, as on Windows.
 - On Windows, Narrator now says a delay set with a step button or Enter, and a character the delay field doesn't take. In the Web Remote window it says a new or expired pairing code, a lockout and a forget that couldn't be saved, and the equalizer's Rename and Delete buttons name the curve, as VoiceOver does on the Mac.
@@ -438,7 +437,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the web remote no longer drops a phone's live updates when the PC is busy.
 - On the Mac, on Windows and in the Linux preview, a Google Cast speaker's volume slider no longer jumps back during a quick drag while the TV is still catching up with your earlier steps, and it follows the TV again after the TV refuses a level you set.
 - On the Mac, an AirPlay speaker muted for a calibration stays muted when AudioSync connects it again while the calibration runs.
-- On Windows, a zone name, zone count, zone member name or stereo pair member line that ends in an ellipsis in the half-width speaker list shows its full text in a tooltip.
+- On Windows, a zone name, zone count, zone member name or stereo pair member line that ends in an ellipsis in the half-width speaker list shows its full text in a tooltip, and one that fits shows none. A name in the In zones list keeps its tooltip, which holds the device name and the rename hint.
 
 ## [0.7.1] - 2026-10-27
 

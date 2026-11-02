@@ -33,6 +33,15 @@ AirPlay speakers play about two seconds late. Local speakers don't. Play the sam
 
 AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. Mac app, menu bar panel, free, alpha.
 
+## New in 0.8
+
+- Speakers that only do AirPlay 2, stereo pairs and home theater groups play out of the box, up to 16 at once.
+- An AirPlay speaker that drops off the network waits until it's back, then plays.
+- A local speaker that starts late catches up within 3 seconds.
+- Calibration no longer reads late off a wall reflection.
+- Rename a zone in place, like a speaker.
+- The Windows preview updates itself: Help > Check for Updates…
+
 ## New in 0.7
 
 The Windows parts are in the Windows preview, out since 0.7.1.
@@ -103,7 +112,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 ## What doesn't work (yet)
 
 - Everything is about two seconds late. Fine for music, bad for video and games.
-- Speakers that only do AirPlay 2 play out of the box. A speaker that does both AirPlay 1 and AirPlay 2 still uses AirPlay 1, unless you turn on AirPlay 2 (Experimental) in the app menu or the gear menu, then quit and reopen AudioSync. It plays up to 16 AirPlay 2 speakers at once, but so far I've only tried it on one AirPlay 2 TV, never on several at once. A stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
+- Speakers that only do AirPlay 2 play out of the box. A speaker that does both AirPlay 1 and AirPlay 2 still uses AirPlay 1, unless you turn on AirPlay 2 (Experimental) in the app menu or the gear menu, then quit and reopen AudioSync. It plays up to 16 AirPlay 2 speakers at once, but so far I've only tried it on one AirPlay 2 TV, never on several at once. Speakers waiting for the network or for a free slot have only met emulated receivers so far. A stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
 - Not tried on a HomePod yet. If yours fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
 - On the Mac, Now Playing only works with Spotify and Music.
