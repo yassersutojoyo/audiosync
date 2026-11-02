@@ -3929,7 +3929,17 @@ impl<D: Driver> Controller<D> {
         };
         // A capture being reopened, or an input away or busy, has its own
         // outcome or notice, which playing something won't answer.
-        if session.reopen.is_some() || session.audio_check.is_none_or(|due| now < due) {
+        if session.reopen.is_some() {
+            if let Some(due) = session.audio_check.as_mut() {
+                *due = now + FIRST_AUDIO_CHECK;
+            }
+            if std::mem::take(&mut session.said_waiting) {
+                self.pending
+                    .push(BackendEvent::WaitingForAudio { waiting: false });
+            }
+            return;
+        }
+        if session.audio_check.is_none_or(|due| now < due) {
             return;
         }
         if session.ring.heard() {
@@ -5653,10 +5663,11 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
             )
         }
         BackendEvent::WaitingForAudio { waiting: true } => {
-            "the source played no sound in the session's first 3 s".to_owned()
+            "the source has played no sound yet in this session".to_owned()
         }
         BackendEvent::WaitingForAudio { waiting: false } => {
-            "no longer waiting for sound: it arrived, or the session ended".to_owned()
+            "no longer waiting for sound: it arrived, the capture closed, or the session ended"
+                .to_owned()
         }
         BackendEvent::Woke => "the PC woke".to_owned(),
         BackendEvent::AirPlayChanged => "the AirPlay speakers changed".to_owned(),

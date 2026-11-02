@@ -2610,6 +2610,15 @@ do {
           "capture notice: no waiting notice while the input is away or busy; the check posts once the capture opens again",
           "\(whileAway) \(firstTry) \(whileBusy) \(secondTry) \(whileOpen)")
 }
+// covers: S350
+do {
+    var shownGate = CaptureNoticeGate(session: 9)
+    _ = shownGate.step(verdict: .waiting, session: 9, running: true, app: nil)
+    check(shownGate.step(verdict: .waiting, session: 9, running: true, captureClosed: true, app: nil) == .withdraw
+          && shownGate.step(verdict: .waiting, session: 9, running: true, captureClosed: true, app: nil) == .keep
+          && shownGate.step(verdict: .waiting, session: 9, running: true, app: nil) == .post(.waiting, nil),
+          "capture notice: a waiting notice showing clears when the capture closes, and posts again once it is open and still waits")
+}
 // covers: S329 (the Mac: an input device that left is waited for, outside the tries)
 do {
     var watch = CaptureFlowWatch()
