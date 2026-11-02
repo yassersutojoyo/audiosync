@@ -236,6 +236,8 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
+    /// The sources, then Several Apps…, which opens the main window's list.
+    flyout_sources: Rc<VecModel<SharedString>>,
     /// The chosen input device's channel pairs; empty up to two channels.
     input_pairs: Rc<VecModel<SharedString>>,
     mix_apps: Rc<VecModel<MixAppItem>>,
@@ -989,6 +991,7 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
+            flyout_sources: Rc::new(VecModel::default()),
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -1703,7 +1706,8 @@ impl App {
             .set_calibrate_all_rows(ModelRc::from(m.calibration_rows.clone()));
         self.main
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
-        self.flyout.set_sources(ModelRc::from(m.sources.clone()));
+        self.flyout
+            .set_sources(ModelRc::from(m.flyout_sources.clone()));
         self.flyout
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
@@ -2090,6 +2094,9 @@ impl App {
             connected_zoned,
             ..
         } = main_lists;
+        let mut flyout_sources = sources.clone();
+        flyout_sources.push(strings.get_source_mix_more());
+        sync_model(&m.flyout_sources, flyout_sources);
         sync_model(&m.sources, sources);
         sync_model(&m.input_pairs, input_pairs);
         self.main.set_input_pair_index(input_pair_index);
@@ -2856,7 +2863,17 @@ impl App {
         let w = weak.clone();
         flyout.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
         let w = weak.clone();
-        flyout.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
+        flyout.on_source_selected(move |index| {
+            with_app(&w, |app| {
+                if usize::try_from(index) == Ok(app.snapshot().sources.len()) {
+                    app.hide_flyout();
+                    app.show_main();
+                    app.main.set_mix_open(true);
+                } else {
+                    app.select_source(index);
+                }
+            })
+        });
         let w = weak.clone();
         flyout.on_input_pair_selected(move |index| {
             with_app(&w, |app| app.select_input_pair(index));
@@ -6152,11 +6169,12 @@ mod tests {
             let mut backend = MockBackend::new();
             backend.unplug_chosen_input(name);
             let app = app_over(backend);
+            // The flyout's Several Apps… comes after it.
+            let last = app.main.get_sources().row_count() - 1;
             for (sources, index) in [
                 (app.main.get_sources(), app.main.get_source_index()),
                 (app.flyout.get_sources(), app.flyout.get_source_index()),
             ] {
-                let last = sources.row_count() - 1;
                 assert_eq!(index, last as i32, "{shown}: still chosen");
                 assert_eq!(
                     sources.row_data(last).map(String::from).as_deref(),
