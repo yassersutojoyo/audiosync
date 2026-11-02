@@ -582,6 +582,11 @@ struct Recorder {
 impl Recorder {
     fn bind() -> Recorder {
         let socket = UdpSocket::bind("127.0.0.1:0").expect("a socket");
+        // About 20 s of audio for a reader that load holds up; the default
+        // on Windows, 64 KiB, lasts a third of a second.
+        socket2::SockRef::from(&socket)
+            .set_recv_buffer_size(4 << 20)
+            .expect("a receive buffer");
         let reader = socket.try_clone().expect("a clone");
         let got = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -956,12 +961,12 @@ fn ap2_a_pair_sends_every_member_the_same_full_stereo_audio() {
 #[test]
 fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     const ANSWER: Duration = Duration::from_millis(800);
-    // 2 s in the app (P132). Three missed intervals lose the speaker, so
-    // the slow answer below keeps 1.45 s of that for load.
-    const FEEDBACK: Duration = Duration::from_millis(1_000);
-    // Feedback answered this late skips intervals, as on a runner too
-    // loaded to keep the rhythm; 1.05 s plus the 0.5 s a loaded PC added.
-    const SLOW_FEEDBACK: Duration = Duration::from_millis(1_550);
+    // As in the app (P132). Three missed intervals lose the speaker, so
+    // the slow answer below leaves 3.95 s of that to load.
+    const FEEDBACK: Duration = Duration::from_millis(2_000);
+    // Feedback answered this late skips an interval, as on a runner too
+    // loaded to keep the rhythm.
+    const SLOW_FEEDBACK: Duration = Duration::from_millis(2_050);
     let _serial = serial();
     let udp = Udp::bind();
     let server = Ap2Server::start(udp.fake(FakeAp2::new()));
@@ -985,21 +990,40 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
         }
     );
 
+    // Another stream's packets can reach this port (below), so only those
+    // that open with this session's key are counted.
+    let shk = stream_key(&server.fake()).expect("shk");
+    let ours = |(_, _, bytes): &Datagram| open_packet(&shk, bytes).is_some();
+
     // Paused for a while: no audio, the feedback goes on.
     server
         .fake()
         .pause
         .insert("POST /feedback".to_owned(), SLOW_FEEDBACK);
     let feedback = count(&server, "POST /feedback");
+    // The recorder's thread held up for a second, as load holds it up,
+    // while the audio before the pause goes on arriving.
+    let starved = udp.data.got.lock().expect("datagrams");
+    std::thread::sleep(Duration::from_secs(1));
     sender.pause();
     let paused = Instant::now();
+    drop(starved);
     assert!(wait_until(LONG, || count(&server, "FLUSH") == 2));
     assert!(wait_until(LONG, || count(&server, "POST /feedback") >= feedback + 2));
     let (seq, rtptime) = rtp_info(&server);
+    // A packet from another stream, as a sender of a test that held this
+    // port before still sends for a moment after that test ends.
+    let mut stray = vec![0u8; 1_448];
+    stray[..4].copy_from_slice(&[0x80, 0x60, 0, 0]);
+    stray[2..4].copy_from_slice(&seq.wrapping_add(1_000).to_be_bytes());
+    UdpSocket::bind("127.0.0.1:0")
+        .and_then(|socket| socket.send_to(&stray, ("127.0.0.1", udp.data.port())))
+        .expect("the stray packet");
+    assert!(udp.data.wait_for(|(_, _, bytes)| *bytes == stray).is_some());
     // The FLUSH names the first packet held back. Packets before it left
     // before the sender took the pause, however late a busy runner stamps
     // them; nothing else arrives.
-    let datagrams = udp.data.take();
+    let datagrams: Vec<Datagram> = udp.data.take().into_iter().filter(ours).collect();
     let late = tail_before(&datagrams, paused, seq).len();
     assert_eq!(
         datagrams.iter().filter(|(at, _, _)| *at > paused).count(),
@@ -1007,7 +1031,7 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     );
     assert_eq!(count(&server, "FLUSHBUFFERED"), 0);
     sender.resume();
-    let (_, _, bytes) = udp.data.wait_for(|_| true).expect("audio after the resume");
+    let (_, _, bytes) = udp.data.wait_for(ours).expect("audio after the resume");
     assert_eq!(seq_of(&bytes), seq);
     assert_eq!(bytes[1], 0xE0);
     assert_eq!(u32_at(&bytes, 4), rtptime);
@@ -1029,7 +1053,7 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     let held = rtp_info(&server).0;
     let (at, _, bytes) = udp
         .data
-        .wait_for(|(_, _, bytes)| !before(seq_of(bytes), held))
+        .wait_for(|datagram| ours(datagram) && !before(seq_of(&datagram.2), held))
         .expect("audio after the resume");
     assert!(
         at >= paused + ANSWER + ANSWER / 2,
@@ -1039,7 +1063,8 @@ fn ap2_pause_flushes_and_the_resume_waits_for_its_answer() {
     assert_eq!(seq_of(&bytes), held);
     assert_eq!(rtp_info(&server).0, held);
     assert_eq!(bytes[1], 0xE0);
-    tail_before(&udp.data.take(), paused, held);
+    let datagrams: Vec<Datagram> = udp.data.take().into_iter().filter(ours).collect();
+    tail_before(&datagrams, paused, held);
     sender.shutdown();
 }
 
