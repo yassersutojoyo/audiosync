@@ -24,6 +24,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, Right unfolds a zone and Left folds it, in the main window and the menu bar panel, as on Windows.
 - On Windows, when AudioSync turns off an AirPlay speaker that couldn't be reached or stayed busy with another device, the notice says it's off and how to turn it on again, as on the Mac. Before, it said AudioSync keeps trying.
 - On the Mac, when an app you capture starts playing from a new process and AudioSync can't capture that one at first, it keeps trying for a few seconds, longer right after the Mac wakes, as Windows does. Before, streaming stopped with a notice about the source.
+- On the Mac, a preset whose stereo pair or home theater you hid says it stayed off because it's hidden, as on Windows. Before, the notice said it needs AirPlay 2.
 
 ## [0.8.0] - unreleased
 

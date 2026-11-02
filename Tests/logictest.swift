@@ -7502,6 +7502,17 @@ do {
           "presets: a preset saved with the MacBook speakers on switches them on on recall",
           "\(String(describing: savedSpeakersOn)) \(speakersOnRecall)")
 
+    // covers: S252 (a hidden stereo pair or home theater gives the hidden reason, as on Windows)
+    let hiddenPairPlan = PresetRecall.plan(
+        [.init(kind: .airplay2, found: true, hidden: true,
+               needsAirPlay2: ZoneMemberFacts.airPlay2Missing(target: true, found: true, airPlay2On: false)),
+         .init(kind: .airplay2, found: false,
+               needsAirPlay2: ZoneMemberFacts.airPlay2Missing(target: true, found: false, airPlay2On: false))],
+        others: [true], streaming: true)
+    check(hiddenPairPlan.steps == [.leftOff(.hidden), .leftOff(.needsAirPlay2)],
+          "presets: a hidden stereo pair or home theater is left off as hidden, one not listed while AirPlay 2 is off as needing it",
+          "\(hiddenPairPlan.steps)")
+
     // covers: S265
     var goneCast = CastModel()
     goneCast.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
