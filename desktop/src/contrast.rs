@@ -1099,6 +1099,7 @@ fn the_audiosync_guide_is_wired_and_worded_in_strings() {
 
 /// The Windows and Linux Guides say what Several Apps opens and describe
 /// the Now Playing card, as the Mac Guide does.
+// covers: S416
 #[test]
 fn the_guide_describes_several_apps_and_now_playing_on_both_hosts() {
     let strings = include_str!("../ui/strings.slint");
