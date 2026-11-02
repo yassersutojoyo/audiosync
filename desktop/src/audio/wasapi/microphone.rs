@@ -1,4 +1,5 @@
 //! The calibration's recording of the default input device: shared mode,
+//! raw (without the device's effects) when the device and Windows allow it,
 //! 32-bit float at the device's own rate and channels (Windows converts from
 //! its mix format), mixed down to mono into a buffer allocated
 //! before the stream starts. The thread stamps the first frame with the
@@ -11,6 +12,7 @@ use std::slice;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 
 use audiosync_core::clock;
 use windows::Win32::Foundation::{E_ACCESSDENIED, WAIT_EVENT, WAIT_OBJECT_0, WAIT_TIMEOUT};
@@ -18,20 +20,24 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY, AUDCLNT_BUFFERFLAGS_SILENT,
     AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_E_DEVICE_IN_USE, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, IAudioCaptureClient, IAudioClient, WAVEFORMATEX,
-    eCapture, eConsole,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDCLNT_STREAMOPTIONS_RAW, AudioCategory_Other,
+    AudioClientProperties, IAudioCaptureClient, IAudioClient, IAudioClient2, IMMDevice,
+    WAVEFORMATEX, eCapture, eConsole,
 };
 use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows::Win32::System::Threading::WaitForMultipleObjects;
-use windows::core::HRESULT;
+use windows::core::{HRESULT, Interface};
 
 use super::com::{
     Apartment, ComMemory, Event, Ready, Worker, float_format, read_mix_format, spawn_worker,
 };
-use super::devices::{device_id, enumerator, properties};
+use super::devices::{device_id, enumerator, properties, raw_processing_supported};
 use crate::audio::calibration::{Microphone, MicrophoneError, MicrophoneId, RecordingClock};
-use crate::audio::outputs::{HNS_PER_MS, RenderFormat, default_channel_mask, is_hands_free};
+use crate::audio::outputs::{
+    HNS_PER_MS, MixFormat, RenderFormat, default_channel_mask, is_hands_free,
+};
+use crate::debug_log::DebugLog;
 
 /// The stream buffer asked for, 100 ms.
 const BUFFER_HNS: i64 = 100 * HNS_PER_MS;
@@ -151,6 +157,7 @@ struct Stream {
     event: Event,
     id: MicrophoneId,
     channels: usize,
+    raw: Raw,
 }
 
 /// What the recording thread tells the run while it records.
@@ -170,31 +177,81 @@ fn setup_error(code: HRESULT) -> MicrophoneError {
     }
 }
 
-fn open_stream() -> Result<Stream, MicrophoneError> {
-    let enumerator = enumerator().map_err(|_| MicrophoneError::Missing)?;
-    // SAFETY: calls on COM objects this thread owns. The mix format is freed
-    // by ComMemory after its last use, and the format passed to Initialize
-    // lives through the call, which copies it.
-    unsafe {
-        let device = enumerator
-            .GetDefaultAudioEndpoint(eCapture, eConsole)
-            .map_err(|_| MicrophoneError::Missing)?;
-        let enumerator_name = properties(&device).ok().and_then(|found| found.enumerator);
-        if is_hands_free(enumerator_name.as_deref().unwrap_or_default()) {
-            return Err(MicrophoneError::HandsFree);
+/// What became of the request for the input's raw signal, which skips the
+/// device's effects (automatic gain, noise suppression) that can reshape the
+/// test signal differently from one run to the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Raw {
+    Used,
+    /// The device says it has no raw signal.
+    Unsupported,
+    /// The client refused the request.
+    Refused,
+    /// Initialize failed with the request; the stream opened again without it.
+    Failed,
+}
+
+/// The outcome of asking for raw on a device that `supported` it, when the
+/// client `accepted` the request and the stream `initialized` with it.
+fn raw_outcome(supported: bool, accepted: bool, initialized: bool) -> Raw {
+    match (supported, accepted, initialized) {
+        (false, _, _) => Raw::Unsupported,
+        (true, false, _) => Raw::Refused,
+        (true, true, false) => Raw::Failed,
+        (true, true, true) => Raw::Used,
+    }
+}
+
+/// The debug line saying whether the recording is raw.
+fn raw_note(raw: Raw) -> &'static str {
+    match raw {
+        Raw::Used => {
+            "Calibration microphone: recording the raw signal, without the input's effects"
         }
-        let device_name = device_id(&device).unwrap_or_default();
+        Raw::Unsupported => {
+            "Calibration microphone: the input offers no raw signal; recording with the input's effects"
+        }
+        Raw::Refused => {
+            "Calibration microphone: Windows refused the raw signal; recording with the input's effects"
+        }
+        Raw::Failed => {
+            "Calibration microphone: the raw stream failed to open; recording with the input's effects"
+        }
+    }
+}
+
+/// An initialized client of `device`, its mix format and whether it took the
+/// request for raw, made when `raw` is set; or why it failed, and whether it
+/// had taken the request.
+unsafe fn initialize(
+    device: &IMMDevice,
+    raw: bool,
+) -> Result<(IAudioClient, MixFormat, bool), (MicrophoneError, bool)> {
+    // SAFETY: as in open_stream, whose device this is.
+    unsafe {
         let client: IAudioClient = device
             .Activate(CLSCTX_ALL, None)
-            .map_err(|error| setup_error(error.code()))?;
+            .map_err(|error| (setup_error(error.code()), false))?;
+        // Windows takes the stream's options only before Initialize.
+        let properties = AudioClientProperties {
+            cbSize: size_of::<AudioClientProperties>() as u32,
+            bIsOffload: false.into(),
+            eCategory: AudioCategory_Other,
+            Options: AUDCLNT_STREAMOPTIONS_RAW,
+        };
+        let accepted = raw
+            && client
+                .cast::<IAudioClient2>()
+                .and_then(|client| client.SetClientProperties(&raw const properties))
+                .is_ok();
         let mix = ComMemory::new(
             client
                 .GetMixFormat()
-                .map_err(|error| setup_error(error.code()))?,
+                .map_err(|error| (setup_error(error.code()), accepted))?,
         );
         let mix = read_mix_format(mix.as_ptr());
         if mix.channels == 0 || mix.rate == 0 {
-            return Err(MicrophoneError::Missing);
+            return Err((MicrophoneError::Missing, accepted));
         }
         let own = float_format(RenderFormat {
             rate: mix.rate,
@@ -215,7 +272,35 @@ fn open_stream() -> Result<Stream, MicrophoneError> {
                 (&raw const own).cast::<WAVEFORMATEX>(),
                 None,
             )
-            .map_err(|error| setup_error(error.code()))?;
+            .map_err(|error| (setup_error(error.code()), accepted))?;
+        Ok((client, mix, accepted))
+    }
+}
+
+fn open_stream() -> Result<Stream, MicrophoneError> {
+    let enumerator = enumerator().map_err(|_| MicrophoneError::Missing)?;
+    // SAFETY: calls on COM objects this thread owns. The mix format is freed
+    // by ComMemory after its last use, and the format passed to Initialize
+    // lives through the call, which copies it.
+    unsafe {
+        let device = enumerator
+            .GetDefaultAudioEndpoint(eCapture, eConsole)
+            .map_err(|_| MicrophoneError::Missing)?;
+        let enumerator_name = properties(&device).ok().and_then(|found| found.enumerator);
+        if is_hands_free(enumerator_name.as_deref().unwrap_or_default()) {
+            return Err(MicrophoneError::HandsFree);
+        }
+        let device_name = device_id(&device).unwrap_or_default();
+        let supported = raw_processing_supported(&device);
+        let mut opened = initialize(&device, supported);
+        let raw = match &opened {
+            Ok((_, _, accepted)) => raw_outcome(supported, *accepted, true),
+            Err((_, accepted)) => raw_outcome(supported, *accepted, false),
+        };
+        if raw == Raw::Failed {
+            opened = initialize(&device, false);
+        }
+        let (client, mix, _) = opened.map_err(|(error, _)| error)?;
         let event = Event::auto_reset().map_err(|_| MicrophoneError::Missing)?;
         client
             .SetEventHandle(event.raw())
@@ -232,6 +317,7 @@ fn open_stream() -> Result<Stream, MicrophoneError> {
                 rate: mix.rate,
             },
             channels: usize::from(mix.channels),
+            raw,
         })
     }
 }
@@ -259,6 +345,9 @@ fn run(
             return;
         }
     };
+    let log = DebugLog::appending_from_env();
+    log.log(|| raw_note(stream.raw).to_owned());
+    log.flush(Duration::from_secs(1));
     let capacity = (seconds.max(0.0) * f64::from(stream.id.rate)).ceil() as usize;
     let mut samples = vec![0.0_f32; capacity];
     // SAFETY: starts the stream initialized above.
@@ -395,5 +484,21 @@ mod tests {
         assert_eq!(setup_error(E_ACCESSDENIED), MicrophoneError::Denied);
         assert_eq!(setup_error(AUDCLNT_E_DEVICE_IN_USE), MicrophoneError::InUse);
         assert_eq!(setup_error(E_FAIL), MicrophoneError::Missing);
+    }
+
+    #[test]
+    fn the_calibration_records_raw_only_when_the_device_and_windows_allow_it() {
+        assert_eq!(raw_outcome(false, false, true), Raw::Unsupported);
+        assert_eq!(raw_outcome(false, false, false), Raw::Unsupported);
+        assert_eq!(raw_outcome(true, false, true), Raw::Refused);
+        assert_eq!(raw_outcome(true, false, false), Raw::Refused);
+        assert_eq!(raw_outcome(true, true, false), Raw::Failed);
+        assert_eq!(raw_outcome(true, true, true), Raw::Used);
+        assert!(raw_note(Raw::Used).ends_with("without the input's effects"));
+        let fallbacks = [Raw::Unsupported, Raw::Refused, Raw::Failed].map(raw_note);
+        for note in fallbacks {
+            assert!(note.ends_with(" with the input's effects"), "{note}");
+        }
+        assert!(fallbacks[0] != fallbacks[1] && fallbacks[1] != fallbacks[2]);
     }
 }
