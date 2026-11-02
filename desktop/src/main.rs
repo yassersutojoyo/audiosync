@@ -635,6 +635,30 @@ mod tests {
         assert!(body.contains("root.notices-dismissed-all();"), "{body}");
     }
 
+    /// While the Google Cast search finds nothing, the flyout offers Add by
+    /// Address… under the list, as the Mac panel does, and it opens the
+    /// main window's dialog.
+    #[test]
+    fn the_flyout_offers_add_by_address_while_no_cast_speaker_is_found() {
+        let flyout = include_str!("../ui/flyout.slint");
+        assert!(flyout.contains(
+            "if root.cast-by-address && root.cast-list == CastList.none-found: HorizontalLayout {"
+        ));
+        let body = handler_body(flyout, "text: Strings.cast-add-address;", "clicked");
+        assert!(body.contains("root.cast-add-address-requested();"), "{body}");
+
+        let view = include_str!("view.rs");
+        let wiring = &view[view
+            .find("flyout.on_cast_add_address_requested(")
+            .expect("the flyout's link is wired")..];
+        let wiring = &wiring[..wiring.find("});").expect("the wiring ends")];
+        assert!(wiring.contains("app.hide_flyout();"), "{wiring}");
+        assert!(
+            wiring.contains("app.main.invoke_cast_add_address_requested();"),
+            "{wiring}"
+        );
+    }
+
     /// A dismiss button names its notice in a few words: after a dismiss the
     /// next notice's button takes the focus, and Narrator then says which
     /// notice it is without reading the whole notice again.
