@@ -4387,6 +4387,7 @@ The checks for S368 to S379, and the busy-port check of S337, in the remote crat
 |---|---|
 | the_mix_apps_keep_their_order_and_whether_they_run_and_none_without_the_field (`remote/src/state.rs`) | S353, S343 |
 | the_phone_gets_the_several_apps_list_with_an_app_only_a_mix_holds_as_not_running (`desktop/src/adapter.rs`) | S353 |
+| the_phone_gets_an_app_only_the_last_mix_holds_once_as_not_running (`desktop/src/adapter.rs`) | S353, S354 |
 | a_mix_post_that_is_not_a_list_of_up_to_63_app_ids_answers_400_and_waits_out_a_run (`remote/tests/server.rs`) | S353 |
 | a_mix_post_passes_on_the_running_apps_once_each_in_the_order_sent (`remote/tests/server.rs`) | S353 |
 | a_phone_mix_selects_the_apps_as_the_several_apps_list_would (`desktop/src/adapter.rs`) | S353 |
@@ -4413,6 +4414,7 @@ The checks for S368 to S379, and the busy-port check of S337, in the remote crat
 | last mix: the picker lists the last mix once, right after the whole system, an app that isn't running under its kept name | S354, S211 |
 | last mix: while a mix is in use the picker lists that one alone, never the kept one beside it | S354 |
 | last mix: the phone lists the last mix as an app under the picker's name, and its pick maps back to it | S354, S344 |
+| last mix: the several-apps list keeps an app only the last mix holds, once and as not running, while no mix is in use | S353 |
 
 ### Receiver latency: AirPlay crate, core, Windows and Mac (`cargo test` in `airplay/`, `core/` and `desktop/`, the logic suite)
 

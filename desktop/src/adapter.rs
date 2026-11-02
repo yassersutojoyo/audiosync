@@ -2004,7 +2004,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// The apps the several-apps list offers: the listed apps, then the
-    /// checked ones that aren't listed, so each can still be unchecked.
+    /// checked ones and the last mix's (S354) that aren't listed, so each
+    /// can still be unchecked or picked again.
     fn mix_apps(&self) -> Vec<MixApp> {
         let checked = mix_checked(&self.chosen, mix_mode(&self.chosen, self.mix_mode));
         let is_checked = |executable: &str| {
@@ -2028,7 +2029,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 });
             }
         }
-        for app in &checked {
+        let kept: &[SavedMixApp] = match self.kept_mix() {
+            Some(Chosen::Mix { apps, .. }) => apps,
+            _ => &[],
+        };
+        for app in checked.iter().chain(kept) {
             if !apps
                 .iter()
                 .any(|listed| listed.id.eq_ignore_ascii_case(&app.executable))
@@ -2040,7 +2045,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     } else {
                         app.name.clone()
                     },
-                    checked: true,
+                    checked: is_checked(&app.executable),
                     running: false,
                 });
             }
@@ -12765,6 +12770,31 @@ mod tests {
             .collect();
         let phone: serde_json::Value = serde_json::from_str(&page(&adapter).to_json(1)).unwrap();
         assert_eq!(phone["mix_apps"], serde_json::Value::Array(expected));
+    }
+
+    // covers: S353, S354
+    #[test]
+    fn the_phone_gets_an_app_only_the_last_mix_holds_once_as_not_running() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        adapter.select_source(SYSTEM_KEY);
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_sources();
+        let phone: serde_json::Value = serde_json::from_str(&page(&adapter).to_json(1)).unwrap();
+        let running = |id: &str| -> Vec<bool> {
+            phone["mix_apps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|app| app["id"] == id)
+                .map(|app| app["running"].as_bool().unwrap())
+                .collect()
+        };
+        assert_eq!(running("player.exe"), [true], "{}", phone["mix_apps"]);
+        assert_eq!(running("browser.exe"), [false], "{}", phone["mix_apps"]);
     }
 
     fn phone_mix(adapter: &mut AudioAdapter<MockBackend>, apps: &[&str]) {

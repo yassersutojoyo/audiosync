@@ -404,6 +404,14 @@ do {
     check(phone[1].id == both.defaultsValue && phone[1].kind == .app && phone[1].name == "Music + Safari"
             && RemoteSource.pickerID(phone[1].id) == both.defaultsValue,
           "last mix: the phone lists the last mix as an app under the picker's name, and its pick maps back to it")
+    let offeredKept = SourceList.mixApps(apps, checked: [], chosenAppName: { _ in "Safari" }, lastMix: both)
+    let offeredInUse = SourceList.mixApps(apps, checked: [chat], chosenAppName: { _ in "Safari" }, chosen: except,
+                                          lastMix: both)
+    // covers: S353
+    check(offeredKept.map(\.id) == [chat, music, safari] && offeredKept.map(\.available) == [true, true, false]
+            && offeredInUse.map(\.id) == [chat, music],
+          "last mix: the several-apps list keeps an app only the last mix holds, once and as not running, while no mix is in use",
+          "\(offeredKept)")
 }
 
 // MARK: Source apps — display names and the picker's app list

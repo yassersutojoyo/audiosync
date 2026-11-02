@@ -572,12 +572,18 @@ enum SourceList {
     }
 
     /// The apps the several-apps menu offers: the running apps, plus the
-    /// checked ones that aren't running, so each can still be unchecked. By
+    /// checked ones and, while no mix is chosen, `lastMix`'s (S354) that
+    /// aren't running, so each can still be unchecked or picked again. By
     /// name, as the picker sorts.
     static func mixApps(_ apps: [(bundleID: String, name: String)], checked: [String],
-                        chosenAppName: (String) -> String) -> [Entry] {
+                        chosenAppName: (String) -> String, chosen: AudioSource = .system,
+                        lastMix: AudioSource? = nil) -> [Entry] {
         var entries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
-        for id in checked where !entries.contains(where: { $0.id == id }) {
+        var listedMix = lastMix
+        if case .mix = chosen { listedMix = chosen }
+        var kept: [String] = []
+        if let listedMix, case .mix(_, let ids) = listedMix { kept = ids }
+        for id in checked + kept where !entries.contains(where: { $0.id == id }) {
             entries.append(Entry(id: id, name: chosenAppName(id), isInput: false, available: false))
         }
         return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
