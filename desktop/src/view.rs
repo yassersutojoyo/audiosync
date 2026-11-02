@@ -11365,6 +11365,35 @@ mod tests {
         assert!(expanded(), "Enter unfolded it");
     }
 
+    // covers: S152, S383
+    #[test]
+    fn the_auto_connect_mark_is_read_by_narrator_and_follows_the_auto_connect_setting() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        app.main
+            .window()
+            .set_size(slint::PhysicalSize::new(1000, 2000));
+        draw_frames();
+        let marks = || {
+            ElementHandle::find_by_accessible_label(&app.main, "Auto-Connect When Available")
+                .count()
+        };
+        assert_eq!(marks(), 1, "Kitchen is set to auto-connect");
+
+        app.main
+            .invoke_auto_connect_toggled("local:desk".into(), true);
+        draw_frames();
+        assert_eq!(marks(), 2, "the USB speaker's mark shows right away");
+
+        app.main
+            .invoke_auto_connect_toggled("airplay:kitchen".into(), false);
+        app.main
+            .invoke_auto_connect_toggled("local:desk".into(), false);
+        draw_frames();
+        assert_eq!(marks(), 0, "both marks went with the setting");
+    }
+
     // covers: S359
     #[test]
     fn a_zone_header_folds_and_unfolds_through_its_accessibility_actions() {
