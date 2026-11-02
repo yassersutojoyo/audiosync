@@ -697,8 +697,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         host.sizingOptions = []
         popover.contentViewController = host
         popover.behavior = .transient
-        // The content reaches under the arrow, so the panel's backing colors the arrow as it does the box.
-        popover.hasFullSizeContent = true
         popover.delegate = self
         if let button = statusItem.button {
             button.target = self
@@ -828,15 +826,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         popover.animates = !reduceMotion && PanelSwitches.systemAnimation
         closing += 1
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        // Only in the popover does the content's measure take in the arrow's safe area, which the size must cover.
-        let inPopover = host.sizeThatFits(in: PanelTopLayout.measuring)
-        if inPopover != size {
-            host.setSize(inPopover)
-            popover.contentSize = inPopover
-        }
-        DebugTrace.log(String(format: "[AudioSync] panel size: safe area top %.1f, measured %.0fx%.0f, in the popover %.0fx%.0f",
-                              Double(host.view.safeAreaInsets.top), Double(size.width), Double(size.height),
-                              Double(inPopover.width), Double(inPopover.height)))
         host.view.window?.ignoresMouseEvents = false
         if !PanelSwitches.systemAnimation { animateOpen(PanelMotion.open(reduceMotion: reduceMotion)) }
         // From when the steps start, not the press: the refresh and layout above take part of the open's time.

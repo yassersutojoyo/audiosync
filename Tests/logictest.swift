@@ -8133,10 +8133,6 @@ do {
     // covers: S405
     check(endSource.contains("\n        host.view.layer?.removeAnimation(forKey: Self.stepKey)"),
           "menu bar panel source: ending the steps always hands the content back at its laid-out scale, even once the window is gone")
-    // covers: S405
-    check(windowSource.contains("popover.hasFullSizeContent = true")
-            && windowSource.contains(".background(Brand.panelBacking.ignoresSafeArea())"),
-          "menu bar panel source: the panel's backing reaches under the arrow, so the arrow's edge has the box's color")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
