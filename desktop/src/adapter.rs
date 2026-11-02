@@ -2301,11 +2301,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
         });
         if on {
             self.notices.clear(&[NoticeSubject::Cast(id.to_owned())]);
-            self.taken_over_cast.remove(id);
         }
         match self.audio.set_cast_enabled(id, on) {
             Err(problem) => self.cast_cant_play(id, problem),
-            Ok(()) if on => self.start_if_switched_on(),
+            Ok(()) if on => {
+                self.taken_over_cast.remove(id);
+                self.start_if_switched_on();
+            }
             Ok(()) => self.stop_if_idle(),
         }
         self.take_events();
@@ -2363,10 +2365,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
             SpeakerKey::Cast(id) => {
                 if on {
                     self.notices.clear(&[NoticeSubject::Cast(id.clone())]);
-                    self.taken_over_cast.remove(id);
                 }
-                if let Err(problem) = self.audio.set_cast_enabled(id, on) {
-                    self.cast_cant_play(id, problem);
+                match self.audio.set_cast_enabled(id, on) {
+                    Err(problem) => self.cast_cant_play(id, problem),
+                    Ok(()) if on => {
+                        self.taken_over_cast.remove(id);
+                    }
+                    Ok(()) => {}
                 }
             }
         }
@@ -19104,6 +19109,26 @@ mod tests {
         adapter.set_speaker_enabled(&cc(CAST_KITCHEN), false);
         adapter.toggle_zone("zone:1");
         assert!(speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled);
+    }
+
+    /// As on the Mac, a switch-on refused as busy keeps the takeover mark.
+    // covers: S246, C2
+    #[test]
+    fn a_busy_refusal_keeps_a_cast_member_taken_over_for_the_next_zone_click() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.add_zone("Lounge", &[key(SPEAKERS), cc(CAST_KITCHEN)]);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(cast_ended(1, SessionEnd::TakenOver));
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), true);
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        assert!(messages(&adapter).contains(&cast_cant_play("Kitchen", UiCastProblem::Busy)));
+        adapter.set_speaker_enabled(&cc(CAST_LIVING), false);
+        Backend::dismiss_all_notices(&mut adapter);
+
+        adapter.toggle_zone("zone:1");
+        assert!(enabled(&adapter, SPEAKERS));
+        assert!(!speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled);
     }
 
     /// The zone row reads the takeover as the click does: with Speakers on
