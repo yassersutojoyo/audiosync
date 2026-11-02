@@ -153,6 +153,9 @@ pub const CAST_EVENT_VOLUME_UNANSWERED: i32 = 20;
 /// Someone paused the device itself; [`CAST_EVENT_PLAYING`] follows once
 /// its next `PLAYING` loaded the stream again (C113).
 pub const CAST_EVENT_PAUSED: i32 = 21;
+/// A line for the debug log, in `detail`: the certificates file couldn't
+/// be read or written (C21).
+pub const CAST_EVENT_LOG: i32 = 22;
 
 /// How an attempt ended ([`AscCastEvent::reason`]): the sender's own
 /// teardown (C87).
@@ -414,6 +417,8 @@ struct Shared {
     /// The equalizer's headroom cut as a linear factor
     /// ([`asc_cast_set_equalizer`]).
     give_back: AtomicU64,
+    /// Lines for the debug log, reported as [`CAST_EVENT_LOG`].
+    log: Mutex<Vec<String>>,
 }
 
 /// A writer from `Box::into_raw` that [`Shared::attach`] swapped out.
@@ -437,6 +442,7 @@ impl Shared {
             at: OnceLock::new(),
             hold_back: AtomicUsize::new(0),
             give_back: AtomicU64::new(1.0f64.to_bits()),
+            log: Mutex::new(Vec::new()),
         }
     }
 
@@ -900,6 +906,14 @@ impl AscCast {
             .map_or_else(|| device.to_string(), |known| known.id.clone())
     }
 
+    fn pump_log(&mut self) {
+        for line in std::mem::take(&mut *lock(&self.shared.log)) {
+            let mut pending = Pending::new(CAST_EVENT_LOG);
+            pending.detail = line;
+            self.events.push_back(pending);
+        }
+    }
+
     fn pump_host(&mut self) {
         while let Some(event) = self.host.poll_event() {
             let pending = self.take_in(event);
@@ -1274,16 +1288,25 @@ pub unsafe extern "C" fn asc_cast_memory_reads(memory_json: *const c_char) -> bo
     unsafe { host_text(memory_json) }.is_some_and(|text| DeviceMemory::read_json(text).is_some())
 }
 
-fn certificates_book(folder: Option<&Path>) -> FingerprintBook {
+fn certificates_book(folder: Option<&Path>, shared: &Arc<Shared>) -> FingerprintBook {
     let Some(folder) = folder else {
         return FingerprintBook::new();
     };
     // Diagnostics only: a file that can't be read starts an empty book.
-    let (book, _) = FingerprintBook::open(
+    let (book, error) = FingerprintBook::open(
         folder.join("cast-certificates.txt"),
         |path| std::fs::read(path),
         write_atomically,
     );
+    if let Some(error) = error {
+        lock(&shared.log).push(format!("the certificates file couldn't be read: {error}"));
+    }
+    let save_shared = Arc::clone(shared);
+    let book = book.on_save_error(move |error| {
+        lock(&save_shared.log).push(format!(
+            "the certificates file couldn't be written: {error}"
+        ));
+    });
     #[cfg(test)]
     let book = tests::record_on_open(book);
     book
@@ -1299,12 +1322,14 @@ fn create_with(
     let created = panic::catch_unwind(|| {
         injected_panic();
         let memory = DeviceMemory::from_json(memory_json);
-        let Ok(host) = CastHost::with_fingerprints(memory, certificates_book(folder)) else {
+        let shared = Arc::new(Shared::new());
+        let book = certificates_book(folder, &shared);
+        let Ok(host) = CastHost::with_fingerprints(memory, book) else {
             return ptr::null_mut();
         };
         Box::into_raw(Box::new(AscCast {
             host,
-            shared: Arc::new(Shared::new()),
+            shared,
             master: MasterGain::default(),
             master_position: 100.0,
             input_taken: false,
@@ -1519,6 +1544,7 @@ pub unsafe extern "C" fn asc_cast_next_event(cast: *mut AscCast, event: *mut Asc
             return failure(cast);
         }
         if cast.events.is_empty() {
+            cast.pump_log();
             cast.pump_discovery();
             cast.pump_host();
         }
@@ -2767,10 +2793,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
         let kitchen = DeviceId::parse(KITCHEN).expect("id");
         let fingerprint = Fingerprint([7; 32]);
-        let mut first = certificates_book(Some(&folder));
+        let shared = Arc::new(Shared::new());
+        let mut first = certificates_book(Some(&folder), &shared);
         assert_eq!(first.record(kitchen, fingerprint), FingerprintChange::First);
         drop(first);
-        let mut relaunched = certificates_book(Some(&folder));
+        let mut relaunched = certificates_book(Some(&folder), &shared);
         assert_eq!(
             relaunched.record(kitchen, fingerprint),
             FingerprintChange::Same
@@ -2802,6 +2829,66 @@ mod tests {
             [FingerprintChange::First, FingerprintChange::Same]
         );
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// The details of the events a sender made with `folder` reports first.
+    fn details_on_create(folder: &Path) -> Vec<String> {
+        let c_folder = CString::new(folder.to_str().expect("UTF-8")).expect("no NUL");
+        // SAFETY: a null memory text and a NUL-terminated folder.
+        let mut handle = unsafe { asc_cast_create_in(ptr::null(), c_folder.as_ptr()) };
+        assert!(!handle.is_null());
+        let details = waiting(handle)
+            .into_iter()
+            .map(|pending| pending.detail)
+            .collect();
+        // SAFETY: a live handle, destroyed once.
+        unsafe { asc_cast_destroy(&mut handle) };
+        details
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_certificates_file_that_cant_be_read_reaches_the_debug_log() {
+        let folder = crate::test_scratch().join("cast-certificates-unread");
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).expect("folder");
+        std::fs::write(folder.join("cast-certificates.txt"), [0xFF, 0xFE]).expect("written");
+        let details = details_on_create(&folder);
+        let read = "the certificates file couldn't be read: ";
+        assert_eq!(
+            details
+                .iter()
+                .filter(|detail| detail.starts_with(read))
+                .count(),
+            1,
+            "{details:?}"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_certificates_file_that_cant_be_written_reaches_the_debug_log() {
+        let scratch = crate::test_scratch();
+        std::fs::create_dir_all(&scratch).expect("scratch");
+        let folder = scratch.join("cast-certificates-unwritten");
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::write(&folder, b"a file where the folder would be").expect("written");
+        let kitchen = DeviceId::parse(KITCHEN).expect("id");
+        RECORD_ON_OPEN.with(|record| *record.borrow_mut() = Some((kitchen, Fingerprint([7; 32]))));
+        let details = details_on_create(&folder);
+        RECORD_ON_OPEN.with(|record| record.borrow_mut().take());
+        RECORDED.with(|recorded| recorded.take());
+        let written = "the certificates file couldn't be written: ";
+        assert_eq!(
+            details
+                .iter()
+                .filter(|detail| detail.starts_with(written))
+                .count(),
+            1,
+            "{details:?}"
+        );
+        let _ = std::fs::remove_file(&folder);
     }
 
     // CAST_SPEC: C80, C81

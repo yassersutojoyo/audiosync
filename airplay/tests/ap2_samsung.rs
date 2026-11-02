@@ -629,8 +629,8 @@ fn each_pause_flushes_once_at_the_first_unsent_packet_and_its_resume_continues()
 /// How long a host takes to build the new capture at a source switch.
 const REBUILD: Duration = Duration::from_millis(300);
 /// The most the silence a source switch leaves on the television may
-/// outlast the host's own pause in writing, which load stretches.
-const SWITCH_GAP: Duration = Duration::from_millis(700);
+/// outlast the host's own pause in writing: the cap of P84's margin.
+const SWITCH_GAP: Duration = Duration::from_millis(100);
 /// A rebuild a loaded host stretches past a second.
 const SLOW_REBUILD: Duration = Duration::from_millis(1200);
 
@@ -715,7 +715,7 @@ fn heard(
 
 // covers: P143
 // A source switch on the Samsung television is an underrun of P112: the
-// new capture's first frame sounds at most 700 ms after the host's own pause
+// new capture's first frame sounds at most 100 ms after the host's own pause
 // in writing, and the switch sends no FLUSH, TEARDOWN, SETUP, pair-verify or
 // /info.
 #[test]
@@ -724,7 +724,7 @@ fn capture_switch_without_flush() {
     cell(
         "W6.switch",
         &format!(
-            "source switch on the fake Samsung: 0 PIN prompts; 0 FLUSH, TEARDOWN, SETUP, pair-setup, pair-verify, GET /info; last old to first new frame {} ms after {} ms without host audio (limit that plus 700)",
+            "source switch on the fake Samsung: 0 PIN prompts; 0 FLUSH, TEARDOWN, SETUP, pair-setup, pair-verify, GET /info; last old to first new frame {} ms after {} ms without host audio (limit that plus 100)",
             gap.as_millis(),
             host_gap.as_millis()
         ),

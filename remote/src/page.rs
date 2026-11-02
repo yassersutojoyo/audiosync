@@ -470,12 +470,64 @@ mod tests {
             .find("ui.source.addEventListener(\"change\"")
             .unwrap()..];
         let back = picked.find("if (id === snapshot.source_id) {").unwrap();
-        let timer = picked.find("switchTimer = window.setTimeout(").unwrap();
+        let timer = picked.find("startSwitch(id, sourceName(id));").unwrap();
         assert!(back < timer);
         let branch = &picked[back..timer];
         assert!(branch.contains("endSwitch(\"\");"));
         assert!(branch.contains("sourceSender.set(id);"));
         assert!(branch.contains("return;"));
+    }
+
+    // covers: S353
+    #[test]
+    fn several_apps_lists_the_mix_apps_as_checkboxes_and_play_reports_as_a_pick() {
+        let button = line_with("id=\"mix-open\"");
+        assert!(button.contains("data-text=\"severalApps\""));
+        assert!(button.contains("aria-expanded=\"false\" aria-controls=\"mix\""));
+        assert!(button.ends_with(" hidden></button>"));
+        assert!(line_with("id=\"mix-play\"").contains("data-text=\"play\" disabled>"));
+        assert!(line_with("id=\"mix-cancel\"").contains("data-text=\"cancel\""));
+        let open = PAGE.find("<fieldset id=\"writes\">").unwrap();
+        assert!(
+            PAGE[open..].find("id=\"mix\"").unwrap() < PAGE[open..].find("</fieldset>").unwrap()
+        );
+
+        // A Windows checkout may give the page CRLF; the multi-line checks below expect LF.
+        let script = only_element(PAGE, "script").unwrap().replace("\r\n", "\n");
+        assert!(script.contains("severalApps: \"Several Apps…\","));
+        assert!(script.contains("appNotRunning: (name) => `${name} (not running)`,"));
+        assert!(script.contains("play: \"Play\","));
+        assert!(script.contains("cancel: \"Cancel\","));
+        // Shown only while an app runs; one that doesn't is greyed and can't be checked.
+        assert!(script.contains("const offered = apps.some((app) => app.running === true);"));
+        assert!(script.contains("ui.mixOpen.hidden = !offered;"));
+        assert!(script.contains("box.type = \"checkbox\";"));
+        assert!(script.contains("box.disabled = app.running !== true;"));
+        assert!(script.contains("box.disabled ? TEXT.appNotRunning(app.name) : app.name"));
+        assert!(script.contains("ui.mixPlay.disabled = none;"));
+        // Play posts {"apps": [id, …]} and reports through the source pick's switching, switched and notSwitched.
+        assert!(script.contains("post(\"/api/mix\", { apps })"));
+        assert!(script.contains("const apps = checkedApps();"));
+        let sent = &script[script.find("const mixSender = sender(").unwrap()..];
+        // Each sender ends only its own wait, and still shows its own failure.
+        assert!(sent.starts_with("const mixSender = sender((apps) => post(\"/api/mix\", { apps }), (problem, settled) => {\n  if (settled && switchingTo === null) { endSwitch(problem ? problem.message : \"\"); }"));
+        assert!(script.contains("const sourceSender = sender((id) => post(\"/api/source\", { id }), (problem, settled) => {\n  if (settled && mixing === null) { endSwitch(problem ? problem.message : \"\"); }"));
+        // Playing the one app in use waits for nothing, as a pick of the source in use doesn't.
+        let played = &script[script
+            .find("ui.mixPlay.addEventListener(\"click\"")
+            .unwrap()..];
+        let in_use = played
+            .find("if (apps.length === 1 && `app:${apps[0]}` === snapshot.source_id) {")
+            .unwrap();
+        let wait = played
+            .find("startSwitch(null, names.join(\", \"));")
+            .unwrap();
+        assert!(played[in_use..wait].contains("endSwitch(\"\");"));
+        assert!(played[wait..].contains("mixSender.set(apps);"));
+        // Switched names the new source, or the checked apps when the list doesn't.
+        assert!(script.contains("} else if (mixing !== null && next.source_id !== shownSource) {"));
+        assert!(script.contains("const name = sourceName(next.source_id) || mixing;"));
+        assert!(script.contains("mixing = id === null ? name : null;"));
     }
 
     #[test]

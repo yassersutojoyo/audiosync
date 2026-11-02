@@ -7,7 +7,7 @@
 mod common;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -40,6 +40,8 @@ struct Feed {
     stalls: Arc<AtomicU64>,
     /// While set, the feed thread writes nothing, as one starved of the CPU.
     held: Arc<AtomicBool>,
+    /// Blocks to write at once, ahead of their slots.
+    rush: Arc<AtomicU32>,
 }
 
 /// How late a block may be written before the pump plays silence for it
@@ -61,6 +63,13 @@ impl Feed {
 
     fn hold(&self, held: bool) {
         self.held.store(held, Ordering::SeqCst);
+    }
+
+    /// Writes `time` of audio at once and then none until the clock catches
+    /// up: to the pump, the same as a stall of its own.
+    fn rush(&self, time: Duration) {
+        let blocks = (time.as_millis() / 10) as u32;
+        self.rush.store(blocks, Ordering::SeqCst);
     }
 }
 
@@ -86,6 +95,8 @@ fn feed(writer: AudioWriter, held: bool) -> Feed {
     let stall_count = Arc::clone(&stalls);
     let held = Arc::new(AtomicBool::new(held));
     let hold = Arc::clone(&held);
+    let rush = Arc::new(AtomicU32::new(0));
+    let rushed = Arc::clone(&rush);
     let thread = thread::spawn(move || {
         let block = vec![9i16; 960];
         let mut clock = None;
@@ -97,6 +108,11 @@ fn feed(writer: AudioWriter, held: bool) -> Feed {
                 continue;
             }
             let start = *clock.get_or_insert_with(Instant::now);
+            for _ in 0..rushed.swap(0, Ordering::SeqCst) {
+                writer.write_i16(&block);
+                count.fetch_add(480, Ordering::SeqCst);
+                written += 1;
+            }
             let slot = start + Duration::from_millis(10) * written;
             let is_late = slot.elapsed() > LATE;
             if is_late {
@@ -120,6 +136,7 @@ fn feed(writer: AudioWriter, held: bool) -> Feed {
         late,
         stalls,
         held,
+        rush,
     }
 }
 
@@ -332,21 +349,34 @@ fn a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on() {
         ..Behavior::default()
     });
     let (mut session, _feed) = start(&device);
-    let seen = run(&mut session, Duration::from_secs(3));
+    // A loaded PC: the device thread starts its pings late.
+    device.send(Command::Pause(Duration::from_millis(1800)));
+    let mut seen = run(&mut session, Duration::from_secs(3));
+    let pongs = || {
+        device
+            .received()
+            .into_iter()
+            .filter(|(destination, _, payload)| {
+                destination == PLATFORM && payload["type"] == "PONG"
+            })
+            .count()
+    };
+    // The device's pings come as late as its thread runs.
+    let until = Instant::now() + Duration::from_secs(10);
+    while pongs() < 4 && Instant::now() < until {
+        seen.extend(run(&mut session, Duration::from_millis(100)));
+    }
     assert_eq!(
         device.connection_count(),
         1,
         "answered pings keep the channel: {seen:?}"
     );
-    let pongs = device
-        .received()
-        .into_iter()
-        .filter(|(destination, _, payload)| destination == PLATFORM && payload["type"] == "PONG")
-        .count();
+    let pongs = pongs();
     assert!(pongs >= 4, "{pongs} PONGs");
 
-    // Suspended: the session is not driven, so no PONG goes out.
-    thread::sleep(Duration::from_secs(3));
+    // Suspended: the session is not driven, so no PONG goes out. 5 s covers
+    // one ping interval and the 2 s timeout with 2 s to spare for a late device.
+    thread::sleep(Duration::from_secs(5));
     let seen = run_until(&mut session, Duration::from_secs(10), |event| {
         matches!(event, SessionEvent::Recovered { .. })
     });
@@ -366,7 +396,7 @@ fn a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on() {
     run(&mut session, Duration::from_millis(300));
     device.send(Command::ClearApps);
     run(&mut session, Duration::from_millis(100));
-    thread::sleep(Duration::from_secs(3));
+    thread::sleep(Duration::from_secs(5));
     let seen = run_until(&mut session, Duration::from_secs(15), |event| {
         matches!(event, SessionEvent::Recovered { relaunched: true })
     });
@@ -388,7 +418,7 @@ fn a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on() {
     device.join();
     cell(
         "C13",
-        "PONG cut 3 s twice: reconnect reusing the app, then relaunch and reload",
+        "PONG cut 5 s twice: reconnect reusing the app, then relaunch and reload",
     );
 }
 
@@ -493,15 +523,26 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
         Some(json!(42.25)),
     ];
     let mut seen = Vec::new();
-    for _ in 0..3 {
-        for time in &variants {
+    for round in 0..3 {
+        // A loaded PC: the pump finds 1.5 s of audio at once, and the device
+        // thread sends the last status late.
+        if round == 1 {
+            feed.rush(Duration::from_millis(1500));
+        }
+        for (index, time) in variants.iter().enumerate() {
+            if round == 2 && index == variants.len() - 1 {
+                device.send(Command::Pause(Duration::from_millis(2500)));
+            }
             device.send(playing_at(time.clone()));
             seen.extend(run(&mut session, Duration::from_millis(100)));
         }
     }
-    let tail = run_until(&mut session, Duration::from_secs(3), |event| {
-        matches!(event, SessionEvent::Diagnostics(_))
-    });
+    // The last status shows once the device's thread has sent it.
+    let tail = run_until(
+        &mut session,
+        Duration::from_secs(10),
+        |event| matches!(event, SessionEvent::Diagnostics(line) if line.current_time == Some(42.25)),
+    );
     seen.extend(tail);
     assert!(
         !seen.iter().any(|event| matches!(
@@ -521,12 +562,13 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     // stalls. A feed thread starved on a loaded machine catches up past the
     // ring backlog and drops some (up to 0.9 s seen under 16 busy loops), so
     // drops may only cover audio the feed wrote late, plus per stall up to
-    // the 100 ms ring backlog that filled before a block counted late; with
-    // no stall, none.
+    // the 100 ms ring backlog that filled before a block counted late, plus
+    // what the full ring refused while the pump was starved, which the pump
+    // pays in underrun silence on waking; with no stall, none.
     assert_eq!(diagnostics.rebuffers, 0);
     let backlog = 48_000 * LATE.as_millis() as u64 / 1000;
     assert!(
-        diagnostics.frames_dropped <= late + stalls * backlog,
+        diagnostics.frames_dropped <= late + stalls * backlog + diagnostics.underrun_frames,
         "{late} late in {stalls} stalls: {diagnostics:?}"
     );
     assert_eq!(

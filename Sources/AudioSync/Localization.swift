@@ -1908,8 +1908,10 @@ struct UIStrings {
 
         Web Remote
         Choose Web Remote… in the gear menu or the Window menu and turn it
-        on to control the speakers from a phone on the same network: each
-        speaker's switch, volume and delay, Master Volume, and what's playing.
+        on to control AudioSync from a phone on the same network: each
+        speaker's switch, volume and delay, Master Volume, the source or a mix
+        of several apps, each zone's switch and volume, and the presets. The
+        page also shows what's playing.
         On the phone, open the address it shows or scan its QR code, add the
         page to the Home Screen before you enter the code, then open
         AudioSync from the new icon and pair there: on iPhone, a pairing made

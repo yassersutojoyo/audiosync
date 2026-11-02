@@ -3281,22 +3281,24 @@ export component NoticeStack inherits VerticalLayout {
 
                 if notice.update-buttons.length > 0: HorizontalLayout {
                     alignment: start;
-                    spacing: 8px;
-                    for button[button-index] in notice.update-buttons: Button {
-                        text: Strings.update-button(button);
-                        accessible-label: Strings.update-button(button);
-                        clicked => {
-                            root.update-button-pressed(button);
-                        }
-                        // Tab between two of these may report the gain before
-                        // the loss, so only the button holding focus clears it.
-                        changed has-focus => {
-                            if self.has-focus {
-                                row.update-focused = button-index;
-                                row.guide-focused = true;
-                            } else if row.update-focused == button-index {
-                                row.update-focused = -1;
-                                row.guide-focused = false;
+                    VerticalLayout {
+                        spacing: 8px;
+                        for button[button-index] in notice.update-buttons: Button {
+                            text: Strings.update-button(button);
+                            accessible-label: Strings.update-button(button);
+                            clicked => {
+                                root.update-button-pressed(button);
+                            }
+                            // Tab between two of these may report the gain before
+                            // the loss, so only the button holding focus clears it.
+                            changed has-focus => {
+                                if self.has-focus {
+                                    row.update-focused = button-index;
+                                    row.guide-focused = true;
+                                } else if row.update-focused == button-index {
+                                    row.update-focused = -1;
+                                    row.guide-focused = false;
+                                }
                             }
                         }
                     }

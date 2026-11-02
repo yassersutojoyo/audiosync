@@ -444,6 +444,27 @@ impl Updater {
                 self.notice = None;
                 Action::Nothing
             }
+            UpdaterButton::SkipThisVersion => {
+                // Only a record for this version already quiets the launch check.
+                // A higher one stays, since one record can't hold both versions.
+                let stored = self
+                    .record
+                    .as_ref()
+                    .and_then(|r| Version::parse(&r.version));
+                if let Some(update) = &self.offered
+                    && stored.is_none_or(|stored| stored < update.version)
+                {
+                    self.keep_record(
+                        Some(UpdateRecord {
+                            version: update.version_text.clone(),
+                            reason: UpdateRecordReason::Skipped,
+                        }),
+                        &mut Polled::default(),
+                    );
+                }
+                self.notice = None;
+                Action::Nothing
+            }
             UpdaterButton::Cancel => {
                 self.cancel_install();
                 Action::Nothing
@@ -1117,7 +1138,11 @@ pub mod tests {
         );
         assert_eq!(
             updater.notice().unwrap().buttons(),
-            [UpdaterButton::Download, UpdaterButton::NotNow]
+            [
+                UpdaterButton::NotNow,
+                UpdaterButton::SkipThisVersion,
+                UpdaterButton::Download
+            ]
         );
         assert_eq!(updater.press(UpdaterButton::Download), Action::Nothing);
         updater.wait();
@@ -1195,6 +1220,90 @@ pub mod tests {
         updater.check(Trigger::Launch);
         updater.wait();
         assert_eq!(updater.notice().cloned(), available("0.9.1"));
+    }
+
+    // covers: S297, S316
+    #[test]
+    fn a_skipped_version_is_quiet_at_launch_offered_on_a_manual_check_and_a_newer_one_is_offered() {
+        use crate::updater::flow::tests::FEED;
+        let (mut updater, fetch) = updater("skip");
+        updater.check(Trigger::Launch);
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Available { .. })
+        ));
+        updater.press(UpdaterButton::SkipThisVersion);
+        assert_eq!(updater.notice(), None);
+        assert_eq!(
+            updater.record(),
+            record("0.9.0", UpdateRecordReason::Skipped).as_ref()
+        );
+        updater.check(Trigger::Launch);
+        assert!(updater.wait().checked, "the appcast was read");
+        assert_eq!(updater.notice(), None, "the launch check offers nothing");
+        updater.check(Trigger::Manual);
+        updater.wait();
+        assert!(matches!(
+            updater.notice(),
+            Some(UpdaterNotice::Available { new, .. }) if new == "0.9.0"
+        ));
+
+        let feed = String::from_utf8(fetch.files[FEED].clone()).unwrap();
+        let mut newer = MemoryFetch::default();
+        newer
+            .files
+            .insert(FEED.to_owned(), feed.replace("0.9.0", "0.9.1").into_bytes());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while Arc::strong_count(&updater.env) > 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the check worker still holds its env"
+            );
+            std::thread::yield_now();
+        }
+        Arc::get_mut(&mut updater.env).unwrap().fetch = Arc::new(newer);
+        updater.check(Trigger::Launch);
+        assert!(updater.wait().record_changed);
+        assert_eq!(updater.record(), None, "a higher version clears it");
+        assert_eq!(
+            updater.notice(),
+            Some(&UpdaterNotice::Available {
+                new: "0.9.1".to_owned(),
+                running: "0.8.0".to_owned(),
+                last: None,
+            })
+        );
+    }
+
+    // covers: S297, S316
+    #[test]
+    fn skipping_keeps_a_record_for_the_same_or_a_higher_version() {
+        use UpdateRecordReason::{Blocked, FailedStart};
+        for (stored, reason) in [
+            ("0.9.0", Blocked),
+            ("0.9.0", FailedStart),
+            ("0.9.1", Blocked),
+        ] {
+            let (mut updater, _) = updater(&format!("skip-keeps-{stored}-{reason:?}"));
+            updater.set_record(record(stored, reason));
+            updater.check(Trigger::Manual);
+            updater.wait();
+            updater.press(UpdaterButton::SkipThisVersion);
+            assert_eq!(updater.record(), record(stored, reason).as_ref());
+            let same = stored == "0.9.0";
+            updater.check(Trigger::Launch);
+            updater.wait();
+            // A record for a higher version leaves this one to S316's rule.
+            assert_eq!(updater.notice().is_none(), same, "{stored} at launch");
+            updater.check(Trigger::Manual);
+            updater.wait();
+            let last = same.then_some(reason);
+            assert!(
+                matches!(updater.notice(), Some(UpdaterNotice::Available { last: l, .. }) if *l == last),
+                "{stored} {reason:?}: the manual check keeps the warning"
+            );
+        }
     }
 
     // covers: S305

@@ -15,6 +15,7 @@ use audiosync_airplay::ap2::{
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::rtsp::{Method, Request};
 use audiosync_airplay::secret::Secret;
+use audiosync_airplay::session::UdpSendResult;
 use audiosync_airplay::volume::Volume;
 use plist::Value;
 
@@ -549,6 +550,24 @@ fn feedback_every_two_seconds() {
     rig.advance(Duration::from_millis(200));
     assert_eq!(kind(&rig), Some(ErrorKind::Lost));
     assert_eq!(rig.times_of("POST /feedback").len(), 3);
+}
+
+// covers: P141
+#[test]
+fn two_unreachable_udp_sends_in_a_row_lose_the_speaker() {
+    let mut rig = transient();
+    assert_eq!(rig.session.state(), Ap2State::Ready);
+    let now = rig.now;
+    rig.session.handle_udp_send(UdpSendResult::Unreachable, now);
+    rig.session.handle_udp_send(UdpSendResult::Sent, now);
+    rig.session.handle_udp_send(UdpSendResult::Unreachable, now);
+    rig.pump();
+    assert_eq!(rig.session.state(), Ap2State::Ready, "not in a row");
+    assert!(rig.failure().is_none());
+    rig.session.handle_udp_send(UdpSendResult::Unreachable, now);
+    rig.pump();
+    assert_eq!(kind(&rig), Some(ErrorKind::Lost));
+    assert_eq!(rig.closes, 1);
 }
 
 fn ptp_peer() -> PtpPeer {

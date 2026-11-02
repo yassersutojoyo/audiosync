@@ -1489,6 +1489,13 @@ impl<D: Driver> Controller<D> {
         })
     }
 
+    /// The resyncs a playing output's reader counted so far.
+    #[cfg(test)]
+    pub fn playing_resyncs(&self, id: &str) -> Option<u64> {
+        let playing = self.session.as_ref()?.outputs.get(id)?;
+        Some(playing.control.counters().resyncs)
+    }
+
     /// Frames captured since the start: 0 until the source plays something.
     #[cfg(test)]
     pub fn frames_captured(&self) -> u64 {
@@ -1766,17 +1773,10 @@ impl<D: Driver> Controller<D> {
             let Some(mut playing) = session.outputs.remove(id) else {
                 continue;
             };
-            let why = if self.policy.settings(id).enabled {
-                keep_lead(&mut session.held_leads, id, &playing.control);
-                drop(playing);
-                "its device isn't listed"
-            } else {
-                playing.handle.request_stop();
-                switched_off.push(playing);
-                "switched off"
-            };
+            playing.handle.request_stop();
+            switched_off.push(playing);
             self.log
-                .log(|| format!("output {} stopped: {why}", label(&self.names, id)));
+                .log(|| format!("output {} stopped: switched off", label(&self.names, id)));
         }
         if !switched_off.is_empty() {
             self.retiring.push(Retiring {
@@ -7736,6 +7736,58 @@ mod tests {
         assert_eq!(retry.ran_away("b", 302), Reopen);
     }
 
+    // covers: S347
+    #[test]
+    fn a_device_pulling_twice_as_fast_reopens_then_plays_on_with_the_struggling_notice() {
+        let (mut backend, log, dir) = logged_backend("controller-runaway");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let hold_back = backend.policy().hold_back_ms(SPEAKERS);
+        backend.starve_output(HEADPHONES);
+        let lead = backend.session_lead();
+        assert!(lead > Some(0), "its first callback published its lead");
+        assert!(backend.poll().is_empty(), "a first runaway posts no notice");
+        assert_eq!(
+            backend.driver().renderers_faded(),
+            0,
+            "it ends without a fade"
+        );
+        assert_eq!(
+            backend.driver().renderers_started(),
+            [HEADPHONES, SPEAKERS, HEADPHONES],
+            "it opens again, and the other output isn't"
+        );
+        assert!(backend.policy().settings(HEADPHONES).enabled);
+        assert_eq!(backend.session_lead(), lead, "its lead is held");
+        assert_eq!(backend.policy().hold_back_ms(SPEAKERS), hold_back);
+
+        backend.starve_output(HEADPHONES);
+        let struggling = BackendEvent::OutputStruggling {
+            id: HEADPHONES.to_owned(),
+        };
+        assert_eq!(backend.poll(), [struggling]);
+        // Its share stays up, and the stream isn't taken again past the 30 s.
+        poll_quietly(&mut backend, RUNAWAY_RETRY_POLLS as u32 + 1);
+        assert_eq!(starts_of(&backend, HEADPHONES), 2);
+        let ran_away: Vec<String> = (logged(&log, &dir).into_iter())
+            .filter(|line| line.contains("ran away:"))
+            .collect();
+        assert_eq!(
+            ran_away,
+            [
+                "output \"Headphones\" (headphones) ran away: 100% of its callbacks starved over \
+                 5 s while the capture wrote; it opens again",
+                "output \"Headphones\" (headphones) ran away: 100% of its callbacks starved over \
+                 5 s while the capture wrote; it ran away again within 30 s of its reopen, so it \
+                 plays on with the struggling notice",
+            ]
+        );
+
+        backend.stop();
+        assert!(backend.poll().contains(&BackendEvent::OutputPlaysAgain {
+            id: HEADPHONES.to_owned(),
+        }));
+    }
+
     // covers: S326
     #[test]
     fn a_stalled_output_reopens_at_the_next_poll_with_a_debug_line() {
@@ -8658,6 +8710,21 @@ mod tests {
             }),
             "{events:?}"
         );
+        let lines = logged(&log, &dir);
+        assert!(
+            !lines.iter().any(|line| line.contains("the PC woke")),
+            "{lines:?}"
+        );
+    }
+
+    // covers: S332
+    #[test]
+    fn a_wall_clock_set_back_11_s_is_no_resume() {
+        let (mut backend, log, dir) = logged_backend("controller-resume-clock-back");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        poll_quietly(&mut backend, 1);
+        backend.set_wall_clock_back(Duration::from_secs(11));
+        backend.poll();
         let lines = logged(&log, &dir);
         assert!(
             !lines.iter().any(|line| line.contains("the PC woke")),
@@ -11330,6 +11397,52 @@ mod tests {
         backend.end_renderer(BLUETOOTH);
         backend.poll();
         assert_eq!(held(&backend), [Some(250), Some(400), None]);
+    }
+
+    // covers: S328
+    #[test]
+    fn a_bluetooth_output_unlisted_for_one_poll_keeps_its_lead_in_the_session_lead() {
+        let mut backend = local_delay_backend();
+        for (id, frames) in [(BUILT_IN, 480), (USB, 480), (BLUETOOTH, 9_600)] {
+            backend.set_output_period(id, frames);
+        }
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let before = backend.session_lead();
+        // Its stream plays on; the listing drops it.
+        backend.disconnect_output_unnoticed(BLUETOOTH);
+        backend.poll();
+        assert_eq!(playing(&backend), [BUILT_IN, USB]);
+        assert_eq!(backend.session_lead(), before);
+        backend.set_output_period(BLUETOOTH, 9_600);
+        backend.connect_output_as(BLUETOOTH, "Earbuds", OutputKind::Bluetooth);
+        backend.poll();
+        assert_eq!(playing(&backend), [BLUETOOTH, BUILT_IN, USB]);
+        assert_eq!(backend.session_lead(), before);
+    }
+
+    // covers: S177
+    #[test]
+    fn a_new_offset_resyncs_only_the_output_whose_hold_back_changed() {
+        let mut backend = local_delay_backend();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let play_a_second = |backend: &mut MockBackend| {
+            for _ in 0..100 {
+                backend.feed_capture(480);
+                for id in [BUILT_IN, USB, BLUETOOTH] {
+                    backend.render_output(id, 480);
+                }
+            }
+        };
+        let resyncs = |backend: &MockBackend| {
+            [BUILT_IN, USB, BLUETOOTH].map(|id| backend.playing_resyncs(id))
+        };
+        play_a_second(&mut backend);
+        let before = resyncs(&backend);
+        backend.set_output_delay(USB, 200.0);
+        play_a_second(&mut backend);
+        let after = resyncs(&backend);
+        assert_eq!([after[0], after[2]], [before[0], before[2]]);
+        assert!(after[1] > before[1], "{before:?} {after:?}");
     }
 
     // covers: S328, S138

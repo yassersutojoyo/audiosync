@@ -446,6 +446,7 @@ extension AppDelegate {
                 + (list.isEmpty ? "unknown" : list.map { "\($0.name) (\($0.id.isEmpty ? "not listed" : $0.id))" }
                     .joined(separator: ", "))
         case .groupLog(let line): return "group: " + line
+        case .log(let line): return line
         case .memoryChanged: return nil
         case .discoveryStopped: return "discovery's mDNS daemon ended"
         case .failed(let detail): return "the sender stopped working" + (detail.isEmpty ? "" : " (\(detail))")

@@ -599,6 +599,8 @@ pub enum UpdateRecordReason {
     FailedStart,
     /// Windows security blocked an update file (spec S315).
     Blocked,
+    /// The user chose Skip This Version (spec S297).
+    Skipped,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -606,6 +608,7 @@ pub enum UpdateRecordReason {
 pub enum UpdaterButton {
     Download,
     NotNow,
+    SkipThisVersion,
     Cancel,
     TryAgain,
     OpenReleasePage,
@@ -617,7 +620,7 @@ impl UpdaterNotice {
     pub fn buttons(&self) -> &'static [UpdaterButton] {
         use UpdaterButton::*;
         match self {
-            UpdaterNotice::Available { .. } => &[Download, NotNow],
+            UpdaterNotice::Available { .. } => &[NotNow, SkipThisVersion, Download],
             UpdaterNotice::Downloading { .. } => &[Cancel],
             UpdaterNotice::Installed { .. } => &[RestartNow],
             UpdaterNotice::ReadOnly

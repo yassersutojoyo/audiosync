@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
-use audiosync_cast::error::{ConnectError, ReconnectPacer};
+use audiosync_cast::error::{ConnectError, EndReason, ReconnectPacer};
 use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::{IdleReason, MediaError, Metadata, VolumeError};
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
@@ -1422,6 +1422,44 @@ fn a_close_from_the_running_app_reconnects_its_virtual_connection_and_plays_on()
     assert_eq!(device.connection_count(), 1, "the same channel");
     assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 1);
     assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1);
+    session.stop();
+    device.join();
+}
+
+// covers: C81, C82
+#[test]
+fn a_close_from_the_app_on_a_silent_device_recovers_as_a_dead_channel() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    // The app closes and the device stops answering status requests, then
+    // comes back without the app.
+    device.send(Command::SilenceStatus);
+    device.send(Command::ClearApps);
+    device.send(Command::Send(json_message(
+        "transport-1",
+        "sender-0",
+        NS_CONNECTION,
+        json!({"type": "CLOSE"}),
+    )));
+    let seen = run_until(&mut session, Duration::from_secs(30), |event| {
+        matches!(
+            event,
+            SessionEvent::Recovered { .. } | SessionEvent::Ended(_)
+        )
+    });
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovering(EndReason::Silent))),
+        "{seen:?}"
+    );
+    assert!(
+        seen.iter()
+            .any(|event| matches!(event, SessionEvent::Recovered { relaunched: true })),
+        "{seen:?}"
+    );
+    assert_eq!(device.connection_count(), 2);
+    assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 2);
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2);
     session.stop();
     device.join();
 }

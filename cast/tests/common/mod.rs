@@ -121,7 +121,7 @@ pub struct Behavior {
     /// level of its own (G1 e); `None` keeps the level sent.
     pub volume_answer: Option<fn(f64) -> f64>,
     /// The device sends `PING` every `.0` and drops the connection, without
-    /// a TLS close, once `.1` passes without a `PONG` (C35, G12).
+    /// a TLS close, once its oldest unanswered `PING` is `.1` old (C35, G12).
     pub device_ping: Option<(Duration, Duration)>,
     /// A new self-signed certificate for every connection, as a device
     /// that made one at a reboot (G4).
@@ -226,6 +226,11 @@ pub enum Command {
     /// Stop reading the current connection, so the sender's writes fill
     /// the socket buffers and then block.
     Stall,
+    /// Do nothing for this long, as a device thread starved of the CPU.
+    Pause(Duration),
+    /// Leave the receiver's `GET_STATUS` unanswered on the current
+    /// connection; PING and the media namespace still answer.
+    SilenceStatus,
     Disconnect,
 }
 
@@ -325,6 +330,7 @@ impl FakeDevice {
             fetches: Arc::clone(&fetches),
             stop_fetching: Arc::clone(&stop_fetching),
             ipv4_closed: false,
+            status_silent: false,
         };
         let thread_log = Arc::clone(&log);
         let thread_connections = Arc::clone(&connections);
@@ -525,6 +531,7 @@ struct Device {
     fetches: Arc<Mutex<Vec<Fetch>>>,
     stop_fetching: Arc<AtomicBool>,
     ipv4_closed: bool,
+    status_silent: bool,
 }
 
 impl Device {
@@ -556,7 +563,9 @@ impl Device {
                 NS_HEARTBEAT,
                 json!({"type": "PONG"}),
             )],
-            (NS_RECEIVER, "GET_STATUS") if self.behavior.answer_status => vec![self.status(id)],
+            (NS_RECEIVER, "GET_STATUS") if self.behavior.answer_status && !self.status_silent => {
+                vec![self.status(id)]
+            }
             (NS_RECEIVER, "LAUNCH") => {
                 self.launches += 1;
                 let error = |reason: &str| {
@@ -831,9 +840,12 @@ fn serve(
     let mut reader = FrameReader::new();
     let mut buffer = vec![0u8; 16 * 1024];
     let mut stalled = false;
+    device.status_silent = false;
     let mut suite_recorded = false;
     let mut last_ping = Instant::now();
-    let mut last_pong = Instant::now();
+    // The oldest PING since the last PONG: a device thread starved of the CPU
+    // sent none, so its own wait is not the sender's silence.
+    let mut unanswered: Option<Instant> = None;
     loop {
         if !suite_recorded
             && !stream.conn.is_handshaking()
@@ -842,16 +854,13 @@ fn serve(
             suites.lock().expect("suites").push(suite.suite());
             suite_recorded = true;
         }
-        if let Some((every, close_after)) = device.behavior.device_ping {
-            if last_pong.elapsed() > close_after {
-                let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
-                return false;
-            }
-            if last_ping.elapsed() >= every {
-                last_ping = Instant::now();
-                let ping = json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PING"}));
-                write(&mut stream, &ping);
-            }
+        if let Some((every, _)) = device.behavior.device_ping
+            && last_ping.elapsed() >= every
+        {
+            last_ping = Instant::now();
+            unanswered.get_or_insert(last_ping);
+            let ping = json_message(PLATFORM, SENDER, NS_HEARTBEAT, json!({"type": "PING"}));
+            write(&mut stream, &ping);
         }
         loop {
             match commands.try_recv() {
@@ -876,6 +885,8 @@ fn serve(
                 }
                 Ok(Command::SetApps(apps)) => device.apps = apps,
                 Ok(Command::Stall) => stalled = true,
+                Ok(Command::Pause(time)) => thread::sleep(time),
+                Ok(Command::SilenceStatus) => device.status_silent = true,
                 Ok(Command::DropConnection) => {
                     let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
                     return false;
@@ -908,7 +919,7 @@ fn serve(
                             .as_deref()
                             .is_some_and(|text| text.contains("\"PONG\""))
                     {
-                        last_pong = Instant::now();
+                        unanswered = None;
                     }
                     log.lock().expect("log").push(message.clone());
                     for reply in device.answer(&message) {
@@ -924,6 +935,13 @@ fn serve(
                         | io::ErrorKind::Interrupted
                 ) => {}
             Err(_) => return false,
+        }
+        // After the read, so a PONG that waited out a starved device thread counts.
+        if let Some((_, close_after)) = device.behavior.device_ping
+            && unanswered.is_some_and(|since| since.elapsed() > close_after)
+        {
+            let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
+            return false;
         }
     }
 }
