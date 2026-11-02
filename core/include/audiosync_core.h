@@ -2195,6 +2195,13 @@ typedef struct AscCastEvent {
 AscCast *asc_cast_create(const char *memory_json);
 
 /*
+ * As asc_cast_create, keeping the certificate fingerprints in
+ * cast-certificates.txt in folder, so a certificate changed across a
+ * relaunch is logged too. NULL or an empty folder keeps them in memory.
+ */
+AscCast *asc_cast_create_in(const char *memory_json, const char *folder);
+
+/*
  * Whether asc_cast_create reads memory_json as device memory: a JSON object
  * that no newer format version wrote. Keep a file that doesn't read before
  * saving over it. False for NULL.

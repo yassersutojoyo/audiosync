@@ -33,12 +33,14 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, CString, c_char};
 use std::net::{IpAddr, SocketAddr};
 use std::panic::{self, AssertUnwindSafe};
+use std::path::Path;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, Codec, MasterGain, audio_ring};
+use audiosync_cast::client::FingerprintBook;
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
@@ -56,6 +58,7 @@ use audiosync_cast::stream::StreamError;
 
 use super::airplay::{LATEST_PANIC, PANICS, caught_panic_location, note_panic_locations};
 use super::{host_slice, stereo_samples};
+use crate::airplay_pairings::write_atomically;
 use crate::delay_line::DelayLine;
 use crate::eq::{self, BAND_COUNT, EqSettings};
 use crate::fade::InputFade;
@@ -1234,7 +1237,27 @@ unsafe fn live<T>(cast: *mut AscCast, failed: T, body: impl FnOnce(&mut AscCast)
 pub unsafe extern "C" fn asc_cast_create(memory_json: *const c_char) -> *mut AscCast {
     // SAFETY: as the caller's.
     let text = unsafe { host_text(memory_json) }.unwrap_or_default();
-    create_with(text, live_browser)
+    create_with(text, None, live_browser)
+}
+
+/// As [`asc_cast_create`], keeping the certificate fingerprints (C21) in
+/// `cast-certificates.txt` in `folder`, so a certificate changed across a
+/// relaunch is logged too. A null or empty `folder` keeps them in memory.
+///
+/// # Safety
+///
+/// `memory_json` and `folder` are null or NUL-terminated strings, unchanged
+/// during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_create_in(
+    memory_json: *const c_char,
+    folder: *const c_char,
+) -> *mut AscCast {
+    // SAFETY: as the caller's.
+    let text = unsafe { host_text(memory_json) }.unwrap_or_default();
+    // SAFETY: as the caller's.
+    let folder = unsafe { host_text(folder) }.filter(|folder| !folder.is_empty());
+    create_with(text, folder.map(Path::new), live_browser)
 }
 
 /// Whether [`asc_cast_create`] reads `memory_json` as device memory: a JSON
@@ -1251,12 +1274,32 @@ pub unsafe extern "C" fn asc_cast_memory_reads(memory_json: *const c_char) -> bo
     unsafe { host_text(memory_json) }.is_some_and(|text| DeviceMemory::read_json(text).is_some())
 }
 
-fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
+fn certificates_book(folder: Option<&Path>) -> FingerprintBook {
+    let Some(folder) = folder else {
+        return FingerprintBook::new();
+    };
+    // Diagnostics only: a file that can't be read starts an empty book.
+    let (book, _) = FingerprintBook::open(
+        folder.join("cast-certificates.txt"),
+        |path| std::fs::read(path),
+        write_atomically,
+    );
+    #[cfg(test)]
+    let book = tests::record_on_open(book);
+    book
+}
+
+fn create_with(
+    memory_json: &str,
+    folder: Option<&Path>,
+    open_browser: OpenBrowser,
+) -> *mut AscCast {
     note_panic_locations();
     let panics_before = PANICS.load(Ordering::SeqCst);
     let created = panic::catch_unwind(|| {
         injected_panic();
-        let Ok(host) = CastHost::new(DeviceMemory::from_json(memory_json)) else {
+        let memory = DeviceMemory::from_json(memory_json);
+        let Ok(host) = CastHost::with_fingerprints(memory, certificates_book(folder)) else {
             return ptr::null_mut();
         };
         Box::into_raw(Box::new(AscCast {
@@ -2290,12 +2333,27 @@ mod tests {
     use std::net::{Ipv4Addr, TcpListener};
     use std::time::Instant;
 
-    use audiosync_cast::client::Fingerprint;
+    use audiosync_cast::client::{Fingerprint, FingerprintChange};
     use audiosync_cast::discovery::{MAX_DEVICES, ServiceRecord};
 
     thread_local! {
         /// The next guarded call on this thread panics inside its guard.
         pub(super) static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    thread_local! {
+        /// A fingerprint each book opened on this thread records, as a played
+        /// start would, and what each record gave.
+        static RECORD_ON_OPEN: std::cell::RefCell<Option<(DeviceId, Fingerprint)>> = const { std::cell::RefCell::new(None) };
+        static RECORDED: std::cell::RefCell<Vec<FingerprintChange>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub(super) fn record_on_open(mut book: FingerprintBook) -> FingerprintBook {
+        if let Some((id, fingerprint)) = RECORD_ON_OPEN.with(|record| *record.borrow()) {
+            let change = book.record(id, fingerprint);
+            RECORDED.with(|recorded| recorded.borrow_mut().push(change));
+        }
+        book
     }
 
     thread_local! {
@@ -2471,7 +2529,7 @@ mod tests {
     }
 
     fn create() -> *mut AscCast {
-        let handle = create_with("", quiet);
+        let handle = create_with("", None, quiet);
         assert!(!handle.is_null());
         handle
     }
@@ -2700,6 +2758,50 @@ mod tests {
         assert_eq!(pending.kind, CAST_EVENT_CERTIFICATE_CHANGED);
         assert_eq!(pending.detail, format!("{before} to {after}"));
         assert!(pending.detail.starts_with("AB:AB:") && pending.detail.ends_with(":CD:CD"));
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_certificate_recorded_in_the_data_folder_is_known_after_a_relaunch() {
+        let folder = crate::test_scratch().join("cast-certificates");
+        let _ = std::fs::remove_dir_all(&folder);
+        let kitchen = DeviceId::parse(KITCHEN).expect("id");
+        let fingerprint = Fingerprint([7; 32]);
+        let mut first = certificates_book(Some(&folder));
+        assert_eq!(first.record(kitchen, fingerprint), FingerprintChange::First);
+        drop(first);
+        let mut relaunched = certificates_book(Some(&folder));
+        assert_eq!(
+            relaunched.record(kitchen, fingerprint),
+            FingerprintChange::Same
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_sender_made_with_a_folder_keeps_its_certificates_there_across_a_relaunch() {
+        let folder = crate::test_scratch().join("cast-certificates-ffi");
+        let _ = std::fs::remove_dir_all(&folder);
+        let kitchen = DeviceId::parse(KITCHEN).expect("id");
+        let fingerprint = Fingerprint([7; 32]);
+        let c_folder = CString::new(folder.to_str().expect("UTF-8")).expect("no NUL");
+        RECORD_ON_OPEN.with(|record| *record.borrow_mut() = Some((kitchen, fingerprint)));
+        for _ in 0..2 {
+            // SAFETY: a null memory text and a NUL-terminated folder.
+            let mut handle = unsafe { asc_cast_create_in(ptr::null(), c_folder.as_ptr()) };
+            assert!(!handle.is_null());
+            // SAFETY: a live handle, destroyed once.
+            unsafe { asc_cast_destroy(&mut handle) };
+        }
+        RECORD_ON_OPEN.with(|record| record.borrow_mut().take());
+        let text = std::fs::read_to_string(folder.join("cast-certificates.txt")).expect("kept");
+        assert_eq!(text, format!("{kitchen} {fingerprint}\n"));
+        assert_eq!(
+            RECORDED.with(|recorded| recorded.take()),
+            [FingerprintChange::First, FingerprintChange::Same]
+        );
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     // CAST_SPEC: C80, C81
@@ -3733,7 +3835,7 @@ mod tests {
     // covers: S352
     #[test]
     fn starting_discovery_again_browses_afresh_and_keeps_the_list() {
-        let handle = create_with("", kitchen_and_den);
+        let handle = create_with("", None, kitchen_and_den);
         let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
         browse(handle, vec![BrowseEvent::Resolved(kitchen)], false);
         let first: Vec<(i32, String)> = devices(handle)
@@ -3769,7 +3871,7 @@ mod tests {
     // covers: S352
     #[test]
     fn starting_discovery_again_first_takes_in_what_the_old_browser_held() {
-        let handle = create_with("", den_only);
+        let handle = create_with("", None, den_only);
         let kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
         let fullname = kitchen.fullname.clone();
         browse(handle, vec![BrowseEvent::Resolved(kitchen)], false);

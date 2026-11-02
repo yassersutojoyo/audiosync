@@ -63,7 +63,8 @@ final class CastSender {
         queue.async { [weak self] in
             guard let self else { return }
             self.memory = self.memoryURL.map(CastMemoryStore.init(url:))
-            guard let created = asc_cast_create(self.memory?.json) else {
+            guard let created = asc_cast_create_in(self.memory?.json,
+                                                   self.memoryURL?.deletingLastPathComponent().path) else {
                 DispatchQueue.main.async { completion(false, false) }
                 return
             }
