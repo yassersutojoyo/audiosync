@@ -13631,7 +13631,7 @@ mod tests {
             .iter()
             .map(|app| app.name.to_string())
             .collect();
-        assert_eq!(names, ["Spotify", "Chrome (not running)"]);
+        assert_eq!(names, ["Chrome (not running)", "Spotify"]);
     }
 
     #[test]
