@@ -16492,6 +16492,11 @@ do {
     check(!tips.isEmpty && !tips.contains(" ms") && !tips.contains("if it plays late, lower it")
             && tips.contains("one by one") && tips.contains("hands-free microphone"),
           "guide: Tips keep their advice without an unsourced delay range or More Controls' raise/lower rule", tips)
+    let flatGuide = guide.helpText.replacingOccurrences(of: "\n  ", with: " ")
+    check(flatGuide.contains("appears. At launch, AudioSync starts streaming only when such a speaker is there.")
+            && flatGuide.contains("- Rename: double-click a speaker's name, or right-click it or use its ⋯ button and choose Rename…;")
+            && flatGuide.contains("out of the lists, right-click it or use its ⋯ button and choose “Hide Speaker”."),
+          "guide: auto-connect says when a launch streams, and Rename and Hide name the right-click menu, as on Windows")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

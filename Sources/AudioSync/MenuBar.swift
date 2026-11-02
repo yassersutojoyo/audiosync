@@ -1637,7 +1637,7 @@ private struct CompactRow: View {
                     .font(.callout.weight(state == .playing ? .semibold : .regular))
                     .lineLimit(1)
                     .layoutPriority(2)
-                    .help(name)
+                    .help(text.panelNameHelp(name: name, renamedFrom: renamedFrom))
                     // The button's own label reads the name; the tooltip would repeat it.
                     .accessibilityHidden(true)
                 if let kind {

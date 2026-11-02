@@ -1289,6 +1289,11 @@ struct UIStrings {
     func speakerNameHelp(name: String, system: String, renamed: Bool) -> String {
         renamed ? "\(name)\nDevice name: \(system). Double-click to rename." : "\(name)\nDouble-click to rename."
     }
+    /// The same in the menu bar panel, where a click switches the speaker
+    /// and nothing renames it.
+    func panelNameHelp(name: String, renamedFrom: String?) -> String {
+        renamedFrom.map { "\(name)\nDevice name: \($0)" } ?? name
+    }
     /// What VoiceOver adds after a renamed speaker's label.
     func renamedSpeaker(system: String) -> String { "device name \(system)" }
     /// Last in a speaker's ⋯ menu and right-click menu; never on the reference.
@@ -1805,12 +1810,14 @@ struct UIStrings {
           update or delete a preset, use its ⋯ button.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           Auto-Connect When Available. AudioSync then turns it on whenever it
-          appears.
-        - Rename: double-click a speaker's name, or choose Rename… from its
-          ⋯ button, type a name and press Return. Leave it empty to go back to
-          the device's own name, which its tooltip keeps showing.
-        - Hide: to keep a speaker you never use out of the lists, choose “Hide
-          Speaker” from its ⋯ button. A speaker that is on turns off first.
+          appears. At launch, AudioSync starts streaming only when such a speaker
+          is there.
+        - Rename: double-click a speaker's name, or right-click it or use its ⋯
+          button and choose Rename…; type a name and press Return. Leave it empty
+          to go back to the device's own name, which its tooltip keeps showing.
+        - Hide: to keep a speaker you never use out of the lists, right-click it
+          or use its ⋯ button and choose “Hide Speaker”. A speaker that is on
+          turns off first.
           Hidden Speakers in the gear menu lists what you hid; choose one to
           show it again, off, with its volume and delay as you left them.
         - Equalizer: click Equalizer in the window for 10 bands, a preamp,
