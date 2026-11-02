@@ -44,6 +44,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, an Apple TV turns on while its home theater group is on but can't play yet because one of its speakers asks for a password you haven't typed since AudioSync started, as on Windows.
 - When the input is unplugged before any sound arrives, only the notice that it's not connected shows. Before, the waiting-for-audio notice showed next to it, on the Mac even when it came up first and on Windows when it was already showing.
 - On the Mac, a channel pair you pick while the input is unplugged plays once it's plugged back in, as on Windows. Before, the old pair could play while the picker showed the new one, or streaming stopped.
+- On the Mac, when the last speaker goes off while you type a preset's name, Save says to turn on the speakers you want in the preset first, as on Windows. Before, the preset wasn't saved and nothing said so.
 
 ## [0.8.0] - 2026-11-02
 
