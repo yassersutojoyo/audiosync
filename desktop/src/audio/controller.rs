@@ -123,9 +123,10 @@ const MIX_FOLLOW_INTERVAL: Duration = Duration::from_secs(2);
 /// (S348).
 const VOLUME_LOG_PAUSE: Duration = Duration::from_secs(1);
 
-/// A row whose volume moved and isn't logged yet.
+/// A volume that moved and isn't logged yet.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum VolumeMove {
+    Master,
     Output(String),
     AirPlay(String),
 }
@@ -2459,6 +2460,9 @@ impl<D: Driver> Controller<D> {
         for moved in rested {
             self.volume_moves.remove(&moved);
             match moved {
+                VolumeMove::Master => self
+                    .log
+                    .log(|| format!("master volume: {}", self.policy.master())),
                 VolumeMove::Output(id) => self.log.log(|| {
                     let (gain, returned_db) = self.played_gain(&id);
                     format!(
@@ -4342,8 +4346,8 @@ impl<D: Driver> AudioBackend for Controller<D> {
             }
             let after = self.policy.master();
             if after != before {
-                self.log.log(|| format!("master volume: {after}"));
                 let now = Instant::now();
+                self.volume_moves.insert(VolumeMove::Master, now);
                 for id in self.playing_ids() {
                     self.volume_moves.insert(VolumeMove::Output(id), now);
                 }
@@ -10783,6 +10787,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S348
+    #[test]
+    fn a_master_drag_is_logged_once_after_its_last_step() {
+        let (mut backend, log, dir) = logged_backend("controller-master-drag");
+        for volume in [70.0, 75.0, 80.0] {
+            backend.set_master_volume(volume);
+        }
+        let now = Instant::now();
+        backend.log_rested_volumes(now);
+        assert!(logged(&log, &dir).is_empty(), "nothing while it moves");
+        backend.log_rested_volumes(now + VOLUME_LOG_PAUSE);
+        backend.log_rested_volumes(now + 2 * VOLUME_LOG_PAUSE);
+        assert_eq!(logged(&log, &dir), ["master volume: 80"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn each_rendered_outputs_level_is_logged_once_per_ten_seconds() {
         let (mut logging, log, dir) = logged_backend("controller-levels");
@@ -10878,6 +10898,7 @@ mod tests {
         let gain = backend.policy().params(HEADPHONES).gain;
         backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
         backend.set_master_volume(80.0);
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
         let mut settings = EqSettings {
             enabled: true,
             preamp_db: -3.0,
