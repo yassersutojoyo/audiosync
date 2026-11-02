@@ -209,6 +209,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the tray panel says "No connected speakers" when it has nothing to list, as the main window does, instead of staying blank.
 - On Windows, with the equalizer off, its gain values and band labels stay readable; only the sliders fade.
 - On the Mac, the line under a speaker list's In zones box no longer runs into the box's rounded corners.
+- On Windows and in the Linux preview, a speaker's row under In zones keeps its name in view when its zone's name is long, and the zone link ends in an ellipsis instead.
 - On the Mac, after macOS restarts its audio service AudioSync keeps following each speaker's volume and mute, and the list of outputs.
 - On Windows, when the app you play from runs as administrator and quits or restarts, AudioSync now notices within about 2 seconds and stops or switches to the whole system, as your setting says, with the usual notice. Before, streaming went on in silence.
 - On Windows, when the PC wakes from sleep while AudioSync streams and Windows audio is slow to come back, AudioSync keeps trying to capture for up to a minute after the wake. Before, it stopped streaming after about 5 seconds of tries. A speaker Windows was refusing to open when the PC went to sleep gets its full 30 seconds again after the wake before AudioSync shows its notice. It hasn't been tried on a real sleep and wake yet.

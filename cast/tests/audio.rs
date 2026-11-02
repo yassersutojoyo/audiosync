@@ -71,6 +71,7 @@ fn samples(out: &[u8]) -> Vec<i16> {
 
 /// The host's master scales every frame read, and a change fades in over
 /// the next read (S415 in `docs/ENGINE_SPEC.md`).
+// covers: S415
 #[test]
 fn the_master_scales_the_frames_read_and_a_change_fades_over_one_read() {
     let master = MasterGain::default();
