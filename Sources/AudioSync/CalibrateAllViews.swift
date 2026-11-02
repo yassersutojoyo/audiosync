@@ -66,6 +66,7 @@ struct CalibrateAllSheetView: View {
     let room: CGFloat?
     /// An object rather than @State: the Command Line Tools can't expand @State.
     @StateObject private var layout = CalibrateAllLayout()
+    @FocusState private var focus: CalibrateAllFocus?
 
     /// Until the window's height is known: keeps Apply and Close on a
     /// 13-inch screen with a dozen or more rows.
@@ -93,10 +94,10 @@ struct CalibrateAllSheetView: View {
                     Text(t.calibrateZoneBring(zone.name))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if status.sheet == nil {
-                    Text(t.calibrateAllIntro)
-                        .foregroundStyle(Brand.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
+                if status.sheet == nil, !status.isRunning {
+                    beforeYouStart(status.volume, t: t)
+                } else if status.sheet == nil, let progress = status.progress {
+                    runHero(progress, t: t)
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { layout.top = $0 }
@@ -117,7 +118,7 @@ struct CalibrateAllSheetView: View {
                 .frame(height: layout.list.map { min($0, listCap) })
             }
             VStack(alignment: .leading, spacing: Self.spacing) {
-                if let progress = status.progress {
+                if status.sheet != nil, let progress = status.progress {
                     HStack(spacing: 8) {
                         ProgressView()
                             .controlSize(.small)
@@ -160,60 +161,243 @@ struct CalibrateAllSheetView: View {
         }
     }
 
-    private func results(_ sheet: CalibrateAllSheet, status: CalibrateAllStatus, t: UIStrings) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
-                GridRow {
-                    Text(t.calibrateAllSpeakerColumn)
-                    Text(t.calibrateAllCurrentColumn)
-                    Text(t.calibrateAllNewColumn)
-                    Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
-                }
+    /// Before a run: where the microphone goes and whether the reference is
+    /// loud enough for it, with the main window's fix when it isn't.
+    private func beforeYouStart(_ volume: CalibrationVolumeCheck?, t: UIStrings) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(t.calibrateBeforeStart)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Brand.secondaryText)
-                .accessibilityHidden(true)
-                Divider()
-                ForEach(sheet.rows) { row in
-                    GridRow {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(row.speaker.name).lineLimit(2)
-                            Text(t.calibrateAllKind(row.speaker.kind, reference: row.result == .reference))
-                                .font(.caption)
-                                .foregroundStyle(Brand.secondaryText)
-                        }
-                        .frame(width: 150, alignment: .leading)
-                        .accessibilityElement(children: .combine)
-                        Text(current(row, t: t))
-                            .monospacedDigit()
-                            .accessibilityLabel(t.calibrateAllCurrentColumn + ", " + current(row, t: t))
-                            .accessibilityHidden(row.result == .reference)
-                        Text(t.calibrateAllResult(row))
-                            .monospacedDigit()
-                            .foregroundStyle(color(row))
+                .accessibilityAddTraits(.isHeader)
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    checkIcon("mic", tint: Brand.tealText, solid: false)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(t.calibrateMicrophoneCheck).fontWeight(.semibold)
+                        Text(t.calibrateMicrophoneCheckDetail)
+                            .foregroundStyle(Brand.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityLabel(t.calibrateAllNewColumn + ", " + t.calibrateAllResult(row))
-                        if sheet.canMeasureAgain(row) {
-                            Button(t.measureAgain) { model.actions.measureAgain(row.index) }
-                                .controlSize(.small)
-                                .disabled(status.isRunning || status.holdsOutputs)
-                                .accessibilityLabel(t.measureAgainLabel(of: row.speaker.name))
-                        } else {
-                            Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
-                        }
                     }
+                    .accessibilityElement(children: .combine)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                if let volume {
+                    Divider()
+                    volumeRow(volume, t: t)
                 }
             }
-            if let airPlay = sheet.airPlay {
-                Text(t.calibrateAllAirPlay(airPlay))
-                    .foregroundStyle(airPlay.state == .certain ? Color.primary : Brand.secondaryText)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor)))
+        }
+    }
+
+    /// A warning tinted in the warn color with the fix, or a check with the volume;
+    /// it follows the device as it changes, so it goes once the fix works.
+    private func volumeRow(_ volume: CalibrationVolumeCheck, t: UIStrings) -> some View {
+        let warning = volume.warning
+        let tint = warning == nil ? Brand.tealText : Brand.warn
+        return HStack(spacing: 12) {
+            checkIcon(warning?.symbol ?? "checkmark", tint: tint, solid: warning != nil)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(t.calibrateVolumeTitle(volume)).fontWeight(.semibold)
+                Text(t.calibrateVolumeDetail(volume))
+                    .foregroundStyle(warning == nil ? Brand.secondaryText : Color.primary)
                     .fixedSize(horizontal: false, vertical: true)
-                if let moves = status.zone.flatMap({ t.calibrateZoneAirPlayMoves($0.airPlayMoves) }) {
-                    Text(moves)
-                        .foregroundStyle(Brand.secondaryText)
+                if let percent = volume.percent {
+                    volumeMeter(percent, tint: tint, muted: isMuted(warning), t: t)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 0)
+            if let warning {
+                Button(t.deviceVolumeFix(warning)) {
+                    // The button goes once the fix works, so focus moves on before it does.
+                    if focus == .fix { focus = .start }
+                    model.actions.fixCalibrationVolume()
+                }
+                .focused($focus, equals: .fix)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(warning == nil ? Color.clear : Brand.warnBackground)
+        .overlay(alignment: .leading) {
+            if warning != nil { Rectangle().fill(Brand.warn).frame(width: 3) }
+        }
+    }
+
+    private func isMuted(_ warning: DeviceVolumeHint?) -> Bool {
+        switch warning {
+        case .muted, .mutedAndLow: true
+        default: false
+        }
+    }
+
+    /// The volume against the low line. The title already says it, so
+    /// VoiceOver skips the meter.
+    private func volumeMeter(_ percent: Int, tint: Color, muted: Bool, t: UIStrings) -> some View {
+        let width: CGFloat = 260
+        let low = CGFloat(CalibrationVolumeCheck.lowPercent) / 100
+        return VStack(alignment: .leading, spacing: 3) {
+            ZStack(alignment: .leading) {
+                Capsule().fill(Brand.meterTrack)
+                Capsule()
+                    .fill(tint.opacity(muted ? 0.35 : 1))
+                    .frame(width: width * CGFloat(min(max(percent, 0), 100)) / 100)
+                Rectangle()
+                    .fill(Color.primary.opacity(0.55))
+                    .frame(width: 2, height: 12)
+                    .offset(x: width * low - 1)
+            }
+            .frame(width: width, height: 6)
+            Text(t.percent(0))
+                .frame(width: width, alignment: .leading)
+                .overlay(alignment: .trailing) { Text(t.percent(100)) }
+                .overlay(alignment: .leading) {
+                    Text(t.percent(CalibrationVolumeCheck.lowPercent))
+                        .frame(width: 40)
+                        .offset(x: width * low - 20)
+                }
+                .font(.caption2)
+                .foregroundStyle(Brand.secondaryText)
+        }
+        .padding(.top, 5)
+        .accessibilityHidden(true)
+    }
+
+    private func checkIcon(_ symbol: String, tint: Color, solid: Bool) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 12, weight: .bold))
+            .foregroundStyle(solid ? Brand.warnBackground : tint)
+            .frame(width: 26, height: 26)
+            .background(Circle().fill(solid ? tint : tint.opacity(0.15)))
+            .accessibilityHidden(true)
+    }
+
+    /// A whole run before its results: the sweep under way, in the middle.
+    private func runHero(_ progress: CalibrateAllProgress, t: UIStrings) -> some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .accessibilityHidden(true)
+            Text(t.calibrateAllProgress(progress))
+                .fontWeight(.semibold)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(t.calibrateMusicFadesBack)
+                .font(.caption)
+                .foregroundStyle(Brand.secondaryText)
+        }
+        .accessibilityElement(children: .combine)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 26)
+        .frame(maxWidth: .infinity)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor)))
+    }
+
+    private func results(_ sheet: CalibrateAllSheet, status: CalibrateAllStatus, t: UIStrings) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(sheet.rows) { row in
+                resultCard(row, sheet: sheet, status: status, t: t)
+            }
+            if let airPlay = sheet.airPlay {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(t.calibrateAllAirPlay(airPlay))
+                        .foregroundStyle(airPlay.state == .certain ? Color.primary : Brand.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let moves = status.zone.flatMap({ t.calibrateZoneAirPlayMoves($0.airPlayMoves) }) {
+                        Text(moves)
+                            .foregroundStyle(Brand.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Brand.teal.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+    }
+
+    /// One speaker: the new delay large with its uncertainty and the old
+    /// one beside it, a chip for how clearly it was measured, and Measure Again.
+    private func resultCard(_ row: CalibrateAllSheet.Row, sheet: CalibrateAllSheet, status: CalibrateAllStatus,
+                            t: UIStrings) -> some View {
+        let reference = row.result == .reference
+        let chip = resultChip(row, t: t)
+        let label: [String?] = [row.speaker.name, t.calibrateAllKind(row.speaker.kind, reference: reference), chip?.text,
+                     t.calibrateAllResult(row), reference ? nil : t.calibrateAllCurrentColumn + ", " + current(row, t: t)]
+        return HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(row.speaker.name).fontWeight(.semibold).lineLimit(2)
+                    if !reference {
+                        Text(t.calibrateAllKind(row.speaker.kind, reference: false))
+                            .font(.caption)
+                            .foregroundStyle(Brand.secondaryText)
+                    }
+                    if let chip {
+                        Text(chip.text)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(chip.warn ? Color.primary : Brand.tealText)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 1)
+                            .background((chip.warn ? Brand.warn : Brand.teal).opacity(0.15), in: Capsule())
+                            .overlay { if chip.warn { Capsule().strokeBorder(Brand.warn) } }
+                    }
+                }
+                if let delay = newDelay(row) {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(t.calibrateAllValue(delay.ms, kind: row.speaker.kind))
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(color(row))
+                        Text(t.calibrateAllWas(uncertaintyMs: delay.uncertaintyMs, was: current(row, t: t)))
+                            .foregroundStyle(Brand.secondaryText)
+                    }
+                    .monospacedDigit()
+                }
+                if let note = t.calibrateAllCardNote(row) {
+                    Text(newDelay(row) == nil && !reference ? t.calibrateAllNote(note, was: current(row, t: t)) : note)
+                        .font(.caption)
+                        .foregroundStyle(row.isCertain ? Brand.secondaryText : color(row))
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label.compactMap { $0 }.joined(separator: ", "))
+            Spacer(minLength: 0)
+            if sheet.canMeasureAgain(row) {
+                Button(t.measureAgain) { model.actions.measureAgain(row.index) }
+                    .controlSize(.small)
+                    .disabled(status.isRunning || status.holdsOutputs)
+                    .accessibilityLabel(t.measureAgainLabel(of: row.speaker.name))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor)))
+    }
+
+    private func resultChip(_ row: CalibrateAllSheet.Row, t: UIStrings) -> (text: String, warn: Bool)? {
+        guard !row.off else { return nil }
+        switch row.result {
+        case .reference: return (t.calibrateAllKind(row.speaker.kind, reference: true), false)
+        case .certain: return (t.calibrateAllMeasuredClearly, false)
+        case .uncertain: return (t.calibrateAllNotClear, true)
+        default: return nil
+        }
+    }
+
+    private func newDelay(_ row: CalibrateAllSheet.Row) -> (ms: Double, uncertaintyMs: Double)? {
+        guard !row.off else { return nil }
+        switch row.result {
+        case .certain(let ms, let u, _), .uncertain(let ms, let u): return (ms, u)
+        default: return nil
         }
     }
 
@@ -225,6 +409,10 @@ struct CalibrateAllSheetView: View {
         let rows = visibleLeftOut(status)
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
+                Text(t.calibrateLeftOutTitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Brand.secondaryText)
+                    .accessibilityAddTraits(.isHeader)
                 ForEach(rows) { row in
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         VStack(alignment: .leading, spacing: 1) {
@@ -288,6 +476,7 @@ struct CalibrateAllSheetView: View {
                 if status.sheet == nil || status.sheet?.ended != nil {
                     Button(status.zone == nil ? t.calibrateAll : t.calibrateZone) { model.actions.calibrateAll() }
                         .keyboardShortcut(.defaultAction)
+                        .focused($focus, equals: .start)
                         .disabled(status.blocker != nil || status.holdsOutputs)
                 } else if let sheet = status.sheet, !sheet.applied, sheet.ended == nil {
                     Button(t.calibrateAllApply) { model.actions.applyCalibrateAll() }
@@ -336,4 +525,9 @@ struct CalibrateAllSheetView: View {
         default: false
         }
     }
+}
+
+/// The sheet's controls that keyboard focus moves between on its own.
+enum CalibrateAllFocus: Hashable {
+    case fix, start
 }

@@ -32,3 +32,14 @@ unused-allowed-license = "allow"
 
 [licenses.private]
 ignore = false
+
+# Checked weekly by .github/workflows/advisories.yml; every ignore says why.
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "warn"
+ignore = [
+    # A dev-dependency that only generates the fake receiver's test key; ring
+    # signs with it, and no shipped code runs RSA.
+    { id = "RUSTSEC-2023-0071", reason = "rsa only makes a test key; Marvin needs RSA decryption; no patched rsa version exists" },
+]

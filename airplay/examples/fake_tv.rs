@@ -65,7 +65,7 @@ use television::{Pin, television};
 const SERVICE_TYPE: &str = "_airplay._tcp.local.";
 
 fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, ServiceInfo), String> {
-    let mut entries = television::txt(options.pin, 0, options.device_id);
+    let mut entries = television::txt(options.pin, options.device_id);
     if options.ptp_only {
         entries = television::ptp_only_txt(entries);
     }

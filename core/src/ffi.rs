@@ -1270,6 +1270,11 @@ mod tests {
                 "ASC_AIRPLAY_EVENT_LATENCY_HELD",
                 AIRPLAY_EVENT_LATENCY_HELD.to_string(),
             ),
+            ("ASC_AIRPLAY_EVENT_STORED", AIRPLAY_EVENT_STORED.to_string()),
+            (
+                "ASC_AIRPLAY_PAIRED_FOR_SESSION",
+                AIRPLAY_PAIRED_FOR_SESSION.to_string(),
+            ),
             (
                 "ASC_AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY",
                 AIRPLAY_LATENCY_SOURCE_AUDIO_LATENCY.to_string(),
@@ -1294,6 +1299,10 @@ mod tests {
             (
                 "ASC_AIRPLAY_PAIRINGS_NEWER",
                 AIRPLAY_PAIRINGS_NEWER.to_string(),
+            ),
+            (
+                "ASC_AIRPLAY_PAIRINGS_UNREADABLE",
+                AIRPLAY_PAIRINGS_UNREADABLE.to_string(),
             ),
             ("ASC_AIRPLAY_FILE_UNREAD", AIRPLAY_FILE_UNREAD.to_string()),
             ("ASC_AIRPLAY_FILE_PRIVATE", AIRPLAY_FILE_PRIVATE.to_string()),
@@ -1578,6 +1587,11 @@ mod tests {
                 "ASC_CAST_EVENT_CERTIFICATE_CHANGED",
                 CAST_EVENT_CERTIFICATE_CHANGED.to_string(),
             ),
+            (
+                "ASC_CAST_EVENT_VOLUME_UNANSWERED",
+                CAST_EVENT_VOLUME_UNANSWERED.to_string(),
+            ),
+            ("ASC_CAST_EVENT_PAUSED", CAST_EVENT_PAUSED.to_string()),
             ("ASC_CAST_END_STOPPED", CAST_END_STOPPED.to_string()),
             ("ASC_CAST_END_TAKEN_OVER", CAST_END_TAKEN_OVER.to_string()),
             ("ASC_CAST_END_DESELECTED", CAST_END_DESELECTED.to_string()),

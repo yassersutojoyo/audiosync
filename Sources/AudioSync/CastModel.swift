@@ -104,7 +104,7 @@ enum CastGroupMembers: Equatable {
 
 /// Where the session of the device that is on stands.
 enum CastStatus: Equatable {
-    case idle, connecting, playing, reconnecting
+    case idle, connecting, playing, reconnecting, paused
 }
 
 /// Why a Cast speaker went off, or stayed off, for its notice.
@@ -192,6 +192,8 @@ enum CastEvent: Equatable {
     /// The device plays the stream in `format`, an `ASC_CAST_FORMAT_` code.
     case started(attempt: UInt64, format: Int32)
     case playing(attempt: UInt64)
+    /// Someone paused the device itself; a playing event follows its next play (C113).
+    case paused(attempt: UInt64)
     /// `detail` here, in `recovering` and in `formatFallback` is the core's text for the debug log (C20).
     case connectFailed(attempt: UInt64, error: CastError?, retryMs: Int64, detail: String = "")
     case recovering(attempt: UInt64, detail: String = "")
@@ -199,6 +201,8 @@ enum CastEvent: Equatable {
     case reloaded(attempt: UInt64)
     /// `answersMute`: the first status since a mute was sent (C70).
     case volume(attempt: UInt64, CastVolume, answersMute: Bool = false)
+    /// A level asked for that no status will answer, once per ask, which `ask` names (C70).
+    case volumeUnanswered(attempt: UInt64, level: Double, ask: UInt64)
     case commandFailed(attempt: UInt64, error: CastError?)
     case ended(attempt: UInt64, CastEnd)
     /// The device refused WAV; `format` is loaded instead (C84).
@@ -216,9 +220,9 @@ enum CastEvent: Equatable {
 
     var attempt: UInt64? {
         switch self {
-        case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .connectFailed(let a, _, _, _),
+        case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .paused(let a), .connectFailed(let a, _, _, _),
              .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _, _), .commandFailed(let a, _),
-             .ended(let a, _), .note(let a, _), .members(let a, _):
+             .volumeUnanswered(let a, _, _), .ended(let a, _), .note(let a, _), .members(let a, _):
             return a
         case .groupLog, .memoryChanged, .discoveryStopped, .failed:
             return nil
@@ -244,6 +248,7 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_PLAYING:
             underruns.forget(a)
             self = .playing(attempt: a)
+        case ASC_CAST_EVENT_PAUSED: self = .paused(attempt: a)
         case ASC_CAST_EVENT_CONNECT_FAILED:
             self = .connectFailed(attempt: a, error: error, retryMs: raw.retry_ms, detail: detail)
         case ASC_CAST_EVENT_RECOVERING: self = .recovering(attempt: a, detail: detail)
@@ -252,6 +257,8 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_VOLUME:
             self = .volume(attempt: a, CastVolume(level: raw.level, muted: raw.muted, fixed: raw.volume_fixed,
                                                   step: raw.step), answersMute: raw.answers_mute)
+        case ASC_CAST_EVENT_VOLUME_UNANSWERED:
+            self = .volumeUnanswered(attempt: a, level: raw.level, ask: raw.ask)
         case ASC_CAST_EVENT_COMMAND_FAILED: self = .commandFailed(attempt: a, error: error)
         case ASC_CAST_EVENT_ENDED:
             let end: CastEnd
@@ -445,6 +452,9 @@ struct CastModel {
 
     /// The connect failures before a first connect that turn the device off (C80).
     static let failuresBeforeOff = 3
+    /// From the Mac's will-sleep notice to its wake: a connect failure doesn't
+    /// count toward turning the device off (S412).
+    var asleep = false
 
     var discovery = Discovery.off
     private(set) var devices: [String: CastDevice] = [:]
@@ -473,8 +483,11 @@ struct CastModel {
     /// is in no zone.
     private(set) var zoneLevels: [String: Double] = [:]
     /// The levels sent in this session that no status has answered yet,
-    /// oldest first; a drag sends one every 100 ms at most (C70).
-    private var unanswered: [Double] = []
+    /// oldest first, each with its number in `sends` and the sender's ask id,
+    /// 0 until `volumeAsked` brings it; a drag sends one every 100 ms at most (C70).
+    private var unanswered: [(send: UInt64, ask: UInt64, level: Double)] = []
+    /// How many levels the model handed out to send; the latest one's number.
+    private(set) var sends: UInt64 = 0
     /// A level a re-key left to send once (S341).
     private var levelDue: Double?
     private var offsetCopiedTo: String?
@@ -573,14 +586,16 @@ struct CastModel {
     /// A session runs or starts for `id`: its volume, Mute and Resync reach it.
     func isLive(_ id: String) -> Bool { status(of: id) != .idle }
 
-    /// The slider position, 0 to 100: the own level the user set until a
-    /// status answers it, else the one kept, else the reported level.
+    /// The slider position, 0 to 100: a fixed volume's reported level, else
+    /// the own level the user set until a status answers it, else the one
+    /// kept, else the reported level.
     func volume(of id: String) -> Double { knownVolume(of: id) ?? 100 }
 
     /// `volume(of:)`, nil while no status reported a level and the user set
     /// none; it may pass 100 (S415).
     func knownVolume(of id: String) -> Double? {
-        (ownLevel(of: id) ?? volumes[id]?.level).map { max(0, $0 * 100) }
+        let fixed = volumes[id].flatMap { $0.fixed ? $0.level : nil }
+        return (fixed ?? ownLevel(of: id) ?? volumes[id]?.level).map { max(0, $0 * 100) }
     }
 
     private func ownLevel(of id: String) -> Double? {
@@ -593,8 +608,11 @@ struct CastModel {
         asc_airplay_row_level(deviceLevel(of: id) * 100)
     }
 
-    /// A level held at zone 0, else zone × own, else the reported level, else 1.
+    /// A fixed volume's reported level, else a level held at zone 0, else
+    /// zone × own, else the reported level, else 1.
     private func deviceLevel(of id: String) -> Double {
+        // Nothing reaches a fixed volume (C68), so zone × own would be a guess.
+        if let reported = volumes[id], reported.fixed { return reported.level }
         if let held, held.id == id { return held.level }
         return ownLevel(of: id).map { asc_cast_zone_level(zone(of: id), $0) } ?? volumes[id]?.level ?? 1
     }
@@ -917,10 +935,12 @@ struct CastModel {
             return setStatus(.playing)
         case .recovering:
             return setStatus(.reconnecting)
+        case .paused:
+            return setStatus(.paused)
         case .connectFailed(_, let error, _, _):
             guard current.status == .connecting else { return setStatus(.reconnecting) }
             // A group with no address yet waits for its records (C81).
-            guard error != .noAddress else { return nil }
+            guard error != .noAddress, !asleep else { return nil }
             attempt?.connectFailures += 1
             guard attempt?.connectFailures == Self.failuresBeforeOff else { return nil }
             enabled = nil
@@ -928,6 +948,9 @@ struct CastModel {
         case .volume(_, let volume, let answersMute):
             attempt?.reportedMute = nil
             return volumeReported(id, volume, answersMute: answersMute)
+        case .volumeUnanswered(_, _, let ask):
+            volumeUnanswered(id, ask)
+            return nil
         case .members(_, let list):
             guard devices[id]?.group == true, members != list else { return nil }
             members = list
@@ -1022,18 +1045,35 @@ struct CastModel {
         guard volumes[id]?.fixed != true else { return nil }
         attempt?.reportedMute = nil
         let level = asc_cast_zone_level(zone(of: id), own)
-        if let current = volumes[id], asc_cast_volume_answers(level, current.level, current.step) {
-            // The device reports only changes, so this level gets no answer; it
-            // is still sent, so it replaces a level the sender holds back.
-            unanswered = []
+        sends += 1
+        if unanswered.isEmpty, let current = volumes[id], asc_cast_volume_answers(level, current.level, current.step) {
+            // The device reports only changes, so with nothing in flight this
+            // level gets no answer; it is still sent, so it replaces a level the
+            // sender holds back.
             levels[id] = own
             if requested?.id == id { requested = nil }
-        } else if unanswered.last != level {
-            // The same level sent twice in a row gets one answer.
+        } else {
             if unanswered.count == Self.maxUnanswered { unanswered.removeFirst() }
-            unanswered.append(level)
+            unanswered.append((send: sends, ask: 0, level: level))
         }
         return level
+    }
+
+    /// The sender's id for the level handed out as `send`, which its report
+    /// on that ask names (C70).
+    mutating func volumeAsked(send: UInt64, ask: UInt64) {
+        guard let index = unanswered.firstIndex(where: { $0.send == send }) else { return }
+        unanswered[index].ask = ask
+    }
+
+    /// The sender will get no answer to `ask` (C70, C104), so it stops waiting.
+    private mutating func volumeUnanswered(_ id: String, _ ask: UInt64) {
+        guard ask != 0, let index = unanswered.firstIndex(where: { $0.ask == ask }) else { return }
+        unanswered.remove(at: index)
+        if unanswered.isEmpty, let requested, requested.id == id {
+            levels[id] = requested.level
+            self.requested = nil
+        }
     }
 
     /// A status's volume (C70, C104, C105): the answer to a level sent keeps
@@ -1046,7 +1086,7 @@ struct CastModel {
         let level = volume.level
         let first = attempt?.heardVolume == false
         attempt?.heardVolume = true
-        let answered = unanswered.firstIndex { asc_cast_volume_answers($0, level, volume.step) }
+        let answered = unanswered.firstIndex { asc_cast_volume_answers($0.level, level, volume.step) }
         if let answered { unanswered.removeFirst(answered + 1) }
         // The answer to a mute repeating the known level is no change from elsewhere: a level still awaited stays.
         let elsewhere = answered == nil && !(answersMute && volumes[id]?.level == level)
@@ -1084,11 +1124,16 @@ struct CastModel {
         let size = deviceStep > 0 ? deviceStep : Self.fallbackVolumeStep
         // A step moves the row (S415); at zone 0 it sends nothing.
         var own = 0.0
-        guard asc_cast_row_move((deviceLevel(of: id) + (up ? size : -size)) * 100, zone(of: id), &own)
+        // Unrounded, 0.4 + 0.02 lands past 0.42, and a status of 0.43, exactly
+        // half a step away, would answer the level sent (C70).
+        let row = ((deviceLevel(of: id) + (up ? size : -size)) * 1e8).rounded() / 1e6
+        guard asc_cast_row_move(row, zone(of: id), &own)
         else { return nil }
         requested = (id, own)
         attempt?.reportedMute = nil
         // The device's own step moves its level, which is the own level only at zone 1 (C104).
+        // The sender's own step has an ask the model never learns, so its level
+        // isn't awaited; a drag level the step replaces is reported under its own ask.
         if deviceStep > 0, zone(of: id) == 1 { return .device(up: up) }
         return levelToSend(id, own: own).map { .level($0) }
     }
@@ -1400,20 +1445,24 @@ struct CastManualAddress: Hashable {
     }
 
     /// Four decimal parts from 0 to 255, without leading zeros, which the
-    /// core would not read.
+    /// core would not read; 0.0.0.0, broadcast and multicast name no device.
     static func isIPv4(_ text: String) -> Bool {
         let parts = text.split(separator: ".", omittingEmptySubsequences: false)
-        return parts.count == 4 && parts.allSatisfy { part in
+        let wellFormed = parts.count == 4 && parts.allSatisfy { part in
             (1...3).contains(part.count) && part.allSatisfy(\.isASCIIDigit)
                 && (part.count == 1 || part.first != "0") && Int(part).map { $0 <= 255 } == true
         }
+        return wellFormed && text != "0.0.0.0" && text != "255.255.255.255"
+            && Int(parts[0]).map { !(224...239).contains($0) } == true
     }
 
     /// Labels of letters, digits and hyphens (RFC 1123), 63 characters at
-    /// most and not starting or ending with a hyphen, 253 in all.
+    /// most and not starting or ending with a hyphen, 253 in all; a last
+    /// label of only digits is a malformed IPv4 address, not a name.
     static func isHostName(_ text: String) -> Bool {
-        guard (1...253).contains(text.count) else { return false }
-        return text.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in
+        let labels = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...253).contains(text.count), labels.last?.allSatisfy(\.isASCIIDigit) == false else { return false }
+        return labels.allSatisfy { label in
             (1...63).contains(label.count) && label.first != "-" && label.last != "-"
                 && label.allSatisfy { $0 == "-" || $0.isASCIIDigit || ("a"..."z").contains($0) }
         }
@@ -1432,9 +1481,12 @@ enum CastAddProblem: Equatable {
 /// The addresses the user added, in the order added, one entry each; the
 /// app adds them to the sender again at every launch.
 struct CastManualList: Equatable {
+    static let maxAddresses = 64
+
     private(set) var addresses: [CastManualAddress] = []
 
-    /// From the stored strings; one that no longer reads, or repeats, is dropped.
+    /// From the stored strings; one that no longer reads, or repeats, is
+    /// dropped, and only the first `maxAddresses` are kept.
     init(stored: Any?) {
         for text in stored as? [String] ?? [] {
             if let address = CastManualAddress(text) { add(address) }
@@ -1443,10 +1495,10 @@ struct CastManualList: Equatable {
 
     var stored: [String] { addresses.map(\.text) }
 
-    /// False when it is listed already.
+    /// False when it is listed already or the list is full.
     @discardableResult
     mutating func add(_ address: CastManualAddress) -> Bool {
-        guard !addresses.contains(address) else { return false }
+        guard !addresses.contains(address), addresses.count < Self.maxAddresses else { return false }
         addresses.append(address)
         return true
     }

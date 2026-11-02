@@ -523,7 +523,8 @@ enum SourceList {
         let isInput: Bool
         /// False only for the chosen input device while it is unplugged.
         var connected = true
-        /// False for the chosen input device while it is unplugged or a hands-free input.
+        /// False for the chosen input device while it is unplugged or a hands-free input,
+        /// and in the several-apps menu for a checked app that isn't running.
         var available = true
     }
 
@@ -534,18 +535,22 @@ enum SourceList {
     /// unplugged, listed last as `unpluggedInputName`, not connected.
     /// Devices without a UID can't be chosen and are skipped, and a Bluetooth
     /// headset's hands-free input (`AudioDevices.isHandsFreeInput`) is left
-    /// out; a chosen one is listed last under its name, not available.
+    /// out; a chosen one is listed last under its name, not available. While
+    /// no mix is chosen, `lastMix` (S354) is listed where a chosen mix would be.
     static func entries(systemName: String,
                         apps: [(bundleID: String, name: String)],
                         inputs: [Input],
                         chosen: AudioSource,
                         chosenAppName: (String) -> String,
                         mixName: (AppMixMode, [String]) -> String = { $1.joined(separator: ", ") },
-                        unpluggedInputName: String = "") -> [Entry] {
+                        unpluggedInputName: String = "",
+                        lastMix: AudioSource? = nil) -> [Entry] {
         var mixEntry: [Entry] = []
-        if case .mix(let mode, let ids) = chosen {
+        var listedMix = lastMix
+        if case .mix = chosen { listedMix = chosen }
+        if let listedMix, case .mix(let mode, let ids) = listedMix {
             let names = ids.map { id in apps.first { $0.bundleID == id }?.name ?? chosenAppName(id) }
-            mixEntry = [Entry(id: chosen.defaultsValue, name: mixName(mode, names), isInput: false)]
+            mixEntry = [Entry(id: listedMix.defaultsValue, name: mixName(mode, names), isInput: false)]
         }
         var appEntries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
         if case .app(let bundleID) = chosen, !appEntries.contains(where: { $0.id == bundleID }) {
@@ -573,7 +578,7 @@ enum SourceList {
                         chosenAppName: (String) -> String) -> [Entry] {
         var entries = apps.map { Entry(id: $0.bundleID, name: $0.name, isInput: false) }
         for id in checked where !entries.contains(where: { $0.id == id }) {
-            entries.append(Entry(id: id, name: chosenAppName(id), isInput: false))
+            entries.append(Entry(id: id, name: chosenAppName(id), isInput: false, available: false))
         }
         return entries.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }

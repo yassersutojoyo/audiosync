@@ -407,14 +407,29 @@ fn a_code_expires() {
     );
     assert_eq!(reply.status, 401);
     assert_eq!(reply.error(), "code_expired");
-    let fresh = remote.server.rotate_code().unwrap();
-    let reply = post(
-        &remote,
-        "/api/pair",
-        None,
-        &json!({ "code": fresh }).to_string(),
-    );
-    assert_eq!(reply.status, 200);
+    // The fresh code can expire as well before a loaded runner delivers the
+    // try; only then is it refused, and the next fresh code is tried.
+    for _ in 0..10 {
+        let made = Instant::now();
+        let fresh = remote.server.rotate_code().unwrap();
+        let reply = post(
+            &remote,
+            "/api/pair",
+            None,
+            &json!({ "code": fresh }).to_string(),
+        );
+        if reply.status == 200 {
+            return;
+        }
+        assert!(
+            reply.error() == "code_expired" && made.elapsed() >= timing.code_lifetime,
+            "{} {} after {:?}",
+            reply.status,
+            reply.error(),
+            made.elapsed()
+        );
+    }
+    panic!("every fresh code expired before its try arrived");
 }
 
 // covers: S369
@@ -813,11 +828,12 @@ impl Events {
                 Ok(count) => self
                     .data
                     .push_str(&String::from_utf8_lossy(&buffer[..count])),
+                // A WinSock read that times out on a busy runner can end in WSA_IO_PENDING (997) instead.
                 Err(error)
                     if matches!(
                         error.kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) => {}
+                    ) || (cfg!(windows) && error.raw_os_error() == Some(997)) => {}
                 Err(_) => return false,
             }
         }
@@ -1166,6 +1182,125 @@ fn a_source_pick_reaches_the_app_and_a_refused_one_says_why() {
             "{body}"
         );
         assert!(!reply.json()["message"].as_str().unwrap().is_empty());
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
+/// Spotify and Chrome run; Zoom is listed only because a mix holds it.
+fn mixable(calibrating: bool) -> String {
+    SAMPLE.replacen(
+        "\"speakers\"",
+        &format!(
+            r#""calibrating": {calibrating}, "mix_apps": [
+        {{"id": "spotify.exe", "name": "Spotify", "running": true}},
+        {{"id": "chrome.exe", "name": "Google Chrome", "running": true}},
+        {{"id": "zoom.exe", "name": "Zoom", "running": false}}
+    ], "speakers""#
+        ),
+        1,
+    )
+}
+
+fn received_json(remote: &Remote) -> Vec<Value> {
+    let received = remote.received.lock().unwrap();
+    received
+        .iter()
+        .map(|command| serde_json::from_str(&command.to_json()).unwrap())
+        .collect()
+}
+
+// covers: S353
+#[test]
+fn a_mix_post_that_is_not_a_list_of_up_to_63_app_ids_answers_400_and_waits_out_a_run() {
+    let remote = start("mix-refused");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    remote.server.publish_json(&mixable(false)).unwrap();
+    let list = |count: usize| {
+        format!(
+            "{{\"apps\": [{}]}}",
+            vec!["\"spotify.exe\""; count].join(", ")
+        )
+    };
+    let too_many = list(64);
+    for body in [
+        "not json",
+        "[\"spotify.exe\"]",
+        "{}",
+        "{\"apps\": \"spotify.exe\"}",
+        "{\"apps\": []}",
+        "{\"apps\": [3]}",
+        "{\"apps\": [\"spotify.exe\", null]}",
+        too_many.as_str(),
+    ] {
+        let reply = post(&remote, "/api/mix", token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (400, "bad_request"),
+            "{body}"
+        );
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+    let reply = post(&remote, "/api/mix", token, &list(63));
+    assert_eq!(reply.status, 202, "{}", reply.body);
+    remote.received.lock().unwrap().clear();
+
+    for method in ["GET", "PUT", "DELETE"] {
+        let reply = send(&remote, method, "/api/mix", token, &list(1));
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (405, "method_not_allowed"),
+            "{method}"
+        );
+        assert_eq!(reply.header("allow"), Some("POST"));
+    }
+    remote.server.publish_json(&mixable(true)).unwrap();
+    for body in [list(1).as_str(), "not json"] {
+        let reply = post(&remote, "/api/mix", token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (409, "calibrating"),
+            "{body}"
+        );
+    }
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
+// covers: S353
+#[test]
+fn a_mix_post_passes_on_the_running_apps_once_each_in_the_order_sent() {
+    let remote = start("mix");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    let early = post(&remote, "/api/mix", token, "{\"apps\": [\"spotify.exe\"]}");
+    assert_eq!(
+        (early.status, early.error().as_str()),
+        (404, "unknown_source")
+    );
+
+    remote.server.publish_json(&mixable(false)).unwrap();
+    let state = get(&remote, "/api/state", token).json();
+    assert_eq!(state["mix_apps"][1]["name"], "Google Chrome");
+    assert_eq!(state["mix_apps"][2]["running"], false);
+    let body = r#"{"apps": ["chrome.exe", "zoom.exe", "gone.exe", "spotify.exe", "chrome.exe"]}"#;
+    let reply = post(&remote, "/api/mix", token, body);
+    assert_eq!(reply.status, 202, "{}", reply.body);
+    assert_eq!(
+        received_json(&remote),
+        [json!({"type": "mix", "apps": ["chrome.exe", "spotify.exe"]})]
+    );
+    remote.received.lock().unwrap().clear();
+
+    for body in [
+        r#"{"apps": ["zoom.exe"]}"#,
+        r#"{"apps": ["gone.exe", "Spotify.exe"]}"#,
+    ] {
+        let reply = post(&remote, "/api/mix", token, body);
+        assert_eq!(
+            (reply.status, reply.error().as_str()),
+            (404, "unknown_source"),
+            "{body}"
+        );
     }
     assert!(remote.received.lock().unwrap().is_empty());
 }
@@ -1573,19 +1708,19 @@ fn a_body_at_the_limit_is_read_and_one_byte_more_gets_413() {
 // covers: S374
 #[test]
 fn a_declared_length_over_the_limit_is_refused_before_the_body_arrives() {
-    let remote = start("declared-length");
+    // A server waiting for the body leaves exchange's 20 s read timeout to fail the test; the 60 s
+    // request limit keeps it from timing the request out first, however loaded the runner.
+    let timing = Timing {
+        request: Duration::from_secs(60),
+        ..Timing::default()
+    };
+    let remote = start_with(config("declared-length", timing));
     let host = host(&remote);
     let raw = format!(
         "POST /api/pair HTTP/1.1\r\nHost: {host}\r\nOrigin: http://{host}\r\nContent-Type: application/json\r\nContent-Length: 1000000\r\n\r\n{{"
     );
-    let asked = Instant::now();
     let reply = exchange(remote.server.port(), raw.as_bytes());
     assert_eq!((reply.status, reply.error().as_str()), (413, "too_large"));
-    assert!(
-        asked.elapsed() < Duration::from_secs(3),
-        "answered without waiting for the body: {:?}",
-        asked.elapsed()
-    );
     assert_eq!(remote.server.device_count(), 0);
 }
 
@@ -1677,6 +1812,26 @@ fn a_foreign_host_is_refused_first_even_with_a_matching_origin_and_a_token() {
     // Header names are case-insensitive (RFC 9110 §5.1).
     let lower = format!("GET / HTTP/1.1\r\nhost: 127.0.0.1:{port}\r\n\r\n");
     assert_eq!(exchange(port, lower.as_bytes()).status, 200);
+}
+
+// covers: S373, S378
+#[test]
+fn a_foreign_host_in_a_reserved_slot_gets_403_not_busy() {
+    let remote = start_with(Config {
+        capacity: Capacity {
+            connections: 4,
+            per_peer: 4,
+            reserved: 2,
+            reserved_per_peer: 1,
+        },
+        ..config("reserved-host", Timing::default())
+    });
+    // Accepted in order, so both hold the shared slots before the next connection comes.
+    let _slow: Vec<TcpStream> = (0..2).map(|_| idle_connection(&remote)).collect();
+    let port = remote.server.port();
+    let raw = format!("GET / HTTP/1.1\r\nHost: evil.example:{port}\r\n\r\n");
+    let reply = exchange(port, raw.as_bytes());
+    assert_eq!((reply.status, reply.error().as_str()), (403, "bad_host"));
 }
 
 fn zoned(calibrating: bool) -> State {

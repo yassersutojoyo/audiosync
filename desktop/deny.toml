@@ -62,3 +62,23 @@ unused-allowed-license = "allow"
 
 [licenses.private]
 ignore = false
+
+# Checked weekly by .github/workflows/advisories.yml; every ignore says why.
+[advisories]
+unmaintained = "all"
+unsound = "all"
+yanked = "warn"
+ignore = [
+    # A dev-dependency that only generates the fake receiver's test key; ring
+    # signs with it, and no shipped code runs RSA.
+    { id = "RUSTSEC-2023-0071", reason = "rsa only makes a test key; Marvin needs RSA decryption; no patched rsa version exists" },
+    # Slint parses styled text with ENABLE_STRIKETHROUGH only, never wikilinks.
+    { id = "RUSTSEC-2026-0414", reason = "Slint never sets ENABLE_WIKILINKS; 0.13.5 fixes it, kept out of this change, which bumps only the advisories it names" },
+    # Linux-only, under Slint through winit's window decorations.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained, Linux-only, under Slint" },
+    # zbus 5 brings these; our MPRIS code uses it directly, as do the ksni tray
+    # and Slint's AT-SPI bridge. Nothing maintained replaces them yet.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: unmaintained, under zbus 5, no maintained replacement yet" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, under zbus 5, no maintained replacement yet" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, under zbus 5, no maintained replacement yet" },
+]

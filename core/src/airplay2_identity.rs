@@ -175,6 +175,8 @@ pub struct IdentityStore {
     /// How private the file was found.
     access: Access,
     identity: Airplay2Identity,
+    /// Whether the last write failed, so the file lacks what changed since.
+    unsaved: bool,
 }
 
 impl fmt::Debug for IdentityStore {
@@ -203,7 +205,7 @@ fn fresh() -> (Airplay2Identity, bool) {
 }
 
 fn left_as_it_is(error: &std::io::Error) -> Loaded {
-    Loaded::Ignored(format!(
+    Loaded::Unreadable(format!(
         "the file can't be read, so it is left as it is: {error}"
     ))
 }
@@ -217,6 +219,7 @@ impl IdentityStore {
             writable: true,
             access: Access::Private,
             identity: fresh().0,
+            unsaved: false,
         }
     }
 
@@ -262,11 +265,12 @@ impl IdentityStore {
             }
             Err(error) => (fresh().0, false, left_as_it_is(&error)),
         };
-        let store = IdentityStore {
+        let mut store = IdentityStore {
             path: Some(path),
             writable,
             access,
             identity,
+            unsaved: false,
         };
         if store.writable && matches!(loaded, Loaded::NoFile | Loaded::Ignored(_)) {
             // When it can't be written now, the next pairing tries again.
@@ -278,6 +282,21 @@ impl IdentityStore {
     /// How private the file was found when the store was opened.
     pub fn access(&self) -> Access {
         self.access
+    }
+
+    /// The file, or `None` for a store that lives in memory only.
+    pub fn file(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Whether the last write failed, so the file lacks what changed since.
+    pub fn unsaved(&self) -> bool {
+        self.unsaved
+    }
+
+    /// How many receivers have credentials.
+    pub fn paired(&self) -> usize {
+        self.identity.len()
     }
 
     pub fn device_id(&self) -> [u8; 6] {
@@ -315,7 +334,13 @@ impl IdentityStore {
         saved.and(pruned)
     }
 
-    fn save(&self) -> io::Result<()> {
+    fn save(&mut self) -> io::Result<()> {
+        let written = self.write();
+        self.unsaved = written.is_err();
+        written
+    }
+
+    fn write(&self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };
@@ -554,7 +579,7 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("a folder");
         let (mut store, loaded) = IdentityStore::open(path.clone());
-        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert!(matches!(loaded, Loaded::Unreadable(_)), "{loaded:?}");
         assert!(!store.writable);
         assert!(store.insert("A1", credentials(2)).is_err());
         assert_eq!(store.get("A1"), Some(&credentials(2)), "kept for this run");
@@ -610,7 +635,7 @@ mod tests {
         let path = scratch("link.dat");
         std::os::unix::fs::symlink(&target, &path).expect("a symbolic link");
         let (store, loaded) = IdentityStore::open(path.clone());
-        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert!(matches!(loaded, Loaded::Unreadable(_)), "{loaded:?}");
         assert_eq!(store.access(), Access::Unread);
         let mode = fs::metadata(&target)
             .expect("metadata")

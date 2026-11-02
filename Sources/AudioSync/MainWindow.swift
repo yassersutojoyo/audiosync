@@ -4,7 +4,8 @@ import SwiftUI
 /// The main AudioSync window: every control, in two columns. Closing it leaves
 /// AudioSync running in the menu bar.
 final class MainWindowController: NSObject, NSWindowDelegate {
-    private static let frameName = "AudioSyncMainWindow"
+    // Renamed with the slim layout so a frame saved at the old 860 pt default opens slim once.
+    private static let frameName = "AudioSyncMainWindowSlim"
     private let window: NSWindow
     private let model: AppModel
     /// Whether the window was on screen at the last check, so the callback
@@ -17,7 +18,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         let host = NSHostingController(rootView: MainView(model: model))
         host.sizingOptions = [.minSize]   // SwiftUI sets the minimum; the user picks the size
         let chrome: NSWindow.StyleMask = [.titled, .resizable, .closable, .miniaturizable]
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 860, height: 600),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 696, height: 600),
                           styleMask: chrome, backing: .buffered, defer: false)
         super.init()
         window.contentViewController = host
@@ -27,7 +28,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.isExcludedFromWindowsMenu = true   // the Window menu has its own AudioSync item
         window.delegate = self
-        window.setContentSize(NSSize(width: 860, height: 600))
+        window.setContentSize(NSSize(width: 696, height: 600))
+        // Past this the speaker column stops widening and the header would stretch alone.
+        window.contentMaxSize = NSSize(width: 860, height: CGFloat.greatestFiniteMagnitude)
         // A saved frame on a display that is no longer attached would leave
         // the window out of reach.
         if !window.setFrameUsingName(Self.frameName)
@@ -162,13 +165,15 @@ struct MainView: View {
                     }
                     .padding(.bottom, 4)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Slim by default; a wider window widens it up to 524 pt, its
+                // width in the old 860 pt window. 360 still fits a zone header.
+                .frame(minWidth: 360, maxWidth: 524, maxHeight: .infinity)
             }
         }
         .padding(.horizontal, BrandTokens.Spacing.windowMargin)
         .padding(.top, 4)
         .padding(.bottom, 20)
-        .frame(minWidth: 720, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity, alignment: .topLeading)
+        .frame(minWidth: 696, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity, alignment: .topLeading)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sheetRoom.height = $0 }
         // A click no row or control takes closes the delay panels, applying
         // what was typed. Behind everything, so the header can still drag
@@ -694,6 +699,9 @@ private struct ZoneCard: View {
     let zone: AppModel.Zone
 
     private var state: SpeakerState { model.state(of: zone) }
+    private var waitNote: String? { model.waitNote(of: zone) }
+    // A waiting zone's icon is outlined, as while streaming is off; a click still switches it off.
+    private var shownState: SpeakerState { waitNote == nil ? state : .willPlay }
     private var expanded: Bool { disclosure.isExpanded(zone.id) }
     // The icon greys out and folds then: unfolding still lists the missing speakers.
     private var nonePresent: Bool { zone.present == 0 }
@@ -757,7 +765,7 @@ private struct ZoneCard: View {
             .focused($focused, equals: .chevron)
 
             Button { hit(.zoneIcon) } label: {
-                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: state, size: 32)
+                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: shownState, size: 32)
             }
             .buttonStyle(.plain)
             .opacity(nonePresent ? 0.45 : 1)
@@ -767,7 +775,7 @@ private struct ZoneCard: View {
             .accessibilityLabel(t.zoneLabel(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
-            .accessibilityHint(t.rowHint(state, note: nil))
+            .accessibilityHint(t.rowHint(state, note: waitNote))
             .accessibilityAction(named: t.renameZone) { model.startRename(zone) }
             .help(t.help(state))
             .focused($focused, equals: .zoneIcon)
@@ -780,7 +788,7 @@ private struct ZoneCard: View {
                                     label: model.text.nameField(for: zone.name))
                 } else {
                     Text(zone.name)
-                        .font(.body.weight(state == .playing ? .semibold : .regular))
+                        .font(.body.weight(shownState == .playing ? .semibold : .regular))
                         .lineLimit(1)
                         // Read through the switch's label, whose Rename action replaces the double-click.
                         .accessibilityHidden(true)
@@ -792,13 +800,15 @@ private struct ZoneCard: View {
                 countLine(t)
                     .onTapGesture { hit(.count) }
             }
+            // In a slim column the name and count take room from the slider first.
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
 
             Slider(value: Binding(get: { zone.volume }, set: { model.actions.setZoneVolume(zone.id, $0) }),
                    in: 0...100)
                 .controlSize(.small)
-                .frame(width: 140)
+                .frame(minWidth: 100, maxWidth: 140)
                 .tint(Brand.tealText)
                 .disabled(zone.total == 0)
                 .accessibilityLabel(t.volume(of: zone.name))
@@ -839,6 +849,9 @@ private struct ZoneCard: View {
                     .foregroundStyle(zone.on > 0 ? Brand.tealText : Brand.secondaryText)
                 if zone.waiting > 0 {
                     Text(t.zoneWaiting(zone.waiting)).foregroundStyle(Brand.secondaryText)
+                }
+                if let waitNote {
+                    Text(t.zoneWaitNote(waitNote)).foregroundStyle(Brand.secondaryText)
                 }
             }
         }
@@ -1085,6 +1098,8 @@ struct SpeakerRow: View {
                             Text(speaker.name)
                                 .font(.body.weight(state == .playing ? .semibold : .regular))
                                 .lineLimit(1)
+                                // The note beside it wraps or truncates first.
+                                .layoutPriority(1)
                                 .help(t.speakerNameHelp(name: speaker.name, system: speaker.systemName, renamed: speaker.isRenamed))
                                 // The toggle's label already reads the name and device name,
                                 // and its Rename action replaces the double-click.

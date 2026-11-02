@@ -254,6 +254,10 @@ struct RendererLink {
     id: String,
     /// The ring its reader reads.
     ring: Arc<Ring>,
+    /// What its renderer is made of until [`MockBackend::render_output`]
+    /// first renders it.
+    unstarted: Option<(Reader, RendererControl, Arc<SharedGain>)>,
+    renderer: Option<Renderer>,
     ended: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
     stall: Arc<StallSlot>,
@@ -351,6 +355,7 @@ pub struct MockDriver {
     hold_fades: Arc<AtomicBool>,
     captures_started: Vec<CaptureTarget>,
     renderers_started: Vec<String>,
+    start_gains: Vec<(String, f32)>,
     /// Every capture start asked for, refused ones included.
     capture_attempts: usize,
     /// Windows' suspend and resume notices not yet taken.
@@ -422,6 +427,7 @@ impl MockDriver {
             hold_fades: Arc::new(AtomicBool::new(false)),
             captures_started: Vec::new(),
             renderers_started: Vec::new(),
+            start_gains: Vec::new(),
             capture_attempts: 0,
             renderer_attempts: Vec::new(),
             power_notices: Vec::new(),
@@ -472,6 +478,12 @@ impl MockDriver {
     /// The endpoint ID of every output started, in order.
     pub fn renderers_started(&self) -> &[String] {
         &self.renderers_started
+    }
+
+    /// The endpoint ID and gain of every output started, in order: a real
+    /// render thread plays its first period at that gain.
+    pub fn start_gains(&self) -> &[(String, f32)] {
+        &self.start_gains
     }
 
     /// How many capture starts were asked for, refused ones included.
@@ -808,7 +820,9 @@ impl Driver for MockDriver {
         gain: Arc<SharedGain>,
     ) -> Result<MockRenderer, BackendError> {
         self.renderer_attempts.push(endpoint.id.clone());
-        if !self.outputs.iter().any(|output| output.id == endpoint.id) {
+        let enumerated =
+            (self.readings.iter()).any(|reading| reading.id.as_deref() == Ok(endpoint.id.as_str()));
+        if !enumerated && !self.outputs.iter().any(|output| output.id == endpoint.id) {
             return Err(BackendError::DeviceGone);
         }
         if let Some(error) = self.output_errors.get(&endpoint.id) {
@@ -825,15 +839,22 @@ impl Driver for MockDriver {
         let invalidated = Arc::new(AtomicBool::new(false));
         let format = self.device_format(&endpoint.id);
         let ring = Arc::clone(reader.ring());
-        if let Some(period) = self.periods.remove(&endpoint.id) {
-            let channels = usize::from(format.channels);
-            Renderer::new(reader, &control, gain, SESSION_RATE, format.rate, channels)
-                .expect("a mock format renders")
-                .set_period_frames(period);
-        }
+        self.start_gains.push((endpoint.id.clone(), gain.get()));
+        let unstarted = match self.periods.remove(&endpoint.id) {
+            Some(period) => {
+                let channels = usize::from(format.channels);
+                Renderer::new(reader, &control, gain, SESSION_RATE, format.rate, channels)
+                    .expect("a mock format renders")
+                    .set_period_frames(period);
+                None
+            }
+            None => Some((reader, control, gain)),
+        };
         self.renderers.push(RendererLink {
             id: endpoint.id.clone(),
             ring,
+            unstarted,
+            renderer: None,
             ended: Arc::clone(&ended),
             dropped: Arc::clone(&dropped),
             stall: Arc::clone(&stall),
@@ -1135,6 +1156,32 @@ impl Controller<MockDriver> {
     /// device stays connected (as after a change of its format).
     pub fn end_renderer(&mut self, id: &str) {
         self.driver_mut().end_renderers_of(id);
+    }
+
+    /// Renders `frames` frames of the output playing on `id` as its render
+    /// thread would.
+    pub fn render_output(&mut self, id: &str, frames: usize) {
+        for link in &mut self.driver_mut().renderers {
+            if link.id != id || !link.plays() {
+                continue;
+            }
+            if let Some((reader, control, gain)) = link.unstarted.take() {
+                let channels = usize::from(link.format.channels);
+                link.renderer = Renderer::new(
+                    reader,
+                    &control,
+                    gain,
+                    SESSION_RATE,
+                    link.format.rate,
+                    channels,
+                )
+                .ok();
+            }
+            if let Some(renderer) = link.renderer.as_mut() {
+                let mut out = vec![0.0; frames * renderer.channels()];
+                renderer.render(&mut out);
+            }
+        }
     }
 
     /// Ends the output playing on `id` as a render thread ends a stream

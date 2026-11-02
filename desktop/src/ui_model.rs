@@ -71,6 +71,8 @@ pub struct MixApp {
     pub name: String,
     /// Checked in the mode the list shows.
     pub checked: bool,
+    /// False for an app the list keeps only because a chosen source holds it.
+    pub running: bool,
 }
 
 /// Something AudioSync can capture.
@@ -369,6 +371,8 @@ pub enum CastState {
     Idle,
     Connecting,
     Playing,
+    /// Someone paused the device itself.
+    Paused,
     /// It played, and AudioSync is reaching it again.
     Reconnecting,
 }
@@ -406,7 +410,7 @@ pub enum CastProblem {
     Refused,
     /// It couldn't fetch the stream from this PC.
     Blocked,
-    /// Another app started casting to it.
+    /// The speaker ended the stream: another app cast to it, or its own controls stopped it.
     TakenOver,
     ConnectionLost,
     SearchStopped,
@@ -942,7 +946,7 @@ pub fn preset_notice(
     left_off: Vec<(String, PresetLeftOff)>,
     nothing_changed: bool,
 ) -> Option<NoticeMessage> {
-    (nothing_changed || !left_off.is_empty()).then(|| NoticeMessage::PresetLeftOff {
+    (!left_off.is_empty()).then(|| NoticeMessage::PresetLeftOff {
         preset: preset.to_owned(),
         left_off,
         nothing_changed,
@@ -1309,34 +1313,7 @@ impl AppState {
     /// (spec S246), so a Cast member the click leaves off counts toward
     /// neither. Playing, it waits when each member it counts waits.
     pub fn zone_state(&self, zone: &Zone) -> SpeakerState {
-        let members: Vec<zones::Member> = self
-            .zone_members(zone)
-            .map(|s| zones::Member {
-                // The action tells only Cast members apart.
-                kind: if s.kind == SpeakerKind::Cast {
-                    MemberKind::Cast
-                } else {
-                    MemberKind::Local
-                },
-                listed: true,
-                on: s.enabled,
-                busy: s
-                    .cast
-                    .as_ref()
-                    .is_some_and(|cast| cast.offline || cast.taken_over),
-                needs_airplay2: false,
-                in_target: s.in_target.is_some(),
-            })
-            .collect();
-        let situation = Situation {
-            streaming: true,
-            cast_on_elsewhere: self
-                .speakers
-                .iter()
-                .any(|s| s.kind == SpeakerKind::Cast && s.enabled && !zone.members.contains(&s.id)),
-            ..Situation::default()
-        };
-        let on = zones::click_plan(&members, situation).action == ClickAction::TurnOff;
+        let on = self.zone_plan(zone, true, &[]).action == ClickAction::TurnOff;
         match SpeakerState::new(on, self.running) {
             SpeakerState::Playing => {
                 let waiting: Option<Vec<Waiting>> =
@@ -1347,6 +1324,39 @@ impl AppState {
             }
             state => state,
         }
+    }
+
+    /// The plan of a click on `zone`, one step per member `zone_members` lists;
+    /// the members in `keep_off` count as not found, as in the adapter.
+    fn zone_plan(&self, zone: &Zone, streaming: bool, keep_off: &[String]) -> zones::ClickPlan {
+        let members: Vec<zones::Member> = self
+            .zone_members(zone)
+            .map(|s| zones::Member {
+                // The action tells only Cast members apart.
+                kind: if s.kind == SpeakerKind::Cast {
+                    MemberKind::Cast
+                } else {
+                    MemberKind::Local
+                },
+                listed: !keep_off.contains(&s.id),
+                on: s.enabled,
+                busy: s
+                    .cast
+                    .as_ref()
+                    .is_some_and(|cast| cast.offline || cast.taken_over),
+                needs_airplay2: false,
+                in_target: s.in_target.is_some(),
+            })
+            .collect();
+        let situation = Situation {
+            streaming,
+            cast_on_elsewhere: self
+                .speakers
+                .iter()
+                .any(|s| s.kind == SpeakerKind::Cast && s.enabled && !zone.members.contains(&s.id)),
+            ..Situation::default()
+        };
+        zones::click_plan(&members, situation)
     }
 
     /// The members a playing zone waits on: every switched member but Cast,
@@ -1558,6 +1568,9 @@ pub trait Backend {
     fn select_input_pair(&mut self, pair: u16);
     /// Checks or unchecks an app of the several-apps list, by executable.
     fn toggle_mix_app(&mut self, executable: &str);
+    /// Picks the source the several-apps list builds in "only these" mode
+    /// with exactly these of its apps checked, by executable (S353).
+    fn select_mix(&mut self, executables: &[String]);
     /// Switches the several-apps list to "all except" (true) or "only" (false).
     fn set_mix_all_except(&mut self, on: bool);
     fn set_master_volume(&mut self, volume: f64);
@@ -1956,6 +1969,10 @@ pub struct MockBackend {
     pub play_pauses: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each AirPlay delay applied, as asked.
     pub airplay_delays: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
+    /// Calibrate All's left-out list, read at each snapshot.
+    pub left_out: std::rc::Rc<std::cell::RefCell<Vec<LeftOutRow>>>,
+    /// Each Include Anyway (true) or Leave Out, by output ID.
+    pub includes: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each volume slider hold (true) or release (false), by speaker key.
     pub volume_editing: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Window settings the next poll takes in, as a settings file read
@@ -1966,6 +1983,8 @@ pub struct MockBackend {
     /// While `Some`, an input device is captured, and it counts the level
     /// meter's reads of its peak.
     pub input_peak_reads: std::rc::Rc<std::cell::Cell<Option<u32>>>,
+    /// How many times Refresh Devices ran.
+    pub refreshes: std::rc::Rc<std::cell::Cell<u32>>,
     /// Runs at each save, to look at the app as the save happens.
     pub on_save: std::rc::Rc<std::cell::OnceCell<Box<dyn Fn()>>>,
     view_restored: bool,
@@ -2103,11 +2122,13 @@ impl MockBackend {
                     id: "player.exe".into(),
                     name: "Music Player".into(),
                     checked: false,
+                    running: true,
                 },
                 MixApp {
                     id: "browser.exe".into(),
                     name: "Web Browser".into(),
                     checked: false,
+                    running: true,
                 },
             ],
             mix_all_except: false,
@@ -2144,10 +2165,13 @@ impl MockBackend {
             preset_notice: None,
             play_pauses: std::rc::Rc::default(),
             airplay_delays: std::rc::Rc::default(),
+            left_out: std::rc::Rc::default(),
+            includes: std::rc::Rc::default(),
             volume_editing: std::rc::Rc::default(),
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
             input_peak_reads: std::rc::Rc::default(),
+            refreshes: std::rc::Rc::default(),
             on_save: std::rc::Rc::default(),
             view_restored: false,
             password_on: None,
@@ -2502,6 +2526,7 @@ impl Backend for MockBackend {
             .iter()
             .any(|speaker| speaker.kind == SpeakerKind::Cast && speaker.enabled);
         show_presets(&mut state, &self.presets);
+        state.calibrate_all.left_out = self.left_out.borrow().clone();
         state
     }
 
@@ -2540,6 +2565,12 @@ impl Backend for MockBackend {
             .find(|source| source.id == self.state.source_id);
         if chosen.is_some_and(|source| source.kind == SourceKind::Input) {
             self.state.input_pair = pair;
+        }
+    }
+
+    fn select_mix(&mut self, executables: &[String]) {
+        for app in &mut self.state.mix_apps {
+            app.checked = executables.contains(&app.id);
         }
     }
 
@@ -2629,6 +2660,10 @@ impl Backend for MockBackend {
         }
     }
 
+    fn include_in_calibration(&mut self, id: &str, included: bool) {
+        self.includes.borrow_mut().push((id.to_owned(), included));
+    }
+
     fn set_airplay_delay(&mut self, ms: f64) {
         self.airplay_delays.borrow_mut().push(ms);
         if !ms.is_nan() && self.state.airplay_delay_ms.is_some() {
@@ -2682,25 +2717,26 @@ impl Backend for MockBackend {
         let Some(zone) = self.state.zones.iter().find(|z| z.id == id).cloned() else {
             return;
         };
-        let turn_on = self.state.zone_state(&zone).click_turns_on();
-        let mut cast_on = false;
-        for member in &zone.members {
-            if keep_off.contains(member) {
-                continue;
-            }
-            let Some(speaker) = self.speaker_mut(member) else {
-                continue;
+        let plan = self.state.zone_plan(&zone, self.state.running, keep_off);
+        let turn_on = match plan.action {
+            ClickAction::Nothing => return,
+            ClickAction::TurnOn { .. } => true,
+            ClickAction::TurnOff => false,
+        };
+        let members: Vec<String> = self
+            .state
+            .zone_members(&zone)
+            .map(|s| s.id.clone())
+            .collect();
+        for (member, step) in members.iter().zip(&plan.steps) {
+            let on = match step {
+                zones::Step::On | zones::Step::Waiting => true,
+                zones::Step::Off | zones::Step::CastLeftOff(_) => false,
+                _ => continue,
             };
-            if speaker.in_target.is_some() {
-                continue;
+            if let Some(speaker) = self.speaker_mut(member) {
+                speaker.enabled = on;
             }
-            if turn_on && speaker.kind == SpeakerKind::Cast {
-                // One Google Cast speaker plays at a time.
-                speaker.enabled |= !cast_on;
-                cast_on = true;
-                continue;
-            }
-            speaker.enabled = turn_on;
         }
         if turn_on {
             self.state.running = true;
@@ -2965,7 +3001,9 @@ impl Backend for MockBackend {
         self.state.notices.clear();
     }
 
-    fn refresh_devices(&mut self) {}
+    fn refresh_devices(&mut self) {
+        self.refreshes.set(self.refreshes.get() + 1);
+    }
 
     /// As Windows would report it once the fix is written.
     fn fix_device_volume(&mut self, id: &str) {
@@ -3506,6 +3544,44 @@ mod tests {
             .collect();
         assert_eq!(on, ["airplay:bedroom", "cc:attic"]);
         assert_eq!(state.zone_state(&state.zones[0]), SpeakerState::Playing);
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_click_passes_over_a_taken_over_cast_member_like_the_adapter() {
+        let mut backend = MockBackend::new();
+        for id in ["cc:attic", "cc:porch"] {
+            backend.add_speaker(Speaker {
+                id: id.into(),
+                kind: SpeakerKind::Cast,
+                enabled: false,
+                cast: Some(CastRow {
+                    state: CastState::Idle,
+                    muted: false,
+                    volume_fixed: false,
+                    volume_step: 1.0,
+                    group: None,
+                    added_by_address: false,
+                    offline: false,
+                    taken_over: id == "cc:attic",
+                }),
+                ..backend.snapshot().speakers[3].clone()
+            });
+        }
+        backend.add_zone(
+            "zone:a",
+            "Garden",
+            &["airplay:bedroom", "cc:attic", "cc:porch"],
+        );
+        backend.toggle_zone("zone:a");
+        let state = backend.snapshot();
+        let on: Vec<&str> = state
+            .speakers
+            .iter()
+            .filter(|s| s.enabled && state.zone_of(&s.id).is_some())
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(on, ["airplay:bedroom", "cc:porch"]);
     }
 
     // covers: S246

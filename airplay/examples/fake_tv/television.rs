@@ -96,13 +96,16 @@ pub fn parse_device_id(text: &str) -> Result<[u8; 6], String> {
 }
 
 /// The `_airplay._tcp` TXT entries it advertises: the traced television's
-/// features, with `features_low` added to their low word.
-pub fn txt(pin: Pin, features_low: u64, id: [u8; 6]) -> Vec<(&'static str, String)> {
-    let features = TRACED_FEATURES | features_low;
+/// features.
+pub fn txt(pin: Pin, id: [u8; 6]) -> Vec<(&'static str, String)> {
     vec![
         (
             "features",
-            format!("{:#x},{:#x}", features & 0xFFFF_FFFF, features >> 32),
+            format!(
+                "{:#x},{:#x}",
+                TRACED_FEATURES & 0xFFFF_FFFF,
+                TRACED_FEATURES >> 32
+            ),
         ),
         ("flags", format!("{:#x}", status_flags(pin))),
         ("model", MODEL.to_owned()),
@@ -116,6 +119,7 @@ pub fn television(name: &str, pin: Pin, code: &str, features_low: u64, id: [u8; 
         fake.hap.code = code.to_owned();
         fake.hap.pairing_per_connection = pin == Pin::EveryTime;
     }
+    // Not TRACED_FEATURES: the session acts on these, so metadata and PTP stay per-cell switches.
     fake.info_body = plist(dict(&[
         (
             "features",

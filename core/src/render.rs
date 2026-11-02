@@ -99,6 +99,7 @@ use std::time::Duration;
 use crate::convert::map_to_device;
 use crate::fade::{Fade, FadeState};
 use crate::lead::{HeldLead, SessionLeads};
+use crate::meter::OutputLevel;
 use crate::reader::{Correction, NextRead, ReadReport, Reader, ReaderControl, ReaderCounters};
 use crate::resample::Resampler;
 use crate::ring::Ring;
@@ -470,6 +471,8 @@ struct Shared {
     /// in ns (S231); they differ only when the report was rejected.
     reported_latency_ns: AtomicU64,
     output_latency_ns: AtomicU64,
+    /// The level the device got, for the debug log.
+    level: OutputLevel,
     /// The ring whose session lead counts this renderer, and its slot
     /// there, `None` when every slot was taken (S208).
     ring: Arc<Ring>,
@@ -559,6 +562,7 @@ impl RendererControl {
                 bluetooth: AtomicBool::new(false),
                 reported_latency_ns: AtomicU64::new(0),
                 output_latency_ns: AtomicU64::new(0),
+                level: OutputLevel::default(),
                 ring,
                 slot,
             }),
@@ -670,6 +674,12 @@ impl RendererControl {
     /// The reader's counters (S158).
     pub fn counters(&self) -> ReaderCounters {
         self.reader.counters()
+    }
+
+    /// The peak and RMS in dBFS the device got since the last take, after
+    /// every gain and the equalizer; `None` when nothing was rendered.
+    pub fn take_level(&self) -> Option<(f64, f64)> {
+        self.shared.level.take()
     }
 
     /// [`Renderer::slowed_frames`], from any thread (S206, S207).
@@ -1439,6 +1449,7 @@ impl Renderer {
         }
         // A trailing partial frame is never played; keep it silent.
         out[frames * channels..].fill(0.0);
+        self.shared.level.add(out);
         // A stale or missing stamp means the capture isn't writing, which
         // starves every output alike.
         self.count_starved(frames, starved && capture.is_some());
@@ -2565,6 +2576,26 @@ mod tests {
                 self.renderer.render_at(&mut self.out, self.now + 1_000_000);
             }
         }
+    }
+
+    #[test]
+    fn the_level_is_taken_from_what_the_device_gets() {
+        let mut stepped = Stepped::new();
+        assert_eq!(stepped.control.take_level(), None);
+        let (mut peak, mut squares, mut samples) = (0.0f32, 0.0f64, 0usize);
+        for _ in 0..50 {
+            stepped.step(1);
+            for &sample in &stepped.out {
+                peak = peak.max(sample.abs());
+                squares += f64::from(sample) * f64::from(sample);
+            }
+            samples += stepped.out.len();
+        }
+        assert!(peak > 0.0, "the block plays after the fade-in");
+        let (got_peak, got_rms) = stepped.control.take_level().expect("it rendered");
+        assert!((got_peak - 20.0 * f64::from(peak).log10()).abs() < 1e-9);
+        let rms = (squares / samples as f64).sqrt();
+        assert!((got_rms - 20.0 * rms.log10()).abs() < 1e-9);
     }
 
     /// What a [`jittered`] run trimmed: frames slowed and sped up, the most

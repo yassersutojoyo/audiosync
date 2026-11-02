@@ -386,10 +386,18 @@ enum ZoneLayout {
     /// A zone header's count, `total` being its members that aren't hidden
     /// (rows and count agree): "No speakers", "None of 3 found" while none is
     /// present, else "2 of 3 on" with ", 1 waiting" when one waits.
-    static func count(on: Int, waiting: Int, present: Int, total: Int, text: UIStrings) -> String {
+    /// `inPair`: the members that play as part of a stereo pair.
+    static func count(on: Int, waiting: Int, present: Int, total: Int, inPair: Int = 0, text: UIStrings) -> String {
         if total == 0 { return text.zoneEmpty }
-        if present == 0 { return text.zoneNoneHere(total) }
+        if present == 0 { return inPair == total ? text.zonePlayingInPair(total) : text.zoneNoneHere(total) }
         return text.zoneCount(on: on, of: total) + (waiting > 0 ? text.zoneWaiting(waiting) : "")
+    }
+
+    /// The note a zone header shows while it plays and every present member
+    /// that is on waits: `note`, its first waiting member's row note; nil
+    /// while one of them still plays (S246).
+    static func waitNote(state: SpeakerState, on: Int, waiting: Int, note: String?) -> String? {
+        state == .playing && on > 0 && waiting == on ? note : nil
     }
 
     /// The menu bar panel's rows for `zones`: a header each, plus the members

@@ -58,9 +58,12 @@ pub enum Loaded {
     NoFile,
     /// The credentials of this many receivers.
     Receivers(usize),
-    /// The file was ignored, for this reason: one in the wrong format is
-    /// replaced by the next pairing, an unreadable one is left as it is.
+    /// The file was ignored, for this reason, and is replaced by the next
+    /// pairing.
     Ignored(String),
+    /// The file couldn't be read, for this reason: it is left as it is, and
+    /// pairings made now last until the app quits.
+    Unreadable(String),
     /// A newer AudioSync wrote the file (its format version): it is left as
     /// it is, and pairings made now last until the app quits.
     Newer(u8),
@@ -72,6 +75,7 @@ impl fmt::Display for Loaded {
             Loaded::NoFile => f.write_str("no pairings file yet"),
             Loaded::Receivers(count) => write!(f, "{count} paired receiver(s)"),
             Loaded::Ignored(reason) => write!(f, "pairings file ignored: {reason}"),
+            Loaded::Unreadable(reason) => write!(f, "pairings file left as it is: {reason}"),
             Loaded::Newer(version) => write!(
                 f,
                 "pairings file left as it is: a newer AudioSync wrote it (format {version})"
@@ -93,6 +97,8 @@ pub struct PairingStore {
     /// keeps a copy of it first ([`keep_aside`]).
     unusable: Option<Zeroizing<Vec<u8>>>,
     entries: BTreeMap<String, Credentials>,
+    /// Whether the last write failed, so the file lacks what changed since.
+    unsaved: bool,
 }
 
 impl fmt::Debug for PairingStore {
@@ -123,6 +129,7 @@ impl PairingStore {
             access: Access::Private,
             unusable: None,
             entries: BTreeMap::new(),
+            unsaved: false,
         }
     }
 
@@ -144,7 +151,9 @@ impl PairingStore {
                 keep_aside = true;
                 (BTreeMap::new(), true, Loaded::Ignored(reason))
             }
-            Err(Unreadable::Ignored(reason)) => (BTreeMap::new(), false, Loaded::Ignored(reason)),
+            Err(Unreadable::Ignored(reason)) => {
+                (BTreeMap::new(), false, Loaded::Unreadable(reason))
+            }
         };
         let store = PairingStore {
             path: Some(path),
@@ -152,6 +161,7 @@ impl PairingStore {
             access,
             unusable: bytes.filter(|_| keep_aside),
             entries,
+            unsaved: false,
         };
         (store, loaded)
     }
@@ -159,6 +169,16 @@ impl PairingStore {
     /// How private the file was found when the store was opened.
     pub fn access(&self) -> Access {
         self.access
+    }
+
+    /// The file, or `None` for a store that lives in memory only.
+    pub fn file(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Whether the last write failed, so the file lacks what changed since.
+    pub fn unsaved(&self) -> bool {
+        self.unsaved
     }
 
     /// How many receivers are paired.
@@ -218,6 +238,12 @@ impl PairingStore {
     /// it; removes the file once nothing is paired. A file that held
     /// something unusable is copied aside first, and stays when that fails.
     fn save(&mut self) -> io::Result<()> {
+        let written = self.write();
+        self.unsaved = written.is_err();
+        written
+    }
+
+    fn write(&mut self) -> io::Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };
@@ -639,7 +665,7 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("a folder");
         let (mut store, loaded) = PairingStore::open(path.clone());
-        assert!(matches!(loaded, Loaded::Ignored(_)), "{loaded:?}");
+        assert!(matches!(loaded, Loaded::Unreadable(_)), "{loaded:?}");
         assert!(!store.writable);
         let credentials = Credentials::new(
             "0123456789ABCDEF",

@@ -27,7 +27,7 @@ extension AppDelegate {
     func applyZoneVolumes() {
         reapplyLocalGains()
         nativeAirPlay?.setZones(nativeZoneVolumes())
-        if let level = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast)) { castSender?.setVolume(level) }
+        if let level = castModel.setZones(SpeakerZone.volumes(zones, kind: .cast)) { sendCastVolume(level) }
     }
 
     /// The zone volume of every AirPlay speaker in a zone, by receiver ID.
@@ -89,6 +89,7 @@ extension AppDelegate {
     func logLocalVolume(_ uid: String) {
         guard let v = localVolume[uid] else { return }
         DebugTrace.log("[AudioSync] volume of \(uid) set to \(String(format: "%.2f", v))")
+        engine.logGain(uid: uid, g: effectiveGain(uid))
     }
 
     /// The master scales every speaker AudioSync plays: a local speaker's
@@ -101,6 +102,16 @@ extension AppDelegate {
         nativeAirPlay?.setMaster(masterVolume)
         castSender?.setMaster(masterVolume)
         pushModel()
+        if DebugTrace.enabled {
+            // Per drag, not per step: logged once the master rests.
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(logMasterGains), object: nil)
+            perform(#selector(logMasterGains), with: nil, afterDelay: 0.5)
+        }
+    }
+
+    @objc private func logMasterGains() {
+        DebugTrace.log("[AudioSync] master volume set to \(String(format: "%.2f", masterVolume))")
+        for uid in engine.activeOutputUIDs { engine.logGain(uid: uid, g: effectiveGain(uid)) }
     }
 
     // MARK: - Local delays (the local delay model, LocalDelay.swift, S172 to S181)
@@ -193,7 +204,8 @@ extension AppDelegate {
         if let cleared = step.clear { clearNotices([Notice.airPlayAhead(cleared)]) }
         if let shown = step.post {
             postNotice(text.airPlayAheadOfCast(tenths: shown.tenths, speaker: castName(shown.device)),
-                       subject: Notice.airPlayAhead(shown.device))
+                       subject: Notice.airPlayAhead(shown.device),
+                       shortName: text.airPlayAheadNoticeName(castName(shown.device)))
         }
     }
 
@@ -306,6 +318,7 @@ extension AppDelegate {
         }
         microphoneRequest.supersedeSwitch()   // a switch still waiting on the prompt is out of date
         let old = audioSource
+        lastMix = LastMix.kept(lastMix, leaving: old, for: source)
         audioSource = source
         updateNowPlayingTarget()
         // The tap is built for one source; switching rebuilds only it, under
@@ -433,7 +446,8 @@ extension AppDelegate {
         clearNotices(gone.clear.map { SpeakerKey.make(id: $0, airplay: false) })
         for uid in gone.post {
             postNotice(text.outputLost(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
-                       subject: SpeakerKey.make(id: uid, airplay: false))
+                       subject: SpeakerKey.make(id: uid, airplay: false),
+                       shortName: text.speakerLostNoticeName(shownName(local: uid, system: localDevices[uid]?.name ?? "")))
         }
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
@@ -504,7 +518,8 @@ extension AppDelegate {
         for failure in report.notices {   // one notice per speaker, so each one clears by itself
             postNotice(text.outputCouldNotStart(names: [shownName(local: failure.uid, system: failure.deviceName)],
                                                 refusedCaptureRate: failure.refusedCaptureRate),
-                       subject: SpeakerKey.make(id: failure.uid, airplay: false))
+                       subject: SpeakerKey.make(id: failure.uid, airplay: false),
+                       shortName: text.speakerFailedNoticeName(shownName(local: failure.uid, system: failure.deviceName)))
         }
         stopIfIdle()   // the failed speaker may have been the only output
         pushModel()
@@ -519,7 +534,8 @@ extension AppDelegate {
         guard case .retry(let atS) = step else { return }
         if !wasLost {   // once, so a dismissed notice stays dismissed through the retries
             postNotice(text.outputLost(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
-                       subject: SpeakerKey.make(id: uid, airplay: false))
+                       subject: SpeakerKey.make(id: uid, airplay: false),
+                       shortName: text.speakerLostNoticeName(shownName(local: uid, system: localDevices[uid]?.name ?? "")))
         }
         DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) stalled again before playing "
             + "\(Int(OutputStallRetry.trialS)) s; trying again every \(Int(OutputStallRetry.retryEveryS)) s")
@@ -535,7 +551,8 @@ extension AppDelegate {
             engine.dropRunaway(uid, percent: percent)
         case .notice:
             postNotice(text.outputLinkStruggling(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
-                       subject: SpeakerKey.make(id: uid, airplay: false))
+                       subject: SpeakerKey.make(id: uid, airplay: false),
+                       shortName: text.speakerStrugglingNoticeName(shownName(local: uid, system: localDevices[uid]?.name ?? "")))
             DebugTrace.log("[AudioSync] output \(engine.outputNumber(uid)) ran away again within "
                 + "\(Int(OutputRunawayRetry.noticeWithinS)) s of its reopen: \(percent)% of its callbacks starved; "
                 + "it plays on with the struggling notice")
@@ -557,7 +574,8 @@ extension AppDelegate {
         case .lost?:
             goneNotices.refusedLost(uid)
             postNotice(text.outputLost(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
-                       subject: SpeakerKey.make(id: uid, airplay: false))
+                       subject: SpeakerKey.make(id: uid, airplay: false),
+                       shortName: text.speakerLostNoticeName(shownName(local: uid, system: localDevices[uid]?.name ?? "")))
             DebugTrace.log("[AudioSync] output \(number) still refused after \(Int(OutputRefusalRetry.lostAfterS)) s; "
                 + "counted as lost, still trying every \(Int(OutputRefusalRetry.retryEveryS)) s")
         case nil:

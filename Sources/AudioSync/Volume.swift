@@ -105,4 +105,31 @@ struct AirPlayVolumeEvents {
     func applies(_ id: String) -> Bool {
         unreached[id] == nil
     }
+
+    private var zones: [String: Double] = [:]
+    private var zonesUnreached: [String: Int] = [:]
+
+    /// The host queued zone positions `zones` by receiver ID, the rest in no
+    /// zone; returns the receivers whose zone moved.
+    mutating func sendingZones(_ zones: [String: Double]) -> Set<String> {
+        let moved = Set(self.zones.keys).union(zones.keys).filter { self.zones[$0] != zones[$0] }
+        self.zones = zones
+        for id in moved { zonesUnreached[id, default: 0] += 1 }
+        return moved
+    }
+
+    /// Those zone moves reached the core.
+    mutating func reachedZones(_ ids: Set<String>) {
+        for id in ids {
+            guard let count = zonesUnreached[id] else { continue }
+            zonesUnreached[id] = count > 1 ? count - 1 : nil
+        }
+    }
+
+    /// The level a report of `level` for receiver `id` holds at zone `zone`
+    /// (S290). None while a zone move is on its way: the core read it against
+    /// the zone before, and the move then sends the speaker s × k.
+    func held(_ id: String, level: Double, zone: Double) -> Double? {
+        zonesUnreached[id] == nil ? AirPlayDeviceLevel.held(level: level, zone: zone) : nil
+    }
 }

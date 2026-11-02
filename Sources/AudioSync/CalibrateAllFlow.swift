@@ -202,6 +202,9 @@ struct CalibrateAllStatus: Equatable {
     var zone: CalibrateZoneSheet?
     /// Undo is offered: Apply ran and no value it wrote changed since.
     var canUndo = false
+    /// The reference's row under "Before you start" while the sheet is open
+    /// and the reference is on.
+    var volume: CalibrationVolumeCheck?
 
     var isRunning: Bool { progress != nil }
 }

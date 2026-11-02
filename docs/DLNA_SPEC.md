@@ -118,6 +118,10 @@ Read-only black-box run from the Windows PC on 2026-10-30 at night, silent: one 
 - Overlap with Cast: large. Same class of output, same stream server, same offset and volume model; the new value is only for renderers that have neither AirPlay nor Cast, such as older TVs and AV receivers.
 - Recommendation: no-go for code now; keep this specification. Revisit when a renderer without AirPlay or Cast is a real target.
 
+## 13. Test map
+
+No automated test covers DLNA yet.
+
 ## Sources
 
 Every clause rests on the sources below or is marked as AudioSync's design. UPnP Forum documents are cited for facts, restated in our own words. All URLs fetched on 2026-10-30.

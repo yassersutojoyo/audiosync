@@ -10,9 +10,9 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 
 use audiosync_remote::{
-    Command, DEFAULT_PORT, NowPlaying, Preset as RemotePreset, Source as RemoteSource,
-    SourceKind as RemoteSourceKind, Speaker as RemoteSpeaker, State, Zone as RemoteZone,
-    ZoneCounts,
+    Command, DEFAULT_PORT, MixApp as RemoteMixApp, NowPlaying, Preset as RemotePreset,
+    Source as RemoteSource, SourceKind as RemoteSourceKind, Speaker as RemoteSpeaker, State,
+    Zone as RemoteZone, ZoneCounts,
 };
 use serde::{Deserialize, Serialize};
 
@@ -289,6 +289,15 @@ pub fn snapshot(
             .iter()
             .any(|source| source.id == state.source_id)
             .then(|| page_id(&state.source_id)),
+        mix_apps: state
+            .mix_apps
+            .iter()
+            .map(|app| RemoteMixApp {
+                id: app.id.clone(),
+                name: app.name.clone(),
+                running: app.running,
+            })
+            .collect(),
     }
 }
 
@@ -379,6 +388,10 @@ pub enum Action {
     Source {
         id: String,
     },
+    /// The several-apps list's "only these" with these apps checked, by executable.
+    Mix {
+        apps: Vec<String>,
+    },
 }
 
 /// Why a command changed nothing.
@@ -467,6 +480,8 @@ pub fn actions(
             // Even the source in use: the picker's re-pick clears a failed switch's notice (S163).
             Ok(vec![Action::Source { id: picked.clone() }])
         }
+        // The adapter checks the apps against its own list when it applies them.
+        Command::Mix { apps } => Ok(vec![Action::Mix { apps: apps.clone() }]),
         Command::Speaker { id, change } => {
             let speaker = state
                 .speaker(id)

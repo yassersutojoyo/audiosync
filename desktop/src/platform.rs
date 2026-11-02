@@ -1138,9 +1138,9 @@ mod tests {
 
     #[test]
     fn the_smallest_outer_size_scales_the_inner_minimum_and_adds_the_frame() {
-        // 860 x 440 at 150 %, with a 16 x 59 pixel frame and menu bar.
-        assert_eq!(min_track_size((860.0, 440.0), 144, (16, 59)), (1306, 719));
-        assert_eq!(min_track_size((860.0, 440.0), 96, (0, 0)), (860, 440));
+        // 776 x 440 at 150 %, with a 16 x 59 pixel frame and menu bar.
+        assert_eq!(min_track_size((776.0, 440.0), 144, (16, 59)), (1180, 719));
+        assert_eq!(min_track_size((776.0, 440.0), 96, (0, 0)), (776, 440));
         // A fraction of a pixel rounds up, so the inner size never falls short.
         assert_eq!(min_track_size((101.0, 101.0), 120, (0, 0)), (127, 127));
     }

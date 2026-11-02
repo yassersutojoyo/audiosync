@@ -809,7 +809,7 @@ pub mod tests {
         dir
     }
 
-    fn updater(name: &str) -> (Updater, Arc<MemoryFetch>) {
+    pub(crate) fn updater(name: &str) -> (Updater, Arc<MemoryFetch>) {
         let f = fixture(name, false, Arc::new(RealFiles), DebugLog::default());
         (Updater::new(f.env), f.fetch)
     }

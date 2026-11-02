@@ -163,8 +163,14 @@ mod tests {
     #[test]
     fn a_change_made_elsewhere_clears_the_error_it_settles() {
         let script = only_element(PAGE, "script").unwrap();
-        assert!(script.contains("if (speaker.on !== was.on || speaker.volume !== was.volume || speaker.delay_ms !== was.delay_ms) { showError(row.error, \"\"); }"));
-        assert!(script.contains("if (zone.volume !== row.zone.volume || zone.counts.on !== row.zone.counts.on) { showError(row.error, \"\"); }"));
+        assert!(script.contains("if (speaker.on !== was.on || (speaker.volume !== was.volume && !row.volumeControl.lateEcho(speaker.volume)) || speaker.delay_ms !== was.delay_ms) { showError(row.error, \"\"); }"));
+        assert!(script.contains("if ((zone.volume !== row.zone.volume && !row.volumeControl.lateEcho(zone.volume)) || zone.counts.on !== row.zone.counts.on) { showError(row.error, \"\"); }"));
+        assert!(script.contains("const send = sender((value) => write(value).then((reply) => {"));
+        assert!(script.contains("delivered.push(value);"));
+        assert!(script.contains("if (delivered.length > 8) { delivered.shift(); }"));
+        assert!(script.contains("const LATE_ECHO_MS = 3000;"));
+        assert!(script.contains("failedAt = Date.now();"));
+        assert!(script.contains("lateEcho: (reported) => Date.now() - failedAt < LATE_ECHO_MS && delivered.includes(Math.round(reported)),"));
         assert!(script.contains("if ((button.getAttribute(\"aria-current\") === \"true\") !== (preset.current === true)) { showError(ui.presetError, \"\"); }"));
         assert!(script.contains("presetButtons.delete(id); showError(ui.presetError, \"\"); }"));
     }

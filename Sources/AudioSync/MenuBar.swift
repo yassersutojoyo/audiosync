@@ -52,6 +52,8 @@ final class AppModel: ObservableObject {
         var holdsCredentials = false
         /// An AirPlay speaker whose password AudioSync holds until it quits.
         var holdsPassword = false
+        /// An AirPlay speaker turned off for refusing a pairing, until the user turns it on here.
+        var refusedForCode = false
         /// A stereo pair or home theater group: its kind and members (P176).
         var airPlayTarget: AirPlayTargetRow? = nil
         /// Why a local speaker sits out of microphone calibration: headphones
@@ -92,6 +94,8 @@ final class AppModel: ObservableObject {
         var waiting = 0
         /// Members listed now that a click switches.
         var present = 0
+        /// Members that play as part of a stereo pair instead of on their own.
+        var inPair = 0
         /// Every member a click would switch on is on.
         var allOn = false
         var total: Int { members.count }
@@ -128,7 +132,8 @@ final class AppModel: ObservableObject {
         var connected = true
         /// The plain device name while the chosen input is unplugged.
         var deviceName: String? = nil
-        /// False for the chosen input device while it is unplugged or a hands-free input.
+        /// False for the chosen input device while it is unplugged or a hands-free input,
+        /// and in `mixApps` for a checked app that isn't running.
         var available = true
         static func == (a: Source, b: Source) -> Bool {
             a.id == b.id && a.name == b.name && a.pairs == b.pairs && a.connected == b.connected && a.available == b.available
@@ -223,6 +228,8 @@ final class AppModel: ObservableObject {
         var retryAirPlay: () -> Void = {}
         /// The device volume fix the user clicked under a local output (S197).
         var fixDeviceVolume: (String) -> Void = { _ in }
+        /// The same fix on the calibration reference, from "Before you start".
+        var fixCalibrationVolume: () -> Void = {}
         /// Calibrate this local speaker with the microphone (S232), and cancel it.
         var calibrate: (String) -> Void = { _ in }
         var cancelCalibration: () -> Void = {}
@@ -496,8 +503,22 @@ final class AppModel: ObservableObject {
         SpeakerState(enabled: zone.allOn, streaming: running)
     }
 
+    /// The note `zone`'s header shows while each of its members that is on
+    /// waits: the first waiting member's row note (S246).
+    func waitNote(of zone: Zone) -> String? {
+        let waiter = zone.members.lazy.compactMap { self.speaker(of: $0) }
+            .first { $0.enabled && ($0.waitingForAirPlay2 || $0.waitingForPtp) }
+        let note = waiter.flatMap { speaker in
+            text.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                         waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                         codeWait: speaker.codeWait, name: speaker.name,
+                         unannounced: speaker.unannounced, target: speaker.airPlayTarget)
+        }
+        return ZoneLayout.waitNote(state: state(of: zone), on: zone.on, waiting: zone.waiting, note: note)
+    }
+
     func countText(of zone: Zone) -> String {
-        ZoneLayout.count(on: zone.on, waiting: zone.waiting, present: zone.present, total: zone.total, text: text)
+        ZoneLayout.count(on: zone.on, waiting: zone.waiting, present: zone.present, total: zone.total, inPair: zone.inPair, text: text)
     }
 
     /// The listed speaker a zone member's row shows.
@@ -668,6 +689,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var closingPress: TimeInterval?
     private var running = false
     private var noticeCount = 0
+    private var speakerCount = 0
     private var quietQueue = QuietQueue()
     /// The rows were last built before the panel's latest close.
     private var rowsStale = false
@@ -695,6 +717,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private weak var revealed: CALayer?
     private var revealSteps: (began: CFTimeInterval, scales: [Double])?
     private var noticeWatch: AnyCancellable?
+    private var speakerWatch: AnyCancellable?
     let model: AppModel
 
     /// What the popover's arrow and its gap under the menu bar take from the
@@ -730,6 +753,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             self.noticeCount = list.count
             self.refreshIcon()
         }
+        // Received on the next main-queue turn, after the change is set.
+        speakerWatch = model.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            guard let self, self.model.activeSpeakers != self.speakerCount else { return }
+            self.speakerCount = self.model.activeSpeakers
+            self.refreshIcon()
+        }
         // The first build and drawing of the rows is the slowest; it happens once launch settles.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.prewarm() }
         DebugTrace.log("[AudioSync] status item visible=\(statusItem.isVisible) button=\(statusItem.button != nil)")
@@ -748,7 +777,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // The badge sits beside the mark, so the item widens while it shows.
         statusItem.length = badge ? NSStatusItem.variableLength : NSStatusItem.squareLength
         button.image = Self.statusImage(running: running, badge: badge)
-        button.setAccessibilityValue(model.text.statusItemValue(running: running, notices: noticeCount))
+        button.setAccessibilityValue(model.text.statusItemValue(running: running, speakers: speakerCount,
+                                                                     notices: noticeCount))
     }
 
     /// The brand mark as a template image (the menu bar tints it), dimmed while
@@ -1891,7 +1921,8 @@ struct MenuBarView: View {
                                 speakerRow(speaker, note: member.note)
                             } else {
                                 CompactRow(name: member.name, symbol: member.symbol, state: .off, text: t,
-                                           height: rowHeight, hint: member.note) {}
+                                           height: rowHeight, hint: member.note,
+                                           shownNote: t.panelRowNote(member.note)) {}
                                     .disabled(true)
                             }
                         }
@@ -1911,12 +1942,13 @@ struct MenuBarView: View {
     /// `note`: what the speaker's zone says about it, when its own note is empty.
     private func speakerRow(_ speaker: AppModel.Speaker, note: String?) -> some View {
         let t = model.text
+        let hint = t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
+                             waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
+                             codeWait: speaker.codeWait, name: speaker.name,
+                             unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
-                          text: t, height: rowHeight,
-                          hint: t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
-                                          waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
-                                          codeWait: speaker.codeWait, name: speaker.name,
-                                          unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note,
+                          text: t, height: rowHeight, hint: hint,
+                          shownNote: t.panelRowNote(hint),
                           renamedFrom: speaker.renamedFrom,
                           value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
                           kind: speaker.tag, airPlay2: speaker.airPlay2,
@@ -1945,6 +1977,8 @@ private struct CompactRow: View {
     /// Read after the name by VoiceOver: what a Google Cast speaker is
     /// doing, or why a zone member doesn't play with its zone.
     var hint: String? = nil
+    /// The part of `hint` shown in the row, before its availability note.
+    var shownNote: String? = nil
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
     /// VoiceOver's label and value in place of the speaker's: a zone's, read
@@ -1978,6 +2012,17 @@ private struct CompactRow: View {
                     SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2)
                 }
                 Spacer(minLength: 4)
+                if let shownNote {
+                    Text(shownNote)
+                        .lineLimit(1)
+                        .font(.caption)
+                        .foregroundStyle(Brand.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .help(hint ?? shownNote)
+                        // Read in the row's hint, or its value when off the network.
+                        .accessibilityHidden(true)
+                        .layoutPriority(1)
+                }
                 AvailabilityNote(availability: availability, text: text, givesWay: true)
                     .layoutPriority(1)
                 if let deviceVolume { DeviceVolumeBadge(glyph: deviceVolume) }
@@ -2403,7 +2448,8 @@ struct NoticeStack: View {
             if let newest = list.newest {
                 NoticeBanner(notice: newest, text: t, showsTime: false,
                              lineLimit: list.count > 1 ? 3 : nil,
-                             dismiss: { model.actions.dismissNotice(newest.subject) }) {
+                             dismiss: { model.actions.dismissNotice(newest.subject) },
+                             retry: { model.actions.retryAirPlay() }) {
                     if list.count > 1 { footer(t, more: list.count - 1) }
                 }
             }
@@ -2411,7 +2457,8 @@ struct NoticeStack: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(list.items) { notice in
                     NoticeBanner(notice: notice, text: t, showsTime: true, lineLimit: nil,
-                                 dismiss: { model.actions.dismissNotice(notice.subject) }) { EmptyView() }
+                                 dismiss: { model.actions.dismissNotice(notice.subject) },
+                                 retry: { model.actions.retryAirPlay() }) { EmptyView() }
                 }
                 if list.count > 1 {
                     HStack {
@@ -2455,6 +2502,7 @@ struct NoticeBanner<Footer: View>: View {
     let showsTime: Bool
     let lineLimit: Int?
     let dismiss: () -> Void
+    let retry: () -> Void
     @ViewBuilder let footer: () -> Footer
 
     var body: some View {
@@ -2485,6 +2533,10 @@ struct NoticeBanner<Footer: View>: View {
                     NoticeLink(title: text.openSettings) { NSWorkspace.shared.open(pane.url) }
                         .accessibilityHint(text.openSettingsHint)
                 }
+                if notice.retriesAirPlay {
+                    NoticeLink(title: text.retry, action: retry)
+                        .accessibilityHint(text.retryAirPlayHelp)
+                }
                 footer()
             }
             Spacer(minLength: 0)
@@ -2495,7 +2547,7 @@ struct NoticeBanner<Footer: View>: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .accessibilityLabel(text.dismissNotice)
+            .accessibilityLabel(notice.dismissLabel(text))
             .help(text.dismissNotice)
         }
         .padding(10)

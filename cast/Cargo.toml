@@ -2,7 +2,7 @@
 name = "audiosync-cast"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.99"
 license = "GPL-3.0-or-later"
 description = "AudioSync's own Google Cast sender: discovery of _googlecast._tcp, the CASTV2 channel over TLS with its framing, heartbeat and receiver status, the launch and teardown of the Default Media Receiver, LOAD and MEDIA_STATUS, device volume, recovery, and the live WAV stream server the device fetches from, as sans-I/O state machines driven on std threads and sockets."
 repository = "https://github.com/yassersutojoyo/audiosync"
@@ -41,6 +41,20 @@ rustls = { version = "0.23.31", default-features = false, features = ["ring", "s
 # PKCS#8 export run here; ring does the signing.
 rand_core = { version = "0.6.4", default-features = false, features = ["getrandom"] }
 rsa = { version = "0.9.8", default-features = false, features = ["std", "u64_digit"] }
+
+# The test binaries' crash handler (tests/common/crash_dump.rs): a minidump
+# when one dies in the PC's repeated test loops. Test-only; MIT OR
+# Apache-2.0, already in the graph.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
 
 # RSA key generation runs for seconds unoptimized; this keeps the tests quick.
 [profile.dev.package.num-bigint-dig]

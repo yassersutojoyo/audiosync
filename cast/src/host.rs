@@ -38,6 +38,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::audio::{AudioReader, Codec, StreamFormat};
+use crate::channel::new_volume_ask;
 use crate::client::{FingerprintBook, QUIT_BUDGET};
 use crate::discovery::DeviceId;
 use crate::group::GroupRecords;
@@ -321,7 +322,7 @@ enum Command {
         announced: Arc<AtomicBool>,
     },
     Stop,
-    SetVolume(f64),
+    SetVolume(f64, u64),
     SetMuted(bool),
     StepVolume(bool),
     SetMetadata(Metadata),
@@ -418,6 +419,14 @@ impl CastHost {
     /// Starts the worker thread. `memory` is what the host stored from
     /// [`CastHost::memory`] last time, or the default.
     pub fn new(memory: DeviceMemory) -> std::io::Result<CastHost> {
+        CastHost::with_fingerprints(memory, FingerprintBook::new())
+    }
+
+    /// As [`CastHost::new`], with the fingerprints recorded so far (C21).
+    pub fn with_fingerprints(
+        memory: DeviceMemory,
+        fingerprints: FingerprintBook,
+    ) -> std::io::Result<CastHost> {
         let (commands, inbox) = mpsc::channel();
         let (outbox, events) = mpsc::sync_channel(MAX_HOST_EVENTS);
         let shared = Arc::new(Shared {
@@ -432,7 +441,7 @@ impl CastHost {
             thread::Builder::new()
                 .name("cast-host".to_owned())
                 .spawn(move || {
-                    let mut worker = Worker::new(inbox, outbox, shared);
+                    let mut worker = Worker::new(inbox, outbox, shared, fingerprints);
                     let mut pause = Duration::ZERO;
                     let mut last_panic: Option<Instant> = None;
                     while panic::catch_unwind(AssertUnwindSafe(|| worker.run())).is_err() {
@@ -574,9 +583,12 @@ impl CastHost {
         }
     }
 
-    /// The device level, 0.0 to 1.0 (C65, C67, C70).
-    pub fn set_volume(&self, level: f64) {
-        let _ = self.commands.send(Command::SetVolume(level));
+    /// The device level, 0.0 to 1.0 (C65, C67, C70); returns the ask id
+    /// that a report on this ask carries.
+    pub fn set_volume(&self, level: f64) -> u64 {
+        let ask = new_volume_ask();
+        let _ = self.commands.send(Command::SetVolume(level, ask));
+        ask
     }
 
     pub fn set_muted(&self, muted: bool) {
@@ -687,14 +699,19 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(inbox: Receiver<Command>, outbox: SyncSender<HostEvent>, shared: Arc<Shared>) -> Worker {
+    fn new(
+        inbox: Receiver<Command>,
+        outbox: SyncSender<HostEvent>,
+        shared: Arc<Shared>,
+        fingerprints: FingerprintBook,
+    ) -> Worker {
         Worker {
             inbox,
             outbox,
             held: Arc::new(Mutex::new(VecDeque::new())),
             shared,
             running: None,
-            fingerprints: Arc::new(Mutex::new(FingerprintBook::new())),
+            fingerprints: Arc::new(Mutex::new(fingerprints)),
             in_hand: None,
         }
     }
@@ -843,9 +860,9 @@ impl Worker {
                 (selected, announced),
             ),
             Command::Stop => self.stop_running(),
-            Command::SetVolume(level) => {
-                self.with_session(|session| session.set_volume(level).map_err(CommandError::Volume))
-            }
+            Command::SetVolume(level, ask) => self.with_session(|session| {
+                session.ask_volume(ask, level).map_err(CommandError::Volume)
+            }),
             Command::SetMuted(muted) => {
                 self.with_session(|session| session.set_muted(muted).map_err(CommandError::Volume))
             }
@@ -1118,7 +1135,7 @@ mod tests {
             quitting: Arc::new(AtomicBool::new(false)),
             panic_in_start: std::sync::atomic::AtomicU32::new(0),
         });
-        let mut worker = Worker::new(inbox, outbox, shared);
+        let mut worker = Worker::new(inbox, outbox, shared, FingerprintBook::new());
         for answers_mute in [true, false] {
             worker.emit(HostEvent::Session {
                 attempt: AttemptId(1),

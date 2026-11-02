@@ -7,6 +7,7 @@
 
 #![allow(dead_code)]
 
+mod crash_dump;
 pub mod http;
 
 use std::io::{self, Read, Write};
@@ -71,6 +72,8 @@ pub enum OnLoad {
 pub enum OnMediaStatus {
     /// One `PLAYING` entry for the current media session.
     Playing,
+    /// One `PAUSED` entry for the current media session.
+    Paused,
     /// A `MEDIA_STATUS` with an empty `status` list.
     Empty,
     Ignore,
@@ -215,6 +218,8 @@ pub enum Command {
     ClearApps,
     /// Leave `level` out of the volume of every later status.
     ForgetLevel,
+    /// Report a fixed volume control in every later status.
+    FixVolume,
     /// Replace the running apps without telling anyone, as an app opened
     /// on the device while the sender is cut off.
     SetApps(Vec<Value>),
@@ -612,11 +617,15 @@ impl Device {
                 )]
             }
             (NS_MEDIA, "GET_STATUS") => match self.behavior.on_media_status {
-                OnMediaStatus::Playing => vec![media_status(
+                OnMediaStatus::Playing | OnMediaStatus::Paused => vec![media_status(
                     &message.destination_id,
                     id,
                     self.media_session,
-                    "PLAYING",
+                    if self.behavior.on_media_status == OnMediaStatus::Paused {
+                        "PAUSED"
+                    } else {
+                        "PLAYING"
+                    },
                     None,
                 )],
                 OnMediaStatus::Empty => vec![json_message(
@@ -861,6 +870,9 @@ fn serve(
                     if let Some(volume) = device.behavior.volume.as_object_mut() {
                         volume.remove("level");
                     }
+                }
+                Ok(Command::FixVolume) => {
+                    device.behavior.volume["controlType"] = json!("fixed");
                 }
                 Ok(Command::SetApps(apps)) => device.apps = apps,
                 Ok(Command::Stall) => stalled = true,

@@ -63,25 +63,33 @@ extension AppDelegate {
     /// about it once, and the reconcile that falls due
     /// `NativeSenderStarts.retrySpacing` later starts it again (armed by the
     /// model update below, `scheduleDueReconcile`). A start that works clears
-    /// that notice.
+    /// that notice. A finish for a replaced sender, or during a quit (which
+    /// keeps `nativeAirPlay` set), is ignored: browsing has already stopped.
     private func nativeStartFinished(_ native: NativeAirPlay, started: Bool) {
+        guard nativeAirPlay === native, !Self.exiting.load(ordering: .relaxed) else { return }
         let news = nativeStarts.finished(started: started, at: Date())
         if started {
             clearNotices([Notice.airplaySender, Notice.airplayPtp])   // a new sender binds PTP anew
             ptpPortNotice = PtpPortNotice()
-            if !native.pairingsNotSaved {
+            let pairingsAtStart = pairingsWrites.atStart(openedUnsaved: native.pairingsNotSaved)
+            if pairingsAtStart == .clear {
                 clearNotices([Notice.pairings])
-            } else if !appModel.notices.items.contains(where: { $0.subject == Notice.pairings }) {
-                postNotice(text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings)
+            } else if pairingsAtStart == .post,
+                      !appModel.notices.items.contains(where: { $0.subject == Notice.pairings }) {
+                postNotice(text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings,
+                           shortName: text.pairingsNotSavedNoticeName)
             }
             resendTrackInfo()   // a new sender knows nothing of what plays
             // Its discovery raised the Local Network prompt, if any: the
             // probe may ask now, and an empty list counts from here.
             airplayEmptySince = native.model.rows(enabled: enabledAirPlay).isEmpty ? Date() : nil
             updateLocalNetworkProbe(senderRunning: true)
-        } else if nativeAirPlay === native {
+        } else {
             nativeAirPlay = nil
-            if news { notify(text.nativeAirPlayCouldNotStart, origin: .automatic, subject: Notice.airplaySender) }
+            if news {
+                notify(text.nativeAirPlayStopped, origin: .automatic, subject: Notice.airplaySender,
+                       shortName: text.airPlayStoppedNoticeName)
+            }
             stopNativeLocalNetworkProbe()
         }
         retimeLocalOutputs()   // L is known now
@@ -98,20 +106,22 @@ extension AppDelegate {
     }
 
     /// What was saved under the bundled engine's output ID of `receiver`
-    /// (switched on, its volume, its groups, zones and presets, auto-connect) moves to its
-    /// native ID, before its row appears (S204). Nothing is left to move
-    /// afterwards, so this runs for every receiver discovery reports.
+    /// (switched on, its volume, its groups, zones and presets, auto-connect,
+    /// its name and hidden entry) moves to its native ID, before its row
+    /// appears (S204). Nothing is left to move afterwards, so this runs for
+    /// every receiver discovery reports.
     private func migrateSavedSpeakerIDs(to receiver: NativeReceiver) {
         let saved = SpeakerIDMigration.Saved(enabledAirPlay: enabledAirPlay, airplayVolumes: airplayVolume,
                                              groups: groups, autoConnect: autoConnect, zones: zones,
-                                             presets: presets)
+                                             presets: presets, names: speakerNames, hidden: hiddenSpeakers)
         let renames = SpeakerIDMigration.renames(saved, receivers: [receiver.id])
         guard !renames.isEmpty else { return }
         for old in renames.keys.sorted() {
             DebugTrace.log("[AudioSync] native AirPlay: settings saved under the bundled engine's ID \(old) now belong to \(receiver.name) (\(receiver.id))")
         }
         let migrated = SpeakerIDMigration.apply(renames, to: saved)
-        hiddenSpeakers.migrate(airPlay: renames)
+        hiddenSpeakers = migrated.hidden
+        speakerNames = migrated.names
         airplayVolume = migrated.airplayVolumes
         groups = migrated.groups
         zones = migrated.zones
@@ -123,8 +133,22 @@ extension AppDelegate {
     private func nativeSpeakerEvent(_ event: NativeSpeakerEvent, _ outcome: NativeAirPlayOutcome?) {
         let names = nativeAirPlay?.model.names ?? [:]
         DebugTrace.log(event.logLine { names[$0] })
+        if let saved = event.pairingsSaved { pairingsWritten(saved) }
         if let outcome { nativeOutcome(outcome) }
         closeWithdrawnPrompt()   // its pairing may have ended underneath
+    }
+
+    /// A write of the pairings file worked or failed (S224), as on Windows.
+    private func pairingsWritten(_ saved: Bool) {
+        switch pairingsWrites.written(saved, openedUnsaved: nativeAirPlay?.pairingsNotSaved ?? false) {
+        case .post?:
+            postNotice(text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings,
+                       shortName: text.pairingsNotSavedNoticeName)
+        case .clear?:
+            clearNotices([Notice.pairings])
+        case nil:
+            break
+        }
     }
 
     /// Acts on what the native model decided.
@@ -174,7 +198,7 @@ extension AppDelegate {
             guard let receiver = NativeAirPlayID.receiver(id),
                   nativeAirPlay?.volumeEvents.applies(receiver) == true else { return }
             airplayVolume[id] = position
-            airplayHeldLevel[id] = AirPlayDeviceLevel.held(level: level, zone: airPlayZoneVolume(id))
+            airplayHeldLevel[id] = nativeAirPlay?.volumeEvents.held(receiver, level: level, zone: airPlayZoneVolume(id))
             pushModel()
         case .ptpPortsTaken:
             updatePtpPortNotice { $0.reported() }
@@ -203,7 +227,7 @@ extension AppDelegate {
         change(&ptpPortNotice)
         let shown = ptpPortNotice.shown
         if shown && (!was || ptpPortNotice.raises != raises) {
-            postNotice(text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp)
+            postNotice(text.nativeAirPlayPtpPortsTaken, subject: Notice.airplayPtp, shortName: text.ptpPortsNoticeName)
         } else if was && !shown {
             clearNotices([Notice.airplayPtp])
         }
@@ -339,8 +363,8 @@ extension AppDelegate {
     }
 
     /// The sender stopped after an internal error: it goes (torn down off
-    /// the main queue), its rows with it, and the AirPlay section shows it
-    /// as failed, with Retry, in place of a notice. The switches stay as
+    /// the main queue), its rows with it, and the AirPlay section and a
+    /// notice show it as failed, both with Retry. The switches stay as
     /// they are, so the speakers rejoin once a new sender runs.
     private func nativeSenderFailed() {
         guard let native = nativeAirPlay else { return }
@@ -354,8 +378,7 @@ extension AppDelegate {
         if codePromptBusy { closeCodePrompt() }   // its prompt went with it
         airplayOrder = []
         stopNativeLocalNetworkProbe()
-        // No notice: Connected Speakers says so in place of the AirPlay speakers, with Retry.
-        clearNotices([Notice.airplaySender])
+        postNotice(text.nativeAirPlayStopped, subject: Notice.airplaySender, shortName: text.airPlayStoppedNoticeName)
         retimeLocalOutputs()   // no native speaker is chosen any more
         endNativePinSessions(.senderFailed, streaming: engine.isRunning, model: native.model)
         pushModel()
@@ -491,7 +514,8 @@ extension AppDelegate {
               let target = native.model.holdingTarget(receiver, on: enabledAirPlay.contains(id)) else { return false }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off: it plays as part of \(nativeLabel(target))")
         notify(text.nativeAirPlayPlaysInGroup(name: shownName(airPlay: id), group: shownName(airPlay: NativeAirPlayID.app(target))),
-               origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+               origin: origin, subject: SpeakerKey.make(id: id, airplay: true),
+               shortName: text.cantPlayNoticeName(shownName(airPlay: id)))
         pushModel()
         return true
     }
@@ -503,7 +527,8 @@ extension AppDelegate {
               nativeAirPlay?.model.homeTheaterConflict(receiver, enabled: enabledAirPlay) == true else { return false }
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off: its home theater group and Apple TV can't play at once")
         if let words = nativeTurnOffText(id, .playsThroughSpeakers, onThisMac: false) {
-            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true),
+                   shortName: text.cantPlayNoticeName(shownName(airPlay: id)))
         }
         pushModel()
         return true
@@ -516,7 +541,7 @@ extension AppDelegate {
     func forgetNativePairing(_ id: String) {
         guard let receiver = NativeAirPlayID.receiver(id) else { return }
         endNativeAttempt(id)
-        nativeAirPlay?.forgetPairing(receiver)
+        nativeAirPlay?.forgetPairing(receiver) { [weak self] saved in self?.pairingsWritten(saved) }
         nativeAirPlay?.setPassword(receiver, nil)
         nativeAirPlay?.model.forgetPassword(receiver)
         clearNotices(Notice.forgotten(airPlay: id))
@@ -617,7 +642,8 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) turned off (\(reason))")
         enabledAirPlay.remove(id)
         if let words = nativeTurnOffText(id, reason, onThisMac: onThisMac) {
-            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true))
+            notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true),
+                   shortName: text.cantPlayNoticeName(shownName(airPlay: id)))
         }
         let timing = reason == .timingUnavailable
         updatePtpPortNotice { $0.turnedOff(id, timing: timing) }

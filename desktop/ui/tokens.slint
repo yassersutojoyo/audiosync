@@ -60,6 +60,13 @@ export global Tokens {
     // on #2B2B2B.
     out property <color> error-text: root.dark ? #ff99a4 : #c42b1c;
 
+    // A warning's icon, left bar and meter fill on the Mac: 5.37:1 on warnBackground in light
+    // appearance.
+    out property <color> warn: root.dark ? #ffb547 : #9a5200;
+
+    // A warning row's background and the glyph on a filled warn icon.
+    out property <color> warn-background: root.dark ? #3a2c12 : #fff4dd;
+
     // A playing AirPlay or Bluetooth speaker's type icon on the Mac: deeper on light and lighter on
     // dark than the system blue, so it keeps 3:1 on the menu bar panel over any window.
     out property <color> active-blue: root.dark ? #5eaeff : #0062cc;

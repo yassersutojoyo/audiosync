@@ -2,7 +2,7 @@
 name = "audiosync-desktop"
 version = "0.7.1"
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.99"
 license = "GPL-3.0-or-later"
 description = "AudioSync for Windows 11 (in development)."
 repository = "https://github.com/yassersutojoyo/audiosync"
@@ -161,6 +161,20 @@ libc = "0.2.191"
 # Slint's element search, so tests can run the accessibility actions UI
 # Automation sends. Test-only, never in a build; already in Slint's graph.
 i-slint-backend-testing = { version = "=1.18.1", default-features = false }
+
+# The test binary's crash handler (the cast crate's
+# tests/common/crash_dump.rs): a minidump when it dies in the PC's repeated
+# test loops. Test-only; MIT OR Apache-2.0, already in the graph.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
+] }
 
 # The Linux live tests feed the whole system's capture to the airplay and
 # cast crates' own test receivers, compiled in from their tests/common

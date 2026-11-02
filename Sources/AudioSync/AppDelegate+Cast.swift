@@ -85,9 +85,10 @@ extension AppDelegate {
             let name = castName(change.id)   // read before the change takes the row away
             if case .turnedOff(let id, let problem?)? = castModel.apply(change) {
                 DebugTrace.log("[AudioSync] Cast: \(id) left the list, so it is off")
-                postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id))
+                postNotice(text.castProblem(problem, name: name), subject: Notice.cast(id),
+                           shortName: text.cantPlayNoticeName(name))
             }
-            if let level = castModel.takeLevelDue() { castSender?.setVolume(level) }
+            if let level = castModel.takeLevelDue() { sendCastVolume(level) }
             if let address = castModel.takeRelistDue(), let sender = castSender {
                 addStoredCastAddress(address, to: sender, relisting: change.id)
             }
@@ -117,7 +118,8 @@ extension AppDelegate {
         var list = appModel.notices
         guard let notice = list.items.first(where: { $0.subject == Notice.cast(old) }) else { return }
         list.clear([Notice.cast(old)])
-        list.post(notice.text, subject: Notice.cast(new), at: notice.date, title: notice.title, settings: notice.settings)
+        list.post(notice.text, subject: Notice.cast(new), at: notice.date, title: notice.title,
+                  shortName: notice.shortName, settings: notice.settings)
         appModel.notices = list
     }
 
@@ -151,12 +153,15 @@ extension AppDelegate {
         case .changed, .memoryChanged:
             break
         case .setVolume(let level):
-            castSender?.setVolume(level)
+            sendCastVolume(level)
         case .playing(let id):
             clearNotices([Notice.cast(id)])
         case .turnedOff(let id, let problem):
             DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) is off")
-            if let problem { postNotice(text.castProblem(problem, name: named(id)), subject: Notice.cast(id)) }
+            if let problem {
+                postNotice(text.castProblem(problem, name: named(id)), subject: Notice.cast(id),
+                           shortName: text.cantPlayNoticeName(named(id)))
+            }
         case .senderFailed(let wasOn):
             DebugTrace.log("[AudioSync] Cast: the sender stopped after an internal error")
             let name = wasOn.map(named)
@@ -211,7 +216,8 @@ extension AppDelegate {
         if on {
             if let problem = castModel.turnOn(id) {
                 DebugTrace.log("[AudioSync] Cast: \(castLabel(id)) stays off (\(problem))")
-                postNotice(text.castProblem(problem, name: castName(id)), subject: Notice.cast(id))
+                postNotice(text.castProblem(problem, name: castName(id)), subject: Notice.cast(id),
+                           shortName: text.cantPlayNoticeName(castName(id)))
                 pushModel()
                 return
             }
@@ -229,7 +235,7 @@ extension AppDelegate {
     /// The row moved to `position`, 0 to 100: the level the device gets (S415).
     func setCastVolume(_ appID: String, _ position: Double) {
         guard let id = CastID.device(appID) else { return }
-        if let level = castModel.moveRow(id, row: position) { castSender?.setVolume(level) }
+        if let level = castModel.moveRow(id, row: position) { sendCastVolume(level) }
         pushModel()
     }
 
@@ -237,8 +243,15 @@ extension AppDelegate {
     /// times the zone (C104, S415).
     func setCastOwnVolume(_ appID: String, _ position: Double) {
         guard let id = CastID.device(appID) else { return }
-        if let level = castModel.setVolume(id, position: position) { castSender?.setVolume(level) }
+        if let level = castModel.setVolume(id, position: position) { sendCastVolume(level) }
         pushModel()
+    }
+
+    /// Sends the level the model handed out last and tells the model the
+    /// sender's ask id for it, which a report that no status answers names (C70).
+    func sendCastVolume(_ level: Double) {
+        let send = castModel.sends
+        castSender?.setVolume(level) { [weak self] ask in self?.castModel.volumeAsked(send: send, ask: ask) }
     }
 
     /// An arrow key on the slider: the device's own step, or the fallback
@@ -247,7 +260,7 @@ extension AppDelegate {
         guard let id = CastID.device(appID), let step = castModel.stepVolume(id, up: up) else { return }
         switch step {
         case .device(let up): castSender?.stepVolume(up: up)
-        case .level(let level): castSender?.setVolume(level)
+        case .level(let level): sendCastVolume(level)
         }
         pushModel()
     }
@@ -413,6 +426,7 @@ extension AppDelegate {
         case .formatFallback(let a, let format, let detail):
             return "attempt \(a): WAV refused (\(detail)), format \(format) instead"
         case .playing(let a): return "attempt \(a): the device reports playing"
+        case .paused(let a): return "attempt \(a): the device was paused"
         case .connectFailed(let a, _, let retry, let detail):
             return "attempt \(a): connecting failed (\(detail)), again in \(retry) ms"
         case .recovering(let a, let detail): return "attempt \(a): reconnecting (\(detail))"
@@ -421,6 +435,8 @@ extension AppDelegate {
         case .volume(let a, let v, _):
             return "attempt \(a): volume \(Int((v.level * 100).rounded()))" + (v.muted ? ", muted" : "")
                 + (v.fixed ? ", fixed" : "")
+        case .volumeUnanswered(let a, let level, _):
+            return "attempt \(a): volume \(Int((level * 100).rounded())) gets no answer"
         case .commandFailed(let a, let error): return "attempt \(a): a request failed (\(String(describing: error)))"
         case .ended(let a, .failed(_, let detail)): return "attempt \(a) ended: failed: \(detail)"
         case .ended(let a, let end): return "attempt \(a) ended: \(end)"

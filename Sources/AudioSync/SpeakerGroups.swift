@@ -100,7 +100,8 @@ enum GroupName {
 enum SpeakerIDMigration {
     /// What is saved by AirPlay speaker ID: the speakers switched on, their
     /// volumes, the groups, the auto-connect list, the zones (S248) and the
-    /// presets (S254).
+    /// presets (S254). The user's names and the hidden entries are kept by
+    /// speaker key, which holds the ID.
     struct Saved: Equatable {
         var enabledAirPlay: Set<String>
         var airplayVolumes: [String: Double]
@@ -147,7 +148,8 @@ enum SpeakerIDMigration {
         guard !byDevice.isEmpty else { return [:] }
         var ids = saved.enabledAirPlay.union(saved.airplayVolumes.keys)
         let keys = saved.autoConnect.union(saved.groups.flatMap(\.members)).union(saved.zones.flatMap(\.members))
-            .union(saved.presets.flatMap { $0.members.map(\.key) })
+            .union(saved.presets.flatMap { $0.members.map(\.key) }).union(saved.names.custom.keys)
+            .union(saved.hidden.entries.map(\.key))
         for key in keys {
             if let (id, airplay) = SpeakerKey.parse(key), airplay { ids.insert(id) }
         }
@@ -165,6 +167,7 @@ enum SpeakerIDMigration {
     /// over the old one, a group that already lists the new key drops the
     /// old one, and so does every zone once any zone holds the new key
     /// (one zone per speaker, S245); groups and zones keep their order.
+    /// A name or hidden entry moves too, one already under the new key winning.
     static func apply(_ renames: [String: String], to saved: Saved) -> Saved {
         guard !renames.isEmpty else { return saved }
         func renamed(_ id: String) -> String { renames[id] ?? id }
@@ -174,6 +177,8 @@ enum SpeakerIDMigration {
         }
         var out = movingKeys(keys, in: saved)
         out.enabledAirPlay = Set(saved.enabledAirPlay.map(renamed))
+        out.names = keys.keys.sorted().reduce(saved.names) { $0.movingKey($1, to: keys[$1] ?? $1) }
+        out.hidden.migrate(airPlay: renames)
         var volumes = saved.airplayVolumes.filter { renames[$0.key] == nil }
         for (old, new) in renames {
             if volumes[new] == nil, let volume = saved.airplayVolumes[old] { volumes[new] = volume }

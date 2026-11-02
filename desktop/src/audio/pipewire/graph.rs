@@ -7,9 +7,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::audio::backend::OutputKind;
+use crate::audio::backend::{BackendError, OutputKind};
 use crate::audio::outputs::{
-    DeviceTraits, Endpoint, EndpointProperties, EndpointReading, Listing, ListingNote,
+    DeviceTraits, Endpoint, EndpointProperties, EndpointReading, Listing, ListingNote, form_factor,
 };
 use crate::audio::process::ProcessTable;
 use crate::audio::routing::{EndpointAudio, EndpointVolume};
@@ -107,6 +107,27 @@ pub fn positions(value: &str) -> Vec<&str> {
         .split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace())
         .filter(|name| !name.is_empty())
         .collect()
+}
+
+/// What calibration needs of a sink, in the Windows terms [`DeviceTraits`]
+/// holds: a worn form factor as its Windows value, and a sink [`sink_kind`]
+/// calls virtual under the `ROOT` enumerator Windows gives virtual devices.
+pub fn sink_traits(node: &Node) -> DeviceTraits {
+    let form_factor = match node.prop("device.form-factor") {
+        Some("headphone") => Some(form_factor::HEADPHONES),
+        Some("headset") => Some(form_factor::HEADSET),
+        Some("handset") => Some(form_factor::HANDSET),
+        _ => None,
+    };
+    let enumerator = if sink_kind(node) == OutputKind::Virtual {
+        Some("ROOT")
+    } else {
+        node.prop("device.api")
+    };
+    DeviceTraits {
+        form_factor,
+        enumerator: enumerator.map(str::to_owned),
+    }
 }
 
 /// The kind of an output, from its node's properties.
@@ -270,6 +291,15 @@ impl Graph {
             .map(|(&id, node)| (id, node))
     }
 
+    /// The input node named `name`, to capture as the source.
+    pub fn capture_input(&self, name: &str) -> Result<&Node, BackendError> {
+        let (_, node) = self.named(name).ok_or(BackendError::InputGone)?;
+        // The listing leaves a hands-free node out, so one saved anyway counts as not connected.
+        (!node.hands_free())
+            .then_some(node)
+            .ok_or(BackendError::InputGone)
+    }
+
     /// The rate and channels to play to output `id` at: its own format,
     /// else what its properties say, else 48 kHz stereo; at most its first
     /// [`MAX_CHANNELS`](super::format::MAX_CHANNELS) channels.
@@ -319,10 +349,7 @@ impl Graph {
                 is_default: self.default_sink.as_deref() == Some(id.as_str()),
                 name: name.unwrap_or_else(|| id.clone()),
                 kind: sink_kind(node),
-                traits: DeviceTraits {
-                    form_factor: None,
-                    enumerator: node.prop("device.api").map(str::to_owned),
-                },
+                traits: sink_traits(node),
                 id,
             });
         }
@@ -507,6 +534,7 @@ pub fn linear_volume(level: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::outputs::MicKind;
     use crate::audio::process::ProcessEntry;
 
     fn props(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -627,6 +655,61 @@ mod tests {
         );
         assert_eq!(sink_kind(&node(&[device])), OutputKind::Other);
         assert_eq!(sink_kind(&node(&[])), OutputKind::Virtual);
+    }
+
+    // covers: S381
+    #[test]
+    fn calibration_leaves_out_worn_and_virtual_sinks() {
+        let mut graph = Graph::default();
+        let device = ("device.id", "7");
+        sink(&mut graph, 1, &[("node.name", "a-room"), device]);
+        sink(
+            &mut graph,
+            2,
+            &[
+                ("node.name", "b-phones"),
+                device,
+                ("device.form-factor", "headphone"),
+            ],
+        );
+        sink(
+            &mut graph,
+            3,
+            &[
+                ("node.name", "c-headset"),
+                device,
+                ("device.api", "bluez5"),
+                ("device.form-factor", "headset"),
+            ],
+        );
+        sink(&mut graph, 4, &[("node.name", "d-null-sink")]);
+        sink(
+            &mut graph,
+            5,
+            &[("node.name", "e-bt-speaker"), ("device.api", "bluez5")],
+        );
+        sink(
+            &mut graph,
+            6,
+            &[("node.name", "f-usb-speaker"), ("device.bus", "usb")],
+        );
+        let kinds: Vec<MicKind> = graph
+            .listing()
+            .endpoints
+            .iter()
+            .map(|output| output.traits.mic_kind())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                MicKind::Speaker,
+                MicKind::Headphones,
+                MicKind::Headphones,
+                MicKind::Virtual,
+                MicKind::Speaker,
+                MicKind::Speaker
+            ]
+        );
     }
 
     // covers: S380
@@ -889,6 +972,34 @@ mod tests {
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].id.as_deref(), Ok("mic"));
         assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(4));
+    }
+
+    #[test]
+    fn a_saved_input_that_is_hands_free_or_missing_is_refused_as_not_connected() {
+        let mut graph = Graph::default();
+        graph.add(
+            1,
+            Kind::Node,
+            props(&[("media.class", "Audio/Source"), ("node.name", "mic")]),
+        );
+        graph.add(
+            2,
+            Kind::Node,
+            props(&[
+                ("media.class", "Audio/Source"),
+                ("node.name", "sco"),
+                ("factory.name", "api.bluez5.sco.source"),
+            ]),
+        );
+        assert!(graph.capture_input("mic").is_ok());
+        assert_eq!(
+            graph.capture_input("sco").err(),
+            Some(BackendError::InputGone)
+        );
+        assert_eq!(
+            graph.capture_input("gone").err(),
+            Some(BackendError::InputGone)
+        );
     }
 
     // covers: S14

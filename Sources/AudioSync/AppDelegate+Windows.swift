@@ -414,6 +414,9 @@ extension AppDelegate {
             self?.pushModel()
         }
         a.fixDeviceVolume = { [weak self] uid in self?.fixDeviceVolume(uid) }
+        a.fixCalibrationVolume = { [weak self] in
+            if let uid = self?.localReference { self?.fixDeviceVolume(uid) }
+        }
         return a
     }
 
@@ -611,7 +614,7 @@ extension AppDelegate {
                                          apps: running.map { (bundleID: $0.bundleID, name: $0.name) },
                                          inputs: inputs, chosen: audioSource,
                                          chosenAppName: SourceApps.name(for:), mixName: text.sourceMixName,
-                                         unpluggedInputName: text.sourceNotConnected(inputName))
+                                         unpluggedInputName: text.sourceNotConnected(inputName), lastMix: lastMix)
         let icons = Dictionary(running.compactMap { app in app.icon.map { (app.bundleID, $0) } },
                                uniquingKeysWith: { first, _ in first })
         let sources = entries.map { entry -> AppModel.Source in
@@ -639,7 +642,8 @@ extension AppDelegate {
         publish(\.mixChecked, checked)
         publish(\.mixApps, mixApps.map { entry in
             AppModel.Source(id: entry.id, name: entry.name,
-                            icon: (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized), isInput: false)
+                            icon: (icons[entry.id] ?? SourceApps.icon(for: entry.id)).map(Self.menuSized), isInput: false,
+                            available: entry.available)
         })
     }
 
@@ -697,6 +701,7 @@ extension AppDelegate {
                                     paired: receiver.map { native?.isPaired($0) == true } ?? false,
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,
                                     holdsPassword: receiver.map { native?.holdsPassword($0) == true } ?? false,
+                                    refusedForCode: receiver.map { native?.refusedOff.contains($0) == true } ?? false,
                                     airPlayTarget: receiver.flatMap { native?.targetRow($0) })
         }
     }
@@ -810,7 +815,9 @@ extension AppDelegate {
 
         let guide = NSMutableAttributedString()
         var firstPiece = true
-        for piece in GuideLayout.pieces(of: text.helpText, anchor: text.guideArtAnchor) {
+        var strings = text
+        strings.updatesOn = AppUpdater.isEnabled
+        for piece in GuideLayout.pieces(of: strings.helpText, anchor: strings.guideArtAnchor) {
             let paragraphs = GuideLayout.paragraphs(of: piece.text)
             let roles = GuideLayout.roles(of: paragraphs, opensText: firstPiece)
             firstPiece = false

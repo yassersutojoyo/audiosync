@@ -266,6 +266,23 @@ struct Shared {
     read: AtomicUsize,
     /// Frames the writer dropped because the ring was full.
     overflow: AtomicU64,
+    /// Give-back factors by the frame each starts at; the writer adds,
+    /// the reader takes them in order.
+    stamps: [Stamp; STAMPS],
+    stamped: AtomicUsize,
+    consumed: AtomicUsize,
+    /// The factor of the newest stamp; NaN before the first.
+    back: AtomicU64,
+}
+
+/// Pending give-backs a ring holds: enough for an equalizer slider dragged
+/// through the whole hold-back (up to 20 s) and the ring.
+const STAMPS: usize = 2048;
+
+#[derive(Default)]
+struct Stamp {
+    at: AtomicUsize,
+    back: AtomicU64,
 }
 
 /// Makes a ring that holds `capacity` frames, split into its two ends.
@@ -276,6 +293,10 @@ pub fn audio_ring(capacity: usize) -> (AudioWriter, AudioReader) {
         written: AtomicUsize::new(0),
         read: AtomicUsize::new(0),
         overflow: AtomicU64::new(0),
+        stamps: std::array::from_fn(|_| Stamp::default()),
+        stamped: AtomicUsize::new(0),
+        consumed: AtomicUsize::new(0),
+        back: AtomicU64::new(f64::NAN.to_bits()),
     });
     (
         AudioWriter {
@@ -284,7 +305,9 @@ pub fn audio_ring(capacity: usize) -> (AudioWriter, AudioReader) {
         AudioReader {
             shared,
             master: MasterGain::default(),
-            cut_gain: 1.0,
+            last_master: 1.0,
+            back: 1.0,
+            next_stamp: 0,
         },
     )
 }
@@ -313,6 +336,36 @@ impl AudioWriter {
         self.write_frames(samples.as_chunks::<CHANNELS>().0.iter().map(|frame| {
             (to_i16(frame[0]) as u16 as u32) | ((to_i16(frame[1]) as u16 as u32) << 16)
         }))
+    }
+
+    /// Sets the equalizer's headroom cut as a linear factor `back` (at
+    /// least 1), which the reader gives back under the master as far as
+    /// unity allows (S26, S415), from the frame `delay` frames after the
+    /// next one written: the first one equalized with it, once the host's
+    /// delay line has held it back. The first call covers every frame
+    /// before it too. A change finding every stamp pending is left for the
+    /// next call. Real-time safe.
+    pub fn give_back(&self, back: f64, delay: usize) {
+        let shared = &*self.shared;
+        let stamped = shared.stamped.load(Ordering::Relaxed);
+        if shared.back.load(Ordering::Relaxed) == back.to_bits()
+            || stamped.wrapping_sub(shared.consumed.load(Ordering::Acquire)) == STAMPS
+        {
+            return;
+        }
+        let written = shared.written.load(Ordering::Relaxed);
+        let at = if stamped == 0 {
+            written.wrapping_sub(shared.slots.len())
+        } else {
+            written.wrapping_add(delay)
+        };
+        let stamp = &shared.stamps[stamped % STAMPS];
+        stamp.at.store(at, Ordering::Relaxed);
+        stamp.back.store(back.to_bits(), Ordering::Relaxed);
+        shared.back.store(back.to_bits(), Ordering::Relaxed);
+        shared
+            .stamped
+            .store(stamped.wrapping_add(1), Ordering::Release);
     }
 
     fn write_frames(&self, frames: impl ExactSizeIterator<Item = u32>) -> usize {
@@ -381,15 +434,18 @@ impl MasterGain {
 pub struct AudioReader {
     shared: Arc<Shared>,
     master: MasterGain,
-    /// The gain the last frame read was scaled by.
-    cut_gain: f64,
+    /// The master the last frame read was scaled by.
+    last_master: f64,
+    /// The give-back of the last frame read, and the stamp after it.
+    back: f64,
+    next_stamp: usize,
 }
 
 impl AudioReader {
     /// The reader, its frames scaled by `master` (S415).
     pub fn with_master(self, master: MasterGain) -> AudioReader {
         AudioReader {
-            cut_gain: master.get(),
+            last_master: master.get(),
             master,
             ..self
         }
@@ -407,29 +463,45 @@ impl AudioReader {
     }
 
     /// Appends up to `frames` frames to `out` as little-endian 16-bit
-    /// samples scaled by the master; a master change fades in linearly
-    /// over this read. Returns the frames read.
+    /// samples scaled by the master with each frame's give-back; a master
+    /// change fades in linearly over this read. Returns the frames read.
     pub fn read_into(&mut self, out: &mut Vec<u8>, frames: usize) -> usize {
         let shared = &*self.shared;
         let capacity = shared.slots.len();
         let read = shared.read.load(Ordering::Relaxed);
         let count = frames.min(self.available());
-        let from = self.cut_gain;
+        let from = self.last_master;
         let to = self.master.get();
+        let stamped = shared.stamped.load(Ordering::Acquire);
         for index in 0..count {
-            let frame = shared.slots[read.wrapping_add(index) % capacity].load(Ordering::Relaxed);
-            let gain = if from == to {
+            let position = read.wrapping_add(index);
+            while self.next_stamp != stamped {
+                let stamp = &shared.stamps[self.next_stamp % STAMPS];
+                if (position.wrapping_sub(stamp.at.load(Ordering::Relaxed)) as isize) < 0 {
+                    break;
+                }
+                self.back = f64::from_bits(stamp.back.load(Ordering::Relaxed));
+                self.next_stamp = self.next_stamp.wrapping_add(1);
+            }
+            let frame = shared.slots[position % capacity].load(Ordering::Relaxed);
+            let master = if from == to {
                 to
             } else {
                 from + (to - from) * (index + 1) as f64 / count as f64
+            };
+            let gain = if master < 1.0 {
+                (master * self.back).min(1.0)
+            } else {
+                master
             };
             for sample in [frame as u16 as i16, (frame >> 16) as u16 as i16] {
                 out.extend_from_slice(&scaled(sample, gain).to_le_bytes());
             }
         }
         if count > 0 {
-            self.cut_gain = to;
+            self.last_master = to;
         }
+        shared.consumed.store(self.next_stamp, Ordering::Release);
         shared
             .read
             .store(read.wrapping_add(count), Ordering::Release);

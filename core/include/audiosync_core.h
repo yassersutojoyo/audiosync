@@ -131,12 +131,16 @@ extern "C" {
 #define ASC_AIRPLAY_EVENT_PIN_NEEDED 6      /* a pairing's Apple TV shows a PIN: ask the user, then asc_airplay_submit_pin */
 #define ASC_AIRPLAY_EVENT_PASSWORD_NEEDED 7 /* a pairing needs the password (.error PASSWORD_REQUIRED) or got a wrong one (WRONG_PASSWORD, forgotten) */
 #define ASC_AIRPLAY_EVENT_PAIRING_FAILED 8  /* a pairing ended without credentials: .error (WRONG_PIN, NOT_RESPONDING, ...) */
-#define ASC_AIRPLAY_EVENT_PAIRED 9          /* paired, credentials stored; .detail "" or why they last this run only */
+#define ASC_AIRPLAY_EVENT_PAIRED 9          /* paired, credentials stored; .detail "" or why they last this run only; with .error ASC_AIRPLAY_PAIRED_FOR_SESSION paired for this session only, nothing stored */
 #define ASC_AIRPLAY_EVENT_VOLUME 10         /* its volume was changed on the speaker itself: .volume, the slider position that plays at it */
 #define ASC_AIRPLAY_EVENT_WARNING 11        /* something to show; the session goes on: .warning, .detail for a debug log */
 #define ASC_AIRPLAY_EVENT_TRACE 12          /* a debug log line about a speaker's session (.detail), only with AUDIOSYNC_DEBUG=1 */
 #define ASC_AIRPLAY_EVENT_REMOTE 13         /* a speaker's remote asked for .remote: send it through the now-playing control */
 #define ASC_AIRPLAY_EVENT_LATENCY_HELD 14   /* an Lf set while a speaker sounds is held (.latency_ms, the held L) until the stream is empty or restarts */
+#define ASC_AIRPLAY_EVENT_STORED 15         /* a PIN pairing whose verify failed stored its credentials; the PAIRING_FAILED that follows ends it: .detail "" or why they last this run only */
+
+/* A PAIRED event's .error. */
+#define ASC_AIRPLAY_PAIRED_FOR_SESSION 1 /* paired for this session only: nothing stored or written, it asks for a code every time */
 
 /* AscAirPlayEvent.remote: the transport control a speaker's remote asked for */
 #define ASC_AIRPLAY_REMOTE_PLAY_PAUSE 1
@@ -192,8 +196,9 @@ extern "C" {
 
 /* What asc_airplay_open_pairings returns when the store holds nothing it found. */
 #define ASC_AIRPLAY_PAIRINGS_FAILED -1  /* NULL or dead handle, or NULL, empty or non-UTF-8 path */
-#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* ignored; the wrong format is replaced by the next pairing, an unreadable file is left as it is */
+#define ASC_AIRPLAY_PAIRINGS_IGNORED -2 /* not in the expected format: ignored and replaced by the next pairing */
 #define ASC_AIRPLAY_PAIRINGS_NEWER -3   /* a newer AudioSync wrote it: ignored and left as it is */
+#define ASC_AIRPLAY_PAIRINGS_UNREADABLE -4 /* it can't be read: ignored and left as it is */
 
 /* How private asc_airplay_pairings_access and asc_airplay_airplay2_identity_access found a file. */
 #define ASC_AIRPLAY_FILE_UNREAD -1     /* NULL or dead handle, the identity file with AirPlay 2 off, or a file not read: another account owns it, it isn't a regular file, or opening it failed */
@@ -251,6 +256,8 @@ extern "C" {
 #define ASC_CAST_EVENT_MEMBERS 17          /* the playing group's members changed: asc_cast_member_count, asc_cast_member */
 #define ASC_CAST_EVENT_GROUP_LOG 18        /* a line about a Cast group for the debug log in .detail */
 #define ASC_CAST_EVENT_CERTIFICATE_CHANGED 19 /* the device's certificate changed since its last connect: "<before> to <after>" in .detail, for the debug log */
+#define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level, .ask */
+#define ASC_CAST_EVENT_PAUSED 21           /* someone paused the device itself; PLAYING follows once its next play loaded the stream again */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
 #define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */
@@ -948,6 +955,11 @@ uint64_t asc_renderer_late_max_ns(const AscRenderer *renderer);
 /* Any thread: the callbacks that came more than 5 ms later than
    the renderer's earliest ones (S209); 0 for a NULL handle. */
 uint64_t asc_renderer_late_callbacks(const AscRenderer *renderer);
+
+/* Control thread: the peak and RMS in dBFS the device got since the last take,
+   after every gain and the equalizer; silence reads as -infinity. False,
+   writing nothing, when nothing was rendered since or a pointer is NULL. */
+bool asc_renderer_take_level(const AscRenderer *renderer, double *peak_db, double *rms_db);
 
 /* Any thread: the device frames the converter couldn't produce and that were
    played as silence, in all (0 unless the read sizing is wrong); 0 for a NULL
@@ -1957,8 +1969,10 @@ bool asc_airplay_set_playback(AscAirPlay *airplay, const char *app, int32_t play
  * ASC_AIRPLAY_NEEDS_PIN. The file is versioned, mode 0600, written through a
  * temporary file created new and renamed over it, and removed once nothing
  * is paired; it never holds a password. Listed receivers are reported again
- * as changed. Returns how many receivers it holds credentials for, or an
- * ASC_AIRPLAY_PAIRINGS_* code.
+ * as changed. A store whose last write failed, left by a handle destroyed
+ * this run, is taken back instead of reading the file; for a file its first
+ * open ignored, that code is returned again. Returns how many receivers it
+ * holds credentials for, or an ASC_AIRPLAY_PAIRINGS_* code.
  */
 int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
 
@@ -1969,9 +1983,11 @@ int32_t asc_airplay_open_pairings(AscAirPlay *airplay, const char *path);
  * the receivers it paired with, which later sessions verify with; new ones
  * are written to it as pairings give them. Kept like the pairings file
  * (versioned, mode 0600, replaced through a temporary file); it never holds
- * a password and its credentials never cross this interface. With the hidden
- * AirPlay 2 switch off it reads and writes nothing and returns 0, and only
- * asc_airplay_forget_pairing opens the file, to drop the receiver from it,
+ * a password and its credentials never cross this interface. An identity
+ * whose last write failed comes back as asc_airplay_open_pairings says for
+ * such a store. With the hidden AirPlay 2 switch off it reads and writes
+ * nothing and returns 0, and only asc_airplay_forget_pairing opens the
+ * file, to drop the receiver from it,
  * and writes it only when it reads as this build's own: one it can't read
  * or parse, or that another account owns, is left as it is.
  * Returns how many receivers it holds credentials for, or an
@@ -2028,7 +2044,8 @@ void asc_airplay_cancel_pairing(AscAirPlay *airplay, const char *id);
  * (asc_airplay_add_speaker adds or restarts one) and pairings, until the
  * handle is destroyed; NULL or "" forgets it. Kept in memory only and wiped
  * when dropped, never stored or logged, and forgotten when the receiver turns
- * it down. Returns false when the handle or id is NULL.
+ * it down. Returns false when the handle or id is NULL, or when password is
+ * not UTF-8, which keeps the stored one.
  */
 bool asc_airplay_set_password(AscAirPlay *airplay, const char *id, const char *password);
 
@@ -2123,7 +2140,7 @@ typedef struct AscCastInput AscCastInput;
 typedef struct AscCastDevice {
     int32_t event;     /* ASC_CAST_APPEARED, _CHANGED or _GONE */
     const char *id;    /* 32 hex digits, or "manual:<ip:port>" */
-    const char *name;  /* the name it announces, "" when none */
+    const char *name;  /* the name it announces, else its full service name; "" when none */
     const char *model; /* its model, "" when none */
     uint32_t flags;    /* ASC_CAST_FLAG_* bits */
     const char *former; /* on the APPEARED of a device a browse found that was added by address:
@@ -2160,6 +2177,7 @@ typedef struct AscCastEvent {
     bool has_level;      /* the status gave the level; .level means nothing without it */
     bool answers_mute;   /* a volume event's status is the first since a mute was sent */
     double step;         /* the device's volume step; 0 when it reports none */
+    uint64_t ask;        /* a volume-unanswered event's ask id, as asc_cast_set_volume returned it */
     double drift_ms;     /* dropped audio plus rebuffering since the stream was loaded */
     double queued_ms;    /* audio waiting in the sender's queue */
     uint64_t underrun_frames; /* silent frames sent since the stream was loaded because the input ran dry */
@@ -2282,11 +2300,12 @@ void asc_cast_stop(AscCast *cast);
 /*
  * Sets the device's volume, 0 to 1, clamped. Show the level volume events
  * report, and while the user drags a slider send at most one every 100 ms.
- * Returns false, sending nothing, for a NULL or dead handle, a level that
- * isn't finite, or when no session runs or starts; a locked volume comes as
+ * Returns the ask id that ASC_CAST_EVENT_VOLUME_UNANSWERED names for this
+ * ask; 0, sending nothing, for a NULL or dead handle, a level that isn't
+ * finite, or when no session runs or starts; a locked volume comes as
  * ASC_CAST_EVENT_COMMAND_FAILED with ASC_CAST_ERROR_VOLUME_FIXED.
  */
-bool asc_cast_set_volume(AscCast *cast, double level);
+uint64_t asc_cast_set_volume(AscCast *cast, double level);
 
 /*
  * Mutes or unmutes the device, apart from its level. Returns false, sending

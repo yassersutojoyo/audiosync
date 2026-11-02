@@ -277,8 +277,22 @@ final class NowPlayingMonitor {
     /// supported player, "" for none, nil for whichever player is playing.
     var preferredBundleID: String?
 
+    /// Where the players post their change notices; a test hands in its own.
+    let noticeCenter: NotificationCenter
+
+    init(noticeCenter: NotificationCenter = DistributedNotificationCenter.default()) {
+        self.noticeCenter = noticeCenter
+    }
+
+    /// Posted by Music and Spotify when their track or play state changes.
+    static let changeNotices = [Notification.Name("com.apple.Music.playerInfo"),
+                                Notification.Name("com.spotify.client.PlaybackStateChanged")]
+
     // Main thread.
     private var timer: Timer?
+    private let notices = ChangeNotices()
+    /// A change notice came in while a reading was under way, which may have read the player before it.
+    private var readAgain = false
     /// True while polling; a stopped monitor's last track may be stale.
     var isRunning: Bool { timer != nil }
     /// When polling started; nil while stopped.
@@ -330,9 +344,24 @@ final class NowPlayingMonitor {
         emptyReadings.reset()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in self?.refresh() }
+        notices.posted = { [weak self] in
+            guard let self else { return }
+            if self.refreshing { self.readAgain = true } else { self.refresh() }
+        }
+        for name in Self.changeNotices {
+            // AppKit holds distributed notices back while AudioSync isn't the active app, which it seldom is.
+            if let center = noticeCenter as? DistributedNotificationCenter {
+                center.addObserver(notices, selector: #selector(ChangeNotices.post), name: name, object: nil,
+                                   suspensionBehavior: .deliverImmediately)
+            } else {
+                noticeCenter.addObserver(notices, selector: #selector(ChangeNotices.post), name: name, object: nil)
+            }
+        }
     }
 
     func stopWatching() {
+        noticeCenter.removeObserver(notices)
+        readAgain = false
         timer?.invalidate()
         timer = nil
         startedAt = nil
@@ -436,6 +465,10 @@ final class NowPlayingMonitor {
                 self.played.note(shown: shown, last: last, dropped: self.emptyReadings.dropped != nil)
                 self.publish(shown, reading: true)
                 if self.isRunning { self.onReading?(startedAt) }
+                if self.readAgain {
+                    self.readAgain = false
+                    self.refresh()
+                }
             }
         }
     }
@@ -603,6 +636,13 @@ final class NowPlayingMonitor {
             DispatchQueue.main.async { [weak self] in self?.onAutomationDenied?(target, refused) }
         }
     }
+}
+
+/// The selector target for the players' change notices: only the selector form of
+/// `DistributedNotificationCenter` can ask for delivery while the app is inactive.
+private final class ChangeNotices: NSObject {
+    var posted: () -> Void = {}
+    @objc func post(_ notice: Notification) { posted() }
 }
 
 /// Whether Now Playing reads a player (S336). Until a player is known to be

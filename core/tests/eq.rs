@@ -111,6 +111,8 @@ struct Reference {
     bands: [[f64; 5]; BAND_COUNT],
     preamp: f64,
     state: [[(f64, f64); BAND_COUNT]; 2],
+    /// The linear 10 ms preamp ramp after a retune (S31): from, frames played, length.
+    ramp: (f64, u64, u64),
 }
 
 impl Reference {
@@ -121,19 +123,36 @@ impl Reference {
             }),
             preamp: 10f64.powf((settings.preamp_db - headroom_db(settings, fs)) / 20.0),
             state: [[(0.0, 0.0); BAND_COUNT]; 2],
+            ramp: (0.0, u64::MAX, 1),
         }
     }
 
     fn retune(&mut self, settings: &EqSettings, fs: f64) {
-        let state = self.state;
+        let (state, ramp, from, old) = (self.state, self.ramp, self.ramped(), self.preamp);
         *self = Reference::new(settings, fs);
         self.state = state;
+        self.ramp = if self.preamp == old {
+            ramp
+        } else {
+            (from, 0, (0.010 * fs).round() as u64)
+        };
+    }
+
+    fn ramped(&self) -> f64 {
+        let (from, done, full) = self.ramp;
+        if done >= full {
+            self.preamp
+        } else {
+            from + (self.preamp - from) * (done as f64 / full as f64)
+        }
     }
 
     fn process(&mut self, block: &mut [f32]) {
         for frame in block.chunks_exact_mut(2) {
+            self.ramp.1 = self.ramp.1.saturating_add(1);
+            let preamp = self.ramped();
             for (channel, sample) in frame.iter_mut().enumerate() {
-                let mut y = f64::from(*sample) * self.preamp;
+                let mut y = f64::from(*sample) * preamp;
                 for (c, z) in self.bands.iter().zip(self.state[channel].iter_mut()) {
                     let x = y;
                     y = c[0] * x + z.0;
@@ -394,13 +413,6 @@ fn the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state() {
     control.set_settings(settings);
     assert_eq!(control.bands(), design_bands(&settings.gains_db, 48_000.0));
 
-    // The same rate again is a no-op: the filters keep ringing into silence.
-    processor.process(&mut sine(0, BLOCK, 1000.0, 48_000.0, 0.5));
-    assert!(control.set_sample_rate(48_000.0));
-    let mut silence = vec![0.0f32; BLOCK * 2];
-    processor.process(&mut silence);
-    assert!(silence.iter().any(|&x| x != 0.0));
-
     // A new rate recomputes the coefficients and zeroes all state.
     processor.process(&mut sine(0, BLOCK, 1000.0, 48_000.0, 0.5));
     assert!(control.set_sample_rate(44_100.0));
@@ -420,6 +432,20 @@ fn the_rate_defaults_to_48_khz_and_a_change_recomputes_and_zeroes_state() {
         assert!(!control.set_sample_rate(bad));
         assert_eq!(control.sample_rate(), 44_100.0);
     }
+}
+
+// covers: S30
+#[test]
+fn a_capture_reopened_at_the_same_rate_starts_from_zeroed_state_with_the_same_curve() {
+    let settings = enabled(with_band(0, 12.0), 0.0);
+    let (mut control, mut processor) = configured(48_000.0, settings);
+    processor.process(&mut sine(0, BLOCK, 40.0, 48_000.0, 0.9));
+    assert!(control.set_sample_rate(48_000.0));
+    let mut silence = vec![0.0f32; BLOCK * 2];
+    processor.process(&mut silence);
+    assert!(silence.iter().all(|&x| x == 0.0));
+    assert_eq!(control.settings(), settings);
+    assert_eq!(control.bands(), design_bands(&settings.gains_db, 48_000.0));
 }
 
 // covers: S16
@@ -486,6 +512,49 @@ fn a_change_takes_effect_at_the_next_block_and_keeps_filter_state() {
     let copy = untouched.clone();
     processor.process(&mut untouched);
     assert_eq!(untouched, copy);
+}
+
+// covers: S26, S31
+#[test]
+fn a_curve_change_ramps_the_preamp_instead_of_stepping_it() {
+    let flat = enabled([0.0; BAND_COUNT], 0.0);
+    let bass = enabled(preset("bassBoost").unwrap().gains_db, 0.0);
+    let (mut control, mut processor) = configured(48_000.0, flat);
+    let mut reference = Reference::new(&flat, 48_000.0);
+    // A 37.5 Hz cosine peaks every 1280 frames, so the change at frame 5120
+    // lands on a peak, where Bass Boost's 6 dB headroom cut steps furthest.
+    let input: Vec<f32> = (0..40 * BLOCK)
+        .flat_map(|i| {
+            let x = (0.5 * (2.0 * PI * 37.5 * i as f64 / 48_000.0).cos()) as f32;
+            [x, x]
+        })
+        .collect();
+    let mut output = Vec::with_capacity(input.len());
+    let mut expected = Vec::with_capacity(input.len());
+    for (index, chunk) in input.chunks(2 * BLOCK).enumerate() {
+        if index == 10 {
+            control.set_settings(bass);
+            reference.retune(&bass, 48_000.0);
+        }
+        let mut block = chunk.to_vec();
+        processor.process(&mut block);
+        output.extend_from_slice(&block);
+        let mut block = chunk.to_vec();
+        reference.process(&mut block);
+        expected.extend_from_slice(&block);
+    }
+    assert_eq!(
+        output, expected,
+        "a linear preamp ramp of 10 ms, 480 frames"
+    );
+    let tone = largest_step(&input);
+    let worst = largest_step(&output);
+    // The new filters swell the bass in over the first frames at up to about
+    // three times the tone's slope; a stepped preamp jumped by 0.28.
+    assert!(
+        worst <= 4.0 * tone,
+        "step {worst} against the tone's {tone}"
+    );
 }
 
 // covers: S32

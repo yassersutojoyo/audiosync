@@ -37,7 +37,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -60,8 +60,9 @@ use audiosync_cast::status::{
     ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_volume, device_level, own_level,
     row_own_level, start_own_level,
 };
+use audiosync_core::delay_line::DelayLine;
 use audiosync_core::eq::{self, EqSettings};
-use audiosync_core::fade::{Fade, InputFade};
+use audiosync_core::fade::InputFade;
 use audiosync_core::policy::delay::MAX_HOLD_BACK_MS;
 use audiosync_core::volume::gain_for_position;
 
@@ -83,9 +84,6 @@ const HANDOFF: usize = 8;
 
 /// The longest hold-back of the Cast feed, in frames: the ceiling of L.
 const MAX_HOLD_BACK_FRAMES: usize = MAX_HOLD_BACK_MS as usize * SESSION_RATE as usize / 1000;
-
-/// The smallest page size Windows maps memory in.
-const PAGE_BYTES: usize = 4096;
 
 /// The volume step of a device that reports none, 0 to 100.
 const DEFAULT_VOLUME_STEP: f64 = 1.0;
@@ -121,105 +119,6 @@ pub fn volume_step(volume: Option<&DeviceVolume>) -> f64 {
         .map_or(DEFAULT_VOLUME_STEP, |step| (step * 100.0).round().max(1.0))
 }
 
-/// Interleaved stereo frames held back by a delay that may change while it
-/// runs: a change fades out, moves the read point and fades in, so it
-/// never clicks.
-struct DelayLine {
-    buffer: Box<[f32]>,
-    /// The frame written next.
-    write: usize,
-    /// Frames written since the last reset, at most the capacity: older ones
-    /// read as silence.
-    filled: usize,
-    /// The delay in frames; `None` until the first frame after a reset, which
-    /// takes the target at once since only silence is behind it.
-    delay: Option<usize>,
-    /// [`DelayLine::close`] ran: the output fades out and stays silent.
-    closing: bool,
-    fade: Fade,
-}
-
-impl DelayLine {
-    /// Allocates; on the UI thread only.
-    fn new(max_frames: usize) -> DelayLine {
-        let mut buffer = vec![0.0_f32; (max_frames + 1) * 2].into_boxed_slice();
-        // Zeroed memory is mapped on first touch: touch each page here so the
-        // capture thread never takes the page fault.
-        let last = buffer.len() - 1;
-        let stride = PAGE_BYTES / size_of::<f32>();
-        for index in (0..last).step_by(stride).chain([last]) {
-            // SAFETY: `index` is in bounds, so the pointer is valid and aligned.
-            unsafe { std::ptr::write_volatile(&raw mut buffer[index], 0.0) };
-        }
-        DelayLine {
-            buffer,
-            write: 0,
-            filled: 0,
-            delay: None,
-            closing: false,
-            fade: Fade::opened(SESSION_RATE),
-        }
-    }
-
-    /// Forgets the audio taken in, so a new capture never replays the end
-    /// of the old one, and opens a closed line. Never allocates.
-    fn reset(&mut self) {
-        self.filled = 0;
-        self.delay = None;
-        self.closing = false;
-        self.fade.open();
-    }
-
-    /// Fades the output out and keeps it silent until [`DelayLine::reset`],
-    /// so the audio it still holds doesn't end the stream with a cut.
-    fn close(&mut self) {
-        self.closing = true;
-    }
-
-    /// Takes in the whole frames of `input` and hands as many frames, held
-    /// back by `target` frames, to `out`. Never allocates.
-    fn process(&mut self, input: &[f32], target: usize, mut out: impl FnMut(&[f32])) {
-        let capacity = self.buffer.len() / 2;
-        let target = target.min(capacity - 1);
-        let mut chunk = [0.0_f32; 512];
-        for piece in input.chunks(chunk.len()) {
-            let frames = piece.len() / 2;
-            for (frame, held) in piece
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .zip(chunk.as_chunks_mut::<2>().0)
-            {
-                let delay = *self.delay.get_or_insert(target);
-                if self.closing {
-                    self.fade.fade_out();
-                } else if delay == target {
-                    self.fade.fade_in();
-                } else if self.fade.is_closed() {
-                    self.delay = Some(target);
-                    self.fade.fade_in();
-                } else {
-                    self.fade.fade_out();
-                }
-                let delay = self.delay.unwrap_or(target);
-                let write = self.write * 2;
-                self.buffer[write..write + 2].copy_from_slice(frame.as_slice());
-                self.filled = (self.filled + 1).min(capacity);
-                let gain = self.fade.next_gain();
-                if delay < self.filled {
-                    let read = (self.write + capacity - delay) % capacity * 2;
-                    held[0] = self.buffer[read] * gain;
-                    held[1] = self.buffer[read + 1] * gain;
-                } else {
-                    held.fill(0.0);
-                }
-                self.write = (self.write + 1) % capacity;
-            }
-            out(&chunk[..frames * 2]);
-        }
-    }
-}
-
 /// A Cast session's writer behind its delay line; built and freed on the
 /// UI thread only.
 struct CastWriter {
@@ -231,7 +130,7 @@ impl CastWriter {
     fn new(audio: AudioWriter) -> CastWriter {
         CastWriter {
             audio,
-            delay: DelayLine::new(MAX_HOLD_BACK_FRAMES),
+            delay: DelayLine::new(MAX_HOLD_BACK_FRAMES, SESSION_RATE),
         }
     }
 }
@@ -245,6 +144,8 @@ pub struct CastTap {
     retired: Option<CastWriter>,
     /// How many frames the feed is held back (C77), set by the UI thread.
     hold_back: Arc<AtomicUsize>,
+    /// The equalizer's headroom cut as a linear factor, set by the UI thread.
+    give_back: Arc<AtomicU64>,
     /// In at each lease (S189); the delay line fades out.
     fade: InputFade,
 }
@@ -257,7 +158,11 @@ impl CastTap {
     pub fn push(&mut self, block: &[f32], frames: usize) {
         self.take_handoffs();
         let target = self.hold_back.load(Ordering::Relaxed);
+        let back = f64::from_bits(self.give_back.load(Ordering::Relaxed));
         let CastTap { writer, fade, .. } = self;
+        if let Some(CastWriter { audio, .. }) = writer.as_ref() {
+            audio.give_back(back, target);
+        }
         fade.process(&block[..(frames * 2).min(block.len())], |piece| {
             if let Some(CastWriter { audio, delay }) = writer.as_mut() {
                 delay.process(piece, target, |held| {
@@ -379,6 +284,7 @@ pub struct CastFeed {
     waiting: Option<Option<CastWriter>>,
     /// The tap's hold-back, in frames.
     hold_back: Arc<AtomicUsize>,
+    give_back: Arc<AtomicU64>,
 }
 
 impl CastFeed {
@@ -390,12 +296,14 @@ impl CastFeed {
         let (to_tap, inbox) = mpsc::sync_channel(handoff);
         let (outbox, from_tap) = mpsc::sync_channel(handoff);
         let hold_back = Arc::new(AtomicUsize::new(0));
+        let give_back = Arc::new(AtomicU64::new(1.0f64.to_bits()));
         let tap = CastTap {
             inbox,
             outbox,
             writer: None,
             retired: None,
             hold_back: Arc::clone(&hold_back),
+            give_back: Arc::clone(&give_back),
             fade: InputFade::new(SESSION_RATE, CONVERT_CHUNK),
         };
         CastFeed {
@@ -407,7 +315,16 @@ impl CastFeed {
             },
             waiting: None,
             hold_back,
+            give_back,
         }
+    }
+
+    /// The equalizer's headroom cut in dB, which the session gives back
+    /// under the master from the first frame the capture equalizes with it
+    /// (S26, S415).
+    fn set_give_back(&self, cut_db: f64) {
+        self.give_back
+            .store(10f64.powf(cut_db / 20.0).to_bits(), Ordering::Relaxed);
     }
 
     /// Holds the feed back by `frames` from now on, up to the ceiling of L;
@@ -465,8 +382,8 @@ pub trait CastLink: Send {
         reader: AudioReader,
     ) -> Result<AttemptId, StartRefused>;
     fn stop(&mut self);
-    /// 0.0 to 1.0.
-    fn set_volume(&mut self, level: f64);
+    /// 0.0 to 1.0; returns the ask id that a report on this ask carries.
+    fn set_volume(&mut self, level: f64) -> u64;
     fn set_muted(&mut self, muted: bool);
     /// Kept for the next `LOAD`; the playing stream is not reloaded (C54).
     fn set_track(&mut self, track: CastTrack);
@@ -502,8 +419,11 @@ impl HostLink {
         not(os_backend),
         expect(dead_code, reason = "the OS backend's startup starts it")
     )]
-    pub fn start(memory: DeviceMemory) -> io::Result<(HostLink, Option<String>)> {
-        let host = CastHost::new(memory)?;
+    pub fn start(
+        memory: DeviceMemory,
+        fingerprints: audiosync_cast::client::FingerprintBook,
+    ) -> io::Result<(HostLink, Option<String>)> {
+        let host = CastHost::with_fingerprints(memory, fingerprints)?;
         let (browser, error) = match MdnsBrowser::new() {
             Ok(browser) => (Some(browser), None),
             Err(error) => (None, Some(error.to_string())),
@@ -529,8 +449,8 @@ impl CastLink for HostLink {
         self.host.stop();
     }
 
-    fn set_volume(&mut self, level: f64) {
-        self.host.set_volume(level);
+    fn set_volume(&mut self, level: f64) -> u64 {
+        self.host.set_volume(level)
     }
 
     fn set_muted(&mut self, muted: bool) {
@@ -667,15 +587,13 @@ pub struct CastSpeakers {
     master: MasterGain,
     /// The master position, 0 to 100.
     master_position: f64,
-    /// The equalizer's headroom cut in dB, given back under the master (S26).
-    eq_cut_db: f64,
     /// The zone level, 0.0 to 1.0, of each device in a zone (S249); one not
     /// here is in no zone.
     zones: BTreeMap<DeviceId, f64>,
-    /// The levels sent in this session that no status has answered yet,
-    /// oldest first, the latest [`MAX_UNANSWERED`]; the sender paces a drag
-    /// later (C70) and may send any of them.
-    unanswered: Vec<f64>,
+    /// The ask ids and levels sent in this session that no status has
+    /// answered yet, oldest first, the latest [`MAX_UNANSWERED`]; the sender
+    /// paces a drag later (C70) and may send any of them.
+    unanswered: Vec<(u64, f64)>,
     attempt: Option<Attempt>,
     /// How long the feed waits for L, in ms (C77).
     hold_back_ms: f64,
@@ -685,6 +603,9 @@ pub struct CastSpeakers {
     /// Each group's members as its latest session listed them (C94).
     members: BTreeMap<DeviceId, Vec<GroupMember>>,
     streaming: bool,
+    /// From the PC's suspend notice to its resume: a connect failure
+    /// doesn't count toward turning the device off (S412).
+    asleep: bool,
     /// The playing track; `None` while it is being read, which holds a
     /// start back so the first `LOAD` names it (C54).
     track: Option<CastTrack>,
@@ -715,7 +636,6 @@ impl CastSpeakers {
             held: None,
             master: MasterGain::default(),
             master_position: 100.0,
-            eq_cut_db: 0.0,
             zones: BTreeMap::new(),
             unanswered: Vec::new(),
             attempt: None,
@@ -723,6 +643,7 @@ impl CastSpeakers {
             records: None,
             members: BTreeMap::new(),
             streaming: false,
+            asleep: false,
             track: Some(CastTrack::default()),
             sent: None,
             log,
@@ -1124,8 +1045,12 @@ impl CastSpeakers {
         memory: &DeviceMemory,
     ) -> CastInfo {
         let reported = self.volumes.get(&id);
-        let level = self
-            .own_of(id)
+        // Nothing reaches a fixed volume (C68), so zone × own level would be a guess.
+        let fixed = reported
+            .filter(|volume| volume.control_type == ControlType::Fixed)
+            .map(|volume| volume.level);
+        let level = fixed
+            .or_else(|| self.own_of(id))
             .or_else(|| reported.map(|volume| volume.level));
         let session = self.attempt.filter(|attempt| attempt.device == id);
         let status = session.map_or(CastStatus::Idle, |attempt| attempt.status);
@@ -1137,10 +1062,12 @@ impl CastSpeakers {
             offline: !self.entry(id).is_some_and(|entry| entry.online),
             enabled: self.enabled == Some(id),
             volume: (level.unwrap_or(1.0) * 100.0).max(0.0),
-            device_level: self
-                .held
-                .filter(|(held, _)| *held == id)
-                .map(|(_, level)| level)
+            device_level: fixed
+                .or_else(|| {
+                    self.held
+                        .filter(|(held, _)| *held == id)
+                        .map(|(_, level)| level)
+                })
                 .or_else(|| {
                     self.own_of(id)
                         .map(|own| device_level(self.zone_of(id), own))
@@ -1149,7 +1076,7 @@ impl CastSpeakers {
                 .map_or(100.0, |level| (level * 100.0).clamp(0.0, 100.0)),
             volume_known: level.is_some(),
             muted: reported.is_some_and(|volume| volume.muted),
-            volume_fixed: reported.is_some_and(|volume| volume.control_type == ControlType::Fixed),
+            volume_fixed: fixed.is_some(),
             volume_step: volume_step(reported),
             offset_ms: offset_ms(memory, &id),
             status,
@@ -1337,6 +1264,11 @@ impl CastSpeakers {
         Ok(())
     }
 
+    /// The PC is going to sleep, or it woke (S412).
+    pub fn set_asleep(&mut self, asleep: bool) {
+        self.asleep = asleep;
+    }
+
     /// Streaming started or stopped: the device that is on joins or leaves.
     pub fn set_streaming(&mut self, streaming: bool) {
         self.streaming = streaming;
@@ -1503,15 +1435,15 @@ impl CastSpeakers {
     }
 
     /// Takes the headroom cut `settings` make at the session rate, which the
-    /// master's gain gives back as far as unity allows (S26, S415).
+    /// session gives back under the master as far as unity allows, from the
+    /// first frame equalized with it (S26, S415).
     pub fn set_equalizer(&mut self, settings: &EqSettings) {
-        self.eq_cut_db = eq::headroom_cut_db(settings, f64::from(SESSION_RATE));
-        self.send_master_gain();
+        self.feed
+            .set_give_back(eq::headroom_cut_db(settings, f64::from(SESSION_RATE)));
     }
 
     fn send_master_gain(&self) {
-        let gain = gain_for_position(self.master_position);
-        self.master.set(eq::returned(gain, self.eq_cut_db).0);
+        self.master.set(gain_for_position(self.master_position));
     }
 
     /// The zone volume, 0 to 100, of every Cast device ID in a zone (S249),
@@ -1562,10 +1494,12 @@ impl CastSpeakers {
         if reported.is_some_and(|volume| volume.control_type == ControlType::Fixed) {
             return;
         }
-        if reported.is_some_and(|volume| answers_volume(level, volume)) {
-            // The device reports only changes, so this level gets no answer,
-            // and the latest level sent replaces whatever was still in flight.
-            self.unanswered.clear();
+        let ask = self.link.as_mut().map_or(0, |link| link.set_volume(level));
+        if self.unanswered.is_empty()
+            && reported.is_some_and(|volume| answers_volume(level, volume))
+        {
+            // The device reports only changes, so with nothing in flight this
+            // level gets no answer.
             self.levels.insert(device, own);
             if self
                 .requested
@@ -1573,18 +1507,14 @@ impl CastSpeakers {
             {
                 self.requested = None;
             }
-        } else if self.unanswered.last() != Some(&level) {
-            // The same level sent twice in a row gets one answer.
+        } else {
             if self.unanswered.len() == MAX_UNANSWERED {
                 self.unanswered.remove(0);
             }
-            self.unanswered.push(level);
+            self.unanswered.push((ask, level));
         }
         if let Some(attempt) = self.attempt.as_mut() {
             attempt.reported_mute = None;
-        }
-        if let Some(link) = self.link.as_mut() {
-            link.set_volume(level);
         }
     }
 
@@ -1605,7 +1535,7 @@ impl CastSpeakers {
         let answered = self
             .unanswered
             .iter()
-            .position(|&sent| answers_volume(sent, &volume));
+            .position(|&(_, sent)| answers_volume(sent, &volume));
         if let Some(index) = answered {
             self.unanswered.drain(..=index);
         }
@@ -1652,6 +1582,22 @@ impl CastSpeakers {
                 )
             });
             self.send_level(device, own);
+        }
+    }
+
+    /// The sender will get no answer to `ask` (C70, C104), so it stops
+    /// waiting.
+    fn volume_unanswered(&mut self, device: DeviceId, ask: u64) {
+        let Some(index) = self.unanswered.iter().position(|&(id, _)| id == ask) else {
+            return;
+        };
+        self.unanswered.remove(index);
+        if self.unanswered.is_empty()
+            && let Some((requested, own)) = self.requested
+            && requested == device
+        {
+            self.levels.insert(device, own);
+            self.requested = None;
         }
     }
 
@@ -1993,7 +1939,7 @@ impl CastSpeakers {
                     return;
                 }
                 // A group with no address yet waits for its records (C81).
-                if matches!(error, ConnectError::NoAddress) {
+                if matches!(error, ConnectError::NoAddress) || self.asleep {
                     return;
                 }
                 attempt.connect_failures += 1;
@@ -2011,6 +1957,9 @@ impl CastSpeakers {
                 }
                 self.volume_reported(device, volume, answers_mute)
             }
+            SessionEvent::VolumeUnanswered { ask, .. } => {
+                self.volume_unanswered(device, ask);
+            }
             SessionEvent::Diagnostics(diagnostics) => {
                 self.log
                     .log(|| format!("Cast diagnostics: {diagnostics:?}"));
@@ -2021,6 +1970,10 @@ impl CastSpeakers {
                 self.set_codec(to);
             }
             SessionEvent::Rebuffering => self.log.log(|| "Cast: the device ran dry".to_owned()),
+            SessionEvent::Paused => {
+                self.log.log(|| "Cast: the device was paused".to_owned());
+                self.set_status(CastStatus::Paused);
+            }
             SessionEvent::Stream(event) => self.log.log(|| format!("Cast stream: {event:?}")),
             SessionEvent::GroupMessage(kind) => self.log.log(|| format!("Cast group: {kind}")),
             SessionEvent::CertificateChanged { before, after } => self.log.log(|| {
@@ -2235,8 +2188,10 @@ pub mod tests {
             self.state().stops += 1;
         }
 
-        fn set_volume(&mut self, level: f64) {
-            self.state().volumes.push(level);
+        fn set_volume(&mut self, level: f64) -> u64 {
+            let mut state = self.state();
+            state.volumes.push(level);
+            state.volumes.len() as u64
         }
 
         fn set_muted(&mut self, muted: bool) {
@@ -2415,6 +2370,27 @@ pub mod tests {
         assert_eq!(status(&cast, KITCHEN), CastStatus::Idle);
     }
 
+    // covers: C113
+    #[test]
+    fn a_pause_on_the_device_shows_until_it_plays_again() {
+        let (fake, mut cast) = listed();
+        assert_eq!(cast.set_enabled(KITCHEN, true), Ok(()));
+        cast.set_streaming(true);
+        fake.report(playing(KITCHEN));
+        cast.poll();
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::Paused,
+        });
+        assert!(cast.poll().contains(&BackendEvent::CastChanged));
+        assert_eq!(status(&cast, KITCHEN), CastStatus::Paused);
+
+        fake.report(playing(KITCHEN));
+        cast.poll();
+        assert_eq!(status(&cast, KITCHEN), CastStatus::Playing);
+    }
+
     #[test]
     fn events_of_an_older_attempt_are_ignored() {
         let (fake, mut cast) = listed();
@@ -2538,7 +2514,7 @@ pub mod tests {
         assert_eq!(fake.state().started.len(), 1, "no retry once off");
     }
 
-    fn connect_failed(attempt: u64, device: &str, error: ConnectError) -> HostEvent {
+    pub fn connect_failed(attempt: u64, device: &str, error: ConnectError) -> HostEvent {
         HostEvent::Session {
             attempt: AttemptId(attempt),
             device: id(device),
@@ -3276,6 +3252,274 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 52.0);
     }
 
+    /// Reports each level's latest ask still awaited unanswered, as the
+    /// sender does the moment it replaces or sends that ask.
+    fn unanswered(fake: &FakeCast, cast: &mut CastSpeakers, levels: &[f64]) {
+        for &level in levels {
+            let latest = cast
+                .unanswered
+                .iter()
+                .rev()
+                .find(|&&(_, sent)| sent == level);
+            unanswered_ask(fake, cast, latest.map_or(0, |&(ask, _)| ask), level);
+        }
+    }
+
+    fn unanswered_ask(fake: &FakeCast, cast: &mut CastSpeakers, ask: u64, level: f64) {
+        fake.report(HostEvent::Session {
+            attempt: AttemptId(1),
+            device: id(KITCHEN),
+            event: SessionEvent::VolumeUnanswered { level, ask },
+        });
+        cast.poll();
+    }
+
+    // covers: C70, C104 (the TV answered 0.55 before the sender sent it again)
+    #[test]
+    fn a_drag_back_to_the_level_the_tv_reports_awaits_nothing_more() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, &[0.6]);
+        report(&fake, &mut cast, 0.55);
+        unanswered(&fake, &mut cast, &[0.55]);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70, C104 (the sender sent 0.55 twice, 0.6 never went out)
+    #[test]
+    fn a_level_sent_twice_while_unanswered_awaits_one_answer() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, &[0.6, 0.55]);
+        report(&fake, &mut cast, 0.55);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70, C104 (0.55 went out, the next three waited and were replaced, then 0.55 went out again)
+    #[test]
+    fn levels_a_drag_replaced_before_sending_never_hold_the_slider() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, &[0.6, 0.55, 0.6, 0.55]);
+        report(&fake, &mut cast, 0.55);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70, C104 (0.55, 0.6 and 0.55 went out, then 0.55 again; the second 0.6 never did)
+    #[test]
+    fn a_repeat_after_a_wobble_still_awaits_the_levels_sent_before_it() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, &[0.6, 0.55]);
+        for answer in [0.55, 0.6, 0.55] {
+            report(&fake, &mut cast, answer);
+            assert_eq!(shown(&cast, KITCHEN).round(), 55.0, "after {answer}");
+        }
+    }
+
+    /// Runs the host's volume asks through the sender's own channel (C70):
+    /// each ask reaches the channel at its moment in ms, what the channel
+    /// reports unanswered reaches the host, and the device, at `from`, answers
+    /// each level sent that changes its own. Returns the row after each answer.
+    fn through_the_channel(from: f64, asks: &[(u64, f64)]) -> (FakeCast, CastSpeakers, Vec<f64>) {
+        use audiosync_cast::channel::{Channel, Event, VOLUME_INTERVAL};
+        use audiosync_cast::ids::RequestIds;
+        use audiosync_cast::message::{CastMessage, Namespace, PLATFORM, SENDER};
+
+        fn status(id: u64, level: f64) -> CastMessage {
+            let mut message = CastMessage::json(
+                SENDER,
+                Namespace::Receiver,
+                &serde_json::json!({"type": "RECEIVER_STATUS", "requestId": id, "status": {"volume": {"level": level}}}),
+            );
+            message.source_id = PLATFORM.to_owned();
+            message
+        }
+        fn forward(channel: &mut Channel, fake: &FakeCast, cast: &mut CastSpeakers) {
+            while let Some(event) = channel.poll_event() {
+                if let Event::VolumeUnanswered { level, ask } = event {
+                    unanswered_ask(fake, cast, ask, level);
+                }
+            }
+        }
+        fn set_volumes(channel: &mut Channel) -> Vec<(u64, f64)> {
+            std::iter::from_fn(|| channel.poll_outbound())
+                .filter_map(|message| message.json_payload().ok())
+                .filter(|payload| payload["type"] == "SET_VOLUME")
+                .filter_map(|payload| {
+                    Some((
+                        payload["requestId"].as_u64()?,
+                        payload["volume"]["level"].as_f64()?,
+                    ))
+                })
+                .collect()
+        }
+
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, from);
+        let start = Instant::now();
+        let mut channel = Channel::open(start, RequestIds::starting_at(100));
+        channel.handle(start, status(100, from));
+        assert!(channel.is_ready());
+        let mut forwarded = sent(&fake).len();
+        let mut wire = Vec::new();
+        let mut last = start;
+        for &(ms, position) in asks {
+            last = start + Duration::from_millis(ms);
+            channel.tick(last);
+            cast.set_volume(KITCHEN, position);
+            for (ask, level) in (1..).zip(sent(&fake)).skip(forwarded) {
+                channel.ask_volume(last, ask, level).expect("ready");
+            }
+            forwarded = sent(&fake).len();
+            forward(&mut channel, &fake, &mut cast);
+            wire.extend(set_volumes(&mut channel));
+        }
+        let end = last + VOLUME_INTERVAL;
+        channel.tick(end);
+        forward(&mut channel, &fake, &mut cast);
+        wire.extend(set_volumes(&mut channel));
+        let mut device = from;
+        let mut rows = Vec::new();
+        for (id, level) in wire {
+            if level != device {
+                device = level;
+                channel.handle(end, status(id, level));
+                forward(&mut channel, &fake, &mut cast);
+                report(&fake, &mut cast, level);
+                rows.push(shown(&cast, KITCHEN).round());
+            }
+        }
+        (fake, cast, rows)
+    }
+
+    // covers: C70, C104 (0.98 and 1.0 go out, 1.0 asked again waits and 0.9 replaces it)
+    #[test]
+    fn a_level_asked_again_while_it_waits_is_awaited_again() {
+        let asks = [(0, 98.0), (100, 100.0), (150, 100.0), (180, 90.0)];
+        let (_, cast, rows) = through_the_channel(0.5, &asks);
+        assert_eq!(rows.last(), Some(&90.0), "{rows:?}");
+        assert_eq!(shown(&cast, KITCHEN).round(), 90.0);
+    }
+
+    // covers: C70, C104
+    #[test]
+    fn a_drag_through_the_senders_channel_never_holds_or_flickers_the_slider() {
+        let wobble = [
+            (0, 55.0),
+            (100, 60.0),
+            (200, 55.0),
+            (250, 60.0),
+            (280, 55.0),
+        ];
+        assert_eq!(through_the_channel(0.5, &wobble).2, [55.0, 55.0, 55.0]);
+        let one_interval = [(0, 55.0), (10, 60.0), (20, 55.0), (30, 60.0), (40, 55.0)];
+        let (fake, mut cast, rows) = through_the_channel(0.5, &one_interval);
+        assert_eq!(rows, [55.0]);
+        report(&fake, &mut cast, 0.6);
+        assert_eq!(shown(&cast, KITCHEN), 60.0, "the TV's remote");
+    }
+
+    // covers: C70, C104 (the TV reports 0.55; 0.7, 0.55, 0.8 and 0.55 go out before any echo)
+    #[test]
+    fn a_drag_away_and_back_to_the_reported_level_never_shows_a_level_it_passed() {
+        let drag = [
+            (0, 55.0),
+            (100, 70.0),
+            (200, 55.0),
+            (300, 80.0),
+            (400, 55.0),
+        ];
+        let (_, cast, rows) = through_the_channel(0.55, &drag);
+        assert_eq!(rows, [55.0; 4]);
+        assert_eq!(shown(&cast, KITCHEN).round(), 55.0);
+    }
+
+    // covers: C70, C104 (the TV answered 0.6, then 0.55 and 0.6 go out before any echo)
+    #[test]
+    fn asking_the_reported_level_again_keeps_the_level_in_flight_awaited() {
+        let (_, cast, rows) = through_the_channel(0.6, &[(0, 55.0), (100, 60.0)]);
+        assert_eq!(rows, [60.0, 60.0]);
+        assert_eq!(shown(&cast, KITCHEN), 60.0);
+    }
+
+    // covers: C70, C104 (0.6 goes out, 0.7 replaces the waiting 0.55, then 0.55 and 0.8 go out; the
+    // report on the replaced 0.55 arrives after the second 0.55 was asked)
+    #[test]
+    fn a_late_report_on_a_replaced_level_leaves_a_newer_ask_of_that_level_awaited() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        let replaced = sent(&fake).len() as u64 + 2;
+        for position in [60.0, 55.0, 70.0, 55.0, 80.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered_ask(&fake, &mut cast, replaced, 0.55);
+        for answer in [0.6, 0.7, 0.55, 0.8] {
+            report(&fake, &mut cast, answer);
+        }
+        assert_eq!(shown(&cast, KITCHEN), 80.0);
+    }
+
+    // covers: C70, C104 (0.3, 0.6 and 0.3 went out, 0.35 was replaced, then 0.3 went out again)
+    #[test]
+    fn a_repeat_of_a_level_sent_earlier_never_strands_the_slider_on_another() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [30.0, 60.0, 30.0, 35.0, 30.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        unanswered(&fake, &mut cast, &[0.35, 0.3]);
+        for answer in [0.3, 0.6, 0.3] {
+            report(&fake, &mut cast, answer);
+        }
+        assert_eq!(shown(&cast, KITCHEN).round(), 30.0);
+    }
+
+    // covers: C70 (0.55, 0.6 and 0.55 all went out)
+    #[test]
+    fn late_answers_to_a_drag_back_to_its_first_level_never_move_the_slider() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        report(&fake, &mut cast, 0.5);
+        for position in [55.0, 60.0, 55.0] {
+            cast.set_volume(KITCHEN, position);
+        }
+        for answer in [0.55, 0.6, 0.55] {
+            report(&fake, &mut cast, answer);
+            assert_eq!(shown(&cast, KITCHEN).round(), 55.0, "after {answer}");
+        }
+    }
+
     // covers: C70, C104 (a drag of 60 levels, 100 ms pacing, 400 ms echoes)
     #[test]
     fn a_long_fast_drag_ends_on_the_last_level_once_its_echoes_arrive() {
@@ -3394,7 +3638,7 @@ pub mod tests {
         assert_eq!(shown(&cast, KITCHEN), 40.0);
     }
 
-    // covers: C70, C105 (the device echoes a level sent twice in a row once)
+    // covers: C70, C105 (the sender reports the second of two levels sent in a row unanswered)
     #[test]
     fn a_level_resent_at_the_first_status_never_swallows_a_later_change_to_it() {
         let (fake, mut cast) = listed();
@@ -3403,6 +3647,7 @@ pub mod tests {
         cast.set_volume(KITCHEN, 30.0);
         report(&fake, &mut cast, 0.8);
         assert_eq!(sent(&fake), [0.3, 0.3], "re-sent at the first status");
+        unanswered(&fake, &mut cast, &[0.3]);
         report(&fake, &mut cast, 0.3);
         report(&fake, &mut cast, 0.7);
         assert_eq!(shown(&cast, KITCHEN), 70.0);
@@ -3438,6 +3683,56 @@ pub mod tests {
         let (held, heard) = bytes.split_at(48 * 4);
         assert!(held.iter().all(|byte| *byte == 0), "1 ms of silence first");
         assert!(heard.iter().any(|byte| *byte != 0));
+    }
+
+    // covers: S415, S71
+    #[test]
+    fn the_tap_gives_a_new_cut_back_from_the_first_frame_equalized_with_it() {
+        let curve = |gains_db| EqSettings {
+            enabled: true,
+            gains_db,
+            ..EqSettings::default()
+        };
+        let bass = curve(eq::PRESETS[1].gains_db);
+        let back = 10f32.powf(eq::headroom_cut_db(&bass, f64::from(SESSION_RATE)) as f32 / 20.0);
+        assert!(back > 1.5, "Bass Boost cuts {back}");
+        let (fake, mut cast) = listed();
+        let mut lease = cast.lease().expect("the tap");
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_master(50.0);
+        cast.set_equalizer(&curve([0.0; 10]));
+        cast.set_hold_back(2000.0);
+        let mut left = Vec::new();
+        // The capture's output for a tone the curve leaves at 0 dB: the cut
+        // alone lowers it.
+        let mut feed = |lease: &mut CastLease, level: f32, blocks: usize| {
+            for _ in 0..blocks {
+                lease.push(&[level; 480 * 2], 480);
+                let mut bytes = Vec::new();
+                fake.state().readers[0].read_into(&mut bytes, 4800);
+                left.extend(
+                    bytes
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|frame| f64::from(i16::from_le_bytes([frame[0], frame[1]]))),
+                );
+            }
+        };
+        feed(&mut lease, 0.25, 300);
+        cast.set_equalizer(&bass);
+        feed(&mut lease, 0.25 / back, 250);
+        let before = left[120_000..140_000].iter().sum::<f64>() / 20_000.0;
+        for (span, what) in [
+            (150_000..190_000, "held back from before the change"),
+            (245_000..264_000, "equalized with the new curve"),
+        ] {
+            for frame in span {
+                let db = 20.0 * (left[frame] / before).log10();
+                assert!(db.abs() < 0.5, "frame {frame}, {what}: {db} dB");
+            }
+        }
     }
 
     // covers: S189
@@ -3495,18 +3790,21 @@ pub mod tests {
     #[test]
     fn the_delay_line_passes_audio_on_unchanged_or_late_by_its_hold_back() {
         let ramp: Vec<f32> = (0..2000).map(|i| i as f32 / 4000.0).collect();
-        assert_eq!(delayed(&mut DelayLine::new(4800), &ramp, 0), ramp);
-        let out = delayed(&mut DelayLine::new(4800), &ramp, 100);
+        assert_eq!(
+            delayed(&mut DelayLine::new(4800, SESSION_RATE), &ramp, 0),
+            ramp
+        );
+        let out = delayed(&mut DelayLine::new(4800, SESSION_RATE), &ramp, 100);
         assert!(out[..200].iter().all(|sample| *sample == 0.0));
         assert_eq!(out[200..], ramp[..1800]);
-        let out = delayed(&mut DelayLine::new(50), &ramp, 100);
+        let out = delayed(&mut DelayLine::new(50, SESSION_RATE), &ramp, 100);
         assert_eq!(out[100..], ramp[..1900], "held back at most its length");
 
         let long: Vec<f32> = (0..(MAX_HOLD_BACK_FRAMES + 1000) * 2)
             .map(|i| (i % 4000) as f32 / 4000.0)
             .collect();
         let out = delayed(
-            &mut DelayLine::new(MAX_HOLD_BACK_FRAMES),
+            &mut DelayLine::new(MAX_HOLD_BACK_FRAMES, SESSION_RATE),
             &long,
             MAX_HOLD_BACK_FRAMES,
         );
@@ -3531,7 +3829,7 @@ pub mod tests {
                 [sample, sample]
             })
             .collect();
-        let mut line = DelayLine::new(48_000);
+        let mut line = DelayLine::new(48_000, SESSION_RATE);
         let mut out = delayed(&mut line, &sine[..9600], 0);
         out.extend(delayed(&mut line, &sine[9600..], 12_000));
         let largest = out
@@ -4827,5 +5125,19 @@ pub mod tests {
         fake.report(report(ControlType::Attenuation));
         cast.poll();
         assert!(!volume_fixed(&cast, KITCHEN));
+    }
+
+    // covers: C68, C104
+    #[test]
+    fn a_fixed_volume_row_shows_what_the_device_reports_whatever_the_zone() {
+        let (fake, mut cast) = listed();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 50.0)]));
+        fake.report(reported(KITCHEN, 1.0, ControlType::Fixed));
+        cast.poll();
+        cast.set_zones(BTreeMap::from([(KITCHEN.to_owned(), 40.0)]));
+        assert_eq!(row(&cast), 100.0);
+        assert_eq!(shown(&cast, KITCHEN), 100.0);
     }
 }

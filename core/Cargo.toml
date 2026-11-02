@@ -2,7 +2,7 @@
 name = "audiosync-core"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.99"
 license = "GPL-3.0-or-later"
 description = "Platform-independent audio core of AudioSync: delay ring buffer, drift correction, resampling, equalizer, volume and sync policy, plus the C interface of AudioSync's own AirPlay and Google Cast senders."
 repository = "https://github.com/yassersutojoyo/audiosync"
@@ -54,10 +54,9 @@ name = "eq"
 harness = false
 
 [lints.clippy]
-# The minimum Rust went from 1.85 to 1.88 with the AirPlay sender, which turns
-# on two lints for std APIs stabilized in between (`as_chunks`,
-# `is_multiple_of`). The audio code's `chunks_exact(2)` frame loops and
-# `% n == 0` checks stay as they are here; moving them is a change of its own.
+# Both lints push std APIs (`as_chunks`, `is_multiple_of`) over the audio
+# code's `chunks_exact(2)` frame loops and `% n == 0` checks; moving those is a
+# change of its own.
 chunks_exact_to_as_chunks = "allow"
 manual_is_multiple_of = "allow"
 

@@ -2,7 +2,7 @@
 name = "audiosync-remote"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.99"
 license = "GPL-3.0-or-later"
 description = "AudioSync's web remote: a small HTTP/1.1 server on the home network that serves one page and a JSON and Server-Sent Events API, so a paired phone can switch speakers, set their volume and delay and the master volume."
 repository = "https://github.com/yassersutojoyo/audiosync"

@@ -25,7 +25,7 @@ export enum SpeakerKind { airplay, airplay2, cast, built-in, headphones, bluetoo
 export enum SpeakerGroup { none, stereo-pair, home-theater }
 
 // Where a Google Cast speaker that is on is: idle while streaming is off.
-export enum CastState { idle, connecting, playing, reconnecting }
+export enum CastState { idle, connecting, playing, paused, reconnecting }
 
 // What went wrong with a Google Cast speaker, for its notice.
 export enum CastProblem { busy, not-responding, refused, blocked, taken-over, connection-lost, search-stopped }
@@ -58,6 +58,8 @@ export struct MixAppItem {
 
 // An output that is on but left out of Calibrate All by its kind.
 export struct LeftOutItem {
+    // Its endpoint ID.
+    id: string,
     name: string,
     // Why it is left out, or that it is included anyway.
     reason: string,
@@ -92,6 +94,12 @@ export struct HiddenItem {
     kind: string,
     // Listed now, only hidden; else it reads "not found".
     present: bool,
+}
+
+// An entry of a speaker's Move to Zone submenu.
+export struct ZoneChoice {
+    id: string,
+    name: string,
 }
 
 export struct SpeakerItem {
@@ -189,6 +197,8 @@ export struct SpeakerItem {
     // Its menu offers Move to Zone and Remove from Zone: every row but one
     // that plays as part of a stereo pair or home theater.
     zone-movable: bool,
+    // The zones its Move to Zone submenu lists.
+    move-zones: [ZoneChoice],
     // In a zone: what its row says in place of its own note (it plays as
     // part of a stereo pair, needs AirPlay 2, isn't found, stayed off);
     // empty otherwise.

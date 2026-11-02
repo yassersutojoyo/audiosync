@@ -665,7 +665,7 @@ fn no_text_promises_airplay() {
                 || line.contains("property <string> airplay-delay-")
                 || line
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
-                || line.contains("notice-retry-label: @tr(\"Start AirPlay again\")")
+                || line.contains("notice-retry-label: @tr(\"Retry, AirPlay\")")
                 || line.contains("return @tr(\"AirPlay stopped\");")
                 || line.contains(
                     "notice-airplay-ptp-ports-taken: @tr(\"Another app is using port 319 or 320,"
@@ -783,6 +783,65 @@ fn accessible_names_have_no_private_use_characters() {
     for line in strings.lines() {
         assert!(!has_private_use(line), "strings.slint: `{}`", line.trim());
     }
+}
+
+/// The English text inside the first `@tr("…")` of string or function `name`.
+fn tr_text<'a>(strings: &'a str, name: &str) -> &'a str {
+    let start = strings
+        .find(&format!("out property <string> {name}: @tr(\""))
+        .or_else(|| strings.find(&format!("function {name}(")))
+        .unwrap_or_else(|| panic!("strings.slint has {name}"));
+    let rest = &strings[start..];
+    let open = rest.find("@tr(\"").expect("a translatable string") + "@tr(\"".len();
+    let len = rest[open..].find('"').expect("a closed string");
+    &rest[open..open + len]
+}
+
+/// Whether `line` names `Strings.{name}` itself, not a longer name it prefixes.
+fn names_string(line: &str, name: &str) -> bool {
+    let pattern = format!("Strings.{name}");
+    line.match_indices(&pattern).any(|(i, _)| {
+        !line[i + pattern.len()..].starts_with(|c: char| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+/// Voice Access clicks a button by the words it shows, so a button's Narrator
+/// name starts with its visible text, and every button showing that text
+/// takes its Narrator name from the matching label.
+#[test]
+fn accessible_names_start_with_the_visible_text() {
+    let strings = include_str!("../ui/strings.slint");
+    let mut buttons = 0;
+    for (text, label) in [
+        ("notice-retry", "notice-retry-label"),
+        ("notice-open-privacy", "notice-open-privacy-label"),
+        ("leave-out", "leave-out-label"),
+        ("include-anyway", "include-anyway-label"),
+        ("calibrate-all-again", "calibrate-all-again-label"),
+        ("calibrate-with-microphone", "calibrate-label"),
+    ] {
+        for (file, source) in UI_FILES {
+            for block in blocks(source, "Button") {
+                let lines: Vec<&str> = block.lines().map(str::trim).collect();
+                if !lines
+                    .iter()
+                    .any(|l| l.starts_with("text:") && names_string(l, text))
+                {
+                    continue;
+                }
+                buttons += 1;
+                assert!(
+                    lines
+                        .iter()
+                        .any(|l| l.starts_with("accessible-label:") && names_string(l, label)),
+                    "{file}: a {text} button without accessible-label {label}:\n{block}"
+                );
+            }
+        }
+        let (text, label) = (tr_text(strings, text), tr_text(strings, label));
+        assert!(label.starts_with(text), "`{label}` starts with `{text}`");
+    }
+    assert_eq!(buttons, 8, "the check found the buttons");
 }
 
 /// Retry on the notice that AirPlay stopped: the button shows only on a
@@ -944,7 +1003,7 @@ fn linux_texts_name_no_windows_places() {
             "Volume mixer",
             "Start menu",
             "notification area",
-            "quick settings",
+            "tray panel",
         ] {
             assert!(!text.contains(windows_only), "{windows_only} in: {text}");
         }
@@ -964,6 +1023,16 @@ fn windows_texts_with_a_linux_twin_are_unchanged() {
             strings.contains(&format!("@tr(\"{text}\"")),
             "a Windows text changed: {text}"
         );
+    }
+}
+
+/// Pairing texts ask for the code a speaker shows, the word its row uses,
+/// never a PIN, as on the Mac.
+#[test]
+fn no_text_asks_for_a_pin() {
+    let strings = include_str!("../ui/strings.slint");
+    for line in strings.lines().filter(|line| line.contains("@tr(")) {
+        assert!(!line.contains("PIN"), "strings.slint: `{}`", line.trim());
     }
 }
 
@@ -1304,16 +1373,20 @@ fn a_flyout_row_shows_the_speakers_note() {
     let note = lines
         .iter()
         .position(|line| {
-            *line
-                == "if Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name)) != \"\": QuietText {"
+            *line == "if Strings.speaker-caption(root.caption, root.note) != \"\": QuietText {"
         })
         .expect("FlyoutRow shows a QuietText while its state has a note");
     assert_eq!(
         lines.get(note + 1).copied(),
-        Some(
-            "text: Strings.speaker-caption(root.caption, Strings.row-note(root.state, root.name));"
-        ),
+        Some("text: Strings.speaker-caption(root.caption, root.note);"),
         "the QuietText shows the note"
+    );
+    assert_eq!(
+        include_str!("../ui/flyout.slint")
+            .matches("note: Strings.speaker-note(speaker);")
+            .count(),
+        3,
+        "every speaker row takes the main window's note"
     );
 }
 
@@ -1475,8 +1548,8 @@ fn only_a_zone_headers_badge_switches_the_zone() {
     assert!(header[badge..].find("root.toggled();").unwrap() < 800);
     assert_eq!(
         header.matches("TouchArea {").count(),
-        3,
-        "the box, the name and the arrow"
+        4,
+        "the box, the name, the count line and the arrow"
     );
     // A FocusScope that takes the focus on click accepts the press (Slint
     // 1.18), so the box's TouchArea would never see a click on the name.
@@ -1538,4 +1611,20 @@ fn an_equalizer_turned_off_fades_only_the_sliders() {
         sliders,
         "nothing but the sliders fades in equalizer.slint"
     );
+}
+
+/// Narrator calls the calibration results' Undo button "Undo the new
+/// delays", the label VoiceOver reads on the Mac; the button still shows
+/// Undo.
+#[test]
+fn the_calibration_undo_button_is_labeled_as_on_the_mac() {
+    let strings = include_str!("../ui/strings.slint");
+    assert!(strings.contains(r#"calibrate-all-undo-label: @tr("Undo the new delays");"#));
+    let main = include_str!("../ui/main.slint");
+    let start = main
+        .find("undo-button := Button {")
+        .expect("the Undo button");
+    let button = &main[start..start + 400];
+    assert!(button.contains("text: Strings.calibrate-all-undo;"));
+    assert!(button.contains("accessible-label: Strings.calibrate-all-undo-label;"));
 }

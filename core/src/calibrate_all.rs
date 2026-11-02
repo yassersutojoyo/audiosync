@@ -151,6 +151,7 @@ pub enum EndReason {
     SpeakersChanged,
     SpeakerTurnedOff,
     SourceChanged,
+    DelaysChanged,
 }
 
 /// Which recording a step asks for.

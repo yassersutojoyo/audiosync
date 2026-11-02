@@ -139,9 +139,9 @@ fn mix_trees(root_pids: &[u32], own_pid: u32, processes: &ProcessTable) -> Vec<A
 }
 
 /// The capture for an "only these" mix as it plays: its top processes
-/// `root_pids` that still run, and every app with an audio session running
-/// one of `executables` (an instance started later, or a second one). Fails
-/// as [`decide_capture`] does when none of them runs.
+/// `root_pids` that still run one of `executables`, and every app with an
+/// audio session running one of them (an instance started later, or a
+/// second one). Fails as [`decide_capture`] does when none of them runs.
 pub fn decide_apps_capture(
     processes: &ProcessTable,
     session_pids: &[u32],
@@ -149,17 +149,22 @@ pub fn decide_apps_capture(
     root_pids: &[u32],
     executables: &[String],
 ) -> Result<CaptureTarget, BackendError> {
-    let mut roots = root_pids.to_vec();
-    roots.extend(session_apps(
-        processes,
-        session_pids,
-        own_pid,
-        |executable| {
-            executables
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(executable))
-        },
-    ));
+    let chosen = |executable: &str| {
+        executables
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(executable))
+    };
+    // A process ID a chosen app held may have gone to another app since.
+    let mut roots: Vec<u32> = root_pids
+        .iter()
+        .copied()
+        .filter(|&pid| {
+            processes
+                .get(pid)
+                .is_some_and(|entry| chosen(&entry.executable))
+        })
+        .collect();
+    roots.extend(session_apps(processes, session_pids, own_pid, chosen));
     decide_mix(&roots, own_pid, processes)
 }
 

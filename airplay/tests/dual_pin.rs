@@ -265,7 +265,21 @@ impl Rig {
             .seen
             .iter()
             .filter_map(|(_, event)| match event {
-                SenderEvent::PathLog { key, line } if *key == self.key => Some(line.clone()),
+                SenderEvent::PathLog { key, line, .. } if *key == self.key => Some(line.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Which of [`Rig::path_logs`] are marked as forgets (P218).
+    fn forgets(&self) -> Vec<bool> {
+        self.events
+            .seen
+            .iter()
+            .filter_map(|(_, event)| match event {
+                SenderEvent::PathLog {
+                    key, remembered, ..
+                } if *key == self.key => Some(remembered.is_none()),
                 _ => None,
             })
             .collect()
@@ -574,6 +588,7 @@ fn a_goodbye_for_the_raop_record_forgets_the_outcome() {
         "{logs:?}"
     );
     assert!(logs[2].contains("remembered"), "{logs:?}");
+    assert_eq!(rig.forgets(), [false, true, false]);
     rig.sender.shutdown();
 }
 

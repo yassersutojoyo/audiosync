@@ -30,5 +30,6 @@ extension AppDelegate {
 
     private func publishDeviceVolumes() {
         if appModel.deviceVolumes != deviceVolumes.hints { appModel.deviceVolumes = deviceVolumes.hints }
+        followCalibrateVolume()
     }
 }

@@ -144,6 +144,12 @@ pub const CAST_EVENT_GROUP_LOG: i32 = 18;
 /// The device's certificate changed since its last connect, for the debug
 /// log: `detail` is "<before> to <after>" (C21).
 pub const CAST_EVENT_CERTIFICATE_CHANGED: i32 = 19;
+/// A level asked for that no status will answer, in `level`, once per ask,
+/// which `ask` names (C70, C104).
+pub const CAST_EVENT_VOLUME_UNANSWERED: i32 = 20;
+/// Someone paused the device itself; [`CAST_EVENT_PLAYING`] follows once
+/// its next `PLAYING` loaded the stream again (C113).
+pub const CAST_EVENT_PAUSED: i32 = 21;
 
 /// How an attempt ended ([`AscCastEvent::reason`]): the sender's own
 /// teardown (C87).
@@ -212,7 +218,8 @@ pub struct AscCastDevice {
     pub event: i32,
     /// 32 hex digits, or `manual:<address>`.
     pub id: *const c_char,
-    /// The `fn` TXT value; "" when it has none.
+    /// The `fn` TXT value, else the full service name (C13); "" for a gone
+    /// device or an address no browse found.
     pub name: *const c_char,
     /// The `md` TXT value; "" when it has none.
     pub model: *const c_char,
@@ -266,6 +273,9 @@ pub struct AscCastEvent {
     pub answers_mute: bool,
     /// The device's volume step; 0 when it reports none (C69).
     pub step: f64,
+    /// A volume-unanswered event's ask id, as [`asc_cast_set_volume`]
+    /// returned it (C70).
+    pub ask: u64,
     /// Diagnostics: dropped audio plus rebuffering since the `LOAD` (C79).
     pub drift_ms: f64,
     /// Diagnostics: audio waiting in the sender's queue (C64).
@@ -324,6 +334,7 @@ struct Pending {
     has_level: bool,
     answers_mute: bool,
     step: f64,
+    ask: u64,
     drift_ms: f64,
     queued_ms: f64,
     underrun_frames: u64,
@@ -348,6 +359,7 @@ impl Pending {
             has_level: false,
             answers_mute: false,
             step: 0.0,
+            ask: 0,
             drift_ms: 0.0,
             queued_ms: 0.0,
             underrun_frames: 0,
@@ -396,6 +408,9 @@ struct Shared {
     /// How many frames the input holds its audio back
     /// ([`asc_cast_set_hold_back`]).
     hold_back: AtomicUsize,
+    /// The equalizer's headroom cut as a linear factor
+    /// ([`asc_cast_set_equalizer`]).
+    give_back: AtomicU64,
 }
 
 /// A writer from `Box::into_raw` that [`Shared::attach`] swapped out.
@@ -418,6 +433,7 @@ impl Shared {
             dead: AtomicBool::new(false),
             at: OnceLock::new(),
             hold_back: AtomicUsize::new(0),
+            give_back: AtomicU64::new(1.0f64.to_bits()),
         }
     }
 
@@ -458,6 +474,17 @@ impl Shared {
         unsafe { &*writer }.write_f32(samples)
     }
 
+    /// Capture thread, inside a write: the running session gives the cut
+    /// back from the frame `delay` frames after its next one (S26, S415).
+    fn give_back(&self, delay: usize) {
+        let writer = self.writer.load(Ordering::SeqCst);
+        if !writer.is_null() {
+            let back = f64::from_bits(self.give_back.load(Ordering::Relaxed));
+            // SAFETY: as in `write`.
+            unsafe { &*writer }.give_back(back, delay);
+        }
+    }
+
     /// A call on this thread caught a panic: the handle is dead, and the
     /// location the panic hook noted for it is kept.
     fn panicked(&self) {
@@ -496,9 +523,6 @@ pub struct AscCast {
     master: MasterGain,
     /// The master position ([`asc_cast_set_master`]).
     master_position: f64,
-    /// The equalizer's headroom cut in dB, given back under the master
-    /// ([`asc_cast_set_equalizer`], S26).
-    eq_cut_db: f64,
     input_taken: bool,
     list: DeviceList,
     announcements: Announcements,
@@ -663,11 +687,9 @@ fn attempt_number(attempt: AttemptId) -> u64 {
 }
 
 impl AscCast {
-    /// Gives every session the master's gain with the equalizer's headroom
-    /// cut given back as far as unity allows (S26, S415).
+    /// Gives every session the master's gain (S415).
     fn send_master_gain(&self) {
-        let gain = gain_for_position(self.master_position);
-        self.master.set(eq::returned(gain, self.eq_cut_db).0);
+        self.master.set(gain_for_position(self.master_position));
     }
 
     /// A call panicked, or the worker thread ended.
@@ -709,7 +731,10 @@ impl AscCast {
         };
         if let Some(entry) = entry {
             if let Some(device) = &entry.device {
-                change.name = device.name.clone().unwrap_or_default();
+                change.name = device
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| device.instance.clone());
                 change.model = device.model.clone().unwrap_or_default();
                 if device.kind == DeviceKind::Group {
                     change.flags |= CAST_FLAG_GROUP;
@@ -1051,6 +1076,7 @@ impl AscCast {
             has_level: pending.has_level,
             answers_mute: pending.answers_mute,
             step: pending.step,
+            ask: pending.ask,
             drift_ms: pending.drift_ms,
             queued_ms: pending.queued_ms,
             underrun_frames: pending.underrun_frames,
@@ -1074,6 +1100,7 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending
         }
         SessionEvent::Rebuffering => Pending::new(CAST_EVENT_REBUFFERING),
+        SessionEvent::Paused => Pending::new(CAST_EVENT_PAUSED),
         SessionEvent::Volume(volume, answers_mute) => {
             let mut pending = Pending::new(CAST_EVENT_VOLUME);
             pending.level = volume.level;
@@ -1082,6 +1109,12 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending.has_level = volume.has_level;
             pending.answers_mute = answers_mute;
             pending.step = volume.step_interval.unwrap_or(0.0);
+            pending
+        }
+        SessionEvent::VolumeUnanswered { level, ask } => {
+            let mut pending = Pending::new(CAST_EVENT_VOLUME_UNANSWERED);
+            pending.level = level;
+            pending.ask = ask;
             pending
         }
         SessionEvent::ConnectFailed { error, retry_in } => {
@@ -1231,7 +1264,6 @@ fn create_with(memory_json: &str, open_browser: OpenBrowser) -> *mut AscCast {
             shared: Arc::new(Shared::new()),
             master: MasterGain::default(),
             master_position: 100.0,
-            eq_cut_db: 0.0,
             input_taken: false,
             list: DeviceList::new(),
             announcements: Announcements::default(),
@@ -1578,21 +1610,27 @@ unsafe fn with_session(cast: *mut AscCast, send: impl FnOnce(&CastHost)) -> bool
 }
 
 /// Sets the device's volume, 0 to 1, clamped (C65, C67). The level shown is
-/// the one volume events report (C69, C70); a host dragging a slider sends
-/// at most one every 100 ms. False, sending nothing, for a null or dead
-/// handle, a level that isn't finite, or when no session runs; a refusal
-/// (a locked volume, C68) comes as a command-failed event.
+/// the one volume events report (C69, C70); the sender sends at most one
+/// every 100 ms and reports each level it won't get an answer for, so a
+/// host passes every level asked for. Returns the ask id that a
+/// volume-unanswered event on this ask names; 0, sending nothing, for a null
+/// or dead handle, a level that isn't finite, or when no session runs; a
+/// refusal (a locked volume, C68) comes as a command-failed event.
 ///
 /// # Safety
 ///
 /// `cast` is null or a live handle, called under the threading contract.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn asc_cast_set_volume(cast: *mut AscCast, level: f64) -> bool {
+pub unsafe extern "C" fn asc_cast_set_volume(cast: *mut AscCast, level: f64) -> u64 {
     if !level.is_finite() {
-        return false;
+        return 0;
     }
+    let mut ask = 0;
     // SAFETY: as the caller's.
-    unsafe { with_session(cast, |host| host.set_volume(level.clamp(0.0, 1.0))) }
+    unsafe {
+        with_session(cast, |host| ask = host.set_volume(level.clamp(0.0, 1.0)));
+    }
+    ask
 }
 
 /// Mutes or unmutes the device, apart from its level (C65). False, sending
@@ -1641,8 +1679,9 @@ pub unsafe extern "C" fn asc_cast_set_master(cast: *mut AscCast, master: f64) {
 }
 
 /// Takes the headroom cut the equalizer makes with `enabled` and `gains_db`
-/// at [`CAST_RATE`], which the master's gain gives back as far as unity
-/// allows (S26, S415). Returns false when `cast` or `gains_db` is null.
+/// at [`CAST_RATE`], which each session gives back under the master as far
+/// as unity allows, from the first frame equalized with it (S26, S415).
+/// Returns false when `cast` or `gains_db` is null.
 ///
 /// # Safety
 ///
@@ -1667,8 +1706,10 @@ pub unsafe extern "C" fn asc_cast_set_equalizer(
     // SAFETY: as the caller's.
     unsafe {
         live(cast, false, |cast| {
-            cast.eq_cut_db = cut;
-            cast.send_master_gain();
+            let back = 10f64.powf(cut / 20.0);
+            cast.shared
+                .give_back
+                .store(back.to_bits(), Ordering::Relaxed);
             true
         })
     }
@@ -2039,6 +2080,7 @@ impl Feed {
         }
         let mut taken = 0;
         let target = shared.hold_back.load(Ordering::Relaxed);
+        shared.give_back(target);
         let (resampler, resampled, delay) =
             (&mut self.resampler, &mut self.resampled, &mut self.delay);
         self.fade.process(block, |piece| {
@@ -2304,7 +2346,7 @@ mod tests {
 
     // covers: S26, S415
     #[test]
-    fn the_master_gain_gives_the_equalizer_cut_back_under_the_master() {
+    fn the_master_sets_the_gain_and_the_equalizer_the_give_back() {
         let gains = [5.0, 4.0, 1.0, 0.0, -2.0, 1.0, 0.0, 1.0, 4.0, 5.0];
         let back = 10f64.powf(eq::cascade_peak_db(&gains, 48_000.0) / 20.0);
         let mut handle = create();
@@ -2312,11 +2354,14 @@ mod tests {
         let gain = |enabled: bool, master: f64| unsafe {
             asc_cast_set_master(handle, master);
             assert!(asc_cast_set_equalizer(handle, enabled, gains.as_ptr()));
-            inside(handle).master.get()
+            let given = inside(handle).shared.give_back.load(Ordering::Relaxed);
+            (inside(handle).master.get(), f64::from_bits(given))
         };
-        assert!((gain(true, 50.0) - 0.125 * back).abs() < 1e-9);
-        assert_eq!(gain(false, 50.0), 0.125);
-        assert_eq!(gain(true, 100.0), 1.0, "unity keeps the cut");
+        let (master, given) = gain(true, 50.0);
+        assert_eq!(master, 0.125);
+        assert!((given - back).abs() < 1e-9);
+        assert_eq!(gain(false, 50.0), (0.125, 1.0));
+        assert_eq!(gain(true, 100.0).0, 1.0, "unity keeps the cut");
         // SAFETY: null pointers are part of the contract; destroyed once.
         unsafe {
             assert!(!asc_cast_set_equalizer(handle, true, ptr::null()));
@@ -2325,6 +2370,74 @@ mod tests {
                 true,
                 gains.as_ptr()
             ));
+            asc_cast_destroy(&mut handle);
+        }
+    }
+
+    // covers: S415, S71
+    #[test]
+    fn a_curve_change_gives_the_cut_back_from_the_first_frame_equalized_with_it() {
+        let flat = [0.0; BAND_COUNT];
+        let bass = eq::PRESETS[1].gains_db;
+        let settings = EqSettings {
+            enabled: true,
+            gains_db: bass,
+            ..EqSettings::default()
+        };
+        let back = 10f32.powf(eq::headroom_cut_db(&settings, f64::from(CAST_RATE)) as f32 / 20.0);
+        assert!(back > 1.5, "Bass Boost cuts {back}");
+        let mut handle = create();
+        // SAFETY: a live handle, used by this thread only.
+        let mut input = unsafe { asc_cast_take_input(handle) };
+        let (writer, reader) = audio_ring(RING_FRAMES);
+        inside(handle).shared.attach(Some(writer));
+        let mut reader = reader.with_master(inside(handle).master.clone());
+        // SAFETY: a live handle and input, used by this thread only; 10 doubles.
+        unsafe {
+            asc_cast_set_master(handle, 50.0);
+            assert!(asc_cast_set_equalizer(handle, true, flat.as_ptr()));
+            asc_cast_set_hold_back(handle, 2000.0);
+            assert!(asc_cast_input_set_rate(input, 48_000.0));
+        }
+        let mut left = Vec::new();
+        // The capture's output for a tone the curve leaves at 0 dB: the cut
+        // alone lowers it.
+        let mut feed = |level: f32, blocks: usize| {
+            let block = vec![level; 480 * 2];
+            for _ in 0..blocks {
+                // SAFETY: a live input; `block` holds 480 stereo frames.
+                unsafe { asc_cast_input_write(input, block.as_ptr(), 480) };
+                let mut bytes = Vec::new();
+                reader.read_into(&mut bytes, RING_FRAMES);
+                left.extend(
+                    bytes
+                        .chunks_exact(4)
+                        .map(|frame| f64::from(i16::from_le_bytes([frame[0], frame[1]]))),
+                );
+            }
+        };
+        feed(0.25, 300);
+        // SAFETY: a live handle; 10 doubles.
+        assert!(unsafe { asc_cast_set_equalizer(handle, true, bass.as_ptr()) });
+        feed(0.25 / back, 250);
+        let before = left[120_000..140_000].iter().sum::<f64>() / 20_000.0;
+        let db = |sample: f64| 20.0 * (sample / before).log10();
+        for (span, what) in [
+            (150_000..190_000, "held back from before the change"),
+            (245_000..264_000, "equalized with the new curve"),
+        ] {
+            for frame in span {
+                assert!(
+                    db(left[frame]).abs() < 0.5,
+                    "frame {frame}, {what}: {} dB",
+                    db(left[frame])
+                );
+            }
+        }
+        inside(handle).shared.attach(None);
+        // SAFETY: destroyed once, by this thread.
+        unsafe {
+            asc_cast_input_destroy(&mut input);
             asc_cast_destroy(&mut handle);
         }
     }
@@ -2439,6 +2552,7 @@ mod tests {
             has_level: false,
             answers_mute: false,
             step: 0.0,
+            ask: 0,
             drift_ms: 0.0,
             queued_ms: 0.0,
             underrun_frames: 0,
@@ -2562,6 +2676,21 @@ mod tests {
         }
     }
 
+    // CAST_SPEC: C70
+    #[test]
+    fn an_unanswered_volume_event_names_its_ask() {
+        let handle = create();
+        let unanswered = SessionEvent::VolumeUnanswered { level: 0.4, ask: 7 };
+        let pending = session_event(unanswered, |_| {});
+        inside(handle).events.push_back(pending);
+        let mut event = blank_event();
+        // SAFETY: a live handle, used by this thread only.
+        assert!(unsafe { asc_cast_next_event(handle, &mut event) });
+        assert_eq!(event.kind, CAST_EVENT_VOLUME_UNANSWERED);
+        assert_eq!((event.level, event.ask), (0.4, 7));
+        destroy(handle);
+    }
+
     // CAST_SPEC: C21
     #[test]
     fn a_changed_certificate_reaches_the_app_as_a_log_line() {
@@ -2610,7 +2739,7 @@ mod tests {
             assert_eq!(asc_cast_start(no_handle, id, &mut refused), 0);
             assert_eq!(refused, CAST_REFUSED_CLOSED);
             asc_cast_stop(no_handle);
-            assert!(!asc_cast_set_volume(no_handle, 0.5));
+            assert_eq!(asc_cast_set_volume(no_handle, 0.5), 0);
             assert!(!asc_cast_set_muted(no_handle, true));
             assert!(!asc_cast_step_volume(no_handle, true));
             asc_cast_set_master(no_handle, 50.0);
@@ -2645,7 +2774,7 @@ mod tests {
             assert!(!asc_cast_add_device(handle, c"not an address".as_ptr()));
             assert!(!asc_cast_remove_device(handle, ptr::null()));
             assert!(!asc_cast_remove_device(handle, c"\xff".as_ptr()));
-            assert!(!asc_cast_set_volume(handle, f64::NAN));
+            assert_eq!(asc_cast_set_volume(handle, f64::NAN), 0);
             assert!(!asc_cast_set_artwork(handle, ptr::null(), 3));
             assert!(!asc_cast_set_metadata(
                 handle,
@@ -2673,7 +2802,7 @@ mod tests {
         // Nothing plays: volume, mute, step and Resync send nothing.
         // SAFETY: as above.
         unsafe {
-            assert!(!asc_cast_set_volume(handle, 0.5));
+            assert_eq!(asc_cast_set_volume(handle, 0.5), 0);
             assert!(!asc_cast_set_muted(handle, false));
             assert!(!asc_cast_step_volume(handle, false));
             assert!(!asc_cast_resync(handle));
@@ -2752,6 +2881,22 @@ mod tests {
         assert_eq!(refused, CAST_REFUSED_NONE);
         // SAFETY: a live handle.
         unsafe { asc_cast_stop(handle) };
+        destroy(handle);
+    }
+
+    // CAST_SPEC: C13
+    #[test]
+    fn a_device_without_a_friendly_name_is_listed_under_its_instance_name() {
+        let handle = create();
+        let mut kitchen = record(KITCHEN, "Kitchen", DEVICE_PORT, Ipv4Addr::new(192, 0, 2, 5));
+        kitchen.txt.retain(|entry| !entry.starts_with(b"fn="));
+        let instance = kitchen.fullname.clone();
+        browse(handle, vec![BrowseEvent::Resolved(kitchen)], false);
+        let names: Vec<String> = devices(handle)
+            .into_iter()
+            .map(|found| found.name)
+            .collect();
+        assert_eq!(names, [instance]);
         destroy(handle);
     }
 
@@ -3690,7 +3835,12 @@ mod tests {
         assert!(start(handle, &id).0 > 0);
         // SAFETY: a live handle, used by this thread only.
         unsafe {
-            assert!(asc_cast_set_volume(handle, 0.4));
+            // C70: each ask gets its own id, which a report on it names.
+            let asks = [
+                asc_cast_set_volume(handle, 0.4),
+                asc_cast_set_volume(handle, 0.4),
+            ];
+            assert!(asks[0] > 0 && asks[1] > 0 && asks[0] != asks[1]);
             assert!(asc_cast_set_muted(handle, true));
             assert!(asc_cast_step_volume(handle, true));
             assert!(asc_cast_resync(handle));

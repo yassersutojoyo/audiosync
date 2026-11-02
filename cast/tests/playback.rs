@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::error::{ConnectError, ReconnectPacer};
 use audiosync_cast::group::GroupRecords;
-use audiosync_cast::media::{IdleReason, MediaError, Metadata};
+use audiosync_cast::media::{IdleReason, MediaError, Metadata, VolumeError};
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
 use audiosync_cast::session::{
     CastSession, Diagnostics, SessionConfig, SessionEnd, SessionError, SessionEvent,
@@ -864,6 +864,96 @@ fn underrun_silence_counts_from_the_latest_load() {
     device.join();
 }
 
+// covers: C113
+#[test]
+fn a_pause_on_the_device_loads_nothing_and_its_play_starts_at_the_newest_audio() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        1,
+        "PAUSED",
+        None,
+    )));
+    run_until(&mut session, Duration::from_secs(3), |event| {
+        matches!(event, SessionEvent::Paused)
+    });
+    session.run_for(Duration::from_millis(500));
+    while session.poll_event().is_some() {}
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 1, "a pause loads nothing");
+
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        1,
+        "PLAYING",
+        None,
+    )));
+    run_until(&mut session, Duration::from_secs(5), |event| {
+        matches!(event, SessionEvent::Playing)
+    });
+    assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2, "the play loads again");
+    assert_eq!(device.fetches().len(), 2, "from a new fetch at the newest");
+    session.run_for(Duration::from_millis(500));
+    assert_eq!(
+        count(&device, NS_MEDIA, "LOAD"),
+        2,
+        "the reload's own PLAYING loads nothing"
+    );
+    session.stop();
+    device.join();
+}
+
+// covers: C81, C113
+#[test]
+fn a_reconnect_while_the_device_stays_paused_reports_the_pause_again() {
+    let device = FakeDevice::start(Behavior {
+        on_media_status: OnMediaStatus::Paused,
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    device.send(Command::Send(media_status(
+        "transport-1",
+        0,
+        1,
+        "PAUSED",
+        None,
+    )));
+    run_until(&mut session, Duration::from_secs(3), |event| {
+        matches!(event, SessionEvent::Paused)
+    });
+
+    device.send(Command::DropConnection);
+    let mut seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    session.run_for(Duration::from_millis(500));
+    seen.extend(std::iter::from_fn(|| session.poll_event()));
+    let after: Vec<_> = seen
+        .iter()
+        .skip_while(|event| !matches!(event, SessionEvent::Recovered { .. }))
+        .collect();
+    assert!(
+        matches!(
+            after[..],
+            [
+                SessionEvent::Recovered { relaunched: false },
+                SessionEvent::Paused,
+                ..
+            ]
+        ),
+        "{seen:?}"
+    );
+    assert_eq!(
+        count(&device, NS_MEDIA, "LOAD"),
+        1,
+        "still paused, no reload"
+    );
+    session.stop();
+    device.join();
+}
+
 // covers: C83
 #[test]
 fn a_failed_resync_reloads_once_then_ends_with_its_reason() {
@@ -1146,6 +1236,59 @@ fn a_level_waiting_for_its_interval_reaches_the_device_after_a_reconnect() {
         session.run_for(Duration::from_millis(50));
     }
     assert_eq!(device.connection_count(), 2);
+    session.stop();
+    device.join();
+}
+
+// covers: C68, C70, C81
+#[test]
+fn a_waiting_level_the_reconnected_device_refuses_is_reported_unanswered() {
+    let device = FakeDevice::start(Behavior::default());
+    let (mut session, _feed) = start(&device);
+    session.set_volume_interval(Duration::from_secs(60));
+    session.set_volume(0.3).expect("sent");
+    run_until(
+        &mut session,
+        Duration::from_secs(3),
+        |event| matches!(event, SessionEvent::Volume(volume, _) if (volume.level - 0.3).abs() < 1e-9),
+    );
+    session.set_volume(0.5).expect("waits for the interval");
+    device.send(Command::FixVolume);
+    device.send(Command::DropConnection);
+    assert!(device.wait_for_hangup(HANG_GUARD));
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        matches!(event, SessionEvent::Recovered { .. })
+    });
+    assert!(
+        seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::VolumeUnanswered { level, .. } if (*level - 0.5).abs() < 1e-9
+        )),
+        "{seen:?}"
+    );
+    session.stop();
+    device.join();
+}
+
+// covers: C68, C70
+#[test]
+fn a_level_a_fixed_volume_refuses_is_reported_unanswered_under_its_ask() {
+    let device = FakeDevice::start(Behavior {
+        volume: json!({"level": 0.5, "controlType": "fixed"}),
+        ..Behavior::default()
+    });
+    let (mut session, _feed) = start(&device);
+    assert_eq!(session.ask_volume(7, 0.5), Err(VolumeError::Fixed));
+    let reports: Vec<_> = std::iter::from_fn(|| session.poll_event())
+        .filter(|event| matches!(event, SessionEvent::VolumeUnanswered { .. }))
+        .collect();
+    assert!(
+        matches!(
+            reports[..],
+            [SessionEvent::VolumeUnanswered { ask: 7, level }] if level == 0.5
+        ),
+        "{reports:?}"
+    );
     session.stop();
     device.join();
 }

@@ -3,6 +3,7 @@
 //! out. [`crate::client`] runs it over TLS.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -33,6 +34,14 @@ pub const STOP_STEP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 /// The shortest gap between two `SET_VOLUME` levels while dragging (C70).
 pub const VOLUME_INTERVAL: Duration = Duration::from_millis(100);
+
+static NEXT_VOLUME_ASK: AtomicU64 = AtomicU64::new(1);
+
+/// A volume ask id no other ask in this process has, so a report on one
+/// ask never matches another of the same level (C70).
+pub fn new_volume_ask() -> u64 {
+    NEXT_VOLUME_ASK.fetch_add(1, Ordering::Relaxed)
+}
 
 /// What the channel reports to its driver.
 #[derive(Clone, Debug, PartialEq)]
@@ -73,6 +82,14 @@ pub enum Event {
     Multizone(MultizoneMessage),
     /// A message the sender dropped, for the log (C26 to C28, C31).
     Dropped(Dropped),
+    /// A level asked for that no status will answer, once per ask (C70,
+    /// C104): replaced or dropped before it went out, or sent while the
+    /// device already reports it or while the same level sent before it
+    /// still waits.
+    VolumeUnanswered {
+        level: f64,
+        ask: u64,
+    },
     /// The channel is over; nothing more will be sent (sections 4 and 8).
     Ended(EndReason),
 }
@@ -183,12 +200,12 @@ pub struct Channel {
     media: Option<Media>,
     volume_sent: Option<Instant>,
     volume_interval: Duration,
-    /// The level a drag asked for inside [`VOLUME_INTERVAL`]; the latest
-    /// wins (C70).
-    volume_queued: Option<f64>,
-    /// The request id and level last sent, until a `RECEIVER_STATUS`
+    /// The ask and level a drag asked for inside [`VOLUME_INTERVAL`]; the
+    /// latest wins (C70).
+    volume_queued: Option<(u64, f64)>,
+    /// The request id, ask and level last sent, until a `RECEIVER_STATUS`
     /// answers that request or reports that level.
-    volume_unconfirmed: Option<(u32, f64)>,
+    volume_unconfirmed: Option<(u32, u64, f64)>,
     /// The volume the previous channel to the device knew, for a first
     /// status that leaves it out (C37).
     assumed_volume: Option<DeviceVolume>,
@@ -408,14 +425,31 @@ impl Channel {
     /// a drag sends faster than [`VOLUME_INTERVAL`], the latest level waits
     /// for the interval to pass (C70).
     pub fn set_volume(&mut self, now: Instant, level: f64) -> Result<(), VolumeError> {
+        self.ask_volume(now, new_volume_ask(), level)
+    }
+
+    /// [`Channel::set_volume`] under the caller's `ask`, which every report
+    /// on it carries.
+    pub fn ask_volume(&mut self, now: Instant, ask: u64, level: f64) -> Result<(), VolumeError> {
         self.volume_check()?;
         if level.is_nan() {
             return Err(VolumeError::Invalid);
         }
         let level = level.clamp(0.0, 1.0);
         match self.volume_sent {
-            Some(sent) if now < sent + self.volume_interval => self.volume_queued = Some(level),
-            _ => self.send_level(now, level),
+            Some(sent) if now < sent + self.volume_interval => {
+                if let Some((ask, level)) = self.volume_queued.replace((ask, level)) {
+                    self.events
+                        .push_back(Event::VolumeUnanswered { level, ask });
+                }
+            }
+            _ => {
+                if let Some((ask, level)) = self.volume_queued.take() {
+                    self.events
+                        .push_back(Event::VolumeUnanswered { level, ask });
+                }
+                self.send_level(now, ask, level);
+            }
         }
         Ok(())
     }
@@ -443,7 +477,8 @@ impl Channel {
         // Steps pressed faster than the device reports build on each other.
         let base = self
             .volume_queued
-            .or(self.volume_unconfirmed.map(|(_, level)| level))
+            .map(|(_, level)| level)
+            .or(self.volume_unconfirmed.map(|(_, _, level)| level))
             .or(status.volume.has_level.then_some(status.volume.level))
             .ok_or(VolumeError::NotReady)?;
         let level = if up { base + step } else { base - step }.clamp(0.0, 1.0);
@@ -465,8 +500,11 @@ impl Channel {
 
     /// Takes the level still waiting for its interval, or else the one sent
     /// and not yet answered, for the channel that replaces this one (C70, C81).
-    pub fn take_unanswered_volume(&mut self) -> Option<f64> {
-        let unconfirmed = self.volume_unconfirmed.take().map(|(_, level)| level);
+    pub fn take_unanswered_volume(&mut self) -> Option<(u64, f64)> {
+        let unconfirmed = self
+            .volume_unconfirmed
+            .take()
+            .map(|(_, ask, level)| (ask, level));
         self.volume_queued.take().or(unconfirmed)
     }
 
@@ -481,7 +519,7 @@ impl Channel {
         Ok(status)
     }
 
-    fn send_level(&mut self, now: Instant, level: f64) {
+    fn send_level(&mut self, now: Instant, ask: u64, level: f64) {
         self.volume_sent = Some(now);
         self.volume_queued = None;
         let id = self.send_request(
@@ -491,8 +529,15 @@ impl Channel {
         );
         // A device reports only changes, so the level it already has gets no answer (C104).
         let current = self.status.as_ref().map(|status| &status.volume);
-        self.volume_unconfirmed =
-            (!current.is_some_and(|current| answers_volume(level, current))).then_some((id, level));
+        let reported = current.is_some_and(|current| answers_volume(level, current));
+        let repeated = self
+            .volume_unconfirmed
+            .is_some_and(|(_, _, sent)| sent == level);
+        if repeated || (reported && self.volume_unconfirmed.is_none()) {
+            self.events
+                .push_back(Event::VolumeUnanswered { level, ask });
+        }
+        self.volume_unconfirmed = (!reported).then_some((id, ask, level));
     }
 
     /// Tears the session down (C44, C87): media `STOP` for the sender's
@@ -653,11 +698,11 @@ impl Channel {
             self.end(EndReason::Silent);
             return;
         }
-        if let (Some(level), Some(sent)) = (self.volume_queued, self.volume_sent)
+        if let (Some((ask, level)), Some(sent)) = (self.volume_queued, self.volume_sent)
             && now >= sent + self.volume_interval
             && matches!(self.phase, Phase::Ready | Phase::Running)
         {
-            self.send_level(now, level);
+            self.send_level(now, ask, level);
         }
         if now >= self.next_ping {
             self.outbox.push_back(CastMessage::json(
@@ -927,14 +972,16 @@ impl Channel {
         if status.volume.control_type == ControlType::Fixed {
             // A drag value still waiting for its interval must not reach a
             // control that turned fixed meanwhile (C68).
-            self.volume_queued = None;
+            if let Some((ask, level)) = self.volume_queued.take() {
+                self.events
+                    .push_back(Event::VolumeUnanswered { level, ask });
+            }
         }
         // The answer to an older level leaves the newer one unanswered (C70); a
         // device that rounds to its step may answer without the request id.
-        if self
-            .volume_unconfirmed
-            .is_some_and(|(request, level)| request == id || answers_volume(level, &status.volume))
-        {
+        if self.volume_unconfirmed.is_some_and(|(request, _, level)| {
+            request == id || answers_volume(level, &status.volume)
+        }) {
             self.volume_unconfirmed = None;
         }
         self.status = Some(status.clone());
