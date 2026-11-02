@@ -267,7 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Bluetooth outputs that started on a link that just came up (S325).
     let freshLinks = FreshLinkWatch()
     /// Speakers whose devices left the list a moment ago, still counted (S328).
-    var briefLoss = LocalBriefLoss()
+    let briefLoss = LocalBriefLoss()
     /// Local outputs whose render callback stopped, until a stream plays 5 s (S334).
     var stallRetry = OutputStallRetry()
     /// Local outputs that ran away, for 30 s after each reopen (S347).

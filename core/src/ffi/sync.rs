@@ -1,10 +1,13 @@
 //! The local delay model and the delay helpers through the C interface (S3,
-//! S124, S172 to S179): pure functions for the control thread.
+//! S124, S172 to S179, S328): functions for the control thread.
 //!
 //! The rules themselves are in [`delay`]: [`delay::hold_backs`] and
 //! [`delay::migrate_mac_delays`] for the local delay model; this module only
 //! reads the host's C arrays. It may
 //! allocate (the outputs taking part), so it never runs on an audio thread.
+
+use std::ffi::{CStr, CString, c_char};
+use std::time::Duration;
 
 use super::{host_slice, host_slice_mut};
 use crate::policy::delay;
@@ -269,6 +272,226 @@ pub unsafe extern "C" fn asc_local_delay_migrate(
     true
 }
 
+/// [`delay::BriefLosses`] (S328) behind an opaque C pointer, with the held
+/// outputs' IDs as C strings for [`asc_brief_losses_held_id`].
+pub struct AscBriefLosses {
+    losses: delay::BriefLosses,
+    held: Vec<CString>,
+}
+
+impl AscBriefLosses {
+    fn refresh_held(&mut self) {
+        self.held = self
+            .losses
+            .held()
+            .filter_map(|id| CString::new(id).ok())
+            .collect();
+    }
+}
+
+/// # Safety
+///
+/// `id` is null or points to a NUL-terminated string that stays valid and
+/// unchanged during `'a`.
+unsafe fn host_id<'a>(id: *const c_char) -> Option<&'a str> {
+    if id.is_null() {
+        return None;
+    }
+    // SAFETY: non-null, and by the caller's contract NUL-terminated.
+    unsafe { CStr::from_ptr(id) }.to_str().ok()
+}
+
+/// The `count` IDs at `ids`, null and non-UTF-8 ones left out; `None` for a
+/// null array with a nonzero count.
+///
+/// # Safety
+///
+/// `ids` is null or holds `count` aligned elements, each null or a
+/// NUL-terminated string, all valid and unchanged during `'a`.
+unsafe fn host_ids<'a>(ids: *const *const c_char, count: usize) -> Option<Vec<&'a str>> {
+    // SAFETY: by the caller's contract.
+    let ids = unsafe { host_slice(ids, count) }?;
+    // SAFETY: by the caller's contract each is null or NUL-terminated.
+    Some(
+        ids.iter()
+            .filter_map(|&id| unsafe { host_id(id) })
+            .collect(),
+    )
+}
+
+/// The host's uptime in seconds; a negative or non-finite one counts as 0.
+fn host_time(seconds: f64) -> Duration {
+    Duration::try_from_secs_f64(seconds).unwrap_or_default()
+}
+
+/// Creates the brief-loss hold (S328), holding nothing.
+#[unsafe(no_mangle)]
+pub extern "C" fn asc_brief_losses_create() -> *mut AscBriefLosses {
+    Box::into_raw(Box::new(AscBriefLosses {
+        losses: delay::BriefLosses::default(),
+        held: Vec::new(),
+    }))
+}
+
+/// Destroys a brief-loss hold.
+///
+/// # Safety
+///
+/// `losses` is null or a pointer returned by [`asc_brief_losses_create`]
+/// that was not destroyed yet, and no other call on it runs now or later.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_brief_losses_destroy(losses: *mut AscBriefLosses) {
+    if losses.is_null() {
+        return;
+    }
+    // SAFETY: the pointer came from Box::into_raw in asc_brief_losses_create,
+    // and by the caller's contract it is destroyed once, with no call in
+    // progress.
+    drop(unsafe { Box::from_raw(losses) });
+}
+
+/// [`delay::BriefLosses::note_listing`]: the `listed_count` IDs listed at
+/// `now_s`, the `enabled_count` switched on, and the reference among them
+/// (null for none). Does nothing for a null handle or a null array with a
+/// nonzero count.
+///
+/// # Safety
+///
+/// `losses` is null or a live handle that nothing else uses during the
+/// call; each array is null or holds its count of aligned elements, and each
+/// ID and `reference` is null or a NUL-terminated string, all valid and
+/// unchanged during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_brief_losses_note_listing(
+    losses: *mut AscBriefLosses,
+    listed: *const *const c_char,
+    listed_count: usize,
+    enabled: *const *const c_char,
+    enabled_count: usize,
+    reference: *const c_char,
+    now_s: f64,
+) {
+    // SAFETY: by the caller's contract.
+    let (Some(losses), Some(listed), Some(enabled), reference) = (unsafe {
+        (
+            losses.as_mut(),
+            host_ids(listed, listed_count),
+            host_ids(enabled, enabled_count),
+            host_id(reference),
+        )
+    }) else {
+        return;
+    };
+    losses.losses.note_listing(
+        listed,
+        |id| enabled.contains(&id),
+        reference,
+        host_time(now_s),
+    );
+    losses.refresh_held();
+}
+
+/// [`delay::BriefLosses::switched_off`]: whether `id` was held; false for a
+/// null handle or ID.
+///
+/// # Safety
+///
+/// `losses` is null or a live handle that nothing else uses during the
+/// call; `id` is null or a NUL-terminated string, valid and unchanged
+/// during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_brief_losses_switched_off(
+    losses: *mut AscBriefLosses,
+    id: *const c_char,
+) -> bool {
+    // SAFETY: by the caller's contract.
+    let (Some(losses), Some(id)) = (unsafe { (losses.as_mut(), host_id(id)) }) else {
+        return false;
+    };
+    let was_held = losses.losses.switched_off(id);
+    losses.refresh_held();
+    was_held
+}
+
+/// [`delay::BriefLosses::expire`] at `now_s`: whether any hold ended; false
+/// for a null handle.
+///
+/// # Safety
+///
+/// `losses` is null or a live handle that nothing else uses during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_brief_losses_expire(losses: *mut AscBriefLosses, now_s: f64) -> bool {
+    // SAFETY: by the caller's contract.
+    let Some(losses) = (unsafe { losses.as_mut() }) else {
+        return false;
+    };
+    let ended = losses.losses.expire(host_time(now_s));
+    losses.refresh_held();
+    ended
+}
+
+/// [`delay::BriefLosses::restart`] (S20); nothing for a null handle.
+///
+/// # Safety
+///
+/// `losses` is null or a live handle that nothing else uses during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_brief_losses_restart(losses: *mut AscBriefLosses) {
+    // SAFETY: by the caller's contract.
+    if let Some(losses) = unsafe { losses.as_mut() } {
+        losses.losses.restart();
+        losses.refresh_held();
+    }
+}
+
+/// How many outputs are held; 0 for a null handle.
+///
+/// # Safety
+///
+/// `losses` is null or a live handle that nothing changes during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_brief_losses_held_count(losses: *const AscBriefLosses) -> usize {
+    // SAFETY: by the caller's contract.
+    unsafe { losses.as_ref() }.map_or(0, |losses| losses.held.len())
+}
+
+/// The ID of held output `index`, sorted by ID; null past the end or for a
+/// null handle. It stays valid until the next call that changes the handle.
+///
+/// # Safety
+///
+/// `losses` is null or a live handle that nothing changes during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_brief_losses_held_id(
+    losses: *const AscBriefLosses,
+    index: usize,
+) -> *const c_char {
+    // SAFETY: by the caller's contract.
+    unsafe { losses.as_ref() }
+        .and_then(|losses| losses.held.get(index))
+        .map_or(std::ptr::null(), |id| id.as_ptr())
+}
+
+/// [`delay::BriefLosses::next_expiry`] into `at_s`, in the host's uptime
+/// seconds: false, writing nothing, when nothing is held or for a null
+/// pointer.
+///
+/// # Safety
+///
+/// `losses` is null or a live handle that nothing changes during the call;
+/// `at_s` is null or points to an aligned, writable double that nothing
+/// else touches during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_brief_losses_next_expiry_s(
+    losses: *const AscBriefLosses,
+    at_s: *mut f64,
+) -> bool {
+    // SAFETY: by the caller's contract.
+    let next = unsafe { losses.as_ref() }.and_then(|losses| losses.losses.next_expiry());
+    // SAFETY: by the caller's contract.
+    unsafe { write_sanitized(next.map(|at| at.as_secs_f64()), at_s) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,5 +735,162 @@ mod tests {
             assert_eq!(frames, 0, "an ignored input writes nothing");
             assert!(!asc_delay_ms_to_frames(500.0, 48_000, ptr::null_mut()));
         }
+    }
+
+    /// A brief-loss hold driven as the Mac drives it.
+    struct Hold(*mut AscBriefLosses);
+
+    impl Hold {
+        fn new() -> Self {
+            Self(asc_brief_losses_create())
+        }
+
+        fn note(&self, listed: &[&CStr], enabled: &[&CStr], reference: Option<&CStr>, now_s: f64) {
+            let listed: Vec<*const c_char> = listed.iter().map(|id| id.as_ptr()).collect();
+            let enabled: Vec<*const c_char> = enabled.iter().map(|id| id.as_ptr()).collect();
+            let reference = reference.map_or(ptr::null(), CStr::as_ptr);
+            // SAFETY: a live handle; the arrays and strings outlive the call.
+            unsafe {
+                asc_brief_losses_note_listing(
+                    self.0,
+                    listed.as_ptr(),
+                    listed.len(),
+                    enabled.as_ptr(),
+                    enabled.len(),
+                    reference,
+                    now_s,
+                );
+            }
+        }
+
+        fn held(&self) -> Vec<String> {
+            // SAFETY: a live handle; each ID is read before the next change.
+            unsafe {
+                (0..asc_brief_losses_held_count(self.0))
+                    .map(|index| {
+                        CStr::from_ptr(asc_brief_losses_held_id(self.0, index))
+                            .to_str()
+                            .unwrap()
+                            .to_owned()
+                    })
+                    .collect()
+            }
+        }
+
+        fn next_expiry(&self) -> Option<f64> {
+            let mut at = -1.0;
+            // SAFETY: a live handle and a live double.
+            unsafe { asc_brief_losses_next_expiry_s(self.0, &mut at) }.then_some(at)
+        }
+
+        fn expire(&self, now_s: f64) -> bool {
+            // SAFETY: a live handle.
+            unsafe { asc_brief_losses_expire(self.0, now_s) }
+        }
+
+        fn switched_off(&self, id: &CStr) -> bool {
+            // SAFETY: a live handle and a live string.
+            unsafe { asc_brief_losses_switched_off(self.0, id.as_ptr()) }
+        }
+    }
+
+    impl Drop for Hold {
+        fn drop(&mut self) {
+            // SAFETY: created by asc_brief_losses_create, destroyed once.
+            unsafe { asc_brief_losses_destroy(self.0) };
+        }
+    }
+
+    const R: &CStr = c"built-in";
+    const USB: &CStr = c"usb";
+    const BT: &CStr = c"bluetooth";
+    const ON: [&CStr; 3] = [R, USB, BT];
+
+    /// Bluetooth listed at 0 s and gone from the list at `lost_at` s.
+    fn flapped(lost_at: f64) -> Hold {
+        let hold = Hold::new();
+        hold.note(&ON, &ON, Some(R), 0.0);
+        hold.note(&[R, USB], &ON, Some(R), lost_at);
+        hold
+    }
+
+    // covers: S328
+    #[test]
+    fn the_brief_loss_hold_crosses_the_boundary_as_the_core_keeps_it() {
+        let flap = flapped(5.0);
+        assert_eq!(flap.held(), ["bluetooth"]);
+        flap.note(&ON, &ON, Some(R), 6.0);
+        assert!(flap.held().is_empty(), "listed again within 10 s");
+
+        let flap = flapped(5.0);
+        assert!(!flap.expire(14.9));
+        assert_eq!(flap.next_expiry(), Some(15.0));
+        assert!(flap.expire(15.0), "still lost at 10 s");
+        assert!(!flap.expire(16.0), "it ends once");
+        assert_eq!(flap.next_expiry(), None);
+        assert!(flap.held().is_empty());
+
+        let flap = flapped(5.0);
+        assert!(flap.switched_off(BT));
+        assert!(!flap.switched_off(USB), "a listed output wasn't held");
+        assert!(flap.held().is_empty());
+
+        let flap = flapped(5.0);
+        // SAFETY: a live handle.
+        unsafe { asc_brief_losses_restart(flap.0) };
+        assert!(flap.held().is_empty(), "a session restart holds nothing");
+
+        let lost_reference = Hold::new();
+        lost_reference.note(&ON, &ON, Some(R), 0.0);
+        lost_reference.note(&[USB, BT], &ON, None, 5.0);
+        assert!(lost_reference.held().is_empty());
+
+        let off_first = Hold::new();
+        off_first.note(&ON, &ON, Some(R), 0.0);
+        off_first.note(&[R, USB], &[R, USB], Some(R), 5.0);
+        assert!(off_first.held().is_empty());
+
+        let flap = flapped(5.0);
+        assert!(flap.switched_off(BT));
+        flap.note(&[R, USB], &ON, Some(R), 6.0);
+        assert!(
+            flap.held().is_empty(),
+            "switched off and on again while still missing isn't held again"
+        );
+    }
+
+    // covers: S328
+    #[test]
+    fn the_brief_loss_hold_ignores_bad_arguments() {
+        let flap = flapped(5.0);
+        // SAFETY: null handles and arrays are allowed; the strings are live.
+        unsafe {
+            asc_brief_losses_note_listing(flap.0, ptr::null(), 2, ptr::null(), 0, ptr::null(), 6.0);
+            assert_eq!(
+                flap.held(),
+                ["bluetooth"],
+                "a null array with a count changes nothing"
+            );
+            asc_brief_losses_note_listing(
+                ptr::null_mut(),
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                ptr::null(),
+                0.0,
+            );
+            assert!(!asc_brief_losses_switched_off(flap.0, ptr::null()));
+            assert!(!asc_brief_losses_expire(ptr::null_mut(), 20.0));
+            asc_brief_losses_restart(ptr::null_mut());
+            assert_eq!(asc_brief_losses_held_count(ptr::null()), 0);
+            assert!(asc_brief_losses_held_id(flap.0, 1).is_null());
+            assert!(!asc_brief_losses_next_expiry_s(flap.0, ptr::null_mut()));
+            asc_brief_losses_destroy(ptr::null_mut());
+        }
+        assert!(
+            !flap.expire(f64::NAN),
+            "a time that isn't finite counts as 0"
+        );
     }
 }

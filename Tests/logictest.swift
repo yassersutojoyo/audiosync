@@ -8461,7 +8461,7 @@ do {
     // covers: S328 (a speaker whose device leaves the list for a moment)
     let on: Set<String> = [r, usb, bt]
     func flapped(at lostAt: Double = 5) -> LocalBriefLoss {
-        var flap = LocalBriefLoss()
+        let flap = LocalBriefLoss()
         flap.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
         flap.noteListing([r, usb], enabled: on, reference: r, now: lostAt)
         return flap
@@ -8486,10 +8486,10 @@ do {
           "local delay: a lost output switched off re-times the others at once")
     flap = flapped()
     flap.restart()
-    var lostReference = LocalBriefLoss()
+    let lostReference = LocalBriefLoss()
     lostReference.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
     lostReference.noteListing([usb, bt], enabled: on, reference: nil, now: 5)
-    var offFirst = LocalBriefLoss()
+    let offFirst = LocalBriefLoss()
     offFirst.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
     offFirst.noteListing([r, usb], enabled: [r, usb], reference: r, now: 5)
     // covers: S328

@@ -300,6 +300,14 @@ impl BriefLosses {
     pub fn held(&self) -> impl Iterator<Item = &str> {
         self.lost.keys().map(String::as_str)
     }
+
+    /// When the next hold ends, if any output is held.
+    pub fn next_expiry(&self) -> Option<Duration> {
+        self.lost
+            .values()
+            .min()
+            .map(|lost_at| *lost_at + BRIEF_LOSS_HOLD)
+    }
 }
 
 /// One UID the Mac's migration looks at (S179): one with a stored absolute
