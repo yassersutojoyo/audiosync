@@ -4,6 +4,19 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [0.8.1] - unreleased
 
+### Added
+
+- On Windows, pointing at a speaker's auto-connect bolt shows "Auto-Connect When Available", and Narrator reads it, as on the Mac.
+
+### Changed
+
+- On Windows, a zone whose speakers all play through a stereo pair or home theater says "N playing in a pair" instead of "None of N found", as on the Mac.
+- On the Mac, when calibration can't use the microphone's sample rate, its message now says to set the microphone to 48 kHz in Audio MIDI Setup and try again.
+
+### Fixed
+
+- On Windows and in the Linux preview, a Google Cast speaker's delay set to 0 while the saved Cast speakers file couldn't be read yet at launch stays at 0 once the file reads, instead of going back to the saved delay.
+
 ## [0.8.0] - 2026-11-02
 
 ### Added
