@@ -92,9 +92,8 @@ extension AppDelegate {
         engine.logGain(uid: uid, g: effectiveGain(uid))
     }
 
-    /// The master scales every speaker AudioSync plays: a local speaker's
-    /// gain, each AirPlay speaker's volume, which AudioSync's own sender
-    /// scales by it, and the audio the Cast speaker gets (S415).
+    /// The master is a gain on what AudioSync plays: a local speaker's gain and the
+    /// AirPlay and Cast streams' samples, never a speaker's own or device volume (S413, S415).
     func setMasterVolume(_ position: Double) {
         guard let v = VolumeCurve.accepted(position) else { return }
         masterVolume = v
