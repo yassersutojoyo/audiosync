@@ -2804,6 +2804,66 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
     }
 
+    /// The details of the events a sender made with `folder` reports first.
+    fn details_on_create(folder: &Path) -> Vec<String> {
+        let c_folder = CString::new(folder.to_str().expect("UTF-8")).expect("no NUL");
+        // SAFETY: a null memory text and a NUL-terminated folder.
+        let mut handle = unsafe { asc_cast_create_in(ptr::null(), c_folder.as_ptr()) };
+        assert!(!handle.is_null());
+        let details = waiting(handle)
+            .into_iter()
+            .map(|pending| pending.detail)
+            .collect();
+        // SAFETY: a live handle, destroyed once.
+        unsafe { asc_cast_destroy(&mut handle) };
+        details
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_certificates_file_that_cant_be_read_reaches_the_debug_log() {
+        let folder = crate::test_scratch().join("cast-certificates-unread");
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).expect("folder");
+        std::fs::write(folder.join("cast-certificates.txt"), [0xFF, 0xFE]).expect("written");
+        let details = details_on_create(&folder);
+        let read = "the certificates file couldn't be read: ";
+        assert_eq!(
+            details
+                .iter()
+                .filter(|detail| detail.starts_with(read))
+                .count(),
+            1,
+            "{details:?}"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    // CAST_SPEC: C21
+    #[test]
+    fn a_certificates_file_that_cant_be_written_reaches_the_debug_log() {
+        let scratch = crate::test_scratch();
+        std::fs::create_dir_all(&scratch).expect("scratch");
+        let folder = scratch.join("cast-certificates-unwritten");
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::write(&folder, b"a file where the folder would be").expect("written");
+        let kitchen = DeviceId::parse(KITCHEN).expect("id");
+        RECORD_ON_OPEN.with(|record| *record.borrow_mut() = Some((kitchen, Fingerprint([7; 32]))));
+        let details = details_on_create(&folder);
+        RECORD_ON_OPEN.with(|record| record.borrow_mut().take());
+        RECORDED.with(|recorded| recorded.take());
+        let written = "the certificates file couldn't be written: ";
+        assert_eq!(
+            details
+                .iter()
+                .filter(|detail| detail.starts_with(written))
+                .count(),
+            1,
+            "{details:?}"
+        );
+        let _ = std::fs::remove_file(&folder);
+    }
+
     // CAST_SPEC: C80, C81
     #[test]
     fn a_connect_failure_with_no_address_has_its_own_code() {
