@@ -2130,6 +2130,7 @@ fn every_write_answers_409_while_calibrating() {
         ("/api/presets/preset:1", "{\"recall\": true}"),
         ("/api/presets/gone", "{\"recall\": 7}"),
         ("/api/master", "{\"volume\": 500}"),
+        ("/api/source", "{\"id\": \"system\"}"),
     ] {
         let reply = post(&remote, path, token, body);
         assert_eq!(

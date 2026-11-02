@@ -1839,6 +1839,44 @@ mod tests {
         }
     }
 
+    // A request already accepted when stop takes the sink; no socket reaches that window.
+    // covers: S376
+    #[test]
+    fn a_command_once_stopping_answers_503_and_reaches_nothing() {
+        let config = Config {
+            port: 0,
+            listen: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            ..Config::default()
+        };
+        let reached = Arc::new(AtomicBool::new(false));
+        let sink = Arc::clone(&reached);
+        let mut server = RemoteServer::start(config, move |_: &Command| {
+            sink.store(true, Ordering::SeqCst);
+        })
+        .unwrap();
+        server
+            .publish_json(
+                r#"{"computer_name": "Den", "master": {"volume": 70}, "speakers": [
+                {"id": "kitchen", "name": "Kitchen", "kind": "local", "on": true, "volume": 40,
+                 "delay_ms": 0, "delay_min_ms": 0, "delay_max_ms": 1000, "available": true,
+                 "notice": null}]}"#,
+            )
+            .unwrap();
+        server.stop_in_place();
+        let mut request =
+            http::parse_head(b"POST /api/speakers/kitchen HTTP/1.1\r\nHost: localhost").unwrap();
+        request.body = br#"{"volume": 55}"#.to_vec();
+        let Answer::Response(response) =
+            speaker(&request, Some("kitchen".to_owned()), &server.shared)
+        else {
+            panic!("a command answers with a response");
+        };
+        assert_eq!(response.status, 503);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["error"], "not_ready");
+        assert!(!reached.load(Ordering::SeqCst));
+    }
+
     // Through route, not sockets: a test can't connect from 127.0.0.2 on macOS.
     // covers: S368, S369, S373
     #[test]
