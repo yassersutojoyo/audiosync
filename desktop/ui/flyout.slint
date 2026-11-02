@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // zone that is on but can't play right now under it (a zone's count first) ("In use by another app",
@@ -521,20 +521,40 @@ export component TrayFlyout inherits Window {
             HorizontalLayout {
                 spacing: 10px;
 
-                BrandMark {
-                    running: root.running;
-                    width: 24px;
-                    height: 24px;
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    Wordmark {
-                        size: 15px;
+                // A mouse shortcut, as on the Mac; Open AudioSync below is the
+                // keyboard's way.
+                TouchArea {
+                    horizontal-stretch: 0;
+                    clicked => {
+                        root.open-app();
                     }
 
-                    SecondaryText {
-                        text: root.status;
+                    HorizontalLayout {
+                        spacing: 10px;
+
+                        BrandMark {
+                            running: root.running;
+                            width: 24px;
+                            height: 24px;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            Wordmark {
+                                size: 15px;
+                            }
+
+                            SecondaryText {
+                                text: root.status;
+                            }
+                        }
+                    }
+
+                    Tooltip {
+                        brand-tip := LabelTip {
+                            text: Strings.open-app;
+                            max-tip-width: 240px;
+                        }
                     }
                 }
 
@@ -542,13 +562,24 @@ export component TrayFlyout inherits Window {
                     horizontal-stretch: 1;
                 }
 
-                power := ToggleSwitch {
-                    checked: root.running;
-                    accessible-label: Strings.streaming-switch;
-                    toggled => {
-                        root.power-toggled(self.checked);
-                        // Show what the engine did, even if it refused.
-                        self.checked = root.running;
+                TouchArea {
+                    horizontal-stretch: 0;
+                    power := ToggleSwitch {
+                        height: 100%;
+                        checked: root.running;
+                        accessible-label: Strings.streaming-switch;
+                        toggled => {
+                            root.power-toggled(self.checked);
+                            // Show what the engine did, even if it refused.
+                            self.checked = root.running;
+                        }
+                    }
+
+                    Tooltip {
+                        power-tip := LabelTip {
+                            text: root.running ? Strings.turn-off : Strings.turn-on;
+                            max-tip-width: 240px;
+                        }
                     }
                 }
             }
@@ -617,8 +648,6 @@ export component TrayFlyout inherits Window {
                             }
                         }
                     }
-
-                    Divider { }
 
                     // No visible labels above the source and the volume, as in the
                     // Mac panel; Narrator still hears each control's name.

@@ -13932,6 +13932,90 @@ mod tests {
         assert!(!app.main.get_mix_open(), "a refresh never reopens it");
     }
 
+    /// The logo and wordmark at the top of the flyout open the main window,
+    /// with Open AudioSync as their tooltip, as in the Mac panel.
+    #[test]
+    fn the_flyout_logo_opens_the_main_window() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.flyout.show().unwrap();
+        draw_frames();
+        hold_clock();
+        let logo = ElementHandle::find_by_element_type_name(&app.flyout, "BrandMark")
+            .next()
+            .expect("the flyout's logo");
+        let (at, size) = (logo.absolute_position(), logo.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let window = app.flyout.window();
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_secs(2));
+        slint::platform::update_timers_and_animations();
+        assert!(
+            ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::brand-tip")
+                .next()
+                .is_some(),
+            "a tooltip on the logo"
+        );
+        let switch = ElementHandle::find_by_accessible_label(&app.flyout, "Streaming")
+            .next()
+            .expect("the flyout's streaming switch");
+        click(window, switch.absolute_position().x - 10.0, position.y);
+        assert!(
+            !app.main.window().is_visible(),
+            "a click beside the switch opens nothing"
+        );
+        click(window, position.x, position.y);
+        assert!(app.main.window().is_visible());
+        assert!(!app.flyout.window().is_visible());
+    }
+
+    /// Resting on the flyout's streaming switch shows a tooltip, Turn On or
+    /// Turn Off by its state, as the Mac panel's power switch does.
+    #[test]
+    fn the_flyout_streaming_switch_has_a_tooltip() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.flyout.show().unwrap();
+        draw_frames();
+        hold_clock();
+        let switch = ElementHandle::find_by_accessible_label(&app.flyout, "Streaming")
+            .next()
+            .expect("the flyout's streaming switch");
+        let (at, size) = (switch.absolute_position(), switch.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        app.flyout
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_secs(2));
+        slint::platform::update_timers_and_animations();
+        assert!(
+            ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::power-tip")
+                .next()
+                .is_some(),
+            "a tooltip on the streaming switch"
+        );
+    }
+
+    /// With no notice, the source drop-down starts the flyout's body: no
+    /// line sits between it and the header, as in the Mac panel.
+    #[test]
+    fn no_line_sits_between_the_flyout_header_and_its_source() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.flyout.show().unwrap();
+        draw_frames();
+        assert_eq!(app.flyout.get_notices().row_count(), 0);
+        let source = ElementHandle::find_by_accessible_label(&app.flyout, "Audio Source")
+            .next()
+            .expect("the flyout's source drop-down");
+        let body = ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::body")
+            .next()
+            .expect("the flyout's body");
+        assert_eq!(source.absolute_position().y, body.absolute_position().y);
+    }
+
     /// Several Apps… is a link under the flyout's source drop-down, as the
     /// Mac panel's source menu ends in its submenu: the drop-down holds the
     /// sources only, and the link opens the main window's list and leaves the
