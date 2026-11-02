@@ -67,6 +67,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows and Linux, when the app the Now Playing card shows pauses, the card keeps its track as paused, as on the Mac. Before, another app's paused track could take its place right away.
 - On the Mac, when AudioSync can't save a new AirPlay pairing or a forgotten one, you get the notice that your pairings aren't saved, as on Windows, and it goes away once a save works again. Before, the Mac told you only when the pairings file couldn't be opened at launch.
 - When a Google Cast speaker ends AudioSync's stream, by another app or by its own controls, the notice now says "<name> stopped AudioSync's stream, so it's off." instead of blaming another app. On the Mac and on Windows.
 - On Windows, when Windows fails to list the input devices for a moment, the source menu keeps the ones it listed last. Before, the input you capture from showed as not connected, and the phone remote refused to pick it.

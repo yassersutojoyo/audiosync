@@ -304,6 +304,7 @@ fn run<L: SessionList>(
     sessions.watch(Changed(Arc::downgrade(shared)));
     shared.lock().icon = sessions.icon(log);
     let mut reader = Reader::new(sessions);
+    let mut card_seen = 0;
     loop {
         let woken_by_change;
         let (track, track_generation, played_last, card, card_generation, commands, remote) = {
@@ -329,6 +330,10 @@ fn run<L: SessionList>(
                 remote,
             )
         };
+        if card_generation != card_seen {
+            card_seen = card_generation;
+            reader.card_played_last = None;
+        }
         // The host logged the command already (S279), so the send stays quiet.
         if let Some(track) = &track {
             for command in &remote {
@@ -341,8 +346,9 @@ fn run<L: SessionList>(
             }
         }
         if let Some(card) = &card {
+            let played_last = reader.card_played_last.clone();
             for command in &commands {
-                reader.send(card, None, *command, log);
+                reader.send(card, played_last.as_deref(), *command, log);
             }
         }
         let mut listing = reader.listing(log);
@@ -421,6 +427,9 @@ struct Reader<L> {
     /// The last tracks read, for the log.
     last_track: Option<MediaSession>,
     last_card: Option<MediaSession>,
+    /// The app the card last showed playing, kept while its session is
+    /// listed (S218).
+    card_played_last: Option<String>,
 }
 
 /// One listing of the sessions, which both readers' readings come from.
@@ -440,6 +449,7 @@ impl<L: SessionList> Reader<L> {
             failing: false,
             last_track: None,
             last_card: None,
+            card_played_last: None,
         }
     }
 
@@ -512,7 +522,17 @@ impl<L: SessionList> Reader<L> {
         follow: &Follow,
         log: &DebugLog,
     ) -> Option<CardTrack> {
-        let index = self.sessions.pick(&listing.listed, follow);
+        let played_last = self.card_played_last.take().filter(|app_id| {
+            listing
+                .listed
+                .iter()
+                .any(|(session, _)| session.app_id == *app_id)
+        });
+        let index = self.counting(&listing.listed, follow, played_last.as_deref());
+        self.card_played_last = match index.map(|index| &listing.listed[index].0) {
+            Some(session) if session.playing => Some(session.app_id.clone()),
+            _ => played_last,
+        };
         self.log_card(index.map(|index| &listing.listed[index].0), log);
         let index = index?;
         let session = listing.listed[index].0.clone();
