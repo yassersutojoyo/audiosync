@@ -18,6 +18,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay speaker you turn on stays on while it asks for its password or code, and Cancel turns it off. While other speakers play, its row says "Waiting for the password" or "Enter the code shown on" followed by its name. Before, Windows left it off until you typed the code and the Mac row said nothing. On the Mac and on Windows.
 - With the debug log on, each playing speaker on this computer logs its peak and RMS level every 10 seconds, after volume and equalizer, and every volume or master change logs the gain it plays at. On the Mac and on Windows.
 - On the Mac, Calibrate All Speakers opens with a "Before you start" list: the microphone where you listen, the Mac's own volume, with an Unmute or Set to button when it's muted or quiet, and the outputs it leaves out. Each result shows as a card with the new delay, the one it replaces and whether it was measured clearly.
+- On Windows, while more than one notice waits, the tray panel has Dismiss All beside "n more notices…", as on the Mac.
 
 ### Changed
 

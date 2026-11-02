@@ -426,8 +426,8 @@ export component TrayFlyout inherits Window {
     forward-focus: focus;
 
     // Whether a control that a refresh can remove has keyboard focus: the
-    // notice's buttons (dismiss, Show How), the button for more notices, or
-    // a zone or speaker row. Slint leaves nothing focused when the focused control is
+    // notice's buttons (dismiss, Show How), the buttons for more notices and
+    // Dismiss All, or a zone or speaker row. Slint leaves nothing focused when the focused control is
     // removed, and Escape then does nothing until Tab, so the app calls
     // `take-focus` when a refresh removed the part that held it. A removed
     // control never reports losing focus; `take-focus` clears these. (The
@@ -580,8 +580,8 @@ export component TrayFlyout inherits Window {
                     }
 
                     if root.notice-count > root.notices.length: HorizontalLayout {
-                        alignment: start;
-                        Button {
+                        alignment: space-between;
+                        more := Button {
                             text: Strings.more-notices(root.notice-count - root.notices.length);
                             accessible-label: self.text;
                             clicked => {
@@ -589,7 +589,18 @@ export component TrayFlyout inherits Window {
                             }
                             // A standard button reports focus only through has-focus.
                             changed has-focus => {
-                                root.more-notices-focused = self.has-focus;
+                                root.more-notices-focused = more.has-focus || all.has-focus;
+                            }
+                        }
+
+                        all := Button {
+                            text: Strings.dismiss-all-notices;
+                            accessible-label: Strings.dismiss-all-notices;
+                            clicked => {
+                                root.notices-dismissed-all();
+                            }
+                            changed has-focus => {
+                                root.more-notices-focused = more.has-focus || all.has-focus;
                             }
                         }
                     }
