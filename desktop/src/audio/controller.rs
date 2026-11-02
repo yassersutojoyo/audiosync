@@ -3921,9 +3921,7 @@ impl<D: Driver> Controller<D> {
         if session.reopen.is_some() || session.audio_check.is_none_or(|due| now < due) {
             return;
         }
-        // Any sample other than zero is sound; the level meter of an input
-        // device takes the same peak, but only in silence could it hide it.
-        if session.ring.take_peak() > 0.0 {
+        if session.ring.heard() {
             session.audio_check = None;
             if session.said_waiting {
                 self.pending
@@ -9701,6 +9699,27 @@ mod tests {
         assert_eq!(backend.input_peak(), Some(0.0), "taken once");
         backend.stop();
         assert_eq!(backend.input_peak(), None);
+    }
+
+    // covers: S350
+    #[test]
+    fn sound_the_level_meter_read_first_still_counts_as_heard() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.poll();
+        backend.feed_capture_level(480, 0.5);
+        assert!(backend.input_peak().is_some_and(|peak| peak > 0.0));
+        backend.check_audio_now();
+        assert!(
+            !backend
+                .poll()
+                .contains(&BackendEvent::WaitingForAudio { waiting: true })
+        );
     }
 
     // covers: S329

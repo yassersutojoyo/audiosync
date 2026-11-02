@@ -110,6 +110,9 @@ pub struct Ring {
     /// ran, as float bits: for non-negative floats the bit order is the
     /// numeric order, so the writer raises it with one `fetch_max`.
     peak: AtomicU32,
+    /// Set by the first write holding a finite sample other than zero, and never
+    /// cleared, so a meter taking [`Ring::take_peak`] can't hide it.
+    heard: AtomicBool,
     /// Set while a [`RingWriter`] exists.
     writer_taken: AtomicBool,
     /// The start leads and hold-backs of the renderers reading it (S208).
@@ -151,6 +154,7 @@ impl Ring {
             stamp_written: AtomicU64::new(0),
             stamp_time: AtomicU64::new(NO_STAMP),
             peak: AtomicU32::new(0),
+            heard: AtomicBool::new(false),
             writer_taken: AtomicBool::new(false),
             leads: SessionLeads::new(),
         }))
@@ -210,6 +214,12 @@ impl Ring {
     /// samples don't count. A relaxed swap, safe on any thread.
     pub fn take_peak(&self) -> f32 {
         f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+    }
+
+    /// Whether any write so far held a finite sample other than zero,
+    /// whoever took the peak since (S350). A relaxed load.
+    pub fn heard(&self) -> bool {
+        self.heard.load(Ordering::Relaxed)
     }
 
     /// The newest stamp of the capture's blocks (S207), or `None` while
@@ -341,6 +351,7 @@ impl RingWriter {
             .fold(0.0_f32, f32::max);
         if peak > 0.0 {
             self.ring.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
+            self.ring.heard.store(true, Ordering::Relaxed);
         }
         if frames > 0 {
             self.open += frames as u64;
@@ -524,6 +535,18 @@ mod tests {
         assert_eq!(ring.take_peak(), 0.75, "non-finite samples don't count");
         writer.write(&[-1.5, 0.0], 1);
         assert_eq!(ring.take_peak(), 1.5, "a clipped sample reads above 1");
+    }
+
+    #[test]
+    fn heard_stays_set_once_sound_was_written_whoever_took_the_peak() {
+        let ring = Ring::new(16_384, 8192).unwrap();
+        let mut writer = ring.writer().unwrap();
+        writer.write(&[0.0, 0.0, f32::NAN, 0.0], 2);
+        assert!(!ring.heard(), "zeros and non-finite samples are no sound");
+        writer.write(&[0.25, 0.0], 1);
+        ring.take_peak();
+        writer.write(&[0.0, 0.0], 1);
+        assert!(ring.heard());
     }
 
     // covers: S35
