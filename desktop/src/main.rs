@@ -266,12 +266,7 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     #[cfg(target_os = "linux")]
     platform::on_exit_signal(session_ending(&app, log, "exit signal"));
     #[cfg(windows)]
-    platform::on_console_quit(|| {
-        // Queued until the event loop runs, so a Ctrl-C before then still quits through it.
-        let _ = slint::invoke_from_event_loop(|| {
-            let _ = slint::quit_event_loop();
-        });
-    });
+    platform::on_console_quit(quit_through_event_loop);
 
     // To look at both appearances without changing the Windows setting, only
     // while the debug log is on.
@@ -346,6 +341,14 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn quit_through_event_loop() {
+    // Queued until the event loop runs, so a Ctrl-C before then still quits through it.
+    let _ = slint::invoke_from_event_loop(|| {
+        let _ = slint::quit_event_loop();
+    });
+}
+
 /// The quit steps for an end that may come before the event loop ends, or
 /// instead of it (S351).
 fn session_ending(
@@ -380,6 +383,39 @@ mod tests {
     #[ignore = "crashes the test process on purpose"]
     fn deliberate_crash_writes_a_minidump() {
         unsafe { std::ptr::null_mut::<u8>().write_volatile(1) };
+    }
+
+    // covers: S414
+    #[cfg(windows)]
+    #[test]
+    fn a_ctrl_c_before_the_event_loop_runs_ends_it_as_soon_as_it_starts() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        // The app's own backend: it drops a quit sent before its loop runs.
+        // Slint's proxy is per process, so a view test's quit can end this loop: a false pass, never a false fail.
+        slint::BackendSelector::new()
+            .backend_name("winit".to_owned())
+            .select()
+            .expect("the winit backend");
+        super::quit_through_event_loop();
+        let (ended, wait) = mpsc::channel::<()>();
+        // Ends a loop the Ctrl-C left running, so the test fails instead of hanging.
+        let watchdog = std::thread::spawn(move || {
+            let late = wait.recv_timeout(Duration::from_secs(10)).is_err();
+            if late {
+                let _ = slint::invoke_from_event_loop(|| {
+                    let _ = slint::quit_event_loop();
+                });
+            }
+            late
+        });
+        slint::run_event_loop_until_quit().expect("the event loop runs");
+        let _ = ended.send(());
+        assert!(
+            !watchdog.join().unwrap(),
+            "the Ctrl-C ends the event loop once it starts"
+        );
     }
 
     /// The Wayland app id, the .desktop file's window class and name, and
