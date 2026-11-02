@@ -1033,6 +1033,67 @@ mod tests {
             Some(("Probe.exe".to_owned(), false)),
             "another app's paused track took the place of the one just paused"
         );
+        let (mut second, counts) = self::fake(Thumbnail::Image);
+        second.sessions = vec![reader.sessions.sessions[0].clone(), probe(true)];
+        let (_track, mut card) = spawn(
+            move || Ok(second),
+            Duration::from_millis(10),
+            DebugLog::default(),
+        );
+        card.follow(Some(CardSource::AnyApp));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut wait_for = |playing: bool| {
+            while !card
+                .take_reading()
+                .flatten()
+                .is_some_and(|read| read.app_id == "Probe.exe" && read.playing == playing)
+            {
+                assert!(Instant::now() < deadline, "the card never read the probe");
+                thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait_for(true);
+        counts.paused.store(true, Ordering::SeqCst);
+        wait_for(false);
+        card.send(Transport::PlayPause);
+        while counts.sends.load(Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "nothing was sent");
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(*counts.sent_to.lock().unwrap(), ["Probe.exe"]);
+    }
+
+    // covers: S218, S274
+    #[test]
+    fn the_card_lets_go_of_an_app_whose_session_stays_untitled_for_the_drop_time() {
+        let (mut fake, _) = fake(Thumbnail::Image);
+        let spotify = MediaSession {
+            playing: false,
+            paused: true,
+            ..playing()
+        };
+        let probe = MediaSession {
+            app_id: "Probe.exe".to_owned(),
+            title: "Probe".to_owned(),
+            ..playing()
+        };
+        fake.sessions = vec![spotify, probe];
+        let mut reader = Reader::new(fake);
+        let shown = |card: Option<CardTrack>| card.map(|card| card.app_id);
+        assert_eq!(shown(poll(&mut reader).1).as_deref(), Some("Probe.exe"));
+        let untitled = &mut reader.sessions.sessions[1];
+        (untitled.title, untitled.playing, untitled.paused) = (String::new(), false, true);
+        assert_eq!(
+            shown(poll(&mut reader).1),
+            None,
+            "held while it may come back"
+        );
+        thread::sleep(crate::audio::now_playing::DROP_AFTER + Duration::from_millis(100));
+        assert_eq!(
+            shown(poll(&mut reader).1).as_deref(),
+            Some("Spotify.exe"),
+            "an untitled session kept the card hidden past the drop time"
+        );
     }
 
     #[test]
