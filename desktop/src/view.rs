@@ -8058,6 +8058,22 @@ mod tests {
         );
     }
 
+    /// The Guide's AirPlay section says what the sender does: AirPlay 2
+    /// speakers play by default, and the switch keeps its label.
+    // covers: S312, S313
+    #[test]
+    fn the_airplay_guide_plays_airplay_2_by_default() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        for guide in [strings.get_help_airplay(), strings.get_help_airplay_linux()] {
+            assert!(!guide.contains("off at first"), "{guide}");
+            assert!(
+                guide.contains("unless AirPlay 2 (Experimental), in the File menu, is on"),
+                "{guide}"
+            );
+        }
+    }
+
     /// A Public reading reaches the note that no speaker was found on a poll
     /// that changes nothing else, and the note leaves the firewall out again
     /// once it goes.

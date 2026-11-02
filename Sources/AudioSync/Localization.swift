@@ -1984,16 +1984,7 @@ struct UIStrings {
     /// The Guide's lines on the AirPlay 2 switch, which the AirPlay 2 flag
     /// turns into a preference (S312, S313).
     private var guideAirPlay2Note: String {
-        guard airPlay2Auto else {
-            return """
-                '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, lets
-                AudioSync play to AirPlay 2 speakers, stereo pairs and home theater
-                groups. It's off at first; turn it on, then quit and reopen AudioSync.
-                With it on, a stereo pair or home theater group shows as one row, and
-                its note names the speakers in it.
-                """
-        }
-        return """
+        """
             AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater
             groups. A speaker that plays both AirPlay 1 and AirPlay 2 uses AirPlay 1
             unless '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, is

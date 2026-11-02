@@ -3836,6 +3836,10 @@ do {
     check(asc_airplay2_auto() == (ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY2_AUTO"] != "0")
             && UIStrings().airPlay2Toggle == "AirPlay 2 (Experimental)",
           "S312 AirPlay 2 switch: AirPlay 2 is on by default and the switch keeps its label")
+    // covers: S312, S313 (the Guide the app shows)
+    check(!UIStrings().helpText.contains("off at first")
+            && UIStrings().helpText.contains("uses AirPlay 1\nunless 'AirPlay 2 (Experimental)', in the gear menu"),
+          "S312 Guide: AirPlay 2 speakers play by default, and the switch keeps its label")
     // The menu classes are main-actor bound; top-level code runs on the main thread.
     MainActor.assumeIsolated {
         let noteMenu = NSMenu()
