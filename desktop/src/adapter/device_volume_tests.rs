@@ -9,7 +9,7 @@ use super::AudioAdapter;
 use crate::DeviceVolumeHint;
 use crate::audio::backend::{AudioBackend, OutputKind};
 use crate::audio::mock::{MockBackend, VolumeWrite};
-use crate::debug_log::{DebugLog, test_dir};
+use crate::debug_log::{DebugLog, FILE_NAME, TEST_FLUSH, read_messages, test_dir};
 use crate::settings::{self, SettingsFile};
 use crate::ui_model::{AllPhase, AllProgress, Backend, SheetState};
 use crate::view::{calibrate_all_volume, speaker_item};
@@ -306,4 +306,27 @@ fn calibrate_all_shows_a_quiet_or_muted_reference_before_a_run_with_its_fix() {
     });
     assert_eq!(calibrate_all_volume(&state).0, DeviceVolumeHint::None);
     assert_eq!(before(&adapter).0, DeviceVolumeHint::Low);
+}
+
+// covers: S197
+#[test]
+fn calibrate_all_logs_the_reference_volume_and_mute_at_its_start() {
+    let dir = test_dir("calibrate-all-reference-volume");
+    let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+    let mut audio = MockBackend::empty();
+    audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);
+    audio.set_output_level(SPEAKERS, 0.13);
+    let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), log.clone());
+    adapter.set_speaker_enabled(&key(SPEAKERS), true);
+
+    adapter.start_calibrate_all();
+    assert!(log.flush(TEST_FLUSH));
+    let messages = read_messages(&dir.join(FILE_NAME));
+    assert!(
+        messages
+            .iter()
+            .any(|line| line == "Calibrate All reference volume: 13%, not muted, low"),
+        "{messages:?}"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
