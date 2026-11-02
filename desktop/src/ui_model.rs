@@ -12,7 +12,9 @@
 
 use audiosync_core::eq::{self, CurveMatch, EqSettings, UserCurve};
 use audiosync_core::policy::device_volume::Hint;
-use audiosync_core::policy::presets::{self as policy_presets, Preset, Scene, SpeakerNow};
+#[cfg(any(test, feature = "mock-backend"))]
+use audiosync_core::policy::presets as policy_presets;
+use audiosync_core::policy::presets::{Preset, Scene, SpeakerNow};
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::compare_names;
 use audiosync_core::policy::zones::{self, ClickAction, MemberKind, Situation, Zone, Zones};
@@ -199,6 +201,8 @@ pub enum AirPlayProblem {
     /// An Apple TV that needs pairing with a PIN first; switching it on
     /// pairs it.
     NeedsPin,
+    /// It still asks for a code right after pairing, so it is off.
+    StillNeedsCode,
     /// It turned the session down without asking for a PIN or password, so
     /// it is off; the notice names no code.
     NotAccepted,
@@ -725,8 +729,9 @@ pub enum NoticeMessage {
     /// The settings file couldn't be read at launch (or was damaged), so
     /// AudioSync started with the defaults; once it could be read again, it
     /// was kept aside as `file`, in the app's data folder, before the first
-    /// save over it.
-    SettingsKeptAside { file: String },
+    /// save over it. `newer`: a newer AudioSync wrote it, which updating
+    /// AudioSync brings back.
+    SettingsKeptAside { file: String, newer: bool },
     /// The pairings' file couldn't be read at launch (or decrypted, or
     /// parsed), so AudioSync started without the pairings in it; once it
     /// could be read again, it was kept aside as `file`, in the app's data
@@ -831,14 +836,14 @@ pub enum PresetLeftOff {
 pub const MAX_PRESETS: usize = crate::settings::MAX_ENTRIES;
 
 /// The speakers on now as a preset sees them (spec S251, S253): list
-/// order, the reference output left out, no own volume for a fixed-volume
+/// order, the reference output included, no own volume for a fixed-volume
 /// Cast speaker or one with no known volume. A hidden speaker is never
 /// listed, so never captured.
 pub fn speakers_on_now(state: &AppState) -> Vec<SpeakerNow> {
     state
         .speakers
         .iter()
-        .filter(|speaker| speaker.enabled && !speaker.is_reference())
+        .filter(|speaker| speaker.enabled)
         .map(|speaker| SpeakerNow {
             key: speaker.id.clone(),
             volume: match &speaker.cast {
@@ -877,17 +882,37 @@ pub fn use_target_instead(
 }
 
 /// The preset that `state` plays exactly, the first in list order (spec
-/// S253).
-pub fn current_preset(presets: &[Preset], state: &AppState) -> Option<String> {
+/// S253); for a preset in `leaving_reference` the reference output is left
+/// out (S252).
+pub fn current_preset(
+    presets: &[Preset],
+    leaving_reference: &std::collections::BTreeSet<String>,
+    state: &AppState,
+) -> Option<String> {
     let on = speakers_on_now(state);
+    let without_reference: Vec<SpeakerNow> = on
+        .iter()
+        .filter(|now| !state.speaker(&now.key).is_some_and(Speaker::is_reference))
+        .cloned()
+        .collect();
     let zones = Zones::from_stored(state.zones.clone());
-    let scene = Scene {
-        on: &on,
+    let scene = |on| Scene {
+        on,
         zones: &zones,
         master: state.master_volume,
         gains_db: state.equalizer.gains_db,
     };
-    policy_presets::current(presets, &scene).map(|preset| preset.id.clone())
+    presets
+        .iter()
+        .find(|preset| {
+            let on = if leaving_reference.contains(&preset.id) {
+                &without_reference
+            } else {
+                &on
+            };
+            preset.is_current(&scene(on))
+        })
+        .map(|preset| preset.id.clone())
 }
 
 /// What `state` plays now as preset `id` named `name` (spec S251); `None`
@@ -908,8 +933,12 @@ pub fn capture_preset(id: &str, name: &str, state: &AppState) -> Option<Preset> 
 }
 
 /// Fills in `state`'s preset list and the preset it plays now (spec S264).
-pub fn show_presets(state: &mut AppState, presets: &[Preset]) {
-    state.current_preset = current_preset(presets, state);
+pub fn show_presets(
+    state: &mut AppState,
+    presets: &[Preset],
+    leaving_reference: &std::collections::BTreeSet<String>,
+) {
+    state.current_preset = current_preset(presets, leaving_reference, state);
     state.presets = presets
         .iter()
         .map(|preset| PresetItem {
@@ -1978,9 +2007,6 @@ pub struct MockBackend {
     /// Window settings the next poll takes in, as a settings file read
     /// after launch brings them.
     pub late_view: std::rc::Rc<std::cell::RefCell<Option<ViewSettings>>>,
-    /// Sources each snapshot lists last, as an app that starts playing
-    /// between two refreshes.
-    pub late_sources: std::rc::Rc<std::cell::RefCell<Vec<Source>>>,
     /// The window settings each save found.
     pub saved_views: std::rc::Rc<std::cell::RefCell<Vec<ViewSettings>>>,
     /// While `Some`, an input device is captured, and it counts the level
@@ -2172,7 +2198,6 @@ impl MockBackend {
             includes: std::rc::Rc::default(),
             volume_editing: std::rc::Rc::default(),
             late_view: std::rc::Rc::default(),
-            late_sources: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
             input_peak_reads: std::rc::Rc::default(),
             refreshes: std::rc::Rc::default(),
@@ -2525,14 +2550,11 @@ impl Backend for MockBackend {
 
     fn snapshot(&self) -> AppState {
         let mut state = self.state.clone();
-        state
-            .sources
-            .extend(self.late_sources.borrow().iter().cloned());
         state.cast_on = state
             .speakers
             .iter()
             .any(|speaker| speaker.kind == SpeakerKind::Cast && speaker.enabled);
-        show_presets(&mut state, &self.presets);
+        show_presets(&mut state, &self.presets, &Default::default());
         state.calibrate_all.left_out = self.left_out.borrow().clone();
         state
     }
@@ -2951,7 +2973,7 @@ impl Backend for MockBackend {
         let nothing_changed = members.is_empty();
         if !nothing_changed {
             for speaker in &mut self.state.speakers {
-                if !speaker.is_reference() && !members.iter().any(|(key, _)| *key == speaker.id) {
+                if !members.iter().any(|(key, _)| *key == speaker.id) {
                     speaker.enabled = false;
                 }
             }

@@ -58,7 +58,8 @@ extension AppDelegate {
             // A member its target holds leaves the rows; the target's row stands for it.
             let target = listed ? nil : receiver.flatMap { model?.holdingTarget($0, on: on) }
             let facts = ZoneMemberFacts(kind: isTarget || overAirPlay2 ? .airplay2 : .airplay, listed: listed, on: on,
-                                        needsAirPlay2: isTarget && !listed && !airPlay2On, inTarget: target != nil)
+                                        needsAirPlay2: ZoneMemberFacts.airPlay2Missing(target: isTarget, found: found, airPlay2On: airPlay2On),
+                                        inTarget: target != nil)
             return ZoneMemberState(key: key, kind: kind, appID: id, facts: facts, found: found, target: target,
                                    waiting: receiver.map { model?.isWaiting($0) == true } ?? false)
         }

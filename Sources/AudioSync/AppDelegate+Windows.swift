@@ -984,12 +984,18 @@ private final class GuideWindow: NSWindow {
         performClose(sender)
     }
 
-    /// The text view would take Escape before `cancelOperation` reaches the
-    /// window, so catch it here, ahead of the first responder.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        closeOnEscape(event) || super.performKeyEquivalent(with: event)
+    }
+}
+
+extension NSWindow {
+    /// A text view would take Escape before `cancelOperation` reaches the
+    /// window, so `performKeyEquivalent` catches it, ahead of the first responder.
+    func closeOnEscape(_ event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let isEscape = event.type == .keyDown && event.keyCode == 53 && modifiers.isEmpty   // 53: Escape
         if isEscape { performClose(nil) }
-        return isEscape || super.performKeyEquivalent(with: event)
+        return isEscape
     }
 }

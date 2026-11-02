@@ -56,6 +56,7 @@ struct PanelZoneHeader: View {
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
             .accessibilityHint(t.rowHint(state, note: waitNote))
             .help(t.help(state))
+            .onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }
 
             Button { hit(.name) } label: {
                 HStack(spacing: 0) {
@@ -83,6 +84,7 @@ struct PanelZoneHeader: View {
             .accessibilityLabel(foldTitle)
             .accessibilityValue(nonePresent ? model.countText(of: zone) : "")
             .help(foldTitle)
+            .onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }
         }
         .frame(height: height)
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.control)
@@ -93,9 +95,17 @@ struct PanelZoneHeader: View {
     // The controller animates the fold, so the panel resizes with the rows.
     private func hit(_ area: ZoneHeaderHit.Area) {
         switch ZoneHeaderHit.action(for: area, nonePresent: nonePresent) {
-        case .fold: model.foldPanelZone { disclosure.toggle(zone.id) }
+        case .fold: fold()
         case .toggleZone: model.actions.toggleZone(zone.id)
         case .none: break
         }
+    }
+
+    private func fold() { model.foldPanelZone { disclosure.toggle(zone.id) } }
+
+    private func arrowKey(_ press: KeyPress) -> KeyPress.Result {
+        guard ZoneHeaderHit.arrowFolds(right: press.key == .rightArrow, expanded: expanded) else { return .ignored }
+        fold()
+        return .handled
     }
 }

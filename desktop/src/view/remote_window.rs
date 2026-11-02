@@ -64,6 +64,20 @@ fn problem_for(error: &RemoteError) -> Problem {
     }
 }
 
+/// What Narrator hears as the window's pairing code and lockout go from
+/// `shown` to `now`, as VoiceOver does on the Mac: a new code, an expired
+/// one, a lockout.
+fn pairing_news(strings: &Strings, shown: (&str, bool), now: (&str, bool)) -> Option<SharedString> {
+    match now {
+        (_, true) if !shown.1 => Some(strings.get_remote_locked()),
+        ("", false) if !shown.0.is_empty() => Some(strings.get_remote_no_code()),
+        (code, false) if code != shown.0 => {
+            Some(strings.invoke_remote_code_label(remote::spaced_digits(code).into()))
+        }
+        _ => None,
+    }
+}
+
 /// The running server and what the window shows about it.
 pub(super) struct RemoteHost {
     server: Option<RemoteServer>,
@@ -86,6 +100,7 @@ pub(super) struct RemoteHost {
     devices_offline: Option<usize>,
     /// Forget All Remote Devices couldn't save the empty list.
     forget_failed: bool,
+    announcement_timer: slint::Timer,
     /// The networks' profiles; `None` reads none (the tests that don't fake one).
     pub(super) profiles: Option<Arc<dyn ProfileSource>>,
     watch: Option<Watch>,
@@ -119,6 +134,7 @@ impl Default for RemoteHost {
             qr: None,
             devices_offline: None,
             forget_failed: false,
+            announcement_timer: slint::Timer::default(),
             profiles: profile_source(),
             watch: None,
             public: PublicNetworkWarning::default(),
@@ -453,6 +469,28 @@ impl App {
             host.devices_offline = None;
         }
         self.show_remote_state();
+        if saved.is_err() {
+            self.announce_remote(self.strings().get_remote_forget_failed());
+        }
+    }
+
+    /// Has Narrator say `text` in the web remote window while it shows, as
+    /// [`App::announce`] does in the main window.
+    fn announce_remote(&self, text: SharedString) {
+        if !self.remote_window.window().is_visible() {
+            return;
+        }
+        self.remote_window.set_announcement(text);
+        let window = self.remote_window.as_weak();
+        self.remote.borrow().announcement_timer.start(
+            slint::TimerMode::SingleShot,
+            super::ANNOUNCEMENT_CLEARS_AFTER,
+            move || {
+                if let Some(window) = window.upgrade() {
+                    window.set_announcement(SharedString::new());
+                }
+            },
+        );
     }
 
     fn use_remote_port(&self, text: &str) {
@@ -644,9 +682,15 @@ impl App {
         };
         let port = server.port();
         let code = server.pairing_code().unwrap_or_default();
+        let locked = server.pairing_locked();
+        let news = pairing_news(
+            &self.strings(),
+            (&window.get_code(), window.get_locked()),
+            (&code, locked),
+        );
         window.set_code(code.as_str().into());
         window.set_code_spoken(remote::spaced_digits(&code).into());
-        window.set_locked(server.pairing_locked());
+        window.set_locked(locked);
         let local = host
             .host
             .as_deref()
@@ -654,15 +698,14 @@ impl App {
         window.set_local_address(local.clone().unwrap_or_default().into());
         // The PC may have moved to another network since the remote started.
         host.lan_address = remote::lan_address();
-        window.set_ip_address(
-            host.lan_address
-                .map(|address| remote::ip_url(address, port))
-                .unwrap_or_default()
-                .into(),
-        );
+        let ip = host
+            .lan_address
+            .map(|address| remote::ip_url(address, port));
+        window.set_ip_address(ip.clone().unwrap_or_default().into());
+        let wanted = local.or(ip);
         let drawn = host.qr.as_ref().map(|(text, _)| text.clone());
-        if local != drawn {
-            host.qr = local.and_then(|address| {
+        if wanted != drawn {
+            host.qr = wanted.and_then(|address| {
                 let (side, pixels) = remote::qr_pixels(&address, QR_SCALE)?;
                 let side = u32::try_from(side).ok()?;
                 let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(side, side);
@@ -680,6 +723,10 @@ impl App {
                 .unwrap_or_default(),
         );
         window.set_listening(true);
+        drop(host);
+        if let Some(news) = news {
+            self.announce_remote(news);
+        }
     }
 
     /// Stops the server as the app quits, so no command arrives after the backend.
@@ -901,6 +948,38 @@ mod tests {
         assert_ne!(app.remote_window.get_code(), second);
     }
 
+    // covers: S288
+    #[test]
+    fn narrator_hears_a_new_pairing_code() {
+        let app = over_loopback(MockBackend::new());
+        app.ui.borrow_mut().remote.port = free_port();
+        app.main.invoke_remote_requested();
+        let said = || app.remote_window.get_announcement().to_string();
+        let spoken = || {
+            format!(
+                "Pairing code {}",
+                crate::remote::spaced_digits(&current_code(&app))
+            )
+        };
+        app.remote_window.invoke_remote_toggled(true);
+        assert_eq!(said(), spoken(), "the remote turned on");
+        app.remote_window.invoke_new_code_requested();
+        assert_eq!(said(), spoken(), "New Code");
+    }
+
+    #[test]
+    fn narrator_hears_an_expired_code_and_a_lockout_once() {
+        let app = over_loopback(MockBackend::new());
+        let strings = app.strings();
+        let news = |shown, now| super::pairing_news(&strings, shown, now);
+        let expired = Some(strings.get_remote_no_code());
+        assert_eq!(news(("123456", false), ("", false)), expired);
+        assert_eq!(news(("", false), ("", false)), None);
+        let locked = Some(strings.get_remote_locked());
+        assert_eq!(news(("123456", false), ("123456", true)), locked);
+        assert_eq!(news(("123456", true), ("654321", true)), None);
+    }
+
     #[test]
     fn a_port_in_use_is_said_and_another_port_can_be_picked() {
         let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a port");
@@ -1004,6 +1083,10 @@ mod tests {
         app.remote.borrow_mut().devices_path = Some(blocker.join("remote-devices.json"));
         app.remote_window.invoke_forget_all_requested();
         assert!(app.remote_window.get_forget_failed());
+        assert_eq!(
+            app.remote_window.get_announcement(),
+            app.strings().get_remote_forget_failed()
+        );
     }
 
     fn current_code(app: &super::App) -> String {
@@ -1612,5 +1695,65 @@ mod tests {
         app.remote_window.invoke_remote_toggled(false);
         assert_eq!(public_notices(&app), 0, "the remote is off");
         assert!(!app.remote_window.get_public_network());
+    }
+
+    #[test]
+    fn without_a_usable_name_the_qr_code_has_the_ip_address_and_says_so() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = over_loopback(MockBackend::new());
+        let port = free_port();
+        app.ui.borrow_mut().remote.port = port;
+        app.remote.borrow_mut().host = None;
+        app.main.invoke_remote_requested();
+        let window = &app.remote_window;
+        window.invoke_remote_toggled(true);
+        draw_frames();
+        assert!(window.get_listening());
+        // CI sets AUDIOSYNC_LAN_TESTS, so there it is the runner's own address, not 192.0.2.7.
+        let lan = crate::remote::lan_address().expect("a private IPv4 address");
+        let address = crate::remote::ip_url(lan, port);
+        let drawn = app
+            .remote
+            .borrow()
+            .qr
+            .as_ref()
+            .map(|(text, _)| text.clone());
+        assert_eq!(drawn.as_deref(), Some(address.as_str()));
+        let label = app.strings().invoke_remote_qr_label(address.into());
+        assert!(
+            ElementHandle::find_by_accessible_label(window, label.as_str())
+                .next()
+                .is_some(),
+            "{label}"
+        );
+    }
+
+    #[test]
+    fn the_port_row_shows_while_the_remote_is_on_and_the_http_note_always() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = over_loopback(MockBackend::new());
+        app.ui.borrow_mut().remote.port = free_port();
+        app.main.invoke_remote_requested();
+        draw_frames();
+        let window = &app.remote_window;
+        let has = |text: &str| {
+            ElementHandle::find_by_accessible_label(window, text)
+                .next()
+                .is_some()
+        };
+        let use_port = app.strings().get_remote_use_port();
+        let note = app.strings().get_remote_http_note();
+        assert!(!has(use_port.as_str()), "off: no port row");
+        assert!(has(note.as_str()), "off: the note");
+
+        window.invoke_remote_toggled(true);
+        // Tall enough that the note isn't scrolled out of view (draw_frames
+        // would size it back).
+        window
+            .window()
+            .set_size(slint::LogicalSize::new(460.0, 2000.0));
+        assert!(window.get_listening());
+        assert!(has(use_port.as_str()), "on: the port row");
+        assert!(has(note.as_str()), "on: the note");
     }
 }

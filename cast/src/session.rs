@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -232,8 +232,7 @@ impl Fingerprints {
     /// when it changed.
     fn record(&self, client: &CastClient) -> Option<SessionEvent> {
         let after = client.fingerprint()?;
-        let mut book = self.book.lock().unwrap_or_else(PoisonError::into_inner);
-        match book.record(self.id, after) {
+        match FingerprintBook::record_in(&self.book, self.id, after) {
             FingerprintChange::Changed { before } => {
                 Some(SessionEvent::CertificateChanged { before, after })
             }

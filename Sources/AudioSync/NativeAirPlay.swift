@@ -114,8 +114,8 @@ final class NativeAirPlay {
         }
     }
 
-    /// Adds the receiver `id` as a speaker at slider position `volume` (0 to
-    /// 100) times the master. Main queue.
+    /// Adds the receiver `id` at its own volume `volume` (0 to 100); the master stays
+    /// out of it, since the sender scales the stream instead (S413). Main queue.
     func add(_ id: String, volume: Double) {
         let empty = model.states.isEmpty
         model.added(id)

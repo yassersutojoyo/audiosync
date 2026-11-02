@@ -426,8 +426,8 @@ final class StreamEngine {
     /// tell the host, which rebuilds it or reports the lost source.
     private func handleInterruption(_ reason: SourceCapture.Interruption) {
         guard isRunning else { return }
-        if case .sourceLost(.aggregateDeviceFailed) = reason {
-            follow(flowWatch.report(.aggregateDied, at: ProcessInfo.processInfo.systemUptime))
+        if let sign = CaptureFlowWatch.sign(of: reason) {
+            follow(flowWatch.report(sign, at: ProcessInfo.processInfo.systemUptime))
             return
         }
         if case .sourceLost(.inputDisconnected) = reason {

@@ -8,7 +8,7 @@
 import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
+import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
@@ -322,6 +322,9 @@ component SpeakerSection inherits VerticalLayout {
     // in-zones-focus-id is its speaker's ID, and clears the ID.
     in-out property <string> in-zones-focus-id;
     in-out property <RowPart> in-zones-focus-part;
+    // Open Network Settings, under the note while AirPlay finds nothing.
+    in property <bool> show-network-settings;
+    callback network-settings();
     // Add by Address…, under the note while no Google Cast speaker is found.
     in property <bool> show-add-address;
     callback add-address();
@@ -422,6 +425,20 @@ component SpeakerSection inherits VerticalLayout {
                     SecondaryText {
                         text: root.note;
                         font-size: Tokens.font-size-caption;
+                    }
+                }
+            }
+
+            if root.show-network-settings: HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: 12px;
+                alignment: start;
+                LinkButton {
+                    text: Strings.open-network-settings;
+                    label: Strings.open-network-settings;
+                    clicked => {
+                        root.network-settings();
                     }
                 }
             }
@@ -812,6 +829,11 @@ component CalibrationCard inherits Card {
     in property <string> outcome;
     in property <bool> can-apply;
     in property <bool> can-undo;
+    // Before a run: the reference's device volume when it is low or muted
+    // (spec S197), and the reference's name for Narrator.
+    in property <DeviceVolumeHint> volume;
+    in property <int> volume-percent;
+    in property <string> reference;
     callback start();
     callback cancel();
     callback privacy-requested();
@@ -823,6 +845,8 @@ component CalibrationCard inherits Card {
     callback undo();
     callback focus-changed(bool);
     callback close();
+    // `focused`: the fix had the keyboard focus, which the window places.
+    callback fix-volume(bool);
 
     accessible-role: groupbox;
     accessible-label: Strings.calibrate-all-title;
@@ -880,6 +904,67 @@ component CalibrationCard inherits Card {
         // The button's description says it already.
         QuietText {
             text: root.status;
+        }
+
+        if root.volume != DeviceVolumeHint.none: VerticalLayout {
+            spacing: 4px;
+            accessible-role: groupbox;
+            accessible-label: Strings.calibrate-before-start;
+
+            Text {
+                text: Strings.calibrate-before-start;
+                font-size: Tokens.font-size-caption;
+                font-weight: 600;
+                color: Tokens.secondary-text;
+                accessible-role: none;
+            }
+
+            HorizontalLayout {
+                spacing: 4px;
+
+                Glyph {
+                    glyph: Glyphs.device-volume(root.volume);
+                    font-size: 12px;
+                    color: Tokens.secondary-text;
+                    vertical-alignment: top;
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: LayoutAlignment.start;
+
+                    Text {
+                        text: Strings.device-volume-hint(root.volume, root.volume-percent);
+                        font-size: Tokens.font-size-caption;
+                        color: Tokens.secondary-text;
+                        wrap: word-wrap;
+                        min-height: self.preferred-height;
+                        accessible-role: text;
+                        accessible-label: Strings.device-volume-hint-label(root.reference, root.volume, root.volume-percent);
+                    }
+
+                    HorizontalLayout {
+                        alignment: LayoutAlignment.start;
+
+                        volume-fix := LinkButton {
+                            text: Strings.device-volume-fix(root.volume);
+                            label: Strings.device-volume-fix-label(root.reference, root.volume);
+                            changed keyboard-focused => {
+                                root.focus-changed(self.keyboard-focused);
+                            }
+                            clicked => {
+                                // The button goes once Windows reports the
+                                // fix, so the focus moves on first.
+                                let focused = volume-fix.keyboard-focused;
+                                if focused && root.can-start {
+                                    calibrate-button.focus();
+                                }
+                                root.fix-volume(focused);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if root.left-out.length > 0: VerticalLayout {
@@ -1284,6 +1369,11 @@ export component MainWindow inherits Window {
     in property <string> calibrate-all-outcome;
     in property <bool> calibrate-all-can-apply;
     in property <bool> calibrate-all-can-undo;
+    in property <DeviceVolumeHint> calibrate-all-volume;
+    in property <int> calibrate-all-volume-percent;
+    // The speaker ID the fix goes to.
+    in property <string> calibrate-all-volume-id;
+    in property <string> calibrate-all-reference;
 
     callback power-toggled(bool);
     callback source-selected(int);
@@ -1333,6 +1423,8 @@ export component MainWindow inherits Window {
     // A Google Cast speaker's Mute or Unmute, and its Resync.
     callback cast-muted-requested(string, bool);
     callback cast-resync-requested(string);
+    // Open Network Settings under the no-speakers note.
+    callback network-settings-requested();
     // Speakers > Add by Address…, and Remove on a row added that way.
     callback cast-add-address-requested();
     callback cast-remove-requested(string);
@@ -2006,6 +2098,16 @@ export component MainWindow inherits Window {
                         outcome: root.calibrate-all-outcome;
                         can-apply: root.calibrate-all-can-apply;
                         can-undo: root.calibrate-all-can-undo;
+                        volume: root.calibrate-all-volume;
+                        volume-percent: root.calibrate-all-volume-percent;
+                        reference: root.calibrate-all-reference;
+                        // A focused fix with Calibrate All disabled hands the focus to the card above.
+                        fix-volume(focused) => {
+                            if focused && !root.calibrate-all-can-start {
+                                equalizer-card.focus();
+                            }
+                            root.device-volume-fix-requested(root.calibrate-all-volume-id);
+                        }
                         start => {
                             root.calibrate-all-requested();
                         }
@@ -2321,6 +2423,11 @@ export component MainWindow inherits Window {
                         }
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
+                        // Linux has no Settings page to open.
+                        show-network-settings: root.airplay-none-found && Platform.os != OperatingSystemType.linux;
+                        network-settings => {
+                            root.network-settings-requested();
+                        }
                         show-add-address: root.cast-by-address && root.cast-list == CastList.none-found;
                         add-address => {
                             root.cast-add-address-requested();

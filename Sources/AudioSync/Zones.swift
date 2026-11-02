@@ -242,6 +242,11 @@ struct ZoneMemberFacts: Equatable {
     var needsAirPlay2 = false
     /// Plays as part of a stereo pair or home theater target now.
     var inTarget = false
+
+    /// `needsAirPlay2` for a member: a hidden target is found, so it gets the hidden reason (S252).
+    static func airPlay2Missing(target: Bool, found: Bool, airPlay2On: Bool) -> Bool {
+        target && !found && !airPlay2On
+    }
 }
 
 /// The core's plan for a click on a zone (`asc_zone_click_plan`).
@@ -439,6 +444,13 @@ enum ZoneHeaderHit {
     /// while none of the zone's speakers is present and VoiceOver skips the icon.
     static func goToZoneFocus(nonePresent: Bool) -> Area {
         nonePresent ? .chevron : .zoneIcon
+    }
+
+    /// Whether an arrow key on the header folds or unfolds the zone: Right
+    /// unfolds a folded zone, Left folds an unfolded one, as on Windows.
+    /// Otherwise the key passes on.
+    static func arrowFolds(right: Bool, expanded: Bool) -> Bool {
+        right != expanded
     }
 }
 

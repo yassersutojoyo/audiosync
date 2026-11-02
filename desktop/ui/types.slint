@@ -8,9 +8,10 @@
 export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2, waiting-for-ptp, not-on-network, waiting-for-password, waiting-for-pin }
 
 // The part of a speaker row or zone header that has, or is to take, the keyboard
-// focus: its toggle, delay button, volume, sync controls, options or name
-// field. A row rebuilt under the focus takes it back on the same part.
-export enum RowPart { none, toggle, delay, volume, sync, options, name }
+// focus: its toggle, delay button, volume, sync controls, options, name
+// field or a zone's fold arrow. A row rebuilt under the focus takes it back
+// on the same part.
+export enum RowPart { none, toggle, delay, volume, sync, options, name, arrow }
 
 // A main-window control outside the notices, the speaker rows and the zone headers;
 // one taking the focus applies an open speaker rename.
@@ -37,7 +38,7 @@ export enum CastList { quiet, searching, none-found, failed }
 export enum Availability { open, needs-code, pairing, waiting-to-pair, pairing-not-yet, airplay2-not-yet, airplay2-next-launch, unsupported }
 
 // What went wrong with an AirPlay speaker, for its notice.
-export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, not-accepted, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, too-many-airplay2-speakers, ptp-other-network, plays-through-speakers, receiver-unverified, apple-tv-plays, plays-in-group, unsupported }
+export enum AirPlayProblem { not-responding, connection-lost, busy, refused, needs-password, needs-pin, still-needs-code, not-accepted, pairing-failed, pairing-not-yet, airplay2-not-yet, timing-unavailable, too-many-airplay2-speakers, ptp-other-network, plays-through-speakers, receiver-unverified, apple-tv-plays, plays-in-group, unsupported }
 
 // View > Appearance: as Windows is set, or always light or dark.
 export enum Appearance { system, light, dark }
@@ -242,7 +243,7 @@ export struct ZoneItem {
 }
 
 // What a notice is about, for its short name (Strings.notice-title).
-export enum NoticeKind { no-speaker, source-quit, source-switched, switch-failed, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, waiting-for-audio, speaker-failed, speaker-lost, speaker-busy, speaker-struggling, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network, groups-became-zones, presets-left-off, update }
+export enum NoticeKind { no-speaker, source-quit, source-switched, switch-failed, source-not-running, source-refused, input-not-connected, input-disconnected, microphone-blocked, capture-failed, capture-lost, waiting-for-audio, speaker-failed, speaker-lost, speaker-busy, speaker-struggling, pair-first, airplay-retrying, airplay-waiting, airplay-cant-play, airplay-stopped, airplay-ptp-ports-taken, settings-not-saved, pairings-not-saved, settings-kept-aside, settings-from-newer, pairings-kept-aside, no-sound-output, heard-twice, launch-at-login-failed, launch-at-login-not-removed, launch-at-login-off-in-settings, cast-cant-play, airplay-ahead-of-cast, airplay2-next-launch, remote-public-network, groups-became-zones, presets-left-off, update }
 
 // A button of the updater's notice.
 export enum UpdateButton { download, not-now, skip-this-version, cancel, try-again, open-release-page, restart-now }

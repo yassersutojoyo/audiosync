@@ -250,7 +250,8 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     }
     #[cfg(feature = "mock-backend")]
     if zones_preview {
-        app.set_zone_expanded("zone:upstairs", false);
+        app.set_zone_expanded("zone:upstairs", false, false);
+        app.set_zone_expanded("zone:upstairs", false, true);
     }
     media.attach(&app);
     instance.listen(&app, log);
@@ -698,6 +699,44 @@ mod tests {
         );
     }
 
+    /// While AirPlay finds no speaker, the note in the main window and the
+    /// flyout offers Open Network Settings, as the Mac offers Open Local
+    /// Network Settings, and it opens Settings > Network & internet.
+    #[test]
+    fn the_no_speakers_note_offers_open_network_settings() {
+        let main = include_str!("../ui/main.slint");
+        assert!(main.contains(
+            "show-network-settings: root.airplay-none-found && Platform.os != OperatingSystemType.linux;"
+        ));
+        let body = handler_body(main, "text: Strings.open-network-settings;", "clicked");
+        assert!(body.contains("root.network-settings();"), "{body}");
+        let body = handler_body(main, "show-network-settings: root.", "network-settings");
+        assert!(
+            body.contains("root.network-settings-requested();"),
+            "{body}"
+        );
+        let flyout = include_str!("../ui/flyout.slint");
+        let body = handler_body(flyout, "text: Strings.open-network-settings;", "clicked");
+        assert!(
+            body.contains("root.network-settings-requested();"),
+            "{body}"
+        );
+
+        let view = include_str!("view.rs");
+        for window in ["main", "flyout"] {
+            assert!(view.contains(&format!(
+                "{window}.on_network_settings_requested(move || with_app(&w, App::open_network_settings));"
+            )));
+        }
+        let open = &view[view
+            .find("fn open_network_settings(&self) {")
+            .expect("it opens a page")..];
+        assert!(
+            open[..open.find('}').expect("it ends")]
+                .contains("let uri = SettingsPage::NetworkStatus.uri();")
+        );
+    }
+
     /// A dismiss button names its notice in a few words: after a dismiss the
     /// next notice's button takes the focus, and Narrator then says which
     /// notice it is without reading the whole notice again.
@@ -813,6 +852,11 @@ mod tests {
                 "text: Strings.cast-add-address;",
                 "changed keyboard-focused",
                 "add-address-focused",
+            ),
+            (
+                "text: Strings.open-network-settings;",
+                "changed keyboard-focused",
+                "network-settings-focused",
             ),
         ] {
             let body = handler_body(flyout, element, handler);

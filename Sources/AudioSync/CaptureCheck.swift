@@ -143,6 +143,8 @@ struct CaptureFlowWatch {
         case noCallback(TimeInterval)
         case serviceRestarted
         case aggregateDied
+        /// The app's tap couldn't be built again for its new processes (S11).
+        case retapFailed
         case inputLeft
 
         /// For the debug log.
@@ -151,8 +153,21 @@ struct CaptureFlowWatch {
             case .noCallback(let seconds): return "no callback for \((seconds * 10).rounded() / 10) s"
             case .serviceRestarted: return "Core Audio's service restarted"
             case .aggregateDied: return "the aggregate device is no longer alive"
+            case .retapFailed: return "the app's tap couldn't be built again"
             case .inputLeft: return "the input device left"
             }
+        }
+    }
+
+    /// The sign of an interruption that closes the capture for the tries; nil
+    /// for one that ends the session or has its own handling. Only a retap
+    /// reports a tap, format or IOProc failure during a session.
+    static func sign(of reason: SourceCapture.Interruption) -> Sign? {
+        guard case .sourceLost(let error) = reason else { return nil }
+        switch error {
+        case .aggregateDeviceFailed: return .aggregateDied
+        case .tapNotCreated, .formatUnusable, .ioProcNotStarted: return .retapFailed
+        default: return nil
         }
     }
 

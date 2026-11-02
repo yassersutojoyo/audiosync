@@ -461,6 +461,10 @@ const char *asc_eq_preset_id(size_t preset);
 /* Writes a preset's ASC_EQ_BANDS band gains (dB) to gains_db; false for a bad index. */
 bool asc_eq_preset_gains(size_t preset, double *gains_db);
 
+/* Whether two saved-curve names are one name: equal ignoring case, with no
+ * Unicode normalization; false for NULL. */
+bool asc_eq_same_curve_name(const char *a, const char *b);
+
 /*
  * An equalizer. asc_eq_process runs on the capture thread; every other
  * asc_eq_* call is a control call.
@@ -1129,6 +1133,53 @@ typedef struct AscDelayMigration {
  */
 bool asc_local_delay_migrate(const AscStoredDelay *entries, size_t count, bool has_legacy_delay, double legacy_delay_ms, AscMigratedOffset *offsets, AscDelayMigration *result);
 
+/*
+ * The switched-on local outputs whose devices left the list less than
+ * ASC_BRIEF_LOSS_HOLD_MS ago (S328): the host counts each among the outputs
+ * taking part, at its offset and never as the reference. Times are the
+ * host's uptime in seconds; a negative or non-finite one counts as 0.
+ * Control thread only.
+ */
+typedef struct AscBriefLosses AscBriefLosses;
+
+/* Creates a hold with no output held. */
+AscBriefLosses *asc_brief_losses_create(void);
+
+/* Destroys a hold; NULL is ignored. */
+void asc_brief_losses_destroy(AscBriefLosses *losses);
+
+/*
+ * A device list made at now_s: the listed IDs, the switched-on IDs and the
+ * reference among them (NULL for none). An output that took part at the last
+ * listing, wasn't the reference then, is still switched on and is missing
+ * now is held from now_s; one listed again, or switched off, no longer is.
+ * NULL and non-UTF-8 IDs are left out; nothing happens for a NULL handle or
+ * a NULL array with a nonzero count.
+ */
+void asc_brief_losses_note_listing(AscBriefLosses *losses, const char *const *listed, size_t listed_count, const char *const *enabled, size_t enabled_count, const char *reference, double now_s);
+
+/* Output id was switched off: it stops counting at once. True when it was
+   held, so the others re-time. */
+bool asc_brief_losses_switched_off(AscBriefLosses *losses, const char *id);
+
+/* Ends the holds ASC_BRIEF_LOSS_HOLD_MS old at now_s. True when any ended,
+   so the others re-time once. */
+bool asc_brief_losses_expire(AscBriefLosses *losses, double now_s);
+
+/* A session restart (S20): no output is held any longer. */
+void asc_brief_losses_restart(AscBriefLosses *losses);
+
+/* How many outputs are held; 0 for a NULL handle. */
+size_t asc_brief_losses_held_count(const AscBriefLosses *losses);
+
+/* The ID of held output `index`, sorted by ID; NULL past the end. It stays
+   valid until the next call that changes the hold. */
+const char *asc_brief_losses_held_id(const AscBriefLosses *losses, size_t index);
+
+/* When the next hold ends, in uptime seconds, into *at_s; false, writing
+   nothing, when nothing is held or for a NULL pointer. */
+bool asc_brief_losses_next_expiry_s(const AscBriefLosses *losses, double *at_s);
+
 /* ---- Output device volume (the operating system's own, per device) ------- */
 
 /*
@@ -1290,7 +1341,7 @@ uint32_t asc_preset_recall_plan(const AscPresetMember *members, size_t count, co
 
 /*
  * Whether the host plays a preset exactly (S253): `on_now` speakers are on,
- * the reference output left out; the gains are ten each. False for a NULL
+ * the reference output included; the gains are ten each. False for a NULL
  * array with a count above 0, or NULL gains. Pure function for the control
  * thread.
  */

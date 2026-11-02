@@ -91,7 +91,7 @@ struct HiddenSpeakers: Equatable {
         hide(key: new, name: entry.name, kind: entry.kind)
     }
 
-    /// The Hidden Speakers menu, by shown name ignoring case, then by key.
+    /// The Hidden Speakers menu, by shown name ignoring case with numbers by value, then by key.
     /// `present` holds the current name and kind of each hidden speaker
     /// listed now; the others read as not found.
     func menu(present: [String: (name: String, kind: String)], text: UIStrings) -> [MenuItem] {
@@ -104,7 +104,7 @@ struct HiddenSpeakers: Equatable {
                             title: text.hiddenSpeakerEntryAbsent(name: entry.name, kind: entry.kind))
         }
         .sorted { a, b in
-            let order = a.name.caseInsensitiveCompare(b.name)
+            let order = a.name.compare(b.name, options: [.caseInsensitive, .numeric])
             return order == .orderedSame ? a.key < b.key : order == .orderedAscending
         }
     }

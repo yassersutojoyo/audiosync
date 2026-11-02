@@ -132,6 +132,8 @@ struct UiState {
     /// The zones whose speakers are hidden by their arrow, by ID; a zone
     /// opens expanded.
     collapsed: HashSet<String>,
+    /// The same for the flyout, which keeps its own (S359).
+    flyout_collapsed: HashSet<String>,
     /// Whether the source was a mix at the last refresh.
     source_was_mix: bool,
     /// The equalizer curve last picked or saved, so the picker tells it from
@@ -188,11 +190,14 @@ struct TypedDelay {
 
 impl TypedDelay {
     /// Keeps `text` if the field takes it (`ui_model::delay_field_text`);
-    /// otherwise the field goes back to what it showed before.
-    fn edit(&mut self, text: &str, shown: Option<f64>) {
-        if let Some(text) = ui_model::delay_field_text(text) {
+    /// otherwise the field goes back to what it showed before, and this
+    /// returns false.
+    fn edit(&mut self, text: &str, shown: Option<f64>) -> bool {
+        let taken = ui_model::delay_field_text(text);
+        if let Some(text) = taken {
             self.draft = Some((text.to_string(), shown));
         }
+        taken.is_some()
     }
 
     /// The text the field shows instead of `shown`, the applied value.
@@ -236,8 +241,6 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
-    /// The sources, then Several Apps…, which opens the main window's list.
-    flyout_sources: Rc<VecModel<SharedString>>,
     /// The chosen input device's channel pairs; empty up to two channels.
     input_pairs: Rc<VecModel<SharedString>>,
     mix_apps: Rc<VecModel<MixAppItem>>,
@@ -251,6 +254,8 @@ struct Models {
     flyout_this_pc: Rc<VecModel<SpeakerItem>>,
     flyout_connected: Rc<VecModel<SpeakerItem>>,
     zones: Rc<VecModel<ZoneItem>>,
+    /// The zones as the flyout folds them.
+    flyout_zones: Rc<VecModel<ZoneItem>>,
     /// Each zone's rows by zone ID, kept between refreshes so an unchanged
     /// zone's item compares equal and its rows aren't rebuilt.
     zone_models: RefCell<HashMap<String, ZoneModels>>,
@@ -277,6 +282,7 @@ struct ZoneModels {
 /// A zone as one refresh builds it, before its rows go into its models.
 struct ZoneRowsBuilt {
     item: ZoneItem,
+    flyout_expanded: bool,
     members: Vec<SpeakerItem>,
     targets: Vec<ZoneTarget>,
 }
@@ -304,6 +310,11 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 /// most (it goes sooner with its notice). Cleared, nothing stray is left for
 /// Narrator's scan mode, and the same words can be announced again later.
 const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(5);
+
+/// How long a live region stays empty before the words it held come back.
+/// Windows announces a live region only as it appears or its words change,
+/// so the emptied one has to reach it first, a frame or two after the change.
+const ANNOUNCEMENT_REPEAT_GAP: Duration = Duration::from_millis(100);
 
 /// The most UTF-16 units a tray icon's tooltip holds (128 with the
 /// terminating null).
@@ -430,8 +441,8 @@ const MAIN_WINDOW_CHROME: (f64, f64) = (16.0, 64.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the zone rows,
-/// the speaker rows (a zone's members among them) and the Add by Address
-/// link.
+/// the speaker rows (a zone's members among them), the Add by Address link
+/// and the Open Network Settings link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutParts {
     notices: bool,
@@ -439,6 +450,7 @@ struct FlyoutParts {
     zones: bool,
     speakers: bool,
     add_address: bool,
+    network_settings: bool,
 }
 
 impl FlyoutParts {
@@ -449,13 +461,15 @@ impl FlyoutParts {
             || (self.zones && other.zones)
             || (self.speakers && other.speakers)
             || (self.add_address && other.add_address)
+            || (self.network_settings && other.network_settings)
     }
 }
 
 /// What the tray flyout shows: how many notices there are and how many of
 /// them it lists, how many zones, how many of this PC's and connected
 /// speakers in no zone, and the shape of the zones' member lists
-/// ([`zone_shape`]), and whether it shows the Add by Address link.
+/// ([`zone_shape`]), and whether it shows the Add by Address link and the
+/// Open Network Settings link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutCounts {
     notices: usize,
@@ -465,6 +479,7 @@ struct FlyoutCounts {
     speakers: usize,
     zone_members: u64,
     add_address: bool,
+    network_settings: bool,
 }
 
 impl FlyoutCounts {
@@ -485,6 +500,7 @@ impl FlyoutCounts {
                 || self.speakers != next.speakers
                 || self.zone_members != next.zone_members,
             add_address: self.add_address && !next.add_address,
+            network_settings: self.network_settings && !next.network_settings,
         }
     }
 }
@@ -793,6 +809,8 @@ pub struct App {
     out_of_range: RefCell<HashSet<String>>,
     /// Clears the announcement a while after it was made.
     announcement_timer: Timer,
+    /// Puts back an announcement emptied to be said again.
+    repeat_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
     poll_timer: Timer,
     /// Moves a microphone calibration on while one holds the outputs.
@@ -996,7 +1014,6 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
-            flyout_sources: Rc::new(VecModel::default()),
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -1006,6 +1023,7 @@ impl App {
             flyout_this_pc: Rc::new(VecModel::default()),
             flyout_connected: Rc::new(VecModel::default()),
             zones: Rc::new(VecModel::default()),
+            flyout_zones: Rc::new(VecModel::default()),
             zone_models: RefCell::default(),
             move_zones: RefCell::default(),
             notices: Rc::new(VecModel::default()),
@@ -1053,6 +1071,7 @@ impl App {
             calibrate_all_announced: Cell::new(0),
             out_of_range: RefCell::default(),
             announcement_timer: Timer::default(),
+            repeat_timer: Timer::default(),
             poll_timer: Timer::default(),
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
@@ -1724,15 +1743,14 @@ impl App {
             .set_calibrate_all_rows(ModelRc::from(m.calibration_rows.clone()));
         self.main
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
-        self.flyout
-            .set_sources(ModelRc::from(m.flyout_sources.clone()));
+        self.flyout.set_sources(ModelRc::from(m.sources.clone()));
         self.flyout
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
             .set_this_pc(ModelRc::from(m.flyout_this_pc.clone()));
         self.flyout
             .set_speakers(ModelRc::from(m.flyout_connected.clone()));
-        self.flyout.set_zones(ModelRc::from(m.zones.clone()));
+        self.flyout.set_zones(ModelRc::from(m.flyout_zones.clone()));
         self.flyout
             .set_notices(ModelRc::from(m.flyout_notices.clone()));
         self.equalizer.set_gains(ModelRc::from(m.gains.clone()));
@@ -1783,6 +1801,8 @@ impl App {
             ui.delay_drafts
                 .retain(|id, _| state.speakers.iter().any(|s| s.id == *id));
             ui.collapsed
+                .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
+            ui.flyout_collapsed
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
             became_mix
         };
@@ -1925,6 +1945,7 @@ impl App {
                             .unwrap_or_default(),
                         ..ZoneItem::default()
                     },
+                    flyout_expanded: !ui.flyout_collapsed.contains(&zone.id),
                     members,
                     targets,
                 }
@@ -1943,6 +1964,8 @@ impl App {
         drop(ui);
         self.main
             .set_connected_virtual_hidden(connected_virtual_hidden);
+        // Read before the flyout takes the new state, for `flyout_shown`.
+        let none_found_shown = self.flyout.get_airplay_none_found();
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_airplay_searching(state.airplay_searching);
@@ -2077,6 +2100,9 @@ impl App {
             speakers: m.flyout_connected.row_count(),
             zone_members: self.zone_shape_shown(),
             add_address: add_address_shown,
+            network_settings: none_found_shown
+                && m.zones.row_count() == 0
+                && m.flyout_connected.row_count() == 0,
         };
         let flyout_removed = flyout_shown.removed_by(FlyoutCounts {
             notices: notices.len(),
@@ -2087,9 +2113,10 @@ impl App {
             zone_members: zone_shape(
                 zones
                     .iter()
-                    .map(|zone| listed_members(zone.item.expanded, zone.members.len())),
+                    .map(|zone| listed_members(zone.flyout_expanded, zone.members.len())),
             ),
             add_address: state.cast_by_address && state.cast_list == ui_model::CastList::NoneFound,
+            network_settings: state.airplay_none_found && zones.is_empty() && connected.is_empty(),
         });
         let main_lists = MainLists {
             notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
@@ -2118,9 +2145,6 @@ impl App {
             connected_zoned,
             ..
         } = main_lists;
-        let mut flyout_sources = sources.clone();
-        flyout_sources.push(strings.get_source_mix_more());
-        sync_model(&m.flyout_sources, flyout_sources);
         sync_model(&m.sources, sources);
         sync_model(&m.input_pairs, input_pairs);
         self.main.set_input_pair_index(input_pair_index);
@@ -2131,7 +2155,11 @@ impl App {
                 .mix_apps
                 .iter()
                 .map(|app| MixAppItem {
-                    name: app.name.as_str().into(),
+                    name: if app.running {
+                        app.name.as_str().into()
+                    } else {
+                        strings.invoke_source_not_running(app.name.as_str().into())
+                    },
                     checked: app.checked,
                 })
                 .collect(),
@@ -2254,16 +2282,28 @@ impl App {
     /// Has Narrator say `text` without moving the focus, through the live
     /// region of the window it can hear: the flyout while it is open (it
     /// has the focus then), else the main window. Never both, so it is said
-    /// once. The live region empties again after a few seconds.
+    /// once. The live region empties again after a few seconds. The words
+    /// it already holds empty it first and come back
+    /// [`ANNOUNCEMENT_REPEAT_GAP`] later, so they are said again.
     fn announce(&self, text: SharedString) {
-        if self.flyout.window().is_visible() {
-            self.main.set_notice_announcement(SharedString::new());
-            self.flyout.set_notice_announcement(text);
-        } else {
-            self.flyout.set_notice_announcement(SharedString::new());
-            self.main.set_notice_announcement(text);
-        }
         let (main, flyout) = (self.main.as_weak(), self.flyout.as_weak());
+        let in_flyout = self.flyout.window().is_visible();
+        let held = if in_flyout {
+            self.flyout.get_notice_announcement()
+        } else {
+            self.main.get_notice_announcement()
+        };
+        if held == text {
+            clear_announcement(&main, &flyout);
+            let (main, flyout) = (main.clone(), flyout.clone());
+            self.repeat_timer
+                .start(TimerMode::SingleShot, ANNOUNCEMENT_REPEAT_GAP, move || {
+                    put_announcement(&main, &flyout, text.clone());
+                });
+        } else {
+            self.repeat_timer.stop();
+            put_announcement(&main, &flyout, text);
+        }
         self.announcement_timer.start(
             TimerMode::SingleShot,
             ANNOUNCEMENT_CLEARS_AFTER,
@@ -2283,6 +2323,10 @@ impl App {
         main.set_calibrate_all_outcome(card.outcome);
         main.set_calibrate_all_can_apply(card.can_apply);
         main.set_calibrate_all_can_undo(card.can_undo);
+        main.set_calibrate_all_volume(card.volume.0);
+        main.set_calibrate_all_volume_percent(card.volume.1);
+        main.set_calibrate_all_volume_id(card.volume.2);
+        main.set_calibrate_all_reference(card.reference);
         sync_model(&self.models.calibration_rows, card.rows);
         sync_model(&self.models.calibration_left_out, card.left_out);
     }
@@ -2290,6 +2334,7 @@ impl App {
     /// Empties both live regions now.
     fn clear_announcement(&self) {
         self.announcement_timer.stop();
+        self.repeat_timer.stop();
         clear_announcement(&self.main.as_weak(), &self.flyout.as_weak());
     }
 
@@ -2320,6 +2365,7 @@ impl App {
     /// Puts each zone's rows into its kept models, then the zones into theirs.
     fn sync_zones(&self, zones: Vec<ZoneRowsBuilt>) {
         let m = &self.models;
+        let mut flyout_items = Vec::new();
         let items: Vec<ZoneItem> = {
             let mut kept = m.zone_models.borrow_mut();
             kept.retain(|id, _| zones.iter().any(|zone| zone.item.id == id.as_str()));
@@ -2329,21 +2375,27 @@ impl App {
                     let models = kept.entry(zone.item.id.to_string()).or_default();
                     sync_model(&models.members, zone.members);
                     sync_model(&models.targets, zone.targets);
-                    ZoneItem {
+                    let item = ZoneItem {
                         members: ModelRc::from(models.members.clone()),
                         targets: ModelRc::from(models.targets.clone()),
                         ..zone.item
-                    }
+                    };
+                    flyout_items.push(ZoneItem {
+                        expanded: zone.flyout_expanded,
+                        ..item.clone()
+                    });
+                    item
                 })
                 .collect()
         };
         sync_model(&m.zones, items);
+        sync_model(&m.flyout_zones, flyout_items);
     }
 
     /// The shape of the zones' member lists the flyout shows now.
     fn zone_shape_shown(&self) -> u64 {
         let kept = self.models.zone_models.borrow();
-        zone_shape(self.models.zones.iter().map(|zone| {
+        zone_shape(self.models.flyout_zones.iter().map(|zone| {
             let members = kept
                 .get(zone.id.as_str())
                 .map_or(0, |models| models.members.row_count());
@@ -2363,6 +2415,7 @@ impl App {
             zones: flyout.get_zone_focused(),
             speakers: flyout.get_speaker_focused(),
             add_address: flyout.get_add_address_focused(),
+            network_settings: flyout.get_network_settings_focused(),
         };
         if focused.overlaps(removed) && flyout.window().is_visible() {
             flyout.invoke_take_focus();
@@ -2557,7 +2610,7 @@ impl App {
         let w = weak.clone();
         main.on_airplay_delay_edited(move |text| with_app(&w, |app| app.edit_airplay_delay(&text)));
         let w = weak.clone();
-        main.on_airplay_delay_committed(move || with_app(&w, App::commit_airplay_delay));
+        main.on_airplay_delay_committed(move || with_app(&w, App::enter_airplay_delay));
         let w = weak.clone();
         main.on_airplay_delay_cancelled(move || with_app(&w, |app| app.end_delay_typing(false)));
         let w = weak.clone();
@@ -2608,6 +2661,8 @@ impl App {
         });
         let w = weak.clone();
         main.on_cast_add_address_requested(move || with_app(&w, App::ask_cast_address));
+        let w = weak.clone();
+        main.on_network_settings_requested(move || with_app(&w, App::open_network_settings));
         let w = weak.clone();
         main.on_cast_remove_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.remove_cast_address(&id)))
@@ -2685,7 +2740,7 @@ impl App {
                 if app.renaming(&id, RenamePlace::Zone) {
                     app.blank_click();
                 } else {
-                    app.set_zone_expanded(&id, open);
+                    app.set_zone_expanded(&id, open, false);
                 }
             })
         });
@@ -2896,17 +2951,13 @@ impl App {
         let w = weak.clone();
         flyout.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
         let w = weak.clone();
-        flyout.on_source_selected(move |index| {
+        flyout.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
+        let w = weak.clone();
+        flyout.on_several_apps_requested(move || {
             with_app(&w, |app| {
-                // The shown list's last row: the snapshot may have grown since.
-                let shown = app.models.flyout_sources.row_count();
-                if usize::try_from(index).is_ok_and(|i| i + 1 == shown) {
-                    app.hide_flyout();
-                    app.show_main();
-                    app.main.set_mix_open(true);
-                } else {
-                    app.select_source(index);
-                }
+                app.hide_flyout();
+                app.show_main();
+                app.main.set_mix_open(true);
             })
         });
         let w = weak.clone();
@@ -2923,7 +2974,7 @@ impl App {
         flyout.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
         let w = weak.clone();
         flyout.on_zone_expanded_changed(move |id, open| {
-            with_app(&w, |app| app.set_zone_expanded(&id, open))
+            with_app(&w, |app| app.set_zone_expanded(&id, open, true))
         });
         let w = weak.clone();
         flyout.on_preset_recall_requested(move |id| with_app(&w, |app| app.recall_preset(&id)));
@@ -2946,6 +2997,8 @@ impl App {
         });
         let w = weak.clone();
         flyout.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
+        let w = weak.clone();
+        flyout.on_network_settings_requested(move || with_app(&w, App::open_network_settings));
         let w = weak.clone();
         flyout.on_notice_update_button_pressed(move |button| {
             with_app(&w, |app| app.press_update_button(button))
@@ -3227,6 +3280,15 @@ impl App {
         if !crate::platform::open_settings(uri) {
             self.log
                 .log(|| format!("notice: the shell did not open {uri}"));
+        }
+    }
+
+    /// Opens the network settings for the note that no speakers were found.
+    fn open_network_settings(&self) {
+        let uri = SettingsPage::NetworkStatus.uri();
+        if !crate::platform::open_settings(uri) {
+            self.log
+                .log(|| format!("no speakers found: the shell did not open {uri}"));
         }
     }
 
@@ -3761,6 +3823,7 @@ impl App {
             base = base.max(0.0);
         }
         self.update(|b| b.set_speaker_delay(id, base + f64::from(delta)));
+        self.say_delay_set(id);
     }
 
     /// Keeps what is typed in a speaker's delay field ("+150", "−250");
@@ -3768,22 +3831,44 @@ impl App {
     /// every control (see [`TypedDelay`]).
     fn edit_delay(&self, id: &str, text: &str) {
         let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
-        self.ui
+        let taken = self
+            .ui
             .borrow_mut()
             .delay_drafts
             .entry(id.to_string())
             .or_default()
             .edit(text, shown);
         self.refresh();
+        if !taken {
+            self.announce(self.strings().get_delay_field_takes());
+        }
     }
 
     /// Enter in a speaker's delay field: applies what was typed and
     /// keeps its sync controls open, the focus in the field, to try the next
     /// value; other rows' stay open with their typing.
     fn enter_delay(&self, id: &str) {
-        self.commit_delay(id);
+        if self.commit_delay(id) {
+            self.say_delay_set(id);
+        }
         self.main.set_focus_speaker_part(RowPart::Sync);
         self.main.set_focus_speaker_id(id.into());
+    }
+
+    /// Has Narrator say the delay a step or Enter applied, as VoiceOver
+    /// does on the Mac; Ctrl+S and leaving the field stay quiet.
+    fn say_delay_set(&self, id: &str) {
+        let state = self.snapshot();
+        let Some(speaker) = state.speaker(id) else {
+            return;
+        };
+        let Some(ms) = speaker.delay_ms else {
+            return;
+        };
+        let strings = self.strings();
+        let label = strings.invoke_delay_of(speaker.name.as_str().into());
+        let value = strings.invoke_delay_value(ms.round() as i32);
+        self.announce(strings.invoke_delay_set(label, value));
     }
 
     /// A click on the window outside every control (`apply`), or Escape in
@@ -3963,7 +4048,9 @@ impl App {
         self.commit_airplay_delay();
     }
 
-    fn commit_delay(&self, id: &str) {
+    /// Applies what was typed in a speaker's delay field, and says whether
+    /// it did.
+    fn commit_delay(&self, id: &str) -> bool {
         let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
         let typed = self.ui.borrow_mut().delay_drafts.remove(id);
         let ms = typed
@@ -3974,6 +4061,7 @@ impl App {
             Some(ms) => self.update(|b| b.set_speaker_delay(id, ms)),
             None => self.refresh(),
         }
+        ms.is_some()
     }
 
     fn step_airplay_delay(&self, delta: i32) {
@@ -3986,26 +4074,53 @@ impl App {
             .airplay_delay_draft
             .commit(Some(current));
         let base = typed.map_or(current, |ms| ms.clamp(0.0, ui_model::MAX_DELAY_MS));
-        self.update(|b| b.set_airplay_delay(base + f64::from(delta)));
+        let ms = (base + f64::from(delta)).clamp(0.0, ui_model::MAX_DELAY_MS);
+        if ms == current {
+            self.refresh();
+        } else {
+            self.update(|b| b.set_airplay_delay(ms));
+        }
+        self.say_airplay_delay_set();
     }
 
     /// Keeps what is typed in the AirPlay delay field; nothing applies until
     /// Enter or a click outside every control (see [`TypedDelay`]).
     fn edit_airplay_delay(&self, text: &str) {
         let shown = self.snapshot().airplay_delay_ms;
-        self.ui.borrow_mut().airplay_delay_draft.edit(text, shown);
+        let taken = self.ui.borrow_mut().airplay_delay_draft.edit(text, shown);
         self.refresh();
+        if !taken {
+            self.announce(self.strings().get_delay_field_takes());
+        }
     }
 
     /// Applies the typed AirPlay delay (Enter, a click outside every
-    /// control). Clamped, the field shows the value that was applied.
-    fn commit_airplay_delay(&self) {
+    /// control), and says whether it did. Clamped, the field shows the
+    /// value that was applied.
+    fn commit_airplay_delay(&self) -> bool {
         let shown = self.snapshot().airplay_delay_ms;
         let typed = self.ui.borrow_mut().airplay_delay_draft.commit(shown);
         match typed {
-            Some(ms) => self.update(|b| b.set_airplay_delay(ms)),
+            Some(ms) => self.update(|b| b.set_airplay_delay(ms.clamp(0.0, ui_model::MAX_DELAY_MS))),
             None => self.refresh(),
         }
+        typed.is_some()
+    }
+
+    fn enter_airplay_delay(&self) {
+        if self.commit_airplay_delay() {
+            self.say_airplay_delay_set();
+        }
+    }
+
+    /// The AirPlay delay's [`App::say_delay_set`].
+    fn say_airplay_delay_set(&self) {
+        let Some(ms) = self.snapshot().airplay_delay_ms else {
+            return;
+        };
+        let strings = self.strings();
+        let value = strings.invoke_airplay_delay_value(ms.round() as i32);
+        self.announce(strings.invoke_delay_set(strings.get_airplay_delay_title(), value));
     }
 
     fn shown_curve(&self, state: &AppState) -> Option<CurveMatch> {
@@ -4184,14 +4299,20 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// The arrow of zone `id`, or Left and Right on its header.
-    pub fn set_zone_expanded(&self, id: &str, open: bool) {
+    /// The arrow of zone `id`, or Left and Right on its header, in the
+    /// flyout or the main window.
+    pub fn set_zone_expanded(&self, id: &str, open: bool, in_flyout: bool) {
         let changed = {
             let mut ui = self.ui.borrow_mut();
-            if open {
-                ui.collapsed.remove(id)
+            let collapsed = if in_flyout {
+                &mut ui.flyout_collapsed
             } else {
-                ui.collapsed.insert(id.to_owned())
+                &mut ui.collapsed
+            };
+            if open {
+                collapsed.remove(id)
+            } else {
+                collapsed.insert(id.to_owned())
             }
         };
         if changed {
@@ -4633,6 +4754,29 @@ fn count(n: usize) -> i32 {
     i32::try_from(n).unwrap_or(i32::MAX)
 }
 
+/// Puts `text` in the flyout's live region while the flyout shows, else in
+/// the main window's, and empties the other.
+fn put_announcement(
+    main: &slint::Weak<MainWindow>,
+    flyout: &slint::Weak<TrayFlyout>,
+    text: SharedString,
+) {
+    let in_flyout = flyout
+        .upgrade()
+        .is_some_and(|flyout| flyout.window().is_visible());
+    let (said, quiet) = if in_flyout {
+        (text, SharedString::new())
+    } else {
+        (SharedString::new(), text)
+    };
+    if let Some(main) = main.upgrade() {
+        main.set_notice_announcement(quiet);
+    }
+    if let Some(flyout) = flyout.upgrade() {
+        flyout.set_notice_announcement(said);
+    }
+}
+
 /// Empties the notice live regions of the windows still there.
 fn clear_announcement(main: &slint::Weak<MainWindow>, flyout: &slint::Weak<TrayFlyout>) {
     if let Some(main) = main.upgrade() {
@@ -4806,6 +4950,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::Refused => AirPlayProblem::Refused,
         P::NeedsPassword => AirPlayProblem::NeedsPassword,
         P::NeedsPin => AirPlayProblem::NeedsPin,
+        P::StillNeedsCode => AirPlayProblem::StillNeedsCode,
         P::NotAccepted => AirPlayProblem::NotAccepted,
         P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
@@ -4864,6 +5009,20 @@ fn device_volume_hint(hint: Option<Hint>) -> (DeviceVolumeHint, i32) {
         Some(Hint::Low { percent: n }) => (DeviceVolumeHint::Low, percent(n)),
         Some(Hint::Muted) => (DeviceVolumeHint::Muted, 0),
         Some(Hint::MutedAndLow { percent: n }) => (DeviceVolumeHint::MutedLow, percent(n)),
+    }
+}
+
+/// The reference's device-volume hint under Calibrate All's "Before you
+/// start", with the speaker ID its fix goes to (spec S197).
+pub fn calibrate_all_volume(state: &AppState) -> (DeviceVolumeHint, i32, SharedString) {
+    let all = &state.calibrate_all;
+    let before = !matches!(all.phase, AllPhase::Running(_)) && all.sheet.is_none();
+    match state.speakers.iter().find(|speaker| speaker.is_reference()) {
+        Some(reference) if before => {
+            let (hint, percent) = device_volume_hint(reference.device_volume);
+            (hint, percent, reference.id.as_str().into())
+        }
+        _ => (DeviceVolumeHint::None, 0, SharedString::default()),
     }
 }
 
@@ -5238,6 +5397,9 @@ struct CalibrateAllCard {
     can_undo: bool,
     /// What Narrator hears when the run, Apply or Undo ends.
     said: SharedString,
+    /// The reference's hint under "Before you start" and its fix's speaker ID.
+    volume: (DeviceVolumeHint, i32, SharedString),
+    reference: SharedString,
 }
 
 /// Whether a calibration the microphone refused (`denied`) offers Open
@@ -5356,6 +5518,8 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
         can_undo: sheet.is_some_and(|sheet| sheet.can_undo),
         status,
         said,
+        volume: calibrate_all_volume(state),
+        reference: reference.into(),
     }
 }
 
@@ -5644,7 +5808,9 @@ fn guide_page(page: Option<SettingsPage>) -> GuidePage {
         return GuidePage::None;
     }
     match page {
-        None | Some(SettingsPage::MicrophonePrivacy) => GuidePage::None,
+        None | Some(SettingsPage::MicrophonePrivacy | SettingsPage::NetworkStatus) => {
+            GuidePage::None
+        }
         Some(SettingsPage::VolumeMixer) => GuidePage::VolumeMixer,
         Some(SettingsPage::Sound) => GuidePage::Sound,
     }
@@ -5711,6 +5877,15 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             speaker,
             problem: ui_model::AirPlayProblem::Refused,
         } => strings.invoke_notice_airplay_refused_off(speaker.as_str().into()),
+        NoticeMessage::AirPlayCantPlay {
+            speaker,
+            problem:
+                ui_model::AirPlayProblem::NotResponding | ui_model::AirPlayProblem::ConnectionLost,
+        } => strings.invoke_notice_airplay_unreachable_off(speaker.as_str().into()),
+        NoticeMessage::AirPlayCantPlay {
+            speaker,
+            problem: ui_model::AirPlayProblem::Busy,
+        } => strings.invoke_notice_airplay_busy_off(speaker.as_str().into()),
         NoticeMessage::AirPlayRetrying { speaker, problem }
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
@@ -5730,8 +5905,11 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::AirPlayPtpPortsTaken => strings.get_notice_airplay_ptp_ports_taken(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
-        NoticeMessage::SettingsKeptAside { file } => {
+        NoticeMessage::SettingsKeptAside { file, newer: false } => {
             strings.invoke_notice_settings_kept_aside(file.as_str().into())
+        }
+        NoticeMessage::SettingsKeptAside { file, newer: true } => {
+            strings.invoke_notice_settings_from_newer(file.as_str().into())
         }
         NoticeMessage::PairingsKeptAside { file } => {
             strings.invoke_notice_pairings_kept_aside(file.as_str().into())
@@ -5907,7 +6085,10 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::AirPlayPtpPortsTaken => (NoticeKind::AirplayPtpPortsTaken, ""),
         NoticeMessage::SettingsNotSaved => (NoticeKind::SettingsNotSaved, ""),
         NoticeMessage::PairingsNotSaved => (NoticeKind::PairingsNotSaved, ""),
-        NoticeMessage::SettingsKeptAside { .. } => (NoticeKind::SettingsKeptAside, ""),
+        NoticeMessage::SettingsKeptAside { newer: false, .. } => {
+            (NoticeKind::SettingsKeptAside, "")
+        }
+        NoticeMessage::SettingsKeptAside { newer: true, .. } => (NoticeKind::SettingsFromNewer, ""),
         NoticeMessage::PairingsKeptAside { .. } => (NoticeKind::PairingsKeptAside, ""),
         NoticeMessage::NoSoundOutput => (NoticeKind::NoSoundOutput, ""),
         NoticeMessage::LaunchAtLoginFailed => (NoticeKind::LaunchAtLoginFailed, ""),
@@ -6216,7 +6397,6 @@ mod tests {
             let mut backend = MockBackend::new();
             backend.unplug_chosen_input(name);
             let app = app_over(backend);
-            // The flyout's Several Apps… comes after it.
             let last = app.main.get_sources().row_count() - 1;
             for (sources, index) in [
                 (app.main.get_sources(), app.main.get_source_index()),
@@ -6269,7 +6449,16 @@ mod tests {
         let strings = app.main.global::<Strings>();
         assert_eq!(
             notice_item(&strings, &notices[0]).message,
-            "AirPlay 2 (Experimental) is on. AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+            "AirPlay 2 (Experimental) is on. Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
+        );
+        let mut off = notices[0].clone();
+        off.message = NoticeMessage::AirPlay2NextLaunch {
+            on: false,
+            prefer: false,
+        };
+        assert_eq!(
+            notice_item(&strings, &off).message,
+            "AirPlay 2 (Experimental) is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
         );
         // Under the AirPlay 2 flag the item is Prefer AirPlay 2 (spec S313).
         let mut preferred = notices[0].clone();
@@ -7878,6 +8067,22 @@ mod tests {
         );
     }
 
+    /// The Guide's AirPlay section says what the sender does: AirPlay 2
+    /// speakers play by default, and the switch keeps its label.
+    // covers: S312, S313
+    #[test]
+    fn the_airplay_guide_plays_airplay_2_by_default() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        for guide in [strings.get_help_airplay(), strings.get_help_airplay_linux()] {
+            assert!(!guide.contains("off at first"), "{guide}");
+            assert!(
+                guide.contains("unless AirPlay 2 (Experimental), in the File menu, is on"),
+                "{guide}"
+            );
+        }
+    }
+
     /// A Public reading reaches the note that no speaker was found on a poll
     /// that changes nothing else, and the note leaves the firewall out again
     /// once it goes.
@@ -8100,6 +8305,46 @@ mod tests {
             app.main.get_airplay_delay_range_hint(),
             "The range is 0 to 20000 ms. Enter applies 0."
         );
+    }
+
+    // covers: S220
+    #[test]
+    fn narrator_hears_a_delay_set_by_a_step_or_enter_and_a_refused_character() {
+        let app = app_over(MockBackend::new());
+        let said = || app.main.get_notice_announcement().to_string();
+        let name = desk_row(&app).name.to_string();
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "220".into());
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(said(), format!("{name} delay set to +220 ms"), "Enter");
+        app.main.invoke_delay_stepped("local:desk".into(), -10);
+        assert_eq!(said(), format!("{name} delay set to +210 ms"), "a step");
+        app.main
+            .invoke_delay_edited("local:desk".into(), "+210a".into());
+        assert_eq!(said(), "Only digits, with + or \u{2212} in front");
+
+        app.main.invoke_airplay_delay_stepped(100);
+        let ms = app.snapshot().airplay_delay_ms.expect("an AirPlay delay");
+        assert_eq!(said(), format!("AirPlay Delay set to {ms} ms"));
+    }
+
+    /// Windows reads a live region only as it appears or its words change,
+    /// so the same words again empty it first and come back a moment later.
+    // covers: S220
+    #[test]
+    fn narrator_hears_every_delay_step_at_the_range_end() {
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let said = || app.main.get_notice_announcement().to_string();
+        app.main.invoke_airplay_delay_stepped(-2000);
+        assert_eq!(said(), "AirPlay Delay set to 0 ms");
+
+        app.main.invoke_airplay_delay_stepped(-10);
+        assert_eq!(said(), "", "emptied, so the same words are heard again");
+        advance_clock(Duration::from_millis(500));
+        slint::platform::update_timers_and_animations();
+        assert_eq!(said(), "AirPlay Delay set to 0 ms", "a moment later");
     }
 
     // covers: S221
@@ -8819,6 +9064,7 @@ mod tests {
                     let mut ui = app.ui.borrow_mut();
                     ui.sync_open.clear();
                     ui.collapsed.clear();
+                    ui.flyout_collapsed.clear();
                 }
                 app.refresh();
                 draw_frames();
@@ -9091,6 +9337,76 @@ mod tests {
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
         shows_in_full(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
+    }
+
+    /// A zone name or zone count line that fits shows no tooltip: only one
+    /// cut to "…" does. An In zones name keeps its tip, the only place with
+    /// its device name and the rename hint.
+    #[test]
+    fn a_zone_name_that_fits_shows_no_tooltip() {
+        let mut backend = MockBackend::new();
+        let mut den = long_named_speaker(&backend, "airplay:den");
+        den.name = "Den".into();
+        backend.add_speaker(den);
+        backend.add_zone("zone:den", "Den", &["airplay:den"]);
+        let app = narrow_app(backend);
+        for (label, tip) in [
+            ("ZoneHeader::name-text", "ZoneHeader::name-tip"),
+            ("ZoneHeader::count-text", "ZoneHeader::count-tip"),
+        ] {
+            assert!(rest_on(&app, label, tip).1.is_none(), "{label}");
+        }
+        scroll_to_end(&app);
+        let (_, tip) = rest_on(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
+        assert!(tip.is_some(), "the In zones name");
+    }
+
+    /// Scrolls the narrow app's speaker list to its end, where the rows
+    /// below the first screen are built.
+    fn scroll_to_end(app: &App) {
+        let list = element(app, "MainWindow::scroll").expect("the speaker list");
+        let (at, size) = (list.absolute_position(), list.size());
+        scroll(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+            -3000.0,
+        );
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+    }
+
+    /// The narrow app scrolled to a stereo pair of `member` and Right, the
+    /// last speaker listed.
+    fn pair_app(member: &str) -> Rc<App> {
+        use crate::audio::backend::AirPlayGroup;
+        let mut backend = MockBackend::new();
+        let mut speaker = long_named_speaker(&backend, "airplay:pair");
+        speaker.name = "Pair".into();
+        speaker.group = Some(AirPlayGroup {
+            kind: AirPlayGroupKind::StereoPair,
+            members: vec![member.to_owned(), "Right".to_owned()],
+            missing: Vec::new(),
+            incomplete: false,
+        });
+        backend.add_speaker(speaker);
+        let app = narrow_app(backend);
+        scroll_to_end(&app);
+        app
+    }
+
+    #[test]
+    fn a_cut_pair_line_shows_in_full_in_its_tooltip() {
+        let app = pair_app("The long living room speaker by the window and the bookshelf");
+        shows_in_full(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
+    }
+
+    #[test]
+    fn a_pair_line_that_fits_shows_no_tooltip() {
+        let app = pair_app("Left");
+        let (_, tip) = rest_on(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
+        assert!(tip.is_none());
     }
 
     /// With a long zone name, the "in <zone>" link in an In zones row gives
@@ -9420,6 +9736,31 @@ mod tests {
             1,
             "a focus loss after Return applies nothing"
         );
+    }
+
+    // covers: S220
+    #[test]
+    fn an_airplay_delay_out_of_range_applies_its_end_and_a_step_past_it_nothing() {
+        let backend = MockBackend::new();
+        let applied = backend.airplay_delays.clone();
+        let app = app_over(backend);
+        app.main.invoke_airplay_delay_edited("25000".into());
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(applied.borrow().last(), Some(&ui_model::MAX_DELAY_MS));
+        let said = || app.main.get_notice_announcement().to_string();
+        app.clear_announcement();
+        app.main.invoke_airplay_delay_stepped(100);
+        assert_eq!(applied.borrow().len(), 1, "a step past 20 000 ms");
+        assert_eq!(said(), "AirPlay Delay set to 20000 ms", "and it is said");
+
+        app.main.invoke_airplay_delay_edited("-500".into());
+        app.main.invoke_airplay_delay_committed();
+        assert_eq!(applied.borrow().last(), Some(&0.0), "typed -500 applies 0");
+        app.clear_announcement();
+        app.main.invoke_airplay_delay_stepped(-100);
+        assert_eq!(applied.borrow().len(), 2, "a step below 0 ms");
+        assert_eq!(said(), "AirPlay Delay set to 0 ms", "and it is said");
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(0.0));
     }
 
     #[test]
@@ -11015,7 +11356,7 @@ mod tests {
         draw_frames();
         assert_eq!(
             app.main_focus.borrow().zone,
-            Some(("zone:garage".into(), RowPart::Toggle)),
+            Some(("zone:garage".into(), RowPart::Arrow)),
             "the arrow stands in for the toggle, which has nothing to switch"
         );
         press(app.main.window(), " ");
@@ -11083,7 +11424,7 @@ mod tests {
         draw_frames();
         let expanded = || {
             app.models
-                .zones
+                .flyout_zones
                 .iter()
                 .find(|zone| zone.id == "zone:living")
                 .expect("the zone is listed")
@@ -11120,6 +11461,163 @@ mod tests {
         toggle.invoke_accessible_expand_action();
         draw_frames();
         assert!(expanded(), "Expand on the flyout zone's toggle unfolded it");
+    }
+
+    // covers: S359
+    #[test]
+    fn tab_stops_on_a_main_window_zone_arrow_with_a_member_present_where_space_and_enter_fold() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        let mut zone = None;
+        for _ in 0..100 {
+            press(window, Key::Tab);
+            if let Some((id, RowPart::Arrow)) = app.main_focus.borrow().zone.clone() {
+                zone = Some(id);
+                break;
+            }
+        }
+        let zone = zone.expect("Tab reaches a zone header");
+        let item = || {
+            app.models
+                .zones
+                .iter()
+                .find(|item| item.id == zone)
+                .expect("the zone is listed")
+        };
+        assert!(item().present > 0, "a member is present");
+        assert!(item().expanded);
+
+        press(window, " ");
+        assert!(
+            !item().expanded,
+            "Space on the header's first stop folded the zone"
+        );
+        press(window, Key::Return);
+        assert!(item().expanded, "Enter unfolded it");
+    }
+
+    // covers: S359
+    #[test]
+    fn a_zone_arrow_keeps_the_focus_when_another_zone_is_deleted() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        for _ in 0..100 {
+            press(window, Key::Tab);
+            if app.main_focus.borrow().zone.is_some() {
+                break;
+            }
+        }
+        let living = || {
+            app.models
+                .zones
+                .iter()
+                .find(|item| item.id == "zone:living")
+                .expect("the zone is listed")
+        };
+        assert!(living().present > 0, "a member is present");
+        assert!(living().expanded);
+
+        app.main.invoke_zone_deleted("zone:office".into());
+        draw_frames();
+        press(window, " ");
+        assert!(
+            !living().expanded,
+            "Space on the arrow folded the zone after the cards were rebuilt"
+        );
+    }
+
+    // covers: S359
+    #[test]
+    fn tab_stops_on_a_flyout_zone_arrow_with_a_member_present_where_space_and_enter_fold() {
+        let app = app_over(MockBackend::zones_preview());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        app.flyout.invoke_take_focus();
+        let window = app.flyout.window();
+        for _ in 0..100 {
+            if app.flyout.get_zone_focused() {
+                break;
+            }
+            press(window, Key::Tab);
+        }
+        assert!(app.flyout.get_zone_focused(), "Tab reaches a zone header");
+        let item = || {
+            app.models
+                .flyout_zones
+                .iter()
+                .find(|item| item.id == "zone:living")
+                .expect("the zone is listed")
+        };
+        assert!(item().present > 0, "a member is present");
+        assert!(item().expanded);
+
+        press(window, " ");
+        assert!(
+            !item().expanded,
+            "Space on the header's first stop folded the zone"
+        );
+        press(window, Key::Return);
+        assert!(item().expanded, "Enter unfolded it");
+    }
+
+    // covers: S359
+    #[test]
+    fn a_zone_volume_works_while_none_of_its_members_is_present() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:garage", "Garage", &["airplay:not-here"]);
+        backend.add_zone("zone:empty", "Empty", &[]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        let enabled = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("nothing is labeled {label}"))
+                .accessible_enabled()
+        };
+        assert_eq!(enabled("Garage volume"), Some(true), "as on the Mac");
+        assert_eq!(
+            enabled("Empty volume"),
+            Some(false),
+            "a zone with no member"
+        );
+    }
+
+    // covers: S359
+    #[test]
+    fn the_main_window_and_the_flyout_each_keep_their_own_zone_fold_state() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().unwrap();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        fn shows(window: &impl ComponentHandle, label: &str) -> bool {
+            ElementHandle::find_by_accessible_label(window, label)
+                .next()
+                .is_some()
+        }
+        let (main, flyout) = (&app.main, &app.flyout);
+        let fold = "Hide speakers in Living Room";
+        let unfold = "Show speakers in Living Room";
+
+        app.flyout
+            .invoke_zone_expanded_changed("zone:living".into(), false);
+        draw_frames();
+        assert!(shows(flyout, unfold), "the flyout folded the zone");
+        assert!(shows(main, fold), "the main window keeps it unfolded");
+
+        app.main
+            .invoke_zone_expanded_changed("zone:living".into(), false);
+        app.flyout
+            .invoke_zone_expanded_changed("zone:living".into(), true);
+        draw_frames();
+        assert!(shows(flyout, fold), "the flyout unfolded the zone");
+        assert!(shows(main, unfold), "the main window keeps it folded");
     }
 
     // covers: S245
@@ -11165,13 +11663,12 @@ mod tests {
         assert!(!app.models.zones.row_data(2).unwrap().expanded);
         main.invoke_zone_expanded_changed("zone:office".into(), true);
         assert!(app.models.zones.row_data(2).unwrap().expanded);
-        // The flyout folds the same zone the main window does, until AudioSync quits.
         app.flyout
             .invoke_zone_expanded_changed("zone:office".into(), false);
-        assert!(!app.models.zones.row_data(2).unwrap().expanded);
+        assert!(!app.models.flyout_zones.row_data(2).unwrap().expanded);
         app.flyout
             .invoke_zone_expanded_changed("zone:office".into(), true);
-        assert!(app.models.zones.row_data(2).unwrap().expanded);
+        assert!(app.models.flyout_zones.row_data(2).unwrap().expanded);
 
         main.invoke_speaker_remove_from_zone_requested("local:speakers".into());
         assert!(app.snapshot().zone_of("local:speakers").is_none());
@@ -11485,6 +11982,7 @@ mod tests {
         speakers: 3,
         zone_members: 1,
         add_address: false,
+        network_settings: false,
     };
 
     #[test]
@@ -11503,6 +12001,18 @@ mod tests {
             }
         );
         assert_eq!(FLYOUT.removed_by(add_address), FlyoutParts::default());
+        // A speaker is found: the Open Network Settings link goes.
+        let network_settings = FlyoutCounts {
+            network_settings: true,
+            ..FLYOUT
+        };
+        assert_eq!(
+            network_settings.removed_by(FLYOUT),
+            FlyoutParts {
+                network_settings: true,
+                ..FlyoutParts::default()
+            }
+        );
         let unplugged = FlyoutCounts {
             speakers: 2,
             ..FLYOUT
@@ -11614,6 +12124,7 @@ mod tests {
                 zones: true,
                 speakers: false,
                 add_address: true,
+                network_settings: true,
             }),
             "a focused speaker row keeps its focus when other parts change"
         );
@@ -12087,6 +12598,14 @@ mod tests {
         assert_eq!(eq_window.get_picker_shown_index(), presets as i32);
         assert_eq!(app.main.get_equalizer_curve(), "Desk");
         assert!(eq_window.get_saved_curve_shown());
+        for label in [
+            "Rename \u{201c}Desk\u{201d}\u{2026}",
+            "Delete \u{201c}Desk\u{201d}",
+        ] {
+            let found =
+                i_slint_backend_testing::ElementHandle::find_by_accessible_label(eq_window, label);
+            assert_eq!(found.count(), 1, "{label}");
+        }
 
         eq_window.invoke_preset_selected(0);
         assert_eq!(eq_window.get_preset_index(), 0);
@@ -12138,9 +12657,14 @@ mod tests {
         let eq_window = &app.equalizer;
         eq_window.invoke_save_curve();
         app.zone_dialog.invoke_confirmed("Bass".into());
-        let buttons = ["Save curve", "Rename curve", "Delete curve"];
         let assert_enabled = |enabled: bool, after: &str| {
-            for label in buttons {
+            let curve = app.snapshot().equalizer_curves[0].name.clone();
+            let buttons = [
+                "Save curve".to_owned(),
+                format!("Rename \u{201c}{curve}\u{201d}\u{2026}"),
+                format!("Delete \u{201c}{curve}\u{201d}"),
+            ];
+            for label in &buttons {
                 let button = ElementHandle::find_by_accessible_label(eq_window, label)
                     .next()
                     .unwrap_or_else(|| panic!("nothing is labeled {label}"));
@@ -12573,6 +13097,43 @@ mod tests {
     }
 
     #[test]
+    fn a_dragged_equalizer_band_reads_the_gain_it_applies() {
+        use i_slint_backend_testing::ElementHandle;
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        let (x, y) = first_band_point(&app);
+        let window = app.equalizer.window();
+        let shown = || {
+            let value = ElementHandle::find_by_accessible_label(&app.equalizer, "32 Hz")
+                .find_map(|band| band.accessible_value())
+                .expect("the 32 Hz band");
+            value
+                .trim_end_matches(" dB")
+                .replace('−', "-")
+                .replace('+', "")
+                .parse::<f64>()
+                .expect("a gain")
+        };
+        let button = PointerEventButton::Left;
+        let from = slint::LogicalPosition::new(x, y);
+        window.dispatch_event(WindowEvent::PointerMoved { position: from });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position: from,
+            button,
+        });
+        for step in 1..=40 {
+            let position = slint::LogicalPosition::new(x, y - step as f32);
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+            draw_frames();
+            assert_eq!(shown(), first_band_gain(&app), "{step} px up");
+        }
+        window.dispatch_event(WindowEvent::PointerReleased {
+            position: slint::LogicalPosition::new(x, y - 40.0),
+            button,
+        });
+    }
+
+    #[test]
     fn a_delete_while_a_rename_is_open_keeps_the_curve_being_renamed() {
         let app = app_over(MockBackend::new());
         let eq_window = &app.equalizer;
@@ -12894,6 +13455,32 @@ mod tests {
         );
     }
 
+    /// A speaker the sender gave up on is off, so its notice promises no
+    /// retry, in the Mac's words.
+    #[test]
+    fn an_airplay_speaker_given_up_on_says_it_is_off() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let unreachable = "Den TV couldn't be reached, so it's off. Check that the speaker is on and on the same network, then turn it on again.";
+        for (problem, says) in [
+            (ui_model::AirPlayProblem::NotResponding, unreachable),
+            (ui_model::AirPlayProblem::ConnectionLost, unreachable),
+            (
+                ui_model::AirPlayProblem::Busy,
+                "Den TV seems to be busy with another device, so it's off. Turn it on again once it's free.",
+            ),
+        ] {
+            let off = notice_text(
+                &strings,
+                &NoticeMessage::AirPlayCantPlay {
+                    speaker: "Den TV".into(),
+                    problem,
+                },
+            );
+            assert_eq!(off, says, "{problem:?}");
+        }
+    }
+
     /// The TV's own controls end the stream too, so the notice blames no
     /// other app, as on the Mac.
     #[test]
@@ -12985,6 +13572,91 @@ mod tests {
             "{}",
             notice.title
         );
+    }
+
+    // covers: S197, S198
+    #[test]
+    fn calibrate_alls_volume_fix_unmutes_the_reference_and_keeps_the_focus() {
+        use crate::audio::backend::OutputKind;
+        use crate::audio::mock::VolumeWrite;
+        for can_start in [false, true] {
+            let mut audio = crate::audio::mock::MockBackend::empty();
+            audio.connect_output_as("speakers", "Speakers", OutputKind::BuiltIn);
+            audio.connect_output_as("usb", "USB Speakers", OutputKind::UsbSpeakers);
+            audio.mute_output("speakers", true);
+            let record = audio.volume_record();
+            let mut adapter = crate::adapter::AudioAdapter::new(
+                audio,
+                || "09.41".to_owned(),
+                DebugLog::default(),
+            );
+            adapter.set_speaker_enabled("lc:speakers", true);
+            if can_start {
+                adapter.set_speaker_enabled("lc:usb", true);
+                adapter.set_running(true);
+            }
+            let app = app_over(adapter);
+            app.main.show().expect("the main window shows headless");
+            draw_frames();
+            assert_eq!(app.main.get_calibrate_all_can_start(), can_start);
+            assert_eq!(app.main.get_calibrate_all_volume(), DeviceVolumeHint::Muted);
+
+            // The card's stops: Calibrate All while it is enabled, then the fix.
+            let window = app.main.window();
+            let mut tabs = 0;
+            while app.main_focus.borrow().control != Some(MainControl::Calibration) {
+                assert!(tabs < 40, "the card takes the focus");
+                tab(window, 1);
+                tabs += 1;
+            }
+            if can_start {
+                tab(window, 1);
+            }
+            press(window, " ");
+            app.poll();
+            draw_frames();
+            assert_eq!(
+                record.writes(),
+                [VolumeWrite::Unmute {
+                    id: "speakers".to_owned()
+                }],
+                "can start: {can_start}"
+            );
+            assert_eq!(app.main.get_calibrate_all_volume(), DeviceVolumeHint::None);
+            if can_start {
+                // The fix's late focus-lost note clears the slot, so where the
+                // focus is shows by Shift+Tab: from Calibrate All, the card above.
+                press(window, Key::Backtab);
+            }
+            assert_eq!(
+                app.main_focus.borrow().control,
+                Some(MainControl::Equalizer),
+                "can start: {can_start}"
+            );
+        }
+    }
+
+    // covers: S353, S354
+    #[test]
+    fn an_app_only_the_last_mix_holds_is_listed_as_not_running() {
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.add_app(2000, "Spotify.exe");
+        audio.add_app(3000, "Chrome.exe");
+        let mut adapter =
+            crate::adapter::AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.toggle_mix_app("Spotify.exe");
+        adapter.toggle_mix_app("Chrome.exe");
+        adapter.select_source("system");
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_devices();
+        let app = app_over(adapter);
+        let names: Vec<String> = app
+            .main
+            .get_mix_apps()
+            .iter()
+            .map(|app| app.name.to_string())
+            .collect();
+        assert_eq!(names, ["Chrome (not running)", "Spotify"]);
     }
 
     #[test]
@@ -13079,8 +13751,19 @@ mod tests {
             "Dismiss: Kitchen didn't start, turned off"
         );
         assert_eq!(
-            dismiss_label(NoticeMessage::SettingsKeptAside { file: "f".into() }),
+            dismiss_label(NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: false,
+            }),
             "Dismiss: settings unreadable, copy kept"
+        );
+        // A file a newer AudioSync wrote reads fine; Narrator must not call it unreadable.
+        assert_eq!(
+            dismiss_label(NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: true,
+            }),
+            "Dismiss: settings from a newer version"
         );
         assert_eq!(
             dismiss_label(NoticeMessage::PairingsKeptAside { file: "f".into() }),
@@ -13127,7 +13810,14 @@ mod tests {
             NoticeMessage::AirPlayPtpPortsTaken,
             NoticeMessage::SettingsNotSaved,
             NoticeMessage::PairingsNotSaved,
-            NoticeMessage::SettingsKeptAside { file: "f".into() },
+            NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: false,
+            },
+            NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: true,
+            },
             NoticeMessage::PairingsKeptAside { file: "f".into() },
             NoticeMessage::NoSoundOutput,
             NoticeMessage::LaunchAtLoginFailed,
@@ -13151,6 +13841,41 @@ mod tests {
                 "{message:?}: \"{label}\" is not a short name"
             );
         }
+    }
+
+    #[test]
+    fn settings_from_a_newer_version_get_their_own_text() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let text = |newer| {
+            notice_text(
+                &strings,
+                &NoticeMessage::SettingsKeptAside {
+                    file: "settings.newer-1.json".into(),
+                    newer,
+                },
+            )
+        };
+        let newer = text(true);
+        assert!(
+            newer.starts_with("Your saved settings are from a newer version of AudioSync")
+                && newer.contains("kept as settings.newer-1.json")
+                && newer.ends_with("Update AudioSync to get your settings back."),
+            "{newer}"
+        );
+        let ignored = text(false);
+        assert!(
+            ignored.starts_with("AudioSync couldn't read your saved settings when it started"),
+            "{ignored}"
+        );
+        let pairings = notice_text(
+            &strings,
+            &NoticeMessage::PairingsKeptAside { file: "f".into() },
+        );
+        assert!(
+            pairings.starts_with("AudioSync couldn't read your AirPlay pairings"),
+            "{pairings}"
+        );
     }
 
     /// The App over `backend`, with its main window shown and drawn once.
@@ -13212,9 +13937,9 @@ mod tests {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
         // Switch, Several apps, source, master volume, Save as Preset…,
-        // Equalizer, Calibrate All, then the rows: This PC's, then the
-        // connected speakers' by name.
-        tab(window, 17);
+        // Equalizer, Calibrate All, the reference's volume fix, then the
+        // rows: This PC's, then the connected speakers' by name.
+        tab(window, 18);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -13245,7 +13970,7 @@ mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 25);
+        tab(window, 26);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -13317,47 +14042,111 @@ mod tests {
         assert!(!app.main.get_mix_open(), "a refresh never reopens it");
     }
 
-    /// The flyout's source drop-down ends in Several Apps…, as the Mac
-    /// panel's source menu ends in its submenu: it opens the main window's
-    /// list and leaves the source as it was.
+    /// The logo and wordmark at the top of the flyout open the main window,
+    /// with Open AudioSync as their tooltip, as in the Mac panel.
     #[test]
-    fn several_apps_at_the_end_of_the_flyout_sources_opens_the_main_windows_list() {
+    fn the_flyout_logo_opens_the_main_window() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.flyout.show().unwrap();
+        draw_frames();
+        hold_clock();
+        let logo = ElementHandle::find_by_element_type_name(&app.flyout, "BrandMark")
+            .next()
+            .expect("the flyout's logo");
+        let (at, size) = (logo.absolute_position(), logo.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let window = app.flyout.window();
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_secs(2));
+        slint::platform::update_timers_and_animations();
+        assert!(
+            ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::brand-tip")
+                .next()
+                .is_some(),
+            "a tooltip on the logo"
+        );
+        let switch = ElementHandle::find_by_accessible_label(&app.flyout, "Streaming")
+            .next()
+            .expect("the flyout's streaming switch");
+        click(window, switch.absolute_position().x - 10.0, position.y);
+        assert!(
+            !app.main.window().is_visible(),
+            "a click beside the switch opens nothing"
+        );
+        click(window, position.x, position.y);
+        assert!(app.main.window().is_visible());
+        assert!(!app.flyout.window().is_visible());
+    }
+
+    /// Resting on the flyout's streaming switch shows a tooltip, Turn On or
+    /// Turn Off by its state, as the Mac panel's power switch does.
+    #[test]
+    fn the_flyout_streaming_switch_has_a_tooltip() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.flyout.show().unwrap();
+        draw_frames();
+        hold_clock();
+        let switch = ElementHandle::find_by_accessible_label(&app.flyout, "Streaming")
+            .next()
+            .expect("the flyout's streaming switch");
+        let (at, size) = (switch.absolute_position(), switch.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        app.flyout
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_secs(2));
+        slint::platform::update_timers_and_animations();
+        assert!(
+            ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::power-tip")
+                .next()
+                .is_some(),
+            "a tooltip on the streaming switch"
+        );
+    }
+
+    /// With no notice, the source drop-down starts the flyout's body: no
+    /// line sits between it and the header, as in the Mac panel.
+    #[test]
+    fn no_line_sits_between_the_flyout_header_and_its_source() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.flyout.show().unwrap();
+        draw_frames();
+        assert_eq!(app.flyout.get_notices().row_count(), 0);
+        let source = ElementHandle::find_by_accessible_label(&app.flyout, "Audio Source")
+            .next()
+            .expect("the flyout's source drop-down");
+        let body = ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::body")
+            .next()
+            .expect("the flyout's body");
+        assert_eq!(source.absolute_position().y, body.absolute_position().y);
+    }
+
+    /// Several Apps… is a link under the flyout's source drop-down, as the
+    /// Mac panel's source menu ends in its submenu: the drop-down holds the
+    /// sources only, and the link opens the main window's list and leaves the
+    /// source as it was.
+    #[test]
+    fn several_apps_under_the_flyout_sources_opens_the_main_windows_list() {
+        use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         let sources = app.snapshot().sources.len();
-        let chosen = app.flyout.get_source_index();
-        let shown = app.flyout.get_sources();
-        assert_eq!(shown.row_count(), sources + 1);
-        assert_eq!(shown.row_data(sources).unwrap(), "Several Apps…");
+        let chosen = app.snapshot().source_id;
+        assert_eq!(app.flyout.get_sources().row_count(), sources);
         assert_eq!(app.main.get_sources().row_count(), sources);
 
         app.flyout.show().unwrap();
-        app.flyout.invoke_source_selected(sources as i32);
+        let links: Vec<_> =
+            ElementHandle::find_by_accessible_label(&app.flyout, "Several Apps…").collect();
+        assert_eq!(links.len(), 1);
+        links[0].invoke_accessible_default_action();
         assert!(app.main.get_mix_open());
         assert!(app.main.window().is_visible());
         assert!(!app.flyout.window().is_visible());
-        assert_eq!(app.flyout.get_source_index(), chosen);
-    }
-
-    /// An app that starts playing after the flyout's list was built doesn't
-    /// turn the Several Apps… row into a pick of that app.
-    #[test]
-    fn several_apps_in_the_flyout_opens_the_list_while_a_new_app_waits_for_the_refresh() {
-        let backend = MockBackend::new();
-        let late = backend.late_sources.clone();
-        let app = app_over(backend);
-        let chosen = app.snapshot().source_id;
-        let last = app.flyout.get_sources().row_count() - 1;
-        late.borrow_mut().push(ui_model::Source {
-            id: "app:late".into(),
-            name: "Late App".into(),
-            kind: SourceKind::App,
-            channels: 0,
-            apps: Vec::new(),
-            unplugged: false,
-        });
-
-        app.flyout.invoke_source_selected(last as i32);
-        assert!(app.main.get_mix_open());
         assert_eq!(app.snapshot().source_id, chosen);
     }
 
@@ -13387,7 +14176,7 @@ mod tests {
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 15);
+        tab(window, 16);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -13840,6 +14629,7 @@ mod tests {
         let app = app_over(MockBackend::new());
         app.update(|b| b.set_speaker_enabled("local:desk", true));
         app.update(|b| b.set_speaker_enabled("airplay:kitchen", false));
+        app.update(|b| b.set_speaker_enabled("local:speakers", false));
         app.save_preset("Desk");
         app.update(|b| b.hide_speaker("local:desk", "USB"));
         app.update(|b| b.set_master_volume(40.0));
@@ -14255,7 +15045,7 @@ mod tests {
         let window = app.main.window();
         // As in the example's order without Bedroom's row:
         // the cable row's toggle.
-        tab(window, 15);
+        tab(window, 16);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");

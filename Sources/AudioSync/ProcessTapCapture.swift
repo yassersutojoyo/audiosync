@@ -543,8 +543,8 @@ final class SourceCapture {
         }
     }
 
-    /// A retap that threw: the app can't be followed any more, so the capture
-    /// closes and the session ends (S21). Last thing its caller does.
+    /// A retap that threw: the capture closes, and the host opens it again as
+    /// for a dead aggregate device (S335). Last thing its caller does.
     private func retapFailed(_ bundleID: String, _ failure: Error) {
         closeCapture()
         tapped = []

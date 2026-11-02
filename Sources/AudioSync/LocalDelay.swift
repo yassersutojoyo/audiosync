@@ -184,47 +184,43 @@ enum LocalDelay {
 /// The switched-on local speakers whose devices left the list less than
 /// `holdSeconds` ago (S328). Each still counts among the speakers taking part,
 /// at its offset, so a brief loss and return re-time no other speaker. Times
-/// are the host's uptime in seconds.
-struct LocalBriefLoss: Equatable {
+/// are the host's uptime in seconds. The hold is the core's
+/// (`asc_brief_losses_*`); main thread only.
+final class LocalBriefLoss {
     static let holdSeconds = Double(ASC_BRIEF_LOSS_HOLD_MS) / 1000
 
-    /// The speakers taking part at the last listing, the reference left out.
-    private var listed: Set<String> = []
-    /// Each held speaker, with the time of the listing that no longer had it.
-    private var lostAt: [String: Double] = [:]
+    private let core: OpaquePointer = asc_brief_losses_create()
+
+    deinit { asc_brief_losses_destroy(core) }
 
     /// A device list came in at `now`. A speaker that took part at the last
     /// listing, wasn't the reference then, is still switched on and is
     /// missing now is held from `now`; one listed again, or switched off, no
     /// longer is.
-    mutating func noteListing(_ listed: [String], enabled: Set<String>, reference: String?, now: Double) {
-        let present = Set(listed)
-        for uid in self.listed where !present.contains(uid) && enabled.contains(uid) {
-            lostAt[uid] = now
+    func noteListing(_ listed: [String], enabled: Set<String>, reference: String?, now: Double) {
+        let copies = (listed + Array(enabled) + [reference].compactMap { $0 }).map { strdup($0) }
+        defer { copies.forEach { free($0) } }
+        let pointers: [UnsafePointer<CChar>?] = copies.map { $0.map { UnsafePointer($0) } }
+        let referenceAt = listed.count + enabled.count
+        pointers.withUnsafeBufferPointer { all in
+            let switchedOn = all.baseAddress.map { $0 + listed.count }
+            asc_brief_losses_note_listing(core, all.baseAddress, listed.count, switchedOn, enabled.count,
+                                          reference == nil ? nil : all[referenceAt], now)
         }
-        lostAt = lostAt.filter { !present.contains($0.key) && enabled.contains($0.key) }
-        self.listed = present.filter { enabled.contains($0) && $0 != reference }
     }
 
     /// Speaker `uid` was switched off: it stops counting at once. True when
     /// it was held, so the others re-time.
-    mutating func switchedOff(_ uid: String) -> Bool {
-        listed.remove(uid)
-        return lostAt.removeValue(forKey: uid) != nil
-    }
+    func switchedOff(_ uid: String) -> Bool { asc_brief_losses_switched_off(core, uid) }
 
     /// Ends the holds `holdSeconds` old at `now`. True when any ended, so the
     /// others re-time once.
-    mutating func expire(now: Double) -> Bool {
-        let before = lostAt.count
-        lostAt = lostAt.filter { now - $0.value < Self.holdSeconds }
-        return lostAt.count != before
-    }
+    func expire(now: Double) -> Bool { asc_brief_losses_expire(core, now) }
 
     /// The switched-on speakers went from `old` to `new`: each one switched
     /// off stops counting at once, also when it is switched on again before
     /// its device is back.
-    mutating func followSwitches(from old: Set<String>, to new: Set<String>) {
+    func followSwitches(from old: Set<String>, to new: Set<String>) {
         for uid in old.subtracting(new) { _ = switchedOff(uid) }
     }
 
@@ -239,13 +235,20 @@ struct LocalBriefLoss: Equatable {
 
     /// A session restart (S20): no speaker is held any longer, and the new
     /// session counts only the devices listed then.
-    mutating func restart() { lostAt = [:] }
+    func restart() { asc_brief_losses_restart(core) }
 
     /// The held speakers.
-    var held: Set<String> { Set(lostAt.keys) }
+    var held: Set<String> {
+        Set((0..<asc_brief_losses_held_count(core)).compactMap { index in
+            asc_brief_losses_held_id(core, index).map { String(cString: $0) }
+        })
+    }
 
     /// When the next hold ends, if any is held.
-    var nextExpiry: Double? { lostAt.values.min().map { $0 + Self.holdSeconds } }
+    var nextExpiry: Double? {
+        var at = 0.0
+        return asc_brief_losses_next_expiry_s(core, &at) ? at : nil
+    }
 
     /// When the holds and the start leads `held` since their uptimes (S328)
     /// need checking next, at `now`; nil when nothing is held. A held

@@ -638,6 +638,9 @@ impl Driver {
             restarted: false,
         });
         loop {
+            // Inputs already queued go first, so a stalled turn never times
+            // out an answer it holds (P134).
+            self.wait(Instant::now());
             let now = Instant::now();
             self.run_timers(now);
             self.flush(now);
@@ -3552,6 +3555,135 @@ mod tests {
         });
         assert!(failed);
         drop(listener);
+    }
+
+    // A driver that stalled past the response timeout, with the answer
+    // already queued, reads the answer before its timers count it missing;
+    // without the answer the same stall times the request out.
+    // covers: P134
+    #[test]
+    fn an_answer_queued_while_the_driver_stalled_is_read_before_the_timers_run() {
+        assert!(
+            !times_out_after_a_stall(true),
+            "the queued answer timed out"
+        );
+        assert!(times_out_after_a_stall(false), "no answer, yet no timeout");
+    }
+
+    /// Whether OPTIONS, sent 11 s before the driver's first turn, times out
+    /// when its answer was or wasn't queued before that turn.
+    fn times_out_after_a_stall(answered: bool) -> bool {
+        use crate::discovery::{ScopedAddr, ServiceKind, ServiceRecord};
+        use crate::session::{Connection, RESPONSE_TIMEOUT};
+
+        let address: std::net::SocketAddr = "192.0.2.21:7000".parse().expect("an address");
+        let now = Instant::now();
+        let sent = now
+            .checked_sub(RESPONSE_TIMEOUT + Duration::from_secs(1))
+            .expect("a clock older than the timeout");
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, emitted) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs.clone(), events, latency);
+        let record = ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: "0123456789AB@Living Room".to_owned(),
+            host: "living.local".to_owned(),
+            port: address.port(),
+            txt: vec![b"et=0".to_vec()],
+            addresses: vec![ScopedAddr::new(address.ip())],
+        };
+        let device =
+            Device::from_records(record.device_key(), Some(&record), None).expect("a device");
+        let key = device.key.clone();
+
+        // OPTIONS went out 11 s ago, after the pair-verify.
+        let mut config = SessionConfig::new(vec![address], Volume::Db(-20.0));
+        config.verifier = Some(Box::new(OpenVerifier));
+        let ids = SessionIds::generate(&mut OsEntropy).expect("identifiers");
+        let mut session = Session::new(config, ids, sent);
+        let connection = Connection {
+            local: address.ip(),
+            control_port: 1,
+            timing_port: 2,
+        };
+        session.handle_connected(connection, sent);
+        session.handle_input(&answer(0, &[0x5A; 96]), sent);
+        session.handle_input(&answer(1, &[]), sent);
+        while session.poll_output().is_some() {}
+        let session_key = SessionKey(0);
+        driver.next_session = 1;
+        driver.sessions.insert(session_key, key.clone());
+        driver.speakers.insert(
+            key.clone(),
+            Speaker {
+                device,
+                options: SpeakerOptions::new(Volume::Db(-20.0)),
+                counters: Arc::new(SpeakerCounters::default()),
+                backoff: Backoff::new(),
+                phase: Phase::Active(Box::new(Active {
+                    key: session_key,
+                    session,
+                    codec: Codec::Alac,
+                    software_volume: false,
+                    software_mute: false,
+                    attempt: 1,
+                    io: None,
+                    stream_id: None,
+                })),
+                removing: false,
+                airplay1_outcome: None,
+                ap2_waiting: false,
+                ptp_waiting: false,
+                ap2_refusal: 0,
+                ap2_retry: false,
+                reads_volume: false,
+                target: None,
+                next_start: StartKind::Host,
+                told_connecting: false,
+                started_as: StartKind::Host,
+                restarting: false,
+                receiver_wait: false,
+            },
+        );
+
+        // The answer arrived during the stall, before the turn that runs
+        // the timers; shutdown comes only once the driver has gone quiet.
+        if answered {
+            inputs
+                .send(Input::Io(IoEvent::Rtsp {
+                    session: session_key,
+                    attempt: 1,
+                    bytes: answer(2, &[]),
+                }))
+                .expect("the driver's queue");
+        }
+        let timeout = |event: &SenderEvent| {
+            matches!(
+                event,
+                SenderEvent::Speaker {
+                    event: SpeakerEvent::Error(error),
+                    ..
+                } if error.error.kind == ErrorKind::Timeout
+            )
+        };
+        // Without the answer, a slow runner may start the driver late, so
+        // the shutdown waits for the timeout rather than a short quiet.
+        let quiet = Duration::from_millis(if answered { 300 } else { 5000 });
+        let run = thread::spawn(move || driver.run());
+        let mut timed_out = false;
+        while let Ok(event) = emitted.recv_timeout(quiet) {
+            if timeout(&event) {
+                timed_out = true;
+                break;
+            }
+        }
+        inputs
+            .send(Input::Command(Box::new(Command::Shutdown)))
+            .expect("the driver runs");
+        run.join().expect("the driver ends");
+        timed_out || emitted.try_iter().any(|event| timeout(&event))
     }
 
     // An AirPlay 2 only receiver first listed with its IPv6 address alone:

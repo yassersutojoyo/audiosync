@@ -1097,6 +1097,23 @@ fn the_audiosync_guide_is_wired_and_worded_in_strings() {
     assert!(help.contains("source: Tokens.dark ? root.dark : root.light;"));
 }
 
+/// The Windows and Linux Guides say what Several Apps opens and describe
+/// the Now Playing card, as the Mac Guide does.
+#[test]
+fn the_guide_describes_several_apps_and_now_playing_on_both_hosts() {
+    let strings = include_str!("../ui/strings.slint");
+    let text = |name: &str| {
+        strings
+            .lines()
+            .find(|line| line.contains(&format!("out property <string> {name}: @tr(\"")))
+            .unwrap_or_else(|| panic!("strings.slint has {name}"))
+    };
+    for suffix in ["", "-linux"] {
+        assert!(text(&format!("help-start{suffix}")).contains("Several Apps opens a list"));
+        assert!(text(&format!("help-more{suffix}")).contains("the Now Playing card"));
+    }
+}
+
 /// The body of `function` in strings.slint, up to its closing brace.
 fn strings_function(function: &str) -> &'static str {
     let strings = include_str!("../ui/strings.slint");
@@ -1627,4 +1644,25 @@ fn the_calibration_undo_button_is_labeled_as_on_the_mac() {
     let button = &main[start..start + 400];
     assert!(button.contains("text: Strings.calibrate-all-undo;"));
     assert!(button.contains("accessible-label: Strings.calibrate-all-undo-label;"));
+}
+
+/// The microphone notice and the calibration name the same Windows switches:
+/// the desktop apps one, and the master one, which blocks it when off.
+#[test]
+fn both_microphone_fixes_name_the_same_windows_switches() {
+    let strings = include_str!("../ui/strings.slint");
+    let notice = &strings[strings
+        .find("function notice-microphone-blocked(")
+        .expect("the notice")..];
+    let notice = &notice[..notice.find("\n    }").expect("the notice ends")];
+    let calibration = strings
+        .lines()
+        .find(|line| line.contains("calibration-microphone-denied:"))
+        .expect("the calibration text");
+    for text in [notice, calibration] {
+        assert!(
+            text.contains("“Let desktop apps access your microphone” and “Microphone access”"),
+            "{text}"
+        );
+    }
 }

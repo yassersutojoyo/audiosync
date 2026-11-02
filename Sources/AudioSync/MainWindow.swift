@@ -740,10 +740,18 @@ private struct ZoneCard: View {
 
     private func hit(_ area: ZoneHeaderHit.Area) {
         switch ZoneHeaderHit.action(for: area, nonePresent: nonePresent) {
-        case .fold: withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) }
+        case .fold: fold()
         case .toggleZone: model.actions.toggleZone(zone.id)
         case .none: break
         }
+    }
+
+    private func fold() { withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) } }
+
+    private func arrowKey(_ press: KeyPress) -> KeyPress.Result {
+        guard ZoneHeaderHit.arrowFolds(right: press.key == .rightArrow, expanded: expanded) else { return .ignored }
+        fold()
+        return .handled
     }
 
     private func header(_ t: UIStrings) -> some View {
@@ -763,6 +771,7 @@ private struct ZoneCard: View {
             // With nothing to switch the chevron speaks for the header, so it has the action too.
             .accessibilityAction(named: t.renameZone) { model.startRename(zone) }
             .focused($focused, equals: .chevron)
+            .onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }
 
             Button { hit(.zoneIcon) } label: {
                 SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: shownState, size: 32)
@@ -779,6 +788,7 @@ private struct ZoneCard: View {
             .accessibilityAction(named: t.renameZone) { model.startRename(zone) }
             .help(t.help(state))
             .focused($focused, equals: .zoneIcon)
+            .onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }
             // The badge's gap to the name, as in a speaker row.
             .padding(.trailing, 4)
 
@@ -934,6 +944,7 @@ private struct ZoneMemberCompactRow: View {
                         Text(speaker.name)
                             .font(.body.weight(state == .playing ? .semibold : .regular))
                             .lineLimit(1)
+                            .help(t.speakerNameHelp(name: speaker.name, system: speaker.systemName, renamed: speaker.isRenamed))
                             // The switch's Rename action replaces the double-click.
                             .accessibilityHidden(true)
                             // As on its row under the zone; a single click does nothing here.
@@ -1258,6 +1269,7 @@ struct SpeakerRow: View {
         Divider()
         zoneItems(t)
         if !speaker.isReference {
+            Divider()
             Button(t.hideSpeaker) { model.hide(speaker) }
                 .help(t.hideSpeakerHelp)
         }

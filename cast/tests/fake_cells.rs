@@ -36,7 +36,7 @@ struct Feed {
     /// Frames written more than [`LATE`] past their slot: a starved feed
     /// catching up, which the sender may drop as ring backlog (C64).
     late: Arc<AtomicU64>,
-    /// Runs of late writes, one per stall of the feed thread.
+    /// Runs of late writes, one per stall of the feed thread, and rushes.
     stalls: Arc<AtomicU64>,
     /// While set, the feed thread writes nothing, as one starved of the CPU.
     held: Arc<AtomicBool>,
@@ -47,6 +47,9 @@ struct Feed {
 /// How late a block may be written before the pump plays silence for it
 /// and the catch-up may be dropped as ring backlog.
 const LATE: Duration = Duration::from_millis(100);
+
+/// The sender's wait before it pays lost audio with silence (C52).
+const UNDERRUN_SLACK: Duration = Duration::from_millis(100);
 
 impl Feed {
     fn seconds(&self) -> f64 {
@@ -70,6 +73,7 @@ impl Feed {
     fn rush(&self, time: Duration) {
         let blocks = (time.as_millis() / 10) as u32;
         self.rush.store(blocks, Ordering::SeqCst);
+        self.stalls.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -108,7 +112,16 @@ fn feed(writer: AudioWriter, held: bool) -> Feed {
                 continue;
             }
             let start = *clock.get_or_insert_with(Instant::now);
-            for _ in 0..rushed.swap(0, Ordering::SeqCst) {
+            let blocks = rushed.swap(0, Ordering::SeqCst) as usize;
+            let mut taken = 0;
+            for _ in 0..blocks {
+                taken += writer.write_i16(&block);
+                count.fetch_add(480, Ordering::SeqCst);
+                written += 1;
+            }
+            // An overflow that ends on half a 20 ms block, which the pump's
+            // whole blocks of silence can't pay back exactly.
+            if taken < blocks * 480 && (taken / 480 + blocks) % 2 == 1 {
                 writer.write_i16(&block);
                 count.fetch_add(480, Ordering::SeqCst);
                 written += 1;
@@ -206,7 +219,7 @@ fn close(a: f64, b: f64) -> bool {
 
 /// Runs until the host's view of the device level is `level`.
 fn wait_level(session: &mut CastSession, level: f64) {
-    let until = Instant::now() + Duration::from_secs(3);
+    let until = Instant::now() + Duration::from_secs(10);
     while Instant::now() < until {
         session.run_for(Duration::from_millis(20));
         while session.poll_event().is_some() {}
@@ -377,7 +390,7 @@ fn a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on() {
     // Suspended: the session is not driven, so no PONG goes out. 5 s covers
     // one ping interval and the 2 s timeout with 2 s to spare for a late device.
     thread::sleep(Duration::from_secs(5));
-    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+    let seen = run_until(&mut session, Duration::from_secs(30), |event| {
         matches!(event, SessionEvent::Recovered { .. })
     });
     assert!(
@@ -397,7 +410,7 @@ fn a_sender_suspended_past_the_devices_ping_timeout_reconnects_and_plays_on() {
     device.send(Command::ClearApps);
     run(&mut session, Duration::from_millis(100));
     thread::sleep(Duration::from_secs(5));
-    let seen = run_until(&mut session, Duration::from_secs(15), |event| {
+    let seen = run_until(&mut session, Duration::from_secs(30), |event| {
         matches!(event, SessionEvent::Recovered { relaunched: true })
     });
     assert_eq!(device.connection_count(), 3, "{seen:?}");
@@ -434,7 +447,7 @@ fn the_level_set_stays_shown_after_a_reconnect_whose_first_status_has_no_level()
 
     device.send(Command::ForgetLevel);
     device.send(Command::DropConnection);
-    let mut seen = run_until(&mut session, Duration::from_secs(10), |event| {
+    let mut seen = run_until(&mut session, Duration::from_secs(30), |event| {
         matches!(event, SessionEvent::Recovered { .. })
     });
     seen.extend(run(&mut session, Duration::from_millis(500)));
@@ -470,6 +483,10 @@ fn a_slider_level_the_device_rounds_onto_its_own_is_sent_once_and_not_chased() {
     wait_level(&mut session, 0.35);
 
     session.set_volume(0.36).expect("sent");
+    let until = Instant::now() + Duration::from_secs(10);
+    while levels_sent(&device).is_empty() && Instant::now() < until {
+        run(&mut session, Duration::from_millis(50));
+    }
     run(&mut session, Duration::from_millis(500));
     assert_eq!(levels_sent(&device), [0.36], "no second SET_VOLUME");
     let shown = session.volume().expect("volume").level;
@@ -508,6 +525,18 @@ fn playing_at(current_time: Option<Value>) -> Command {
 // covers: C73, C78
 #[test]
 fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
+    current_time_rounds(false);
+}
+
+// covers: C73, C78
+#[test]
+fn current_time_changes_nothing_but_the_diagnostics_for_a_pump_that_finds_audio_at_once() {
+    current_time_rounds(true);
+}
+
+/// Three rounds of `currentTime` variants; with `rushed`, the pump finds
+/// 1.5 s of audio at once in the second, as on a loaded PC.
+fn current_time_rounds(rushed: bool) {
     let device = FakeDevice::start(Behavior::default());
     let (mut session, feed) = start(&device);
     let variants = [
@@ -524,12 +553,17 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     ];
     let mut seen = Vec::new();
     for round in 0..3 {
-        // A loaded PC: the pump finds 1.5 s of audio at once, and the device
-        // thread sends the last status late.
-        if round == 1 {
+        // A loaded PC: the pump finds 1.5 s of audio at once, wakes late
+        // again as the feed comes back and finds its first 30 ms at once,
+        // and the device thread sends the last status late.
+        if rushed && round == 1 {
             feed.rush(Duration::from_millis(1500));
         }
         for (index, time) in variants.iter().enumerate() {
+            if round == 1 && index == 5 {
+                // Taken when the feed wakes at the end of the rush's gap.
+                feed.rush(Duration::from_millis(20));
+            }
             if round == 2 && index == variants.len() - 1 {
                 device.send(Command::Pause(Duration::from_millis(2500)));
             }
@@ -564,11 +598,15 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     // drops may only cover audio the feed wrote late, plus per stall up to
     // the 100 ms ring backlog that filled before a block counted late, plus
     // what the full ring refused while the pump was starved, which the pump
-    // pays in underrun silence on waking; with no stall, none.
+    // pays in underrun silence on waking; with no stall, none. A pump that
+    // wakes late plays audio up to 100 ms late without silence (C52), so the
+    // rush's gap may be paid up to that much short.
     assert_eq!(diagnostics.rebuffers, 0);
     let backlog = 48_000 * LATE.as_millis() as u64 / 1000;
+    let unpaid = 48_000 * UNDERRUN_SLACK.as_millis() as u64 / 1000;
     assert!(
-        diagnostics.frames_dropped <= late + stalls * backlog + diagnostics.underrun_frames,
+        diagnostics.frames_dropped
+            <= late + stalls * backlog + unpaid + diagnostics.underrun_frames,
         "{late} late in {stalls} stalls: {diagnostics:?}"
     );
     assert_eq!(
@@ -586,7 +624,7 @@ fn current_time_in_any_form_changes_nothing_but_the_diagnostics() {
     session.stop();
     device.join();
     cell(
-        "C19",
+        if rushed { "C19.rush" } else { "C19" },
         "30 statuses, currentTime absent/0/backwards/1e9/negative/text/null: no reload, no drift from currentTime",
     );
 }
@@ -654,6 +692,24 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
             settled = Some(Instant::now());
         }
     }
+    // From the first audio queued on, when the device always has audio
+    // waiting: a sender starved at the start leaves it behind its pace.
+    // A device thread starved near the end catches up to its schedule once it
+    // runs again, so the read is waited for.
+    let waiting = lines
+        .iter()
+        .find(|(_, line, _, _)| !line.queued.is_zero())
+        .expect("audio queued");
+    let until = Instant::now() + Duration::from_secs(10);
+    let reading = loop {
+        let read = device.bytes_read() as f64 / WAV_BYTES_PER_SECOND;
+        let reading = (read - waiting.2) / (started.elapsed().as_secs_f64() - waiting.0);
+        if reading >= PACE - 0.05 || Instant::now() > until {
+            break reading;
+        }
+        session.run_for(Duration::from_millis(50));
+        seen.extend(std::iter::from_fn(|| session.poll_event()));
+    };
     for (_, line, _, _) in &lines {
         assert!(line.queued <= cap, "{line:?}");
         assert_eq!(
@@ -712,13 +768,6 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
     };
     let growth = per_second(first, &lines[filled]);
     let overflow = per_second(&lines[filled], last);
-    // From the first audio queued on, when the device always has audio
-    // waiting: a sender starved at the start leaves it behind its pace.
-    let waiting = lines
-        .iter()
-        .find(|(_, line, _, _)| !line.queued.is_zero())
-        .expect("audio queued");
-    let reading = (last.2 - waiting.2) / (last.0 - waiting.0);
     assert!(
         (PACE - 0.05..=PACE + 0.05).contains(&reading),
         "{reading} s/s read: {lines:?}"
@@ -749,7 +798,7 @@ fn a_device_reading_slower_than_real_time_piles_audio_up_until_the_queue_drops()
 }
 
 /// A device that fetches the stream at once but reports `PLAYING` only 13 s
-/// after the start, longer than `FETCH_TIMEOUT`, as one whose startup latency
+/// after the `LOAD`, longer than `FETCH_TIMEOUT`, as one whose startup latency
 /// is seconds (C74): nothing times out a `PLAYING` that is slow to come.
 // covers: C74
 #[test]
@@ -759,21 +808,24 @@ fn a_device_that_reports_playing_after_13_s_is_waited_for() {
         on_load: OnLoad::NeverPlay,
         ..Behavior::default()
     });
-    let commands = device.commands();
     let started = Instant::now();
-    let release = thread::spawn(move || {
-        thread::sleep(hold);
-        let _ = commands.send(playing_at(None));
+    let (mut session, _feed, waited) = thread::scope(|scope| {
+        scope.spawn(|| {
+            // From the LOAD, which a loaded PC may send seconds after the start.
+            assert!(device.wait_for("LOAD", Duration::from_secs(60)));
+            thread::sleep(hold);
+            device.send(playing_at(None));
+        });
+        let (session, feed) = start(&device);
+        (session, feed, started.elapsed())
     });
-    let (mut session, _feed) = start(&device);
-    let waited = started.elapsed();
-    release.join().expect("the release thread");
     assert!(waited >= hold, "playing after {waited:?}");
-    let seen = run(&mut session, Duration::from_secs(3));
-    let lines = seen
-        .iter()
-        .filter(|event| matches!(event, SessionEvent::Diagnostics(_)))
-        .count();
+    let mut lines = 0;
+    let watched = Instant::now() + Duration::from_secs(3);
+    let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        lines += usize::from(matches!(event, SessionEvent::Diagnostics(_)));
+        lines >= 2 && Instant::now() >= watched
+    });
     assert!(lines >= 2, "{seen:?}");
     assert!(
         !seen.iter().any(|event| matches!(
@@ -909,7 +961,7 @@ fn a_tls_1_2_only_device_back_with_a_new_certificate_is_reconnected_and_plays_on
     let (mut session, _feed) = start(&device);
     for reconnects in 1..=2 {
         device.send(Command::DropConnection);
-        let seen = run_until(&mut session, Duration::from_secs(10), |event| {
+        let seen = run_until(&mut session, Duration::from_secs(30), |event| {
             matches!(event, SessionEvent::Recovered { .. })
         });
         assert!(

@@ -65,9 +65,9 @@ pub struct CardArtwork {
     pub rgba: Arc<[u8]>,
 }
 
-/// How many pixels a side the card's artwork has: its 56 px tile at 200 %.
+/// How many pixels a side the card's artwork has: its 48 px tile at 200 %.
 #[cfg(any(windows, target_os = "linux"))]
-pub const ARTWORK_SIDE: u32 = 112;
+pub const ARTWORK_SIDE: u32 = 96;
 
 /// The size an image of `width` × `height` is scaled to so that it covers a
 /// `side` × `side` square, the rest cropped evenly, as the Mac's tile fills.
@@ -439,11 +439,11 @@ mod tests {
 
     #[test]
     fn artwork_is_scaled_to_cover_the_square_tile() {
-        assert_eq!(cover_size(600, 600, 112), (112, 112));
-        assert_eq!(cover_size(300, 150, 112), (224, 112));
-        assert_eq!(cover_size(100, 333, 112), (112, 373));
-        assert_eq!(cover_size(56, 56, 112), (112, 112), "scaled up");
-        assert_eq!(cover_size(0, 10, 112), (112, 1120));
+        assert_eq!(cover_size(600, 600, ARTWORK_SIDE), (96, 96));
+        assert_eq!(cover_size(300, 150, ARTWORK_SIDE), (192, 96));
+        assert_eq!(cover_size(100, 333, ARTWORK_SIDE), (96, 320));
+        assert_eq!(cover_size(56, 56, ARTWORK_SIDE), (96, 96), "scaled up");
+        assert_eq!(cover_size(0, 10, ARTWORK_SIDE), (96, 960));
     }
 
     #[test]

@@ -162,7 +162,6 @@ struct CalibrateAll {
 /// The zone of a Calibrate Zone run as it was at the start.
 struct MeasuredZone {
     id: String,
-    name: String,
     /// Its member keys then: losing one ends the run (spec S240).
     members: Vec<String>,
 }
@@ -493,9 +492,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// a stream that ran stops (S223).
     airplay_on_by_hand: BTreeSet<String>,
     /// The AirPlay speakers listed as open that refused a session for want
-    /// of a pairing, or went off asking for a PIN outside the user's
-    /// attempt: auto-connect leaves them off until the user turns one on,
-    /// so a refusal never loops (S349).
+    /// of a pairing, went off asking for a PIN outside the user's attempt,
+    /// or refused again right after pairing in it: auto-connect leaves them
+    /// off until the user turns one on, so a refusal never loops (S349).
     airplay_refused: BTreeMap<String, AirPlayProblem>,
     /// Set while a web remote command runs: the AirPlay speakers it switches
     /// on start no attempt, so they never pair or prompt (S257).
@@ -554,6 +553,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The speaker presets (spec S251), the overlapping groups among them
     /// once (S254).
     presets: Vec<Preset>,
+    /// The IDs of the presets saved before the reference output became a
+    /// member (spec S252): their recall leaves it alone.
+    presets_leaving_reference: BTreeSet<String>,
     /// The highest zone and preset ID numbers given out (spec S245, S251).
     last_zone_id: u64,
     last_preset_id: u64,
@@ -752,6 +754,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             groups: Vec::new(),
             zones: Zones::default(),
             presets: Vec::new(),
+            presets_leaving_reference: BTreeSet::new(),
             last_zone_id: 0,
             last_preset_id: 0,
             preset_notice: None,
@@ -896,6 +899,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }));
         self.saved_kinds = saved.zone_member_kinds.clone();
         self.presets = presets::from_stored(saved.speaker_presets.iter().map(SavedPreset::preset));
+        self.presets_leaving_reference = saved
+            .speaker_presets
+            .iter()
+            .filter(|preset| !preset.reference_member)
+            .map(|preset| preset.id.clone())
+            .collect();
         self.last_zone_id = saved.last_zone_id;
         self.last_preset_id = saved.last_preset_id;
         self.push_zone_volumes();
@@ -1101,7 +1110,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .presets
                 .iter()
                 .cloned()
-                .map(SavedPreset::from)
+                .map(|preset| SavedPreset {
+                    reference_member: !self.presets_leaving_reference.contains(&preset.id),
+                    ..SavedPreset::from(preset)
+                })
                 .collect(),
             speaker_presets_migrated: true,
             last_zone_id: self.last_zone_id,
@@ -1229,7 +1241,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         });
         self.post(
             NoticeSubject::SettingsKeptAside,
-            NoticeMessage::SettingsKeptAside { file },
+            NoticeMessage::SettingsKeptAside {
+                file,
+                newer: matches!(kept, KeptAside::Newer(_)),
+            },
         );
     }
 
@@ -1628,12 +1643,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             zone: all
                 .zone
                 .as_ref()
-                .filter(|measured| self.zones.get(&measured.id).is_some())
-                .map(|measured| self.zone_sheet(measured)),
+                .and_then(|measured| self.zones.get(&measured.id))
+                .map(|zone| self.zone_sheet(zone)),
         }
     }
 
-    fn zone_sheet(&self, measured: &MeasuredZone) -> ZoneSheet {
+    fn zone_sheet(&self, zone: &zones::Zone) -> ZoneSheet {
         let off_rows = self
             .calibrate_all
             .sheet
@@ -1652,13 +1667,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
             .filter(|key| !self.is_hidden(key))
             .collect();
         ZoneSheet {
-            name: measured.name.clone(),
+            name: zone.name.clone(),
             off_rows,
-            airplay_moves: airplay_moves(
-                &self.zones,
-                &measured.id,
-                listed.iter().map(String::as_str),
-            ),
+            airplay_moves: airplay_moves(&self.zones, &zone.id, listed.iter().map(String::as_str)),
         }
     }
 
@@ -2003,9 +2014,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
     }
 
-    /// The apps the several-apps list offers: the listed apps, then the
-    /// checked ones and the last mix's (S354) that aren't listed, so each
-    /// can still be unchecked or picked again.
+    /// The apps the several-apps list offers, by name as the picker sorts
+    /// them: the listed apps and the checked ones and the last mix's (S354)
+    /// that aren't listed, so each can still be unchecked or picked again.
     fn mix_apps(&self) -> Vec<MixApp> {
         let checked = mix_checked(&self.chosen, mix_mode(&self.chosen, self.mix_mode));
         let is_checked = |executable: &str| {
@@ -2050,6 +2061,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 });
             }
         }
+        apps.sort_by(|a, b| {
+            a.name
+                .to_lowercase()
+                .cmp(&b.name.to_lowercase())
+                .then_with(|| a.id.cmp(&b.id))
+        });
         apps
     }
 
@@ -2111,7 +2128,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// The speaker list's note about Google Cast discovery.
     fn cast_list(&self) -> CastList {
         match self.audio.cast_discovery() {
-            CastDiscovery::Off => CastList::Quiet,
+            // Without a host the search never started, as on the Mac.
+            CastDiscovery::Off => CastList::Failed,
             // A dead browser leaves browsed rows listed; the Mac keeps only these two (S339).
             CastDiscovery::Failed
                 if self.audio.cast_speakers().iter().any(|speaker| {
@@ -2356,7 +2374,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// list order (spec S253).
     #[cfg(test)]
     pub(crate) fn current_preset(&self) -> Option<String> {
-        ui_model::current_preset(&self.presets, &self.snapshot())
+        ui_model::current_preset(
+            &self.presets,
+            &self.presets_leaving_reference,
+            &self.snapshot(),
+        )
     }
 
     /// Recalls preset `id` as the core's plan says (spec S252), a full
@@ -2602,7 +2624,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let others: Vec<(&str, bool, bool)> = state
             .speakers
             .iter()
-            .map(|speaker| (speaker.id.as_str(), speaker.enabled, speaker.is_reference()))
+            .map(|speaker| {
+                let reference =
+                    speaker.is_reference() && self.presets_leaving_reference.contains(&preset.id);
+                (speaker.id.as_str(), speaker.enabled, reference)
+            })
             .chain(
                 on_now
                     .iter()
@@ -2797,6 +2823,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 problem:
                     ui_model::AirPlayProblem::NeedsPassword
                     | ui_model::AirPlayProblem::NeedsPin
+                    | ui_model::AirPlayProblem::StillNeedsCode
                     | ui_model::AirPlayProblem::NotAccepted
                     | ui_model::AirPlayProblem::AirPlay2NotYet
                     | ui_model::AirPlayProblem::TimingUnavailable,
@@ -3814,6 +3841,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             AirPlayProblem::NeedsPassword
             | AirPlayProblem::PairingNotYet
             | AirPlayProblem::NeedsPin
+            | AirPlayProblem::StillNeedsCode
             | AirPlayProblem::NotAccepted
             | AirPlayProblem::PairingFailed => DropReason::NeedsCode,
             _ => DropReason::Unreachable,
@@ -4042,12 +4070,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if !running {
             self.busy.clear();
             self.forget_waits(|_| false);
+            self.forget_lost(&[]);
             return;
         }
         let outputs = self.audio.enabled_outputs();
         self.busy.retain(|id| outputs.contains(id));
+        self.forget_lost(&outputs);
         let airplay = self.audio.enabled_airplay();
         self.forget_waits(|id| airplay.contains(id));
+    }
+
+    /// Drops the disconnected notice of every output not in `on` (S68).
+    fn forget_lost(&mut self, on: &[String]) {
+        let stale: Vec<NoticeSubject> = self
+            .notices
+            .iter()
+            .filter(|(subject, posted)| {
+                matches!(posted.message, NoticeMessage::SpeakerLost { .. })
+                    && !matches!(subject, NoticeSubject::Speaker(SpeakerKey::Local(id)) if on.contains(id))
+            })
+            .map(|(subject, _)| subject.clone())
+            .collect();
+        self.notices.clear(&stale);
     }
 
     /// Drops the AirPlay waits `keep` turns down, with their notices: nothing
@@ -4300,7 +4344,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 let by_hand = self.airplay_on_by_hand.remove(&id);
                 if matches!(
                     problem,
-                    AirPlayProblem::NotAccepted | AirPlayProblem::PairingNotYet
+                    AirPlayProblem::NotAccepted
+                        | AirPlayProblem::PairingNotYet
+                        | AirPlayProblem::StillNeedsCode
                 ) || (problem == AirPlayProblem::NeedsPin && !by_hand)
                 {
                     self.airplay_refused.insert(id.clone(), problem);
@@ -4497,6 +4543,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 unplugged: false,
             })
             .collect();
+        // A mix goes first under the apps, right after System, as on the Mac (S344).
+        let first_app = |rows: &[Source]| {
+            rows.iter()
+                .position(|row| row.kind != SourceKind::System)
+                .unwrap_or(rows.len())
+        };
         let chosen = self.chosen.key();
         if !rows.iter().any(|row| row.id == chosen) {
             let kind = match self.chosen {
@@ -4517,6 +4569,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             let by_name = matches!(self.chosen, Chosen::App { .. }).then(|| name.to_lowercase());
             let at = match kind {
                 SourceKind::Input => rows.len(),
+                _ if matches!(self.chosen, Chosen::Mix { .. }) => first_app(&rows),
                 _ => rows
                     .iter()
                     .position(|row| {
@@ -4542,12 +4595,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if let Some(mix @ Chosen::Mix { mode, apps }) = self.kept_mix()
             && !rows.iter().any(|row| row.id == mix.key())
         {
-            let at = rows
-                .iter()
-                .position(|row| row.kind == SourceKind::Input)
-                .unwrap_or(rows.len());
             rows.insert(
-                at,
+                first_app(&rows),
                 Source {
                     id: mix.key(),
                     name: String::new(),
@@ -4839,7 +4888,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             },
             calibrate_all: self.calibrate_all_state(),
         };
-        ui_model::show_presets(&mut state, &self.presets);
+        ui_model::show_presets(&mut state, &self.presets, &self.presets_leaving_reference);
         state
     }
 
@@ -5155,6 +5204,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 .log(|| "Cast: Add by Address turned down what was typed".to_owned());
             return Err(CastAddressError::Invalid);
         };
+        if self.audio.cast_discovery() == CastDiscovery::Off {
+            self.log
+                .log(|| "Cast: Add by Address found no Cast host to add to".to_owned());
+            return Err(CastAddressError::NotFound);
+        }
         Ok(CastAddressCheck {
             address,
             answers: self.cast_probe,
@@ -5365,6 +5419,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     fn delete_zone(&mut self, id: &str) {
         if self.zones.delete(id) {
             self.log.log(|| format!("zone {id} deleted"));
+            // A run ends on the zone going (S240) before the card lets go of it (S255).
+            self.stop_calibrate_all_for_zones(false);
+            self.calibrate_all
+                .zone
+                .take_if(|measured| measured.id == id);
             self.push_zone_volumes();
         }
     }
@@ -5458,6 +5517,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         };
         let name = self.presets[index].name.clone();
         self.presets[index] = self.capture_preset(id, &name)?;
+        self.presets_leaving_reference.remove(id);
         self.log.log(|| format!("preset \"{name}\" updated"));
         Ok(())
     }
@@ -5729,7 +5789,6 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         );
         let measured = MeasuredZone {
             id: zone.id,
-            name: zone.name,
             members: zone.members,
         };
         self.calibrate_all_started(started, Some(measured));
@@ -6027,6 +6086,7 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::Refused => P::Refused,
         AirPlayProblem::NeedsPassword => P::NeedsPassword,
         AirPlayProblem::NeedsPin => P::NeedsPin,
+        AirPlayProblem::StillNeedsCode => P::StillNeedsCode,
         AirPlayProblem::NotAccepted => P::NotAccepted,
         AirPlayProblem::PairingFailed => P::PairingFailed,
         AirPlayProblem::PairingNotYet => P::PairingNotYet,
@@ -7865,6 +7925,67 @@ mod tests {
         assert!(adapter.poll());
         assert!(messages(&adapter).is_empty(), "its cause is gone");
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S68
+    #[test]
+    fn the_unplugged_notice_ends_when_streaming_stops() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        adapter.poll();
+        assert_eq!(messages(&adapter).len(), 1, "lost");
+        adapter.set_running(false);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S68
+    #[test]
+    fn the_unplugged_notice_ends_when_its_speaker_is_switched_off_any_way() {
+        type SwitchOff = fn(&mut AudioAdapter<MockBackend>);
+        let ways: [(&str, SwitchOff); 3] = [
+            ("its switch", |adapter| {
+                adapter.set_speaker_enabled(&key(HEADPHONES), false);
+            }),
+            ("its zone", |adapter| adapter.toggle_zone("zone:1")),
+            ("a preset", |adapter| {
+                adapter.recall_preset("preset:1");
+            }),
+        ];
+        for (way, switch_off) in ways {
+            let mut adapter = adapter();
+            adapter.audio_mut().connect_output("monitor", "Monitor");
+            adapter.restore(Settings {
+                speaker_zones: vec![zone(vec![key(HEADPHONES), key(SPEAKERS)])],
+                speaker_presets: vec![saved_preset(&[
+                    (key(SPEAKERS), None),
+                    (key("monitor"), None),
+                ])],
+                ..Settings::default()
+            });
+            adapter.poll();
+            for id in [SPEAKERS, HEADPHONES, "monitor"] {
+                turn_on(&mut adapter, id);
+            }
+            adapter.audio_mut().disconnect_output(HEADPHONES);
+            adapter.poll();
+            assert_eq!(messages(&adapter).len(), 1, "{way}: lost");
+            switch_off(&mut adapter);
+            assert!(
+                !adapter
+                    .audio
+                    .enabled_outputs()
+                    .contains(&HEADPHONES.to_owned()),
+                "{way}"
+            );
+            assert!(adapter.snapshot().running, "{way}: the others play on");
+            assert!(
+                messages(&adapter).is_empty(),
+                "{way}: {:?}",
+                messages(&adapter)
+            );
+        }
     }
 
     // covers: S137
@@ -10630,6 +10751,7 @@ mod tests {
         );
         adapter.poll();
         assert!(adapter.snapshot().speaker(&id).unwrap().paired);
+        fake.state(&tv, AirPlayState::Playing);
 
         fake.fail(&tv, ErrorKind::PairingRequired);
         adapter.poll();
@@ -10650,6 +10772,7 @@ mod tests {
         fake.pairing(&loft, PairingEvent::HomeKitPaired(homekit(0x33)));
         adapter.poll();
         assert!(adapter.snapshot().speaker(&id).unwrap().paired);
+        fake.state(&loft, AirPlayState::Playing);
 
         fake.fail(&loft, ErrorKind::PairingRequired);
         adapter.poll();
@@ -10823,6 +10946,59 @@ mod tests {
                 assert!(speaker_of(&adapter, &id).enabled, "{id}");
             }
         }
+    }
+
+    // covers: S223, S349
+    #[test]
+    fn a_speaker_refused_again_right_after_pairing_stays_off_for_auto_connect() {
+        use crate::audio::pairings::tests::homekit;
+
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        audio.set_airplay(fake.link(), None);
+        let loft = airplay2_device(9, "Loft", false);
+        fake.appear(&loft);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        let id = ap(&loft);
+        adapter.set_auto_connect(&id, true);
+        adapter.set_speaker_enabled(&id, true);
+        fake.fail(&loft, ErrorKind::PairingRequired);
+        adapter.poll();
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&loft, PairingEvent::HomeKitPaired(homekit(0x44)));
+        adapter.poll();
+        fake.fail(&loft, ErrorKind::PairingRequired);
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Loft".to_owned(),
+                problem: ui_model::AirPlayProblem::StillNeedsCode,
+            }]
+        );
+        adapter.dismiss_all_notices();
+        fake.take_calls();
+
+        fake.gone(&loft);
+        adapter.poll();
+        fake.appear(&loft);
+        adapter.poll();
+        assert!(!speaker_of(&adapter, &id).enabled);
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Add { .. }))
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        adapter.set_speaker_enabled(&id, true);
+        assert!(speaker_of(&adapter, &id).enabled, "the user's switch-on");
     }
 
     // covers: S223
@@ -12772,6 +12948,25 @@ mod tests {
         assert_eq!(phone["mix_apps"], serde_json::Value::Array(expected));
     }
 
+    // covers: S211 (the several-apps list sorts an app that isn't running by name)
+    #[test]
+    fn the_several_apps_list_sorts_an_app_that_is_not_running_among_the_others() {
+        let mut adapter = adapter();
+        adapter.audio_mut().add_app(3000, "alpha.exe");
+        adapter.audio_mut().add_app(4000, "zebra.exe");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("alpha.exe");
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_sources();
+        let names: Vec<String> = adapter
+            .snapshot()
+            .mix_apps
+            .into_iter()
+            .map(|app| app.name)
+            .collect();
+        assert_eq!(names, ["Alpha", "Player", "Zebra"]);
+    }
+
     // covers: S353, S354
     #[test]
     fn the_phone_gets_an_app_only_the_last_mix_holds_once_as_not_running() {
@@ -13023,6 +13218,28 @@ mod tests {
         }
     }
 
+    // covers: S344
+    #[test]
+    fn a_chosen_mix_is_listed_first_under_the_apps_in_the_window_and_on_the_phone() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        for mode in ["only", "all apps except"] {
+            let ids = source_ids(&adapter);
+            let mix = adapter.snapshot().source_id;
+            assert_eq!(ids[..2], [SYSTEM_KEY.to_owned(), mix], "{mode}: {ids:?}");
+            let phone: Vec<String> = page(&adapter)
+                .sources
+                .into_iter()
+                .map(|source| source.id)
+                .collect();
+            assert_eq!(phone[..2], ids[..2], "{mode}: {phone:?}");
+            adapter.set_mix_all_except(true);
+        }
+    }
+
     // covers: S354
     #[test]
     fn the_last_mix_is_kept_across_a_switch_and_a_relaunch_and_only_another_mix_replaces_it() {
@@ -13045,11 +13262,7 @@ mod tests {
         let ids = source_ids(&adapter);
         assert_eq!(once(&ids, LAST_MIX), 1, "kept after a switch: {ids:?}");
         let at = ids.iter().position(|id| id == LAST_MIX).unwrap();
-        assert_eq!(
-            ids.get(at + 1),
-            Some(&mic()),
-            "after the apps, before the inputs"
-        );
+        assert_eq!(at, 1, "right after System, before the apps: {ids:?}");
         adapter.save_settings();
 
         let mut adapter = launch(world(), &path);
@@ -15388,7 +15601,7 @@ mod tests {
         adapter.set_master_volume(64.0);
         assert!(adapter.poll(), "the notice shows");
         let shown = messages(&adapter);
-        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+        let [NoticeMessage::SettingsKeptAside { file, newer: false }] = shown.as_slice() else {
             panic!("{shown:?}");
         };
         assert!(file.starts_with("settings.ignored-"), "{file}");
@@ -15413,7 +15626,7 @@ mod tests {
         let mut adapter = launch(launch_audio(), &path);
         // Told at launch, though the user changes nothing.
         let shown = messages(&adapter);
-        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+        let [NoticeMessage::SettingsKeptAside { file, newer: false }] = shown.as_slice() else {
             panic!("{shown:?}");
         };
         assert!(file.starts_with("settings.ignored-"), "{file}");
@@ -15448,7 +15661,7 @@ mod tests {
         adapter.set_master_volume(64.0);
         assert!(adapter.poll(), "the notice shows");
         let shown = messages(&adapter);
-        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+        let [NoticeMessage::SettingsKeptAside { file, newer: true }] = shown.as_slice() else {
             panic!("{shown:?}");
         };
         assert!(file.starts_with("settings.newer-"), "{file}");
@@ -15483,7 +15696,7 @@ mod tests {
             adapter.poll();
         }
         let shown = messages(&adapter);
-        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+        let [NoticeMessage::SettingsKeptAside { file, newer: false }] = shown.as_slice() else {
             panic!("{shown:?}");
         };
         assert_eq!(
@@ -16181,6 +16394,21 @@ mod tests {
     fn without_a_cast_sender_add_by_address_is_off() {
         let adapter = AudioAdapter::new(launch_audio(), || "09.41".to_owned(), DebugLog::default());
         assert!(!adapter.snapshot().cast_by_address);
+    }
+
+    // covers: S393, S394
+    #[test]
+    fn without_a_cast_host_the_list_says_the_search_failed_and_add_by_address_finds_nothing() {
+        let mut adapter =
+            AudioAdapter::new(launch_audio(), || "09.41".to_owned(), DebugLog::default());
+        adapter.set_cast_probe(|_| true);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().cast_list, CastList::Failed);
+        assert_eq!(
+            adapter.add_cast_address("192.0.2.20"),
+            Err(CastAddressError::NotFound)
+        );
+        assert!(adapter.current_settings().cast_addresses.is_empty());
     }
 
     // covers: C18
@@ -17027,12 +17255,47 @@ mod tests {
         );
     }
 
+    // covers: S255
+    #[test]
+    fn a_zone_renamed_while_its_results_show_takes_its_new_name_on_the_card() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibrate_zone("zone:1");
+        adapter.rename_zone("zone:1", "Upstairs");
+        let state = adapter.snapshot().calibrate_all;
+        assert_eq!(state.zone.expect("the zone's sheet").name, "Upstairs");
+    }
+
+    // covers: S240, S255
+    #[test]
+    fn a_deleted_measured_zone_leaves_the_card_even_when_its_id_comes_back() {
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibrate_zone("zone:1");
+        adapter.delete_zone("zone:1");
+        // A settings file read late still holds the zone under its old ID.
+        adapter.restore(Settings {
+            speaker_zones: vec![zone(vec![key("bluetooth"), key("tv")])],
+            ..Settings::default()
+        });
+        assert!(
+            adapter.snapshot().calibrate_all.zone.is_none(),
+            "the card's button reads Calibrate All for good"
+        );
+
+        let mut adapter = zone_adapter(&["bluetooth", "tv"]);
+        zone_running(&mut adapter);
+        adapter.delete_zone("zone:1");
+        ended_as_a_change(&mut adapter);
+    }
+
     /// A Calibrate Zone run over zone:1 that has just started.
     fn zone_running(adapter: &mut AudioAdapter<MockBackend>) {
         adapter.calibrate_all.run = Some(crate::audio::calibrate_all::tests::zone_run());
         adapter.calibrate_all.zone = Some(MeasuredZone {
             id: "zone:1".to_owned(),
-            name: "Downstairs".to_owned(),
             members: vec![key("bluetooth"), key("tv")],
         });
         adapter.stop_calibrate_all_for_zones(false);
@@ -17405,6 +17668,7 @@ mod tests {
             }],
             master_volume: 70.0,
             gains_db: [2.0; audiosync_core::eq::BAND_COUNT],
+            reference_member: true,
         }
     }
 
@@ -17447,8 +17711,8 @@ mod tests {
         assert_eq!(left, [(String::new(), LeftOff::NotFound)]);
         assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
         assert!(
-            enabled(&adapter, "builtin"),
-            "the reference output stays on"
+            !enabled(&adapter, "builtin"),
+            "the reference output goes off like any other"
         );
         assert!(adapter.snapshot().running);
         assert_eq!(delays(&adapter), before);
@@ -17808,10 +18072,10 @@ mod tests {
     #[test]
     fn save_and_update_capture_what_plays_and_need_a_speaker_on() {
         let mut adapter = preset_adapter(Vec::new());
+        adapter.set_speaker_enabled(&key("builtin"), false);
         assert_eq!(
             Backend::save_preset(&mut adapter, "Evening"),
-            Err(PresetError::NoSpeakerOn),
-            "the reference output alone is no preset"
+            Err(PresetError::NoSpeakerOn)
         );
         turn_on(&mut adapter, HEADPHONES);
         Backend::save_preset(&mut adapter, "Evening").expect("saved");
@@ -17827,6 +18091,112 @@ mod tests {
         assert_eq!(adapter.presets[0].name, "Evening");
         assert_eq!(adapter.presets[0].members.len(), 2);
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
+    /// Built-in, Speakers and Headphones with Built-in and Speakers on, read
+    /// from a settings file whose one preset holds Headphones alone, with or
+    /// without the mark of a preset saved since the reference output became a
+    /// member (spec S252).
+    fn headphones_preset_adapter(marked: bool) -> AudioAdapter<MockBackend> {
+        let file = Settings {
+            speaker_presets: vec![saved_preset(&[(key(HEADPHONES), None)])],
+            ..Settings::default()
+        };
+        let mut json: serde_json::Value = serde_json::from_str(&file.to_json()).unwrap();
+        let preset = json["speaker_presets"][0].as_object_mut().unwrap();
+        preset.remove("reference_member");
+        if marked {
+            preset.insert("reference_member".to_owned(), true.into());
+        }
+        let mut adapter = preset_adapter(Vec::new());
+        adapter.restore(Settings::from_json(&json.to_string()).unwrap().0);
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, SPEAKERS);
+        adapter
+    }
+
+    fn first_preset_marked(adapter: &AudioAdapter<MockBackend>) -> bool {
+        let json: serde_json::Value =
+            serde_json::from_str(&adapter.current_settings().to_json()).unwrap();
+        json["speaker_presets"][0]["reference_member"] == true
+    }
+
+    // covers: S252
+    #[test]
+    fn a_recall_switches_the_reference_off_when_the_preset_leaves_it_out() {
+        let mut adapter = headphones_preset_adapter(true);
+
+        let left = adapter
+            .recall_preset("preset:1")
+            .expect("the preset exists");
+        assert!(left.is_empty(), "{left:?}");
+        assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
+        assert!(
+            !enabled(&adapter, "builtin"),
+            "the reference output is a member like any other"
+        );
+        assert!(
+            adapter
+                .snapshot()
+                .speaker(&key("builtin"))
+                .is_some_and(|speaker| speaker.is_reference()),
+            "switched off, it stays the reference"
+        );
+    }
+
+    // covers: S251, S252
+    #[test]
+    fn a_preset_saved_before_the_reference_was_a_member_leaves_it_alone_until_saved_again() {
+        let mut adapter = headphones_preset_adapter(false);
+        adapter.recall_preset("preset:1");
+        assert!(enabled(&adapter, HEADPHONES) && !enabled(&adapter, SPEAKERS));
+        assert!(
+            enabled(&adapter, "builtin"),
+            "the older preset leaves it alone"
+        );
+        assert!(
+            !first_preset_marked(&adapter),
+            "a settings save keeps it older"
+        );
+
+        let text = adapter.current_settings().to_json();
+        let mut adapter = preset_adapter(Vec::new());
+        adapter.restore(Settings::from_json(&text).unwrap().0);
+        turn_on(&mut adapter, "builtin");
+        adapter.recall_preset("preset:1");
+        assert!(enabled(&adapter, "builtin"), "and so does the next launch");
+
+        adapter.set_speaker_enabled(&key("builtin"), false);
+        Backend::update_preset(&mut adapter, "preset:1").expect("updated");
+        assert!(first_preset_marked(&adapter), "an update saves it again");
+        turn_on(&mut adapter, "builtin");
+        adapter.recall_preset("preset:1");
+        assert!(!enabled(&adapter, "builtin"));
+    }
+
+    // covers: S252, S253
+    #[test]
+    fn an_older_preset_is_current_whether_the_reference_is_on_or_off() {
+        let mut adapter = headphones_preset_adapter(false);
+        adapter.recall_preset("preset:1");
+        assert!(enabled(&adapter, "builtin"));
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+        adapter.set_speaker_enabled(&key("builtin"), false);
+        assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
+    // covers: S251, S262
+    #[test]
+    fn a_save_with_only_the_reference_on_holds_the_reference() {
+        let mut adapter = preset_adapter(Vec::new());
+        Backend::save_preset(&mut adapter, "Built-in").expect("saved");
+        let members: Vec<&str> = adapter.presets[0]
+            .members
+            .iter()
+            .map(|member| member.key.as_str())
+            .collect();
+        assert_eq!(members, [key("builtin")]);
+        assert!(first_preset_marked(&adapter));
     }
 
     // covers: S245, S252

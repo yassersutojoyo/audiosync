@@ -1,5 +1,6 @@
 //! The remote over real sockets on 127.0.0.1, which counts as a private peer.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
@@ -2172,4 +2173,85 @@ fn pairing_and_unpair_stay_open_while_calibrating() {
     let reply = post(&remote, "/api/unpair", Some(&token), "{}");
     assert_eq!(reply.status, 200, "{}", reply.body);
     assert_eq!(remote.server.device_count(), 0);
+}
+
+/// The keys of the object literals `block` passes to a call, as in
+/// `change({ volume: value })` or `post(path, { id })`.
+fn sent_fields(block: &str) -> BTreeSet<&str> {
+    let opens = block
+        .match_indices("({ ")
+        .chain(block.match_indices(", { "));
+    opens
+        .flat_map(|(at, open)| {
+            let body = &block[at + open.len()..];
+            body[..body.find('}').unwrap()]
+                .split(',')
+                .map(|item| item.split(':').next().unwrap().trim())
+        })
+        .collect()
+}
+
+/// The top-level statement of `script` that holds byte `at`.
+fn statement_around(script: &str, at: usize) -> &str {
+    let mut start = script[..at].rfind('\n').map_or(0, |n| n + 1);
+    while start > 0 && script[start..].starts_with([' ', '\t', '\r', '\n']) {
+        start = script[..start - 1].rfind('\n').map_or(0, |n| n + 1);
+    }
+    let end = script[at..]
+        .match_indices('\n')
+        .map(|(n, _)| at + n + 1)
+        .find(|&n| !script[n..].starts_with([' ', '\t', '\r', '\n']))
+        .unwrap();
+    &script[start..end]
+}
+
+// Other tests post hand-written bodies; only this ties a field the page sends to its route.
+#[test]
+fn every_field_the_page_posts_is_accepted_by_its_route() {
+    type Route = (
+        &'static str,
+        &'static str,
+        &'static [(&'static str, &'static str)],
+        fn() -> State,
+    );
+    let routes: [Route; 6] = [
+        (
+            "/api/speakers/",
+            "kitchen",
+            &[("on", "true"), ("volume", "40"), ("delay_ms", "120")],
+            sample,
+        ),
+        (
+            "/api/zones/",
+            "zone%201",
+            &[("toggle", "true"), ("volume", "40")],
+            || zoned(false),
+        ),
+        ("/api/presets/", "preset:1", &[("recall", "true")], || {
+            zoned(false)
+        }),
+        ("/api/master", "", &[("volume", "40")], sample),
+        ("/api/source", "", &[("id", "\"system\"")], with_sources),
+        ("/api/pair", "", &[("code", "\"{code}\"")], sample),
+    ];
+    let remote = start("page-bodies");
+    let token = pair(&remote);
+    let script = element(page::PAGE, "script");
+    for (path, id, fields, state) in routes {
+        assert_eq!(script.matches(path).count(), 1, "{path}");
+        let block = statement_around(script, script.find(path).unwrap());
+        let expected: BTreeSet<&str> = fields.iter().map(|(name, _)| *name).collect();
+        assert_eq!(sent_fields(block), expected, "{path}");
+        remote.server.publish(state());
+        for (name, value) in fields {
+            let code = remote.server.pairing_code().unwrap();
+            let body = format!("{{\"{name}\": {}}}", value.replace("{code}", &code));
+            let reply = post(&remote, &format!("{path}{id}"), Some(&token), &body);
+            assert!(
+                (200..300).contains(&reply.status),
+                "{path}{id} {body}: {}",
+                reply.body
+            );
+        }
+    }
 }

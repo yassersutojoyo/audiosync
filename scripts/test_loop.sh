@@ -32,14 +32,20 @@ failed=target/test-loop.failed
 mkdir -p target
 : > "$log"
 : > "$failed"
-rm -f target/test-loop-*.fail
+rm -f target/test-loop-*-*
+# A build in another worktree can replace the binary in the shared target dir
+# mid-loop, so the loop runs a private copy.
+bin=target/test-loop-$$-$(basename "$exe")
+cp "$exe" "$bin" || exit 1
+exe=$bin
 loops=()
-trap '[ ${#loops[@]} -eq 0 ] || kill "${loops[@]}" 2> /dev/null' EXIT
+copies=()
+# Windows keeps a running binary locked, so the copies end before it is removed.
+trap 'kill "${loops[@]}" "${copies[@]}" 2> /dev/null; wait; rm -f "$bin"' EXIT
 for _ in $(seq "$busy"); do
     nice -n 19 sh -c 'while :; do :; done' &
     loops+=("$!")
 done
-copies=()
 for p in $(seq "$procs"); do
     (
         out=target/test-loop-$p.out

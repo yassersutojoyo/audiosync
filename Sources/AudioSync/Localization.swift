@@ -93,7 +93,7 @@ struct UIStrings {
             return error is StreamEngine.StartError ? nil : captureFailedNoticeName
         }
         switch reason {
-        case .appNotRunning(let bundleID): return "\(SourceApps.name(for: bundleID)) not running"
+        case .appNotRunning(let bundleID): return "\(SourceApps.name(for: bundleID)) \(sourceNotRunningNote)"
         case .inputNotFound, .inputDisconnected: return "\(input) not connected"
         case .inputHandsFree: return nil
         default: return captureFailedNoticeName
@@ -676,6 +676,12 @@ struct UIStrings {
     /// The chosen input device while it is unplugged; `name` is the one it
     /// had when last seen, nil when none was remembered.
     func sourceNotConnected(_ name: String?) -> String { "\(name ?? sourceInputDevice) (\(sourceNotConnectedNote))" }
+    let sourceNotRunningNote = "not running"
+    /// An app in the several-apps menu; one that isn't running is there only
+    /// because the last mix keeps it.
+    func sourceMixAppName(_ name: String, running: Bool) -> String {
+        running ? name : "\(name) (\(sourceNotRunningNote))"
+    }
     let inputChannelsLabel = "Input Channels"
     /// One channel pair of an input device, counted from 1 as the device's
     /// own settings count them.
@@ -889,14 +895,9 @@ struct UIStrings {
     /// sentence only once the user turns off AirPlay 2 that this launch runs.
     func airPlay2Note(on: Bool, onAtLaunch: Bool) -> String {
         let stops = !on && onAtLaunch
-        if airPlay2Auto {
-            return stops
-                ? "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
-                : "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
-        }
         return stops
-            ? "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
-            : "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+            ? "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
+            : "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
     }
 
     // MARK: AirPlay pairing prompt
@@ -1048,7 +1049,7 @@ struct UIStrings {
     private func captureFailureText(_ error: SourceCapture.CaptureError) -> String {
         switch error {
         case .appNotRunning(let bundleID):
-            return "\(SourceApps.name(for: bundleID)) is not running. Open it first, or pick another source."
+            return "\(SourceApps.name(for: bundleID)) is \(sourceNotRunningNote). Open it first, or pick another source."
         case .ownProcessUnknown:
             return "AudioSync couldn't capture its own sound to leave it out. Quit AudioSync and open it again."
         case .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:
@@ -1282,6 +1283,11 @@ struct UIStrings {
     /// truncate, then how to rename it.
     func speakerNameHelp(name: String, system: String, renamed: Bool) -> String {
         renamed ? "\(name)\nDevice name: \(system). Double-click to rename." : "\(name)\nDouble-click to rename."
+    }
+    /// The same in the menu bar panel, where a click switches the speaker
+    /// and nothing renames it.
+    func panelNameHelp(name: String, renamedFrom: String?) -> String {
+        renamedFrom.map { "\(name)\nDevice name: \($0)" } ?? name
     }
     /// What VoiceOver adds after a renamed speaker's label.
     func renamedSpeaker(system: String) -> String { "device name \(system)" }
@@ -1799,12 +1805,14 @@ struct UIStrings {
           update or delete a preset, use its ⋯ button.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           Auto-Connect When Available. AudioSync then turns it on whenever it
-          appears.
-        - Rename: double-click a speaker's name, or choose Rename… from its
-          ⋯ button, type a name and press Return. Leave it empty to go back to
-          the device's own name, which its tooltip keeps showing.
-        - Hide: to keep a speaker you never use out of the lists, choose “Hide
-          Speaker” from its ⋯ button. A speaker that is on turns off first.
+          appears. At launch, AudioSync starts streaming only when such a speaker
+          is there.
+        - Rename: double-click a speaker's name, or right-click it or use its ⋯
+          button and choose Rename…; type a name and press Return. Leave it empty
+          to go back to the device's own name, which its tooltip keeps showing.
+        - Hide: to keep a speaker you never use out of the lists, right-click it
+          or use its ⋯ button and choose “Hide Speaker”. A speaker that is on
+          turns off first.
           Hidden Speakers in the gear menu lists what you hid; choose one to
           show it again, off, with its volume and delay as you left them.
         - Equalizer: click Equalizer in the window for 10 bands, a preamp,
@@ -1978,16 +1986,7 @@ struct UIStrings {
     /// The Guide's lines on the AirPlay 2 switch, which the AirPlay 2 flag
     /// turns into a preference (S312, S313).
     private var guideAirPlay2Note: String {
-        guard airPlay2Auto else {
-            return """
-                '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, lets
-                AudioSync play to AirPlay 2 speakers, stereo pairs and home theater
-                groups. It's off at first; turn it on, then quit and reopen AudioSync.
-                With it on, a stereo pair or home theater group shows as one row, and
-                its note names the speakers in it.
-                """
-        }
-        return """
+        """
             AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater
             groups. A speaker that plays both AirPlay 1 and AirPlay 2 uses AirPlay 1
             unless '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, is

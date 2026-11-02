@@ -320,6 +320,24 @@ pub unsafe extern "C" fn asc_eq_preset_gains(preset: usize, gains_db: *mut f64) 
     true
 }
 
+/// Whether two saved-curve names are one name: equal ignoring case, with no
+/// Unicode normalization; false for a null or non-UTF-8 name (S270).
+///
+/// # Safety
+///
+/// `a` and `b` are each null or a NUL-terminated string, unchanged during the
+/// call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_eq_same_curve_name(a: *const c_char, b: *const c_char) -> bool {
+    if a.is_null() || b.is_null() {
+        return false;
+    }
+    // SAFETY: non-null, and by the caller's contract NUL-terminated and
+    // unchanged during the call.
+    let (a, b) = unsafe { (CStr::from_ptr(a), CStr::from_ptr(b)) };
+    matches!((a.to_str(), b.to_str()), (Ok(a), Ok(b)) if eq::same_name(a, b))
+}
+
 /// Creates an equalizer, disabled and flat, designed for `sample_rate`; null
 /// when the rate is not finite and positive.
 #[unsafe(no_mangle)]
@@ -1712,6 +1730,19 @@ mod tests {
         assert_eq!(asc_eq_band_count(), BAND_COUNT);
         assert_eq!(asc_eq_band_center_hz(5), 1000.0);
         assert_eq!(asc_eq_band_center_hz(BAND_COUNT), 0.0);
+    }
+
+    // covers: S270
+    #[test]
+    fn curve_names_match_ignoring_case_only() {
+        let same = |a: &CStr, b: &CStr| {
+            // SAFETY: both are NUL-terminated and live through the call.
+            unsafe { asc_eq_same_curve_name(a.as_ptr(), b.as_ptr()) }
+        };
+        assert!(same(c"Caf\u{e9}", c"CAF\u{c9}"));
+        assert!(!same(c"Caf\u{e9}", c"Cafe\u{301}"));
+        // SAFETY: null is allowed.
+        assert!(!unsafe { asc_eq_same_curve_name(std::ptr::null(), c"Desk".as_ptr()) });
     }
 
     // covers: S2, S26

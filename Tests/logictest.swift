@@ -413,6 +413,14 @@ do {
           "last mix: the several-apps list keeps an app only the last mix holds, once and as not running, while no mix is in use",
           "\(offeredKept)")
 }
+do {
+    let mixMenuSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    // covers: S353
+    check(UIStrings().sourceMixAppName("Safari", running: false) == "Safari (not running)"
+            && UIStrings().sourceMixAppName("Safari", running: true) == "Safari"
+            && mixMenuSource.contains("sourceMixAppName(app.name, running: app.available)"),
+          "last mix: the several-apps list names an app that isn't running as not running")
+}
 
 // MARK: Source apps — display names and the picker's app list
 // covers: S12 (the picker's apps and their names)
@@ -1325,6 +1333,16 @@ do {
     var full = (0..<Equalizer.maxCurves).map { Equalizer.Curve(name: "C\($0)", gains: gains) }
     check(Equalizer.save("One more", gains: gains, in: &full) == nil && Equalizer.save("c7", gains: gains, in: &full) == 7,
           "eq curves: a full list refuses a new name but replaces a taken one")
+    // covers: S270 (the core's same_name decides, so composed and decomposed accents stay apart as on Windows)
+    var spellings: [Equalizer.Curve] = []
+    check(Equalizer.save("Caf\u{E9}", gains: gains, in: &spellings) == 0
+            && Equalizer.save("CAFE\u{301}", gains: gains, in: &spellings) == 1
+            && Equalizer.save("CAF\u{C9}", gains: gains, in: &spellings) == 0,
+          "eq curves: names match ignoring case only, not Unicode composition")
+    // covers: S270 (a NUL is part of a stored name, as on Windows, not where the name ends)
+    check(Equalizer.sanitized([Equalizer.Curve(name: "Rock", gains: gains), Equalizer.Curve(name: "Rock\0x", gains: gains)])
+            .map(\.name) == ["Rock", "Rock\0x"],
+          "eq curves: a stored name with a NUL is not its own prefix")
 
     // covers: S23 (the host steps and clamps a stored curve's band gains)
     let stored = Data(#"[{"name":" Desk ","gains":[1.3,"loud",30,-30]},{"name":"desk","gains":[]},{"gains":[1]},7,{"name":"Late","gains":[0]}]"#.utf8)
@@ -3796,8 +3814,8 @@ do {
             && UIStrings().nativeAirPlayPtpOtherNetwork(name: "Loft")
             == "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off and Loft starts.",
           "S285 native airplay: both waiting notices read as on Windows")
-    let lets = "Lets AudioSync play to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
-    let stops = "AudioSync stops playing to AirPlay 2 speakers, stereo pairs and home theater groups once you quit and reopen it."
+    let lets = "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
+    let stops = "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
     // covers: S313
     check(UIStrings(airPlay2Auto: false).airPlay2Note(on: false, onAtLaunch: true) == stops
             && UIStrings(airPlay2Auto: false).airPlay2Note(on: true, onAtLaunch: true) == lets
@@ -3818,6 +3836,10 @@ do {
     check(asc_airplay2_auto() == (ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY2_AUTO"] != "0")
             && UIStrings().airPlay2Toggle == "AirPlay 2 (Experimental)",
           "S312 AirPlay 2 switch: AirPlay 2 is on by default and the switch keeps its label")
+    // covers: S312, S313 (the Guide the app shows)
+    check(!UIStrings().helpText.contains("off at first")
+            && UIStrings().helpText.contains("uses AirPlay 1\nunless 'AirPlay 2 (Experimental)', in the gear menu"),
+          "S312 Guide: AirPlay 2 speakers play by default, and the switch keeps its label")
     // The menu classes are main-actor bound; top-level code runs on the main thread.
     MainActor.assumeIsolated {
         let noteMenu = NSMenu()
@@ -7470,6 +7492,41 @@ do {
     check(heldOutside == ["lc:den"],
           "presets: a recall leaves on the stereo pair or home theater that holds a stored member", "\(heldOutside)")
 
+    // covers: S251, S252
+    let macSpeakersKey = "lc:BuiltInSpeakerDevice", usbOutKey = "lc:usb:out"
+    let savedSpeakersOff = PresetEdit.saving("Desk", scene: PresetScene(on: [.init(key: usbOutKey, volume: 40)],
+                                                                        zones: [], master: 80, gains: presetFlat),
+                                             id: "p7", to: [], numbered: numbered)?.first
+    let speakersOffOutside = PresetRecall.outside([macSpeakersKey, usbOutKey],
+                                                  stored: Set(savedSpeakersOff?.members.map(\.key) ?? []), holders: [])
+    let speakersOffRecall = PresetRecall.plan([.init(kind: .local, found: true, on: true)],
+                                              others: speakersOffOutside.map { _ in true }, streaming: true)
+    check(speakersOffOutside == [macSpeakersKey] && speakersOffRecall.action == .apply
+            && speakersOffRecall.switchOff == [true],
+          "presets: a preset saved with the MacBook speakers off switches them off on recall",
+          "\(speakersOffOutside) \(speakersOffRecall)")
+    let savedSpeakersOn = PresetEdit.saving("Desk", scene: PresetScene(on: [.init(key: macSpeakersKey, volume: 30),
+                                                                            .init(key: usbOutKey, volume: 40)],
+                                                                       zones: [], master: 80, gains: presetFlat),
+                                            id: "p8", to: [], numbered: numbered)?.first
+    let speakersOnRecall = PresetRecall.plan([.init(kind: .local, found: true), .init(kind: .local, found: true, on: true)],
+                                             others: [], streaming: true)
+    check(savedSpeakersOn?.members.map(\.key) == [macSpeakersKey, usbOutKey]
+            && speakersOnRecall.action == .apply && speakersOnRecall.steps == [.on, .on],
+          "presets: a preset saved with the MacBook speakers on switches them on on recall",
+          "\(String(describing: savedSpeakersOn)) \(speakersOnRecall)")
+
+    // covers: S252 (a hidden stereo pair or home theater gives the hidden reason, as on Windows)
+    let hiddenPairPlan = PresetRecall.plan(
+        [.init(kind: .airplay2, found: true, hidden: true,
+               needsAirPlay2: ZoneMemberFacts.airPlay2Missing(target: true, found: true, airPlay2On: false)),
+         .init(kind: .airplay2, found: false,
+               needsAirPlay2: ZoneMemberFacts.airPlay2Missing(target: true, found: false, airPlay2On: false))],
+        others: [true], streaming: true)
+    check(hiddenPairPlan.steps == [.leftOff(.hidden), .leftOff(.needsAirPlay2)],
+          "presets: a hidden stereo pair or home theater is left off as hidden, one not listed while AirPlay 2 is off as needing it",
+          "\(hiddenPairPlan.steps)")
+
     // covers: S265
     var goneCast = CastModel()
     goneCast.apply(.appeared(CastDevice(id: "K1", name: "Kitchen"), offsetMs: nil))
@@ -7757,45 +7814,6 @@ do {
     // covers: S357
     check(fold.moves && fold.duration == 0.2 && !stillFold.moves && stillFold.duration == 0,
           "menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once")
-
-    // The panel's own shadow while it grows in or shrinks away (PanelShadow).
-    let body = CGRect(x: 0, y: 0, width: 306, height: 400), tip = CGPoint(x: 153, y: 412)
-    let outline = PanelShadow.outline(body: body, tip: tip)
-    // covers: S405
-    check(outline.contains(CGPoint(x: 153, y: 200)) && outline.contains(CGPoint(x: 153, y: 410))
-            && !outline.contains(CGPoint(x: 0.5, y: 399.5)) && !outline.contains(CGPoint(x: 100, y: 405)),
-          "menu bar panel shadow: its shape is the rounded body with the arrow up to the icon, not the window's rectangle")
-    let room = body.insetBy(dx: -30, dy: -30)
-    let outside = PanelShadow.outside(outline, in: room)
-    // covers: S405
-    check(!outside.contains(CGPoint(x: 153, y: 200), using: .evenOdd) && !outside.contains(CGPoint(x: 153, y: 410), using: .evenOdd)
-            && outside.contains(CGPoint(x: -10, y: 200), using: .evenOdd)
-            && outside.contains(CGPoint(x: 0.5, y: 399.5), using: .evenOdd),
-          "menu bar panel shadow: it shows only outside the panel, never darkening the translucent panel")
-    let light = PanelShadow.style(dark: false), dark = PanelShadow.style(dark: true)
-    // covers: S405
-    check(dark.opacity > light.opacity && light.opacity > 0 && dark.opacity <= 1 && light.offsetY < 0
-            && light.margin >= light.radius * 2 + abs(light.offsetY) && dark.margin >= dark.radius * 2 + abs(dark.offsetY),
-          "menu bar panel shadow: darker in the dark theme, falling downward, with room to spread in")
-    let barSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    // covers: S405
-    check(barSource.components(separatedBy: ".invalidateShadow()").count - 1 == 1
-            && barSource.components(separatedBy: "hasShadow = on").count - 1 == 1,
-          "menu bar panel source: the system shadow is switched in one place and recomputed once, never per frame")
-    // covers: S405
-    check(barSource.contains("grow(own.panel, about: tip)") && barSource.contains("shrink(own.panel, about: tip)")
-            && barSource.contains("window.addChildWindow(shadow, ordered: .below)"),
-          "menu bar panel source: the own shadow scales with the panel, in a window under it")
-    let resizeBody = barSource.components(separatedBy: "private func animateResize(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    // covers: S405
-    check(resizeBody.contains("dropOwnShadow()") && resizeBody.contains("setShadow(window, true)"),
-          "menu bar panel source: a resize hands the shadow back to the system, so the own one never keeps an old size")
-    let ownBody = barSource.components(separatedBy: "private func ownShadow(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    // covers: S405
-    check(ownBody.contains("window.effectiveAppearance.bestMatch") && !ownBody.contains("NSApp.effectiveAppearance"),
-          "menu bar panel source: the own shadow takes the panel window's theme")
     let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
@@ -7817,41 +7835,6 @@ do {
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
-    let ownShadowBody = bar.components(separatedBy: "private func ownShadow(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    let dropBody = bar.components(separatedBy: "private func dropOwnShadow(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    // covers: S405
-    check(ownShadowBody.contains("standInBackground(") && dropBody.contains("restoreBackground("),
-          "menu bar panel source: while the panel scales, its background is a stand-in that scales with it, handed back to the system's with the shadow")
-    final class Pane {
-        let name: String, background: Bool, children: [Pane]
-        init(_ name: String, background: Bool = false, _ children: [Pane] = []) {
-            self.name = name; self.background = background; self.children = children
-        }
-    }
-    let content = Pane("content", background: true, [Pane("row blur", background: true)])
-    let tree = Pane("theme frame", [Pane("popover frame", background: true,
-                                         [Pane("blur", background: true), Pane("content view", [content]),
-                                          Pane("stand-in", background: true)])])
-    let hidden = PanelBackdrop.hidden(in: tree, children: { $0.children }, isContent: { $0 === content },
-                                      isStandIn: { $0.name == "stand-in" }, isBackground: { $0.background })
-    // covers: S405
-    check(hidden.map(\.name) == ["blur"],
-          "menu bar panel: the stand-in hides only background views beside the content, never one holding it, its own rows or itself",
-          "\(hidden.map(\.name))")
-    let blurLayer = NSObject(), contentLayer = NSObject(), standInLayer = NSObject()
-    let material = PanelBackdrop.material(in: [blurLayer, contentLayer, standInLayer], keeping: [contentLayer, standInLayer])
-    // covers: S405
-    check(material.count == 1 && material.first === blurLayer,
-          "menu bar panel: in a background view that holds the content, only the layers no subview owns are its material")
-    let openBody = bar.components(separatedBy: "private func animateOpen(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
-    // covers: S405
-    check(!bar.contains("panel resize layers") && openBody.contains("ownShadow(window)")
-            && (openBody.range(of: "ownShadow(window)")?.lowerBound ?? openBody.endIndex)
-                < (openBody.range(of: "growInSteps(layer")?.lowerBound ?? openBody.startIndex),
-          "menu bar panel source: the panel grows only once its background can scale with it; otherwise it fades in at full size")
 
     // The open panel moved by AppKit (another display, a status item shifting).
     let shifted = window.offsetBy(dx: -40, dy: -24)
@@ -7916,13 +7899,18 @@ do {
     check(!PanelMotion.open(reduceMotion: true).grows && !PanelMotion.close(reduceMotion: true).grows
             && PanelMotion.open(reduceMotion: true).duration > 0,
           "menu bar panel: with Reduce Motion it only fades")
-    let pinned = PanelMotion.pin(CGPoint(x: 140, y: 420), scale: grow.scale)
+    let iconX = window.midX + 20
+    let pinned = PanelReveal.body(window, scale: grow.scale, about: CGPoint(x: iconX, y: window.maxY), pixel: 0)
     // covers: S405
-    check(abs(140 * grow.scale + Double(pinned.x) - 140) < 1e-9 && abs(420 * grow.scale + Double(pinned.y) - 420) < 1e-9,
-          "menu bar panel: the point under the icon stays put while the panel grows")
+    check(pinned.maxY == window.maxY && abs(Double(iconX - pinned.minX) - Double(iconX - window.minX) * grow.scale) < 1e-9
+            && abs(Double(pinned.maxX - iconX) - Double(window.maxX - iconX) * grow.scale) < 1e-9,
+          "menu bar panel: the point under the icon stays put while the panel grows", "\(pinned)")
+    let openQuiet = PanelQuiet.duration(.open, system: false)
+    // The open's last 120 Hz step.
+    let lastStepShown = Double(PanelReveal.scales(grow, step: 1.0 / 120).count) / 120
     // covers: S406
-    check(PanelQuiet.duration(.open, system: false) == grow.settles && shrink == shrinkBack.duration,
-          "menu bar panel: deferred work waits exactly for the panel's own motion")
+    check(near(openQuiet, lastStepShown) && shrink == shrinkBack.duration,
+          "menu bar panel: deferred work waits exactly for the panel's own motion", "\(openQuiet)")
     // covers: S405
     check(PanelMotion.tail * (1 - grow.scale) * 600 < 0.5,
           "menu bar panel: ending the spring at its settle time moves even a 600 pt panel's far edge under half a point")
@@ -7978,13 +7966,17 @@ do {
           "menu bar panel: a late didShow after the reopen finished brings no second refresh")
     // The panel's show() finishes a reopen itself, since AppKit sends no didShow then.
     let menuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    let showBody = menuBar.components(separatedBy: "    func show() {").dropFirst().first?
+    let showBody = menuBar.components(separatedBy: "    func show(pressedAt press: TimeInterval? = nil) {").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
     func inShow(_ needle: String) -> Int { showBody.components(separatedBy: needle).count - 1 }
     // covers: S403
     check(!showBody.isEmpty && inShow("let finishNow = host.sizing.show(onScreen: popover.isShown)") == 1
           && inShow("if finishNow { finishOpenWhenQuiet() }") == 1,
           "menu bar panel: show() finishes the open at once when it reopens a panel still on screen")
+    // covers: S406
+    check((showBody.range(of: "quietQueue.quiet.began(.open")?.lowerBound ?? showBody.startIndex)
+            > (showBody.range(of: "animateOpen(PanelMotion.open")?.lowerBound ?? showBody.endIndex),
+          "menu bar panel source: the open's quiet starts with its steps, after show()'s own refresh and layout, so deferred work never lands on the last steps")
     var first = PanelSizing.closed
     // covers: S403
     check(!first.show(onScreen: false) && first == .opening && first.finishOpen() && first == .shown,
@@ -7997,7 +7989,7 @@ do {
     var own = PanelQuiet()
     own.began(.open, at: 40)
     // covers: S406
-    check(near(own.wait(at: 40.1), grow.settles - 0.1) && own.wait(at: 40 + grow.settles) == 0 && grow.settles < 0.6,
+    check(near(own.wait(at: 40.1), openQuiet - 0.1) && own.wait(at: 40 + openQuiet) == 0 && openQuiet < 0.6,
           "menu bar panel: with the panel's own grow, work after an open waits less than for the system's bounce")
     own.began(.close, at: 41)
     // covers: S406
@@ -8067,48 +8059,120 @@ do {
             && abs(revealSteps[12] - 1) < abs(revealSteps[6] - 1),
           "menu bar panel: the reveal follows the open's spring, one step per 120 Hz frame, from 0.92 to exactly 1",
           "\(revealSteps.count) \(revealSteps.first ?? 0) \(revealSteps.last ?? 0)")
-    let growBodies = revealSteps.map { PanelReveal.body(revealBody, scale: $0, about: revealTip, pixel: 0.5) }
-    let growLaid = growBodies.allSatisfy { step in
-        let laid = revealBody.applying(PanelReveal.stretch(revealBody, onto: step))
-        return [laid.minX - step.minX, laid.minY - step.minY, laid.maxX - step.maxX, laid.maxY - step.maxY]
-            .allSatisfy { abs($0) < 1e-9 }
+    let restWindow = CGRect(x: 1000, y: 543, width: 306, height: 412)
+    let restContent = CGRect(x: 13, y: 0, width: 280, height: 400)
+    let contentHeld = revealSteps.allSatisfy { scale in
+        let step = PanelReveal.body(restWindow, scale: scale, about: CGPoint(x: 1153, y: restWindow.maxY), pixel: 0.5)
+        let placed = PanelReveal.content(restContent, rest: restWindow, step: step)
+        return placed.size == restContent.size && step.maxY == restWindow.maxY
+            && placed.minX + step.minX == restContent.minX + restWindow.minX
+            && placed.minY + step.minY == restContent.minY + restWindow.minY
     }
     // covers: S405
-    check(growLaid && growBodies.first != revealBody
-            && PanelReveal.stretch(revealBody, onto: growBodies.last ?? .zero) == .identity,
-          "menu bar panel: each step of the open lays the whole body's outer edges exactly on its pixel-aligned step and ends with no transform")
-    let revealSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    let revealOpen = revealSource.components(separatedBy: "private func animateOpen(").dropFirst().first?
-        .components(separatedBy: "\n    }\n").first ?? ""
+    check(contentHeld && PanelReveal.content(restContent, rest: restWindow, step: restWindow) == restContent,
+          "menu bar panel: at each step the window grows from under the icon while the content's frame stays where it rests on screen, at its full size, its layer scaled about the arrow's tip")
+    let growRest = CGRect(x: 1000.25, y: 543.5, width: 306, height: 412)
+    let growTip = PanelReveal.tip(icon: 1153.3, rest: growRest)
+    // The layer's position at the content's middle, where Core Animation's default anchor point puts it.
+    let growOffset = CGVector(dx: -10, dy: -206)
+    let grown = revealSteps.enumerated().map { index, scale -> (tip: CGPoint, corner: CGPoint, laidCorner: CGPoint, scale: CGFloat) in
+        let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
+        let s = step.height / growRest.height
+        // Where AppKit lays the content's tip point before the transform, off by half points.
+        let laid = CGPoint(x: growTip.x + 0.5 * CGFloat(index % 3), y: growTip.y - 0.5 * CGFloat(index % 2))
+        let position = CGPoint(x: laid.x + growOffset.dx, y: laid.y + growOffset.dy)
+        let scaling = PanelReveal.contentScale(Double(s), tip: growTip, anchor: laid, offset: growOffset)
+        func drawn(_ point: CGPoint) -> CGPoint {
+            let moved = CGPoint(x: point.x - position.x, y: point.y - position.y).applying(scaling)
+            return CGPoint(x: position.x + moved.x, y: position.y + moved.y)
+        }
+        let corner = CGPoint(x: laid.x - 153, y: laid.y - 400)
+        return (drawn(laid), drawn(corner), corner, s)
+    }
     // covers: S405
-    check(revealOpen.contains("growInSteps(") && revealOpen.contains("if PanelSwitches.revealContent")
-            && revealSource.contains("shadow.add(steps(")
-            && revealSource.contains("calculationMode = .discrete") && !revealSource.contains("shouldRasterize"),
-          "menu bar panel source: the open scales the whole panel and its own shadow on the same discrete steps, never through a rasterized copy, so its outer edges stay on the pixel grid")
+    check(zip(grown, revealSteps).allSatisfy { step, scale in
+        abs(step.corner.x - (growTip.x - 153 * step.scale)) < 1e-9 && abs(step.corner.y - (growTip.y - 400 * step.scale)) < 1e-9
+            && abs(step.scale - CGFloat(scale)) < 0.002 && (step.scale > 0.999 || abs(step.corner.y - step.laidCorner.y) > 0.25)
+    }, "menu bar panel: at each step the content scales by the window's height about the arrow's tip, never about its own middle, so its text grows from under the icon with the panel",
+          "\(grown.map { $0.corner })")
+    // covers: S405
+    check(grown.allSatisfy { abs($0.tip.x - growTip.x) < 1e-9 && abs($0.tip.y - growTip.y) < 1e-9 }
+            && growTip == CGPoint(x: 1153, y: 956) && PanelReveal.tip(icon: 2400.6, rest: growRest) == CGPoint(x: 1306, y: 956),
+          "menu bar panel: the arrow's tip stays on the same whole screen point at every step, so the content never drifts as the window's edges snap to the pixel grid",
+          "\(growTip) \(grown.map { $0.tip })")
+    let closeMotion = PanelMotion.close(reduceMotion: false)
+    let closeSteps = PanelReveal.shrinks(from: 1, closeMotion, step: 1.0 / 120)
+    let cutShort = PanelReveal.shrinks(from: 0.98, closeMotion, step: 1.0 / 120)
+    let closeHalf = closeSteps.count / 2
+    // covers: S405
+    check(closeSteps.count == Int((closeMotion.duration * 120).rounded(.up)) + 1 && closeSteps.first == 1
+            && closeSteps.last == closeMotion.scale && zip(closeSteps, closeSteps.dropFirst()).allSatisfy { $1 <= $0 }
+            && 1 - closeSteps[closeHalf] < closeSteps[closeHalf] - closeMotion.scale
+            && cutShort.first == 0.98 && cutShort.last == closeMotion.scale,
+          "menu bar panel: the close shrinks from where the panel is to its end scale on an ease-in curve, one step per 120 Hz frame",
+          "\(closeSteps)")
+    let arrowFrames = (revealSteps + closeSteps).map { scale -> (window: CGRect, arrow: CGRect) in
+        let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
+        return (step, PanelArrow.frame(in: step, tip: growTip))
+    }
+    // covers: S405
+    check(arrowFrames.allSatisfy { step in
+        step.arrow.midX == growTip.x && step.arrow.maxY == step.window.maxY && step.arrow.size == PanelArrow.size
+    }, "menu bar panel: the arrow drawn over the popover's own has its apex on the arrow's tip at the window's top edge, at every open and close step",
+          "\(arrowFrames.map { $0.arrow })")
+    let edgeRest = CGRect(x: 1000, y: 543, width: 306, height: 412)
+    let edgeTip = PanelReveal.tip(icon: 1040.3, rest: edgeRest)
+    let edgeArrows = (revealSteps + closeSteps).map { scale in
+        PanelArrow.frame(in: PanelReveal.body(edgeRest, scale: scale, about: edgeTip, pixel: 0.5), tip: edgeTip)
+    }
+    let cornerArrow = PanelArrow.frame(in: edgeRest, tip: PanelReveal.tip(icon: 1001.2, rest: edgeRest))
+    // covers: S405
+    check(edgeArrows.allSatisfy { $0.midX == edgeTip.x }
+            && cornerArrow.minX == edgeRest.minX + PanelArrow.cornerRoom && cornerArrow.maxY == edgeRest.maxY,
+          "menu bar panel: a panel the screen edge holds off the icon draws its arrow on the tip under the icon, kept clear of the window's rounded corner",
+          "\(edgeArrows.map { $0.midX }) \(cornerArrow)")
+    let centredRest = CGRect(x: 933, y: 422, width: 306, height: 507)
+    let centredTip = PanelReveal.tip(icon: 1086.4, rest: centredRest)
+    let centredSteps = [0.5, 1].flatMap { pixel in
+        (revealSteps + closeSteps).map { PanelReveal.body(centredRest, scale: $0, about: centredTip, pixel: pixel) }
+    }
+    // covers: S405
+    check(centredSteps.allSatisfy { step in
+        step.minX + step.width / 2 == centredTip.x && step.minX == step.minX.rounded()
+            && PanelArrow.frame(in: step, tip: centredTip).midX == centredTip.x
+    } && PanelReveal.body(centredRest, scale: 1, about: centredTip, pixel: 0.5) == centredRest,
+          "menu bar panel: every step's window is an even width on whole points centred on the arrow's tip, so the system's arrow, drawn at the window's middle, stays on the tip",
+          "\(centredSteps.filter { $0.minX + $0.width / 2 != centredTip.x })")
 }
 
-// MARK: The panel's stand-in on the first open after launch (MenuBar.swift, WindowRules.swift)
+// MARK: The panel opens and closes as its own window (MenuBar.swift)
 do {
-    final class FrameSublayer {
-        let name: String?
-        init(_ name: String?) { self.name = name }
-    }
-    let frameBackdrop = FrameSublayer("kCUIVariantPopoverMaterial"), frameRing = FrameSublayer("NSAutomaticFocusRing"),
-        frameHosted = FrameSublayer("NSViewBackingLayer")
-    let frameMaterial = PanelBackdrop.material(in: [frameBackdrop, frameHosted, frameRing], keeping: [frameHosted],
-                                               name: { $0.name })
-    // covers: S405
-    check(frameMaterial.count == 1 && frameMaterial.first === frameBackdrop,
-          "menu bar panel: the popover frame's focus ring is no part of its material, so the stand-in never hides it and handing the background back never shows a stale ring",
-          "\(frameMaterial.map { $0.name ?? "nil" })")
-    let panelSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    let standInBody = panelSource.components(separatedBy: "private func standInBackground(").dropFirst().first?
+    let windowSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let placeSource = windowSource.components(separatedBy: "private func place(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
-    let drawPass = standInBody.range(of: "displayIfNeeded()")?.lowerBound
-    let fadeOnly = standInBody.range(of: "no part of it can be hidden")?.lowerBound
+    let scaleSource = windowSource.components(separatedBy: "private func scaleContent(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
     // covers: S405
-    check(drawPass != nil && fadeOnly != nil && drawPass! < fadeOnly!,
-          "menu bar panel source: before the panel settles for a fade, the popover draws once, so the first open after launch finds the frame's material too")
+    check(placeSource.contains("window.setFrame(") && placeSource.contains("PanelReveal.content(")
+            && placeSource.contains("scaleContent(") && !placeSource.contains("layoutSubtreeIfNeeded")
+            && windowSource.components(separatedBy: "(keyPath: \"transform\")").count == 2
+            && scaleSource.contains("let content = contentLayer") && scaleSource.contains("(keyPath: \"transform\")")
+            && !scaleSource.contains("cacheDisplay("),
+          "menu bar panel source: the open and close step the popover window's own frame and scale only the live content's layer, never a picture of the panel, so its corners stay round at every step")
+    // covers: S405
+    check(!windowSource.contains("PanelShadowWindow") && !windowSource.contains("hasShadow = ")
+            && !windowSource.contains("addChildWindow("),
+          "menu bar panel source: the panel keeps the system's shadow throughout, with no shadow of its own to hand back to it")
+    let dismissSource = windowSource.components(separatedBy: "private func dismiss(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
+    check(dismissSource.contains("PanelReveal.shrinks(from: steps?.scale ?? 1"),
+          "menu bar panel source: a close that cuts the open short shrinks from the step the open has shown")
+    let endSource = windowSource.components(separatedBy: "private func endSteps(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
+    check(endSource.contains("\n        host.view.layer?.removeAnimation(forKey: Self.stepKey)"),
+          "menu bar panel source: ending the steps always hands the content back at its laid-out scale, even once the window is gone")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
@@ -8408,7 +8472,7 @@ do {
     // covers: S328 (a speaker whose device leaves the list for a moment)
     let on: Set<String> = [r, usb, bt]
     func flapped(at lostAt: Double = 5) -> LocalBriefLoss {
-        var flap = LocalBriefLoss()
+        let flap = LocalBriefLoss()
         flap.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
         flap.noteListing([r, usb], enabled: on, reference: r, now: lostAt)
         return flap
@@ -8433,10 +8497,10 @@ do {
           "local delay: a lost output switched off re-times the others at once")
     flap = flapped()
     flap.restart()
-    var lostReference = LocalBriefLoss()
+    let lostReference = LocalBriefLoss()
     lostReference.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
     lostReference.noteListing([usb, bt], enabled: on, reference: nil, now: 5)
-    var offFirst = LocalBriefLoss()
+    let offFirst = LocalBriefLoss()
     offFirst.noteListing([r, usb, bt], enabled: on, reference: r, now: 0)
     offFirst.noteListing([r, usb], enabled: [r, usb], reference: r, now: 5)
     // covers: S328
@@ -8659,6 +8723,11 @@ do {
     stored.values[AppSettings.Keys.speakerNames] = ["a": 5, "b": "  ", "c": "Den"] as [String: Any]
     check(store.load().speakerNames.custom == ["c": "Den"],
           "speaker names: a stored entry that isn't a name is skipped")
+
+    // covers: S228 (while renamed the system name stays in the panel row's tooltip)
+    check(UIStrings().panelNameHelp(name: "Desk", renamedFrom: "MacBook Speakers") == "Desk\nDevice name: MacBook Speakers"
+              && UIStrings().panelNameHelp(name: "MacBook Speakers", renamedFrom: nil) == "MacBook Speakers",
+          "speaker names: the panel tooltip names the device only for a renamed speaker")
 
     // covers: S243 (a Cast name kept under lc:cast: moves to cc: once; one under the new key wins)
     let before = SpeakerNames(custom: ["lc:cast:nest-1": "Den", "lc:cast:tv": "Old", "cc:tv": "Lounge",
@@ -9651,6 +9720,35 @@ do {
     check(!rebuiltSteps.contains(.giveUp) && rebuilt.inWakeWindow(at: 69.5) && !rebuilt.inWakeWindow(at: 70),
           "capture watch: a session rebuilt inside a wake's window keeps it, so its failing tries take none of the 5",
           "\(rebuiltSteps.filter { $0 != .none })")
+}
+
+// covers: S335 (an app tap that can't be built again for the app's new processes is reopened, as a dead aggregate is)
+do {
+    let retapSigns = [SourceCapture.CaptureError.tapNotCreated(1), .formatUnusable(1), .ioProcNotStarted(1)]
+        .map { CaptureFlowWatch.sign(of: .sourceLost($0)) }
+    let otherSigns = [CaptureFlowWatch.sign(of: .sourceLost(.aggregateDeviceFailed(1))),
+                      CaptureFlowWatch.sign(of: .sourceLost(.appNotRunning("com.example.player"))),
+                      CaptureFlowWatch.sign(of: .sourceLost(.inputDisconnected)),
+                      CaptureFlowWatch.sign(of: .formatChanged)]
+    check(retapSigns.allSatisfy { $0 == .retapFailed } && otherSigns == [.aggregateDied, nil, nil, nil],
+          "capture watch: a failed retap closes the capture for the tries instead of ending the session; a quit app, a lost input and a format change keep their own handling",
+          "\(retapSigns) \(otherSigns)")
+
+    var retapWoke = CaptureFlowWatch()
+    _ = retapWoke.tick(callbacks: 10, reading: true, source: moving(0), at: 0)
+    retapWoke.pause()
+    retapWoke.resume(at: 10)
+    var retapSeen = [retapWoke.report(.retapFailed, at: 12)]
+    for n in 25...120 {
+        let now = 0.5 * Double(n)
+        let step = retapWoke.tick(callbacks: nil, reading: false, source: moving(now), at: now)
+        retapSeen.append(step)
+        if case .tryOpen = step { retapSeen.append(retapWoke.failed(at: now)) }
+    }
+    let retapTries = retapSeen.filter { if case .tryOpen = $0 { return true } else { return false } }.count
+    check(retapSeen.first == .stopped(.retapFailed) && !retapSeen.contains(.giveUp) && retapTries > CaptureFlowWatch.tries,
+          "capture watch: a retap failing inside a wake's window keeps being tried past the 5 tries",
+          "\(retapSeen.filter { $0 != .none })")
 }
 
 // MARK: Output format: a device whose rate or channels change under a running output (OutputFormatWatch.swift, S330)
@@ -15363,6 +15461,13 @@ do {
           && HiddenSpeakers().menu(present: [:], text: t).isEmpty,
           "hidden speakers: the menu is sorted by shown name, uses the current name when present, says not found otherwise",
           menu.map(\.title).joined(separator: " | "))
+    var roomsHidden = HiddenSpeakers()
+    roomsHidden.hide(key: "lc:room10", name: "Room 10", kind: "USB")
+    roomsHidden.hide(key: "lc:room2", name: "room 2", kind: "USB")
+    let roomsMenu = roomsHidden.menu(present: [:], text: t).map(\.name)
+    check(roomsMenu == ["room 2", "Room 10"],
+          "hidden speakers: the menu sorts numbers in names by value, ignoring case",
+          roomsMenu.joined(separator: " | "))
 
     // Shown again: back in the rows; nothing else was touched, so its saved values stay.
     var store: [String: Any] = [AppSettings.Keys.localOffsets: ["teams": 120.0]]
@@ -16024,6 +16129,14 @@ do {
     check(inCard("focused = ZoneHeaderHit.goToZoneFocus(nonePresent: nonePresent)") == 1
           && inCard(".focused($focused, equals: .chevron)") == 1 && inCard(".focused($focused, equals: .zoneIcon)") == 1,
           "main window zone header: Go to Zone focuses the part ZoneHeaderHit.goToZoneFocus names")
+    // Arrow keys as on Windows: Right unfolds, Left folds, and the other way round passes the key on.
+    check(ZoneHeaderHit.arrowFolds(right: true, expanded: false) && ZoneHeaderHit.arrowFolds(right: false, expanded: true)
+            && !ZoneHeaderHit.arrowFolds(right: true, expanded: true) && !ZoneHeaderHit.arrowFolds(right: false, expanded: false),
+          "zone header: Right unfolds a folded zone, Left folds an unfolded one, and neither acts on a zone already that way")
+    check(occurrences(".onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }") == 2
+            && inCard(".onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }") == 2
+            && occurrences("ZoneHeaderHit.arrowFolds(") == 1 && inCard("ZoneHeaderHit.arrowFolds(") == 1,
+          "zone header: both focusable parts take Left and Right through ZoneHeaderHit.arrowFolds, in the panel and the main window")
 }
 
 // MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)
@@ -16455,6 +16568,11 @@ do {
     check(!tips.isEmpty && !tips.contains(" ms") && !tips.contains("if it plays late, lower it")
             && tips.contains("one by one") && tips.contains("hands-free microphone"),
           "guide: Tips keep their advice without an unsourced delay range or More Controls' raise/lower rule", tips)
+    let flatGuide = guide.helpText.replacingOccurrences(of: "\n  ", with: " ")
+    check(flatGuide.contains("appears. At launch, AudioSync starts streaming only when such a speaker is there.")
+            && flatGuide.contains("- Rename: double-click a speaker's name, or right-click it or use its ⋯ button and choose Rename…;")
+            && flatGuide.contains("out of the lists, right-click it or use its ⋯ button and choose “Hide Speaker”."),
+          "guide: auto-connect says when a launch streams, and Rename and Hide name the right-click menu, as on Windows")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

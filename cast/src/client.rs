@@ -9,9 +9,9 @@ use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -116,20 +116,57 @@ type SaveErrorReport = Box<dyn FnOnce(io::Error) + Send>;
 /// How the host replaces the book's file with new bytes.
 type BookWriter = Box<dyn FnMut(&Path, &[u8]) -> io::Result<()> + Send>;
 
+/// Where the book is kept across launches, and what writes it there.
+struct BookFile {
+    path: PathBuf,
+    write: BookWriter,
+    report_save_error: Option<SaveErrorReport>,
+}
+
+impl BookFile {
+    fn save(&mut self, text: &str) {
+        // Diagnostics only: a book that can't be written stays in memory.
+        if let Err(error) = (self.write)(&self.path, text.as_bytes())
+            && let Some(report) = self.report_save_error.take()
+        {
+            report(error);
+        }
+    }
+}
+
+/// Puts the file back in the book when its writer panics.
+struct Saving<'a> {
+    book: &'a Mutex<FingerprintBook>,
+    file: Option<BookFile>,
+}
+
+impl Drop for Saving<'_> {
+    fn drop(&mut self) {
+        if let Some(file) = self.file.take() {
+            let mut book = self.book.lock().unwrap_or_else(PoisonError::into_inner);
+            book.file = Some(file);
+            book.saving = false;
+        }
+    }
+}
+
 /// The fingerprints seen per device, for diagnostics only (C21).
 #[derive(Default)]
 pub struct FingerprintBook {
     seen: HashMap<DeviceId, Fingerprint>,
-    /// Where the book is kept across launches; `None` keeps it in memory.
-    file: Option<(PathBuf, BookWriter)>,
-    report_save_error: Option<SaveErrorReport>,
+    /// `None` keeps the book in memory, or a record is writing it.
+    file: Option<BookFile>,
+    /// Set while a record writes the file outside the book's lock.
+    saving: bool,
+    /// The newest text, which the record writing the file writes next.
+    unsaved: Option<String>,
 }
 
 impl fmt::Debug for FingerprintBook {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FingerprintBook")
             .field("seen", &self.seen)
-            .field("file", &self.file.as_ref().map(|(path, _)| path))
+            .field("file", &self.file.as_ref().map(|file| &file.path))
             .finish_non_exhaustive()
     }
 }
@@ -160,8 +197,13 @@ impl FingerprintBook {
         };
         let book = FingerprintBook {
             seen,
-            file: Some((path, Box::new(write))),
-            report_save_error: None,
+            file: Some(BookFile {
+                path,
+                write: Box::new(write),
+                report_save_error: None,
+            }),
+            saving: false,
+            unsaved: None,
         };
         (book, error)
     }
@@ -169,31 +211,75 @@ impl FingerprintBook {
     /// Hands the first write that fails to `report`, for the host's log;
     /// later ones go unreported, so a file that stays locked logs once.
     pub fn on_save_error(mut self, report: impl FnOnce(io::Error) + Send + 'static) -> Self {
-        self.report_save_error = Some(Box::new(report));
+        if let Some(file) = &mut self.file {
+            file.report_save_error = Some(Box::new(report));
+        }
         self
     }
 
     pub fn record(&mut self, id: DeviceId, fingerprint: Fingerprint) -> FingerprintChange {
+        let (change, file) = self.note(id, fingerprint);
+        if let Some(file) = file {
+            self.file = Some(file);
+            self.saving = false;
+            if let (Some(text), Some(file)) = (self.unsaved.take(), &mut self.file) {
+                file.save(&text);
+            }
+        }
+        change
+    }
+
+    /// [`FingerprintBook::record`] on a book the sessions share: the file
+    /// is written with the lock dropped, by one record at a time, which
+    /// writes the newest text last.
+    pub fn record_in(
+        book: &Mutex<FingerprintBook>,
+        id: DeviceId,
+        fingerprint: Fingerprint,
+    ) -> FingerprintChange {
+        let lock = || book.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut held = lock();
+        let (change, file) = held.note(id, fingerprint);
+        if let Some(file) = file {
+            let mut saving = Saving {
+                book,
+                file: Some(file),
+            };
+            while let Some(text) = held.unsaved.take() {
+                drop(held);
+                if let Some(file) = &mut saving.file {
+                    file.save(&text);
+                }
+                held = lock();
+            }
+            held.file = saving.file.take();
+            held.saving = false;
+        }
+        change
+    }
+
+    /// Notes `fingerprint` and the text to write for it; the file when no
+    /// other record is writing it.
+    fn note(
+        &mut self,
+        id: DeviceId,
+        fingerprint: Fingerprint,
+    ) -> (FingerprintChange, Option<BookFile>) {
         let change = match self.seen.insert(id, fingerprint) {
             None => FingerprintChange::First,
             Some(before) if before == fingerprint => FingerprintChange::Same,
             Some(before) => FingerprintChange::Changed { before },
         };
-        if change == FingerprintChange::Same {
-            return change;
+        if change == FingerprintChange::Same || (self.file.is_none() && !self.saving) {
+            return (change, None);
         }
         // One `<id> <fingerprint>` line per device, as they are logged.
         let text: String = (self.seen.iter())
             .map(|(id, fingerprint)| format!("{id} {fingerprint}\n"))
             .collect();
-        // Diagnostics only: a book that can't be written stays in memory.
-        if let Some((path, write)) = &mut self.file
-            && let Err(error) = write(path, text.as_bytes())
-            && let Some(report) = self.report_save_error.take()
-        {
-            report(error);
-        }
-        change
+        self.unsaved = Some(text);
+        self.saving = true;
+        (change, self.file.take())
     }
 }
 
