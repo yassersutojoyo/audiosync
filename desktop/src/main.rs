@@ -773,6 +773,11 @@ mod tests {
                 "focus-changed(focused)",
                 "speaker-focused",
             ),
+            (
+                "text: Strings.cast-add-address;",
+                "changed keyboard-focused",
+                "add-address-focused",
+            ),
         ] {
             let body = handler_body(flyout, element, handler);
             assert!(
