@@ -23,6 +23,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, Escape closes the Web Remote window, also while the cursor is in its port field.
 - On the Mac, Right unfolds a zone and Left folds it, in the main window and the menu bar panel, as on Windows.
 - On Windows, when AudioSync turns off an AirPlay speaker that couldn't be reached or stayed busy with another device, the notice says it's off and how to turn it on again, as on the Mac. Before, it said AudioSync keeps trying.
+- On the Mac, when an app you capture starts playing from a new process and AudioSync can't capture that one at first, it keeps trying for a few seconds, longer right after the Mac wakes, as Windows does. Before, streaming stopped with a notice about the source.
 
 ## [0.8.0] - unreleased
 

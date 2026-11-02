@@ -9695,6 +9695,35 @@ do {
           "\(rebuiltSteps.filter { $0 != .none })")
 }
 
+// covers: S335 (an app tap that can't be built again for the app's new processes is reopened, as a dead aggregate is)
+do {
+    let retapSigns = [SourceCapture.CaptureError.tapNotCreated(1), .formatUnusable(1), .ioProcNotStarted(1)]
+        .map { CaptureFlowWatch.sign(of: .sourceLost($0)) }
+    let otherSigns = [CaptureFlowWatch.sign(of: .sourceLost(.aggregateDeviceFailed(1))),
+                      CaptureFlowWatch.sign(of: .sourceLost(.appNotRunning("com.example.player"))),
+                      CaptureFlowWatch.sign(of: .sourceLost(.inputDisconnected)),
+                      CaptureFlowWatch.sign(of: .formatChanged)]
+    check(retapSigns.allSatisfy { $0 == .retapFailed } && otherSigns == [.aggregateDied, nil, nil, nil],
+          "capture watch: a failed retap closes the capture for the tries instead of ending the session; a quit app, a lost input and a format change keep their own handling",
+          "\(retapSigns) \(otherSigns)")
+
+    var retapWoke = CaptureFlowWatch()
+    _ = retapWoke.tick(callbacks: 10, reading: true, source: moving(0), at: 0)
+    retapWoke.pause()
+    retapWoke.resume(at: 10)
+    var retapSeen = [retapWoke.report(.retapFailed, at: 12)]
+    for n in 25...120 {
+        let now = 0.5 * Double(n)
+        let step = retapWoke.tick(callbacks: nil, reading: false, source: moving(now), at: now)
+        retapSeen.append(step)
+        if case .tryOpen = step { retapSeen.append(retapWoke.failed(at: now)) }
+    }
+    let retapTries = retapSeen.filter { if case .tryOpen = $0 { return true } else { return false } }.count
+    check(retapSeen.first == .stopped(.retapFailed) && !retapSeen.contains(.giveUp) && retapTries > CaptureFlowWatch.tries,
+          "capture watch: a retap failing inside a wake's window keeps being tried past the 5 tries",
+          "\(retapSeen.filter { $0 != .none })")
+}
+
 // MARK: Output format: a device whose rate or channels change under a running output (OutputFormatWatch.swift, S330)
 // covers: S330 (the Mac host's reopen decision and its debug line)
 do {
