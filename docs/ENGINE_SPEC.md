@@ -2494,6 +2494,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | menu bar panel source: the open and close step the popover window's own frame around content laid out once, never scaling a picture of the panel, so its corners stay round at every step | S405 |
 | menu bar panel source: the panel keeps the system's shadow throughout, with no shadow of its own to hand back to it | S405 |
 | menu bar panel: at each step the window grows from under the icon while the content stays where it rests on screen, at its full size, so the window only clips it | S405 |
+| menu bar panel: at each step the content scales with the window about the arrow's tip, so its text grows with the panel | S405 |
+| menu bar panel: the arrow's tip stays on the same whole screen point at every step, so the content never drifts as the window's edges snap to the pixel grid | S405 |
 | menu bar panel: the close shrinks from where the panel is to its end scale on an ease-in curve, one step per 120 Hz frame | S405 |
 | menu bar panel source: a close that cuts the open short shrinks from the step the open has shown | S405 |
 | zone rename: the zone menu item reads like the speaker's | S228 |

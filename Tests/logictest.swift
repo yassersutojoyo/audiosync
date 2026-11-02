@@ -8063,6 +8063,37 @@ do {
     // covers: S405
     check(contentHeld && PanelReveal.content(restContent, rest: restWindow, step: restWindow) == restContent,
           "menu bar panel: at each step the window grows from under the icon while the content stays where it rests on screen, at its full size, so the window only clips it")
+    let growRest = CGRect(x: 1000.25, y: 543.5, width: 306, height: 412)
+    let growContent = CGRect(x: 13, y: 0, width: 280, height: 400)
+    let growTip = PanelReveal.tip(icon: 1153.3, top: growRest.maxY)
+    let tipInContent = CGPoint(x: growTip.x - growRest.minX - growContent.minX,
+                               y: growTip.y - growRest.minY - growContent.minY)
+    let growPivot = CGPoint(x: growContent.width / 2, y: growContent.height / 2)
+    let growCorner = CGPoint(x: growRest.minX + growContent.minX, y: growRest.minY + growContent.minY)
+    let grown = revealSteps.map { scale -> (tip: CGPoint, corner: CGPoint, scale: CGFloat) in
+        let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
+        let placed = PanelReveal.content(growContent, rest: growRest, step: step)
+        let scaling = PanelReveal.contentScale(scale, about: tipInContent, pivot: growPivot)
+        func onScreen(_ point: CGPoint) -> CGPoint {
+            let moved = CGPoint(x: point.x - growPivot.x, y: point.y - growPivot.y).applying(scaling)
+            return CGPoint(x: step.minX + placed.minX + growPivot.x + moved.x,
+                           y: step.minY + placed.minY + growPivot.y + moved.y)
+        }
+        return (onScreen(tipInContent), onScreen(.zero), scaling.a)
+    }
+    // covers: S405
+    check(zip(grown, revealSteps).allSatisfy { point, scale in
+        let s = CGFloat(scale)
+        return abs(point.scale - s) < 1e-9 && abs(point.corner.x - (growTip.x + s * (growCorner.x - growTip.x))) < 1e-6
+            && abs(point.corner.y - (growTip.y + s * (growCorner.y - growTip.y))) < 1e-6
+    }, "menu bar panel: at each step the content scales with the window about the arrow's tip, so its text grows with the panel",
+          "\(grown.map { $0.scale })")
+    // covers: S405
+    check(grown.allSatisfy { abs($0.tip.x - grown[0].tip.x) < 1e-9 && abs($0.tip.y - grown[0].tip.y) < 1e-9 }
+            && abs(growTip.x - growTip.x.rounded()) < 1e-9 && abs(growTip.y - growTip.y.rounded()) < 1e-9
+            && abs(grown[0].tip.x - growTip.x) < 1e-9 && abs(grown[0].tip.y - growTip.y) < 1e-9,
+          "menu bar panel: the arrow's tip stays on the same whole screen point at every step, so the content never drifts as the window's edges snap to the pixel grid",
+          "\(growTip) \(grown.map { $0.tip })")
     let closeMotion = PanelMotion.close(reduceMotion: false)
     let closeSteps = PanelReveal.shrinks(from: 1, closeMotion, step: 1.0 / 120)
     let cutShort = PanelReveal.shrinks(from: 0.98, closeMotion, step: 1.0 / 120)
