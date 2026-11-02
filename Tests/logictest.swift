@@ -8064,36 +8064,32 @@ do {
     check(contentHeld && PanelReveal.content(restContent, rest: restWindow, step: restWindow) == restContent,
           "menu bar panel: at each step the window grows from under the icon while the content's frame stays where it rests on screen, at its full size, its layer scaled about the arrow's tip")
     let growRest = CGRect(x: 1000.25, y: 543.5, width: 306, height: 412)
-    let growContent = CGRect(x: 13, y: 0, width: 280, height: 400)
-    let growTip = PanelReveal.tip(icon: 1153.3, top: growRest.maxY)
-    let tipInContent = CGPoint(x: growTip.x - growRest.minX - growContent.minX,
-                               y: growTip.y - growRest.minY - growContent.minY)
-    let growPivot = CGPoint(x: growContent.width / 2, y: growContent.height / 2)
-    let growCorner = CGPoint(x: growRest.minX + growContent.minX, y: growRest.minY + growContent.minY)
-    let grown = revealSteps.map { scale -> (tip: CGPoint, covers: Bool, scale: CGSize) in
+    let growTip = PanelReveal.tip(icon: 1153.3, rest: growRest)
+    // The layer's position at the content's middle, where Core Animation's default anchor point puts it.
+    let growOffset = CGVector(dx: -10, dy: -206)
+    let grown = revealSteps.enumerated().map { index, scale -> (tip: CGPoint, corner: CGPoint, laid: CGPoint, scale: CGFloat) in
         let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
-        let placed = PanelReveal.content(growContent, rest: growRest, step: step)
-        let scales = PanelReveal.contentScales(rest: growRest, step: step, tip: growTip)
-        let scaling = PanelReveal.contentScale(scales, about: tipInContent, pivot: growPivot)
-        func onScreen(_ point: CGPoint) -> CGPoint {
-            let moved = CGPoint(x: point.x - growPivot.x, y: point.y - growPivot.y).applying(scaling)
-            return CGPoint(x: step.minX + placed.minX + growPivot.x + moved.x,
-                           y: step.minY + placed.minY + growPivot.y + moved.y)
+        let s = step.height / growRest.height
+        // Where AppKit lays the content's tip point before the transform, off by half points.
+        let laid = CGPoint(x: growTip.x + 0.5 * CGFloat(index % 3), y: growTip.y - 0.5 * CGFloat(index % 2))
+        let position = CGPoint(x: laid.x + growOffset.dx, y: laid.y + growOffset.dy)
+        let scaling = PanelReveal.contentScale(Double(s), tip: growTip, anchor: laid, offset: growOffset)
+        func drawn(_ point: CGPoint) -> CGPoint {
+            let moved = CGPoint(x: point.x - position.x, y: point.y - position.y).applying(scaling)
+            return CGPoint(x: position.x + moved.x, y: position.y + moved.y)
         }
-        let low = onScreen(CGPoint(x: growRest.minX - growCorner.x, y: growRest.minY - growCorner.y))
-        let high = onScreen(CGPoint(x: growRest.maxX - growCorner.x, y: growRest.maxY - growCorner.y))
-        return (onScreen(tipInContent),
-                low.x <= step.minX + 1e-9 && high.x >= step.maxX - 1e-9 && abs(low.y - step.minY) < 1e-9, scales)
+        let corner = CGPoint(x: laid.x - 153, y: laid.y - 400)
+        return (drawn(laid), drawn(corner), corner, s)
     }
     // covers: S405
-    check(zip(grown, revealSteps).allSatisfy { point, scale in
-        point.covers && abs(point.scale.width - CGFloat(scale)) < 0.005 && abs(point.scale.height - CGFloat(scale)) < 0.005
-    }, "menu bar panel: at each step the content scales with the pixel-snapped window about the arrow's tip, so its text grows with the panel and its backing reaches every edge",
-          "\(grown.map { $0.scale })")
+    check(zip(grown, revealSteps).allSatisfy { step, scale in
+        abs(step.corner.x - (growTip.x - 153 * step.scale)) < 1e-9 && abs(step.corner.y - (growTip.y - 400 * step.scale)) < 1e-9
+            && abs(step.scale - CGFloat(scale)) < 0.002 && (scale > 0.999 || abs(step.corner.y - step.laid.y) > 1)
+    }, "menu bar panel: at each step the content scales by the window's height about the arrow's tip, never about its own middle, so its text grows from under the icon with the panel",
+          "\(grown.map { $0.corner })")
     // covers: S405
-    check(grown.allSatisfy { abs($0.tip.x - grown[0].tip.x) < 1e-9 && abs($0.tip.y - grown[0].tip.y) < 1e-9 }
-            && abs(growTip.x - growTip.x.rounded()) < 1e-9 && abs(growTip.y - growTip.y.rounded()) < 1e-9
-            && abs(grown[0].tip.x - growTip.x) < 1e-9 && abs(grown[0].tip.y - growTip.y) < 1e-9,
+    check(grown.allSatisfy { abs($0.tip.x - growTip.x) < 1e-9 && abs($0.tip.y - growTip.y) < 1e-9 }
+            && growTip == CGPoint(x: 1153, y: 956) && PanelReveal.tip(icon: 2400.6, rest: growRest) == CGPoint(x: 1306, y: 956),
           "menu bar panel: the arrow's tip stays on the same whole screen point at every step, so the content never drifts as the window's edges snap to the pixel grid",
           "\(growTip) \(grown.map { $0.tip })")
     let closeMotion = PanelMotion.close(reduceMotion: false)
@@ -8120,7 +8116,7 @@ do {
     check(placeSource.contains("window.setFrame(") && placeSource.contains("PanelReveal.content(")
             && placeSource.contains("scaleContent(") && !placeSource.contains("layoutSubtreeIfNeeded")
             && windowSource.components(separatedBy: "(keyPath: \"transform\")").count == 2
-            && scaleSource.contains("guard let layer = host.view.layer") && scaleSource.contains("(keyPath: \"transform\")")
+            && scaleSource.contains("let content = contentLayer") && scaleSource.contains("(keyPath: \"transform\")")
             && !scaleSource.contains("cacheDisplay("),
           "menu bar panel source: the open and close step the popover window's own frame and scale only the live content's layer, never a picture of the panel, so its corners stay round at every step")
     // covers: S405

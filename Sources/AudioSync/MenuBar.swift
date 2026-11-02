@@ -920,6 +920,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         var tip: CGPoint
         /// The tip in the content's coordinates at rest.
         var anchor: CGPoint
+        /// From where `anchor` lies to the content layer's position, in its superlayer.
+        var offset: CGVector
         var mask: NSView.AutoresizingMask
         var closes = false
         var began: CFTimeInterval = 0
@@ -949,11 +951,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard let holder = host.view.superview, !scales.isEmpty else { return }
         stepLink?.invalidate()
         let rest = steps?.rest ?? window.frame
-        let tip = steps?.tip ?? PanelReveal.tip(icon: iconMiddle ?? rest.midX, top: rest.maxY)
+        let tip = steps?.tip ?? PanelReveal.tip(icon: iconMiddle ?? rest.midX, rest: rest)
+        let anchor = steps?.anchor ?? host.view.convert(CGPoint(x: tip.x - rest.minX, y: tip.y - rest.minY), from: nil)
         var run = steps ?? PanelSteps(rest: rest, content: holder.convert(host.view.frame, to: nil), tip: tip,
-                                      anchor: host.view.convert(CGPoint(x: tip.x - rest.minX, y: tip.y - rest.minY),
-                                                                from: nil),
-                                      mask: host.view.autoresizingMask)
+                                      anchor: anchor, offset: layerOffset(from: anchor), mask: host.view.autoresizingMask)
         run.closes = closes
         run.began = CACurrentMediaTime()
         run.scales = scales
@@ -979,15 +980,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             steps = run
             place(window, scale: run.scale)
             if DebugTrace.enabled {
-                let tip = window.convertPoint(toScreen: host.view.convert(run.anchor, to: nil))
-                let held = ((host.view.layer?.animation(forKey: Self.stepKey) as? CABasicAnimation)?.toValue as? NSValue)?
-                    .caTransform3DValue ?? CATransform3DIdentity
+                let laid = window.convertPoint(toScreen: host.view.convert(run.anchor, to: nil))
                 DebugTrace.log(String(format: "[AudioSync] panel %@ step: %.1f ms, step %ld of %ld, scale %.4f, frame %@, "
-                                      + "tip %@, drawn tip %@, content scale %.4f x %.4f of frame %.4f",
+                                      + "tip %@, laid %@, drawn tip %@, content scale %.4f of frame %.4f",
                                       run.closes ? "close" : "open", (CACurrentMediaTime() - run.began) * 1000, due,
-                                      run.scales.count - 1, run.scale, NSStringFromRect(window.frame), NSStringFromPoint(tip),
-                                      drawnTip(window, anchor: run.anchor), Double(held.m11), Double(held.m22),
-                                      Double(window.frame.height / run.rest.height)))
+                                      run.scales.count - 1, run.scale, NSStringFromRect(window.frame), NSStringFromPoint(run.tip),
+                                      NSStringFromPoint(laid), drawnTip(window, anchor: run.anchor).map(NSStringFromPoint) ?? "unknown",
+                                      Double(heldTransform.m11), Double(window.frame.height / run.rest.height)))
             }
         }
         guard due == run.scales.count - 1 else { return }
@@ -1001,52 +1000,72 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     /// Sets the window to its rest frame scaled by `scale` about the arrow's
-    /// tip, and the content's frame where it is at rest on screen, its layer
-    /// scaled as far as the snapped window reaches about the same tip.
+    /// tip, and the content's frame where it is at rest on screen, the content
+    /// drawn scaled as the snapped window's height about the same tip.
     private func place(_ window: NSWindow, scale: Double) {
         guard let run = steps, let holder = host.view.superview else { return }
         let frame = PanelReveal.body(run.rest, scale: scale, about: run.tip, pixel: 1 / max(window.backingScaleFactor, 1))
         window.setFrame(frame, display: false)
         host.view.frame = holder.convert(PanelReveal.content(run.content, rest: run.rest, step: frame), from: nil)
-        scaleContent(scale == 1 ? nil : PanelReveal.contentScales(rest: run.rest, step: frame, tip: run.tip), about: run.anchor)
+        scaleContent(scale == 1 ? nil : Double(frame.height / run.rest.height), run: run, in: window)
         window.displayIfNeeded()
     }
 
     private static let stepKey = "panelStep"
 
-    /// Debug log only: where `anchor` is drawn on screen, through the content
-    /// layer's own geometry and the transform it last rendered with.
-    private func drawnTip(_ window: NSWindow, anchor: CGPoint) -> String {
+    /// The content's layer and the view whose layer is its superlayer, where its transform acts.
+    private var contentLayer: (layer: CALayer, holder: NSView)? {
         guard let layer = host.view.layer, let holder = host.view.superview, layer.superlayer === holder.layer else {
-            return "unknown"
+            return nil
         }
-        // Any step's transform keeps the tip in place, so one a frame behind still shows a pivot or flip error.
-        let shown = layer.presentation() ?? layer
-        let pivot = CGPoint(x: shown.bounds.minX + shown.anchorPoint.x * shown.bounds.width,
-                            y: shown.bounds.minY + shown.anchorPoint.y * shown.bounds.height)
-        let point = host.view.convertToLayer(anchor)
-        let moved = CGPoint(x: point.x - pivot.x, y: point.y - pivot.y)
-            .applying(CATransform3DGetAffineTransform(shown.transform))
-        let drawn = holder.convertFromLayer(CGPoint(x: layer.position.x + moved.x, y: layer.position.y + moved.y))
-        return NSStringFromPoint(window.convertPoint(toScreen: holder.convert(drawn, to: nil)))
+        return (layer, holder)
     }
 
-    /// Scales the content's layer by `scales` about `anchor` (the content's
-    /// coordinates); with none the live content shows as laid out.
-    private func scaleContent(_ scales: CGSize?, about anchor: CGPoint) {
-        guard let layer = host.view.layer else { return }
-        guard let scales else { return layer.removeAnimation(forKey: Self.stepKey) }
-        let bounds = layer.bounds
-        let pivot = CGPoint(x: bounds.minX + layer.anchorPoint.x * bounds.width,
-                            y: bounds.minY + layer.anchorPoint.y * bounds.height)
-        let scaling = PanelReveal.contentScale(scales, about: host.view.convertToLayer(anchor), pivot: pivot)
+    /// Where `point` in the content lies in its superlayer.
+    private func inSuperlayer(_ point: CGPoint, holder: NSView) -> CGPoint {
+        holder.convertToLayer(holder.convert(point, from: host.view))
+    }
+
+    /// From where the content's `anchor` lies to its layer's position, in its superlayer.
+    private func layerOffset(from anchor: CGPoint) -> CGVector {
+        guard let content = contentLayer else { return CGVector() }
+        let laid = inSuperlayer(anchor, holder: content.holder)
+        return CGVector(dx: content.layer.position.x - laid.x, dy: content.layer.position.y - laid.y)
+    }
+
+    private var heldTransform: CATransform3D {
+        ((host.view.layer?.animation(forKey: Self.stepKey) as? CABasicAnimation)?.toValue as? NSValue)?
+            .caTransform3DValue ?? CATransform3DIdentity
+    }
+
+    /// Debug log only: where the content's tip is drawn on screen, through
+    /// its layer's live position and the transform it holds.
+    private func drawnTip(_ window: NSWindow, anchor: CGPoint) -> CGPoint? {
+        guard let content = contentLayer else { return nil }
+        let position = content.layer.position, laid = inSuperlayer(anchor, holder: content.holder)
+        let moved = CGPoint(x: laid.x - position.x, y: laid.y - position.y)
+            .applying(CATransform3DGetAffineTransform(heldTransform))
+        let drawn = content.holder.convertFromLayer(CGPoint(x: position.x + moved.x, y: position.y + moved.y))
+        return window.convertPoint(toScreen: content.holder.convert(drawn, to: nil))
+    }
+
+    /// Draws the content `scale` times its size with its tip on the tip's
+    /// screen point; with none the live content shows as laid out.
+    private func scaleContent(_ scale: Double?, run: PanelSteps, in window: NSWindow) {
+        guard let scale, let content = contentLayer else {
+            host.view.layer?.removeAnimation(forKey: Self.stepKey)
+            return
+        }
+        let tip = content.holder.convertToLayer(content.holder.convert(window.convertPoint(fromScreen: run.tip), from: nil))
+        let scaling = PanelReveal.contentScale(scale, tip: tip, anchor: inSuperlayer(run.anchor, holder: content.holder),
+                                               offset: run.offset)
         // A held animation, not the layer's transform, which AppKit owns and resets as it lays the view out.
         let hold = CABasicAnimation(keyPath: "transform")
         hold.fromValue = NSValue(caTransform3D: CATransform3DMakeAffineTransform(scaling))
         hold.toValue = hold.fromValue
         hold.fillMode = .forwards
         hold.isRemovedOnCompletion = false
-        layer.add(hold, forKey: Self.stepKey)
+        content.layer.add(hold, forKey: Self.stepKey)
     }
 
     /// Ends the running open or close with the window and its content at rest.

@@ -315,25 +315,21 @@ enum PanelReveal {
     }
 
     /// The arrow's tip on screen, which the window and its content scale
-    /// about: under the icon's middle `icon`, on the window's top edge `top`.
-    static func tip(icon: CGFloat, top: CGFloat) -> CGPoint {
-        // A whole point, so the window's pixel-snapped steps never move the content's anchor.
-        CGPoint(x: icon.rounded(), y: top.rounded())
+    /// about: under the icon's middle `icon`, on the top edge of the window at
+    /// `rest`, and inside it, so it stays on the panel's own screen.
+    static func tip(icon: CGFloat, rest: CGRect) -> CGPoint {
+        // Whole points, so the window's pixel-snapped steps never move the content's anchor.
+        CGPoint(x: min(max(icon, rest.minX), rest.maxX).rounded(), y: rest.maxY.rounded())
     }
 
-    /// How far the content scales across and down at `step`, the window's
-    /// `rest` frame scaled about `tip` and snapped: as far as the snapped
-    /// edges reach from the tip, so the content's backing covers every one.
-    static func contentScales(rest: CGRect, step: CGRect, tip: CGPoint) -> CGSize {
-        CGSize(width: max((tip.x - step.minX) / (tip.x - rest.minX), (step.maxX - tip.x) / (rest.maxX - tip.x)),
-               height: (tip.y - step.minY) / (tip.y - rest.minY))
-    }
-
-    /// The transform that scales the content by `scales` about `tip`, for a
-    /// layer whose transform acts about `pivot`; both in the layer's coordinates.
-    static func contentScale(_ scales: CGSize, about tip: CGPoint, pivot: CGPoint) -> CGAffineTransform {
-        let sx = scales.width, sy = scales.height
-        return CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: (1 - sx) * (tip.x - pivot.x), ty: (1 - sy) * (tip.y - pivot.y))
+    /// The transform for a layer that draws the content `scale` times its size
+    /// with the point laid at `anchor` drawn at `tip`; Core Animation applies
+    /// it about the layer's position, `offset` from `anchor`. All in the
+    /// layer's superlayer's coordinates, where the transform acts.
+    static func contentScale(_ scale: Double, tip: CGPoint, anchor: CGPoint, offset: CGVector) -> CGAffineTransform {
+        let s = CGFloat(scale)
+        return CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: tip.x - anchor.x - (1 - s) * offset.dx,
+                                 ty: tip.y - anchor.y - (1 - s) * offset.dy)
     }
 
     /// The open's spring, one scale per `step` from `motion.scale` to exactly 1
