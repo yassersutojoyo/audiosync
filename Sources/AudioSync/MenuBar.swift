@@ -1007,23 +1007,28 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Lays the arrow over the popover's own in the window's frame view, the
     /// one view that reaches the arrow, and keeps it there as the window steps and resizes.
     private func showArrow(on window: NSWindow) {
-        guard let frameView = window.contentView?.superview, let layer = frameView.layer else { return }
-        // Added again on every open, so it stays above whatever the frame view added meanwhile.
-        layer.addSublayer(arrowLayer)
-        placeArrow(window)
-        guard arrowWatch == nil else { return }
-        arrowWatch = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window,
-                                                            queue: nil) { [weak self, weak window] _ in
-            MainActor.assumeIsolated {
-                guard let self, let window else { return }
-                self.placeArrow(window)
+        if arrowWatch == nil {
+            arrowWatch = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window,
+                                                                queue: nil) { [weak self, weak window] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let window else { return }
+                    self.placeArrow(window)
+                }
             }
         }
+        DebugTrace.log("[AudioSync] panel arrow show: frame view \(window.contentView?.superview != nil), "
+                       + "its layer \(window.contentView?.superview?.layer != nil)")
+        // Added again on every open, so it stays above whatever the frame view added meanwhile.
+        arrowLayer.removeFromSuperlayer()
+        placeArrow(window)
     }
 
     private func placeArrow(_ window: NSWindow) {
-        guard let frameView = window.contentView?.superview, let layer = frameView.layer,
-              arrowLayer.superlayer === layer else { return }
+        guard let frameView = window.contentView?.superview else { return }
+        // The arrow needs a layer to sit in, which the frame view may lack on the first open after launch.
+        if frameView.layer == nil { frameView.wantsLayer = true }
+        guard let layer = frameView.layer else { return }
+        if arrowLayer.superlayer !== layer { layer.addSublayer(arrowLayer) }
         let arrow = PanelArrow.frame(in: window.frame)
         var fill: CGColor?
         frameView.effectiveAppearance.performAsCurrentDrawingAppearance { fill = NSColor.audioSyncPanelBacking.cgColor }
@@ -1051,8 +1056,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     /// Debug log only: where the popover draws its arrow's apex on screen at
-    /// this step, as the middle of the topmost row its frame draws in, with
-    /// the base and height it draws and where the arrow over it has its apex.
+    /// this step, the middle of the topmost narrow run under the tip, with the
+    /// base and height it draws and where and how big the arrow over it is.
     private func traceArrow(_ window: NSWindow, step: Int, tip: CGPoint) {
         var apex = "unknown", base = "unknown"
         if let frame = window.contentView?.superview {
@@ -1063,37 +1068,49 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 frame.cacheDisplay(in: strip, to: rep)
                 let alpha = rep.bitmapFormat.contains(.alphaFirst) ? 0 : rep.samplesPerPixel - 1
                 let perPoint = CGFloat(rep.pixelsWide) / strip.width
-                var top: Int?, width = 0
+                let column = Int(((tip.x - window.frame.minX - bounds.minX) * perPoint).rounded(.down))
+                var top: Int?, bottom = 0, widest = 0
                 // Bitmap rows run from the strip's top edge, the window's top.
-                for row in 0..<rep.pixelsHigh {
-                    let lit = (0..<rep.pixelsWide).filter { data[row * rep.bytesPerRow + $0 * rep.samplesPerPixel + alpha] > 127 }
-                    guard let first = lit.first, let last = lit.last else { continue }
-                    guard let start = top else {
-                        top = row
-                        width = last - first + 1
-                        apex = NSStringFromPoint(CGPoint(x: window.frame.minX + bounds.minX + CGFloat(first + last + 1) / 2 / perPoint,
-                                                         y: window.frame.maxY - CGFloat(row) / perPoint))
+                for row in 0..<rep.pixelsHigh where (0..<rep.pixelsWide).contains(column) {
+                    func lit(_ x: Int) -> Bool { data[row * rep.bytesPerRow + x * rep.samplesPerPixel + alpha] > 127 }
+                    if !lit(column) {
+                        if top != nil { break }
                         continue
                     }
-                    // The box's top row lights most of the strip, the arrow's rows far less.
+                    var first = column, last = column
+                    while first > 0, lit(first - 1) { first -= 1 }
+                    while last < rep.pixelsWide - 1, lit(last + 1) { last += 1 }
+                    // A run across most of the strip is a hairline above the arrow or the box below it.
                     if last - first + 1 > rep.pixelsWide / 2 {
-                        base = String(format: "%.1f x %.1f", CGFloat(width) / perPoint, CGFloat(row - start) / perPoint)
-                        break
+                        if top != nil { break }
+                        continue
                     }
-                    width = last - first + 1
+                    if top == nil {
+                        top = row
+                        apex = NSStringFromPoint(CGPoint(x: window.frame.minX + bounds.minX + CGFloat(first + last + 1) / 2 / perPoint,
+                                                         y: window.frame.maxY - CGFloat(row) / perPoint))
+                    }
+                    bottom = row
+                    widest = max(widest, last - first + 1)
+                }
+                if let top {
+                    base = String(format: "%.1f x %.1f", CGFloat(widest) / perPoint, CGFloat(bottom - top + 1) / perPoint)
                 }
             }
         }
-        var overlay = "none"
-        if let frame = window.contentView?.superview, let layer = frame.layer, arrowLayer.superlayer === layer,
+        let frameView = window.contentView?.superview
+        var overlay = frameView == nil ? "none, no frame view" : frameView?.layer == nil ? "none, no layer" : "none, not added"
+        var overlaySize = "none"
+        if let frame = frameView, let layer = frame.layer, arrowLayer.superlayer === layer,
            let box = arrowLayer.path?.boundingBox {
             let ends = [CGPoint(x: box.midX, y: box.minY), CGPoint(x: box.midX, y: box.maxY)].map { point in
                 window.convertPoint(toScreen: frame.convert(frame.convertFromLayer(arrowLayer.convert(point, to: layer)), to: nil))
             }
             overlay = NSStringFromPoint(ends[0].y > ends[1].y ? ends[0] : ends[1])
+            overlaySize = String(format: "%.1f x %.1f", box.width, box.height)
         }
         DebugTrace.log("[AudioSync] panel arrow step: step \(step), apex \(apex), base \(base), overlay apex \(overlay), "
-                       + "tip \(NSStringFromPoint(tip)), frame \(NSStringFromRect(window.frame))")
+                       + "overlay \(overlaySize), tip \(NSStringFromPoint(tip)), frame \(NSStringFromRect(window.frame))")
     }
 
     /// Sets the window to its rest frame scaled by `scale` about the arrow's
