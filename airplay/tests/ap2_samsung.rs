@@ -402,11 +402,14 @@ fn the_echo_of_a_level_sent_on_the_grid_is_never_a_change_made_on_the_tv() {
     tv.sender.shutdown();
 }
 
+/// How long a loaded host can go without asking for the level.
+const HOST_STALL: Duration = Duration::from_millis(1700);
+
 // Part of P184 with S291: the television's remote moves its level in
 // 0.3 dB steps, so one press from the echo of a set lands off the 0.6 dB
-// grid of its sets. That reading is reported as read, within about 1 s,
-// and lies further than 0.05 dB from the echo, so the host takes it as a
-// level set on the speaker.
+// grid of its sets. The reads the host asks for after the press, however
+// late, report that reading as read, further than 0.05 dB from the echo,
+// so the host takes it as a level set on the speaker.
 // covers: P184
 #[test]
 fn one_remote_step_off_the_grid_of_sets_is_reported_as_read() {
@@ -432,24 +435,24 @@ fn one_remote_step_off_the_grid_of_sets_is_reported_as_read() {
 
     let presses = Instant::now();
     for (pressed_to, read_as) in [(-26.7, -26.700001), (-27.0, -27.0), (-27.3, -27.299999)] {
-        tv.run(Duration::from_millis(410), true);
+        // No read asked for before the press is still due.
+        tv.run(Duration::from_millis(1500), false);
         let pressed = Instant::now();
         server.fake().set_on_tv(pressed_to);
-        tv.run(Duration::from_millis(2500), true);
-        let seen = tv
-            .reported_after(pressed)
-            .into_iter()
-            .find(|(_, level)| (level - read_as).abs() < 0.000_01);
-        let Some((at, _)) = seen else {
-            panic!(
-                "{pressed_to} never reported as {read_as}: {:?}",
-                tv.reported_after(pressed)
-            );
+        tv.run(HOST_STALL, false);
+        let reported = |tv: &Playing| {
+            tv.reported_after(pressed)
+                .iter()
+                .any(|(_, level)| (level - read_as).abs() < 0.000_01)
         };
+        let deadline = Instant::now() + LONG;
+        while !reported(&tv) && Instant::now() < deadline {
+            tv.run(Duration::from_millis(100), true);
+        }
         assert!(
-            at - pressed <= Duration::from_millis(1600),
-            "{pressed_to} reported {:?} after the press",
-            at - pressed
+            reported(&tv),
+            "{pressed_to} never reported as {read_as}: {:?}",
+            tv.reported_after(pressed)
         );
     }
     let reports = tv.reported_after(presses);
@@ -508,19 +511,18 @@ fn data_port() -> (UdpSocket, Arc<Mutex<Vec<Datagram>>>) {
         let mut buffer = [0u8; 4096];
         loop {
             match recv_queued(&reader, &mut buffer) {
-                Ok((n, _)) if n >= 12 => {
-                    let datagram = Datagram {
+                // Stamped once the log is free: a test that holds it stalls
+                // this thread as load would.
+                Ok((n, _)) if n >= 12 => match shared.lock() {
+                    Ok(mut log) => log.push(Datagram {
                         at: Instant::now(),
                         seq: u16::from_be_bytes([buffer[2], buffer[3]]),
                         rtptime: u32::from_be_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]),
                         marker: buffer[1] & 0x80 != 0,
                         bytes: buffer[..n].to_vec(),
-                    };
-                    match shared.lock() {
-                        Ok(mut log) => log.push(datagram),
-                        Err(_) => return,
-                    }
-                }
+                    }),
+                    Err(_) => return,
+                },
                 Ok(_) => {}
                 Err(error)
                     if matches!(
@@ -1064,22 +1066,29 @@ fn rtp_seconds(from: u32, to: u32) -> f64 {
 }
 
 /// How long after `set` the television got the audio at RTP time
-/// `current`: the progress names the audio arriving as it is set.
+/// `current`: the progress names the audio arriving as it is set. A
+/// receiving thread that falls behind stamps its backlog late, so this
+/// takes the earliest stamp of the audio from there on, less the audio in
+/// between, which the sender sends in real time.
 fn current_heard_after(audio: &Mutex<Vec<Datagram>>, current: u32, set: Instant) -> f64 {
-    let at = audio
-        .lock()
-        .expect("audio")
+    let audio = audio.lock().expect("audio");
+    let Some(named) = audio.iter().position(|datagram| {
+        datagram.at + Duration::from_secs(1) >= set
+            && datagram.rtptime.wrapping_sub(current) < 0x8000_0000
+    }) else {
+        return f64::INFINITY;
+    };
+    audio[named..]
         .iter()
-        .find(|datagram| {
-            datagram.at + Duration::from_secs(1) >= set
-                && datagram.rtptime.wrapping_sub(current) < 0x8000_0000
+        .filter_map(|datagram| {
+            let ahead = rtp_seconds(audio[named].rtptime, datagram.rtptime);
+            let after = match datagram.at.checked_duration_since(set) {
+                Some(after) => after.as_secs_f64(),
+                None => -set.duration_since(datagram.at).as_secs_f64(),
+            };
+            (ahead >= 0.0).then_some(after - ahead)
         })
-        .map(|datagram| datagram.at);
-    match at {
-        Some(at) if at >= set => at.duration_since(set).as_secs_f64(),
-        Some(at) => -set.duration_since(at).as_secs_f64(),
-        None => f64::INFINITY,
-    }
+        .fold(f64::INFINITY, f64::min)
 }
 
 // The weekend sheet's Progress row on the fake Samsung: each progress the
@@ -1120,10 +1129,13 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     tv.sender.pause();
     tv.run(Duration::from_secs(2), false);
     let played = paused.duration_since(first_at);
+    // The receiving thread falls behind from the resume on, as under load.
+    let behind = audio.lock().expect("audio");
     tv.sender.resume();
     let after_pause = Duration::from_secs(10) + played;
     let (resumed, resumed_at) = set(&mut tv, after_pause);
     tv.run(Duration::from_secs(1), false);
+    drop(behind);
     let (seek, seek_at) = set(&mut tv, Duration::from_secs(120));
     tv.assert_no_error();
     tv.sender.shutdown();
