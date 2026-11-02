@@ -11279,7 +11279,7 @@ pub mod tests {
             let audio = self.audio.lock().unwrap_or_else(PoisonError::into_inner);
             audio
                 .iter()
-                .flat_map(|packet| packet.get(12..).unwrap_or_default().chunks_exact(4))
+                .flat_map(|packet| packet.get(12..).unwrap_or_default().as_chunks::<4>().0)
                 .map(|frame| i16::from_be_bytes([frame[0], frame[1]]))
                 .collect()
         }
@@ -11580,10 +11580,7 @@ pub mod tests {
                 if teardown { "TEARDOWN" } else { "no TEARDOWN" }
             );
             assert!(
-                tail.level > 8_000
-                    && f64::from(tail.step) <= largest
-                    && tail.rise <= 8
-                    && teardown,
+                tail.level > 8_000 && f64::from(tail.step) <= largest && tail.rise <= 8 && teardown,
                 "{line}"
             );
             measured.push(line);
@@ -11601,11 +11598,8 @@ pub mod tests {
         use audiosync_airplay::stream::{PacketKind, SpeakerConfig};
 
         let start = Instant::now();
-        let (mut stream, input) = Stream::new(
-            StreamConfig::default(),
-            SenderClock::new(start),
-            start,
-        );
+        let (mut stream, input) =
+            Stream::new(StreamConfig::default(), SenderClock::new(start), start);
         let ports = ReceiverPorts {
             server_port: 50_000,
             control_port: 50_001,
@@ -11653,7 +11647,7 @@ pub mod tests {
             }
         }
         let left: Vec<i16> = (packets.iter())
-            .flat_map(|packet| packet[12..].chunks_exact(4))
+            .flat_map(|packet| packet[12..].as_chunks::<4>().0)
             .map(|frame| i16::from_be_bytes([frame[0], frame[1]]))
             .collect();
         let tail = tail_of(&left);
@@ -11674,9 +11668,15 @@ pub mod tests {
         );
         assert!(tail.level > 16_000, "{measured}");
         assert!((700..=950).contains(&ramp), "{measured}");
-        assert!(f64::from(tail.step) <= largest && tail.rise <= 8, "{measured}");
+        assert!(
+            f64::from(tail.step) <= largest && tail.rise <= 8,
+            "{measured}"
+        );
         assert!(left.len() > full + ramp + 4410, "{measured}");
-        assert!(left[full + ramp..].iter().all(|&sample| sample == 0), "{measured}");
+        assert!(
+            left[full + ramp..].iter().all(|&sample| sample == 0),
+            "{measured}"
+        );
     }
 
     /// A passed dry-run cell for `scripts/fake_tv_cells.sh`, which runs
