@@ -49,7 +49,7 @@ AudioSync sits in the notification area and can start when you sign in, once you
 
 What doesn't work yet:
 - Everything is about two seconds late. Fine for music, not for video or games.
-- The app you capture keeps playing on its own output too. AudioSync tells you when that happens and shows how to send it to an output you don't listen to, or offers to mute that output when AudioSync doesn't play to it.
+- The app you capture keeps playing on its own output too. AudioSync tells you when that happens and shows how to send it to an output you don't listen to, or to mute that output yourself.
 - The Windows app hasn't been tried with a real AirPlay speaker yet, and Bluetooth outputs haven't been tried on Windows.
 - Web Remote is plain HTTP. Keep it to your home network.
 
