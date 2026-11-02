@@ -28,6 +28,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A single Google Cast speaker with no usable address now turns off after its third failed connect and says it's not responding, instead of waiting forever. On Windows it also tries to connect now, as on the Mac.
 - On the Mac, an Apple TV turns on while its home theater group is on but can't play yet because one of its speakers asks for a password you haven't typed since AudioSync started, as on Windows.
 - On the Mac, when the input is unplugged before any sound arrives, only the notice that it's not connected shows. Before, the waiting-for-audio notice showed next to it.
+- On the Mac, a channel pair you pick while the input is unplugged plays once it's plugged back in, as on Windows. Before, the old pair could play while the picker showed the new one, or streaming stopped.
 
 ## [0.8.0] - 2026-11-02
 
