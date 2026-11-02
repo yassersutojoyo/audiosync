@@ -10809,6 +10809,88 @@ mod tests {
         );
     }
 
+    // The TV closed the connection under the open prompt; the window may
+    // still take the Enter the user pressed before it closed.
+    // covers: S223
+    #[test]
+    fn enter_in_a_pin_prompt_the_tv_withdrew_does_nothing() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        fake.pairing(
+            &tv,
+            PairingEvent::Failed {
+                error: SessionError::new(ErrorKind::PairingCancelled),
+                wrong_pin: false,
+            },
+        );
+        adapter.poll();
+        assert_eq!(adapter.snapshot().pin_prompt, None);
+        let notices = messages(&adapter);
+        fake.take_calls();
+
+        adapter.submit_pin(&id, "4821");
+        adapter.poll();
+        assert!(fake.take_calls().is_empty(), "no pairing request is sent");
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None, "no second prompt");
+        assert!(!state.speaker(&id).unwrap().enabled);
+        assert_eq!(messages(&adapter), notices, "no new notice");
+    }
+
+    // covers: S223
+    #[test]
+    fn a_quick_off_and_on_during_the_pin_wait_shows_one_new_prompt_that_takes_the_new_pin() {
+        let (mut adapter, fake, tv) = apple_tv_adapter();
+        let id = ap(&tv);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        assert!(adapter.snapshot().pin_prompt.is_some());
+        fake.take_calls();
+
+        adapter.set_speaker_enabled(&id, false);
+        adapter.set_speaker_enabled(&id, true);
+        fake.pairing(&tv, PairingEvent::Stopped);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().pin_prompt, None, "the new PIN isn't up");
+        fake.pairing(&tv, PairingEvent::PinRequested);
+        adapter.poll();
+        let starts = fake
+            .take_calls()
+            .into_iter()
+            .filter(|call| matches!(call, Call::StartPairing(_)))
+            .count();
+        assert_eq!(starts, 1, "one new pairing");
+        assert_eq!(
+            adapter.snapshot().pin_prompt,
+            Some(PinPrompt {
+                speaker_id: id.clone(),
+                name: "Den TV".to_owned(),
+                phase: PinPhase::Ready,
+                wrong_pin: false,
+            })
+        );
+
+        adapter.submit_pin(&id, "9137");
+        assert_eq!(
+            fake.take_calls(),
+            [Call::SubmitPin(id_of(&tv), "9137".to_owned())]
+        );
+        fake.pairing(
+            &tv,
+            PairingEvent::Paired(credentials("0123456789ABCDEF", 0x11)),
+        );
+        adapter.poll();
+        let state = adapter.snapshot();
+        assert_eq!(state.pin_prompt, None);
+        let row = state.speaker(&id).unwrap();
+        assert!(row.enabled && row.paired);
+        assert!(messages(&adapter).is_empty());
+    }
+
     /// The notices after a pairing on Den TV fails as unsupported for `reason`.
     fn unsupported_pairing_notices(
         reason: audiosync_airplay::error::UnsupportedReason,
