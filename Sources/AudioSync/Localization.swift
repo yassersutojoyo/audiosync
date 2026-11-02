@@ -343,7 +343,8 @@ struct UIStrings {
             return "The test sound couldn't start because streaming stalled. "
                 + "Turn streaming off and on, and try again."
         case .interrupted:
-            return "Streaming, the speakers or their delays changed during the measurement."
+            return "Streaming, the speakers or their delays changed during the measurement. "
+                + "Leave them as they are while it measures, and try again."
         case .microphoneChanged:
             return "The microphone changed during the calibration. Keep one microphone as the default input, "
                 + "and try again."
@@ -364,7 +365,8 @@ struct UIStrings {
             return "An echo or another sound was almost as loud as \(calibrationSubject(which)). "
                 + "Give the microphone a clear line to both speakers and try again."
         case .implausible:
-            return "The two speakers were too far apart to measure."
+            return "The two speakers were too far apart to measure. "
+                + "Make sure the microphone can hear both speakers, and try again."
         case .nothingToMeasure(let zone):
             return "Nothing to measure in “\(zone)”. Turn on a speaker in this zone first."
         }
@@ -807,7 +809,7 @@ struct UIStrings {
     /// The receiver turned NTP timing down, and PTP timing isn't available.
     func nativeAirPlayTimingUnavailable(name: String) -> String {
         "\(name) needs PTP timing, which isn't available, so it's off. "
-            + "Another app may be using ports 319 and 320."
+            + "If another app is using port 319 or 320, close it, then turn the speaker on again."
     }
 
     /// A paired receiver's pair-verify signature didn't check out (P56).
@@ -1494,7 +1496,7 @@ struct UIStrings {
     let castMuteHelp = "Mutes the speaker itself"
     let castUnmuteHelp = "Unmutes the speaker itself"
     let castResync = "Resync"
-    let castResyncHelp = "Restarts the stream, with a short gap, so this speaker plays at its delay again"
+    let castResyncHelp = "Restarts the stream, with a short gap, so this speaker plays at its offset again"
     /// What VoiceOver reads for those buttons: the button's text, so Voice
     /// Control finds it by what it shows, then the speaker ("Mute, Kitchen").
     func castButtonLabel(_ text: String, name: String) -> String { "\(text), \(name)" }
@@ -1595,7 +1597,7 @@ struct UIStrings {
             return "\(name) couldn't reach the stream on this Mac, so it's off. If the macOS firewall is on, "
                 + "allow incoming connections for AudioSync in System Settings → Network → Firewall, then turn it on again."
         case .takenOver:
-            return "\(name) stopped AudioSync's stream, so it's off."
+            return "\(name) stopped AudioSync's stream, so it's off. Turn it on again to stream to it."
         case .connectionLost:
             return "\(name) lost its connection, so it's off. Turn it on again to reconnect."
         case .searchStopped:

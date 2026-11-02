@@ -228,7 +228,7 @@ second line, the same way, which Narrator reads when the tray icon gets the
 focus (Windows+B), and drops it once no notice is left. Its first line holds
 what VoiceOver reads on the Mac's menu bar icon: AudioSync, whether streaming
 is on, how many speakers are on and, while there are notices, how many
-("AudioSync – Streaming on, 2 speakers on, 1 notice").
+("AudioSync: Streaming on, 2 speakers on, 1 notice").
 The tooltip is cut to the 127 characters Windows shows. If Windows refuses
 the tooltip while Explorer restarts, AudioSync sets it again once the taskbar
 is back. AudioSync shows no

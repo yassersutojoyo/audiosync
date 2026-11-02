@@ -631,6 +631,7 @@ impl UpdaterNotice {
             | UpdaterNotice::RelaunchFailed
             | UpdaterNotice::Blocked
             | UpdaterNotice::BadSignature
+            | UpdaterNotice::BrokenDownload
             | UpdaterNotice::Failed => &[OpenReleasePage],
             UpdaterNotice::Unreachable
             | UpdaterNotice::DownloadFailed
