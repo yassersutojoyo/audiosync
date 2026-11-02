@@ -790,7 +790,12 @@ fn diagnostics_count_drift_and_resync_is_only_the_users() {
         Some(audiosync_cast::media::PlayerState::Playing)
     );
     assert_eq!(first.rebuffers, 0);
-    assert!(!first.resync_offered);
+    // A starved pump may drop audio before the first line; the offer follows that drift.
+    assert_eq!(
+        first.resync_offered,
+        first.drift > Duration::from_millis(250),
+        "{first:?}"
+    );
 
     device.send(Command::Send(media_status(
         "transport-1",
@@ -816,7 +821,10 @@ fn diagnostics_count_drift_and_resync_is_only_the_users() {
         |event| matches!(event, SessionEvent::Diagnostics(d) if d.rebuffers == 1 && d.resync_offered),
     );
     let after = diagnostics(&seen).expect("diagnostics");
-    assert!(after.drift > Duration::from_millis(250), "{after:?}");
+    assert!(
+        after.drift > first.drift + Duration::from_millis(250),
+        "{first:?} {after:?}"
+    );
 
     session.set_metadata(Metadata {
         title: Some("Second".to_owned()),

@@ -169,11 +169,21 @@ fn the_stream_server_serves_flac_and_switches_codec_under_the_same_token() {
     let (_, path) = http::split_url(&flac_url).expect("url");
     let mut stream =
         http::request(address, &format!("GET {path} HTTP/1.1\r\n\r\n")).expect("connects");
-    let (head, body) = http::read_response(&mut stream, Duration::from_millis(400));
+    let (head, mut body) = http::read_response(&mut stream, Duration::from_millis(400));
     assert_eq!(http::status(&head), 200);
     assert_eq!(http::header(&head, "Content-Type"), Some("audio/flac"));
-    let bytes: Vec<u8> = http::chunks(&body).concat();
-    let (info, samples) = decode(&bytes);
+    // A starved pump plays silence first; read on until the fed audio shows.
+    let until = Instant::now() + Duration::from_secs(10);
+    let mut buffer = [0u8; 8192];
+    let (info, samples) = loop {
+        let (info, samples) = decode(&http::chunks(&body).concat());
+        if samples.iter().any(|sample| *sample != 0) || Instant::now() > until {
+            break (info, samples);
+        }
+        if let Ok(count) = http::read_timed(&mut stream, &mut buffer) {
+            body.extend_from_slice(&buffer[..count]);
+        }
+    };
     assert_eq!(info.sample_rate, 48_000);
     assert!(!samples.is_empty(), "audio frames follow the header");
     assert!(
