@@ -277,6 +277,9 @@ pub struct FakeAp2 {
     pub connections: usize,
     /// When each RTSP connection was taken up.
     pub connected_at: Vec<Instant>,
+    /// The longest an [`Ap2Server`] took from taking a GET_PARAMETER off
+    /// its connection to writing the answer, any `pause` included.
+    pub slowest_read: Duration,
     /// The pair-setup on this connection is transient (P63).
     transient: bool,
     parser: Parser,
@@ -322,6 +325,7 @@ impl FakeAp2 {
             frame_sizes: Vec::new(),
             connections: 0,
             connected_at: Vec::new(),
+            slowest_read: Duration::ZERO,
             transient: false,
             parser: Parser::new(),
         }
@@ -1052,9 +1056,19 @@ fn serve_rtsp(mut stream: TcpStream, fake: &Mutex<FakeAp2>, line: &Lifeline) {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(50)));
     lock(fake).connect();
     while let Some(bytes) = read_some(&mut stream, line, generation) {
-        let answer = lock(fake).feed(&bytes);
+        let taken = Instant::now();
+        let (answer, read) = {
+            let mut fake = lock(fake);
+            let reads = fake.reads_seen.load(Ordering::SeqCst);
+            let answer = fake.feed(&bytes);
+            (answer, fake.reads_seen.load(Ordering::SeqCst) > reads)
+        };
         if !answer.is_empty() && stream.write_all(&answer).is_err() {
             return;
+        }
+        if read {
+            let mut fake = lock(fake);
+            fake.slowest_read = fake.slowest_read.max(taken.elapsed());
         }
     }
 }

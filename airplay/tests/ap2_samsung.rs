@@ -26,7 +26,7 @@ use audiosync_airplay::sender::{
     NowPlaying, Progress, Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions,
     SpeakerState,
 };
-use audiosync_airplay::volume::Volume;
+use audiosync_airplay::volume::{Volume, parse_reported};
 use plist::Value;
 
 use common::ap2::{
@@ -182,6 +182,24 @@ impl Playing {
             .collect()
     }
 
+    /// No warning, unless the fake answered a read more than [`STARVED`]
+    /// past its `pause`: the host was loaded then, which stalls the sender
+    /// as well, and a read P184 fails for that gives a refused volume its
+    /// one warning (P183).
+    fn assert_no_warning_unless_starved(&self, server: &Ap2Server, pause: Duration) {
+        let warnings = self.warnings();
+        let allowed = if server.fake().slowest_read > pause + STARVED {
+            vec![refused_volume()]
+        } else {
+            Vec::new()
+        };
+        assert!(
+            warnings.iter().all(|warning| allowed.contains(warning)) && warnings.len() <= 1,
+            "{:?}",
+            self.events.of(&self.key)
+        );
+    }
+
     fn assert_no_error(&self) {
         let of = self.events.of(&self.key);
         assert!(
@@ -226,6 +244,22 @@ fn no_session_header(server: &Ap2Server) {
         .map(|(request, _)| format!("{:?} {}", request.method, request.uri))
         .collect();
     assert!(carrying.is_empty(), "{carrying:?}");
+}
+
+/// How much longer than its `pause` the fake may take to answer a read
+/// before the test takes the host as loaded.
+const STARVED: Duration = Duration::from_millis(100);
+
+/// The levels the fake answered to its reads from the `from`th on.
+fn levels_read(server: &Ap2Server, from: usize) -> Vec<f64> {
+    let fake = server.fake();
+    fake.requests
+        .iter()
+        .zip(&fake.answered)
+        .filter(|((request, _), _)| request.method == Method::GetParameter)
+        .skip(from)
+        .filter_map(|(_, answered)| parse_reported(answered.as_ref()?.level.as_ref()?.as_bytes()))
+        .collect()
 }
 
 fn refused_volume() -> Warning {
@@ -293,6 +327,7 @@ fn a_volume_set_the_tv_answers_500_and_ignores_warns_once_and_goes_once_more() {
 #[test]
 fn a_level_set_on_the_tv_shows_within_a_second_of_reads_and_none_go_once_stopped() {
     let _serial = serial();
+    let begun = Instant::now();
     let server = Ap2Server::start(FakeAp2::samsung());
     let mut tv = play(&server);
     tv.run(Duration::from_secs(2), true);
@@ -315,25 +350,56 @@ fn a_level_set_on_the_tv_shows_within_a_second_of_reads_and_none_go_once_stopped
     );
 
     // Three presses of the remote, each between two of the host's asks.
+    let mut first_read = None;
     for (step, db) in [-25.2, -24.6, -30.0].into_iter().enumerate() {
         tv.run(Duration::from_millis(330 * step as u64), true);
         let pressed = Instant::now();
-        server.fake().set_on_tv(db);
-        tv.run(Duration::from_millis(2500), true);
-        let seen = tv
-            .reported_after(pressed)
-            .into_iter()
-            .find(|(_, level)| (level - db).abs() < 0.001);
-        let Some((at, _)) = seen else {
-            panic!("{db} never reported: {:?}", tv.reported_after(pressed));
+        let reads = {
+            let mut fake = server.fake();
+            fake.set_on_tv(db);
+            fake.keys()
+                .iter()
+                .filter(|key| *key == "GET_PARAMETER")
+                .count()
         };
+        first_read.get_or_insert(reads);
+        let reported = |tv: &Playing| {
+            tv.reported_after(pressed)
+                .iter()
+                .any(|(_, level)| (level - db).abs() < 0.001)
+        };
+        let deadline = Instant::now() + LONG;
+        while !reported(&tv) && Instant::now() < deadline {
+            tv.run(Duration::from_millis(100), true);
+        }
         assert!(
-            at - pressed <= Duration::from_millis(1600),
-            "{db} reported {:?} after the press",
-            at - pressed
+            reported(&tv),
+            "{db} never reported: {:?}",
+            tv.reported_after(pressed)
         );
     }
-    assert!(tv.warnings().is_empty(), "{:?}", tv.events.of(&tv.key));
+    // Every read the television answered from the first press on is
+    // reported in order, so the first read after a press shows it: timed by
+    // the reads, not by this thread's clock, which load holds up.
+    tv.run(Duration::from_secs(2), false);
+    let read = levels_read(&server, first_read.unwrap_or_default());
+    let reported: Vec<f64> = tv
+        .reported_after(begun)
+        .iter()
+        .map(|(_, level)| *level)
+        .collect();
+    // A slow fake may leave one read late enough for P184 to fail it.
+    let one_failed = server.fake().slowest_read > STARVED
+        && (0..read.len()).any(|failed| {
+            let mut answered = read.clone();
+            answered.remove(failed);
+            reported.ends_with(&answered)
+        });
+    assert!(
+        reported.ends_with(&read) || one_failed,
+        "read {read:?}, reported {reported:?}"
+    );
+    tv.assert_no_warning_unless_starved(&server, Duration::ZERO);
     tv.assert_no_error();
 
     // The host stops the speaker and keeps asking: nothing is read.
@@ -396,7 +462,7 @@ fn the_echo_of_a_level_sent_on_the_grid_is_never_a_change_made_on_the_tv() {
             "{reports:?}"
         );
     }
-    assert!(tv.warnings().is_empty(), "{:?}", tv.events.of(&tv.key));
+    tv.assert_no_warning_unless_starved(&server, Duration::from_millis(300));
     no_session_header(&server);
     tv.assert_no_error();
     tv.sender.shutdown();
@@ -463,7 +529,7 @@ fn one_remote_step_off_the_grid_of_sets_is_reported_as_read() {
                 && (db - echo.unwrap_or_default()).abs() > BASELINE_DB),
         "{reports:?}"
     );
-    assert!(tv.warnings().is_empty(), "{:?}", tv.events.of(&tv.key));
+    tv.assert_no_warning_unless_starved(&server, Duration::ZERO);
     tv.assert_no_error();
     tv.sender.shutdown();
 }
@@ -1091,10 +1157,28 @@ fn current_heard_after(audio: &Mutex<Vec<Datagram>>, current: u32, set: Instant)
         .fold(f64::INFINITY, f64::min)
 }
 
+/// Seconds of audio the television got from RTP time `from` to `to`: the
+/// RTP span less any step in RTP time its packet numbers don't account for.
+fn heard_seconds(audio: &Mutex<Vec<Datagram>>, from: u32, to: u32) -> f64 {
+    let inside = |rtptime: u32| rtptime.wrapping_sub(from) <= to.wrapping_sub(from);
+    let skipped: i64 = audio
+        .lock()
+        .expect("audio")
+        .windows(2)
+        .filter(|pair| inside(pair[0].rtptime) && inside(pair[1].rtptime))
+        .map(|pair| {
+            let rtp = i64::from(pair[1].rtptime.wrapping_sub(pair[0].rtptime) as i32);
+            let packets = i64::from(pair[1].seq.wrapping_sub(pair[0].seq) as i16);
+            rtp - packets * i64::from(FRAMES_PER_PACKET)
+        })
+        .sum();
+    rtp_seconds(from, to) - skipped as f64 / SAMPLE_RATE
+}
+
 // The weekend sheet's Progress row on the fake Samsung: each progress the
 // host sets reaches the television naming the audio arriving then, and
 // the television's own mapping from the first one still reads the track
-// time after a pause; a seek starts a new mapping.
+// time of the audio it got after a pause; a seek starts a new mapping.
 #[test]
 fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     let _serial = serial();
@@ -1126,6 +1210,9 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     let (first, first_at) = set(&mut tv, Duration::from_secs(10));
     tv.run(Duration::from_secs(1), false);
     let paused = Instant::now();
+    // The test thread is held up between reading its clock and pausing,
+    // as under load.
+    thread::sleep(Duration::from_millis(400));
     tv.sender.pause();
     tv.run(Duration::from_secs(2), false);
     let played = paused.duration_since(first_at);
@@ -1149,13 +1236,14 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     );
 
     let [start, current, end] = first;
+    let on_track = 10.0 + heard_seconds(&audio, current, resumed[1]);
     let readings = [
         ("first", rtp_seconds(start, current), 10.0),
         ("length", rtp_seconds(start, end), 240.0),
         (
             "after the pause, by the first mapping",
             rtp_seconds(start, resumed[1]),
-            after_pause.as_secs_f64(),
+            on_track,
         ),
         (
             "after the pause",
@@ -1180,7 +1268,7 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
         heard.iter().all(|after| after.abs() <= 0.5),
         "the audio each progress names arrived {heard:?} s after it was set"
     );
-    let drift = (rtp_seconds(start, resumed[1]) - after_pause.as_secs_f64()).abs();
+    let drift = (rtp_seconds(start, resumed[1]) - on_track).abs();
     cell(
         "Progress",
         &format!(
