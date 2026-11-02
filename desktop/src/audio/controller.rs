@@ -210,12 +210,9 @@ const RESUME_GAP: Duration = Duration::from_secs(10);
 const BRIEF_LOSS_POLLS: u32 =
     (BRIEF_LOSS_HOLD.as_millis() / super::outputs::POLL_PERIOD.as_millis()) as u32;
 
-/// A Bluetooth output that starts within this many polls (3 s) of its
-/// endpoint appearing in the list may play on a link still coming up, late
-/// by an amount its A2DP link never reports, so it is restarted once (S325).
-const FRESH_LINK_POLLS: u64 = 6;
-
-/// Polls from such a start to its restart's fade-out: 2 s.
+/// Polls from a Bluetooth output's first start on a link that just came up,
+/// late by an amount its A2DP link never reports, to its restart's
+/// fade-out (S325): 2 s.
 const FRESH_RESTART_POLLS: u32 = 4;
 
 /// Polls a restarted output rests between its old stream's release and its
@@ -1928,17 +1925,14 @@ impl<D: Driver> Controller<D> {
                         let age = relinked
                             .or(appeared)
                             .map(|poll| self.polls.saturating_sub(poll));
-                        let fresh =
-                            relinked.is_some() || age.is_some_and(|age| age <= FRESH_LINK_POLLS);
-                        if fresh {
+                        if age.is_some() {
                             self.fresh_restarts.insert(
                                 endpoint.id.clone(),
                                 FreshRestart::Due(FRESH_RESTART_POLLS),
                             );
                         }
-                        self.log.log(|| {
-                            describe_fresh_link(&label(&self.names, &endpoint.id), age, fresh)
-                        });
+                        self.log
+                            .log(|| describe_fresh_link(&label(&self.names, &endpoint.id), age));
                     }
                     session.outputs.insert(
                         endpoint.id.clone(),
@@ -3059,9 +3053,6 @@ impl<D: Driver> Controller<D> {
             cast.set_asleep(false);
         }
         self.pending.push(BackendEvent::Woke);
-        for appeared in self.appeared.values_mut() {
-            *appeared = self.polls;
-        }
         let by = match found {
             ResumeFound::Notice => "as Windows' resume notice said",
             ResumeFound::Clock => "as the clock showed",
@@ -5391,22 +5382,15 @@ fn describe_capture_start(
 /// What a Bluetooth output's start decided of its link (S325): `age` is the
 /// polls since its endpoint appeared, `None` for one listed at launch or
 /// whose appearance an earlier start used up.
-fn describe_fresh_link(output: &str, age: Option<u64>, fresh: bool) -> String {
+fn describe_fresh_link(output: &str, age: Option<u64>) -> String {
     let Some(age) = age else {
         return format!("output {output}: it plays as is: its Bluetooth link isn't new");
     };
     let seconds = age as f64 * super::outputs::POLL_PERIOD.as_secs_f64();
-    if fresh {
-        format!(
-            "output {output}: its Bluetooth link came up {seconds:.1} s before this start; it \
-             restarts once 2 s from now"
-        )
-    } else {
-        format!(
-            "output {output}: it plays as is: its Bluetooth link came up {seconds:.1} s before \
-             this start"
-        )
-    }
+    format!(
+        "output {output}: its Bluetooth link came up {seconds:.1} s before this start; it \
+         restarts once 2 s from now"
+    )
 }
 
 /// The log line of an output that started: the output as [`label`] names
@@ -9032,7 +9016,7 @@ mod tests {
 
     // covers: S325
     #[test]
-    fn a_bluetooth_output_that_starts_within_3_s_of_being_listed_restarts_once_2_s_later() {
+    fn a_fresh_bluetooth_output_restarts_once_2_s_after_its_start() {
         let (mut backend, log, dir) = logged_backend("controller-fresh-link");
         backend.start(&SourceId::WholeSystem).unwrap();
         fresh_buds(&mut backend);
@@ -9077,7 +9061,7 @@ mod tests {
 
     // covers: S325
     #[test]
-    fn a_bluetooth_output_listed_at_launch_or_after_4_s_starts_as_is() {
+    fn a_bluetooth_output_listed_at_launch_starts_as_is_and_one_started_after_4_s_restarts() {
         let mut at_launch = MockBackend::empty();
         at_launch.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
         at_launch.set_output_enabled(BUDS, true).unwrap();
@@ -9094,8 +9078,8 @@ mod tests {
         poll_quietly(&mut later, 8);
         later.set_output_enabled(BUDS, true).unwrap();
         poll_quietly(&mut later, 20);
-        assert_eq!(starts_of(&later, BUDS), 1);
-        assert_eq!(later.driver().renderers_faded(), 0);
+        assert_eq!(starts_of(&later, BUDS), 2);
+        assert_eq!(later.driver().renderers_faded(), 1);
     }
 
     // covers: S325
@@ -9287,24 +9271,6 @@ mod tests {
             assert_eq!(backend.driver().renderers_faded(), 0);
             assert_eq!(playing(&backend), [BUDS, HEADPHONES, SPEAKERS]);
         }
-    }
-
-    // covers: S325, S332
-    #[test]
-    fn a_bluetooth_links_3_s_start_over_at_the_resume() {
-        // Listed 2.5 s before the sleep and started at the resume: its link
-        // counts as new.
-        let mut backend = backend();
-        backend.start(&SourceId::WholeSystem).unwrap();
-        backend.connect_output_as(BUDS, "Buds", OutputKind::Bluetooth);
-        backend.poll();
-        poll_quietly(&mut backend, 5);
-        sleep_two_hours(&mut backend);
-        poll_quietly(&mut backend, 1);
-        backend.set_output_enabled(BUDS, true).unwrap();
-        poll_quietly(&mut backend, 20);
-        assert_eq!(starts_of(&backend, BUDS), 2, "it restarted");
-        assert_eq!(backend.driver().renderers_faded(), 1);
     }
 
     /// Bluetooth earbuds listed at launch, so on a settled link, playing.
