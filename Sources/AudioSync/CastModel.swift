@@ -943,7 +943,7 @@ struct CastModel {
         case .connectFailed(_, let error, _, _):
             guard current.status == .connecting else { return setStatus(.reconnecting) }
             // A group with no address yet waits for its records (C81).
-            guard error != .noAddress, !asleep else { return nil }
+            guard !(error == .noAddress && devices[id]?.group == true), !asleep else { return nil }
             attempt?.connectFailures += 1
             guard attempt?.connectFailures == Self.failuresBeforeOff else { return nil }
             enabled = nil

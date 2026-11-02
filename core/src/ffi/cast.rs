@@ -192,8 +192,8 @@ pub const CAST_ERROR_ARTWORK: i32 = 9;
 pub const CAST_ERROR_GROUP: i32 = 10;
 /// A fault inside the sender ended the attempt; the next start runs (C107).
 pub const CAST_ERROR_INTERNAL: i32 = 11;
-/// A connect failure with no address to try: a group whose records list
-/// none yet (C80, C81).
+/// A connect failure with no address to try: a group waits for its records
+/// (C81), a single device counts toward the give-up (C80).
 pub const CAST_ERROR_NO_ADDRESS: i32 = 12;
 
 /// A stream's format ([`AscCastEvent::format`]): live WAV.

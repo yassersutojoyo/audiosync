@@ -12709,6 +12709,17 @@ do {
     check(tvOff.apply(groupFailed) == nil && tvOff.apply(groupFailed) == nil
             && tvOff.apply(groupFailed) == .turnedOff("group1", problem: .notResponding) && tvOff.enabled == nil,
           "cast: a group that never answers goes off at its third connect failure, as on Windows (C80)")
+    var linkLocalOnly = CastModel()
+    linkLocalOnly.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
+    _ = linkLocalOnly.turnOn(den)
+    linkLocalOnly.startSent(den)
+    _ = linkLocalOnly.started(den, attempt: 7, refusal: ASC_CAST_REFUSED_NONE)
+    let singleNoAddress = CastEvent.connectFailed(attempt: 7, error: CastError(ASC_CAST_ERROR_NO_ADDRESS), retryMs: 1000)
+    // covers: C80
+    check(linkLocalOnly.apply(singleNoAddress) == nil && linkLocalOnly.apply(singleNoAddress) == nil
+            && linkLocalOnly.apply(singleNoAddress) == .turnedOff(den, problem: .notResponding)
+            && linkLocalOnly.enabled == nil,
+          "cast: a speaker with no usable address goes off at its third connect failure (C80)")
     var lidClosed = CastModel()
     lidClosed.apply(.appeared(CastDevice(id: den, name: "Den"), offsetMs: nil))
     _ = lidClosed.turnOn(den)
