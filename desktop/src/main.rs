@@ -657,6 +657,47 @@ mod tests {
         );
     }
 
+    /// While other notices wait behind the newest, Dismiss All sits beside
+    /// the button for them, as in the Mac panel, and dismisses every notice.
+    #[test]
+    fn the_flyout_offers_dismiss_all_beside_the_more_notices_button() {
+        let flyout = include_str!("../ui/flyout.slint");
+        let row = &flyout[flyout
+            .find("if root.notice-count > root.notices.length: HorizontalLayout {")
+            .expect("the more-notices row is there")..];
+        let row = &row[..row.find("Divider { }").expect("the row ends")];
+        assert!(row.contains("text: Strings.dismiss-all-notices;"), "{row}");
+        let body = handler_body(row, "text: Strings.dismiss-all-notices;", "clicked");
+        assert!(body.contains("root.notices-dismissed-all();"), "{body}");
+    }
+
+    /// While the Google Cast search finds nothing, the flyout offers Add by
+    /// Address… under the list, as the Mac panel does, and it opens the
+    /// main window's dialog.
+    #[test]
+    fn the_flyout_offers_add_by_address_while_no_cast_speaker_is_found() {
+        let flyout = include_str!("../ui/flyout.slint");
+        assert!(flyout.contains(
+            "if root.cast-by-address && root.cast-list == CastList.none-found: HorizontalLayout {"
+        ));
+        let body = handler_body(flyout, "text: Strings.cast-add-address;", "clicked");
+        assert!(
+            body.contains("root.cast-add-address-requested();"),
+            "{body}"
+        );
+
+        let view = include_str!("view.rs");
+        let wiring = &view[view
+            .find("flyout.on_cast_add_address_requested(")
+            .expect("the flyout's link is wired")..];
+        let wiring = &wiring[..wiring.find("});").expect("the wiring ends")];
+        assert!(wiring.contains("app.hide_flyout();"), "{wiring}");
+        assert!(
+            wiring.contains("app.main.invoke_cast_add_address_requested();"),
+            "{wiring}"
+        );
+    }
+
     /// A dismiss button names its notice in a few words: after a dismiss the
     /// next notice's button takes the focus, and Narrator then says which
     /// notice it is without reading the whole notice again.
@@ -767,6 +808,11 @@ mod tests {
                 "for speaker in root.speakers: FlyoutRow {",
                 "focus-changed(focused)",
                 "speaker-focused",
+            ),
+            (
+                "text: Strings.cast-add-address;",
+                "changed keyboard-focused",
+                "add-address-focused",
             ),
         ] {
             let body = handler_body(flyout, element, handler);
