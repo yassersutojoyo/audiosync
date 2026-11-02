@@ -345,9 +345,6 @@ fn run(
             return;
         }
     };
-    let log = DebugLog::appending_from_env();
-    log.log(|| raw_note(stream.raw).to_owned());
-    log.flush(Duration::from_secs(1));
     let capacity = (seconds.max(0.0) * f64::from(stream.id.rate)).ceil() as usize;
     let mut samples = vec![0.0_f32; capacity];
     // SAFETY: starts the stream initialized above.
@@ -364,6 +361,10 @@ fn run(
     }
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
+    // Logged after the recording, as opening the log and flushing it would delay its start.
+    let log = DebugLog::appending_from_env();
+    log.log(|| raw_note(stream.raw).to_owned());
+    log.flush(Duration::from_secs(1));
     let _ = send.send(samples);
 }
 
