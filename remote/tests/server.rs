@@ -1301,6 +1301,10 @@ fn a_mix_post_passes_on_the_running_apps_once_each_in_the_order_sent() {
             (404, "unknown_source"),
             "{body}"
         );
+        assert_eq!(
+            reply.json()["message"],
+            "These apps aren't running anymore."
+        );
     }
     assert!(remote.received.lock().unwrap().is_empty());
 }

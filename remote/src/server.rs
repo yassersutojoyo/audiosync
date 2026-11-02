@@ -1446,7 +1446,7 @@ fn mix(request: &Request, shared: &Shared) -> Answer {
         }
     }
     if apps.is_empty() {
-        return error(text::unknown_source());
+        return error(text::mix_apps_gone());
     }
     accepted(&Command::Mix { apps }, shared)
 }

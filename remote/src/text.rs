@@ -111,6 +111,10 @@ pub fn unknown_source() -> ApiError {
     )
 }
 
+pub fn mix_apps_gone() -> ApiError {
+    ApiError::new(404, "unknown_source", "These apps aren't running anymore.")
+}
+
 pub fn method_not_allowed() -> ApiError {
     ApiError::new(
         405,
