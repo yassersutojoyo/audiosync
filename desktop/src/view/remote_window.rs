@@ -698,15 +698,14 @@ impl App {
         window.set_local_address(local.clone().unwrap_or_default().into());
         // The PC may have moved to another network since the remote started.
         host.lan_address = remote::lan_address();
-        window.set_ip_address(
-            host.lan_address
-                .map(|address| remote::ip_url(address, port))
-                .unwrap_or_default()
-                .into(),
-        );
+        let ip = host
+            .lan_address
+            .map(|address| remote::ip_url(address, port));
+        window.set_ip_address(ip.clone().unwrap_or_default().into());
+        let wanted = local.or(ip);
         let drawn = host.qr.as_ref().map(|(text, _)| text.clone());
-        if local != drawn {
-            host.qr = local.and_then(|address| {
+        if wanted != drawn {
+            host.qr = wanted.and_then(|address| {
                 let (side, pixels) = remote::qr_pixels(&address, QR_SCALE)?;
                 let side = u32::try_from(side).ok()?;
                 let mut buffer = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(side, side);
@@ -1696,5 +1695,56 @@ mod tests {
         app.remote_window.invoke_remote_toggled(false);
         assert_eq!(public_notices(&app), 0, "the remote is off");
         assert!(!app.remote_window.get_public_network());
+    }
+
+    #[test]
+    fn without_a_usable_name_the_qr_code_has_the_ip_address_and_says_so() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = over_loopback(MockBackend::new());
+        let window = &app.remote_window;
+        window.set_remote_on(true);
+        window.set_listening(true);
+        window.set_ip_address("http://192.0.2.7:8080".into());
+        window.set_has_qr(true);
+        window.show().expect("the window shows headless");
+        draw_frames();
+        let label = app
+            .strings()
+            .invoke_remote_qr_label("http://192.0.2.7:8080".into());
+        assert!(
+            ElementHandle::find_by_accessible_label(window, label.as_str())
+                .next()
+                .is_some(),
+            "{label}"
+        );
+    }
+
+    #[test]
+    fn the_port_row_shows_while_the_remote_is_on_and_the_http_note_always() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = over_loopback(MockBackend::new());
+        app.ui.borrow_mut().remote.port = free_port();
+        app.main.invoke_remote_requested();
+        draw_frames();
+        let window = &app.remote_window;
+        let has = |text: &str| {
+            ElementHandle::find_by_accessible_label(window, text)
+                .next()
+                .is_some()
+        };
+        let use_port = app.strings().get_remote_use_port();
+        let note = app.strings().get_remote_http_note();
+        assert!(!has(use_port.as_str()), "off: no port row");
+        assert!(has(note.as_str()), "off: the note");
+
+        window.invoke_remote_toggled(true);
+        // Tall enough that the note isn't scrolled out of view (draw_frames
+        // would size it back).
+        window
+            .window()
+            .set_size(slint::LogicalSize::new(460.0, 2000.0));
+        assert!(window.get_listening());
+        assert!(has(use_port.as_str()), "on: the port row");
+        assert!(has(note.as_str()), "on: the note");
     }
 }

@@ -185,10 +185,10 @@ export component RemoteWindow inherits Window {
                         }
                     }
 
-                    if root.remote-on && root.port-problem: VerticalLayout {
+                    if root.remote-on: VerticalLayout {
                         spacing: 8px;
 
-                        Text {
+                        if root.port-problem: Text {
                             text: root.port-in-use ? Strings.remote-port-in-use(root.port) : Strings.remote-port-unavailable(root.port);
                             color: Tokens.error-text;
                             wrap: word-wrap;
@@ -279,7 +279,7 @@ export component RemoteWindow inherits Window {
                                     background: #ffffff;
                                     border-radius: 4px;
                                     accessible-role: image;
-                                    accessible-label: Strings.remote-qr-label(root.local-address);
+                                    accessible-label: Strings.remote-qr-label(root.local-address != "" ? root.local-address : root.ip-address);
 
                                     Image {
                                         width: parent.width;
@@ -405,11 +405,11 @@ export component RemoteWindow inherits Window {
                                 min-height: self.preferred-height;
                             }
                         }
+                    }
 
-                        SecondaryText {
-                            text: Strings.remote-http-note;
-                            min-height: self.preferred-height;
-                        }
+                    SecondaryText {
+                        text: Strings.remote-http-note;
+                        min-height: self.preferred-height;
                     }
 
                     if root.listening || root.devices > 0: VerticalLayout {
