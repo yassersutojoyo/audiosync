@@ -15,7 +15,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
-- On Windows and in the Linux preview, a Google Cast speaker's delay set to 0 while the saved Cast speakers file couldn't be read yet at launch stays at 0 once the file reads, instead of going back to the saved delay.
+- On Windows and in the Linux preview, a Google Cast speaker's offset set to 0 while the saved Cast speakers file couldn't be read yet at launch stays at 0 once the file reads, instead of going back to the saved offset.
 
 ## [0.8.0] - 2026-11-02
 
