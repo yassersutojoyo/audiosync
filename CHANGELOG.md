@@ -15,7 +15,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the source menu, in the main window and on the web remote, lists the mix of several apps in use, or your last mix, right after the whole system, as on the Mac. Before, it came after the apps.
 - On Windows, Several Apps… is a link under the tray panel's source menu instead of its last entry, so arrowing or scrolling through the sources no longer lands on it and closes the panel.
 - An app in the list of several apps that only your last mix keeps there reads "(not running)" after its name. On the Mac and on Windows.
-- On Windows, when a newer version of AudioSync wrote your settings, the notice says so and that updating AudioSync gets them back. Before, it said AudioSync couldn't read them.
+- On Windows, when a newer version of AudioSync wrote your settings, the notice, its dismiss button, the tray tooltip and Narrator say so, and the notice adds that updating AudioSync gets them back. Before, they said AudioSync couldn't read them.
 - On Windows, the notice about blocked microphone access and the calibration name both switches to turn on: "Let desktop apps access your microphone" and "Microphone access".
 - On the Mac, an equalizer curve name matches a saved one by the same rule as on Windows: ignoring case only. A name typed with a ready-made accented letter and one typed with a separate accent mark are now two curves.
 - On Windows, a preset holds the reference output like any other speaker, as on the Mac: recalling a preset without it switches it off, and a preset can hold it alone. A preset saved before this version leaves it as it is until you change something and choose Update to Current Settings for it.
@@ -40,7 +40,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, an AirPlay speaker that still asks for a code or password right after pairing turns off with a notice that points to its Allow Speaker & TV Access setting, as on the Mac. Before, the notice asked you to pair it again.
 - On Windows, a dragged equalizer slider stops on its 0.5 dB steps, so the number, the knob and what Narrator says match the gain you hear.
 - On Windows, a typed AirPlay delay above 20 000 ms applies 20 000 ms, one below 0 applies 0, and a step past either end changes nothing, as on the Mac.
-- On Windows, when a newer version of AudioSync wrote your settings, the notice's dismiss button, the tray tooltip and Narrator say so too. Before, they said AudioSync couldn't read your settings.
 - On Windows, the Calibrate Zone card shows a renamed zone's new name at once, and a deleted zone no longer comes back there, as on the Mac.
 
 ## [0.8.0] - unreleased
