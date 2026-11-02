@@ -440,6 +440,13 @@ enum ZoneHeaderHit {
     static func goToZoneFocus(nonePresent: Bool) -> Area {
         nonePresent ? .chevron : .zoneIcon
     }
+
+    /// Whether an arrow key on the header folds or unfolds the zone: Right
+    /// unfolds a folded zone, Left folds an unfolded one, as on Windows.
+    /// Otherwise the key passes on.
+    static func arrowFolds(right: Bool, expanded: Bool) -> Bool {
+        right != expanded
+    }
 }
 
 /// How the main window draws zone members: one tinted box around a zone's

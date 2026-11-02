@@ -20,6 +20,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On Windows, a zone name, zone count or stereo pair line that fits no longer shows a tooltip repeating it. Only one cut to an ellipsis does, and a name in the In zones list keeps its tooltip, which holds the device name and the rename hint.
 - On the Mac, the menu bar panel no longer stalls at the end of its grow when it opens.
+- On the Mac, Escape closes the Web Remote window, also while the cursor is in its port field.
+- On the Mac, Right unfolds a zone and Left folds it, in the main window and the menu bar panel, as on Windows.
 
 ## [0.8.0] - unreleased
 

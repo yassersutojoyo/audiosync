@@ -16042,6 +16042,14 @@ do {
     check(inCard("focused = ZoneHeaderHit.goToZoneFocus(nonePresent: nonePresent)") == 1
           && inCard(".focused($focused, equals: .chevron)") == 1 && inCard(".focused($focused, equals: .zoneIcon)") == 1,
           "main window zone header: Go to Zone focuses the part ZoneHeaderHit.goToZoneFocus names")
+    // Arrow keys as on Windows: Right unfolds, Left folds, and the other way round passes the key on.
+    check(ZoneHeaderHit.arrowFolds(right: true, expanded: false) && ZoneHeaderHit.arrowFolds(right: false, expanded: true)
+            && !ZoneHeaderHit.arrowFolds(right: true, expanded: true) && !ZoneHeaderHit.arrowFolds(right: false, expanded: false),
+          "zone header: Right unfolds a folded zone, Left folds an unfolded one, and neither acts on a zone already that way")
+    check(occurrences(".onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }") == 2
+            && inCard(".onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }") == 2
+            && occurrences("ZoneHeaderHit.arrowFolds(") == 1 && inCard("ZoneHeaderHit.arrowFolds(") == 1,
+          "zone header: both focusable parts take Left and Right through ZoneHeaderHit.arrowFolds, in the panel and the main window")
 }
 
 // MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)
