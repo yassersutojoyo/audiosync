@@ -14253,6 +14253,17 @@ do {
     check(!willPlayLocked.available
             && RemoteAction.plan(.speaker(id: "tv", on: true, volume: nil, delayMs: nil), rows: [willPlayLocked]).isEmpty,
           "web remote: a speaker that will play but would ask for a code can't be turned on from the phone")
+    let onLocked = RemoteRow(Facts(id: "tv", name: "TV", kind: "AirPlay", on: true, volume: 50, isAirPlay: true,
+                                   needsCode: true, paired: false), text: t)
+    let offLocked = RemoteRow(Facts(id: "tv", name: "TV", kind: "AirPlay", on: false, volume: 50, isAirPlay: true,
+                                    needsCode: true, paired: false), text: t)
+    // covers: S257, S376
+    check(onLocked.available
+            && RemoteAction.plan(.speaker(id: "tv", on: false, volume: nil, delayMs: nil), rows: [onLocked])
+            == [.setEnabled(id: "tv", on: false)]
+            && !offLocked.available
+            && RemoteAction.plan(.speaker(id: "tv", on: true, volume: nil, delayMs: nil), rows: [offLocked]).isEmpty,
+          "web remote: a speaker that is on and would ask for a code can be switched off from the phone, not on")
     // covers: S348
     check(plan("{\"type\":\"speaker\",\"id\":\"usb\",\"volume\":70}") == [.setVolume(id: "usb", position: 70)]
             && plan("{\"type\":\"speaker\",\"id\":\"cast\",\"volume\":70}") == [.setVolume(id: "cast", position: 70)],
