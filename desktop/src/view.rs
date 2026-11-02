@@ -1989,7 +1989,10 @@ impl App {
         self.flyout
             .set_connected_all_hidden(state.connected_all_hidden());
         self.main
-            .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(&state))));
+            .set_hidden_speakers(ModelRc::new(VecModel::from(hidden_items(
+                &self.main.global::<Strings>(),
+                &state,
+            ))));
         sync_model(&self.models.speaker_presets, preset_items(&state));
         self.main
             .set_can_save_preset(state.presets.len() < MAX_PRESETS);
@@ -5180,14 +5183,17 @@ fn zone_note(strings: &Strings<'_>, note: ui_model::ZoneNote<'_>) -> SharedStrin
 }
 
 /// The entries of Speakers > Hidden Speakers.
-fn hidden_items(state: &AppState) -> Vec<HiddenItem> {
+fn hidden_items(strings: &Strings<'_>, state: &AppState) -> Vec<HiddenItem> {
     state
         .hidden
         .iter()
         .map(|hidden| HiddenItem {
             id: hidden.id.as_str().into(),
             name: hidden.name.as_str().into(),
-            kind: hidden.kind_text.as_str().into(),
+            kind: hidden.present.map_or_else(
+                || hidden.kind_text.as_str().into(),
+                |kind| strings.invoke_speaker_kind(speaker_kind(kind)),
+            ),
             present: hidden.present.is_some(),
         })
         .collect()
@@ -8872,6 +8878,35 @@ mod tests {
         assert_eq!(app.main.get_notice_announcement(), format!("{name} shown"));
         assert_eq!(app.main.get_hidden_speakers().row_count(), 0);
         assert!(!app.main.get_connected_all_hidden());
+    }
+
+    // covers: S360
+    #[test]
+    fn a_listed_hidden_speaker_shows_its_kind_now() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let mut state = app.snapshot();
+        let entry = |id: &str, present| ui_model::HiddenSpeaker {
+            id: id.into(),
+            name: id.into(),
+            kind_text: "AirPlay".into(),
+            present,
+        };
+        state.hidden = vec![
+            entry("airplay:found-as-2", Some(ui_model::SpeakerKind::AirPlay2)),
+            entry("airplay:gone", None),
+        ];
+        let kinds: Vec<SharedString> = hidden_items(&strings, &state)
+            .into_iter()
+            .map(|item| item.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                strings.invoke_speaker_kind(SpeakerKind::Airplay2),
+                "AirPlay".into()
+            ]
+        );
     }
 
     // covers: S228
