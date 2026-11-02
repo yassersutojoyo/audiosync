@@ -59,6 +59,7 @@
 //! decided, the notices posted and the source list whenever it changes; the
 //! audio backend logs what it did itself.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
@@ -78,6 +79,7 @@ use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, compa
 use audiosync_core::policy::zones::{self, MemberKind, Situation, Step, Zone, Zones};
 use audiosync_core::reader::DRIFT_TOLERANCE_MS;
 use audiosync_core::volume::row_level;
+use icu_normalizer::DecomposingNormalizerBorrowed;
 
 use crate::audio::backend::{
     AirPlayAvailability, AirPlayInfo, AirPlayProblem, AudioBackend, BackendError, BackendEvent,
@@ -350,6 +352,21 @@ fn mix_mode(chosen: &Chosen, remembered: MixMode) -> MixMode {
         Chosen::App { .. } => MixMode::Only,
         _ => remembered,
     }
+}
+
+/// Compares app names as the Mac's `localizedCaseInsensitiveCompare` orders
+/// the several-apps list (S211): by letter ignoring case and accents, an
+/// accent only breaking a tie, and digits not compared by value.
+fn compare_app_names(a: &str, b: &str) -> Ordering {
+    fn letters(name: &str) -> impl Iterator<Item = char> + '_ {
+        DecomposingNormalizerBorrowed::new_nfd()
+            .normalize_iter(name.chars())
+            .filter(|c| !('\u{300}'..='\u{36f}').contains(c))
+            .flat_map(char::to_lowercase)
+    }
+    letters(a)
+        .cmp(letters(b))
+        .then_with(|| a.to_lowercase().cmp(&b.to_lowercase()))
 }
 
 /// The apps the several-apps list shows checked under `mode`.
@@ -2069,12 +2086,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 });
             }
         }
-        apps.sort_by(|a, b| {
-            a.name
-                .to_lowercase()
-                .cmp(&b.name.to_lowercase())
-                .then_with(|| a.id.cmp(&b.id))
-        });
+        apps.sort_by(|a, b| compare_app_names(&a.name, &b.name).then_with(|| a.id.cmp(&b.id)));
         apps
     }
 
@@ -13144,6 +13156,34 @@ mod tests {
             .map(|app| app.name)
             .collect();
         assert_eq!(names, ["Alpha", "Player", "Zebra"]);
+    }
+
+    // covers: S211 (an accented name sorts with its base letter, as on the Mac)
+    #[test]
+    fn the_several_apps_list_sorts_an_accented_name_with_its_base_letter() {
+        let mut adapter = adapter();
+        adapter.audio_mut().add_app(3000, "éclair.exe");
+        adapter.audio_mut().add_app(4000, "zebra.exe");
+        // "Café.exe" sorts before "cafe.exe" by ID, so only the name's accent puts it after.
+        adapter.audio_mut().add_app(5000, "Café.exe");
+        adapter.audio_mut().add_app(6000, "cafe.exe");
+        adapter.refresh_sources();
+        let ids: Vec<String> = adapter
+            .snapshot()
+            .mix_apps
+            .into_iter()
+            .map(|app| app.id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "cafe.exe",
+                "Café.exe",
+                "éclair.exe",
+                "player.exe",
+                "zebra.exe"
+            ]
+        );
     }
 
     // covers: S353, S354
