@@ -4070,12 +4070,28 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if !running {
             self.busy.clear();
             self.forget_waits(|_| false);
+            self.forget_lost(&[]);
             return;
         }
         let outputs = self.audio.enabled_outputs();
         self.busy.retain(|id| outputs.contains(id));
+        self.forget_lost(&outputs);
         let airplay = self.audio.enabled_airplay();
         self.forget_waits(|id| airplay.contains(id));
+    }
+
+    /// Drops the disconnected notice of every output not in `on` (S68).
+    fn forget_lost(&mut self, on: &[String]) {
+        let stale: Vec<NoticeSubject> = self
+            .notices
+            .iter()
+            .filter(|(subject, posted)| {
+                matches!(posted.message, NoticeMessage::SpeakerLost { .. })
+                    && !matches!(subject, NoticeSubject::Speaker(SpeakerKey::Local(id)) if on.contains(id))
+            })
+            .map(|(subject, _)| subject.clone())
+            .collect();
+        self.notices.clear(&stale);
     }
 
     /// Drops the AirPlay waits `keep` turns down, with their notices: nothing
@@ -7909,6 +7925,67 @@ mod tests {
         assert!(adapter.poll());
         assert!(messages(&adapter).is_empty(), "its cause is gone");
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S68
+    #[test]
+    fn the_unplugged_notice_ends_when_streaming_stops() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        adapter.poll();
+        assert_eq!(messages(&adapter).len(), 1, "lost");
+        adapter.set_running(false);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
+    // covers: S68
+    #[test]
+    fn the_unplugged_notice_ends_when_its_speaker_is_switched_off_any_way() {
+        type SwitchOff = fn(&mut AudioAdapter<MockBackend>);
+        let ways: [(&str, SwitchOff); 3] = [
+            ("its switch", |adapter| {
+                adapter.set_speaker_enabled(&key(HEADPHONES), false);
+            }),
+            ("its zone", |adapter| adapter.toggle_zone("zone:1")),
+            ("a preset", |adapter| {
+                adapter.recall_preset("preset:1");
+            }),
+        ];
+        for (way, switch_off) in ways {
+            let mut adapter = adapter();
+            adapter.audio_mut().connect_output("monitor", "Monitor");
+            adapter.restore(Settings {
+                speaker_zones: vec![zone(vec![key(HEADPHONES), key(SPEAKERS)])],
+                speaker_presets: vec![saved_preset(&[
+                    (key(SPEAKERS), None),
+                    (key("monitor"), None),
+                ])],
+                ..Settings::default()
+            });
+            adapter.poll();
+            for id in [SPEAKERS, HEADPHONES, "monitor"] {
+                turn_on(&mut adapter, id);
+            }
+            adapter.audio_mut().disconnect_output(HEADPHONES);
+            adapter.poll();
+            assert_eq!(messages(&adapter).len(), 1, "{way}: lost");
+            switch_off(&mut adapter);
+            assert!(
+                !adapter
+                    .audio
+                    .enabled_outputs()
+                    .contains(&HEADPHONES.to_owned()),
+                "{way}"
+            );
+            assert!(adapter.snapshot().running, "{way}: the others play on");
+            assert!(
+                messages(&adapter).is_empty(),
+                "{way}: {:?}",
+                messages(&adapter)
+            );
+        }
     }
 
     // covers: S137
