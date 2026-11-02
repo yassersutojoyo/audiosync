@@ -2007,7 +2007,7 @@ impl App {
             .filter(|row| !row.delay_range_hint.is_empty())
             .map(|row| (row.id.to_string(), row.delay_range_hint.clone()))
             .collect();
-        let notices: Vec<NoticeItem> = state
+        let mut notices: Vec<NoticeItem> = state
             .notices
             .iter()
             .map(|n| notice_item(&strings, n))
@@ -2023,6 +2023,12 @@ impl App {
             })
             .collect();
         let announcement = self.notice_announcer.borrow_mut().next(&listed);
+        // The window's own notices follow the backend's in the state;
+        // the post order puts every notice in time, newest first.
+        let posted = self.notice_announcer.borrow().posted().to_vec();
+        notices.sort_by_key(|n| {
+            std::cmp::Reverse(posted.iter().position(|&id| u64::try_from(n.id) == Ok(id)))
+        });
         let mut notice_said = None;
         match announcement {
             Announcement::Say(title) => {
@@ -15518,6 +15524,78 @@ mod tests {
 
         app.update(|backend| backend.dismiss_all_notices());
         assert_eq!(app.flyout.get_notice_announcement(), "", "dismissed");
+    }
+
+    /// The window's own notices sit in one list with the backend's, newest
+    /// posted first, so one posted after four others is listed in the main
+    /// window and is the flyout's newest.
+    // covers: S153
+    #[test]
+    fn a_window_notice_posted_after_four_others_is_listed_first() {
+        let mut backend = MockBackend::new();
+        for subject in ["a", "b", "c", "d"] {
+            backend.post(subject, NoticeMessage::CaptureLost, "09.40");
+        }
+        let app = app_over(backend);
+        app.ui.borrow_mut().airplay2_notice = Some(ui_model::Notice {
+            id: AIRPLAY2_NOTICE_ID,
+            subject: "AirPlay 2 (Experimental)".to_owned(),
+            message: NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false,
+            },
+            time: "09.41".to_owned(),
+        });
+        app.refresh();
+        let id = |item: Option<NoticeItem>| item.map(|n| n.id as u64);
+        assert_eq!(
+            id(app.main.get_notices().row_data(0)),
+            Some(AIRPLAY2_NOTICE_ID)
+        );
+        assert_eq!(app.main.get_notices().row_count(), MAIN_NOTICE_LIMIT);
+        assert_eq!(
+            id(app.flyout.get_notices().row_data(0)),
+            Some(AIRPLAY2_NOTICE_ID)
+        );
+    }
+
+    /// A backend notice posted after a window notice is listed above it,
+    /// though the window notice's fixed id is higher.
+    // covers: S153
+    #[test]
+    fn a_backend_notice_posted_after_a_window_notice_is_listed_first() {
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_speaker_enabled("local:desk", true));
+        app.save_preset("Evening");
+        app.update(|b| b.hide_speaker("local:desk", "USB"));
+        app.ui.borrow_mut().airplay2_notice = Some(ui_model::Notice {
+            id: AIRPLAY2_NOTICE_ID,
+            subject: "AirPlay 2 (Experimental)".to_owned(),
+            message: NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false,
+            },
+            time: "09.40".to_owned(),
+        });
+        app.refresh();
+        let id = |item: Option<NoticeItem>| item.map(|n| n.id as u64);
+        assert_eq!(
+            id(app.main.get_notices().row_data(0)),
+            Some(AIRPLAY2_NOTICE_ID)
+        );
+
+        app.recall_preset(&preset_ids(&app)[0]);
+        app.refresh();
+        let presets = app
+            .snapshot()
+            .notices
+            .iter()
+            .find(|n| n.id != AIRPLAY2_NOTICE_ID)
+            .map(|n| n.id);
+        assert!(presets.is_some(), "the recall posts a notice");
+        assert_eq!(id(app.main.get_notices().row_data(0)), presets);
+        assert_eq!(app.main.get_notices().row_count(), 2);
+        assert_eq!(id(app.flyout.get_notices().row_data(0)), presets);
     }
 
     /// A character outside the Basic Multilingual Plane (two UTF-16 units)
