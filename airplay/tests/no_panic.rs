@@ -2460,6 +2460,9 @@ fn read_answer(body: &[u8]) {
     let dictionary = bodies::read_dictionary(body);
     if body.len() > MAX_PLIST_BYTES {
         assert!(dictionary.is_none(), "{} bytes read", body.len());
+        assert_eq!(bodies::read_info(body), bodies::InfoAnswer::default());
+        assert_eq!(bodies::read_session_setup(body), bodies::SessionSetupAnswer::default());
+        assert_eq!(bodies::read_stream_setup(body), bodies::StreamSetupAnswer::default());
     }
     let info = bodies::read_info(body);
     if let Some(name) = &info.name {
@@ -2471,7 +2474,7 @@ fn read_answer(body: &[u8]) {
     assert!(trace.len() <= TRACE_LIMIT, "{} bytes", trace.len());
 }
 
-// covers: P133
+// covers: P133, P230
 #[test]
 fn airplay2_plist_answers_survive_any_body() {
     let mut rng = Rng::new(0xA1E5_0001);

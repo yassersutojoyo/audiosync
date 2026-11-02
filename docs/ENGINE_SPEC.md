@@ -4423,7 +4423,7 @@ The checks for S368 to S379, and the busy-port check of S337, in the remote crat
 | web_remote_chosen_again_while_its_window_shows_keeps_the_code (`desktop/src/view/remote_window.rs`) | S368 |
 | narrator_hears_a_new_pairing_code (`desktop/src/view/remote_window.rs`) | S288 |
 
-### App mixes from the phone: remote crate, Windows and Mac (pending; `cargo test` in `remote/` and `desktop/`, the logic suite)
+### App mixes from the phone: remote crate, Windows and Mac (`cargo test` in `remote/` and `desktop/`, the logic suite)
 
 | Check | Clauses |
 |---|---|
