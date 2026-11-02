@@ -322,6 +322,9 @@ component SpeakerSection inherits VerticalLayout {
     // in-zones-focus-id is its speaker's ID, and clears the ID.
     in-out property <string> in-zones-focus-id;
     in-out property <RowPart> in-zones-focus-part;
+    // Open Network Settings, under the note while AirPlay finds nothing.
+    in property <bool> show-network-settings;
+    callback network-settings();
     // Add by Address…, under the note while no Google Cast speaker is found.
     in property <bool> show-add-address;
     callback add-address();
@@ -422,6 +425,20 @@ component SpeakerSection inherits VerticalLayout {
                     SecondaryText {
                         text: root.note;
                         font-size: Tokens.font-size-caption;
+                    }
+                }
+            }
+
+            if root.show-network-settings: HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: 12px;
+                alignment: start;
+                LinkButton {
+                    text: Strings.open-network-settings;
+                    label: Strings.open-network-settings;
+                    clicked => {
+                        root.network-settings();
                     }
                 }
             }
@@ -1333,6 +1350,8 @@ export component MainWindow inherits Window {
     // A Google Cast speaker's Mute or Unmute, and its Resync.
     callback cast-muted-requested(string, bool);
     callback cast-resync-requested(string);
+    // Open Network Settings under the no-speakers note.
+    callback network-settings-requested();
     // Speakers > Add by Address…, and Remove on a row added that way.
     callback cast-add-address-requested();
     callback cast-remove-requested(string);
@@ -2321,6 +2340,11 @@ export component MainWindow inherits Window {
                         }
                         focus-id <=> root.focus-speaker-id;
                         focus-part <=> root.focus-speaker-part;
+                        // Linux has no Settings page to open.
+                        show-network-settings: root.airplay-none-found && Platform.os != OperatingSystemType.linux;
+                        network-settings => {
+                            root.network-settings-requested();
+                        }
                         show-add-address: root.cast-by-address && root.cast-list == CastList.none-found;
                         add-address => {
                             root.cast-add-address-requested();

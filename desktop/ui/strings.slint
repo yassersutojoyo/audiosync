@@ -52,6 +52,9 @@ export global Strings {
     out property <string> airplay-none-found: root.public-network ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).") : Platform.os == OperatingSystemType.linux ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it.");
     // In place of that note and the Google Cast one when neither finds any.
     out property <string> network-none-found: root.public-network ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).") : Platform.os == OperatingSystemType.linux ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it.");
+    // Under that note: opens Settings > Network & internet, as the Mac's
+    // Open Local Network Settings does.
+    out property <string> open-network-settings: @tr("Open Network Settings");
     // Under Connected Speakers while no Google Cast speaker is listed: the
     // search runs, has found nothing for 20 seconds, or couldn't start.
     public pure function cast-list(state: CastList) -> string {

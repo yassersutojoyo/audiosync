@@ -430,8 +430,8 @@ const MAIN_WINDOW_CHROME: (f64, f64) = (16.0, 64.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the zone rows,
-/// the speaker rows (a zone's members among them) and the Add by Address
-/// link.
+/// the speaker rows (a zone's members among them), the Add by Address link
+/// and the Open Network Settings link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutParts {
     notices: bool,
@@ -439,6 +439,7 @@ struct FlyoutParts {
     zones: bool,
     speakers: bool,
     add_address: bool,
+    network_settings: bool,
 }
 
 impl FlyoutParts {
@@ -449,13 +450,15 @@ impl FlyoutParts {
             || (self.zones && other.zones)
             || (self.speakers && other.speakers)
             || (self.add_address && other.add_address)
+            || (self.network_settings && other.network_settings)
     }
 }
 
 /// What the tray flyout shows: how many notices there are and how many of
 /// them it lists, how many zones, how many of this PC's and connected
 /// speakers in no zone, and the shape of the zones' member lists
-/// ([`zone_shape`]), and whether it shows the Add by Address link.
+/// ([`zone_shape`]), and whether it shows the Add by Address link and the
+/// Open Network Settings link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutCounts {
     notices: usize,
@@ -465,6 +468,7 @@ struct FlyoutCounts {
     speakers: usize,
     zone_members: u64,
     add_address: bool,
+    network_settings: bool,
 }
 
 impl FlyoutCounts {
@@ -485,6 +489,7 @@ impl FlyoutCounts {
                 || self.speakers != next.speakers
                 || self.zone_members != next.zone_members,
             add_address: self.add_address && !next.add_address,
+            network_settings: self.network_settings && !next.network_settings,
         }
     }
 }
@@ -1943,6 +1948,8 @@ impl App {
         drop(ui);
         self.main
             .set_connected_virtual_hidden(connected_virtual_hidden);
+        // Read before the flyout takes the new state, for `flyout_shown`.
+        let none_found_shown = self.flyout.get_airplay_none_found();
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_airplay_searching(state.airplay_searching);
@@ -2077,6 +2084,9 @@ impl App {
             speakers: m.flyout_connected.row_count(),
             zone_members: self.zone_shape_shown(),
             add_address: add_address_shown,
+            network_settings: none_found_shown
+                && m.zones.row_count() == 0
+                && m.flyout_connected.row_count() == 0,
         };
         let flyout_removed = flyout_shown.removed_by(FlyoutCounts {
             notices: notices.len(),
@@ -2090,6 +2100,7 @@ impl App {
                     .map(|zone| listed_members(zone.item.expanded, zone.members.len())),
             ),
             add_address: state.cast_by_address && state.cast_list == ui_model::CastList::NoneFound,
+            network_settings: state.airplay_none_found && zones.is_empty() && connected.is_empty(),
         });
         let main_lists = MainLists {
             notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
@@ -2363,6 +2374,7 @@ impl App {
             zones: flyout.get_zone_focused(),
             speakers: flyout.get_speaker_focused(),
             add_address: flyout.get_add_address_focused(),
+            network_settings: flyout.get_network_settings_focused(),
         };
         if focused.overlaps(removed) && flyout.window().is_visible() {
             flyout.invoke_take_focus();
@@ -2608,6 +2620,8 @@ impl App {
         });
         let w = weak.clone();
         main.on_cast_add_address_requested(move || with_app(&w, App::ask_cast_address));
+        let w = weak.clone();
+        main.on_network_settings_requested(move || with_app(&w, App::open_network_settings));
         let w = weak.clone();
         main.on_cast_remove_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.remove_cast_address(&id)))
@@ -2947,6 +2961,8 @@ impl App {
         let w = weak.clone();
         flyout.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
         let w = weak.clone();
+        flyout.on_network_settings_requested(move || with_app(&w, App::open_network_settings));
+        let w = weak.clone();
         flyout.on_notice_update_button_pressed(move |button| {
             with_app(&w, |app| app.press_update_button(button))
         });
@@ -3227,6 +3243,15 @@ impl App {
         if !crate::platform::open_settings(uri) {
             self.log
                 .log(|| format!("notice: the shell did not open {uri}"));
+        }
+    }
+
+    /// Opens the network settings for the note that no speakers were found.
+    fn open_network_settings(&self) {
+        let uri = SettingsPage::NetworkStatus.uri();
+        if !crate::platform::open_settings(uri) {
+            self.log
+                .log(|| format!("no speakers found: the shell did not open {uri}"));
         }
     }
 
@@ -5640,7 +5665,9 @@ fn guide_page(page: Option<SettingsPage>) -> GuidePage {
         return GuidePage::None;
     }
     match page {
-        None | Some(SettingsPage::MicrophonePrivacy) => GuidePage::None,
+        None | Some(SettingsPage::MicrophonePrivacy | SettingsPage::NetworkStatus) => {
+            GuidePage::None
+        }
         Some(SettingsPage::VolumeMixer) => GuidePage::VolumeMixer,
         Some(SettingsPage::Sound) => GuidePage::Sound,
     }
@@ -11399,6 +11426,7 @@ mod tests {
         speakers: 3,
         zone_members: 1,
         add_address: false,
+        network_settings: false,
     };
 
     #[test]
@@ -11417,6 +11445,18 @@ mod tests {
             }
         );
         assert_eq!(FLYOUT.removed_by(add_address), FlyoutParts::default());
+        // A speaker is found: the Open Network Settings link goes.
+        let network_settings = FlyoutCounts {
+            network_settings: true,
+            ..FLYOUT
+        };
+        assert_eq!(
+            network_settings.removed_by(FLYOUT),
+            FlyoutParts {
+                network_settings: true,
+                ..FlyoutParts::default()
+            }
+        );
         let unplugged = FlyoutCounts {
             speakers: 2,
             ..FLYOUT
@@ -11528,6 +11568,7 @@ mod tests {
                 zones: true,
                 speakers: false,
                 add_address: true,
+                network_settings: true,
             }),
             "a focused speaker row keeps its focus when other parts change"
         );
