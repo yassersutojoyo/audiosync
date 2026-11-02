@@ -16,6 +16,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the notice for several apps that aren't running says they "are not running", and "all apps except" is written in lowercase in the middle of a notice's sentence. Text that asked you to quit and reopen or restart AudioSync now says to exit AudioSync and open it again, as File > Exit names it.
 - Notices that left you stuck now say what to do next. When AirPlay pairings, or on Windows your settings, couldn't be saved, the notice says to free up some space if the disk is full. A speaker without PTP timing says to close the app using port 319 or 320, a Google Cast speaker that stopped AudioSync's stream says to turn it on again, and a calibration that was interrupted or couldn't measure two speakers says how to try again. On Windows, a broken update download offers Open Release Page, and an update that doesn't fit on the disk says to free up space and try again.
 - On Windows, the tray icon's tooltip reads "AudioSync: Streaming on, 2 speakers on, 1 notice", with a colon after AudioSync instead of a dash.
+- On Windows, calibration records the microphone's raw signal when the device offers it, without the input's effects, and with them otherwise. Calibration results can differ from before on a microphone that applies them.
 
 ### Fixed
 
