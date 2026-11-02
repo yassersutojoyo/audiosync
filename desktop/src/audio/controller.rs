@@ -3058,6 +3058,7 @@ impl<D: Driver> Controller<D> {
         if let Some(cast) = self.cast.as_mut() {
             cast.set_asleep(false);
         }
+        self.pending.push(BackendEvent::Woke);
         for appeared in self.appeared.values_mut() {
             *appeared = self.polls;
         }
@@ -5662,6 +5663,7 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::WaitingForAudio { waiting: false } => {
             "no longer waiting for sound: it arrived, or the session ended".to_owned()
         }
+        BackendEvent::Woke => "the PC woke".to_owned(),
         BackendEvent::AirPlayChanged => "the AirPlay speakers changed".to_owned(),
         BackendEvent::AirPlayPlaying { id } => format!("AirPlay speaker ({id}) plays"),
         BackendEvent::AirPlayTrouble { id, problem } => {
@@ -8042,10 +8044,11 @@ mod tests {
         assert_eq!(backend.driver().captures_started().len(), 1, "no restart");
     }
 
-    /// Polls `count` times, expecting no event.
+    /// Polls `count` times, expecting no event other than a wake.
     fn poll_quietly(backend: &mut MockBackend, count: u32) {
         for _ in 0..count {
-            let events = backend.poll();
+            let mut events = backend.poll();
+            events.retain(|event| *event != BackendEvent::Woke);
             assert!(events.is_empty(), "{events:?}");
         }
     }

@@ -603,6 +603,9 @@ pub enum BackendEvent {
     /// `true` once, when a check 3 s after it started heard none; `false`
     /// when sound arrives after that, or the session ends.
     WaitingForAudio { waiting: bool },
+    /// The PC woke from sleep (S332): the 20 s before a speaker list says
+    /// none was found start over (S396).
+    Woke,
     /// AirPlay speakers appeared, changed, went away, or started or stopped
     /// playing: list them again.
     AirPlayChanged,

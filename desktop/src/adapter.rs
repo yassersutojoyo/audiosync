@@ -4280,6 +4280,23 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     matches!(message, NoticeMessage::WaitingForAudio { .. })
                 });
             }
+            BackendEvent::Woke => {
+                let shown = self.airplay_none_found();
+                let cast_shown = self.cast_list();
+                self.airplay_quiet_polls = 0;
+                self.cast_quiet_polls = 0;
+                if shown {
+                    self.log.log(|| {
+                        "AirPlay: the PC woke; the no-receiver note goes for another 20 s"
+                            .to_owned()
+                    });
+                }
+                let cast_shows = self.cast_list();
+                if cast_shows != cast_shown {
+                    self.log
+                        .log(|| format!("Cast: the speaker list's note is now {cast_shows:?}"));
+                }
+            }
             BackendEvent::AirPlayChanged => self.airplay_listed(),
             BackendEvent::CastChanged => {
                 let mut names = std::mem::take(&mut self.cast_names);
@@ -17044,6 +17061,43 @@ mod tests {
         fake.announce(CAST_KITCHEN, "Kitchen", DEVICE_PORT);
         assert!(adapter.poll());
         assert_eq!(adapter.snapshot().cast_list, CastList::Quiet);
+    }
+
+    /// Speakers left asleep with the PC need their own time to be found
+    /// again, as on the Mac.
+    // covers: S396 (a wake restarts the 20 s)
+    #[test]
+    fn a_wake_restarts_the_20_seconds_before_the_none_found_notes() {
+        use crate::audio::controller::PowerNotice;
+        fn sleep_and_wake(adapter: &mut AudioAdapter<MockBackend>) {
+            adapter.audio.notify_power(PowerNotice::Suspend);
+            adapter.poll();
+            adapter.audio.notify_power(PowerNotice::Resume);
+            adapter.poll();
+        }
+
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        poll_times(&mut adapter, POLLS_IN_20_S);
+        assert!(none_found_hint(&adapter));
+        sleep_and_wake(&mut adapter);
+        assert!(!none_found_hint(&adapter), "not right after the wake");
+        assert!(adapter.snapshot().airplay_searching, "searching again");
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(none_found_hint(&adapter), "20 s after the wake");
+
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = FakeCast::default();
+        audio.set_cast(fake.link());
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        poll_times(&mut adapter, NONE_FOUND_POLLS);
+        assert_eq!(adapter.snapshot().cast_list, CastList::NoneFound);
+        sleep_and_wake(&mut adapter);
+        assert_eq!(adapter.snapshot().cast_list, CastList::Searching);
+        poll_times(&mut adapter, NONE_FOUND_POLLS - 1);
+        assert_eq!(adapter.snapshot().cast_list, CastList::NoneFound);
     }
 
     // covers: S393
