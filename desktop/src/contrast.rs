@@ -1047,6 +1047,22 @@ fn stuck_notices_say_what_to_do_next() {
     }
 }
 
+/// A text that asks the user to start AudioSync again says so in the words
+/// of File > Exit, never quit and reopen or restart.
+#[test]
+fn texts_say_exit_to_start_audiosync_again() {
+    let strings = include_str!("../ui/strings.slint");
+    for line in strings.lines().filter(|line| line.contains("@tr(")) {
+        for wording in [
+            "quit and reopen",
+            "estart AudioSync",
+            "after AudioSync restarts. Select",
+        ] {
+            assert!(!line.contains(wording), "strings.slint: `{}`", line.trim());
+        }
+    }
+}
+
 /// Pairing texts ask for the code a speaker shows, the word its row uses,
 /// never a PIN, as on the Mac.
 // covers: S422

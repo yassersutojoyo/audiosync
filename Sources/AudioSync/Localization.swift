@@ -825,7 +825,7 @@ struct UIStrings {
 
     /// A newer AudioSync wrote the pairings file, its folder couldn't be found, or a write of it failed.
     let nativeAirPlayPairingsNotSaved = "AudioSync couldn't save your AirPlay pairings, so pairings you add or "
-        + "forget now won't be kept after AudioSync quits."
+        + "forget now won't be kept after AudioSync quits. If the disk is full, free up some space."
 
     /// Every AirPlay 2 place is taken: this one stays on and starts once
     /// one of them stops (P169, S285).

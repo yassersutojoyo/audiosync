@@ -47,6 +47,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
+- Notices that left you stuck now say what to do next. When AirPlay pairings, or on Windows your settings, couldn't be saved, the notice says to free up some space if the disk is full. A speaker without PTP timing says to close the app using port 319 or 320, a Google Cast speaker that stopped AudioSync's stream says to turn it on again, and a calibration that was interrupted or couldn't measure two speakers says how to try again. On Windows, a broken update download offers Open Release Page, and an update that doesn't fit on the disk says to free up space and try again.
 - On Windows, the notice about blocked microphone access and the calibration name both switches to turn on: "Let desktop apps access your microphone" and "Microphone access".
 - On the Mac, an equalizer curve name matches a saved one by the same rule as on Windows: ignoring case only. A name typed with a ready-made accented letter and one typed with a separate accent mark are now two curves.
 - On Windows, a preset holds the reference output like any other speaker, as on the Mac: recalling a preset without it switches it off, and a preset can hold it alone. A preset saved before this version leaves it as it is until you change something and choose Update to Current Settings for it.
