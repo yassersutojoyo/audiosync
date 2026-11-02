@@ -338,7 +338,11 @@ fn d1_giveup_a_television_closing_under_the_pin_prompt_withdraws_it_once() {
             .count()
     };
     let count = |events: &Events, wanted: &dyn Fn(&SenderEvent) -> bool| {
-        events.seen.iter().filter(|(_, event)| wanted(event)).count()
+        events
+            .seen
+            .iter()
+            .filter(|(_, event)| wanted(event))
+            .count()
     };
 
     sender.start_pairing(device.clone());

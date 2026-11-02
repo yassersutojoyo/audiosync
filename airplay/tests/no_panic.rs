@@ -2461,8 +2461,14 @@ fn read_answer(body: &[u8]) {
     if body.len() > MAX_PLIST_BYTES {
         assert!(dictionary.is_none(), "{} bytes read", body.len());
         assert_eq!(bodies::read_info(body), bodies::InfoAnswer::default());
-        assert_eq!(bodies::read_session_setup(body), bodies::SessionSetupAnswer::default());
-        assert_eq!(bodies::read_stream_setup(body), bodies::StreamSetupAnswer::default());
+        assert_eq!(
+            bodies::read_session_setup(body),
+            bodies::SessionSetupAnswer::default()
+        );
+        assert_eq!(
+            bodies::read_stream_setup(body),
+            bodies::StreamSetupAnswer::default()
+        );
     }
     let info = bodies::read_info(body);
     if let Some(name) = &info.name {
