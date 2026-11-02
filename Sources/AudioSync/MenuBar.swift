@@ -987,6 +987,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                                       run.scales.count - 1, run.scale, NSStringFromRect(window.frame), NSStringFromPoint(run.tip),
                                       NSStringFromPoint(laid), drawnTip(window, anchor: run.anchor).map(NSStringFromPoint) ?? "unknown",
                                       Double(heldTransform.m11), Double(window.frame.height / run.rest.height)))
+                traceArrow(window, step: due, tip: run.tip)
             }
         }
         guard due == run.scales.count - 1 else { return }
@@ -997,6 +998,32 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         } else {
             endSteps()
         }
+    }
+
+    /// Debug log only: where the popover draws its arrow's apex on screen at
+    /// this step, as the middle of the topmost row its frame draws in.
+    private func traceArrow(_ window: NSWindow, step: Int, tip: CGPoint) {
+        var apex = "unknown"
+        if let frame = window.contentView?.superview {
+            let bounds = frame.bounds
+            let strip = CGRect(x: bounds.minX, y: frame.isFlipped ? bounds.minY : bounds.maxY - Self.arrowRoom,
+                               width: bounds.width, height: Self.arrowRoom)
+            if let rep = frame.bitmapImageRepForCachingDisplay(in: strip), rep.bitsPerSample == 8, let data = rep.bitmapData {
+                frame.cacheDisplay(in: strip, to: rep)
+                let alpha = rep.bitmapFormat.contains(.alphaFirst) ? 0 : rep.samplesPerPixel - 1
+                let perPoint = CGFloat(rep.pixelsWide) / strip.width
+                // Bitmap rows run from the strip's top edge, the window's top.
+                for row in 0..<rep.pixelsHigh {
+                    let lit = (0..<rep.pixelsWide).filter { data[row * rep.bytesPerRow + $0 * rep.samplesPerPixel + alpha] > 127 }
+                    guard let first = lit.first, let last = lit.last else { continue }
+                    apex = NSStringFromPoint(CGPoint(x: window.frame.minX + bounds.minX + CGFloat(first + last + 1) / 2 / perPoint,
+                                                     y: window.frame.maxY - CGFloat(row) / perPoint))
+                    break
+                }
+            }
+        }
+        DebugTrace.log("[AudioSync] panel arrow step: step \(step), apex \(apex), tip \(NSStringFromPoint(tip)), "
+                       + "frame \(NSStringFromRect(window.frame))")
     }
 
     /// Sets the window to its rest frame scaled by `scale` about the arrow's
