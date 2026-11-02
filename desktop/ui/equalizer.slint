@@ -322,7 +322,7 @@ export component EqualizerWindow inherits Window {
 
                 Button {
                     text: Strings.equalizer-rename-curve;
-                    accessible-label: Strings.equalizer-rename-curve-accessibility;
+                    accessible-label: Strings.equalizer-rename-curve-accessibility(root.saved-curve-shown ? root.preset-names[root.preset-index] : "");
                     enabled: root.saved-curve-shown && !root.name-dialog-open;
                     clicked => {
                         root.rename-curve();
@@ -331,7 +331,7 @@ export component EqualizerWindow inherits Window {
 
                 Button {
                     text: Strings.equalizer-delete-curve;
-                    accessible-label: Strings.equalizer-delete-curve-accessibility;
+                    accessible-label: Strings.equalizer-delete-curve-accessibility(root.saved-curve-shown ? root.preset-names[root.preset-index] : "");
                     enabled: root.saved-curve-shown && !root.name-dialog-open;
                     clicked => {
                         root.delete-curve();

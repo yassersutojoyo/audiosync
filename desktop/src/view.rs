@@ -190,11 +190,14 @@ struct TypedDelay {
 
 impl TypedDelay {
     /// Keeps `text` if the field takes it (`ui_model::delay_field_text`);
-    /// otherwise the field goes back to what it showed before.
-    fn edit(&mut self, text: &str, shown: Option<f64>) {
-        if let Some(text) = ui_model::delay_field_text(text) {
+    /// otherwise the field goes back to what it showed before, and this
+    /// returns false.
+    fn edit(&mut self, text: &str, shown: Option<f64>) -> bool {
+        let taken = ui_model::delay_field_text(text);
+        if let Some(text) = taken {
             self.draft = Some((text.to_string(), shown));
         }
+        taken.is_some()
     }
 
     /// The text the field shows instead of `shown`, the applied value.
@@ -2582,7 +2585,7 @@ impl App {
         let w = weak.clone();
         main.on_airplay_delay_edited(move |text| with_app(&w, |app| app.edit_airplay_delay(&text)));
         let w = weak.clone();
-        main.on_airplay_delay_committed(move || with_app(&w, App::commit_airplay_delay));
+        main.on_airplay_delay_committed(move || with_app(&w, App::enter_airplay_delay));
         let w = weak.clone();
         main.on_airplay_delay_cancelled(move || with_app(&w, |app| app.end_delay_typing(false)));
         let w = weak.clone();
@@ -3795,6 +3798,7 @@ impl App {
             base = base.max(0.0);
         }
         self.update(|b| b.set_speaker_delay(id, base + f64::from(delta)));
+        self.say_delay_set(id);
     }
 
     /// Keeps what is typed in a speaker's delay field ("+150", "−250");
@@ -3802,22 +3806,44 @@ impl App {
     /// every control (see [`TypedDelay`]).
     fn edit_delay(&self, id: &str, text: &str) {
         let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
-        self.ui
+        let taken = self
+            .ui
             .borrow_mut()
             .delay_drafts
             .entry(id.to_string())
             .or_default()
             .edit(text, shown);
         self.refresh();
+        if !taken {
+            self.announce(self.strings().get_delay_field_takes());
+        }
     }
 
     /// Enter in a speaker's delay field: applies what was typed and
     /// keeps its sync controls open, the focus in the field, to try the next
     /// value; other rows' stay open with their typing.
     fn enter_delay(&self, id: &str) {
-        self.commit_delay(id);
+        if self.commit_delay(id) {
+            self.say_delay_set(id);
+        }
         self.main.set_focus_speaker_part(RowPart::Sync);
         self.main.set_focus_speaker_id(id.into());
+    }
+
+    /// Has Narrator say the delay a step or Enter applied, as VoiceOver
+    /// does on the Mac; Ctrl+S and leaving the field stay quiet.
+    fn say_delay_set(&self, id: &str) {
+        let state = self.snapshot();
+        let Some(speaker) = state.speaker(id) else {
+            return;
+        };
+        let Some(ms) = speaker.delay_ms else {
+            return;
+        };
+        let strings = self.strings();
+        let label = strings.invoke_delay_of(speaker.name.as_str().into());
+        let value = strings.invoke_delay_value(ms.round() as i32);
+        self.announce(strings.invoke_delay_set(label, value));
     }
 
     /// A click on the window outside every control (`apply`), or Escape in
@@ -3997,7 +4023,9 @@ impl App {
         self.commit_airplay_delay();
     }
 
-    fn commit_delay(&self, id: &str) {
+    /// Applies what was typed in a speaker's delay field, and says whether
+    /// it did.
+    fn commit_delay(&self, id: &str) -> bool {
         let shown = self.snapshot().speaker(id).and_then(|s| s.delay_ms);
         let typed = self.ui.borrow_mut().delay_drafts.remove(id);
         let ms = typed
@@ -4008,6 +4036,7 @@ impl App {
             Some(ms) => self.update(|b| b.set_speaker_delay(id, ms)),
             None => self.refresh(),
         }
+        ms.is_some()
     }
 
     fn step_airplay_delay(&self, delta: i32) {
@@ -4021,25 +4050,47 @@ impl App {
             .commit(Some(current));
         let base = typed.map_or(current, |ms| ms.clamp(0.0, ui_model::MAX_DELAY_MS));
         self.update(|b| b.set_airplay_delay(base + f64::from(delta)));
+        self.say_airplay_delay_set();
     }
 
     /// Keeps what is typed in the AirPlay delay field; nothing applies until
     /// Enter or a click outside every control (see [`TypedDelay`]).
     fn edit_airplay_delay(&self, text: &str) {
         let shown = self.snapshot().airplay_delay_ms;
-        self.ui.borrow_mut().airplay_delay_draft.edit(text, shown);
+        let taken = self.ui.borrow_mut().airplay_delay_draft.edit(text, shown);
         self.refresh();
+        if !taken {
+            self.announce(self.strings().get_delay_field_takes());
+        }
     }
 
     /// Applies the typed AirPlay delay (Enter, a click outside every
-    /// control). Clamped, the field shows the value that was applied.
-    fn commit_airplay_delay(&self) {
+    /// control), and says whether it did. Clamped, the field shows the
+    /// value that was applied.
+    fn commit_airplay_delay(&self) -> bool {
         let shown = self.snapshot().airplay_delay_ms;
         let typed = self.ui.borrow_mut().airplay_delay_draft.commit(shown);
         match typed {
             Some(ms) => self.update(|b| b.set_airplay_delay(ms)),
             None => self.refresh(),
         }
+        typed.is_some()
+    }
+
+    fn enter_airplay_delay(&self) {
+        if self.commit_airplay_delay() {
+            self.say_airplay_delay_set();
+        }
+    }
+
+    /// The AirPlay delay's [`App::say_delay_set`].
+    fn say_airplay_delay_set(&self) {
+        let Some(ms) = self.snapshot().airplay_delay_ms else {
+            return;
+        };
+        let strings = self.strings();
+        let value = strings.invoke_airplay_delay_value(ms.round() as i32);
+        self.announce(strings.invoke_delay_set(strings.get_airplay_delay_title(), value));
     }
 
     fn shown_curve(&self, state: &AppState) -> Option<CurveMatch> {
@@ -8158,6 +8209,28 @@ mod tests {
         );
     }
 
+    // covers: S220
+    #[test]
+    fn narrator_hears_a_delay_set_by_a_step_or_enter_and_a_refused_character() {
+        let app = app_over(MockBackend::new());
+        let said = || app.main.get_notice_announcement().to_string();
+        let name = desk_row(&app).name.to_string();
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "220".into());
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(said(), format!("{name} delay set to +220 ms"), "Enter");
+        app.main.invoke_delay_stepped("local:desk".into(), -10);
+        assert_eq!(said(), format!("{name} delay set to +210 ms"), "a step");
+        app.main
+            .invoke_delay_edited("local:desk".into(), "+210a".into());
+        assert_eq!(said(), "Only digits, with + or \u{2212} in front");
+
+        app.main.invoke_airplay_delay_stepped(100);
+        let ms = app.snapshot().airplay_delay_ms.expect("an AirPlay delay");
+        assert_eq!(said(), format!("AirPlay Delay set to {ms} ms"));
+    }
+
     // covers: S221
     #[test]
     fn a_click_on_a_control_does_only_what_the_control_does() {
@@ -12259,6 +12332,14 @@ mod tests {
         assert_eq!(eq_window.get_picker_shown_index(), presets as i32);
         assert_eq!(app.main.get_equalizer_curve(), "Desk");
         assert!(eq_window.get_saved_curve_shown());
+        for label in [
+            "Rename \u{201c}Desk\u{201d}\u{2026}",
+            "Delete \u{201c}Desk\u{201d}",
+        ] {
+            let found =
+                i_slint_backend_testing::ElementHandle::find_by_accessible_label(eq_window, label);
+            assert_eq!(found.count(), 1, "{label}");
+        }
 
         eq_window.invoke_preset_selected(0);
         assert_eq!(eq_window.get_preset_index(), 0);
@@ -12310,9 +12391,14 @@ mod tests {
         let eq_window = &app.equalizer;
         eq_window.invoke_save_curve();
         app.zone_dialog.invoke_confirmed("Bass".into());
-        let buttons = ["Save curve", "Rename curve", "Delete curve"];
         let assert_enabled = |enabled: bool, after: &str| {
-            for label in buttons {
+            let curve = app.snapshot().equalizer_curves[0].name.clone();
+            let buttons = [
+                "Save curve".to_owned(),
+                format!("Rename \u{201c}{curve}\u{201d}\u{2026}"),
+                format!("Delete \u{201c}{curve}\u{201d}"),
+            ];
+            for label in &buttons {
                 let button = ElementHandle::find_by_accessible_label(eq_window, label)
                     .next()
                     .unwrap_or_else(|| panic!("nothing is labeled {label}"));

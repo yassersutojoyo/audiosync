@@ -91,6 +91,8 @@ export global Strings {
     // Under a delay field while it holds typing not yet applied; also the
     // field's Narrator description then.
     out property <string> delay-draft-hint: @tr("Press Enter to apply");
+    // Narrator, as a delay field refuses a character.
+    out property <string> delay-field-takes: @tr("Only digits, with + or − in front");
     // A text field's right-click menu.
     out property <string> edit-undo: @tr("Undo");
     out property <string> edit-redo: @tr("Redo");
@@ -497,9 +499,20 @@ export global Strings {
     out property <string> equalizer-save-curve: @tr("Save…");
     out property <string> equalizer-save-curve-accessibility: @tr("Save curve");
     out property <string> equalizer-rename-curve: @tr("Rename…");
-    out property <string> equalizer-rename-curve-accessibility: @tr("Rename curve");
+    // With the saved curve the picker shows; "" while it shows none.
+    public pure function equalizer-rename-curve-accessibility(name: string) -> string {
+        if name == "" {
+            return @tr("Rename curve");
+        }
+        return @tr("Rename “{}”…", name);
+    }
     out property <string> equalizer-delete-curve: @tr("Delete");
-    out property <string> equalizer-delete-curve-accessibility: @tr("Delete curve");
+    public pure function equalizer-delete-curve-accessibility(name: string) -> string {
+        if name == "" {
+            return @tr("Delete curve");
+        }
+        return @tr("Delete “{}”", name);
+    }
     out property <string> save-curve-title: @tr("Save Curve");
     out property <string> save-curve-message: @tr("The ten band gains are saved under this name; the preamp stays as you set it. A curve saved under the same name is replaced.");
     out property <string> curve-name-field-label: @tr("Curve name");
@@ -1591,6 +1604,17 @@ export global Strings {
 
     public pure function delay-of(name: string) -> string {
         return @tr("{} delay", name);
+    }
+
+    // Narrator, as a step or Enter applies a delay: `label` is delay-of or
+    // the AirPlay delay's title, `value` its new value.
+    public pure function delay-set(label: string, value: string) -> string {
+        return @tr("{} set to {}", label, value);
+    }
+
+    // The AirPlay delay, which has no sign, as delay-set says it.
+    public pure function airplay-delay-value(ms: int) -> string {
+        return @tr("{} {}", ms, root.milliseconds-unit);
     }
 
     // Under a delay field, in place of the Enter hint, while it holds a
