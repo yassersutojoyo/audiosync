@@ -65,9 +65,9 @@ pub struct CardArtwork {
     pub rgba: Arc<[u8]>,
 }
 
-/// How many pixels a side the card's artwork has: its 56 px tile at 200 %.
+/// How many pixels a side the card's artwork has: its 48 px tile at 200 %.
 #[cfg(any(windows, target_os = "linux"))]
-pub const ARTWORK_SIDE: u32 = 112;
+pub const ARTWORK_SIDE: u32 = 96;
 
 /// The size an image of `width` × `height` is scaled to so that it covers a
 /// `side` × `side` square, the rest cropped evenly, as the Mac's tile fills.
