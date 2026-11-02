@@ -359,8 +359,8 @@ extension AppDelegate {
 
     // MARK: - List reconciliation (local outputs)
 
-    /// `keepListed`: a virtual device already in the list stays there, so
-    /// switching it off doesn't make it vanish under the pointer.
+    /// `keepListed`: a virtual device listed once this session stays there, so
+    /// switching it off doesn't make it vanish under the pointer (S151).
     func reconcileLocal(keepListed: Bool = true) {
         let outputs = devices.allOutputDevices().filter {
             !$0.uid.isEmpty && $0.name != SourceCapture.aggregateName   // hide our private aggregate
@@ -373,8 +373,8 @@ extension AppDelegate {
         for key in autoConnect.union(zones.flatMap(\.members)) {
             if let (id, airplay) = SpeakerKey.parse(key), !airplay { chosen.insert(id) }
         }
-        if keepListed { chosen.formUnion(localOrder) }
-        let available = AudioDevices.listed(outputs, showVirtual: showVirtualDevices, keep: chosen)
+        if !keepListed { listedThisSession.forget() }
+        let available = listedThisSession.list(outputs, showVirtual: showVirtualDevices, keep: chosen)
         followMovedOutputs(available.filter { !localOrder.contains($0.uid) }, listed: Set(outputs.map(\.uid)))
         var known = Set(localOrder)
         var appeared: [String] = []

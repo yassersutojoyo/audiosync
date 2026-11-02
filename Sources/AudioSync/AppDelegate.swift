@@ -249,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// Listed devices' UIDs in Core Audio's order, from the latest reconcile.
     var localOrder: [String] = []
     var localDevices: [String: AudioDevices.Device] = [:]
+    var listedThisSession = AudioDevices.ListedThisSession()
     /// The UIDs of the latest device list, in Core Audio's order: an enabled
     /// speaker takes part while it is listed (S172).
     var localListed: [String] = []

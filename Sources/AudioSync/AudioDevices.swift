@@ -119,6 +119,19 @@ struct AudioDevices: Sendable {
         return devices.filter { !isVirtual(transport: $0.transport) || keep.contains($0.uid) }
     }
 
+    /// Every device listed once stays listed until `forget`; S151.
+    struct ListedThisSession {
+        private var ids: Set<String> = []
+
+        mutating func list(_ devices: [Device], showVirtual: Bool, keep: Set<String>) -> [Device] {
+            let shown = AudioDevices.listed(devices, showVirtual: showVirtual, keep: keep.union(ids))
+            ids.formUnion(shown.map(\.uid))
+            return shown
+        }
+
+        mutating func forget() { ids = [] }
+    }
+
     /// Whether an aggregate device's composition marks it private: visible only
     /// to the process that made it, so in AudioSync's own list it is one that
     /// AudioSync made (its capture tap's) and never a speaker or a source.

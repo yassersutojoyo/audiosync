@@ -943,6 +943,16 @@ do {
           "devices: macOS's own AirPlay output stays listed, in order, once chosen")
     check(uids(AudioDevices.listed(all, showVirtual: false, keep: ["gone"])) == ["builtin", "usb"],
           "devices: a chosen device that isn't present adds nothing")
+    var sessionList = AudioDevices.ListedThisSession()
+    let whileGone = all.filter { $0.uid != "loopback" }
+    _ = sessionList.list(all, showVirtual: false, keep: ["loopback"])   // on
+    _ = sessionList.list(all, showVirtual: false, keep: [])             // switched off
+    _ = sessionList.list(whileGone, showVirtual: false, keep: [])       // re-enumerating, e.g. on wake
+    check(uids(sessionList.list(all, showVirtual: false, keep: [])) == ["builtin", "loopback", "usb"],
+          "devices: a virtual device listed once stays listed this session, also after it was briefly gone")
+    sessionList.forget()
+    check(uids(sessionList.list(all, showVirtual: false, keep: [])) == ["builtin", "usb"],
+          "devices: Show Virtual Devices changing forgets the virtual devices listed this session")
     check(AudioDevices.isPrivateAggregate(composition: [kAudioAggregateDeviceIsPrivateKey: NSNumber(value: 1)])
           && !AudioDevices.isPrivateAggregate(composition: [kAudioAggregateDeviceIsPrivateKey: NSNumber(value: 0)])
           && !AudioDevices.isPrivateAggregate(composition: [kAudioAggregateDeviceNameKey: "Multi-Output Device"]),
