@@ -9118,6 +9118,63 @@ mod tests {
         shows_in_full(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
     }
 
+    /// A zone name, zone count line or In zones name that fits shows no
+    /// tooltip: only one cut to "…" does.
+    #[test]
+    fn a_zone_name_that_fits_shows_no_tooltip() {
+        let mut backend = MockBackend::new();
+        let mut den = long_named_speaker(&backend, "airplay:den");
+        den.name = "Den".into();
+        backend.add_speaker(den);
+        backend.add_zone("zone:den", "Den", &["airplay:den"]);
+        let app = narrow_app(backend);
+        for (label, tip) in [
+            ("ZoneHeader::name-text", "ZoneHeader::name-tip"),
+            ("ZoneHeader::count-text", "ZoneHeader::count-tip"),
+        ] {
+            assert!(rest_on(&app, label, tip).1.is_none(), "{label}");
+        }
+        let list = element(&app, "MainWindow::scroll").expect("the speaker list");
+        let (at, size) = (list.absolute_position(), list.size());
+        scroll(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+            -3000.0,
+        );
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        let (_, tip) = rest_on(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
+        assert!(tip.is_none(), "the In zones name");
+    }
+
+    /// A stereo pair's line cut to "…" shows in full in a tooltip; one that
+    /// fits shows none.
+    #[test]
+    fn only_a_cut_pair_line_shows_a_tooltip() {
+        use crate::audio::backend::AirPlayGroup;
+        let pair = |member: &str| {
+            let mut backend = MockBackend::new();
+            let mut speaker = long_named_speaker(&backend, "airplay:pair");
+            speaker.name = "Pair".into();
+            speaker.group = Some(AirPlayGroup {
+                kind: AirPlayGroupKind::StereoPair,
+                members: vec![member.to_owned(), "Right".to_owned()],
+                missing: Vec::new(),
+                incomplete: false,
+            });
+            backend.add_speaker(speaker);
+            narrow_app(backend)
+        };
+        let app = pair("The long living room speaker by the window and the bookshelf");
+        shows_in_full(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
+        drop(app);
+        let app = pair("Left");
+        let (_, tip) = rest_on(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
+        assert!(tip.is_none());
+    }
+
     /// With a long zone name, the "in <zone>" link in an In zones row gives
     /// way before the speaker's name does: the name keeps 80 px and the link
     /// ends before the options button.
