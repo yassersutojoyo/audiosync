@@ -937,6 +937,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | eq curves: a name is cut to 40 characters | S270 |
 | eq curves: a full list refuses a new name but replaces a taken one | S270 |
 | eq curves: names match ignoring case only, not Unicode composition | S270 |
+| eq curves: a stored name with a NUL is not its own prefix | S270 |
 | eq curves: stored curves are read leniently and cleaned | S270 |
 | eq curves: saved curves come back unchanged | S270 |
 | eq curves: the picker names the shown curve, or Custom when none matches | S270 |

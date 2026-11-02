@@ -96,7 +96,10 @@ enum Equalizer {
     }
 
     private static func sameName(_ a: String, _ b: String) -> Bool {
-        asc_eq_same_curve_name(a, b)
+        // A C string ends at a NUL, so the pieces between NULs cross the FFI one at a time.
+        let (pa, pb) = (a.split(separator: "\0", omittingEmptySubsequences: false),
+                        b.split(separator: "\0", omittingEmptySubsequences: false))
+        return pa.count == pb.count && zip(pa, pb).allSatisfy { asc_eq_same_curve_name(String($0), String($1)) }
     }
 
     /// The gains on the controls' steps, ten of them.

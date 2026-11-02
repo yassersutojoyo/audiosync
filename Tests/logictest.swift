@@ -1339,6 +1339,10 @@ do {
             && Equalizer.save("CAFE\u{301}", gains: gains, in: &spellings) == 1
             && Equalizer.save("CAF\u{C9}", gains: gains, in: &spellings) == 0,
           "eq curves: names match ignoring case only, not Unicode composition")
+    // covers: S270 (a NUL is part of a stored name, as on Windows, not where the name ends)
+    check(Equalizer.sanitized([Equalizer.Curve(name: "Rock", gains: gains), Equalizer.Curve(name: "Rock\0x", gains: gains)])
+            .map(\.name) == ["Rock", "Rock\0x"],
+          "eq curves: a stored name with a NUL is not its own prefix")
 
     // covers: S23 (the host steps and clamps a stored curve's band gains)
     let stored = Data(#"[{"name":" Desk ","gains":[1.3,"loud",30,-30]},{"name":"desk","gains":[]},{"gains":[1]},7,{"name":"Late","gains":[0]}]"#.utf8)
