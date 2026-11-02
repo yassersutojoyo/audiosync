@@ -984,10 +984,10 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 let held = ((host.view.layer?.animation(forKey: Self.stepKey) as? CABasicAnimation)?.toValue as? NSValue)?
                     .caTransform3DValue ?? CATransform3DIdentity
                 DebugTrace.log(String(format: "[AudioSync] panel %@ step: %.1f ms, step %ld of %ld, scale %.4f, frame %@, "
-                                      + "tip %@, content scale %.4f x %.4f of frame %.4f",
+                                      + "tip %@, drawn tip %@, content scale %.4f x %.4f of frame %.4f",
                                       run.closes ? "close" : "open", (CACurrentMediaTime() - run.began) * 1000, due,
                                       run.scales.count - 1, run.scale, NSStringFromRect(window.frame), NSStringFromPoint(tip),
-                                      Double(held.m11), Double(held.m22),
+                                      drawnTip(window, anchor: run.anchor), Double(held.m11), Double(held.m22),
                                       Double(window.frame.height / run.rest.height)))
             }
         }
@@ -1014,6 +1014,23 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     private static let stepKey = "panelStep"
+
+    /// Debug log only: where `anchor` is drawn on screen, through the content
+    /// layer's own geometry and the transform it last rendered with.
+    private func drawnTip(_ window: NSWindow, anchor: CGPoint) -> String {
+        guard let layer = host.view.layer, let holder = host.view.superview, layer.superlayer === holder.layer else {
+            return "unknown"
+        }
+        // Any step's transform keeps the tip in place, so one a frame behind still shows a pivot or flip error.
+        let shown = layer.presentation() ?? layer
+        let pivot = CGPoint(x: shown.bounds.minX + shown.anchorPoint.x * shown.bounds.width,
+                            y: shown.bounds.minY + shown.anchorPoint.y * shown.bounds.height)
+        let point = host.view.convertToLayer(anchor)
+        let moved = CGPoint(x: point.x - pivot.x, y: point.y - pivot.y)
+            .applying(CATransform3DGetAffineTransform(shown.transform))
+        let drawn = holder.convertFromLayer(CGPoint(x: layer.position.x + moved.x, y: layer.position.y + moved.y))
+        return NSStringFromPoint(window.convertPoint(toScreen: holder.convert(drawn, to: nil)))
+    }
 
     /// Scales the content's layer by `scales` about `anchor` (the content's
     /// coordinates); with none the live content shows as laid out.
