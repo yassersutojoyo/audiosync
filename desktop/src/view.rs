@@ -3541,6 +3541,7 @@ impl App {
             let button = match button {
                 UpdateButton::Download => UpdaterButton::Download,
                 UpdateButton::NotNow => UpdaterButton::NotNow,
+                UpdateButton::SkipThisVersion => UpdaterButton::SkipThisVersion,
                 UpdateButton::Cancel => UpdaterButton::Cancel,
                 UpdateButton::TryAgain => UpdaterButton::TryAgain,
                 UpdateButton::OpenReleasePage => UpdaterButton::OpenReleasePage,
@@ -3550,6 +3551,9 @@ impl App {
                 Some(updater) => updater.press(button),
                 None => return,
             };
+            if button == UpdaterButton::SkipThisVersion {
+                self.keep_update_record();
+            }
             match action {
                 Action::Nothing => {}
                 Action::OpenReleasePage => {
@@ -5927,7 +5931,7 @@ fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -
         N::Available {
             new,
             running,
-            last: None,
+            last: None | Some(ui_model::UpdateRecordReason::Skipped),
         } => strings.invoke_notice_update_available(new.into(), running.into()),
         N::Available {
             new,
@@ -5982,6 +5986,7 @@ fn update_buttons(message: &NoticeMessage) -> ModelRc<UpdateButton> {
         .map(|button| match button {
             B::Download => UpdateButton::Download,
             B::NotNow => UpdateButton::NotNow,
+            B::SkipThisVersion => UpdateButton::SkipThisVersion,
             B::Cancel => UpdateButton::Cancel,
             B::TryAgain => UpdateButton::TryAgain,
             B::OpenReleasePage => UpdateButton::OpenReleasePage,
@@ -9747,6 +9752,7 @@ mod tests {
         let labels: HashSet<String> = [
             UpdateButton::Download,
             UpdateButton::NotNow,
+            UpdateButton::SkipThisVersion,
             UpdateButton::Cancel,
             UpdateButton::TryAgain,
             UpdateButton::OpenReleasePage,
@@ -9755,7 +9761,7 @@ mod tests {
         .into_iter()
         .map(|button| strings.invoke_update_button(button).to_string())
         .collect();
-        assert_eq!(labels.len(), 6);
+        assert_eq!(labels.len(), 7);
         assert!(labels.contains("Download and Install") && labels.contains("Restart Now"));
         assert_eq!(
             strings.get_check_updates_automatically().as_str(),
@@ -9825,7 +9831,11 @@ mod tests {
         );
         assert_eq!(
             item.update_buttons.iter().collect::<Vec<_>>(),
-            [UpdateButton::Download, UpdateButton::NotNow]
+            [
+                UpdateButton::NotNow,
+                UpdateButton::SkipThisVersion,
+                UpdateButton::Download
+            ]
         );
         let id = item.id;
         // The test's own handlers: the app's would refresh the notices away.
@@ -9851,15 +9861,19 @@ mod tests {
             steps += 1;
         }
         press(window, " ");
-        assert_eq!(*pressed.borrow(), [UpdateButton::Download], "Space");
+        assert_eq!(*pressed.borrow(), [UpdateButton::NotNow], "Space");
         tab(window, 1);
-        assert!(focused.get(), "Not Now is the next stop");
+        assert!(focused.get(), "Skip This Version is the next stop");
         press(window, Key::Return);
         assert_eq!(
             *pressed.borrow(),
-            [UpdateButton::Download, UpdateButton::NotNow],
+            [UpdateButton::NotNow, UpdateButton::SkipThisVersion],
             "Enter"
         );
+        tab(window, 1);
+        assert!(focused.get(), "Download and Install is the last stop");
+        press(window, " ");
+        assert_eq!(pressed.borrow().last(), Some(&UpdateButton::Download));
     }
 
     #[test]
@@ -10545,6 +10559,78 @@ mod tests {
             "buttons end at {bottom}, window {height} high (Slint asked for {preferred})"
         );
         assert!(height <= bottom + 16.5, "no room left under the buttons");
+    }
+
+    /// The update notice's three buttons stack in the 340 px flyout, Not Now
+    /// on top and Download and Install at the bottom, on one left edge and
+    /// within the notice's text column, measured on a one-button notice
+    /// whose text fills that column; at 200% scaling too.
+    // covers: S308
+    #[test]
+    fn the_flyout_fits_the_update_notice_buttons() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        app.flyout.show().expect("the flyout shows headless");
+        let edges = |notice: ui_model::UpdaterNotice, label: &str| {
+            let item = notice_item(
+                &strings,
+                &ui_model::Notice {
+                    id: UPDATER_NOTICE_ID,
+                    subject: "update".to_owned(),
+                    message: NoticeMessage::Update(notice),
+                    time: String::new(),
+                },
+            );
+            app.flyout
+                .set_notices(ModelRc::from(Rc::new(VecModel::from(vec![item]))));
+            draw_frames();
+            let element = ElementHandle::find_by_accessible_label(&app.flyout, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label} is in the flyout"));
+            let at = element.absolute_position();
+            (at.x, at.x + element.size().width, at.y)
+        };
+        let installed = || ui_model::UpdaterNotice::Installed {
+            version: "0.9.0".to_owned(),
+        };
+        let text = strings.invoke_notice_update_installed("0.9.0".into());
+        let available = || ui_model::UpdaterNotice::Available {
+            new: "0.9.0".to_owned(),
+            running: "0.8.0".to_owned(),
+            last: None,
+        };
+        for scale_factor in [1.0, 2.0] {
+            app.flyout
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor });
+            let column = edges(installed(), &text);
+            let restart = edges(installed(), "Restart Now");
+            assert!(
+                restart.1 < column.1,
+                "a lone button keeps its label's width: {restart:?}, column {column:?}"
+            );
+            let stack = ["Not Now", "Skip This Version", "Download and Install"]
+                .map(|label| (label, edges(available(), label)));
+            for (label, (left, right, _)) in stack {
+                assert!(
+                    right <= column.1,
+                    "{label} at {scale_factor}x ends at {right}, the column at {}",
+                    column.1
+                );
+                assert_eq!(left, stack[0].1.0, "{label} shares the left edge");
+            }
+            assert!(
+                stack.windows(2).all(|pair| pair[0].1.2 < pair[1].1.2),
+                "top to bottom: {stack:?}"
+            );
+            // The flyout grows by the two rows above Download and Install.
+            let tall = app.fit_flyout(1000.0);
+            edges(installed(), &text);
+            let short = app.fit_flyout(1000.0);
+            let rows = stack[2].1.2 - stack[0].1.2;
+            assert!(tall - short >= rows, "{tall} vs {short}, rows {rows}");
+        }
     }
 
     /// On a screen too short for the whole flyout, the list scrolls and the
