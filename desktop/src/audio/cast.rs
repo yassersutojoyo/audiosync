@@ -1297,10 +1297,9 @@ impl CastSpeakers {
         if self.attempt.is_some() || !self.streaming || self.track.is_none() {
             return;
         }
-        let listed = self.enabled.filter(|&id| {
-            self.entry(id)
-                .is_some_and(|entry| entry.online && !entry.addresses.is_empty())
-        });
+        let listed = self
+            .enabled
+            .filter(|&id| self.entry(id).is_some_and(|entry| entry.online));
         if let Some(id) = listed {
             self.start_session(id);
         }
@@ -1946,6 +1945,7 @@ impl CastSpeakers {
                         retry_in.as_millis()
                     )
                 });
+                let group = self.entry(device).is_some_and(Entry::is_group);
                 let Some(attempt) = self.attempt.as_mut() else {
                     return;
                 };
@@ -1954,7 +1954,7 @@ impl CastSpeakers {
                     return;
                 }
                 // A group with no address yet waits for its records (C81).
-                if matches!(error, ConnectError::NoAddress) || self.asleep {
+                if (group && matches!(error, ConnectError::NoAddress)) || self.asleep {
                     return;
                 }
                 attempt.connect_failures += 1;
@@ -2581,6 +2581,36 @@ pub mod tests {
         fake.report(playing(ATTIC));
         cast.poll();
         assert_eq!(status(&cast, ATTIC), CastStatus::Playing);
+    }
+
+    // covers: C80
+    #[test]
+    fn a_speaker_with_no_usable_address_goes_off_at_its_third_failure() {
+        let fake = FakeCast::default();
+        fake.state()
+            .browse
+            .push_back(BrowseEvent::Resolved(ServiceRecord {
+                fullname: format!("Kitchen-{KITCHEN}._googlecast._tcp.local."),
+                port: DEVICE_PORT,
+                txt: vec![format!("id={KITCHEN}").into_bytes()],
+                addresses: vec!["fe80::1".parse().unwrap()],
+            }));
+        let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
+        cast.poll();
+        cast.set_streaming(true);
+        cast.set_enabled(KITCHEN, true).unwrap();
+        assert_eq!(fake.state().started, [id(KITCHEN)]);
+        let not_responding = BackendEvent::CastFailed {
+            id: KITCHEN.to_owned(),
+            problem: CastProblem::NotResponding,
+        };
+        let mut notices = Vec::new();
+        for _ in 0..3 {
+            fake.report(connect_failed(1, KITCHEN, ConnectError::NoAddress));
+            notices.push(cast.poll().contains(&not_responding));
+        }
+        assert_eq!(notices, [false, false, true]);
+        assert!(!cast.speakers()[0].enabled);
     }
 
     // covers: C2
