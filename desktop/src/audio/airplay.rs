@@ -11594,7 +11594,7 @@ pub mod tests {
     /// A stop request makes the feed's last frames, as the sender cuts them
     /// into packets, fall smoothly to 0 within the fade's F frames (S182),
     /// 960 at 48 kHz and 882 at the sender's 44.1 kHz, and stay at 0.
-    // covers: S186
+    // covers: S186, S189
     #[test]
     fn a_stop_request_fades_the_feed_to_zero_within_its_fade() {
         use audiosync_airplay::session::{MediaDestinations, ReceiverPorts};
