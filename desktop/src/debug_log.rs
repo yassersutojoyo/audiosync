@@ -13,9 +13,10 @@
 //! closure. The thread that logs never touches the file: lines go over a
 //! channel to one writer thread, which appends them and flushes whenever the
 //! channel runs empty, so the file stays complete when the app is killed.
-//! Only the UI thread logs. The capture and render threads never do (spec
-//! S131): the UI thread logs what they report, and reads the counters they
-//! keep for a status line every few seconds while streaming.
+//! Only the UI thread and the calibration estimate threads log. The capture
+//! and render threads never do (spec S131): the UI thread logs what they
+//! report, and reads the counters they keep for a status line every few
+//! seconds while streaming.
 
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};

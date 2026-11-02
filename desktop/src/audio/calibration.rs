@@ -1092,11 +1092,14 @@ impl CalibrationRun {
             return self.fail(rig, Failure::UnsupportedRate, now_ns);
         };
         let old = self.old_offset_ms;
+        let log = self.log.clone();
         let (send, receive) = mpsc::channel();
         let spawned = thread::Builder::new()
             .name("audiosync-calibration".into())
             .spawn(move || {
                 let _ = send.send(calibrate::estimate(&signal, &reference, &chosen, rate, old));
+                log.log(|| measured("calibration: Reference", &signal, &reference, rate));
+                log.log(|| measured("calibration: Chosen", &signal, &chosen, rate));
             });
         if spawned.is_err() {
             return self.fail(rig, Failure::Unfinished, now_ns);
@@ -1210,12 +1213,50 @@ impl Drop for CalibrationRun {
     }
 }
 
+/// The core's measurement of one recording, for the debug log: tells a weak
+/// peak or an echo apart from a real change in timing.
+pub(crate) fn measured(label: &str, signal: &[f32], recording: &[f32], rate: u32) -> String {
+    let ms = 1000.0 / f64::from(rate);
+    match calibrate::measure(signal, recording, rate) {
+        Ok(found) => format!(
+            "{label} measured: frame {} ({:.2} ms), peak frame {}, peak_over_floor {:.2}, \
+             echo_share {:.3} at frame {} ({:.2} ms)",
+            found.frame,
+            found.frame as f64 * ms,
+            found.peak_frame,
+            found.peak_over_floor,
+            found.echo_share,
+            found.echo_frame,
+            found.echo_frame as f64 * ms
+        ),
+        Err(reason) => format!("{label} measured: refused, {reason:?}"),
+    }
+}
+
+/// The debug log's messages once every recording's measurement reached it:
+/// the estimate threads log those after handing over their result.
+#[cfg(test)]
+pub(crate) fn logged_after_estimates(log: &DebugLog, path: &std::path::Path) -> Vec<String> {
+    use crate::debug_log::{TEST_FLUSH, read_messages};
+    let deadline = std::time::Instant::now() + TEST_FLUSH;
+    loop {
+        assert!(log.flush(TEST_FLUSH));
+        let messages = read_messages(path);
+        let count = |part: &str| messages.iter().filter(|m| m.contains(part)).count();
+        if count(" measured: ") >= count(" recorded, ") || std::time::Instant::now() >= deadline {
+            return messages;
+        }
+        thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     use super::*;
+    use crate::debug_log::{FILE_NAME, assert_in_order, test_dir};
 
     const MIC_RATE: u32 = 44_100;
     const TICK_NS: u64 = 20_000_000;
@@ -1476,6 +1517,35 @@ mod tests {
             !rig.tap.engaged.load(Ordering::Relaxed),
             "the music is back"
         );
+    }
+
+    #[test]
+    fn each_recording_logs_how_clearly_the_sweep_arrived() {
+        let dir = test_dir("calibration-measured-log");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut rig = FakeRig::new();
+        let now = rig.now.get();
+        let mut run = CalibrationRun::start(&mut rig, "usb", now, log.clone()).expect("it starts");
+        run_to_end(&mut rig, &mut run, |_, _| {});
+        let messages = logged_after_estimates(&log, &dir.join(FILE_NAME));
+        assert_in_order(
+            &messages,
+            &[
+                "calibration: Reference measured: frame ",
+                "calibration: Chosen measured: frame ",
+            ],
+        );
+        assert_in_order(&messages, &["calibration of usb: reference at"]);
+        let measured: Vec<_> = messages
+            .iter()
+            .filter(|m| m.contains(" measured: frame "))
+            .collect();
+        assert_eq!(measured.len(), 2);
+        for line in measured {
+            for field in [", peak frame ", ", peak_over_floor ", ", echo_share "] {
+                assert!(line.contains(field), "{field:?} in {line:?}");
+            }
+        }
     }
 
     // covers: S232
