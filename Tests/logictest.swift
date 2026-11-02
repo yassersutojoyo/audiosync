@@ -8105,13 +8105,24 @@ do {
           "\(closeSteps)")
     let arrowFrames = (revealSteps + closeSteps).map { scale -> (window: CGRect, arrow: CGRect) in
         let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
-        return (step, PanelArrow.frame(in: step))
+        return (step, PanelArrow.frame(in: step, tip: growTip))
     }
     // covers: S405
     check(arrowFrames.allSatisfy { step in
-        step.arrow.midX == step.window.midX && step.arrow.maxY == step.window.maxY && step.arrow.size == PanelArrow.size
-    }, "menu bar panel: the arrow drawn over the popover's own has its apex where the system draws it, the window's top middle, at every open and close step",
+        step.arrow.midX == growTip.x && step.arrow.maxY == step.window.maxY && step.arrow.size == PanelArrow.size
+    }, "menu bar panel: the arrow drawn over the popover's own has its apex on the arrow's tip at the window's top edge, at every open and close step",
           "\(arrowFrames.map { $0.arrow })")
+    let edgeRest = CGRect(x: 1000, y: 543, width: 306, height: 412)
+    let edgeTip = PanelReveal.tip(icon: 1040.3, rest: edgeRest)
+    let edgeArrows = (revealSteps + closeSteps).map { scale in
+        PanelArrow.frame(in: PanelReveal.body(edgeRest, scale: scale, about: edgeTip, pixel: 0.5), tip: edgeTip)
+    }
+    let cornerArrow = PanelArrow.frame(in: edgeRest, tip: PanelReveal.tip(icon: 1001.2, rest: edgeRest))
+    // covers: S405
+    check(edgeArrows.allSatisfy { $0.midX == edgeTip.x }
+            && cornerArrow.minX == edgeRest.minX + PanelArrow.cornerRoom && cornerArrow.maxY == edgeRest.maxY,
+          "menu bar panel: a panel the screen edge holds off the icon draws its arrow on the tip under the icon, kept clear of the window's rounded corner",
+          "\(edgeArrows.map { $0.midX }) \(cornerArrow)")
     let centredRest = CGRect(x: 933, y: 422, width: 306, height: 507)
     let centredTip = PanelReveal.tip(icon: 1086.4, rest: centredRest)
     let centredSteps = [0.5, 1].flatMap { pixel in
@@ -8120,7 +8131,7 @@ do {
     // covers: S405
     check(centredSteps.allSatisfy { step in
         step.minX + step.width / 2 == centredTip.x && step.minX == step.minX.rounded()
-            && PanelArrow.frame(in: step).midX == centredTip.x
+            && PanelArrow.frame(in: step, tip: centredTip).midX == centredTip.x
     } && PanelReveal.body(centredRest, scale: 1, about: centredTip, pixel: 0.5) == centredRest,
           "menu bar panel: every step's window is an even width on whole points centred on the arrow's tip, so the system's arrow, drawn at the window's middle, stays on the tip",
           "\(centredSteps.filter { $0.minX + $0.width / 2 != centredTip.x })")

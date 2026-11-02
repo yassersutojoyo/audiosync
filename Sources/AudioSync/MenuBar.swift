@@ -1029,7 +1029,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         if frameView.layer == nil { frameView.wantsLayer = true }
         guard let layer = frameView.layer else { return }
         if arrowLayer.superlayer !== layer { layer.addSublayer(arrowLayer) }
-        let arrow = PanelArrow.frame(in: window.frame)
+        let arrow = PanelArrow.frame(in: window.frame, tip: steps?.tip ?? PanelReveal.tip(icon: iconMiddle ?? window.frame.midX,
+                                                                                           rest: window.frame))
         var fill: CGColor?
         frameView.effectiveAppearance.performAsCurrentDrawingAppearance { fill = NSColor.audioSyncPanelBacking.cgColor }
         CATransaction.begin()
