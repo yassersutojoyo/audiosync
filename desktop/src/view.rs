@@ -9134,7 +9134,15 @@ mod tests {
         ] {
             assert!(rest_on(&app, label, tip).1.is_none(), "{label}");
         }
-        let list = element(&app, "MainWindow::scroll").expect("the speaker list");
+        scroll_to_end(&app);
+        let (_, tip) = rest_on(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
+        assert!(tip.is_none(), "the In zones name");
+    }
+
+    /// Scrolls the narrow app's speaker list to its end, where the rows
+    /// below the first screen are built.
+    fn scroll_to_end(app: &App) {
+        let list = element(app, "MainWindow::scroll").expect("the speaker list");
         let (at, size) = (list.absolute_position(), list.size());
         scroll(
             app.main.window(),
@@ -9145,32 +9153,36 @@ mod tests {
         app.main
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
-        let (_, tip) = rest_on(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
-        assert!(tip.is_none(), "the In zones name");
     }
 
-    /// A stereo pair's line cut to "…" shows in full in a tooltip; one that
-    /// fits shows none.
-    #[test]
-    fn only_a_cut_pair_line_shows_a_tooltip() {
+    /// The narrow app scrolled to a stereo pair of `member` and Right, the
+    /// last speaker listed.
+    fn pair_app(member: &str) -> Rc<App> {
         use crate::audio::backend::AirPlayGroup;
-        let pair = |member: &str| {
-            let mut backend = MockBackend::new();
-            let mut speaker = long_named_speaker(&backend, "airplay:pair");
-            speaker.name = "Pair".into();
-            speaker.group = Some(AirPlayGroup {
-                kind: AirPlayGroupKind::StereoPair,
-                members: vec![member.to_owned(), "Right".to_owned()],
-                missing: Vec::new(),
-                incomplete: false,
-            });
-            backend.add_speaker(speaker);
-            narrow_app(backend)
-        };
-        let app = pair("The long living room speaker by the window and the bookshelf");
+        let mut backend = MockBackend::new();
+        let mut speaker = long_named_speaker(&backend, "airplay:pair");
+        speaker.name = "Pair".into();
+        speaker.group = Some(AirPlayGroup {
+            kind: AirPlayGroupKind::StereoPair,
+            members: vec![member.to_owned(), "Right".to_owned()],
+            missing: Vec::new(),
+            incomplete: false,
+        });
+        backend.add_speaker(speaker);
+        let app = narrow_app(backend);
+        scroll_to_end(&app);
+        app
+    }
+
+    #[test]
+    fn a_cut_pair_line_shows_in_full_in_its_tooltip() {
+        let app = pair_app("The long living room speaker by the window and the bookshelf");
         shows_in_full(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
-        drop(app);
-        let app = pair("Left");
+    }
+
+    #[test]
+    fn a_pair_line_that_fits_shows_no_tooltip() {
+        let app = pair_app("Left");
         let (_, tip) = rest_on(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
         assert!(tip.is_none());
     }
