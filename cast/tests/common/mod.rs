@@ -226,6 +226,8 @@ pub enum Command {
     /// Stop reading the current connection, so the sender's writes fill
     /// the socket buffers and then block.
     Stall,
+    /// Do nothing for this long, as a device thread starved of the CPU.
+    Pause(Duration),
     Disconnect,
 }
 
@@ -876,6 +878,7 @@ fn serve(
                 }
                 Ok(Command::SetApps(apps)) => device.apps = apps,
                 Ok(Command::Stall) => stalled = true,
+                Ok(Command::Pause(time)) => thread::sleep(time),
                 Ok(Command::DropConnection) => {
                     let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
                     return false;
