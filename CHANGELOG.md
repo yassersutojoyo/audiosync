@@ -6,6 +6,25 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Added
 
+- On Windows, while no AirPlay speaker is found, the note in the main window and the tray panel offers Open Network Settings, which opens Settings > Network & internet, as the Mac offers Open Local Network Settings.
+
+### Changed
+
+- On Windows, the source menu, in the main window and on the web remote, lists the mix of several apps in use, or your last mix, right after the whole system, as on the Mac. Before, it came after the apps.
+- On Windows, Several Apps… is a link under the tray panel's source menu instead of its last entry, so arrowing or scrolling through the sources no longer lands on it and closes the panel.
+- An app in the list of several apps that only your last mix keeps there reads "(not running)" after its name. On the Mac and on Windows.
+- On Windows, when a newer version of AudioSync wrote your settings, the notice says so and that updating AudioSync gets them back. Before, it said AudioSync couldn't read them.
+- On Windows, the notice about blocked microphone access and the calibration name both switches to turn on: "Let desktop apps access your microphone" and "Microphone access".
+
+### Fixed
+
+- On Windows, a zone name, zone count or stereo pair line that fits no longer shows a tooltip repeating it. Only one cut to an ellipsis does, and a name in the In zones list keeps its tooltip, which holds the device name and the rename hint.
+- On the Mac, the menu bar panel no longer stalls at the end of its grow when it opens.
+
+## [0.8.0] - unreleased
+
+### Added
+
 - On Windows, the update notice has Skip This Version, as on the Mac. The automatic checks then stay quiet about that version until a newer one comes out, and Help > Check for Updates… still offers it.
 - Several AirPlay 2 speakers play at once, up to 16. A speaker past that limit stays on, and its row says "Waiting: too many AirPlay 2 speakers" until another one stops. On the Mac and on Windows.
 - A speaker that needs PTP timing while AudioSync plays to AirPlay 2 speakers on another network stays on, its row says "Waiting: AirPlay 2 speakers on another network", and it starts once those speakers are off. On the Mac and on Windows.
@@ -759,7 +778,8 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/yassersutojoyo/audiosync/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.8.0
 [0.7.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.1
 [0.7.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.0
 [0.6.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.6.0
