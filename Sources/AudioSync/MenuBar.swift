@@ -835,7 +835,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     func show() {
         guard !presented, let button = statusItem.button, let item = button.window else { return }
         let finishNow = host.sizing.show(onScreen: popover.isShown)
-        quietQueue.quiet.began(.open, at: Self.uptime)
         let screen = (item.screen ?? NSScreen.main)?.visibleFrame ?? item.frame
         // The status item's own screen, not the one with keyboard focus.
         model.panelRoom = item.frame.minY - Self.arrowRoom - screen.minY
@@ -863,6 +862,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         host.view.window?.ignoresMouseEvents = false
         if !PanelSwitches.systemAnimation { animateOpen(PanelMotion.open(reduceMotion: reduceMotion)) }
+        // From when the steps start, not the press: the refresh and layout above take part of the open's time.
+        quietQueue.quiet.began(.open, at: Self.uptime)
         if finishNow { finishOpenWhenQuiet() }
         let shown = Self.uptime
         // At once: a control draws in its accent color only in the key window.
@@ -1014,12 +1015,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             }
             shadow = own
             let ticket = closing
-            DispatchQueue.main.asyncAfter(deadline: .now() + motion.settles) { [weak self, weak window] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + PanelReveal.handBack(motion)) { [weak self, weak window] in
                 guard let self, let window, self.closing == ticket else { return }
                 self.dropReveal()
                 guard !PanelSwitches.holdOwnShadow else { return }
                 self.setShadow(window, true)
-                self.dropOwnShadow(fade: Self.handBackFade)
+                self.dropOwnShadow(fade: PanelReveal.handBackFade)
+                self.traceHandBack(window, ticket: ticket)
             }
         } else {
             setShadow(window, true)
@@ -1067,10 +1069,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         return (shadow, tip, body)
     }
 
-    /// The time per step of the open's reveal: a frame at 120 Hz, which a
-    /// 60 Hz display shows every other one of.
-    private static let revealStep: TimeInterval = 1.0 / 120
-
     /// Scales `layer` and the own shadow's `shadow` out of the menu bar icon on
     /// the same discrete steps, one per frame, each laying the body's outer
     /// edges onto the pixel grid; `body` and `tip` are in the window's coordinates.
@@ -1085,13 +1083,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             frame.convertToLayer(frame.convert(rect, from: nil)).offsetBy(dx: -pivot.x, dy: -pivot.y)
         }
         let pixel = 1 / max(window.backingScaleFactor, 1)
-        let scales = PanelReveal.scales(motion, step: Self.revealStep)
+        let scales = PanelReveal.scales(motion, step: PanelReveal.step)
         let bodies = scales.map { PanelReveal.body(body, scale: $0, about: tip, pixel: pixel) }
         func steps(_ maps: [CGAffineTransform]) -> CAKeyframeAnimation {
             let steps = CAKeyframeAnimation(keyPath: "transform")
             steps.values = maps.map { NSValue(caTransform3D: CATransform3DMakeAffineTransform($0)) }
             steps.calculationMode = .discrete
-            steps.duration = Double(maps.count) * Self.revealStep
+            steps.duration = Double(maps.count) * PanelReveal.step
             return steps
         }
         let start = toLayer(body)
@@ -1107,7 +1105,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func traceSteps(of frame: NSView, scales: [Double], bodies: [CGRect], body: CGRect) {
         let began = Self.uptime, ticket = closing
         for (index, scale) in scales.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * Self.revealStep) { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(index) * PanelReveal.step) { [weak self] in
                 guard let self, self.closing == ticket else { return }
                 DebugTrace.log(String(format: "[AudioSync] panel open step: %.1f ms, step %ld of %ld, scale %.4f, body %@",
                                       (Self.uptime - began) * 1000, index, scales.count - 1, scale,
@@ -1115,7 +1113,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             }
         }
         // After the stand-in's hand-back fade, so the picture is the panel at rest.
-        let settled = Double(scales.count) * Self.revealStep + 0.3
+        let settled = Double(scales.count) * PanelReveal.step + 0.3
         DispatchQueue.main.asyncAfter(deadline: .now() + settled) { [weak self, weak frame] in
             guard let self, let frame, self.closing == ticket,
                   let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
@@ -1127,8 +1125,27 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
     }
 
+    /// Debug log only: the panel back on the system's background, drawn
+    /// offscreen into /tmp/audiosync-popover-frames/handback.png beside the open's steps.
+    private func traceHandBack(_ window: NSWindow, ticket: Int) {
+        guard DebugTrace.enabled else { return }
+        // After the hand-back fade, so drawing it never lands inside the measured open.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak window] in
+            guard let self, let window, self.closing == ticket, let frame = window.contentView?.superview,
+                  let rep = frame.bitmapImageRepForCachingDisplay(in: frame.bounds) else { return }
+            let began = Self.uptime
+            frame.cacheDisplay(in: frame.bounds, to: rep)
+            guard let picture = rep.cgImage else { return }
+            DebugTrace.log(String(format: "[AudioSync] panel hand-back: drawn in %.1f ms", (Self.uptime - began) * 1000))
+            let size = frame.bounds.size, scale = window.backingScaleFactor
+            DispatchQueue.global(qos: .utility).async {
+                Self.writeSteps(picture, size: size, scale: scale, maps: [.identity], name: "handback")
+            }
+        }
+    }
+
     nonisolated private static func writeSteps(_ picture: CGImage, size: CGSize, scale: CGFloat,
-                                               maps: [CGAffineTransform]) {
+                                               maps: [CGAffineTransform], name: String? = nil) {
         let folder = URL(fileURLWithPath: "/tmp/audiosync-popover-frames", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let width = Int((size.width * scale).rounded()), height = Int((size.height * scale).rounded())
@@ -1141,7 +1158,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             context.scaleBy(x: scale, y: scale)
             context.concatenate(map)
             context.draw(picture, in: CGRect(origin: .zero, size: size))
-            let url = folder.appendingPathComponent("\(index).png") as CFURL
+            let url = folder.appendingPathComponent("\(name ?? String(index)).png") as CFURL
             guard let image = context.makeImage(),
                   let file = CGImageDestinationCreateWithURL(url, "public.png" as CFString, 1, nil) else { continue }
             CGImageDestinationAddImage(file, image, nil)
@@ -1160,7 +1177,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let map = CGAffineTransform(a: right.x - origin.x, b: right.y - origin.y, c: up.x - origin.x,
                                     d: up.y - origin.y, tx: origin.x - offset.x, ty: origin.y - offset.y)
         let pixel = 1 / max(window.backingScaleFactor, 1)
-        let paths = PanelReveal.scales(motion, step: Self.revealStep).map { scale -> CGPath in
+        let paths = PanelReveal.scales(motion, step: PanelReveal.step).map { scale -> CGPath in
             let outline = PanelShadow.outline(body: PanelReveal.body(body, scale: scale, about: tip, pixel: pixel),
                                               tip: tip)
             var shift = map
@@ -1173,17 +1190,17 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         let steps = CAKeyframeAnimation(keyPath: "path")
         steps.values = paths
         steps.calculationMode = .discrete
-        steps.duration = Double(paths.count) * Self.revealStep
+        steps.duration = Double(paths.count) * PanelReveal.step
         mask.add(steps, forKey: Self.motionKey)
         Self.unanimated { layer.mask = mask }
         revealed = layer
-        revealSteps = (CACurrentMediaTime(), PanelReveal.scales(motion, step: Self.revealStep))
+        revealSteps = (CACurrentMediaTime(), PanelReveal.scales(motion, step: PanelReveal.step))
     }
 
     /// How far a reveal still running has grown; nil with none.
     private func revealScale() -> Double? {
         guard revealed != nil, let steps = revealSteps, !steps.scales.isEmpty else { return nil }
-        let index = Int((CACurrentMediaTime() - steps.began) / Self.revealStep)
+        let index = Int((CACurrentMediaTime() - steps.began) / PanelReveal.step)
         return steps.scales[min(max(index, 0), steps.scales.count - 1)]
     }
 
@@ -1193,9 +1210,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         revealed = nil
         Self.unanimated { layer.mask = nil }
     }
-
-    /// How long the stand-in background takes to fade into the system's at rest.
-    private static let handBackFade: TimeInterval = 0.12
 
     /// Hides the system's background and puts one under the panel's content
     /// that scales with it; `outline` and `edge` are in the window's coordinates.

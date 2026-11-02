@@ -7920,9 +7920,12 @@ do {
     // covers: S405
     check(abs(140 * grow.scale + Double(pinned.x) - 140) < 1e-9 && abs(420 * grow.scale + Double(pinned.y) - 420) < 1e-9,
           "menu bar panel: the point under the icon stays put while the panel grows")
+    let openQuiet = PanelQuiet.duration(.open, system: false)
+    // The open's last 120 Hz step, then the stand-in background's 0.12 s fade into the system's.
+    let lastStepShown = Double(PanelReveal.scales(grow, step: 1.0 / 120).count) / 120
     // covers: S406
-    check(PanelQuiet.duration(.open, system: false) == grow.settles && shrink == shrinkBack.duration,
-          "menu bar panel: deferred work waits exactly for the panel's own motion")
+    check(near(openQuiet, lastStepShown + 0.12) && shrink == shrinkBack.duration,
+          "menu bar panel: deferred work waits exactly for the panel's own motion", "\(openQuiet)")
     // covers: S405
     check(PanelMotion.tail * (1 - grow.scale) * 600 < 0.5,
           "menu bar panel: ending the spring at its settle time moves even a 600 pt panel's far edge under half a point")
@@ -7985,6 +7988,10 @@ do {
     check(!showBody.isEmpty && inShow("let finishNow = host.sizing.show(onScreen: popover.isShown)") == 1
           && inShow("if finishNow { finishOpenWhenQuiet() }") == 1,
           "menu bar panel: show() finishes the open at once when it reopens a panel still on screen")
+    // covers: S406
+    check((showBody.range(of: "quietQueue.quiet.began(.open")?.lowerBound ?? showBody.startIndex)
+            > (showBody.range(of: "animateOpen(PanelMotion.open")?.lowerBound ?? showBody.endIndex),
+          "menu bar panel source: the open's quiet starts with its steps, after show()'s own refresh and layout, so deferred work never lands on the last steps")
     var first = PanelSizing.closed
     // covers: S403
     check(!first.show(onScreen: false) && first == .opening && first.finishOpen() && first == .shown,
@@ -7997,7 +8004,7 @@ do {
     var own = PanelQuiet()
     own.began(.open, at: 40)
     // covers: S406
-    check(near(own.wait(at: 40.1), grow.settles - 0.1) && own.wait(at: 40 + grow.settles) == 0 && grow.settles < 0.6,
+    check(near(own.wait(at: 40.1), openQuiet - 0.1) && own.wait(at: 40 + openQuiet) == 0 && openQuiet < 0.6,
           "menu bar panel: with the panel's own grow, work after an open waits less than for the system's bounce")
     own.began(.close, at: 41)
     // covers: S406
@@ -8085,6 +8092,9 @@ do {
             && revealSource.contains("shadow.add(steps(")
             && revealSource.contains("calculationMode = .discrete") && !revealSource.contains("shouldRasterize"),
           "menu bar panel source: the open scales the whole panel and its own shadow on the same discrete steps, never through a rasterized copy, so its outer edges stay on the pixel grid")
+    // covers: S405
+    check(revealOpen.contains("asyncAfter(deadline: .now() + PanelReveal.handBack(motion))"),
+          "menu bar panel source: the panel goes back to the system's background and shadow only once its last step has shown, never mid-step")
 }
 
 // MARK: The panel's stand-in on the first open after launch (MenuBar.swift, WindowRules.swift)

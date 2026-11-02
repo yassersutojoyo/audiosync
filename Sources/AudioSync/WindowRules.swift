@@ -299,6 +299,15 @@ struct PanelRest: Equatable {
 /// The open's steps, each with the panel's edges on the pixel grid: a layer
 /// scaled freely is resampled at sub-pixel offsets, so its hairlines blur.
 enum PanelReveal {
+    /// The time per step: a frame at 120 Hz, which a 60 Hz display shows every other one of.
+    static let step: TimeInterval = 1.0 / 120
+
+    /// How long the stand-in background takes to fade into the system's at rest.
+    static let handBackFade: TimeInterval = 0.12
+
+    /// When the open's last step has had its frame and the panel goes back to the system's background and shadow.
+    static func handBack(_ motion: PanelMotion) -> TimeInterval { Double(scales(motion, step: step).count) * step }
+
     /// The panel's body scaled by `scale` about the arrow's tip, its edges
     /// rounded to the nearest `pixel`.
     static func body(_ body: CGRect, scale: Double, about tip: CGPoint, pixel: CGFloat) -> CGRect {
@@ -447,12 +456,12 @@ struct PanelQuiet: Equatable {
 
     /// The popover's own grow and fade (`system`), from the click to the end
     /// of its bounce and of its fade as measured on the Mac; else the
-    /// panel's own motion (`PanelMotion`).
+    /// panel's own motion (`PanelMotion`), an open's until its hand-back has faded (`PanelReveal`).
     static func duration(_ animation: Animation, system: Bool) -> TimeInterval {
         switch (animation, system) {
         case (.open, true): return 0.6
         case (.close, true): return 0.25
-        case (.open, false): return PanelMotion.open(reduceMotion: false).settles
+        case (.open, false): return PanelReveal.handBack(.open(reduceMotion: false)) + PanelReveal.handBackFade
         case (.close, false): return PanelMotion.close(reduceMotion: false).duration
         }
     }
