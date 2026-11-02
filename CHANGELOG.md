@@ -24,6 +24,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the notices for an input that isn't connected, was disconnected or is blocked by microphone access call an input with no name "Unknown device", as on the Mac. Before, the name was left blank.
 - On Windows, recalling a preset where no speaker can play now is titled "nothing changed" for Narrator, on the notice's Dismiss button and in the tray icon's tooltip, as on the Mac. Before, it was titled "some speakers stayed off".
 - On the Mac, the menu bar panel and the main window no longer say "No speaker is on. The first one you turn on starts playing." when they list no speaker to turn on.
+- With a full curve list, Save Curve now opens so you can overwrite a curve by giving its name, instead of only saying the list is full. On Windows, Save stores the equalizer as it was when you chose Save Curve, even if it changes while the dialog is open.
+- A single Google Cast speaker with no usable address now turns off after its third failed connect and says it's not responding, instead of waiting forever. On Windows it also tries to connect now, as on the Mac.
 
 ## [0.8.0] - 2026-11-02
 
