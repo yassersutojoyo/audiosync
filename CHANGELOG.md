@@ -20,7 +20,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and in the Linux preview, a Google Cast speaker's offset set to 0 while the saved Cast speakers file couldn't be read yet at launch stays at 0 once the file reads, instead of going back to the saved offset.
 - On Windows, the notices for an input that isn't connected, was disconnected or is blocked by microphone access call an input with no name "Unknown device", as on the Mac. Before, the name was left blank.
 - On Windows, recalling a preset where no speaker can play now is titled "nothing changed" for Narrator, on the notice's Dismiss button and in the tray icon's tooltip, as on the Mac. Before, it was titled "some speakers stayed off".
-- On the Mac, the menu bar panel and the main window no longer say "No speaker is on. The first one you turn on starts playing." when they list no speaker to turn on.
 
 ## [0.8.0] - 2026-11-02
 
