@@ -124,12 +124,12 @@ pub trait RowText {
     fn source_not_connected(&self) -> String;
 }
 
-/// A speaker that would ask for a PIN or password when turned on: the prompt
-/// would open on the PC with nobody there, so the page can't turn it on.
+/// A speaker that would ask for a PIN or password when turned on, or was
+/// turned off for a refused pairing: the prompt would open on the PC with
+/// nobody there, so the page can't turn it on.
 fn asks_for_code(state: &AppState, speaker: &Speaker) -> bool {
-    speaker.availability == Availability::NeedsCode
-        && !speaker.paired
-        && !speaker.holds_password
+    (speaker.availability == Availability::NeedsCode && !speaker.paired && !speaker.holds_password
+        || speaker.refused_for_code)
         && state.speaker_state(speaker).click_turns_on()
 }
 
@@ -806,6 +806,7 @@ pub(crate) mod tests {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            refused_for_code: false,
             own_volume: None,
             device_volume: None,
             waiting: None,
@@ -1182,6 +1183,28 @@ pub(crate) mod tests {
         let mut playing = state.clone();
         playing.speakers.last_mut().unwrap().enabled = true;
         assert!(tv(&playing).available, "on, it can be turned off");
+    }
+
+    // covers: S223
+    #[test]
+    fn a_speaker_turned_off_for_a_refused_pairing_is_turned_on_at_the_pc() {
+        let mut state = with_apple_tv(Availability::Open);
+        state.speakers.last_mut().unwrap().refused_for_code = true;
+        let on = SpeakerChange {
+            on: Some(true),
+            ..Default::default()
+        };
+        let tv = snapshot(&state, not_virtual, None, "pc", &Text)
+            .speakers
+            .into_iter()
+            .find(|s| s.id == "tv")
+            .unwrap();
+        assert!(!tv.available, "a tap would do nothing");
+        assert_eq!(tv.notice.as_deref(), Some("Turn it on at the PC"));
+        assert_eq!(
+            actions(&speaker_command("tv", on), &state, not_virtual),
+            Err(Refusal::Unavailable)
+        );
     }
 
     // covers: S257

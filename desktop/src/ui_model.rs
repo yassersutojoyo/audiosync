@@ -266,6 +266,9 @@ pub struct Speaker {
     /// An AirPlay speaker that asks for a code every time it connects:
     /// auto-connect leaves it off, and its row says why.
     pub code_every_time: bool,
+    /// An AirPlay speaker turned off because it refused a session for want
+    /// of a pairing (S223): the web remote can't turn it on.
+    pub refused_for_code: bool,
     /// A local output that is on, whose own volume in Windows is low or
     /// muted (spec S196): the hint under its volume slider, with the fix.
     pub device_volume: Option<Hint>,
@@ -2079,6 +2082,7 @@ impl MockBackend {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            refused_for_code: false,
             own_volume: None,
             device_volume: None,
             waiting: None,
@@ -2879,6 +2883,7 @@ impl Backend for MockBackend {
                 holds_password: false,
                 holds_credentials: false,
                 code_every_time: false,
+                refused_for_code: false,
                 own_volume: None,
                 device_volume: None,
                 waiting: None,
@@ -3347,6 +3352,7 @@ mod tests {
             holds_password: false,
             holds_credentials: false,
             code_every_time: false,
+            refused_for_code: false,
             own_volume: None,
             device_volume: None,
             waiting: None,
