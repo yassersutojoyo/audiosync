@@ -5753,6 +5753,15 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
             speaker,
             problem: ui_model::AirPlayProblem::Refused,
         } => strings.invoke_notice_airplay_refused_off(speaker.as_str().into()),
+        NoticeMessage::AirPlayCantPlay {
+            speaker,
+            problem:
+                ui_model::AirPlayProblem::NotResponding | ui_model::AirPlayProblem::ConnectionLost,
+        } => strings.invoke_notice_airplay_unreachable_off(speaker.as_str().into()),
+        NoticeMessage::AirPlayCantPlay {
+            speaker,
+            problem: ui_model::AirPlayProblem::Busy,
+        } => strings.invoke_notice_airplay_busy_off(speaker.as_str().into()),
         NoticeMessage::AirPlayRetrying { speaker, problem }
         | NoticeMessage::AirPlayCantPlay { speaker, problem } => {
             strings.invoke_notice_airplay(airplay_problem(*problem), speaker.as_str().into())
@@ -13055,6 +13064,32 @@ mod tests {
             off,
             "Den TV declined the stream, so it's off. Turn it on again to try once more."
         );
+    }
+
+    /// A speaker the sender gave up on is off, so its notice promises no
+    /// retry, in the Mac's words.
+    #[test]
+    fn an_airplay_speaker_given_up_on_says_it_is_off() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let unreachable = "Den TV couldn't be reached, so it's off. Check that the speaker is on and on the same network, then turn it on again.";
+        for (problem, says) in [
+            (ui_model::AirPlayProblem::NotResponding, unreachable),
+            (ui_model::AirPlayProblem::ConnectionLost, unreachable),
+            (
+                ui_model::AirPlayProblem::Busy,
+                "Den TV seems to be busy with another device, so it's off. Turn it on again once it's free.",
+            ),
+        ] {
+            let off = notice_text(
+                &strings,
+                &NoticeMessage::AirPlayCantPlay {
+                    speaker: "Den TV".into(),
+                    problem,
+                },
+            );
+            assert_eq!(off, says, "{problem:?}");
+        }
     }
 
     /// The TV's own controls end the stream too, so the notice blames no

@@ -22,6 +22,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the menu bar panel no longer stalls at the end of its grow when it opens.
 - On the Mac, Escape closes the Web Remote window, also while the cursor is in its port field.
 - On the Mac, Right unfolds a zone and Left folds it, in the main window and the menu bar panel, as on Windows.
+- On Windows, when AudioSync turns off an AirPlay speaker that couldn't be reached or stayed busy with another device, the notice says it's off and how to turn it on again, as on the Mac. Before, it said AudioSync keeps trying.
 
 ## [0.8.0] - unreleased
 

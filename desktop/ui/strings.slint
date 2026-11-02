@@ -799,6 +799,17 @@ export global Strings {
         return @tr("{} declined the stream, so it's off. Turn it on again to try once more.", speaker);
     }
 
+    // An AirPlay speaker that stopped answering or lost its connection with
+    // no retry left, so it was turned off.
+    public pure function notice-airplay-unreachable-off(speaker: string) -> string {
+        return @tr("{} couldn't be reached, so it's off. Check that the speaker is on and on the same network, then turn it on again.", speaker);
+    }
+
+    // An AirPlay speaker that stayed busy with no retry left, so it was turned off.
+    public pure function notice-airplay-busy-off(speaker: string) -> string {
+        return @tr("{} seems to be busy with another device, so it's off. Turn it on again once it's free.", speaker);
+    }
+
     // An AirPlay speaker stopped playing or can't play. For the first four
     // problems it stays on and AudioSync keeps trying, and one waiting for
     // the AirPlay 2 slot stays on too; for the others it is off, because
