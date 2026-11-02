@@ -984,6 +984,37 @@ mod tests {
         assert_eq!(*counts.sent_to.lock().unwrap(), ["Spotify.exe"]);
     }
 
+    // covers: S218, S274
+    #[test]
+    fn the_card_keeps_the_app_just_paused_over_a_paused_one_listed_first() {
+        let probe = |plays: bool| MediaSession {
+            app_id: "Probe.exe".to_owned(),
+            title: "Probe".to_owned(),
+            playing: plays,
+            paused: !plays,
+            ..playing()
+        };
+        let (mut fake, _) = fake(Thumbnail::Image);
+        let spotify = MediaSession {
+            playing: false,
+            paused: true,
+            ..playing()
+        };
+        fake.sessions = vec![spotify, probe(true)];
+        let mut reader = Reader::new(fake);
+        let shown = |card: Option<CardTrack>| card.map(|card| (card.app_id, card.playing));
+        assert_eq!(
+            shown(poll(&mut reader).1),
+            Some(("Probe.exe".to_owned(), true))
+        );
+        reader.sessions.sessions[1] = probe(false);
+        assert_eq!(
+            shown(poll(&mut reader).1),
+            Some(("Probe.exe".to_owned(), false)),
+            "another app's paused track took the place of the one just paused"
+        );
+    }
+
     #[test]
     fn a_change_the_system_reports_is_read_at_once_not_at_the_next_poll() {
         let (fake, counts) = fake(Thumbnail::Image);
