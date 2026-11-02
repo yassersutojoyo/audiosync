@@ -250,7 +250,8 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     }
     #[cfg(feature = "mock-backend")]
     if zones_preview {
-        app.set_zone_expanded("zone:upstairs", false);
+        app.set_zone_expanded("zone:upstairs", false, false);
+        app.set_zone_expanded("zone:upstairs", false, true);
     }
     media.attach(&app);
     instance.listen(&app, log);

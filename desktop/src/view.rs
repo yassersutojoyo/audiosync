@@ -132,6 +132,8 @@ struct UiState {
     /// The zones whose speakers are hidden by their arrow, by ID; a zone
     /// opens expanded.
     collapsed: HashSet<String>,
+    /// The same for the flyout, which keeps its own (S359).
+    flyout_collapsed: HashSet<String>,
     /// Whether the source was a mix at the last refresh.
     source_was_mix: bool,
     /// The equalizer curve last picked or saved, so the picker tells it from
@@ -249,6 +251,8 @@ struct Models {
     flyout_this_pc: Rc<VecModel<SpeakerItem>>,
     flyout_connected: Rc<VecModel<SpeakerItem>>,
     zones: Rc<VecModel<ZoneItem>>,
+    /// The zones as the flyout folds them.
+    flyout_zones: Rc<VecModel<ZoneItem>>,
     /// Each zone's rows by zone ID, kept between refreshes so an unchanged
     /// zone's item compares equal and its rows aren't rebuilt.
     zone_models: RefCell<HashMap<String, ZoneModels>>,
@@ -275,6 +279,7 @@ struct ZoneModels {
 /// A zone as one refresh builds it, before its rows go into its models.
 struct ZoneRowsBuilt {
     item: ZoneItem,
+    flyout_expanded: bool,
     members: Vec<SpeakerItem>,
     targets: Vec<ZoneTarget>,
 }
@@ -1008,6 +1013,7 @@ impl App {
             flyout_this_pc: Rc::new(VecModel::default()),
             flyout_connected: Rc::new(VecModel::default()),
             zones: Rc::new(VecModel::default()),
+            flyout_zones: Rc::new(VecModel::default()),
             zone_models: RefCell::default(),
             move_zones: RefCell::default(),
             notices: Rc::new(VecModel::default()),
@@ -1733,7 +1739,7 @@ impl App {
             .set_this_pc(ModelRc::from(m.flyout_this_pc.clone()));
         self.flyout
             .set_speakers(ModelRc::from(m.flyout_connected.clone()));
-        self.flyout.set_zones(ModelRc::from(m.zones.clone()));
+        self.flyout.set_zones(ModelRc::from(m.flyout_zones.clone()));
         self.flyout
             .set_notices(ModelRc::from(m.flyout_notices.clone()));
         self.equalizer.set_gains(ModelRc::from(m.gains.clone()));
@@ -1784,6 +1790,8 @@ impl App {
             ui.delay_drafts
                 .retain(|id, _| state.speakers.iter().any(|s| s.id == *id));
             ui.collapsed
+                .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
+            ui.flyout_collapsed
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
             became_mix
         };
@@ -1926,6 +1934,7 @@ impl App {
                             .unwrap_or_default(),
                         ..ZoneItem::default()
                     },
+                    flyout_expanded: !ui.flyout_collapsed.contains(&zone.id),
                     members,
                     targets,
                 }
@@ -2093,7 +2102,7 @@ impl App {
             zone_members: zone_shape(
                 zones
                     .iter()
-                    .map(|zone| listed_members(zone.item.expanded, zone.members.len())),
+                    .map(|zone| listed_members(zone.flyout_expanded, zone.members.len())),
             ),
             add_address: state.cast_by_address && state.cast_list == ui_model::CastList::NoneFound,
             network_settings: state.airplay_none_found && zones.is_empty() && connected.is_empty(),
@@ -2328,6 +2337,7 @@ impl App {
     /// Puts each zone's rows into its kept models, then the zones into theirs.
     fn sync_zones(&self, zones: Vec<ZoneRowsBuilt>) {
         let m = &self.models;
+        let mut flyout_items = Vec::new();
         let items: Vec<ZoneItem> = {
             let mut kept = m.zone_models.borrow_mut();
             kept.retain(|id, _| zones.iter().any(|zone| zone.item.id == id.as_str()));
@@ -2337,21 +2347,27 @@ impl App {
                     let models = kept.entry(zone.item.id.to_string()).or_default();
                     sync_model(&models.members, zone.members);
                     sync_model(&models.targets, zone.targets);
-                    ZoneItem {
+                    let item = ZoneItem {
                         members: ModelRc::from(models.members.clone()),
                         targets: ModelRc::from(models.targets.clone()),
                         ..zone.item
-                    }
+                    };
+                    flyout_items.push(ZoneItem {
+                        expanded: zone.flyout_expanded,
+                        ..item.clone()
+                    });
+                    item
                 })
                 .collect()
         };
         sync_model(&m.zones, items);
+        sync_model(&m.flyout_zones, flyout_items);
     }
 
     /// The shape of the zones' member lists the flyout shows now.
     fn zone_shape_shown(&self) -> u64 {
         let kept = self.models.zone_models.borrow();
-        zone_shape(self.models.zones.iter().map(|zone| {
+        zone_shape(self.models.flyout_zones.iter().map(|zone| {
             let members = kept
                 .get(zone.id.as_str())
                 .map_or(0, |models| models.members.row_count());
@@ -2696,7 +2712,7 @@ impl App {
                 if app.renaming(&id, RenamePlace::Zone) {
                     app.blank_click();
                 } else {
-                    app.set_zone_expanded(&id, open);
+                    app.set_zone_expanded(&id, open, false);
                 }
             })
         });
@@ -2930,7 +2946,7 @@ impl App {
         flyout.on_zone_toggled(move |id| with_app(&w, |app| app.update(|b| b.toggle_zone(&id))));
         let w = weak.clone();
         flyout.on_zone_expanded_changed(move |id, open| {
-            with_app(&w, |app| app.set_zone_expanded(&id, open))
+            with_app(&w, |app| app.set_zone_expanded(&id, open, true))
         });
         let w = weak.clone();
         flyout.on_preset_recall_requested(move |id| with_app(&w, |app| app.recall_preset(&id)));
@@ -4202,14 +4218,20 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// The arrow of zone `id`, or Left and Right on its header.
-    pub fn set_zone_expanded(&self, id: &str, open: bool) {
+    /// The arrow of zone `id`, or Left and Right on its header, in the
+    /// flyout or the main window.
+    pub fn set_zone_expanded(&self, id: &str, open: bool, in_flyout: bool) {
         let changed = {
             let mut ui = self.ui.borrow_mut();
-            if open {
-                ui.collapsed.remove(id)
+            let collapsed = if in_flyout {
+                &mut ui.flyout_collapsed
             } else {
-                ui.collapsed.insert(id.to_owned())
+                &mut ui.collapsed
+            };
+            if open {
+                collapsed.remove(id)
+            } else {
+                collapsed.insert(id.to_owned())
             }
         };
         if changed {
@@ -8844,6 +8866,7 @@ mod tests {
                     let mut ui = app.ui.borrow_mut();
                     ui.sync_open.clear();
                     ui.collapsed.clear();
+                    ui.flyout_collapsed.clear();
                 }
                 app.refresh();
                 draw_frames();
@@ -11178,7 +11201,7 @@ mod tests {
         draw_frames();
         let expanded = || {
             app.models
-                .zones
+                .flyout_zones
                 .iter()
                 .find(|zone| zone.id == "zone:living")
                 .expect("the zone is listed")
@@ -11215,6 +11238,38 @@ mod tests {
         toggle.invoke_accessible_expand_action();
         draw_frames();
         assert!(expanded(), "Expand on the flyout zone's toggle unfolded it");
+    }
+
+    // covers: S359
+    #[test]
+    fn the_main_window_and_the_flyout_each_keep_their_own_zone_fold_state() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().unwrap();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        fn shows(window: &impl ComponentHandle, label: &str) -> bool {
+            ElementHandle::find_by_accessible_label(window, label)
+                .next()
+                .is_some()
+        }
+        let (main, flyout) = (&app.main, &app.flyout);
+        let fold = "Hide speakers in Living Room";
+        let unfold = "Show speakers in Living Room";
+
+        app.flyout
+            .invoke_zone_expanded_changed("zone:living".into(), false);
+        draw_frames();
+        assert!(shows(flyout, unfold), "the flyout folded the zone");
+        assert!(shows(main, fold), "the main window keeps it unfolded");
+
+        app.main
+            .invoke_zone_expanded_changed("zone:living".into(), false);
+        app.flyout
+            .invoke_zone_expanded_changed("zone:living".into(), true);
+        draw_frames();
+        assert!(shows(flyout, fold), "the flyout unfolded the zone");
+        assert!(shows(main, unfold), "the main window keeps it folded");
     }
 
     // covers: S245
@@ -11260,13 +11315,12 @@ mod tests {
         assert!(!app.models.zones.row_data(2).unwrap().expanded);
         main.invoke_zone_expanded_changed("zone:office".into(), true);
         assert!(app.models.zones.row_data(2).unwrap().expanded);
-        // The flyout folds the same zone the main window does, until AudioSync quits.
         app.flyout
             .invoke_zone_expanded_changed("zone:office".into(), false);
-        assert!(!app.models.zones.row_data(2).unwrap().expanded);
+        assert!(!app.models.flyout_zones.row_data(2).unwrap().expanded);
         app.flyout
             .invoke_zone_expanded_changed("zone:office".into(), true);
-        assert!(app.models.zones.row_data(2).unwrap().expanded);
+        assert!(app.models.flyout_zones.row_data(2).unwrap().expanded);
 
         main.invoke_speaker_remove_from_zone_requested("local:speakers".into());
         assert!(app.snapshot().zone_of("local:speakers").is_none());
