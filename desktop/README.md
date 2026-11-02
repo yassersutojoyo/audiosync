@@ -7,8 +7,9 @@ with a [Slint](https://slint.dev) interface. The audio work comes from
 **Status: in development, ready for a first try on a real PC.** It has the Mac
 app's screens (the main window, the equalizer, a tray icon and its panel, the
 About dialog), and on Windows they drive the real audio backend: it captures
-one app, several apps, everything the PC plays except AudioSync itself, or an
-input device such as a microphone or line in, and plays it on
+one app, several apps, every app except the ones you pick, everything the PC
+plays except AudioSync itself, or an input device such as a microphone or line
+in, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
 equalizer. AirPlay speakers on your network show up under Connected Speakers,
 through AudioSync's own sender ([`../airplay`](../airplay)); that part hasn't
