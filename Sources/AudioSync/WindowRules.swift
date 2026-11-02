@@ -299,7 +299,7 @@ enum PanelReveal {
 
     /// `body`, the panel's window frame, scaled by `scale` about the arrow's
     /// tip, its top and bottom rounded to the nearest `pixel`, its middle and
-    /// each half of its width moved by whole points.
+    /// each half of its width moved by whole points; with no `pixel`, unrounded.
     static func body(_ body: CGRect, scale: Double, about tip: CGPoint, pixel: CGFloat) -> CGRect {
         let s = CGFloat(scale)
         func snap(_ value: CGFloat) -> CGFloat { pixel > 0 ? (value / pixel).rounded() * pixel : value }
@@ -308,8 +308,10 @@ enum PanelReveal {
         // half-point side edge put the arrow half a point off the tip on every odd width.
         let middle = body.midX - ((body.midX - tip.x) * (1 - s)).rounded()
         let half = body.width / 2 - (body.width / 2 * (1 - s)).rounded()
+        let minX = pixel > 0 ? middle - half : scaled(body.minX, tip.x)
+        let width = pixel > 0 ? 2 * half : scaled(body.maxX, tip.x) - minX
         let minY = scaled(body.minY, tip.y), maxY = scaled(body.maxY, tip.y)
-        return CGRect(x: middle - half, y: minY, width: 2 * half, height: maxY - minY)
+        return CGRect(x: minX, y: minY, width: width, height: maxY - minY)
     }
 
     /// Where `content`, laid out in the window at its `rest` frame, goes in the
