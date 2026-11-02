@@ -2898,7 +2898,9 @@ impl App {
         let w = weak.clone();
         flyout.on_source_selected(move |index| {
             with_app(&w, |app| {
-                if usize::try_from(index) == Ok(app.snapshot().sources.len()) {
+                // The shown list's last row: the snapshot may have grown since.
+                let shown = app.models.flyout_sources.row_count();
+                if usize::try_from(index).is_ok_and(|i| i + 1 == shown) {
                     app.hide_flyout();
                     app.show_main();
                     app.main.set_mix_open(true);
@@ -13248,6 +13250,29 @@ mod tests {
         assert!(app.main.window().is_visible());
         assert!(!app.flyout.window().is_visible());
         assert_eq!(app.flyout.get_source_index(), chosen);
+    }
+
+    /// An app that starts playing after the flyout's list was built doesn't
+    /// turn the Several Apps… row into a pick of that app.
+    #[test]
+    fn several_apps_in_the_flyout_opens_the_list_while_a_new_app_waits_for_the_refresh() {
+        let backend = MockBackend::new();
+        let late = backend.late_sources.clone();
+        let app = app_over(backend);
+        let chosen = app.snapshot().source_id;
+        let last = app.flyout.get_sources().row_count() - 1;
+        late.borrow_mut().push(ui_model::Source {
+            id: "app:late".into(),
+            name: "Late App".into(),
+            kind: SourceKind::App,
+            channels: 0,
+            apps: Vec::new(),
+            unplugged: false,
+        });
+
+        app.flyout.invoke_source_selected(last as i32);
+        assert!(app.main.get_mix_open());
+        assert_eq!(app.snapshot().source_id, chosen);
     }
 
     #[test]
