@@ -1701,16 +1701,23 @@ mod tests {
     fn without_a_usable_name_the_qr_code_has_the_ip_address_and_says_so() {
         use i_slint_backend_testing::ElementHandle;
         let app = over_loopback(MockBackend::new());
+        let port = free_port();
+        app.ui.borrow_mut().remote.port = port;
+        app.remote.borrow_mut().host = None;
+        app.main.invoke_remote_requested();
         let window = &app.remote_window;
-        window.set_remote_on(true);
-        window.set_listening(true);
-        window.set_ip_address("http://192.0.2.7:8080".into());
-        window.set_has_qr(true);
-        window.show().expect("the window shows headless");
+        window.invoke_remote_toggled(true);
         draw_frames();
-        let label = app
-            .strings()
-            .invoke_remote_qr_label("http://192.0.2.7:8080".into());
+        assert!(window.get_listening());
+        let address = format!("http://192.0.2.7:{port}");
+        let drawn = app
+            .remote
+            .borrow()
+            .qr
+            .as_ref()
+            .map(|(text, _)| text.clone());
+        assert_eq!(drawn.as_deref(), Some(address.as_str()));
+        let label = app.strings().invoke_remote_qr_label(address.into());
         assert!(
             ElementHandle::find_by_accessible_label(window, label.as_str())
                 .next()
