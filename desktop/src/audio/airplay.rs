@@ -1498,9 +1498,7 @@ impl AirPlaySpeakers {
         self.target_missing.clear();
         self.gone_targets.clear();
         self.homekit_keys.clear();
-        for id in std::mem::take(&mut self.pairings).into_keys() {
-            self.entry(&id).enabled = false;
-        }
+        let pairings = std::mem::take(&mut self.pairings);
         self.ending.clear();
         self.forgotten_while_ending.clear();
         self.password_attempts.clear();
@@ -1511,6 +1509,9 @@ impl AirPlaySpeakers {
         for (id, ask) in std::mem::take(&mut self.password_asks) {
             let owner = ask.target.unwrap_or(id);
             self.turn_off(&owner, AirPlayProblem::NeedsPassword, events);
+        }
+        for id in pairings.into_keys() {
+            self.turn_off(&id, AirPlayProblem::NeedsPin, events);
         }
         if changed || !self.stopped {
             self.log.log(|| {
@@ -7231,7 +7232,14 @@ pub mod tests {
         fake.stop_running();
         assert_eq!(
             airplay.poll(),
-            [BackendEvent::AirPlayChanged, BackendEvent::AirPlayStopped]
+            [
+                BackendEvent::AirPlayChanged,
+                BackendEvent::AirPlayFailed {
+                    id: id.clone(),
+                    problem: AirPlayProblem::NeedsPin
+                },
+                BackendEvent::AirPlayStopped
+            ]
         );
         assert!(fake.take_calls().is_empty(), "nothing starts on a stop");
         assert_eq!(airplay.pin_prompt(), None);
@@ -8684,6 +8692,23 @@ pub mod tests {
         }));
         assert_eq!(airplay.password_prompt(), None);
         assert!(airplay.enabled_ids().is_empty(), "not left on and silent");
+    }
+
+    // covers: S223
+    #[test]
+    fn a_sender_that_stops_during_a_pin_prompt_turns_the_tv_off_with_a_notice() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        pin_shown(&fake, &mut airplay, &tv);
+        fake.stop_running();
+        let events = airplay.poll();
+        assert!(events.contains(&BackendEvent::AirPlayFailed {
+            id: id_of(&tv),
+            problem: AirPlayProblem::NeedsPin
+        }));
+        assert_eq!(airplay.pin_prompt(), None);
+        assert!(airplay.enabled_ids().is_empty());
     }
 
     // covers: S223
