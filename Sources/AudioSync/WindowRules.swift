@@ -381,7 +381,7 @@ enum PanelArrow {
     /// Where the arrow goes on screen for the popover window at `window`:
     /// apex on the window's top edge at its middle, where the system draws its own.
     static func frame(in window: CGRect) -> CGRect {
-        CGRect(x: window.minX, y: window.maxY - size.height, width: size.width, height: size.height)
+        CGRect(x: window.midX - size.width / 2, y: window.maxY - size.height, width: size.width, height: size.height)
     }
 }
 

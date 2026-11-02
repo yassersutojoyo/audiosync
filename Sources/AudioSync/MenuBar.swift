@@ -681,6 +681,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var moveWatch: NSObjectProtocol?
     private var steps: PanelSteps?
     private var stepLink: CADisplayLink?
+    /// Drawn over the popover's own arrow while the panel shows (`PanelArrow`).
+    private let arrowLayer = CAShapeLayer()
+    private var arrowWatch: NSObjectProtocol?
     private var noticeWatch: AnyCancellable?
     private var speakerWatch: AnyCancellable?
     let model: AppModel
@@ -936,6 +939,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func animateOpen(_ motion: PanelMotion) {
         guard let window = host.view.window else { return }
         window.alphaValue = 0
+        showArrow(on: window)
         if motion.grows { startSteps(window, PanelReveal.scales(motion, step: PanelReveal.step), closes: false) }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = motion.duration
@@ -1000,10 +1004,57 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
     }
 
+    /// Lays the arrow over the popover's own in the window's frame view, the
+    /// one view that reaches the arrow, and keeps it there as the window steps and resizes.
+    private func showArrow(on window: NSWindow) {
+        guard let frameView = window.contentView?.superview, let layer = frameView.layer else { return }
+        // Added again on every open, so it stays above whatever the frame view added meanwhile.
+        layer.addSublayer(arrowLayer)
+        placeArrow(window)
+        guard arrowWatch == nil else { return }
+        arrowWatch = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window,
+                                                            queue: nil) { [weak self, weak window] _ in
+            MainActor.assumeIsolated {
+                guard let self, let window else { return }
+                self.placeArrow(window)
+            }
+        }
+    }
+
+    private func placeArrow(_ window: NSWindow) {
+        guard let frameView = window.contentView?.superview, let layer = frameView.layer,
+              arrowLayer.superlayer === layer else { return }
+        let arrow = PanelArrow.frame(in: window.frame)
+        var fill: CGColor?
+        frameView.effectiveAppearance.performAsCurrentDrawingAppearance { fill = NSColor.audioSyncPanelBacking.cgColor }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        arrowLayer.frame = layer.bounds
+        arrowLayer.contentsScale = window.backingScaleFactor
+        let corners = [CGPoint(x: arrow.minX, y: arrow.minY), CGPoint(x: arrow.midX, y: arrow.maxY),
+                       CGPoint(x: arrow.maxX, y: arrow.minY)].map { point in
+            layer.convert(frameView.convertToLayer(frameView.convert(window.convertPoint(fromScreen: point), from: nil)),
+                          to: arrowLayer)
+        }
+        let path = CGMutablePath()
+        path.addLines(between: corners)
+        path.closeSubpath()
+        arrowLayer.path = path
+        arrowLayer.fillColor = fill
+        CATransaction.commit()
+    }
+
+    private func hideArrow() {
+        if let arrowWatch { NotificationCenter.default.removeObserver(arrowWatch) }
+        arrowWatch = nil
+        arrowLayer.removeFromSuperlayer()
+    }
+
     /// Debug log only: where the popover draws its arrow's apex on screen at
-    /// this step, as the middle of the topmost row its frame draws in.
+    /// this step, as the middle of the topmost row its frame draws in, with
+    /// the base and height it draws and where the arrow over it has its apex.
     private func traceArrow(_ window: NSWindow, step: Int, tip: CGPoint) {
-        var apex = "unknown"
+        var apex = "unknown", base = "unknown"
         if let frame = window.contentView?.superview {
             let bounds = frame.bounds
             let strip = CGRect(x: bounds.minX, y: frame.isFlipped ? bounds.minY : bounds.maxY - Self.arrowRoom,
@@ -1012,18 +1063,37 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                 frame.cacheDisplay(in: strip, to: rep)
                 let alpha = rep.bitmapFormat.contains(.alphaFirst) ? 0 : rep.samplesPerPixel - 1
                 let perPoint = CGFloat(rep.pixelsWide) / strip.width
+                var top: Int?, width = 0
                 // Bitmap rows run from the strip's top edge, the window's top.
                 for row in 0..<rep.pixelsHigh {
                     let lit = (0..<rep.pixelsWide).filter { data[row * rep.bytesPerRow + $0 * rep.samplesPerPixel + alpha] > 127 }
                     guard let first = lit.first, let last = lit.last else { continue }
-                    apex = NSStringFromPoint(CGPoint(x: window.frame.minX + bounds.minX + CGFloat(first + last + 1) / 2 / perPoint,
-                                                     y: window.frame.maxY - CGFloat(row) / perPoint))
-                    break
+                    guard let start = top else {
+                        top = row
+                        width = last - first + 1
+                        apex = NSStringFromPoint(CGPoint(x: window.frame.minX + bounds.minX + CGFloat(first + last + 1) / 2 / perPoint,
+                                                         y: window.frame.maxY - CGFloat(row) / perPoint))
+                        continue
+                    }
+                    // The box's top row lights most of the strip, the arrow's rows far less.
+                    if last - first + 1 > rep.pixelsWide / 2 {
+                        base = String(format: "%.1f x %.1f", CGFloat(width) / perPoint, CGFloat(row - start) / perPoint)
+                        break
+                    }
+                    width = last - first + 1
                 }
             }
         }
-        DebugTrace.log("[AudioSync] panel arrow step: step \(step), apex \(apex), tip \(NSStringFromPoint(tip)), "
-                       + "frame \(NSStringFromRect(window.frame))")
+        var overlay = "none"
+        if let frame = window.contentView?.superview, let layer = frame.layer, arrowLayer.superlayer === layer,
+           let box = arrowLayer.path?.boundingBox {
+            let ends = [CGPoint(x: box.midX, y: box.minY), CGPoint(x: box.midX, y: box.maxY)].map { point in
+                window.convertPoint(toScreen: frame.convert(frame.convertFromLayer(arrowLayer.convert(point, to: layer)), to: nil))
+            }
+            overlay = NSStringFromPoint(ends[0].y > ends[1].y ? ends[0] : ends[1])
+        }
+        DebugTrace.log("[AudioSync] panel arrow step: step \(step), apex \(apex), base \(base), overlay apex \(overlay), "
+                       + "tip \(NSStringFromPoint(tip)), frame \(NSStringFromRect(window.frame))")
     }
 
     /// Sets the window to its rest frame scaled by `scale` about the arrow's
@@ -1245,6 +1315,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
         host.sizing = host.sizing.after(.didClose)
         endSteps()
+        hideArrow()
         // A moment later, so a quick reopen right after the close doesn't wait for it.
         whenQuiet("close rebuild", after: 0.3) { [weak self] in
             guard let self, !self.presented, self.rowsStale else { return }
