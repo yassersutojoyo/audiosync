@@ -1229,7 +1229,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         });
         self.post(
             NoticeSubject::SettingsKeptAside,
-            NoticeMessage::SettingsKeptAside { file },
+            NoticeMessage::SettingsKeptAside {
+                file,
+                newer: matches!(kept, KeptAside::Newer(_)),
+            },
         );
     }
 
@@ -15409,7 +15412,7 @@ mod tests {
         adapter.set_master_volume(64.0);
         assert!(adapter.poll(), "the notice shows");
         let shown = messages(&adapter);
-        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+        let [NoticeMessage::SettingsKeptAside { file, newer: false }] = shown.as_slice() else {
             panic!("{shown:?}");
         };
         assert!(file.starts_with("settings.ignored-"), "{file}");
@@ -15434,7 +15437,7 @@ mod tests {
         let mut adapter = launch(launch_audio(), &path);
         // Told at launch, though the user changes nothing.
         let shown = messages(&adapter);
-        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+        let [NoticeMessage::SettingsKeptAside { file, newer: false }] = shown.as_slice() else {
             panic!("{shown:?}");
         };
         assert!(file.starts_with("settings.ignored-"), "{file}");
@@ -15469,7 +15472,7 @@ mod tests {
         adapter.set_master_volume(64.0);
         assert!(adapter.poll(), "the notice shows");
         let shown = messages(&adapter);
-        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+        let [NoticeMessage::SettingsKeptAside { file, newer: true }] = shown.as_slice() else {
             panic!("{shown:?}");
         };
         assert!(file.starts_with("settings.newer-"), "{file}");
@@ -15504,7 +15507,7 @@ mod tests {
             adapter.poll();
         }
         let shown = messages(&adapter);
-        let [NoticeMessage::SettingsKeptAside { file }] = shown.as_slice() else {
+        let [NoticeMessage::SettingsKeptAside { file, newer: false }] = shown.as_slice() else {
             panic!("{shown:?}");
         };
         assert_eq!(

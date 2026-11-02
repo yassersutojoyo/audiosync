@@ -5753,8 +5753,11 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::AirPlayPtpPortsTaken => strings.get_notice_airplay_ptp_ports_taken(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
-        NoticeMessage::SettingsKeptAside { file } => {
+        NoticeMessage::SettingsKeptAside { file, newer: false } => {
             strings.invoke_notice_settings_kept_aside(file.as_str().into())
+        }
+        NoticeMessage::SettingsKeptAside { file, newer: true } => {
+            strings.invoke_notice_settings_from_newer(file.as_str().into())
         }
         NoticeMessage::PairingsKeptAside { file } => {
             strings.invoke_notice_pairings_kept_aside(file.as_str().into())
@@ -13034,7 +13037,10 @@ mod tests {
             "Dismiss: Kitchen didn't start, turned off"
         );
         assert_eq!(
-            dismiss_label(NoticeMessage::SettingsKeptAside { file: "f".into() }),
+            dismiss_label(NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: false,
+            }),
             "Dismiss: settings unreadable, copy kept"
         );
         assert_eq!(
@@ -13082,7 +13088,10 @@ mod tests {
             NoticeMessage::AirPlayPtpPortsTaken,
             NoticeMessage::SettingsNotSaved,
             NoticeMessage::PairingsNotSaved,
-            NoticeMessage::SettingsKeptAside { file: "f".into() },
+            NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: false,
+            },
             NoticeMessage::PairingsKeptAside { file: "f".into() },
             NoticeMessage::NoSoundOutput,
             NoticeMessage::LaunchAtLoginFailed,
@@ -13106,6 +13115,41 @@ mod tests {
                 "{message:?}: \"{label}\" is not a short name"
             );
         }
+    }
+
+    #[test]
+    fn settings_from_a_newer_version_get_their_own_text() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let text = |newer| {
+            notice_text(
+                &strings,
+                &NoticeMessage::SettingsKeptAside {
+                    file: "settings.newer-1.json".into(),
+                    newer,
+                },
+            )
+        };
+        let newer = text(true);
+        assert!(
+            newer.starts_with("Your saved settings are from a newer version of AudioSync")
+                && newer.contains("kept as settings.newer-1.json")
+                && newer.ends_with("Update AudioSync to get your settings back."),
+            "{newer}"
+        );
+        let ignored = text(false);
+        assert!(
+            ignored.starts_with("AudioSync couldn't read your saved settings when it started"),
+            "{ignored}"
+        );
+        let pairings = notice_text(
+            &strings,
+            &NoticeMessage::PairingsKeptAside { file: "f".into() },
+        );
+        assert!(
+            pairings.starts_with("AudioSync couldn't read your AirPlay pairings"),
+            "{pairings}"
+        );
     }
 
     /// The App over `backend`, with its main window shown and drawn once.

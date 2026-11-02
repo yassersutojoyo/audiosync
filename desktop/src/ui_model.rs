@@ -722,8 +722,9 @@ pub enum NoticeMessage {
     /// The settings file couldn't be read at launch (or was damaged), so
     /// AudioSync started with the defaults; once it could be read again, it
     /// was kept aside as `file`, in the app's data folder, before the first
-    /// save over it.
-    SettingsKeptAside { file: String },
+    /// save over it. `newer`: a newer AudioSync wrote it, which updating
+    /// AudioSync brings back.
+    SettingsKeptAside { file: String, newer: bool },
     /// The pairings' file couldn't be read at launch (or decrypted, or
     /// parsed), so AudioSync started without the pairings in it; once it
     /// could be read again, it was kept aside as `file`, in the app's data
