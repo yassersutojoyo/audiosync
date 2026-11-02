@@ -101,7 +101,7 @@ struct CaptureNoticeGate {
         case clear
         /// Post the notice for this verdict, naming the app when one was found; check again.
         case post(CaptureCheck, String?)
-        /// The notice for this verdict was already posted: check again.
+        /// The notice for this verdict was already posted, or the capture is closed: check again.
         case keep
     }
 
@@ -112,9 +112,11 @@ struct CaptureNoticeGate {
         self.session = session
     }
 
-    mutating func step(verdict: CaptureCheck, session current: Int, running: Bool,
+    mutating func step(verdict: CaptureCheck, session current: Int, running: Bool, captureClosed: Bool = false,
                        app: @autoclosure () -> String?) -> Step {
         guard current == session, running else { return .end }
+        // The try or the input notice (S329, S333) settles a closed capture; playing something wouldn't.
+        guard !captureClosed else { return .keep }
         if verdict == .flowing { return .clear }
         // Only a changed verdict posts, so a notice the user dismissed stays dismissed.
         guard verdict != said else { return .keep }
@@ -240,6 +242,14 @@ struct CaptureFlowWatch {
 
     func inWakeWindow(at uptime: TimeInterval) -> Bool {
         uptime < wakeWindowEnds
+    }
+
+    /// Whether the capture is closed, waiting for a try or for its input device to be listed again.
+    var closed: Bool {
+        switch phase {
+        case .waiting, .away: return true
+        case .watching, .trial: return false
+        }
     }
 
     /// `callbacks` is nil while the capture has no IOProc; `reading` is false

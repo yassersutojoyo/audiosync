@@ -117,6 +117,8 @@ final class StreamEngine {
     private var inputAway = false
     /// Whether the capture waits for an input that left or another process holds, its notice up.
     var waitsForInput: Bool { inputAway || busySince != nil }
+    /// Whether the capture is closed for a try or waits for its input (S350).
+    var captureClosed: Bool { flowWatch.closed }
     /// The 0.5 s check for outputs whose render callback stopped (S334).
     private var stallTimer: DispatchSourceTimer?
     private var stallWatch = OutputStallWatch()

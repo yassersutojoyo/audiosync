@@ -443,7 +443,8 @@ extension AppDelegate {
                                         sessionHeard: engine.sessionHeard, runHeard: engine.runHeard,
                                         reportsPlaying: playing != nil, position: playing?.position,
                                         callbacks: engine.captureCallbacks)
-            switch gate.step(verdict: verdict, session: session, running: engine.isRunning, app: sourceDisplayName()) {
+            switch gate.step(verdict: verdict, session: session, running: engine.isRunning,
+                             captureClosed: engine.captureClosed, app: sourceDisplayName()) {
             case .end:
                 return
             case .clear:
