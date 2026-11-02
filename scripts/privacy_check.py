@@ -11,7 +11,8 @@ Names that must stay private can't be listed in a public script without
 publishing them, so they live in an untracked, one-per-line list:
 `$AUDIOSYNC_PRIVATE_NAMES`, or else `info/private-names` in the repository's
 git directory (shared by every worktree; `#` starts a comment). Each entry is
-matched case-insensitively as a whole word. Without the list (in CI, for
+matched case-insensitively as a whole word, in tracked files and, with
+`--commits`, in commit messages. Without the list (in CI, for
 example) that rule is skipped and the script says so.
 
 Forbidden names (names this repository must never spell, such as the projects the
@@ -555,7 +556,7 @@ def join_wrapped(message):
     return "".join(parts)
 
 
-def check_commits(root, spec, names):
+def check_commits(root, spec, names, private=()):
     hits = []
     for commit, message in commit_messages(root, spec):
         physical = message.split("\n")
@@ -565,6 +566,11 @@ def check_commits(root, spec, names):
             if not names.commit_allowed(physical[number - 1]):
                 lines.add(number)
         hits += [f"commit {commit[:12]}:{n}: forbidden name" for n in sorted(lines)]
+        hits += [
+            f"commit {commit[:12]}:{n}: private name"
+            for n, line in enumerate(physical, 1)
+            if any(p.search(line) for p in private)
+        ]
     return hits
 
 
@@ -731,6 +737,14 @@ def self_test():
             failures += [f"binary file scanned: {hit}" for hit in check(root, [name], names)]
         if not check(root, ["missing.md"], names, explicit=True):
             failures.append("a missing file argument passed")
+        git(
+            root, "-c", "user.name=Self Test", "-c", "user.email=self-test@example.invalid",
+            "-c", "commit.gpgsign=false", "commit", "-q", "-m",
+            f"Tidy the samples\n\nAsk {marker.capitalize()} about it.",
+        )
+        got = check_commits(root, "HEAD", ForbiddenNames("s", []), names)
+        if [hit.rsplit(": ", 1)[0] for hit in got] != ["commit " + git(root, "rev-parse", "HEAD")[:12] + ":3"]:
+            failures.append(f"a private name in a commit message: got {len(got)} hit(s)")
     cases, forbidden_failures = forbidden_self_test()
     failures += forbidden_failures
     for failure in failures:
@@ -983,21 +997,6 @@ def main(argv):
             return 1
         print(f"forbidden names: {NAMES_FILE} matches the local list ({len(forbidden.hashes)} names)")
         return 0
-    if args.commits is not None:
-        count = len(commit_messages(root, args.commits))
-        hits = check_commits(root, args.commits, forbidden)
-        for hit in hits:
-            print(hit)
-        if hits:
-            print(f"{len(hits)} forbidden name(s) in commit messages; reword them", file=sys.stderr)
-            return 1
-        print(f"forbidden names: none in {count} commit message(s)")
-        return 0
-    argv = args.files
-    if argv:
-        paths = [os.path.relpath(os.path.abspath(p), root).replace("\\", "/") for p in argv]
-    else:
-        paths = git(root, "ls-files", "-z").split("\0")[:-1]
     listing = os.environ.get("AUDIOSYNC_PRIVATE_NAMES") or os.path.join(
         git(root, "rev-parse", "--path-format=absolute", "--git-common-dir").strip(),
         "info",
@@ -1006,6 +1005,22 @@ def main(argv):
     names = name_patterns(listing)
     if names is None:
         print("private names: no local list, skipped")
+    if args.commits is not None:
+        count = len(commit_messages(root, args.commits))
+        hits = check_commits(root, args.commits, forbidden, names or ())
+        for hit in hits:
+            print(hit)
+        if hits:
+            print(f"{len(hits)} private or forbidden name(s) in commit messages; reword them", file=sys.stderr)
+            return 1
+        label = "forbidden names" if names is None else "private or forbidden names"
+        print(f"{label}: none in {count} commit message(s)")
+        return 0
+    argv = args.files
+    if argv:
+        paths = [os.path.relpath(os.path.abspath(p), root).replace("\\", "/") for p in argv]
+    else:
+        paths = git(root, "ls-files", "-z").split("\0")[:-1]
     hostname = None
     if not os.environ.get("CI"):
         name = socket.gethostname().split(".")[0]
