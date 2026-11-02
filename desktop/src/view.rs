@@ -2877,7 +2877,9 @@ impl App {
         let w = weak.clone();
         flyout.on_source_selected(move |index| {
             with_app(&w, |app| {
-                if usize::try_from(index) == Ok(app.snapshot().sources.len()) {
+                // The shown list's last row: the snapshot may have grown since.
+                let shown = app.models.flyout_sources.row_count();
+                if usize::try_from(index).is_ok_and(|i| i + 1 == shown) {
                     app.hide_flyout();
                     app.show_main();
                     app.main.set_mix_open(true);
