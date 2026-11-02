@@ -7154,6 +7154,25 @@ mod tests {
         assert_eq!(delay_of(&app, "cc:attic"), Some(10.0), "-5 reads as 0");
     }
 
+    // covers: S220
+    #[test]
+    fn a_delay_step_clamps_an_out_of_range_typed_value_first() {
+        let mut backend = MockBackend::new();
+        let mut speaker = backend.snapshot().speaker("local:desk").unwrap().clone();
+        speaker.id = "cc:attic".into();
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        backend.add_speaker(speaker);
+        let app = app_over(backend);
+        let step = |id: &str, typed: &str, delta: i32| {
+            app.main.invoke_delay_edited(id.into(), typed.into());
+            app.main.invoke_delay_stepped(id.into(), delta);
+            delay_of(&app, id)
+        };
+        assert_eq!(step("local:desk", "25000", -100), Some(19_900.0));
+        assert_eq!(step("local:desk", "-5000", 100), Some(-1900.0));
+        assert_eq!(step("cc:attic", "-5000", 100), Some(100.0));
+    }
+
     /// A speaker's applied delay.
     fn delay_of(app: &App, id: &str) -> Option<f64> {
         app.snapshot().speaker(id).unwrap().delay_ms
