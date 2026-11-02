@@ -7,7 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Added
 
 - On Windows, pointing at a speaker's auto-connect bolt shows "Auto-Connect When Available", and Narrator reads it, as on the Mac.
-- On Windows, with the debug log on, Calibrate All logs the reference output's volume, whether it's muted, and whether that counts as fine, low or muted when a run starts.
+- On Windows, with the debug log on, Calibrate All logs the reference output's volume, whether it's muted, and the level it reads as when a run starts.
 
 ### Changed
 
