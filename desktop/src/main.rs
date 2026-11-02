@@ -621,6 +621,20 @@ mod tests {
         );
     }
 
+    /// While other notices wait behind the newest, Dismiss All sits beside
+    /// the button for them, as in the Mac panel, and dismisses every notice.
+    #[test]
+    fn the_flyout_offers_dismiss_all_beside_the_more_notices_button() {
+        let flyout = include_str!("../ui/flyout.slint");
+        let row = &flyout[flyout
+            .find("if root.notice-count > root.notices.length: HorizontalLayout {")
+            .expect("the more-notices row is there")..];
+        let row = &row[..row.find("Divider { }").expect("the row ends")];
+        assert!(row.contains("text: Strings.dismiss-all-notices;"), "{row}");
+        let body = handler_body(row, "text: Strings.dismiss-all-notices;", "clicked");
+        assert!(body.contains("root.notices-dismissed-all();"), "{body}");
+    }
+
     /// A dismiss button names its notice in a few words: after a dismiss the
     /// next notice's button takes the focus, and Narrator then says which
     /// notice it is without reading the whole notice again.
