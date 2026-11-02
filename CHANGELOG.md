@@ -21,6 +21,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On Windows, a zone name, zone count or stereo pair line that fits no longer shows a tooltip repeating it. Only one cut to an ellipsis does, and a name in the In zones list keeps its tooltip, which holds the device name and the rename hint.
 - On the Mac, the menu bar panel no longer stalls at the end of its grow when it opens.
+- On the Mac, the menu bar panel keeps its round corners and its shadow while it opens and closes. Before, the top corners turned square mid-grow and the shadow changed shape, then snapped once the panel was open.
 - On the Mac, Escape closes the Web Remote window, also while the cursor is in its port field.
 - On the Mac, Right unfolds a zone and Left folds it, in the main window and the menu bar panel, as on Windows.
 - On Windows, Narrator now says a delay set with a step button or Enter, and a character the delay field doesn't take. In the Web Remote window it says a new or expired pairing code, a lockout and a forget that couldn't be saved, and the equalizer's Rename and Delete buttons name the curve, as VoiceOver does on the Mac.

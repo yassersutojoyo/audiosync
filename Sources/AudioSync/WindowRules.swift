@@ -162,9 +162,8 @@ enum CastAddRow: Equatable {
 
 /// How the menu bar panel opens and closes: it grows out of the menu bar icon
 /// on a spring too damped to bounce, and shrinks back quickly as it fades.
-/// With Reduce Motion it only fades. The open scales the panel's layer in
-/// pixel-aligned steps (`PanelReveal`) and the close scales it smoothly; the
-/// window keeps its final size, so nothing is laid out again per frame.
+/// With Reduce Motion it only fades. Both step the popover window's own frame
+/// (`PanelReveal`) around content laid out once at its final size.
 struct PanelMotion: Equatable {
     /// Where an open starts, or where a close ends; 1 is a plain fade.
     var scale: Double
@@ -205,13 +204,6 @@ struct PanelMotion: Equatable {
         let ratio = min(dampingRatio, 0.999)
         let decay = ratio * (stiffness / Self.mass).squareRoot()
         return max(duration, (-log(Self.tail) - log((1 - ratio * ratio).squareRoot())) / decay)
-    }
-
-    /// The shift that keeps `anchor` (measured from the layer's anchor point)
-    /// in place while the layer scales by `scale`.
-    static func pin(_ anchor: CGPoint, scale: Double) -> CGPoint {
-        let rest = CGFloat(1 - scale)
-        return CGPoint(x: anchor.x * rest, y: anchor.y * rest)
     }
 }
 
@@ -296,20 +288,17 @@ struct PanelRest: Equatable {
     }
 }
 
-/// The open's steps, each with the panel's edges on the pixel grid: a layer
-/// scaled freely is resampled at sub-pixel offsets, so its hairlines blur.
+/// The steps of the popover window's frame as the panel opens or closes,
+/// each with its edges on the pixel grid.
 enum PanelReveal {
     /// The time per step: a frame at 120 Hz, which a 60 Hz display shows every other one of.
     static let step: TimeInterval = 1.0 / 120
 
-    /// How long the stand-in background takes to fade into the system's at rest.
-    static let handBackFade: TimeInterval = 0.12
+    /// When the open's last step has had its frame.
+    static func duration(_ motion: PanelMotion) -> TimeInterval { Double(scales(motion, step: step).count) * step }
 
-    /// When the open's last step has had its frame and the panel goes back to the system's background and shadow.
-    static func handBack(_ motion: PanelMotion) -> TimeInterval { Double(scales(motion, step: step).count) * step }
-
-    /// The panel's body scaled by `scale` about the arrow's tip, its edges
-    /// rounded to the nearest `pixel`.
+    /// `body`, the panel's window frame, scaled by `scale` about the arrow's
+    /// tip, its edges rounded to the nearest `pixel`.
     static func body(_ body: CGRect, scale: Double, about tip: CGPoint, pixel: CGFloat) -> CGRect {
         let s = CGFloat(scale)
         func snap(_ value: CGFloat) -> CGFloat { pixel > 0 ? (value / pixel).rounded() * pixel : value }
@@ -319,11 +308,10 @@ enum PanelReveal {
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
-    /// The scale and shift that lay `body` exactly onto `step`; none when they match.
-    static func stretch(_ body: CGRect, onto step: CGRect) -> CGAffineTransform {
-        guard body.width > 0, body.height > 0 else { return .identity }
-        let sx = step.width / body.width, sy = step.height / body.height
-        return CGAffineTransform(a: sx, b: 0, c: 0, d: sy, tx: step.minX - body.minX * sx, ty: step.minY - body.minY * sy)
+    /// Where `content`, laid out in the window at its `rest` frame, goes in the
+    /// window at `step`, so it stays put on screen and the window clips it.
+    static func content(_ content: CGRect, rest: CGRect, step: CGRect) -> CGRect {
+        content.offsetBy(dx: rest.minX - step.minX, dy: rest.minY - step.minY)
     }
 
     /// The open's spring, one scale per `step` from `motion.scale` to exactly 1
@@ -342,51 +330,26 @@ enum PanelReveal {
             return 1 - (1 - motion.scale) * left
         }
     }
-}
 
-/// The shadow AudioSync draws around the menu bar panel while it grows in or
-/// shrinks away, so it scales with the panel: the system's own shadow keeps
-/// the window's full size. It stands in for the system's only during the
-/// motion, so its values aim at the system's; they are estimates until
-/// compared with it on the Mac.
-struct PanelShadow: Equatable {
-    var radius: CGFloat
-    var opacity: Double
-    /// Up is positive, as in AppKit.
-    var offsetY: CGFloat
-
-    static func style(dark: Bool) -> PanelShadow {
-        PanelShadow(radius: 14, opacity: dark ? 0.5 : 0.25, offsetY: -5)
-    }
-
-    /// Room around the window for the shadow to spread into.
-    var margin: CGFloat { (radius * 2 + abs(offsetY)).rounded(.up) }
-
-    static let cornerRadius: CGFloat = 10
-    /// The arrow's base for its height.
-    static let arrowWidthRatio: CGFloat = 2.2
-
-    /// The panel's outline: its rounded body, and the arrow over it up to `tip`.
-    static func outline(body: CGRect, tip: CGPoint) -> CGPath {
-        let path = CGMutablePath()
-        path.addRoundedRect(in: body, cornerWidth: cornerRadius, cornerHeight: cornerRadius)
-        let height = tip.y - body.maxY
-        guard height > 0 else { return path }
-        let half = height * arrowWidthRatio / 2
-        path.move(to: CGPoint(x: tip.x - half, y: body.maxY))
-        path.addLine(to: tip)
-        path.addLine(to: CGPoint(x: tip.x + half, y: body.maxY))
-        path.closeSubpath()
-        return path
-    }
-
-    /// Where the shadow may show, filled even-odd: inside `bounds` but
-    /// outside the outline, since under the translucent panel it would darken it.
-    static func outside(_ outline: CGPath, in bounds: CGRect) -> CGPath {
-        let path = CGMutablePath()
-        path.addRect(bounds)
-        path.addPath(outline)
-        return path
+    /// The close's shrink from `start` to `motion.scale`, one scale per `step`
+    /// over `motion.duration`, on Core Animation's ease-in curve (0.42, 0, 1, 1).
+    static func shrinks(from start: Double, _ motion: PanelMotion, step: TimeInterval) -> [Double] {
+        guard motion.grows, motion.duration > 0, step > 0 else { return [start, motion.scale] }
+        let count = Int((motion.duration / step).rounded(.up))
+        return (0...count).map { index in
+            guard index > 0 else { return start }
+            guard index < count else { return motion.scale }
+            let time = Double(index) * step / motion.duration
+            // The curve gives time and progress as functions of one parameter; find it for this time.
+            var low = 0.0, high = 1.0
+            for _ in 0..<40 {
+                let u = (low + high) / 2
+                let v = 1 - u
+                if (1.26 * v * v + (3 * v + u) * u) * u < time { low = u } else { high = u }
+            }
+            let u = (low + high) / 2
+            return start + (motion.scale - start) * (3 * (1 - u) + u) * u * u
+        }
     }
 }
 
@@ -411,44 +374,6 @@ struct PanelFold: Equatable {
     }
 }
 
-/// Which parts of the popover's own background the panel's stand-in hides
-/// while the panel scales. A background view that holds the panel's content
-/// (the popover's frame) stays, or the content and arrow would go with it;
-/// of such a view only its material layers are hidden.
-enum PanelBackdrop {
-    static func hidden<Node>(in node: Node, children: (Node) -> [Node], isContent: (Node) -> Bool,
-                             isStandIn: (Node) -> Bool, isBackground: (Node) -> Bool) -> [Node] {
-        walk(node, children: children, isContent: isContent, isStandIn: isStandIn, isBackground: isBackground).hidden
-    }
-
-    /// The sublayers of a view's layer that no subview owns, apart from
-    /// AppKit's focus ring: it belongs to the focused control, and AppKit
-    /// hides and shows it on its own.
-    static func material<Layer: AnyObject>(in sublayers: [Layer], keeping owned: [Layer],
-                                           name: (Layer) -> String? = { _ in nil }) -> [Layer] {
-        sublayers.filter { layer in
-            !owned.contains { $0 === layer } && !(name(layer)?.contains("FocusRing") ?? false)
-        }
-    }
-
-    private static func walk<Node>(_ node: Node, children: (Node) -> [Node], isContent: (Node) -> Bool,
-                                   isStandIn: (Node) -> Bool,
-                                   isBackground: (Node) -> Bool) -> (hidden: [Node], holdsContent: Bool) {
-        if isContent(node) { return ([], true) }
-        if isStandIn(node) { return ([], false) }
-        var hidden: [Node] = []
-        var holdsContent = false
-        for child in children(node) {
-            let below = walk(child, children: children, isContent: isContent, isStandIn: isStandIn,
-                             isBackground: isBackground)
-            hidden += below.hidden
-            holdsContent = holdsContent || below.holdsContent
-        }
-        if isBackground(node) && !holdsContent { hidden.insert(node, at: 0) }
-        return (hidden, holdsContent)
-    }
-}
-
 /// When work that follows a menu bar panel open or close may run: once its
 /// animation is over. Main-thread work that lands inside it drops frames.
 struct PanelQuiet: Equatable {
@@ -456,12 +381,12 @@ struct PanelQuiet: Equatable {
 
     /// The popover's own grow and fade (`system`), from the click to the end
     /// of its bounce and of its fade as measured on the Mac; else the
-    /// panel's own motion (`PanelMotion`), an open's until its hand-back has faded (`PanelReveal`).
+    /// panel's own motion (`PanelMotion`), an open's until its last step has shown (`PanelReveal`).
     static func duration(_ animation: Animation, system: Bool) -> TimeInterval {
         switch (animation, system) {
         case (.open, true): return 0.6
         case (.close, true): return 0.25
-        case (.open, false): return PanelReveal.handBack(.open(reduceMotion: false)) + PanelReveal.handBackFade
+        case (.open, false): return PanelReveal.duration(.open(reduceMotion: false))
         case (.close, false): return PanelMotion.close(reduceMotion: false).duration
         }
     }
