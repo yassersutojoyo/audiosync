@@ -604,6 +604,11 @@ export global Strings {
         return @tr("{} (not connected)", name);
     }
 
+    // An app in the several-apps list that only the last mix keeps there.
+    public pure function source-not-running(name: string) -> string {
+        return @tr("{} (not running)", name);
+    }
+
     // The status under the wordmark.
     public pure function status(running: bool, speakers: int) -> string {
         if !running {

@@ -676,6 +676,8 @@ struct UIStrings {
     /// The chosen input device while it is unplugged; `name` is the one it
     /// had when last seen, nil when none was remembered.
     func sourceNotConnected(_ name: String?) -> String { "\(name ?? sourceInputDevice) (\(sourceNotConnectedNote))" }
+    /// An app in the several-apps menu that only the last mix keeps there.
+    func sourceNotRunning(_ name: String) -> String { "\(name) (not running)" }
     let inputChannelsLabel = "Input Channels"
     /// One channel pair of an input device, counted from 1 as the device's
     /// own settings count them.

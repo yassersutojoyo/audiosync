@@ -2142,7 +2142,11 @@ impl App {
                 .mix_apps
                 .iter()
                 .map(|app| MixAppItem {
-                    name: app.name.as_str().into(),
+                    name: if app.running {
+                        app.name.as_str().into()
+                    } else {
+                        strings.invoke_source_not_running(app.name.as_str().into())
+                    },
                     checked: app.checked,
                 })
                 .collect(),
