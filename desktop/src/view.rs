@@ -9690,9 +9690,9 @@ mod tests {
         assert_eq!(
             item.update_buttons.iter().collect::<Vec<_>>(),
             [
-                UpdateButton::Download,
                 UpdateButton::NotNow,
-                UpdateButton::SkipThisVersion
+                UpdateButton::SkipThisVersion,
+                UpdateButton::Download
             ]
         );
         let id = item.id;
@@ -9719,22 +9719,19 @@ mod tests {
             steps += 1;
         }
         press(window, " ");
-        assert_eq!(*pressed.borrow(), [UpdateButton::Download], "Space");
+        assert_eq!(*pressed.borrow(), [UpdateButton::NotNow], "Space");
         tab(window, 1);
-        assert!(focused.get(), "Not Now is the next stop");
+        assert!(focused.get(), "Skip This Version is the next stop");
         press(window, Key::Return);
         assert_eq!(
             *pressed.borrow(),
-            [UpdateButton::Download, UpdateButton::NotNow],
+            [UpdateButton::NotNow, UpdateButton::SkipThisVersion],
             "Enter"
         );
         tab(window, 1);
-        assert!(focused.get(), "Skip This Version is the last stop");
+        assert!(focused.get(), "Download and Install is the last stop");
         press(window, " ");
-        assert_eq!(
-            pressed.borrow().last(),
-            Some(&UpdateButton::SkipThisVersion)
-        );
+        assert_eq!(pressed.borrow().last(), Some(&UpdateButton::Download));
     }
 
     #[test]
@@ -10422,12 +10419,12 @@ mod tests {
         assert!(height <= bottom + 16.5, "no room left under the buttons");
     }
 
-    /// The update notice's three buttons fit on one row in the 340 px
-    /// flyout: they end within the notice's text column, measured on a
-    /// one-button notice whose text fills that column.
+    /// The update notice's three buttons stack in the 340 px flyout, Not Now
+    /// on top and Download and Install at the bottom, on one left edge and
+    /// within the notice's text column, measured on a one-button notice
+    /// whose text fills that column; at 200% scaling too.
     // covers: S308
     #[test]
-    #[ignore = "measured 2026-11-01: the row needs 380 px, the column has 214 px; the layout waits for the maintainer"]
     fn the_flyout_fits_the_update_notice_buttons() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
@@ -10449,27 +10446,44 @@ mod tests {
             let element = ElementHandle::find_by_accessible_label(&app.flyout, label)
                 .next()
                 .unwrap_or_else(|| panic!("{label} is in the flyout"));
-            let x = element.absolute_position().x;
-            (x, x + element.size().width)
+            let at = element.absolute_position();
+            (at.x, at.x + element.size().width, at.y)
         };
-        let installed = ui_model::UpdaterNotice::Installed {
+        let installed = || ui_model::UpdaterNotice::Installed {
             version: "0.9.0".to_owned(),
         };
         let text = strings.invoke_notice_update_installed("0.9.0".into());
-        let column = edges(installed, &text);
         let available = || ui_model::UpdaterNotice::Available {
             new: "0.9.0".to_owned(),
             running: "0.8.0".to_owned(),
             last: None,
         };
-        let download = edges(available(), "Download and Install");
-        let skip = edges(available(), "Skip This Version");
-        assert!(
-            skip.1 <= column.1,
-            "the buttons need {} px, the column has {} px",
-            skip.1 - download.0,
-            column.1 - column.0
-        );
+        for scale_factor in [1.0, 2.0] {
+            app.flyout
+                .window()
+                .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor });
+            let column = edges(installed(), &text);
+            let stack = ["Not Now", "Skip This Version", "Download and Install"]
+                .map(|label| (label, edges(available(), label)));
+            for (label, (left, right, _)) in stack {
+                assert!(
+                    right <= column.1,
+                    "{label} at {scale_factor}x ends at {right}, the column at {}",
+                    column.1
+                );
+                assert_eq!(left, stack[0].1.0, "{label} shares the left edge");
+            }
+            assert!(
+                stack.windows(2).all(|pair| pair[0].1.2 < pair[1].1.2),
+                "top to bottom: {stack:?}"
+            );
+            // The flyout grows by the two rows above Download and Install.
+            let tall = app.fit_flyout(1000.0);
+            edges(installed(), &text);
+            let short = app.fit_flyout(1000.0);
+            let rows = stack[2].1.2 - stack[0].1.2;
+            assert!(tall - short >= rows, "{tall} vs {short}, rows {rows}");
+        }
     }
 
     /// On a screen too short for the whole flyout, the list scrolls and the

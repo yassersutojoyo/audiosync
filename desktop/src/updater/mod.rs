@@ -1139,9 +1139,9 @@ pub mod tests {
         assert_eq!(
             updater.notice().unwrap().buttons(),
             [
-                UpdaterButton::Download,
                 UpdaterButton::NotNow,
-                UpdaterButton::SkipThisVersion
+                UpdaterButton::SkipThisVersion,
+                UpdaterButton::Download
             ]
         );
         assert_eq!(updater.press(UpdaterButton::Download), Action::Nothing);
