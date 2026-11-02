@@ -13074,6 +13074,27 @@ mod tests {
         assert!(!app.main.get_mix_open(), "a refresh never reopens it");
     }
 
+    /// The flyout's source drop-down ends in Several Apps…, as the Mac
+    /// panel's source menu ends in its submenu: it opens the main window's
+    /// list and leaves the source as it was.
+    #[test]
+    fn several_apps_at_the_end_of_the_flyout_sources_opens_the_main_windows_list() {
+        let app = app_over(MockBackend::new());
+        let sources = app.snapshot().sources.len();
+        let chosen = app.flyout.get_source_index();
+        let shown = app.flyout.get_sources();
+        assert_eq!(shown.row_count(), sources + 1);
+        assert_eq!(shown.row_data(sources).unwrap(), "Several Apps…");
+        assert_eq!(app.main.get_sources().row_count(), sources);
+
+        app.flyout.show().unwrap();
+        app.flyout.invoke_source_selected(sources as i32);
+        assert!(app.main.get_mix_open());
+        assert!(app.main.window().is_visible());
+        assert!(!app.flyout.window().is_visible());
+        assert_eq!(app.flyout.get_source_index(), chosen);
+    }
+
     #[test]
     fn the_several_apps_list_opens_by_itself_once_as_the_source_becomes_a_mix() {
         let app = app_over(MockBackend::new());
