@@ -1097,6 +1097,23 @@ fn the_audiosync_guide_is_wired_and_worded_in_strings() {
     assert!(help.contains("source: Tokens.dark ? root.dark : root.light;"));
 }
 
+/// The Windows and Linux Guides say what Several Apps opens and describe
+/// the Now Playing card, as the Mac Guide does.
+#[test]
+fn the_guide_describes_several_apps_and_now_playing_on_both_hosts() {
+    let strings = include_str!("../ui/strings.slint");
+    let text = |name: &str| {
+        strings
+            .lines()
+            .find(|line| line.contains(&format!("out property <string> {name}: @tr(\"")))
+            .unwrap_or_else(|| panic!("strings.slint has {name}"))
+    };
+    for suffix in ["", "-linux"] {
+        assert!(text(&format!("help-start{suffix}")).contains("Several Apps opens a list"));
+        assert!(text(&format!("help-more{suffix}")).contains("the Now Playing card"));
+    }
+}
+
 /// The body of `function` in strings.slint, up to its closing brace.
 fn strings_function(function: &str) -> &'static str {
     let strings = include_str!("../ui/strings.slint");

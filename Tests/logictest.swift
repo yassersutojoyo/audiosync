@@ -8653,6 +8653,11 @@ do {
     check(store.load().speakerNames.custom == ["c": "Den"],
           "speaker names: a stored entry that isn't a name is skipped")
 
+    // covers: S228 (while renamed the system name stays in the panel row's tooltip)
+    check(UIStrings().panelNameHelp(name: "Desk", renamedFrom: "MacBook Speakers") == "Desk\nDevice name: MacBook Speakers"
+              && UIStrings().panelNameHelp(name: "MacBook Speakers", renamedFrom: nil) == "MacBook Speakers",
+          "speaker names: the panel tooltip names the device only for a renamed speaker")
+
     // covers: S243 (a Cast name kept under lc:cast: moves to cc: once; one under the new key wins)
     let before = SpeakerNames(custom: ["lc:cast:nest-1": "Den", "lc:cast:tv": "Old", "cc:tv": "Lounge",
                                        "lc:cast:": "Blank ID", "lc:usb-uid": "Desk"])
