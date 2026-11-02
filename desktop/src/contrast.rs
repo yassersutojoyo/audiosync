@@ -1114,6 +1114,44 @@ fn the_guide_describes_several_apps_and_now_playing_on_both_hosts() {
     }
 }
 
+/// The Windows and Linux Guides name a Cast group's members, a zone's
+/// double-click rename, AirPlay 2 code pairing and the AirPlay volume
+/// scale, as the Mac Guide does.
+#[test]
+fn the_guide_matches_the_mac_guide_on_groups_zones_codes_and_volume() {
+    let strings = include_str!("../ui/strings.slint");
+    let text = |name: &str| {
+        strings
+            .lines()
+            .find(|line| line.contains(&format!("out property <string> {name}: @tr(\"")))
+            .unwrap_or_else(|| panic!("strings.slint has {name}"))
+    };
+    assert!(
+        text("help-sync-cast")
+            .contains("its note names the speakers in it once the group reports them")
+    );
+    for suffix in ["", "-linux"] {
+        assert!(
+            text(&format!("help-more{suffix}")).contains("To rename a zone, double-click its name")
+        );
+        assert!(
+            text(&format!("help-volume{suffix}"))
+                .contains("AirPlay speakers use the AirPlay volume scale.")
+        );
+    }
+    for name in [
+        "help-airplay",
+        "help-airplay-prefer",
+        "help-airplay-linux",
+        "help-airplay-linux-prefer",
+    ] {
+        assert!(
+            text(name)
+                .contains("An Apple TV, or a speaker reached over AirPlay 2, that asks for a code")
+        );
+    }
+}
+
 /// The body of `function` in strings.slint, up to its closing brace.
 fn strings_function(function: &str) -> &'static str {
     let strings = include_str!("../ui/strings.slint");
