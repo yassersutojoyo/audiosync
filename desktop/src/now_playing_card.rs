@@ -439,11 +439,11 @@ mod tests {
 
     #[test]
     fn artwork_is_scaled_to_cover_the_square_tile() {
-        assert_eq!(cover_size(600, 600, 112), (112, 112));
-        assert_eq!(cover_size(300, 150, 112), (224, 112));
-        assert_eq!(cover_size(100, 333, 112), (112, 373));
-        assert_eq!(cover_size(56, 56, 112), (112, 112), "scaled up");
-        assert_eq!(cover_size(0, 10, 112), (112, 1120));
+        assert_eq!(cover_size(600, 600, ARTWORK_SIDE), (96, 96));
+        assert_eq!(cover_size(300, 150, ARTWORK_SIDE), (192, 96));
+        assert_eq!(cover_size(100, 333, ARTWORK_SIDE), (96, 320));
+        assert_eq!(cover_size(56, 56, ARTWORK_SIDE), (96, 96), "scaled up");
+        assert_eq!(cover_size(0, 10, ARTWORK_SIDE), (96, 960));
     }
 
     #[test]
