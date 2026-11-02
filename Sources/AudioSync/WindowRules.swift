@@ -298,14 +298,18 @@ enum PanelReveal {
     static func duration(_ motion: PanelMotion) -> TimeInterval { Double(scales(motion, step: step).count) * step }
 
     /// `body`, the panel's window frame, scaled by `scale` about the arrow's
-    /// tip, its edges rounded to the nearest `pixel`.
+    /// tip, its top and bottom rounded to the nearest `pixel`, its middle and
+    /// each half of its width moved by whole points.
     static func body(_ body: CGRect, scale: Double, about tip: CGPoint, pixel: CGFloat) -> CGRect {
         let s = CGFloat(scale)
         func snap(_ value: CGFloat) -> CGFloat { pixel > 0 ? (value / pixel).rounded() * pixel : value }
         func scaled(_ value: CGFloat, _ origin: CGFloat) -> CGFloat { snap(origin + (value - origin) * s) }
-        let minX = scaled(body.minX, tip.x), maxX = scaled(body.maxX, tip.x)
+        // The system draws its arrow at the window's middle and keeps the window on whole points, so a
+        // half-point side edge put the arrow half a point off the tip on every odd width.
+        let middle = body.midX - ((body.midX - tip.x) * (1 - s)).rounded()
+        let half = body.width / 2 - (body.width / 2 * (1 - s)).rounded()
         let minY = scaled(body.minY, tip.y), maxY = scaled(body.maxY, tip.y)
-        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        return CGRect(x: middle - half, y: minY, width: 2 * half, height: maxY - minY)
     }
 
     /// Where `content`, laid out in the window at its `rest` frame, goes in the
