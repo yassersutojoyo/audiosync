@@ -97,6 +97,12 @@ enum StreamingPolicy {
         streaming && !hasSpeaker(enabledAirPlay: enabledAirPlay, enabledLocal: enabledLocal)
     }
 
+    /// The "No speaker is on" line above the speaker rows of the menu bar
+    /// panel or the main window, shown only when there is a row to turn on.
+    static func showsNoSpeakerOnLine(noSpeakerOn: Bool, rows: Int) -> Bool {
+        noSpeakerOn && rows > 0
+    }
+
     /// The speakers the panel counts as on. AirPlay rows are hidden while the
     /// sender has failed (`AppModel.shownAirPlay`), so those don't count.
     static func activeSpeakers(airPlay: [Bool], senderFailed: Bool, others: [Bool]) -> Int {

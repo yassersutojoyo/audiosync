@@ -38,6 +38,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, with 50 saved curves you can save over one of them by its name, as on the Mac. Before, Save Curve said the list was full.
 - On Windows, an AirPlay speaker that drops off the network while playing now shows Reconnecting… and its notice while AudioSync tries again, as on the Mac. Before, its row stayed on with no word that it had stopped.
 - On Windows, AudioSync lists 4 notices at most, as on the Mac, so the tray flyout's count of more notices matches what the main window shows. Dismiss All closes only the notices you can see, and an update download whose notice dropped off the list keeps going.
+- On the Mac, the menu bar panel and the main window no longer say "No speaker is on. The first one you turn on starts playing." when they list no speaker to turn on.
 
 ## [0.8.0] - 2026-11-02
 
