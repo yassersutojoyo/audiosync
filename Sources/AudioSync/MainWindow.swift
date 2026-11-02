@@ -138,7 +138,8 @@ struct MainView: View {
                     let zoned = model.zonedLayout
                     ScrollViewReader { proxy in
                         VStack(alignment: .leading, spacing: BrandTokens.Spacing.sectionGap) {
-                            if model.noSpeakerOn {
+                            if StreamingPolicy.showsNoSpeakerOnLine(
+                                noSpeakerOn: model.noSpeakerOn, rows: all.thisMac.count + all.connected.count) {
                                 Text(t.noSpeakerOn)
                                     .font(.callout)
                                     .foregroundStyle(Brand.secondaryText)

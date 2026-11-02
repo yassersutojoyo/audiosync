@@ -15951,6 +15951,11 @@ do {
             && !StreamingPolicy.showsNoSpeakerOn(streaming: true, enabledAirPlay: [], enabledLocal: ["usb"])
             && !StreamingPolicy.showsNoSpeakerOn(streaming: false, enabledAirPlay: [], enabledLocal: []),
           "no speaker on: the speaker list says so only while streaming with every speaker off")
+    // covers: S162
+    check(!StreamingPolicy.showsNoSpeakerOnLine(noSpeakerOn: true, rows: 0)
+            && StreamingPolicy.showsNoSpeakerOnLine(noSpeakerOn: true, rows: 1)
+            && !StreamingPolicy.showsNoSpeakerOnLine(noSpeakerOn: false, rows: 1),
+          "no speaker on: the panel and the main window say so only above a row to turn on, as on Windows")
     let line = UIStrings().noSpeakerOn
     // covers: S162
     check(line.hasPrefix("No speaker is on") && !line.contains("\u{2014}") && !line.contains("\n"),

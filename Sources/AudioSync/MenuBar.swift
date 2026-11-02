@@ -1497,7 +1497,13 @@ struct MenuBarView: View {
         PanelChrome.height(notices: model.notices.items.count, permissionCard: model.permissionOffer != nil,
                            airPlayNote: model.airPlayProblem != nil || model.localNetworkHint != .none,
                            castAddRow: castAddRow != .none, presets: PresetPanel.showsRow(model.presets),
-                           liveInputHint: model.liveInputAirPlayHint != nil, noSpeakerOn: model.noSpeakerOn)
+                           liveInputHint: model.liveInputAirPlayHint != nil, noSpeakerOn: showsNoSpeakerOn)
+    }
+
+    private var showsNoSpeakerOn: Bool {
+        let layout = model.zonelessLayout
+        return StreamingPolicy.showsNoSpeakerOnLine(
+            noSpeakerOn: model.noSpeakerOn, rows: layout.thisMac.count + model.zones.count + layout.connected.count)
     }
 
     /// While the Google Cast search finds nothing, the panel offers adding
@@ -1527,7 +1533,7 @@ struct MenuBarView: View {
                 thisMacRows(t)
             }
             Divider().padding(.vertical, -4)   // 6 pt on both sides
-            if model.noSpeakerOn { noSpeakerOnLine(t) }
+            if showsNoSpeakerOn { noSpeakerOnLine(t) }
             speakerList(t)
                 .id(model.panelSession)
             if castAddRow != .none {
