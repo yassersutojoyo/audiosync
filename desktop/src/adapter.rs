@@ -493,9 +493,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// a stream that ran stops (S223).
     airplay_on_by_hand: BTreeSet<String>,
     /// The AirPlay speakers listed as open that refused a session for want
-    /// of a pairing, or went off asking for a PIN outside the user's
-    /// attempt: auto-connect leaves them off until the user turns one on,
-    /// so a refusal never loops (S349).
+    /// of a pairing, went off asking for a PIN outside the user's attempt,
+    /// or refused again right after pairing in it: auto-connect leaves them
+    /// off until the user turns one on, so a refusal never loops (S349).
     airplay_refused: BTreeMap<String, AirPlayProblem>,
     /// Set while a web remote command runs: the AirPlay speakers it switches
     /// on start no attempt, so they never pair or prompt (S257).
@@ -2821,6 +2821,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 problem:
                     ui_model::AirPlayProblem::NeedsPassword
                     | ui_model::AirPlayProblem::NeedsPin
+                    | ui_model::AirPlayProblem::StillNeedsCode
                     | ui_model::AirPlayProblem::NotAccepted
                     | ui_model::AirPlayProblem::AirPlay2NotYet
                     | ui_model::AirPlayProblem::TimingUnavailable,
@@ -3838,6 +3839,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             AirPlayProblem::NeedsPassword
             | AirPlayProblem::PairingNotYet
             | AirPlayProblem::NeedsPin
+            | AirPlayProblem::StillNeedsCode
             | AirPlayProblem::NotAccepted
             | AirPlayProblem::PairingFailed => DropReason::NeedsCode,
             _ => DropReason::Unreachable,
@@ -4324,7 +4326,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 let by_hand = self.airplay_on_by_hand.remove(&id);
                 if matches!(
                     problem,
-                    AirPlayProblem::NotAccepted | AirPlayProblem::PairingNotYet
+                    AirPlayProblem::NotAccepted
+                        | AirPlayProblem::PairingNotYet
+                        | AirPlayProblem::StillNeedsCode
                 ) || (problem == AirPlayProblem::NeedsPin && !by_hand)
                 {
                     self.airplay_refused.insert(id.clone(), problem);
@@ -6055,6 +6059,7 @@ fn ui_problem(problem: AirPlayProblem) -> ui_model::AirPlayProblem {
         AirPlayProblem::Refused => P::Refused,
         AirPlayProblem::NeedsPassword => P::NeedsPassword,
         AirPlayProblem::NeedsPin => P::NeedsPin,
+        AirPlayProblem::StillNeedsCode => P::StillNeedsCode,
         AirPlayProblem::NotAccepted => P::NotAccepted,
         AirPlayProblem::PairingFailed => P::PairingFailed,
         AirPlayProblem::PairingNotYet => P::PairingNotYet,
@@ -10658,6 +10663,7 @@ mod tests {
         );
         adapter.poll();
         assert!(adapter.snapshot().speaker(&id).unwrap().paired);
+        fake.state(&tv, AirPlayState::Playing);
 
         fake.fail(&tv, ErrorKind::PairingRequired);
         adapter.poll();
@@ -10678,6 +10684,7 @@ mod tests {
         fake.pairing(&loft, PairingEvent::HomeKitPaired(homekit(0x33)));
         adapter.poll();
         assert!(adapter.snapshot().speaker(&id).unwrap().paired);
+        fake.state(&loft, AirPlayState::Playing);
 
         fake.fail(&loft, ErrorKind::PairingRequired);
         adapter.poll();
@@ -10851,6 +10858,59 @@ mod tests {
                 assert!(speaker_of(&adapter, &id).enabled, "{id}");
             }
         }
+    }
+
+    // covers: S223, S349
+    #[test]
+    fn a_speaker_refused_again_right_after_pairing_stays_off_for_auto_connect() {
+        use crate::audio::pairings::tests::homekit;
+
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        audio.set_airplay(fake.link(), None);
+        let loft = airplay2_device(9, "Loft", false);
+        fake.appear(&loft);
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.poll();
+        let id = ap(&loft);
+        adapter.set_auto_connect(&id, true);
+        adapter.set_speaker_enabled(&id, true);
+        fake.fail(&loft, ErrorKind::PairingRequired);
+        adapter.poll();
+        fake.pairing(&loft, PairingEvent::PinRequested);
+        adapter.poll();
+        adapter.submit_pin(&id, "4821");
+        fake.pairing(&loft, PairingEvent::HomeKitPaired(homekit(0x44)));
+        adapter.poll();
+        fake.fail(&loft, ErrorKind::PairingRequired);
+        adapter.poll();
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::AirPlayCantPlay {
+                speaker: "Loft".to_owned(),
+                problem: ui_model::AirPlayProblem::StillNeedsCode,
+            }]
+        );
+        adapter.dismiss_all_notices();
+        fake.take_calls();
+
+        fake.gone(&loft);
+        adapter.poll();
+        fake.appear(&loft);
+        adapter.poll();
+        assert!(!speaker_of(&adapter, &id).enabled);
+        assert!(
+            !fake
+                .take_calls()
+                .iter()
+                .any(|call| matches!(call, Call::Add { .. }))
+        );
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+
+        adapter.set_speaker_enabled(&id, true);
+        assert!(speaker_of(&adapter, &id).enabled, "the user's switch-on");
     }
 
     // covers: S223

@@ -201,6 +201,8 @@ pub enum AirPlayProblem {
     /// An Apple TV that needs pairing with a PIN first; switching it on
     /// pairs it.
     NeedsPin,
+    /// It still asks for a code right after pairing, so it is off.
+    StillNeedsCode,
     /// It turned the session down without asking for a PIN or password, so
     /// it is off; the notice names no code.
     NotAccepted,

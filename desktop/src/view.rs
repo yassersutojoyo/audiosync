@@ -4946,6 +4946,7 @@ fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
         P::Refused => AirPlayProblem::Refused,
         P::NeedsPassword => AirPlayProblem::NeedsPassword,
         P::NeedsPin => AirPlayProblem::NeedsPin,
+        P::StillNeedsCode => AirPlayProblem::StillNeedsCode,
         P::NotAccepted => AirPlayProblem::NotAccepted,
         P::PairingFailed => AirPlayProblem::PairingFailed,
         P::PairingNotYet => AirPlayProblem::PairingNotYet,
