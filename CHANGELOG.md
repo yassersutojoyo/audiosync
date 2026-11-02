@@ -14,6 +14,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a zone whose speakers all play through a stereo pair or home theater says "N playing in a pair" instead of "None of N found", as on the Mac.
 - On the Mac, when calibration can't use the microphone's sample rate, its message now says to set the microphone to 48 kHz in Audio MIDI Setup and try again.
 - On Windows, the notice for several apps that aren't running says they "are not running", and "all apps except" is written in lowercase in the middle of a notice's sentence. Text that asked you to quit and reopen or restart AudioSync now says to exit AudioSync and open it again, as File > Exit names it.
+- Notices that left you stuck now say what to do next. When AirPlay pairings, or on Windows your settings, couldn't be saved, the notice says to free up some space if the disk is full. A speaker without PTP timing says to close the app using port 319 or 320, a Google Cast speaker that stopped AudioSync's stream says to turn it on again, and a calibration that was interrupted or couldn't measure two speakers says how to try again. On Windows, a broken update download offers Open Release Page, and an update that doesn't fit on the disk says to free up space and try again.
+- On Windows, the tray icon's tooltip reads "AudioSync: Streaming on, 2 speakers on, 1 notice", with a colon after AudioSync instead of a dash.
 
 ### Fixed
 
@@ -50,7 +52,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
-- Notices that left you stuck now say what to do next. When AirPlay pairings, or on Windows your settings, couldn't be saved, the notice says to free up some space if the disk is full. A speaker without PTP timing says to close the app using port 319 or 320, a Google Cast speaker that stopped AudioSync's stream says to turn it on again, and a calibration that was interrupted or couldn't measure two speakers says how to try again. On Windows, a broken update download offers Open Release Page, and an update that doesn't fit on the disk says to free up space and try again.
 - On Windows, the notice about blocked microphone access and the calibration name both switches to turn on: "Let desktop apps access your microphone" and "Microphone access".
 - On the Mac, an equalizer curve name matches a saved one by the same rule as on Windows: ignoring case only. A name typed with a ready-made accented letter and one typed with a separate accent mark are now two curves.
 - On Windows, a preset holds the reference output like any other speaker, as on the Mac: recalling a preset without it switches it off, and a preset can hold it alone. A preset saved before this version leaves it as it is until you change something and choose Update to Current Settings for it.
@@ -66,7 +67,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a speaker row whose device another app holds says "In use by another app", the tray flyout is called the AudioSync tray panel, and a window that fails to open says so in a plain sentence, with the system's reason in the debug log.
 - On the Mac, the main window opens narrower: the speaker column on the right starts at about two thirds of its old width and widens with the window up to its old width, which is also as wide as the window goes. The window opens at the new size once, centered, even if it was moved or resized before.
 - On the Mac, when AirPlay stops after an internal error or can't start, a notice says "AirPlay stopped or couldn't start. Click Retry to try again." and has a Retry button, as on Windows. Before, a failed start said AudioSync keeps trying, with no button, and an internal error showed no notice.
-- On Windows, the tray icon's tooltip, which Narrator reads, says whether streaming is on, how many speakers are on and how many notices wait, such as "AudioSync: Streaming on, 2 speakers on, 1 notice", the facts VoiceOver reads on the Mac. Before, it said "Streaming to 2 speakers" and gave no count of speakers while streaming was off, or of notices.
+- On Windows, the tray icon's tooltip, which Narrator reads, says whether streaming is on, how many speakers are on and how many notices wait, such as "AudioSync – Streaming on, 2 speakers on, 1 notice", the facts VoiceOver reads on the Mac. Before, it said "Streaming to 2 speakers" and gave no count of speakers while streaming was off, or of notices.
 - On the Mac, VoiceOver reads how many speakers are on with the menu bar icon, between whether streaming is on and how many notices wait, such as "Streaming on, 2 speakers on, 1 notice".
 - The pairing prompt, its notices and the Guide ask for the code an Apple TV or AirPlay 2 speaker shows, the word its speaker row already uses, instead of a PIN. On the Mac and on Windows.
 - AirPlay 2 speakers, stereo pairs and home theater groups play without turning on AirPlay 2 (Experimental) first. A speaker that plays both AirPlay 1 and AirPlay 2 still uses AirPlay 1 unless that setting is on. On the Mac and on Windows.
