@@ -461,6 +461,10 @@ const char *asc_eq_preset_id(size_t preset);
 /* Writes a preset's ASC_EQ_BANDS band gains (dB) to gains_db; false for a bad index. */
 bool asc_eq_preset_gains(size_t preset, double *gains_db);
 
+/* Whether two saved-curve names are one name: equal ignoring case, with no
+ * Unicode normalization; false for NULL. */
+bool asc_eq_same_curve_name(const char *a, const char *b);
+
 /*
  * An equalizer. asc_eq_process runs on the capture thread; every other
  * asc_eq_* call is a control call.

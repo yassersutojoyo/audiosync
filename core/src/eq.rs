@@ -223,7 +223,7 @@ pub fn curve_name(typed: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
-fn same_name(a: &str, b: &str) -> bool {
+pub(crate) fn same_name(a: &str, b: &str) -> bool {
     a.to_lowercase() == b.to_lowercase()
 }
 

@@ -1333,6 +1333,12 @@ do {
     var full = (0..<Equalizer.maxCurves).map { Equalizer.Curve(name: "C\($0)", gains: gains) }
     check(Equalizer.save("One more", gains: gains, in: &full) == nil && Equalizer.save("c7", gains: gains, in: &full) == 7,
           "eq curves: a full list refuses a new name but replaces a taken one")
+    // covers: S270 (the core's same_name decides, so composed and decomposed accents stay apart as on Windows)
+    var spellings: [Equalizer.Curve] = []
+    check(Equalizer.save("Caf\u{E9}", gains: gains, in: &spellings) == 0
+            && Equalizer.save("CAFE\u{301}", gains: gains, in: &spellings) == 1
+            && Equalizer.save("CAF\u{C9}", gains: gains, in: &spellings) == 0,
+          "eq curves: names match ignoring case only, not Unicode composition")
 
     // covers: S23 (the host steps and clamps a stored curve's band gains)
     let stored = Data(#"[{"name":" Desk ","gains":[1.3,"loud",30,-30]},{"name":"desk","gains":[]},{"gains":[1]},7,{"name":"Late","gains":[0]}]"#.utf8)

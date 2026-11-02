@@ -95,7 +95,9 @@ enum Equalizer {
         return cut.isEmpty ? nil : cut
     }
 
-    private static func sameName(_ a: String, _ b: String) -> Bool { a.lowercased() == b.lowercased() }
+    private static func sameName(_ a: String, _ b: String) -> Bool {
+        a.withCString { first in b.withCString { second in asc_eq_same_curve_name(first, second) } }
+    }
 
     /// The gains on the controls' steps, ten of them.
     private static func steppedGains(_ gains: [Double]) -> [Double] {

@@ -15,6 +15,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An app in the list of several apps that only your last mix keeps there reads "(not running)" after its name. On the Mac and on Windows.
 - On Windows, when a newer version of AudioSync wrote your settings, the notice says so and that updating AudioSync gets them back. Before, it said AudioSync couldn't read them.
 - On Windows, the notice about blocked microphone access and the calibration name both switches to turn on: "Let desktop apps access your microphone" and "Microphone access".
+- On the Mac, an equalizer curve name matches a saved one by the same rule as on Windows: ignoring case only. A name typed with a ready-made accented letter and one typed with a separate accent mark are now two curves.
 
 ### Fixed
 
