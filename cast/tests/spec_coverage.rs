@@ -1,10 +1,12 @@
 //! Spec coverage: every clause of `docs/CAST_SPEC.md` (C1 to Cn) is named
-//! by at least one `// covers: C20, C26` line in `cast/src` or
-//! `cast/tests`, or is listed in `cast/tests/spec_pending.txt` with a
+//! by at least one `// covers: C20, C26` line in `cast/src`, `cast/tests`
+//! or `desktop/src` (where engine IDs such as `S241` on the same line are
+//! skipped), or is listed in `cast/tests/spec_pending.txt` with a
 //! one-line reason because a later stage implements it (the stream server,
 //! media, volume, timing, recovery, the host), or in
-//! `cast/tests/spec_exempt.txt` because only the host applies it and the
-//! host's own tests cover it. A clause is covered
+//! `cast/tests/spec_exempt.txt` because only the host applies it and a host
+//! test this check doesn't read (in `core/` or the Mac app) covers it. A
+//! clause is covered
 //! only when everything it asks of the sender is implemented and tested; a
 //! test for part of a pending clause says so in a plain comment instead of a
 //! marker. The pending list may only shrink: a clause that gains a marker
@@ -13,8 +15,7 @@
 //! A clause inserted between two others takes the earlier one's number and the
 //! next unused lowercase letter (`C77a`, then `C77b`). Tests in `core/` name
 //! Cast clauses on a `// CAST_SPEC: C77a` line: they are checked to name spec
-//! clauses, but don't count as coverage, since this check reads only the cast
-//! crate.
+//! clauses, but don't count as coverage.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -159,7 +160,8 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
 
 /// Clauses named by `marker` lines in the Rust files under `dirs` (relative
 /// to the cast crate), with where each was named; and every malformed marker
-/// line.
+/// line. Lines in `desktop/` also carry engine IDs (S, P, U) and a
+/// parenthesised note, which are skipped.
 fn marked(dirs: &[&str], marker: &str) -> (BTreeMap<Id, Vec<String>>, Vec<String>) {
     let mut files = Vec::new();
     for dir in dirs {
@@ -174,12 +176,14 @@ fn marked(dirs: &[&str], marker: &str) -> (BTreeMap<Id, Vec<String>>, Vec<String
             .unwrap_or(&file)
             .display()
             .to_string();
+        let host = file.starts_with(crate_dir().join("..").join("desktop"));
         for (index, line) in text.lines().enumerate() {
             let Some(list) = line.trim_start().strip_prefix(marker) else {
                 continue;
             };
             let place = format!("{name}:{}", index + 1);
             let ids: Vec<Option<Id>> = match list.strip_prefix(' ') {
+                Some(list) if host => host_ids(list),
                 Some(list) => list.split(", ").map(clause_id).collect(),
                 None => vec![None],
             };
@@ -195,8 +199,28 @@ fn marked(dirs: &[&str], marker: &str) -> (BTreeMap<Id, Vec<String>>, Vec<String
     (covered, malformed)
 }
 
+/// The Cast clauses on a desktop marker line: notes in parentheses may sit
+/// between IDs and hold commas, and a note left open runs on to the next line.
+fn host_ids(list: &str) -> Vec<Option<Id>> {
+    let mut bare = String::new();
+    let mut depth = 0usize;
+    for c in list.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => bare.push(c),
+            _ => {}
+        }
+    }
+    bare.split(',')
+        .map(str::trim)
+        .filter(|id| !id.starts_with(['S', 'P', 'U']))
+        .map(clause_id)
+        .collect()
+}
+
 fn covers() -> (BTreeMap<Id, Vec<String>>, Vec<String>) {
-    marked(&["src", "tests"], MARKER)
+    marked(&["src", "tests", "../desktop/src"], MARKER)
 }
 
 /// The `// CAST_SPEC:` lines of the core, which this check validates but
@@ -441,6 +465,16 @@ fn every_clause_names_a_source_and_the_ids_are_c1_to_cn_once_each() {
         "clauses without a *Source:* line: {}",
         list(unsourced)
     );
+}
+
+#[test]
+fn a_desktop_marker_keeps_its_cast_ids_around_engine_ids_and_notes() {
+    let found = |list: &str| host_ids(list).into_iter().collect::<Option<Vec<Id>>>();
+    assert_eq!(found("C77a, S241"), Some(ids(&["C77a"])));
+    assert_eq!(found("S246 (a note, with a comma), C2"), Some(ids(&["C2"])));
+    assert_eq!(found("C70 (0.55 (twice)), C104, P99"), Some(ids(&["C70", "C104"])));
+    assert_eq!(found("S112 (a note that runs on,"), Some(Vec::new()));
+    assert_eq!(found("C2, X9"), None);
 }
 
 #[test]
