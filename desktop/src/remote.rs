@@ -945,7 +945,18 @@ pub(crate) mod tests {
     // covers: C69
     #[test]
     fn the_remote_page_gets_the_cast_step_rounded_and_1_without_a_usable_one() {
-        for (reported, step) in [(Some(0.125), 13.0), (None, 1.0)] {
+        for (reported, step) in [
+            (Some(0.05), 5.0),
+            (Some(0.07), 7.0),
+            (Some(0.125), 13.0),
+            (Some(0.004), 1.0),
+            (Some(1.0), 100.0),
+            (None, 1.0),
+            (Some(0.0), 1.0),
+            (Some(-0.1), 1.0),
+            (Some(1.5), 1.0),
+            (Some(f64::NAN), 1.0),
+        ] {
             let mut state = state();
             state.speakers[2].cast.as_mut().unwrap().volume_step =
                 crate::audio::cast::volume_step(Some(&audiosync_cast::status::DeviceVolume {
