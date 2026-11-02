@@ -389,6 +389,8 @@ export component TrayFlyout inherits Window {
     in property <string> notice-announcement;
     callback power-toggled(bool);
     callback source-selected(int);
+    // Several Apps… under the source: opens the main window's list.
+    callback several-apps-requested();
     callback input-pair-selected(int);
     callback master-volume-changed(float);
     callback speaker-toggled(string);
@@ -408,6 +410,8 @@ export component TrayFlyout inherits Window {
     // Open Privacy Settings on a notice.
     callback notice-privacy-requested(int);
     callback notice-update-button-pressed(UpdateButton);
+    // Open Network Settings under the no-speakers note.
+    callback network-settings-requested();
     // Add by Address…: the main window's dialog.
     callback cast-add-address-requested();
     callback open-app();
@@ -443,6 +447,7 @@ export component TrayFlyout inherits Window {
     out property <bool> zone-focused;
     out property <bool> speaker-focused;
     out property <bool> add-address-focused;
+    out property <bool> network-settings-focused;
     // The height that shows every part down to the buttons, which the app
     // sizes the window to: Slint's own preferred height counts a wrapped
     // notice as one line. The parts sit at the top, so this holds at any
@@ -471,6 +476,7 @@ export component TrayFlyout inherits Window {
         root.zone-focused = false;
         root.speaker-focused = false;
         root.add-address-focused = false;
+        root.network-settings-focused = false;
         focus.focus();
     }
 
@@ -627,6 +633,19 @@ export component TrayFlyout inherits Window {
                         }
                     }
 
+                    // A link, not a drop-down entry, so arrowing or wheeling
+                    // through the sources never lands on it and closes the panel.
+                    HorizontalLayout {
+                        alignment: start;
+                        LinkButton {
+                            text: Strings.source-mix-more;
+                            label: Strings.source-mix-more;
+                            clicked => {
+                                root.several-apps-requested();
+                            }
+                        }
+                    }
+
                     if root.live-input-hint != "": SecondaryText {
                         text: root.live-input-hint;
                     }
@@ -711,6 +730,21 @@ export component TrayFlyout inherits Window {
                         property <string> list-note: root.airplay-none-found ? (self.both-none ? Strings.network-none-found : Strings.airplay-none-found) : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : Strings.connected-none;
                         property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
                         text: root.this-pc.length == 0 && root.all-hidden ? Strings.flyout-all-hidden : root.this-pc.length == 0 && root.airplay-none-found ? Strings.no-speakers : self.cast-note == "" ? self.list-note : self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
+                    }
+
+                    // Linux has no Settings page to open.
+                    if root.zones.length == 0 && root.speakers.length == 0 && root.airplay-none-found && Platform.os != OperatingSystemType.linux: HorizontalLayout {
+                        alignment: start;
+                        LinkButton {
+                            text: Strings.open-network-settings;
+                            label: Strings.open-network-settings;
+                            clicked => {
+                                root.network-settings-requested();
+                            }
+                            changed keyboard-focused => {
+                                root.network-settings-focused = self.keyboard-focused;
+                            }
+                        }
                     }
 
                     if root.zones.length > 0 || root.speakers.length > 0: ScrollView {

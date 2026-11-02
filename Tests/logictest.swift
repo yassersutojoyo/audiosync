@@ -413,6 +413,14 @@ do {
           "last mix: the several-apps list keeps an app only the last mix holds, once and as not running, while no mix is in use",
           "\(offeredKept)")
 }
+do {
+    let mixMenuSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    // covers: S353
+    check(UIStrings().sourceMixAppName("Safari", running: false) == "Safari (not running)"
+            && UIStrings().sourceMixAppName("Safari", running: true) == "Safari"
+            && mixMenuSource.contains("sourceMixAppName(app.name, running: app.available)"),
+          "last mix: the several-apps list names an app that isn't running as not running")
+}
 
 // MARK: Source apps — display names and the picker's app list
 // covers: S12 (the picker's apps and their names)

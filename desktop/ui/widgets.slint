@@ -2163,8 +2163,8 @@ export component SpeakerRow inherits Rectangle {
                                             root.box-clicked();
                                         }
 
-                                        if root.tip-allowed: Tooltip {
-                                            LabelTip {
+                                        if root.tip-allowed && group-line.preferred-width > group-line.width: Tooltip {
+                                            group-tip := LabelTip {
                                                 text: root.item.group-note;
                                                 max-tip-width: root.width;
                                             }
@@ -2986,7 +2986,7 @@ export component ZoneHeader inherits Rectangle {
                                             }
                                         }
 
-                                        if root.tip-allowed: Tooltip {
+                                        if root.tip-allowed && name-text.preferred-width > name-text.width: Tooltip {
                                             name-tip := LabelTip {
                                                 text: root.item.name;
                                                 max-tip-width: root.width;
@@ -3059,7 +3059,7 @@ export component ZoneHeader inherits Rectangle {
                                         root.expanded-changed(!root.item.expanded);
                                     }
 
-                                    if root.tip-allowed: Tooltip {
+                                    if root.tip-allowed && count-text.preferred-width > count-text.width: Tooltip {
                                         count-tip := LabelTip {
                                             text: count-text.text;
                                             max-tip-width: root.width;

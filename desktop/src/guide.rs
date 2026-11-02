@@ -23,6 +23,9 @@ pub enum SettingsPage {
     /// Privacy & security > Microphone, where desktop apps get microphone
     /// access. Opened by the microphone notice, not by a guide step.
     MicrophonePrivacy,
+    /// Network & internet, with the network's status and its Private or
+    /// Public profile. Opened by the no-speakers note, not by a guide step.
+    NetworkStatus,
 }
 
 impl SettingsPage {
@@ -31,6 +34,7 @@ impl SettingsPage {
             SettingsPage::VolumeMixer => "ms-settings:apps-volume",
             SettingsPage::Sound => "ms-settings:sound",
             SettingsPage::MicrophonePrivacy => "ms-settings:privacy-microphone",
+            SettingsPage::NetworkStatus => "ms-settings:network-status",
         }
     }
 }
@@ -70,7 +74,7 @@ pub fn linux_program(
             }
             candidates.push(("pavucontrol", &[]));
         }
-        SettingsPage::MicrophonePrivacy => {}
+        SettingsPage::MicrophonePrivacy | SettingsPage::NetworkStatus => {}
     }
     candidates
         .into_iter()
@@ -461,6 +465,18 @@ mod tests {
         assert_eq!(
             linux_program(SettingsPage::MicrophonePrivacy, "GNOME", all),
             None
+        );
+        assert_eq!(
+            linux_program(SettingsPage::NetworkStatus, "GNOME", all),
+            None
+        );
+    }
+
+    #[test]
+    fn open_network_settings_opens_the_network_status_page() {
+        assert_eq!(
+            SettingsPage::NetworkStatus.uri(),
+            "ms-settings:network-status"
         );
     }
 

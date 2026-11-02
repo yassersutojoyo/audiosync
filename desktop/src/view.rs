@@ -236,8 +236,6 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
-    /// The sources, then Several Apps…, which opens the main window's list.
-    flyout_sources: Rc<VecModel<SharedString>>,
     /// The chosen input device's channel pairs; empty up to two channels.
     input_pairs: Rc<VecModel<SharedString>>,
     mix_apps: Rc<VecModel<MixAppItem>>,
@@ -430,8 +428,8 @@ const MAIN_WINDOW_CHROME: (f64, f64) = (16.0, 64.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the zone rows,
-/// the speaker rows (a zone's members among them) and the Add by Address
-/// link.
+/// the speaker rows (a zone's members among them), the Add by Address link
+/// and the Open Network Settings link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutParts {
     notices: bool,
@@ -439,6 +437,7 @@ struct FlyoutParts {
     zones: bool,
     speakers: bool,
     add_address: bool,
+    network_settings: bool,
 }
 
 impl FlyoutParts {
@@ -449,13 +448,15 @@ impl FlyoutParts {
             || (self.zones && other.zones)
             || (self.speakers && other.speakers)
             || (self.add_address && other.add_address)
+            || (self.network_settings && other.network_settings)
     }
 }
 
 /// What the tray flyout shows: how many notices there are and how many of
 /// them it lists, how many zones, how many of this PC's and connected
 /// speakers in no zone, and the shape of the zones' member lists
-/// ([`zone_shape`]), and whether it shows the Add by Address link.
+/// ([`zone_shape`]), and whether it shows the Add by Address link and the
+/// Open Network Settings link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutCounts {
     notices: usize,
@@ -465,6 +466,7 @@ struct FlyoutCounts {
     speakers: usize,
     zone_members: u64,
     add_address: bool,
+    network_settings: bool,
 }
 
 impl FlyoutCounts {
@@ -485,6 +487,7 @@ impl FlyoutCounts {
                 || self.speakers != next.speakers
                 || self.zone_members != next.zone_members,
             add_address: self.add_address && !next.add_address,
+            network_settings: self.network_settings && !next.network_settings,
         }
     }
 }
@@ -996,7 +999,6 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
-            flyout_sources: Rc::new(VecModel::default()),
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -1724,8 +1726,7 @@ impl App {
             .set_calibrate_all_rows(ModelRc::from(m.calibration_rows.clone()));
         self.main
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
-        self.flyout
-            .set_sources(ModelRc::from(m.flyout_sources.clone()));
+        self.flyout.set_sources(ModelRc::from(m.sources.clone()));
         self.flyout
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
@@ -1943,6 +1944,8 @@ impl App {
         drop(ui);
         self.main
             .set_connected_virtual_hidden(connected_virtual_hidden);
+        // Read before the flyout takes the new state, for `flyout_shown`.
+        let none_found_shown = self.flyout.get_airplay_none_found();
         self.main.set_airplay_none_found(state.airplay_none_found);
         self.flyout.set_airplay_none_found(state.airplay_none_found);
         self.main.set_airplay_searching(state.airplay_searching);
@@ -2077,6 +2080,9 @@ impl App {
             speakers: m.flyout_connected.row_count(),
             zone_members: self.zone_shape_shown(),
             add_address: add_address_shown,
+            network_settings: none_found_shown
+                && m.zones.row_count() == 0
+                && m.flyout_connected.row_count() == 0,
         };
         let flyout_removed = flyout_shown.removed_by(FlyoutCounts {
             notices: notices.len(),
@@ -2090,6 +2096,7 @@ impl App {
                     .map(|zone| listed_members(zone.item.expanded, zone.members.len())),
             ),
             add_address: state.cast_by_address && state.cast_list == ui_model::CastList::NoneFound,
+            network_settings: state.airplay_none_found && zones.is_empty() && connected.is_empty(),
         });
         let main_lists = MainLists {
             notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
@@ -2118,9 +2125,6 @@ impl App {
             connected_zoned,
             ..
         } = main_lists;
-        let mut flyout_sources = sources.clone();
-        flyout_sources.push(strings.get_source_mix_more());
-        sync_model(&m.flyout_sources, flyout_sources);
         sync_model(&m.sources, sources);
         sync_model(&m.input_pairs, input_pairs);
         self.main.set_input_pair_index(input_pair_index);
@@ -2131,7 +2135,11 @@ impl App {
                 .mix_apps
                 .iter()
                 .map(|app| MixAppItem {
-                    name: app.name.as_str().into(),
+                    name: if app.running {
+                        app.name.as_str().into()
+                    } else {
+                        strings.invoke_source_not_running(app.name.as_str().into())
+                    },
                     checked: app.checked,
                 })
                 .collect(),
@@ -2363,6 +2371,7 @@ impl App {
             zones: flyout.get_zone_focused(),
             speakers: flyout.get_speaker_focused(),
             add_address: flyout.get_add_address_focused(),
+            network_settings: flyout.get_network_settings_focused(),
         };
         if focused.overlaps(removed) && flyout.window().is_visible() {
             flyout.invoke_take_focus();
@@ -2608,6 +2617,8 @@ impl App {
         });
         let w = weak.clone();
         main.on_cast_add_address_requested(move || with_app(&w, App::ask_cast_address));
+        let w = weak.clone();
+        main.on_network_settings_requested(move || with_app(&w, App::open_network_settings));
         let w = weak.clone();
         main.on_cast_remove_requested(move |id| {
             with_app(&w, |app| app.update(|b| b.remove_cast_address(&id)))
@@ -2896,17 +2907,13 @@ impl App {
         let w = weak.clone();
         flyout.on_power_toggled(move |on| with_app(&w, |app| app.update(|b| b.set_running(on))));
         let w = weak.clone();
-        flyout.on_source_selected(move |index| {
+        flyout.on_source_selected(move |index| with_app(&w, |app| app.select_source(index)));
+        let w = weak.clone();
+        flyout.on_several_apps_requested(move || {
             with_app(&w, |app| {
-                // The shown list's last row: the snapshot may have grown since.
-                let shown = app.models.flyout_sources.row_count();
-                if usize::try_from(index).is_ok_and(|i| i + 1 == shown) {
-                    app.hide_flyout();
-                    app.show_main();
-                    app.main.set_mix_open(true);
-                } else {
-                    app.select_source(index);
-                }
+                app.hide_flyout();
+                app.show_main();
+                app.main.set_mix_open(true);
             })
         });
         let w = weak.clone();
@@ -2946,6 +2953,8 @@ impl App {
         });
         let w = weak.clone();
         flyout.on_notice_privacy_requested(move |_| with_app(&w, App::open_microphone_privacy));
+        let w = weak.clone();
+        flyout.on_network_settings_requested(move || with_app(&w, App::open_network_settings));
         let w = weak.clone();
         flyout.on_notice_update_button_pressed(move |button| {
             with_app(&w, |app| app.press_update_button(button))
@@ -3227,6 +3236,15 @@ impl App {
         if !crate::platform::open_settings(uri) {
             self.log
                 .log(|| format!("notice: the shell did not open {uri}"));
+        }
+    }
+
+    /// Opens the network settings for the note that no speakers were found.
+    fn open_network_settings(&self) {
+        let uri = SettingsPage::NetworkStatus.uri();
+        if !crate::platform::open_settings(uri) {
+            self.log
+                .log(|| format!("no speakers found: the shell did not open {uri}"));
         }
     }
 
@@ -5644,7 +5662,9 @@ fn guide_page(page: Option<SettingsPage>) -> GuidePage {
         return GuidePage::None;
     }
     match page {
-        None | Some(SettingsPage::MicrophonePrivacy) => GuidePage::None,
+        None | Some(SettingsPage::MicrophonePrivacy | SettingsPage::NetworkStatus) => {
+            GuidePage::None
+        }
         Some(SettingsPage::VolumeMixer) => GuidePage::VolumeMixer,
         Some(SettingsPage::Sound) => GuidePage::Sound,
     }
@@ -5730,8 +5750,11 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::AirPlayPtpPortsTaken => strings.get_notice_airplay_ptp_ports_taken(),
         NoticeMessage::SettingsNotSaved => strings.get_notice_settings_not_saved(),
         NoticeMessage::PairingsNotSaved => strings.get_notice_pairings_not_saved(),
-        NoticeMessage::SettingsKeptAside { file } => {
+        NoticeMessage::SettingsKeptAside { file, newer: false } => {
             strings.invoke_notice_settings_kept_aside(file.as_str().into())
+        }
+        NoticeMessage::SettingsKeptAside { file, newer: true } => {
+            strings.invoke_notice_settings_from_newer(file.as_str().into())
         }
         NoticeMessage::PairingsKeptAside { file } => {
             strings.invoke_notice_pairings_kept_aside(file.as_str().into())
@@ -6216,7 +6239,6 @@ mod tests {
             let mut backend = MockBackend::new();
             backend.unplug_chosen_input(name);
             let app = app_over(backend);
-            // The flyout's Several Apps… comes after it.
             let last = app.main.get_sources().row_count() - 1;
             for (sources, index) in [
                 (app.main.get_sources(), app.main.get_source_index()),
@@ -9093,6 +9115,76 @@ mod tests {
         shows_in_full(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
     }
 
+    /// A zone name or zone count line that fits shows no tooltip: only one
+    /// cut to "…" does. An In zones name keeps its tip, the only place with
+    /// its device name and the rename hint.
+    #[test]
+    fn a_zone_name_that_fits_shows_no_tooltip() {
+        let mut backend = MockBackend::new();
+        let mut den = long_named_speaker(&backend, "airplay:den");
+        den.name = "Den".into();
+        backend.add_speaker(den);
+        backend.add_zone("zone:den", "Den", &["airplay:den"]);
+        let app = narrow_app(backend);
+        for (label, tip) in [
+            ("ZoneHeader::name-text", "ZoneHeader::name-tip"),
+            ("ZoneHeader::count-text", "ZoneHeader::count-tip"),
+        ] {
+            assert!(rest_on(&app, label, tip).1.is_none(), "{label}");
+        }
+        scroll_to_end(&app);
+        let (_, tip) = rest_on(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
+        assert!(tip.is_some(), "the In zones name");
+    }
+
+    /// Scrolls the narrow app's speaker list to its end, where the rows
+    /// below the first screen are built.
+    fn scroll_to_end(app: &App) {
+        let list = element(app, "MainWindow::scroll").expect("the speaker list");
+        let (at, size) = (list.absolute_position(), list.size());
+        scroll(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+            -3000.0,
+        );
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+    }
+
+    /// The narrow app scrolled to a stereo pair of `member` and Right, the
+    /// last speaker listed.
+    fn pair_app(member: &str) -> Rc<App> {
+        use crate::audio::backend::AirPlayGroup;
+        let mut backend = MockBackend::new();
+        let mut speaker = long_named_speaker(&backend, "airplay:pair");
+        speaker.name = "Pair".into();
+        speaker.group = Some(AirPlayGroup {
+            kind: AirPlayGroupKind::StereoPair,
+            members: vec![member.to_owned(), "Right".to_owned()],
+            missing: Vec::new(),
+            incomplete: false,
+        });
+        backend.add_speaker(speaker);
+        let app = narrow_app(backend);
+        scroll_to_end(&app);
+        app
+    }
+
+    #[test]
+    fn a_cut_pair_line_shows_in_full_in_its_tooltip() {
+        let app = pair_app("The long living room speaker by the window and the bookshelf");
+        shows_in_full(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
+    }
+
+    #[test]
+    fn a_pair_line_that_fits_shows_no_tooltip() {
+        let app = pair_app("Left");
+        let (_, tip) = rest_on(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
+        assert!(tip.is_none());
+    }
+
     /// With a long zone name, the "in <zone>" link in an In zones row gives
     /// way before the speaker's name does: the name keeps 80 px and the link
     /// ends before the options button.
@@ -11485,6 +11577,7 @@ mod tests {
         speakers: 3,
         zone_members: 1,
         add_address: false,
+        network_settings: false,
     };
 
     #[test]
@@ -11503,6 +11596,18 @@ mod tests {
             }
         );
         assert_eq!(FLYOUT.removed_by(add_address), FlyoutParts::default());
+        // A speaker is found: the Open Network Settings link goes.
+        let network_settings = FlyoutCounts {
+            network_settings: true,
+            ..FLYOUT
+        };
+        assert_eq!(
+            network_settings.removed_by(FLYOUT),
+            FlyoutParts {
+                network_settings: true,
+                ..FlyoutParts::default()
+            }
+        );
         let unplugged = FlyoutCounts {
             speakers: 2,
             ..FLYOUT
@@ -11614,6 +11719,7 @@ mod tests {
                 zones: true,
                 speakers: false,
                 add_address: true,
+                network_settings: true,
             }),
             "a focused speaker row keeps its focus when other parts change"
         );
@@ -12987,6 +13093,29 @@ mod tests {
         );
     }
 
+    // covers: S353, S354
+    #[test]
+    fn an_app_only_the_last_mix_holds_is_listed_as_not_running() {
+        let mut audio = crate::audio::mock::MockBackend::empty();
+        audio.add_app(2000, "Spotify.exe");
+        audio.add_app(3000, "Chrome.exe");
+        let mut adapter =
+            crate::adapter::AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.toggle_mix_app("Spotify.exe");
+        adapter.toggle_mix_app("Chrome.exe");
+        adapter.select_source("system");
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_devices();
+        let app = app_over(adapter);
+        let names: Vec<String> = app
+            .main
+            .get_mix_apps()
+            .iter()
+            .map(|app| app.name.to_string())
+            .collect();
+        assert_eq!(names, ["Spotify", "Chrome (not running)"]);
+    }
+
     #[test]
     fn a_several_apps_source_that_quits_is_named_in_the_uis_words() {
         use audiosync_core::policy::source_quit::WhenSourceQuits;
@@ -13079,7 +13208,10 @@ mod tests {
             "Dismiss: Kitchen didn't start, turned off"
         );
         assert_eq!(
-            dismiss_label(NoticeMessage::SettingsKeptAside { file: "f".into() }),
+            dismiss_label(NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: false,
+            }),
             "Dismiss: settings unreadable, copy kept"
         );
         assert_eq!(
@@ -13127,7 +13259,10 @@ mod tests {
             NoticeMessage::AirPlayPtpPortsTaken,
             NoticeMessage::SettingsNotSaved,
             NoticeMessage::PairingsNotSaved,
-            NoticeMessage::SettingsKeptAside { file: "f".into() },
+            NoticeMessage::SettingsKeptAside {
+                file: "f".into(),
+                newer: false,
+            },
             NoticeMessage::PairingsKeptAside { file: "f".into() },
             NoticeMessage::NoSoundOutput,
             NoticeMessage::LaunchAtLoginFailed,
@@ -13151,6 +13286,41 @@ mod tests {
                 "{message:?}: \"{label}\" is not a short name"
             );
         }
+    }
+
+    #[test]
+    fn settings_from_a_newer_version_get_their_own_text() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        let text = |newer| {
+            notice_text(
+                &strings,
+                &NoticeMessage::SettingsKeptAside {
+                    file: "settings.newer-1.json".into(),
+                    newer,
+                },
+            )
+        };
+        let newer = text(true);
+        assert!(
+            newer.starts_with("Your saved settings are from a newer version of AudioSync")
+                && newer.contains("kept as settings.newer-1.json")
+                && newer.ends_with("Update AudioSync to get your settings back."),
+            "{newer}"
+        );
+        let ignored = text(false);
+        assert!(
+            ignored.starts_with("AudioSync couldn't read your saved settings when it started"),
+            "{ignored}"
+        );
+        let pairings = notice_text(
+            &strings,
+            &NoticeMessage::PairingsKeptAside { file: "f".into() },
+        );
+        assert!(
+            pairings.starts_with("AudioSync couldn't read your AirPlay pairings"),
+            "{pairings}"
+        );
     }
 
     /// The App over `backend`, with its main window shown and drawn once.
@@ -13317,47 +13487,27 @@ mod tests {
         assert!(!app.main.get_mix_open(), "a refresh never reopens it");
     }
 
-    /// The flyout's source drop-down ends in Several Apps…, as the Mac
-    /// panel's source menu ends in its submenu: it opens the main window's
-    /// list and leaves the source as it was.
+    /// Several Apps… is a link under the flyout's source drop-down, as the
+    /// Mac panel's source menu ends in its submenu: the drop-down holds the
+    /// sources only, and the link opens the main window's list and leaves the
+    /// source as it was.
     #[test]
-    fn several_apps_at_the_end_of_the_flyout_sources_opens_the_main_windows_list() {
+    fn several_apps_under_the_flyout_sources_opens_the_main_windows_list() {
+        use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         let sources = app.snapshot().sources.len();
-        let chosen = app.flyout.get_source_index();
-        let shown = app.flyout.get_sources();
-        assert_eq!(shown.row_count(), sources + 1);
-        assert_eq!(shown.row_data(sources).unwrap(), "Several Apps…");
+        let chosen = app.snapshot().source_id;
+        assert_eq!(app.flyout.get_sources().row_count(), sources);
         assert_eq!(app.main.get_sources().row_count(), sources);
 
         app.flyout.show().unwrap();
-        app.flyout.invoke_source_selected(sources as i32);
+        let links: Vec<_> =
+            ElementHandle::find_by_accessible_label(&app.flyout, "Several Apps…").collect();
+        assert_eq!(links.len(), 1);
+        links[0].invoke_accessible_default_action();
         assert!(app.main.get_mix_open());
         assert!(app.main.window().is_visible());
         assert!(!app.flyout.window().is_visible());
-        assert_eq!(app.flyout.get_source_index(), chosen);
-    }
-
-    /// An app that starts playing after the flyout's list was built doesn't
-    /// turn the Several Apps… row into a pick of that app.
-    #[test]
-    fn several_apps_in_the_flyout_opens_the_list_while_a_new_app_waits_for_the_refresh() {
-        let backend = MockBackend::new();
-        let late = backend.late_sources.clone();
-        let app = app_over(backend);
-        let chosen = app.snapshot().source_id;
-        let last = app.flyout.get_sources().row_count() - 1;
-        late.borrow_mut().push(ui_model::Source {
-            id: "app:late".into(),
-            name: "Late App".into(),
-            kind: SourceKind::App,
-            channels: 0,
-            apps: Vec::new(),
-            unplugged: false,
-        });
-
-        app.flyout.invoke_source_selected(last as i32);
-        assert!(app.main.get_mix_open());
         assert_eq!(app.snapshot().source_id, chosen);
     }
 

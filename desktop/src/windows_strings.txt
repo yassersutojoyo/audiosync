@@ -40,7 +40,7 @@ Muted in Windows, volume {}%
 {0}: Windows volume is {1}%
 {}: muted in Windows
 {0}: muted in Windows, volume {1}%
-Windows is blocking microphone access for desktop apps. Turn on “Let desktop apps access your microphone” in Settings > Privacy & security > Microphone, and try again.
+Windows is blocking microphone access for desktop apps. Turn on “Let desktop apps access your microphone” and “Microphone access” in Settings > Privacy & security > Microphone, and try again.
 AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.
 The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.
 The default microphone is a Bluetooth headset's hands-free input, and recording from it would switch the headset to call mode. Choose another input in Settings > System > Sound, and try again.

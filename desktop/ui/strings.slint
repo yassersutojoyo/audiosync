@@ -52,6 +52,9 @@ export global Strings {
     out property <string> airplay-none-found: root.public-network ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).") : Platform.os == OperatingSystemType.linux ? @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it.");
     // In place of that note and the Google Cast one when neither finds any.
     out property <string> network-none-found: root.public-network ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it (or set the network to Private).") : Platform.os == OperatingSystemType.linux ? @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that no firewall on this PC blocks AudioSync.") : @tr("No AirPlay or Google Cast speakers found yet. Make sure this PC is on the same network as your speakers, and that Windows Firewall allows AudioSync on it.");
+    // Under that note: opens Settings > Network & internet, as the Mac's
+    // Open Local Network Settings does.
+    out property <string> open-network-settings: @tr("Open Network Settings");
     // Under Connected Speakers while no Google Cast speaker is listed: the
     // search runs, has found nothing for 20 seconds, or couldn't start.
     public pure function cast-list(state: CastList) -> string {
@@ -604,6 +607,11 @@ export global Strings {
         return @tr("{} (not connected)", name);
     }
 
+    // An app in the several-apps list that only the last mix keeps there.
+    public pure function source-not-running(name: string) -> string {
+        return @tr("{} (not running)", name);
+    }
+
     // The status under the wordmark.
     public pure function status(running: bool, speakers: int) -> string {
         if !running {
@@ -703,7 +711,7 @@ export global Strings {
 
     // Windows' privacy settings block microphone access for desktop apps.
     public pure function notice-microphone-blocked(source: string) -> string {
-        return @tr("Windows is blocking microphone access for desktop apps, so AudioSync can't capture {}. Open Privacy Settings and turn on microphone access for desktop apps.", source);
+        return @tr("Windows is blocking microphone access for desktop apps, so AudioSync can't capture {}. Open Privacy Settings and turn on “Let desktop apps access your microphone” and “Microphone access”.", source);
     }
 
     // The input device being captured was unplugged while streaming.
@@ -718,7 +726,7 @@ export global Strings {
     }
 
     // The settings file couldn't be read when the app started (another
-    // program held it, it was damaged, or a newer AudioSync wrote it), so
+    // program held it, or it was damaged), so
     // the defaults applied; it was kept under this file name in the data
     // folder (data_folder.rs) before the first save over it.
     public pure function notice-settings-kept-aside(file: string) -> string {
@@ -726,6 +734,14 @@ export global Strings {
             return @tr("AudioSync couldn't read your saved settings when it started, so it's using the default settings. The old file was kept as {} in AudioSync's data folder (usually ~/.local/share/audiosync).", file);
         }
         return @tr("AudioSync couldn't read your saved settings when it started, so it's using the default settings. The old file was kept as {} in AudioSync's data folder (type %LOCALAPPDATA% in File Explorer's address bar, then open AudioSync).", file);
+    }
+
+    // The same when a newer AudioSync wrote the file, which updating reads.
+    public pure function notice-settings-from-newer(file: string) -> string {
+        if Platform.os == OperatingSystemType.linux {
+            return @tr("Your saved settings are from a newer version of AudioSync, so this version is using the default settings. Your settings file was kept as {} in AudioSync's data folder (usually ~/.local/share/audiosync). Update AudioSync to get your settings back.", file);
+        }
+        return @tr("Your saved settings are from a newer version of AudioSync, so this version is using the default settings. Your settings file was kept as {} in AudioSync's data folder (type %LOCALAPPDATA% in File Explorer's address bar, then open AudioSync). Update AudioSync to get your settings back.", file);
     }
 
     // The same for the file with the AirPlay pairings: those speakers ask
@@ -1682,7 +1698,7 @@ export global Strings {
     out property <string> calibration-a-speaker: @tr("a speaker");
     out property <string> calibration-no-reference: @tr("Calibration measures against the PC's own speakers, and they aren't listed.");
     out property <string> calibration-own-speakers: @tr("the PC's own speakers");
-    out property <string> calibration-microphone-denied: Platform.os == OperatingSystemType.linux ? @tr("PipeWire didn't let AudioSync use the microphone. Allow microphone access for AudioSync in your desktop's privacy settings, and try again.") : @tr("Windows is blocking microphone access for desktop apps. Turn on “Let desktop apps access your microphone” in Settings > Privacy & security > Microphone, and try again.");
+    out property <string> calibration-microphone-denied: Platform.os == OperatingSystemType.linux ? @tr("PipeWire didn't let AudioSync use the microphone. Allow microphone access for AudioSync in your desktop's privacy settings, and try again.") : @tr("Windows is blocking microphone access for desktop apps. Turn on “Let desktop apps access your microphone” and “Microphone access” in Settings > Privacy & security > Microphone, and try again.");
     out property <string> calibration-no-microphone: Platform.os == OperatingSystemType.linux ? @tr("AudioSync couldn't record from the microphone. Check the input in Sound settings.") : @tr("AudioSync couldn't record from the microphone. Check the input in Settings > System > Sound.");
     out property <string> calibration-unsupported-rate: Platform.os == OperatingSystemType.linux ? @tr("The microphone runs at a sample rate calibration can't use. Choose another input in Sound settings, and try again.") : @tr("The microphone runs at a sample rate calibration can't use. Set its format to 48 kHz in Settings > System > Sound, and try again.");
     out property <string> calibration-source-silent: @tr("The test sound couldn't start because streaming stalled. Turn streaming off and on, and try again.");

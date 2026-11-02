@@ -1628,3 +1628,24 @@ fn the_calibration_undo_button_is_labeled_as_on_the_mac() {
     assert!(button.contains("text: Strings.calibrate-all-undo;"));
     assert!(button.contains("accessible-label: Strings.calibrate-all-undo-label;"));
 }
+
+/// The microphone notice and the calibration name the same Windows switches:
+/// the desktop apps one, and the master one, which blocks it when off.
+#[test]
+fn both_microphone_fixes_name_the_same_windows_switches() {
+    let strings = include_str!("../ui/strings.slint");
+    let notice = &strings[strings
+        .find("function notice-microphone-blocked(")
+        .expect("the notice")..];
+    let notice = &notice[..notice.find("\n    }").expect("the notice ends")];
+    let calibration = strings
+        .lines()
+        .find(|line| line.contains("calibration-microphone-denied:"))
+        .expect("the calibration text");
+    for text in [notice, calibration] {
+        assert!(
+            text.contains("“Let desktop apps access your microphone” and “Microphone access”"),
+            "{text}"
+        );
+    }
+}
