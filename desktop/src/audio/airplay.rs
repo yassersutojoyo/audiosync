@@ -2082,16 +2082,19 @@ impl AirPlaySpeakers {
                 missing.push(name);
             }
         }
+        missing.sort_by_key(|name| name.to_lowercase());
+        let mut members: Vec<String> = target
+            .members
+            .iter()
+            .map(|member| member.name.clone())
+            .collect();
+        members.sort_by_key(|name| name.to_lowercase());
         AirPlayGroup {
             kind: match target.id.kind {
                 TargetKind::StereoPair => AirPlayGroupKind::StereoPair,
                 TargetKind::HomeTheater => AirPlayGroupKind::HomeTheater,
             },
-            members: target
-                .members
-                .iter()
-                .map(|member| member.name.clone())
-                .collect(),
+            members,
             missing,
             incomplete: !target.complete() || !silent.is_empty(),
         }
@@ -10491,6 +10494,31 @@ pub mod tests {
                 .expect("a group")
                 .incomplete
         );
+    }
+
+    // covers: P181
+    #[test]
+    fn a_pair_names_its_members_and_missing_members_by_name_ignoring_case() {
+        let fake = FakeAirPlay::new();
+        let (mut pair, _, _) = stereo_pair();
+        let banana = airplay2_device(21, "Banana", false);
+        let apple = airplay2_device(22, "apple", false);
+        pair.members = vec![member_of(&banana), member_of(&apple)];
+        let mut airplay = with_target(&fake, &pair, &[&banana, &apple]);
+        let group = airplay.speakers()[0].group.clone().expect("a group");
+        assert_eq!(group.members, ["apple", "Banana"]);
+
+        pair.members[0].device = None;
+        fake.target(&pair);
+        airplay.set_streaming(true);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        fake.push(SenderEvent::TargetMissing {
+            id: pair.id.clone(),
+            missing: vec![apple.key.clone()],
+        });
+        airplay.poll();
+        let group = airplay.speakers()[0].group.clone().expect("a group");
+        assert_eq!(group.missing, ["apple", "Banana"]);
     }
 
     // covers: P181

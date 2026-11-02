@@ -24,7 +24,7 @@ use audiosync_remote::{Command, Config, RemoteError, RemoteServer};
 use slint::{ComponentHandle, SharedString};
 
 use super::{
-    App, REMOTE_PUBLIC_NOTICE_ID, availability, cast_group_note, cast_state, row_state,
+    App, REMOTE_PUBLIC_NOTICE_ID, availability, cast_group_note, cast_state, group_note, row_state,
     speaker_kind, with_app,
 };
 use crate::Strings;
@@ -227,6 +227,9 @@ impl RowText for StringsText<'_> {
                 .is_some_and(|cast| cast.added_by_address)
         {
             return self.0.get_cast_added_by_address().into();
+        }
+        if note.is_empty() {
+            return group_note(&self.0, speaker).into();
         }
         note.into()
     }
@@ -1334,6 +1337,32 @@ mod tests {
         let speaker = state.speaker("cc:192.0.2.20").expect("listed");
         let text = super::StringsText(app.strings());
         assert_eq!(text.note(&state, speaker), "Added by address");
+    }
+
+    // covers: S343
+    #[test]
+    fn the_phone_row_note_of_a_stereo_pair_names_its_members_or_the_missing_one() {
+        use crate::audio::backend::{AirPlayGroup, AirPlayGroupKind};
+        use crate::remote::RowText;
+        let app = over_loopback(MockBackend::new());
+        let text = super::StringsText(app.strings());
+        let state = app.snapshot();
+        let mut speaker = state
+            .speaker("airplay:kitchen")
+            .expect("the mock lists Kitchen")
+            .clone();
+        let mut group = AirPlayGroup {
+            kind: AirPlayGroupKind::StereoPair,
+            members: vec!["Left".into(), "Right".into()],
+            missing: Vec::new(),
+            incomplete: false,
+        };
+        speaker.group = Some(group.clone());
+        assert_eq!(text.note(&state, &speaker), "Stereo pair: Left and Right");
+        group.missing = vec!["Right".into()];
+        group.incomplete = true;
+        speaker.group = Some(group);
+        assert_eq!(text.note(&state, &speaker), "Stereo pair, missing Right");
     }
 
     /// The mock with a zone of the kitchen and living room speakers and a
