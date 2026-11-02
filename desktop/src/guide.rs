@@ -466,12 +466,18 @@ mod tests {
             linux_program(SettingsPage::MicrophonePrivacy, "GNOME", all),
             None
         );
-        assert_eq!(linux_program(SettingsPage::NetworkStatus, "GNOME", all), None);
+        assert_eq!(
+            linux_program(SettingsPage::NetworkStatus, "GNOME", all),
+            None
+        );
     }
 
     #[test]
     fn open_network_settings_opens_the_network_status_page() {
-        assert_eq!(SettingsPage::NetworkStatus.uri(), "ms-settings:network-status");
+        assert_eq!(
+            SettingsPage::NetworkStatus.uri(),
+            "ms-settings:network-status"
+        );
     }
 
     #[test]

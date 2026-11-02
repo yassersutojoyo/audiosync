@@ -710,10 +710,16 @@ mod tests {
         let body = handler_body(main, "text: Strings.open-network-settings;", "clicked");
         assert!(body.contains("root.network-settings();"), "{body}");
         let body = handler_body(main, "show-network-settings: root.", "network-settings");
-        assert!(body.contains("root.network-settings-requested();"), "{body}");
+        assert!(
+            body.contains("root.network-settings-requested();"),
+            "{body}"
+        );
         let flyout = include_str!("../ui/flyout.slint");
         let body = handler_body(flyout, "text: Strings.open-network-settings;", "clicked");
-        assert!(body.contains("root.network-settings-requested();"), "{body}");
+        assert!(
+            body.contains("root.network-settings-requested();"),
+            "{body}"
+        );
 
         let view = include_str!("view.rs");
         for window in ["main", "flyout"] {
