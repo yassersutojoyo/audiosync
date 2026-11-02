@@ -2589,6 +2589,27 @@ do {
           "capture watch: an input device that stops delivering is opened again and kept once it calls back; one that stays silent gets 5 tries, one unplugged none",
           "\(back) \(off)")
 }
+// covers: S350 (the Mac: no check while the capture is closed for a try, or its input is away or busy)
+do {
+    var closedGate = CaptureNoticeGate(session: 8)
+    var closedWatch = CaptureFlowWatch()
+    let closedInput = CaptureFlowWatch.source(.input(uid: "line-in"), reading: nil)
+    _ = closedWatch.deviceLeft(at: 2)
+    let whileAway = closedGate.step(verdict: .waiting, session: 8, running: true,
+                                    captureClosed: closedWatch.closed, app: nil)
+    let firstTry = closedWatch.tick(callbacks: nil, reading: true, source: closedInput, at: 3, inputListed: true)
+    closedWatch.busy(at: 3)
+    let whileBusy = closedGate.step(verdict: .waiting, session: 8, running: true,
+                                    captureClosed: closedWatch.closed, app: nil)
+    let secondTry = closedWatch.tick(callbacks: nil, reading: true, source: closedInput,
+                                     at: 3 + CaptureFlowWatch.busySpacing, inputListed: true)
+    let whileOpen = closedGate.step(verdict: .waiting, session: 8, running: true,
+                                    captureClosed: closedWatch.closed, app: nil)
+    check(whileAway == .keep && firstTry == .tryOpen(1) && whileBusy == .keep && secondTry == .tryOpen(1)
+            && whileOpen == .post(.waiting, nil),
+          "capture notice: no waiting notice while the input is away or busy; the check posts once the capture opens again",
+          "\(whileAway) \(firstTry) \(whileBusy) \(secondTry) \(whileOpen)")
+}
 // covers: S329 (the Mac: an input device that left is waited for, outside the tries)
 do {
     var watch = CaptureFlowWatch()
