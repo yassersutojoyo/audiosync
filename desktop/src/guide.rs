@@ -472,6 +472,7 @@ mod tests {
         );
     }
 
+    // covers: S419
     #[test]
     fn open_network_settings_opens_the_network_status_page() {
         assert_eq!(

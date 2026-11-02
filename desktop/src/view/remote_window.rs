@@ -951,7 +951,7 @@ mod tests {
         assert_ne!(app.remote_window.get_code(), second);
     }
 
-    // covers: S288
+    // covers: S368
     #[test]
     fn narrator_hears_a_new_pairing_code() {
         let app = over_loopback(MockBackend::new());
@@ -970,6 +970,7 @@ mod tests {
         assert_eq!(said(), spoken(), "New Code");
     }
 
+    // covers: S368
     #[test]
     fn narrator_hears_an_expired_code_and_a_lockout_once() {
         let app = over_loopback(MockBackend::new());

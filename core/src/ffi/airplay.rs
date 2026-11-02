@@ -8275,6 +8275,7 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // covers: P176
     #[test]
     fn a_speaker_added_again_as_a_target_tears_its_own_session_down() {
         let receiver = Loopback::start();

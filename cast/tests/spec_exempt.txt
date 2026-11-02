@@ -3,3 +3,4 @@
 # A `// covers:` line in cast/src, cast/tests or desktop/src counts instead.
 # One per line: the clause ID, a space, the reason. tests/spec_coverage.rs
 # fails if a clause listed here gains a `// covers:` test.
+C114 Takeover notice wording: the hosts apply it, and the Windows test a_cast_speaker_that_ends_the_stream_says_it_stopped_it (desktop/src/view.rs) and the Mac logic check "cast: a stream the TV's own controls or another app stopped reads as stopped, naming no other app" cover it.

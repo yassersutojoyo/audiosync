@@ -1539,6 +1539,7 @@ do {
                         t.nativeAirPlayPairingFailed(name: "Den"), t.nativeAirPlayReceiverUnverified(name: "Den"),
                         t.nativePairPINMessage(name: "Den"), t.nativePairWrongPINMessage(name: "Den"),
                         t.forgetPairingHelp, t.pairPINOnlyPlaceholder, t.pairPINFieldLabel(name: "Den"), t.helpText]
+    // covers: S422
     check(pairingTexts.allSatisfy { !$0.contains("PIN") }
             && t.pairPINOnlyPlaceholder == "Code" && t.pairPINFieldLabel(name: "Den") == "Code for Den",
           "pairing texts: the Mac asks for a code, never a PIN, as its rows do")
@@ -9746,6 +9747,7 @@ do {
         if case .tryOpen = step { retapSeen.append(retapWoke.failed(at: now)) }
     }
     let retapTries = retapSeen.filter { if case .tryOpen = $0 { return true } else { return false } }.count
+    // covers: S332, S335
     check(retapSeen.first == .stopped(.retapFailed) && !retapSeen.contains(.giveUp) && retapTries > CaptureFlowWatch.tries,
           "capture watch: a retap failing inside a wake's window keeps being tried past the 5 tries",
           "\(retapSeen.filter { $0 != .none })")
@@ -11631,13 +11633,17 @@ do {
     func refLevel(_ volume: Double?, _ muted: Bool?) -> CalibrationReferenceLevel {
         CalibrationReferenceLevel(DeviceVolumeReading(volume: volume, muted: muted))
     }
+    // covers: S196, S197
     check(refLevel(0.8, true) == .muted && refLevel(0.1, true) == .muted && refLevel(nil, true) == .muted,
           "calibration reference: muted wins at any volume, known or not")
+    // covers: S196, S197
     check(refLevel(0, false) == .quiet && refLevel(0.25, false) == .quiet && refLevel(0.254, false) == .quiet
             && refLevel(0.2, nil) == .quiet,
           "calibration reference: 25 % or less (whole percent) is quiet, the main window's low line")
+    // covers: S196, S197
     check(refLevel(0.256, false) == .ok && refLevel(0.26, false) == .ok && refLevel(1, false) == .ok && refLevel(0.75, nil) == .ok,
           "calibration reference: above 25 % and not muted is ok")
+    // covers: S196, S197
     check(refLevel(nil, nil) == .unknown && refLevel(nil, false) == .unknown && refLevel(Double.nan, nil) == .unknown,
           "calibration reference: no readable volume and not muted is unknown")
 }
@@ -11648,32 +11654,40 @@ do {
     func volumeRow(_ volume: Double?, _ muted: Bool?) -> CalibrationVolumeCheck? {
         CalibrationVolumeCheck(DeviceVolumeReading(volume: volume, muted: muted))
     }
+    // covers: S197
     check(t.calibrateBeforeStart == "Before you start" && t.calibrateMicrophoneCheck == "Microphone where you listen"
             && t.calibrateMicrophoneCheckDetail == "Keep the room quiet. Nothing changes until you click Apply.",
           "before you start: the microphone row says where it goes and that nothing changes before Apply")
     let muted = volumeRow(0.4, true), mutedLow = volumeRow(0.12, true), mutedUnknown = volumeRow(nil, true)
+    // covers: S196, S197
     check(muted?.warning == .muted && muted?.percent == 40 && mutedLow?.warning == .mutedAndLow(percent: 12)
             && mutedUnknown?.warning == .muted && mutedUnknown?.percent == nil,
           "before you start: muted warns at any volume, with the meter only when the volume is known")
     let mutedWhy: String = "Calibration plays a sweep on the Mac's built-in speakers, "
         + "and the microphone can't hear them while they're muted."
+    // covers: S197
     check(muted.map(t.calibrateVolumeTitle) == "Your Mac is muted" && mutedLow.map(t.calibrateVolumeTitle) == "Your Mac is muted"
             && muted.map(t.calibrateVolumeDetail) == mutedWhy,
           "before you start: the muted warning says why")
+    // covers: S197, S199
     check((muted?.warning).map(t.deviceVolumeFix) == "Unmute" && (mutedLow?.warning).map(t.deviceVolumeFix) == "Unmute at 75%",
           "before you start: the muted warning offers the main window's fix")
     let quiet = volumeRow(0.12, false)
     let quietWhy: String = "The microphone may barely hear the sweep on the built-in speakers. "
         + "Turn it up before you calibrate."
+    // covers: S196, S197, S199
     check(quiet?.warning == .low(percent: 12) && quiet.map(t.calibrateVolumeTitle) == "Your Mac's volume is 12%"
             && quiet.map(t.calibrateVolumeDetail) == quietWhy && (quiet?.warning).map(t.deviceVolumeFix) == "Set to 75%",
           "before you start: 25 % or less warns with the percent and offers Set to 75%")
     let fine = volumeRow(0.62, false)
+    // covers: S197
     check(fine?.warning == nil && fine?.percent == 62 && fine.map(t.calibrateVolumeTitle) == "Mac volume: 62%"
             && fine.map(t.calibrateVolumeDetail) == "Loud enough for the microphone to hear the built-in speakers.",
           "before you start: a fine volume shows a check with its percent, no warning")
+    // covers: S196, S197
     check(volumeRow(nil, nil) == nil && volumeRow(nil, false) == nil && volumeRow(Double.nan, nil) == nil,
           "before you start: an unknown volume shows no row")
+    // covers: S196
     check(CalibrationVolumeCheck.lowPercent == 25, "before you start: the meter marks the core's low line, 25 %")
 }
 
@@ -12963,7 +12977,7 @@ do {
     let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .searchStopped]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
-    // covers: C43
+    // covers: C43, C114
     check(t.castProblem(.takenOver, name: "Den") == "Den stopped AudioSync's stream, so it's off.",
           "cast: a stream the TV's own controls or another app stopped reads as stopped, naming no other app")
     let bothNone = t.networkSpeakersNote(airPlayNone: true, cast: .noneFound) ?? ""
@@ -13014,6 +13028,7 @@ do {
     let retrying = t.rowNote(cast: nil, waitingForAirPlay2: false, reconnecting: true, unannounced: false, target: nil)
     let away = t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: true, target: nil)
     let starting = t.rowNote(cast: joining, waitingForAirPlay2: false, unannounced: false, target: nil)
+    // covers: S419
     check(t.panelRowNote(retrying) == t.reconnecting
             && t.panelRowNote(away) == "Not on the network"
             && t.panelRowNote(starting) == "Connecting…"
@@ -14042,6 +14057,7 @@ do {
     check(guideWords.contains("the button with its zone's name goes to the zone")
             && !guideWords.contains("after its own goes to the zone"),
           "guide, zones: a zoned speaker's short row names the button that goes to its zone")
+    // covers: S407
     check(guideWords.contains("a preamp, preset curves and curves you save yourself"),
           "guide, equalizer: the line names the curves you save yourself, as on Windows")
     // covers: S407
@@ -16131,9 +16147,11 @@ do {
           && inCard(".focused($focused, equals: .chevron)") == 1 && inCard(".focused($focused, equals: .zoneIcon)") == 1,
           "main window zone header: Go to Zone focuses the part ZoneHeaderHit.goToZoneFocus names")
     // Arrow keys as on Windows: Right unfolds, Left folds, and the other way round passes the key on.
+    // covers: S359
     check(ZoneHeaderHit.arrowFolds(right: true, expanded: false) && ZoneHeaderHit.arrowFolds(right: false, expanded: true)
             && !ZoneHeaderHit.arrowFolds(right: true, expanded: true) && !ZoneHeaderHit.arrowFolds(right: false, expanded: false),
           "zone header: Right unfolds a folded zone, Left folds an unfolded one, and neither acts on a zone already that way")
+    // covers: S359
     check(occurrences(".onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }") == 2
             && inCard(".onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }") == 2
             && occurrences("ZoneHeaderHit.arrowFolds(") == 1 && inCard("ZoneHeaderHit.arrowFolds(") == 1,
@@ -16528,12 +16546,14 @@ do {
 }
 
 do {
+    // covers: S153
     check(UIStrings().dismissNotice("X") == "Dismiss: X",
           "notices: a close button names the notice it dismisses, as on Windows")
 }
 
 do {
     let words = UIStrings()
+    // covers: S153
     check(words.noSpeakerNoticeName == "no speaker on"
             && words.speakerLostNoticeName("Den") == "Den disconnected"
             && words.cantPlayNoticeName("Den") == "Den can't play"
@@ -16543,12 +16563,14 @@ do {
           "notices: each short name is Windows' title for the same notice, none where Windows has no such notice")
     var named = NoticeList()
     named.post("Den was disconnected.", subject: "den", shortName: "Den disconnected")
+    // covers: S153
     check(named.newest?.shortName == "Den disconnected" && named.newest?.title == nil,
           "notices: a short name is kept apart from the drawn title")
     let at = Date(timeIntervalSince1970: 0)
     let shortOnly = Notice(subject: "a", text: "x", date: at, shortName: "Den disconnected")
     let titleOnly = Notice(subject: "b", text: "x", date: at, title: "Den waiting")
     let unnamed = Notice(subject: "c", text: "x", date: at, title: "", shortName: "")
+    // covers: S153
     check(shortOnly.dismissLabel(words) == "Dismiss: Den disconnected"
             && titleOnly.dismissLabel(words) == "Dismiss: Den waiting"
             && unnamed.dismissLabel(words) == "Dismiss Notice",
@@ -16559,6 +16581,7 @@ do {
 do {
     let guide = UIStrings()
     let updatingGuide = UIStrings(updatesOn: true)
+    // covers: S407
     check(updatingGuide.helpText.contains("\(guide.menuCheckForUpdates) in the AudioSync menu")
             && !guide.helpText.contains(guide.menuCheckForUpdates),
           "guide: names Check for Updates… in the AudioSync menu only in a build that checks for updates")
@@ -16566,6 +16589,7 @@ do {
     let tipsStart = guideLines.firstIndex(of: "Tips")
     let tipsEnd = guideLines.firstIndex(of: "Volume")
     let tips = tipsStart.flatMap { s in tipsEnd.map { e in s < e ? guideLines[s..<e].joined(separator: "\n") : "" } } ?? ""
+    // covers: S407
     check(!tips.isEmpty && !tips.contains(" ms") && !tips.contains("if it plays late, lower it")
             && tips.contains("one by one") && tips.contains("hands-free microphone"),
           "guide: Tips keep their advice without an unsourced delay range or More Controls' raise/lower rule", tips)

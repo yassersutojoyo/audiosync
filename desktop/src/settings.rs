@@ -3219,6 +3219,7 @@ mod tests {
         assert!(read.to_json().contains(r#""maximized": false"#));
     }
 
+    // covers: S420
     #[test]
     fn a_window_saved_before_the_slim_speaker_list_opens_at_the_default_width_once() {
         let text =

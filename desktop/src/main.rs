@@ -660,6 +660,7 @@ mod tests {
 
     /// While other notices wait behind the newest, Dismiss All sits beside
     /// the button for them, as in the Mac panel, and dismisses every notice.
+    // covers: S153
     #[test]
     fn the_flyout_offers_dismiss_all_beside_the_more_notices_button() {
         let flyout = include_str!("../ui/flyout.slint");
@@ -675,6 +676,7 @@ mod tests {
     /// While the Google Cast search finds nothing, the flyout offers Add by
     /// Address… under the list, as the Mac panel does, and it opens the
     /// main window's dialog.
+    // covers: S419
     #[test]
     fn the_flyout_offers_add_by_address_while_no_cast_speaker_is_found() {
         let flyout = include_str!("../ui/flyout.slint");
@@ -702,6 +704,7 @@ mod tests {
     /// While AirPlay finds no speaker, the note in the main window and the
     /// flyout offers Open Network Settings, as the Mac offers Open Local
     /// Network Settings, and it opens Settings > Network & internet.
+    // covers: S419
     #[test]
     fn the_no_speakers_note_offers_open_network_settings() {
         let main = include_str!("../ui/main.slint");

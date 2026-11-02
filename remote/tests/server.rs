@@ -2206,6 +2206,7 @@ fn statement_around(script: &str, at: usize) -> &str {
 }
 
 // Other tests post hand-written bodies; only this ties a field the page sends to its route.
+// covers: S257, S370, S376
 #[test]
 fn every_field_the_page_posts_is_accepted_by_its_route() {
     type Route = (
