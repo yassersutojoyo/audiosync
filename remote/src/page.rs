@@ -492,7 +492,8 @@ mod tests {
             PAGE[open..].find("id=\"mix\"").unwrap() < PAGE[open..].find("</fieldset>").unwrap()
         );
 
-        let script = only_element(PAGE, "script").unwrap();
+        // A Windows checkout may give the page CRLF; the multi-line checks below expect LF.
+        let script = only_element(PAGE, "script").unwrap().replace("\r\n", "\n");
         assert!(script.contains("severalApps: \"Several Apps…\","));
         assert!(script.contains("appNotRunning: (name) => `${name} (not running)`,"));
         assert!(script.contains("play: \"Play\","));
