@@ -22,6 +22,7 @@ use audiosync_core::calibrate_all::{
     airplay_wait_ms, cast_wait_ms, zone_plan,
 };
 use audiosync_core::policy::delay::{MAX_HOLD_BACK_MS, native_airplay_latency_ms};
+use audiosync_core::policy::device_volume::DeviceVolume;
 use audiosync_core::policy::speakers::SpeakerKey;
 
 use super::backend::{AudioBackend, CastStatus, SourceId};
@@ -29,6 +30,7 @@ use super::calibration::{
     CalibrationTap, Failure, LATENCY_ALLOWANCE_S, Microphone, MicrophoneError, MicrophoneId,
     Missing, Route, SIGNAL_WAIT_S, STALL_S, WARM_UP_LIMIT_S, WARM_UP_S, ns, trim_start,
 };
+use super::controller::device_volume::describe;
 use super::outputs::{DeviceTraits, MicKind};
 use crate::debug_log::DebugLog;
 
@@ -112,6 +114,8 @@ pub struct Lineup {
     pub source: Option<SourceId>,
     /// The reference output, by endpoint ID.
     pub reference: Option<String>,
+    /// The reference output's own volume and mute, unknown while it isn't read (S192).
+    pub reference_volume: DeviceVolume,
     /// Every speaker that plays: the reference first, the other local
     /// outputs, the AirPlay speakers, then the Cast speaker.
     pub members: Vec<Member>,
@@ -392,6 +396,11 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
         switching: engine.session.is_none() && audio.running_source().is_some(),
         source: audio.running_source(),
         reference: engine.reference,
+        reference_volume: outputs
+            .iter()
+            .find(|output| output.is_reference)
+            .and_then(|output| output.device_volume)
+            .unwrap_or_default(),
         members: locals.into_iter().chain(airplay).chain(casts).collect(),
         hold_backs_ms: engine.hold_backs_ms,
         devices,
@@ -1256,6 +1265,14 @@ fn log_plan(log: &DebugLog, lineup: &Lineup, included: &BTreeSet<String>) {
             )
         });
     }
+    let volume = lineup.reference_volume;
+    log.log(|| {
+        format!(
+            "Calibrate All reference volume: {}, {}",
+            describe(volume),
+            volume.decision()
+        )
+    });
 }
 
 fn speaker(member: &Member) -> Speaker {
@@ -1429,6 +1446,7 @@ pub(crate) mod tests {
                     switching: false,
                     source: Some(SourceId::WholeSystem),
                     reference: Some("builtin".to_owned()),
+                    reference_volume: DeviceVolume::default(),
                     members: vec![
                         member(Class::Local, "builtin", Some(0.0), 2500.0),
                         member(Class::Local, "usb", Some(150.0), 2650.0),

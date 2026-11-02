@@ -99,7 +99,7 @@ use super::routing::{
 };
 use crate::debug_log::DebugLog;
 
-mod device_volume;
+pub(crate) mod device_volume;
 
 #[cfg(test)]
 mod log_lines_tests;

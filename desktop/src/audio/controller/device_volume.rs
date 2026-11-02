@@ -63,7 +63,7 @@ fn device_volume(volume: Result<EndpointVolume, BackendError>) -> DeviceVolume {
 }
 
 /// A reading as the log shows it: "13%, muted", or "unknown".
-fn describe(reading: DeviceVolume) -> String {
+pub(crate) fn describe(reading: DeviceVolume) -> String {
     if reading == DeviceVolume::UNKNOWN {
         return "unknown".to_owned();
     }
