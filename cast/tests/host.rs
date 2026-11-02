@@ -5,12 +5,12 @@
 mod common;
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, audio_ring};
+use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, StreamFormat, audio_ring};
 use audiosync_cast::client::{Fingerprint, FingerprintBook, FingerprintChange};
 use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::host::{
@@ -19,7 +19,9 @@ use audiosync_cast::host::{
 };
 use audiosync_cast::media::Metadata;
 use audiosync_cast::message::{NS_CONNECTION, NS_MEDIA, NS_RECEIVER, PLATFORM};
-use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
+use audiosync_cast::session::{
+    CastSession, Fingerprints, SessionConfig, SessionEnd, SessionError, SessionEvent,
+};
 use common::{Behavior, Command, FakeDevice, OnLaunch, OnLoad, json_message};
 use serde_json::{Value, json};
 
@@ -1196,6 +1198,112 @@ fn a_certificates_file_that_cant_be_written_is_reported_once() {
         FingerprintChange::Changed { before }
     );
     assert_eq!(reports.load(Ordering::SeqCst), 1);
+}
+
+// covers: C21
+#[test]
+fn a_slow_certificates_write_holds_up_no_other_session() {
+    let first = FakeDevice::start(Behavior::default());
+    let second = FakeDevice::start(Behavior::default());
+    let (entered, writing) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let saved = Arc::clone(&written);
+    let mut slow = true;
+    let (book, _) = FingerprintBook::open(
+        "cast-certificates.txt".into(),
+        |_| Err(std::io::ErrorKind::NotFound.into()),
+        move |_, bytes| {
+            if std::mem::take(&mut slow) {
+                let _ = entered.send(());
+                let _ = released.recv();
+            }
+            let text = String::from_utf8_lossy(bytes).into_owned();
+            saved.lock().expect("written").push(text);
+            Ok(())
+        },
+    );
+    let book = Arc::new(Mutex::new(book));
+    let start = |id: DeviceId, device: &FakeDevice| {
+        let config = SessionConfig {
+            addresses: vec![device.address],
+            format: StreamFormat::wav(48_000).expect("rate"),
+            metadata: Metadata::default(),
+            artwork: None,
+            group: None,
+            records: None,
+            fingerprints: Some(Fingerprints {
+                id,
+                book: Arc::clone(&book),
+            }),
+        };
+        thread::spawn(move || {
+            let (feed, reader) = ring();
+            let selected = Arc::new(AtomicBool::new(true));
+            let session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
+            (session, feed)
+        })
+    };
+    let slow_start = start(A, &first);
+    writing
+        .recv_timeout(Duration::from_secs(15))
+        .expect("the first start writes the book");
+    let other_start = start(B, &second);
+    let waited = Instant::now();
+    while !other_start.is_finished() && waited.elapsed() < Duration::from_secs(10) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let not_held_up = other_start.is_finished();
+    let _ = release.send(());
+    let (slow_session, _slow_feed) = slow_start.join().expect("first start");
+    let (other_session, _other_feed) = other_start.join().expect("second start");
+    assert!(
+        not_held_up,
+        "the second device's start waited for the first one's write"
+    );
+    let last = written.lock().expect("written").last().cloned();
+    let last = last.expect("a write");
+    assert!(
+        last.contains(&A.to_string()) && last.contains(&B.to_string()),
+        "the newest book is written last: {last:?}"
+    );
+    slow_session.stop();
+    other_session.stop();
+    first.join();
+    second.join();
+}
+
+// covers: C21
+#[test]
+fn a_certificates_write_that_panics_leaves_the_file_to_the_next_record() {
+    let written = Arc::new(Mutex::new(Vec::new()));
+    let saved = Arc::clone(&written);
+    let mut panics = true;
+    let (book, _) = FingerprintBook::open(
+        "cast-certificates.txt".into(),
+        |_| Err(std::io::ErrorKind::NotFound.into()),
+        move |_, bytes| {
+            assert!(!std::mem::take(&mut panics), "a test panic in the writer");
+            let text = String::from_utf8_lossy(bytes).into_owned();
+            saved.lock().expect("written").push(text);
+            Ok(())
+        },
+    );
+    let book = Mutex::new(book);
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        FingerprintBook::record_in(&book, A, Fingerprint([1; 32]))
+    }));
+    assert!(panicked.is_err());
+    assert_eq!(
+        FingerprintBook::record_in(&book, B, Fingerprint([2; 32])),
+        FingerprintChange::First
+    );
+    let last = written.lock().expect("written").last().cloned();
+    let last = last.expect("the later record is written");
+    assert!(
+        last.contains(&A.to_string()) && last.contains(&B.to_string()),
+        "{last:?}"
+    );
 }
 
 fn open_book(path: &std::path::Path) -> (FingerprintBook, Option<std::io::Error>) {
