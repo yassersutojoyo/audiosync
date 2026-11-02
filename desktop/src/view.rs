@@ -3824,7 +3824,9 @@ impl App {
             base = base.max(0.0);
         }
         self.update(|b| b.set_speaker_delay(id, base + f64::from(delta)));
-        self.say_delay_set(id);
+        if self.snapshot().speaker(id).and_then(|s| s.delay_ms) != Some(current) {
+            self.say_delay_set(id);
+        }
     }
 
     /// Keeps what is typed in a speaker's delay field ("+150", "−250");
@@ -4080,8 +4082,8 @@ impl App {
             self.refresh();
         } else {
             self.update(|b| b.set_airplay_delay(ms));
+            self.say_airplay_delay_set();
         }
-        self.say_airplay_delay_set();
     }
 
     /// Keeps what is typed in the AirPlay delay field; nothing applies until
@@ -8331,21 +8333,47 @@ mod tests {
     }
 
     /// Windows reads a live region only as it appears or its words change,
-    /// so the same words again empty it first and come back a moment later.
+    /// so Enter setting the same delay again empties it first and the words
+    /// come back a moment later.
     // covers: S220
     #[test]
-    fn narrator_hears_every_delay_step_at_the_range_end() {
+    fn narrator_hears_the_same_delay_set_again() {
         let app = app_over(MockBackend::new());
         hold_clock();
         let said = || app.main.get_notice_announcement().to_string();
         app.main.invoke_airplay_delay_stepped(-2000);
         assert_eq!(said(), "AirPlay Delay set to 0 ms");
 
-        app.main.invoke_airplay_delay_stepped(-10);
+        app.main.invoke_airplay_delay_edited("0".into());
+        app.main.invoke_airplay_delay_committed();
         assert_eq!(said(), "", "emptied, so the same words are heard again");
         advance_clock(Duration::from_millis(500));
         slint::platform::update_timers_and_animations();
         assert_eq!(said(), "AirPlay Delay set to 0 ms", "a moment later");
+    }
+
+    /// As on the Mac, a step at the range's end applies nothing, so Narrator
+    /// hears nothing.
+    // covers: S220
+    #[test]
+    fn narrator_hears_nothing_from_a_delay_step_that_leaves_the_delay_as_it_is() {
+        let app = app_over(MockBackend::new());
+        let said = || app.main.get_notice_announcement().to_string();
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "+20000".into());
+        app.main.invoke_delay_committed("local:desk".into());
+        app.clear_announcement();
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        assert_eq!(delay_of(&app, "local:desk"), Some(20000.0));
+        assert_eq!(said(), "", "a speaker's step past 20 000 ms");
+
+        app.main.invoke_airplay_delay_edited("0".into());
+        app.main.invoke_airplay_delay_committed();
+        app.clear_announcement();
+        app.main.invoke_airplay_delay_stepped(-10);
+        assert_eq!(app.snapshot().airplay_delay_ms, Some(0.0));
+        assert_eq!(said(), "", "an AirPlay delay step below 0 ms");
     }
 
     // covers: S221
@@ -9752,7 +9780,7 @@ mod tests {
         app.clear_announcement();
         app.main.invoke_airplay_delay_stepped(100);
         assert_eq!(applied.borrow().len(), 1, "a step past 20 000 ms");
-        assert_eq!(said(), "AirPlay Delay set to 20000 ms", "and it is said");
+        assert_eq!(said(), "", "and nothing is said");
 
         app.main.invoke_airplay_delay_edited("-500".into());
         app.main.invoke_airplay_delay_committed();
@@ -9760,7 +9788,7 @@ mod tests {
         app.clear_announcement();
         app.main.invoke_airplay_delay_stepped(-100);
         assert_eq!(applied.borrow().len(), 2, "a step below 0 ms");
-        assert_eq!(said(), "AirPlay Delay set to 0 ms", "and it is said");
+        assert_eq!(said(), "", "and nothing is said");
         assert_eq!(app.snapshot().airplay_delay_ms, Some(0.0));
     }
 
