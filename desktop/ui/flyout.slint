@@ -431,15 +431,18 @@ export component TrayFlyout inherits Window {
 
     // Whether a control that a refresh can remove has keyboard focus: the
     // notice's buttons (dismiss, Show How), the buttons for more notices and
-    // Dismiss All, or a zone or speaker row. Slint leaves nothing focused when the focused control is
-    // removed, and Escape then does nothing until Tab, so the app calls
+    // Dismiss All, a zone or speaker row, or the Add by Address link. Slint
+    // leaves nothing focused when the focused control is removed, and
+    // Escape then does nothing until Tab, so the app calls
     // `take-focus` when a refresh removed the part that held it. A removed
     // control never reports losing focus; `take-focus` clears these. (The
-    // flyout lists one notice, so the stack shows no Dismiss All here.)
+    // stack gets one notice, so its own Dismiss All stays hidden; the row
+    // under it has one.)
     out property <bool> notice-focused;
     out property <bool> more-notices-focused;
     out property <bool> zone-focused;
     out property <bool> speaker-focused;
+    out property <bool> add-address-focused;
     // The height that shows every part down to the buttons, which the app
     // sizes the window to: Slint's own preferred height counts a wrapped
     // notice as one line. The parts sit at the top, so this holds at any
@@ -467,6 +470,7 @@ export component TrayFlyout inherits Window {
         root.more-notices-focused = false;
         root.zone-focused = false;
         root.speaker-focused = false;
+        root.add-address-focused = false;
         focus.focus();
     }
 
@@ -790,6 +794,9 @@ export component TrayFlyout inherits Window {
                             label: Strings.cast-add-address;
                             clicked => {
                                 root.cast-add-address-requested();
+                            }
+                            changed keyboard-focused => {
+                                root.add-address-focused = self.keyboard-focused;
                             }
                         }
                     }

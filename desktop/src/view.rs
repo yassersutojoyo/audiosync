@@ -429,14 +429,16 @@ const NATIVE_WINDOW_TRIES: u8 = 100;
 const MAIN_WINDOW_CHROME: (f64, f64) = (16.0, 64.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
-/// in them: the listed notice, the button for more notices, the zone rows
-/// and the speaker rows (a zone's members among them).
+/// in them: the listed notice, the button for more notices, the zone rows,
+/// the speaker rows (a zone's members among them) and the Add by Address
+/// link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutParts {
     notices: bool,
     more_notices: bool,
     zones: bool,
     speakers: bool,
+    add_address: bool,
 }
 
 impl FlyoutParts {
@@ -446,13 +448,14 @@ impl FlyoutParts {
             || (self.more_notices && other.more_notices)
             || (self.zones && other.zones)
             || (self.speakers && other.speakers)
+            || (self.add_address && other.add_address)
     }
 }
 
 /// What the tray flyout shows: how many notices there are and how many of
 /// them it lists, how many zones, how many of this PC's and connected
 /// speakers in no zone, and the shape of the zones' member lists
-/// ([`zone_shape`]).
+/// ([`zone_shape`]), and whether it shows the Add by Address link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutCounts {
     notices: usize,
@@ -461,6 +464,7 @@ struct FlyoutCounts {
     this_pc: usize,
     speakers: usize,
     zone_members: u64,
+    add_address: bool,
 }
 
 impl FlyoutCounts {
@@ -480,6 +484,7 @@ impl FlyoutCounts {
             speakers: self.this_pc != next.this_pc
                 || self.speakers != next.speakers
                 || self.zone_members != next.zone_members,
+            add_address: self.add_address && !next.add_address,
         }
     }
 }
@@ -1931,6 +1936,9 @@ impl App {
         self.flyout.set_airplay_searching(state.airplay_searching);
         self.main.set_no_speaker_on(state.no_speaker_on);
         self.flyout.set_no_speaker_on(state.no_speaker_on);
+        // Read before the flyout takes the new state, for `flyout_shown`.
+        let add_address_shown =
+            self.flyout.get_cast_by_address() && self.flyout.get_cast_list() == CastList::NoneFound;
         self.main.set_cast_list(cast_list(state.cast_list));
         self.flyout.set_cast_list(cast_list(state.cast_list));
         self.watch_network(
@@ -2055,6 +2063,7 @@ impl App {
             this_pc: m.flyout_this_pc.row_count(),
             speakers: m.flyout_connected.row_count(),
             zone_members: self.zone_shape_shown(),
+            add_address: add_address_shown,
         };
         let flyout_removed = flyout_shown.removed_by(FlyoutCounts {
             notices: notices.len(),
@@ -2067,6 +2076,7 @@ impl App {
                     .iter()
                     .map(|zone| listed_members(zone.item.expanded, zone.members.len())),
             ),
+            add_address: state.cast_by_address && state.cast_list == ui_model::CastList::NoneFound,
         });
         let main_lists = MainLists {
             notices: newest_notices(&notices, MAIN_NOTICE_LIMIT),
@@ -2339,6 +2349,7 @@ impl App {
             more_notices: flyout.get_more_notices_focused(),
             zones: flyout.get_zone_focused(),
             speakers: flyout.get_speaker_focused(),
+            add_address: flyout.get_add_address_focused(),
         };
         if focused.overlaps(removed) && flyout.window().is_visible() {
             flyout.invoke_take_focus();
@@ -11282,11 +11293,25 @@ mod tests {
         this_pc: 1,
         speakers: 3,
         zone_members: 1,
+        add_address: false,
     };
 
     #[test]
     fn a_refresh_removes_the_flyout_lists_whose_length_changes() {
         assert_eq!(FLYOUT.removed_by(FLYOUT), FlyoutParts::default());
+        // A Google Cast speaker is found: the Add by Address link goes.
+        let add_address = FlyoutCounts {
+            add_address: true,
+            ..FLYOUT
+        };
+        assert_eq!(
+            add_address.removed_by(FLYOUT),
+            FlyoutParts {
+                add_address: true,
+                ..FlyoutParts::default()
+            }
+        );
+        assert_eq!(FLYOUT.removed_by(add_address), FlyoutParts::default());
         let unplugged = FlyoutCounts {
             speakers: 2,
             ..FLYOUT
@@ -11397,6 +11422,7 @@ mod tests {
                 more_notices: true,
                 zones: true,
                 speakers: false,
+                add_address: true,
             }),
             "a focused speaker row keeps its focus when other parts change"
         );
