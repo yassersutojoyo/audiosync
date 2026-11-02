@@ -822,12 +822,9 @@ export component SpeakerBadge inherits Rectangle {
     }
 }
 
-// A zone arrow's keyboard focus, taken only while `enabled`: with no member
-// found the toggle has nothing to switch, so the arrow joins the Tab order
-// in its place. Space and Enter fold or unfold the zone, Left and Right as
-// on the toggle.
+// A zone arrow's keyboard focus, always one Tab stop, as on the Mac. Space
+// and Enter fold or unfold the zone, Left and Right as on the toggle.
 export component ZoneArrowFocus inherits Rectangle {
-    in property <bool> enabled;
     in property <bool> expanded;
     callback expanded-changed(bool);
     callback focus-changed(bool);
@@ -837,7 +834,6 @@ export component ZoneArrowFocus inherits Rectangle {
     }
 
     scope := FocusScope {
-        enabled: root.enabled;
         focus-on-click: false;
         key-pressed(event) => {
             if event.text == " " || event.text == Key.Return {
@@ -2714,8 +2710,7 @@ export component ZoneMemberRow inherits Rectangle {
 // count, then its volume, its options and the arrow that shows or hides its
 // speakers. Like a speaker row's box opening its delay panel, a click
 // anywhere but the toggle, the volume and the options shows or hides the
-// speakers; the arrow is left out of the Tab order, as Left and Right on the
-// toggle do its work, until no member is found.
+// speakers; the arrow is a Tab stop of its own, as on the Mac.
 export component ZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
@@ -2734,26 +2729,27 @@ export component ZoneHeader inherits Rectangle {
     // Use <target> Instead, by the member's ID.
     callback use-target(string);
     // The part of the header with the keyboard focus changed (its toggle,
-    // name field, volume or options); none: the header lost it.
+    // arrow, name field, volume or options); none: the header lost it.
     callback focus-changed(RowPart);
 
     // Gives the header the keyboard focus on `part`. With no member found
-    // the arrow takes the toggle's, and the options the volume's.
+    // the arrow takes the toggle's, and with no member at all the options
+    // take the volume's.
     public function take-focus(part: RowPart) {
         if part == RowPart.name && root.item.renaming {
             root.pending-focus = RowPart.name;
-        } else if part == RowPart.volume && root.live {
+        } else if part == RowPart.volume && root.item.total > 0 {
             volume-slider.focus-slider();
         } else if part == RowPart.toggle && root.live {
             badge.focus();
-        } else if part == RowPart.toggle {
+        } else if part == RowPart.toggle || part == RowPart.arrow {
             arrow-focus.take-focus();
         } else {
             options.focus();
         }
     }
 
-    // A member is listed: the toggle and the volume work.
+    // A member is listed: the toggle works. The volume works with any member, as on the Mac.
     property <bool> live: root.item.present > 0;
     property <bool> badge-focused;
     property <bool> arrow-focused;
@@ -2768,7 +2764,7 @@ export component ZoneHeader inherits Rectangle {
             root.name-focused = false;
         }
     }
-    property <RowPart> focused-part: self.name-focused ? RowPart.name : self.options-focused ? RowPart.options : volume-slider.slider-focused ? RowPart.volume : self.badge-focused || self.arrow-focused ? RowPart.toggle : RowPart.none;
+    property <RowPart> focused-part: self.name-focused ? RowPart.name : self.options-focused ? RowPart.options : volume-slider.slider-focused ? RowPart.volume : self.badge-focused ? RowPart.toggle : self.arrow-focused ? RowPart.arrow : RowPart.none;
     changed focused-part => {
         root.focus-changed(self.focused-part);
     }
@@ -2866,7 +2862,6 @@ export component ZoneHeader inherits Rectangle {
                         }
 
                         arrow-focus := ZoneArrowFocus {
-                            enabled: !root.live;
                             expanded: root.item.expanded;
                             expanded-changed(open) => {
                                 root.expanded-changed(open);
@@ -3079,7 +3074,7 @@ export component ZoneHeader inherits Rectangle {
                         volume-slider := VolumeSlider {
                             width: 140px;
                             volume: root.item.volume;
-                            enabled: root.live;
+                            enabled: root.item.total > 0;
                             label: Strings.zone-volume(root.item.name);
                             changed(value) => {
                                 root.volume-changed(value);

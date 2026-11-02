@@ -8,9 +8,10 @@
 export enum RowState { off, will-play, playing, waiting-for-device, reconnecting, waiting-for-airplay2, waiting-for-ptp, not-on-network, waiting-for-password, waiting-for-pin }
 
 // The part of a speaker row or zone header that has, or is to take, the keyboard
-// focus: its toggle, delay button, volume, sync controls, options or name
-// field. A row rebuilt under the focus takes it back on the same part.
-export enum RowPart { none, toggle, delay, volume, sync, options, name }
+// focus: its toggle, delay button, volume, sync controls, options, name
+// field or a zone's fold arrow. A row rebuilt under the focus takes it back
+// on the same part.
+export enum RowPart { none, toggle, delay, volume, sync, options, name, arrow }
 
 // A main-window control outside the notices, the speaker rows and the zone headers;
 // one taking the focus applies an open speaker rename.

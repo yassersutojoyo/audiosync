@@ -11215,7 +11215,7 @@ mod tests {
         draw_frames();
         assert_eq!(
             app.main_focus.borrow().zone,
-            Some(("zone:garage".into(), RowPart::Toggle)),
+            Some(("zone:garage".into(), RowPart::Arrow)),
             "the arrow stands in for the toggle, which has nothing to switch"
         );
         press(app.main.window(), " ");
@@ -11320,6 +11320,131 @@ mod tests {
         toggle.invoke_accessible_expand_action();
         draw_frames();
         assert!(expanded(), "Expand on the flyout zone's toggle unfolded it");
+    }
+
+    // covers: S359
+    #[test]
+    fn tab_stops_on_a_main_window_zone_arrow_with_a_member_present_where_space_and_enter_fold() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        let mut zone = None;
+        for _ in 0..100 {
+            press(window, Key::Tab);
+            if let Some((id, RowPart::Arrow)) = app.main_focus.borrow().zone.clone() {
+                zone = Some(id);
+                break;
+            }
+        }
+        let zone = zone.expect("Tab reaches a zone header");
+        let item = || {
+            app.models
+                .zones
+                .iter()
+                .find(|item| item.id == zone)
+                .expect("the zone is listed")
+        };
+        assert!(item().present > 0, "a member is present");
+        assert!(item().expanded);
+
+        press(window, " ");
+        assert!(
+            !item().expanded,
+            "Space on the header's first stop folded the zone"
+        );
+        press(window, Key::Return);
+        assert!(item().expanded, "Enter unfolded it");
+    }
+
+    // covers: S359
+    #[test]
+    fn a_zone_arrow_keeps_the_focus_when_another_zone_is_deleted() {
+        let app = app_over(MockBackend::zones_preview());
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        for _ in 0..100 {
+            press(window, Key::Tab);
+            if app.main_focus.borrow().zone.is_some() {
+                break;
+            }
+        }
+        let living = || {
+            app.models
+                .zones
+                .iter()
+                .find(|item| item.id == "zone:living")
+                .expect("the zone is listed")
+        };
+        assert!(living().present > 0, "a member is present");
+        assert!(living().expanded);
+
+        app.main.invoke_zone_deleted("zone:office".into());
+        draw_frames();
+        press(window, " ");
+        assert!(
+            !living().expanded,
+            "Space on the arrow folded the zone after the cards were rebuilt"
+        );
+    }
+
+    // covers: S359
+    #[test]
+    fn tab_stops_on_a_flyout_zone_arrow_with_a_member_present_where_space_and_enter_fold() {
+        let app = app_over(MockBackend::zones_preview());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        app.flyout.invoke_take_focus();
+        let window = app.flyout.window();
+        for _ in 0..100 {
+            if app.flyout.get_zone_focused() {
+                break;
+            }
+            press(window, Key::Tab);
+        }
+        assert!(app.flyout.get_zone_focused(), "Tab reaches a zone header");
+        let item = || {
+            app.models
+                .flyout_zones
+                .iter()
+                .find(|item| item.id == "zone:living")
+                .expect("the zone is listed")
+        };
+        assert!(item().present > 0, "a member is present");
+        assert!(item().expanded);
+
+        press(window, " ");
+        assert!(
+            !item().expanded,
+            "Space on the header's first stop folded the zone"
+        );
+        press(window, Key::Return);
+        assert!(item().expanded, "Enter unfolded it");
+    }
+
+    // covers: S359
+    #[test]
+    fn a_zone_volume_works_while_none_of_its_members_is_present() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:garage", "Garage", &["airplay:not-here"]);
+        backend.add_zone("zone:empty", "Empty", &[]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        let enabled = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("nothing is labeled {label}"))
+                .accessible_enabled()
+        };
+        assert_eq!(enabled("Garage volume"), Some(true), "as on the Mac");
+        assert_eq!(
+            enabled("Empty volume"),
+            Some(false),
+            "a zone with no member"
+        );
     }
 
     // covers: S359

@@ -234,8 +234,8 @@ component FlyoutRow inherits HorizontalLayout {
 // A zone's row, routed like its header in the main window: only the round
 // toggle switches the zone, and a click anywhere else on the row, the name
 // and the arrow included, shows or hides its speakers. Left and Right on the
-// toggle do that from the keyboard, so the arrow stays out of the Tab order
-// until no member is found.
+// toggle do that from the keyboard, and so do Space and Enter on the arrow,
+// a Tab stop of its own as on the Mac.
 component FlyoutZoneHeader inherits Rectangle {
     in property <ZoneItem> item;
     callback toggled();
@@ -279,7 +279,6 @@ component FlyoutZoneHeader inherits Rectangle {
                     }
 
                     ZoneArrowFocus {
-                        enabled: !root.live;
                         expanded: root.item.expanded;
                         expanded-changed(open) => {
                             root.expanded-changed(open);

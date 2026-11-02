@@ -19,6 +19,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
+- On Windows, Tab reaches a zone's arrow, in the main window and the tray panel, and Space or Enter on it shows or hides the zone's speakers. A zone's volume now works while none of its speakers is found, as on the Mac. Before, Tab skipped the arrow while a speaker was found, and the volume was greyed out while none was.
 - On Windows, a zone name, zone count or stereo pair line that fits no longer shows a tooltip repeating it. Only one cut to an ellipsis does, and a name in the In zones list keeps its tooltip, which holds the device name and the rename hint.
 - On the Mac, the menu bar panel no longer stalls at the end of its grow when it opens.
 - On the Mac, the menu bar panel keeps its round corners and its shadow while it opens and closes. Before, the top corners turned square mid-grow and the shadow changed shape, then snapped once the panel was open.
