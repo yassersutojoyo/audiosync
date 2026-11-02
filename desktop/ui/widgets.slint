@@ -2631,7 +2631,7 @@ export component ZoneMemberRow inherits Rectangle {
                                     }
                                 }
 
-                                if root.tip-allowed && name-label.preferred-width > name-label.width: Tooltip {
+                                if root.tip-allowed: Tooltip {
                                     tip-text := LabelTip {
                                         text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
                                         max-tip-width: root.width;

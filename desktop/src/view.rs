@@ -9118,8 +9118,9 @@ mod tests {
         shows_in_full(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
     }
 
-    /// A zone name, zone count line or In zones name that fits shows no
-    /// tooltip: only one cut to "…" does.
+    /// A zone name or zone count line that fits shows no tooltip: only one
+    /// cut to "…" does. An In zones name keeps its tip, the only place with
+    /// its device name and the rename hint.
     #[test]
     fn a_zone_name_that_fits_shows_no_tooltip() {
         let mut backend = MockBackend::new();
@@ -9136,7 +9137,7 @@ mod tests {
         }
         scroll_to_end(&app);
         let (_, tip) = rest_on(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
-        assert!(tip.is_none(), "the In zones name");
+        assert!(tip.is_some(), "the In zones name");
     }
 
     /// Scrolls the narrow app's speaker list to its end, where the rows
