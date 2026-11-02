@@ -4743,7 +4743,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | not_now_comes_back_at_a_manual_check_and_a_newer_update_replaces_the_notice | S297 |
 | a_skipped_version_is_quiet_at_launch_offered_on_a_manual_check_and_a_newer_one_is_offered | S297, S316 |
 | skipping_keeps_a_record_for_the_same_or_a_higher_version (a blocked or failed-start record keeps its warning) | S297, S316 |
-| the_flyout_fits_the_update_notice_buttons (ignored: the three buttons need 380 px, the flyout's notice column has 214 px) | S308 |
+| the_flyout_fits_the_update_notice_buttons (Not Now, Skip This Version, then Download and Install stack on one left edge inside the notice's text column, at 100% and 200% scaling, and the flyout grows by the two extra rows) | S308 |
 | a_leftover_new_is_deleted_before_the_exclusive_create | S301, S302 |
 | a_failed_relaunch_restores_the_bak (the exe and the notices pair) | S303 |
 | a_failed_restore_lists_every_bak_with_its_name_the_exe_first (a refused move back leaves the new exe in place) | S302 |
@@ -4761,7 +4761,7 @@ The updater lives in `desktop/src/updater/`; S293 to S311 and S314 to S316, host
 | the_check_while_running_waits_a_day_after_the_launch_check (`desktop/src/updater/mod.rs`) | S305 |
 | the_check_while_running_skips_a_swapped_process (no check and no notice after a dismissed Restart Now) | S305 |
 | the_updater_texts (every text of S308 comes from strings.slint; the blocked and failed-start notices offer Open Release Page) | S308, S314, S315, S316 |
-| the_updater_notice_buttons_take_tab_then_space_or_enter (Tab reaches Download, Not Now, then Skip This Version; Space and Enter press them) | S308 |
+| the_updater_notice_buttons_take_tab_then_space_or_enter (Tab reaches Not Now, Skip This Version, then Download and Install; Space and Enter press them) | S308 |
 | the_updater_notice_uses_strings_and_tokens (notice words and button names from strings.slint, token colors, text 4.5:1 on the notice in light and dark) | S308 |
 | the_updater_writes_its_debug_log_lines | S309 |
 | a_relaunched_start_keeps_the_log_and_a_plain_start_empties_it (`desktop/src/debug_log.rs`) | S170, S309 |

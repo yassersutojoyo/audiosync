@@ -445,8 +445,8 @@ impl Updater {
                 Action::Nothing
             }
             UpdaterButton::SkipThisVersion => {
-                // A record for this version or a higher one already quiets the
-                // launch check, and keeps its reason for the manual one.
+                // Only a record for this version already quiets the launch check.
+                // A higher one stays, since one record can't hold both versions.
                 let stored = self
                     .record
                     .as_ref()

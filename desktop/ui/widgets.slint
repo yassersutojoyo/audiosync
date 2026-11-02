@@ -3379,8 +3379,7 @@ export component NoticeStack inherits VerticalLayout {
                     }
                 }
 
-                if notice.update-buttons.length > 0: HorizontalLayout {
-                    alignment: start;
+                if notice.update-buttons.length > 0: VerticalLayout {
                     spacing: 8px;
                     for button[button-index] in notice.update-buttons: Button {
                         text: Strings.update-button(button);

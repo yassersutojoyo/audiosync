@@ -620,7 +620,7 @@ impl UpdaterNotice {
     pub fn buttons(&self) -> &'static [UpdaterButton] {
         use UpdaterButton::*;
         match self {
-            UpdaterNotice::Available { .. } => &[Download, NotNow, SkipThisVersion],
+            UpdaterNotice::Available { .. } => &[NotNow, SkipThisVersion, Download],
             UpdaterNotice::Downloading { .. } => &[Cancel],
             UpdaterNotice::Installed { .. } => &[RestartNow],
             UpdaterNotice::ReadOnly
