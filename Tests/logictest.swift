@@ -3163,12 +3163,16 @@ do {
             && InputChannelPair.change(from: 1, to: -1, streaming: true) == .none,
           "channel pairs: choosing another pair restarts a running session, the same one does nothing")
     // covers: S14
-    check(InputChannelPair.change(from: 3, to: 0, channels: 4, streaming: true) == .none
-            && InputChannelPair.change(from: 3, to: 1, channels: 4, streaming: true) == .restart
-            && InputChannelPair.change(from: 1, to: 0, channels: 4, streaming: true) == .restart
+    check(InputChannelPair.change(from: 3, to: 0, channels: 4, streaming: true, inputAway: false) == .none
+            && InputChannelPair.change(from: 3, to: 1, channels: 4, streaming: true, inputAway: false) == .restart
+            && InputChannelPair.change(from: 1, to: 0, channels: 4, streaming: true, inputAway: false) == .restart
             && InputChannelPair.stores(0, over: 3) && !InputChannelPair.stores(1, over: 1)
             && !InputChannelPair.stores(-1, over: 3),
           "channel pairs: picking the pair a saved pair fell back to restarts nothing and keeps the pick")
+    // covers: S329
+    check(InputChannelPair.change(from: 0, to: 1, channels: 0, streaming: true, inputAway: true) == .none
+            && InputChannelPair.change(from: 0, to: 1, channels: 4, streaming: true, inputAway: false) == .restart,
+          "channel pairs: a pick while the input device is away rebuilds nothing, the reopen takes it")
     // covers: S14
     check(UIStrings().inputChannelPair(four[1]) == "Channels 3-4" && UIStrings().inputChannelPair(five[2]) == "Channel 5",
           "channel pairs: shown as the device counts its channels")

@@ -114,7 +114,7 @@ final class StreamEngine {
     /// The uptime of the first try that met a busy input; nil when none did.
     private var busySince: TimeInterval?
     /// Whether the input device left and the capture waits for it (S329).
-    private var inputAway = false
+    private(set) var inputAway = false
     /// Whether the capture waits for an input that left or another process holds, its notice up.
     var waitsForInput: Bool { inputAway || busySince != nil }
     /// Whether the capture is closed for a try or waits for its input (S350).
@@ -591,6 +591,13 @@ final class StreamEngine {
     func followInput(to uid: String) {
         guard let opened, case .input = opened.source else { return }
         self.opened = (source: .input(uid: uid), inputPair: opened.inputPair)
+    }
+
+    /// The pair `pair` was picked while the input device is away (S329): the
+    /// reopen once it is back reads that pair.
+    func followInputPair(_ pair: Int) {
+        guard inputAway, let opened else { return }
+        self.opened = (source: opened.source, inputPair: pair)
     }
 
     /// The input device left (S329): only the capture closes, the notice says

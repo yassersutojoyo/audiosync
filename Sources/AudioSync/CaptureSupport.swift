@@ -507,8 +507,11 @@ struct InputChannelPair: Equatable {
 
     /// `change` from the pair a device with `channels` input channels plays
     /// for the stored `saved`, which is 1-2 when the device lacks it.
-    static func change(from saved: Int, to chosen: Int, channels: Int, streaming: Bool) -> SourceSwitch.Step {
-        change(from: resolve(saved: saved, channels: channels).pair.index, to: chosen, streaming: streaming)
+    /// While the device is away the capture's reopen takes the pick (S329).
+    static func change(from saved: Int, to chosen: Int, channels: Int, streaming: Bool,
+                       inputAway: Bool) -> SourceSwitch.Step {
+        guard !inputAway else { return .none }
+        return change(from: resolve(saved: saved, channels: channels).pair.index, to: chosen, streaming: streaming)
     }
 
     /// Kept even when nothing plays differently, so a fallen-back saved pair never returns over the latest pick.

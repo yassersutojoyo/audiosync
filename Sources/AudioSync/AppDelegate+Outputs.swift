@@ -338,12 +338,13 @@ extension AppDelegate {
         guard case .input(let uid) = audioSource else { return }
         let channels = devices.allInputDevices().first { $0.uid == uid }?.inputChannels ?? 0
         let change = InputChannelPair.change(from: currentInputPair, to: index, channels: channels,
-                                             streaming: engine.isRunning)
+                                             streaming: engine.isRunning, inputAway: engine.inputAway)
         clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning,
                                                   inputWaiting: engine.waitsForInput))
         guard change != .none else {
             if InputChannelPair.stores(index, over: currentInputPair) {
                 inputPairs[uid] = index == 0 ? nil : index
+                engine.followInputPair(currentInputPair)
                 pushModel()
             }
             microphoneRequest.repicked(source: audioSource, pair: index)
