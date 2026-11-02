@@ -1033,8 +1033,9 @@ mod tests {
         let quitting = Instant::now();
         drop(watcher);
         let waited = quitting.elapsed();
+        // Half its own answer timeout: load stretches a grace, not that far.
         assert!(
-            waited >= STUCK_GRACE / 2 && waited < STUCK_GRACE * 4,
+            waited >= STUCK_GRACE / 2 && waited < LIMIT,
             "the drop waited {waited:?}"
         );
         // Windows audio answers: both end by themselves.

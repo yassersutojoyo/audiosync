@@ -398,9 +398,11 @@ mod tests {
         let gate = Arc::new(Gate::default());
         let _open = OpensOnDrop(gate.clone());
         let started = Instant::now();
-        assert!(within(hung::<bool>(&gate), started + APP_WAIT).is_err());
-        let took = started.elapsed();
-        assert!(took >= APP_WAIT && took < APP_WAIT + SLACK, "took {took:?}");
+        let given_up = within(hung::<bool>(&gate), started + APP_WAIT).unwrap_err();
+        assert!(started.elapsed() >= APP_WAIT);
+        // A wait for the app's answer would hold the thread until the gate
+        // gives up, then end here with the app's E_FAIL.
+        assert_eq!(given_up.code(), ERROR_TIMEOUT.to_hresult());
     }
 
     #[test]
