@@ -2321,10 +2321,10 @@ do {
     let finished = done.wait(timeout: .now() + 5) == .success
     let spotify = seen.spotify, music = seen.music
     check(finished && h.calls(consentSpotify) == 1 && spotify.allSatisfy { $0 == .wait },
-          "automation consent: only one Apple event is in flight per undecided player, and it isn't read meanwhile",
+          "EC14 automation consent: only one Apple event is in flight per undecided player, and it isn't read meanwhile",
           "\(finished) \(h.calls(consentSpotify)) \(Set(spotify.map { "\($0)" }))")
     check(firstMusic == .wait && finished && music.allSatisfy { $0 == .read } && h.calls(consentMusic) == 1,
-          "automation consent: a hung send for Spotify doesn't stop Music's readings",
+          "EC14 automation consent: a hung send for Spotify doesn't stop Music's readings",
           "\(firstMusic) \(finished) \(Set(music.map { "\($0)" }))")
 }
 do {
@@ -2337,7 +2337,7 @@ do {
     let music = h.step(consentMusic)
     check(spotify == .refused && music == .read && h.verdicts.sorted() == ["Music allowed", "Spotify denied"]
             && !h.queue.sync { h.consent.mayCommand(consentSpotify) } && h.queue.sync { h.consent.mayCommand(consentMusic) },
-          "automation consent: -1743 counts as denied and success as allowed, for readings and commands",
+          "EC14 automation consent: -1743 counts as denied and success as allowed, for readings and commands",
           "\(spotify) \(music) \(h.verdicts)")
 }
 do {
@@ -2351,7 +2351,7 @@ do {
     h.queue.sync { h.consent.noted(consentSpotify, code: -1743) }
     steps.append(h.step(consentSpotify))
     check(steps == [.wait, .refused, .refused, .read, .refused] && h.verdicts == ["Spotify denied", "Spotify allowed", "Spotify denied"],
-          "automation consent: after a denial a later allowed answer is followed, and a reading refused after that is denied again",
+          "EC14 automation consent: after a denial a later allowed answer is followed, and a reading refused after that is denied again",
           "\(steps) \(h.verdicts)")
 }
 do {
@@ -2364,7 +2364,7 @@ do {
     }
     steps.append(h.step(consentSpotify))
     check(h.calls(consentSpotify) == 3 && steps == [.wait, .wait, .wait, .read],
-          "automation consent: a timeout or a missing player sends again later",
+          "EC14 automation consent: a timeout or a missing player sends again later",
           "\(h.calls(consentSpotify)) \(steps)")
 }
 do {
@@ -2376,7 +2376,7 @@ do {
     h.answer(consentSpotify, 0)
     let allowed = h.step(consentSpotify, mayAsk: false)
     check(held.allSatisfy { $0 == .hold } && stillHeld == .hold && allowed == .read && h.mayPrompt(consentSpotify) == [false, false],
-          "automation consent: before the explanation was read, a player already allowed is read through an event that can't prompt",
+          "EC14 automation consent: before the explanation was read, a player already allowed is read through an event that can't prompt",
           "\(Set(held.map { "\($0)" })) \(stillHeld) \(allowed) \(h.mayPrompt(consentSpotify))")
 }
 do {
@@ -2386,7 +2386,7 @@ do {
     h.answer(consentSpotify, -1728)
     let after = h.step(consentSpotify)
     check(after == .read && h.calls(consentSpotify) == 1 && h.mayPrompt(consentSpotify) == [true],
-          "automation consent: any reply but -1743 counts as allowed, so it isn't sent again every reading",
+          "EC14 automation consent: any reply but -1743 counts as allowed, so it isn't sent again every reading",
           "\(after) \(h.calls(consentSpotify))")
 }
 do {
@@ -2398,7 +2398,7 @@ do {
     h.queue.sync { h.consent.noted(consentSpotify, code: -1712) }
     let after = h.step(consentSpotify)
     check(before == .read && after == .wait && h.calls(consentSpotify) == 2,
-          "automation consent: a reading that times out sends the one waiting Apple event before any further reading",
+          "EC14 automation consent: a reading that times out sends the one waiting Apple event before any further reading",
           "\(before) \(after) \(h.calls(consentSpotify))")
 }
 
@@ -9647,7 +9647,7 @@ do {
     steps = []
     for n in 33...36 { tick(0.5 * Double(n)) }
     check(asleepStalls.isEmpty && asleepSteps.isEmpty && stalls == [18.0] && steps.allSatisfy({ $0 == .none }),
-          "output stall and capture watch: neither fires from the will-sleep notice to the wake; an output counts 2 s from the wake, the capture its 6 s grace",
+          "EC3 output stall and capture watch: neither fires from the will-sleep notice to the wake; an output counts 2 s from the wake, the capture its 6 s grace",
           "asleep \(asleepStalls) \(asleepSteps), awake \(stalls) \(steps)")
 
     // Spotify moved on before the sleep; after the wake the tap is slow to call back again.
@@ -9662,7 +9662,7 @@ do {
         if step != .none { wokeSteps.append((now, step)) }
     }
     check(wokeSteps.count == 1 && wokeSteps.first?.at == 24 && wokeSteps.first?.step == .stopped(.noCallback(8)),
-          "capture watch: the 6 s grace starts over at the wake, so a tap slow to resume isn't stopped 2 s after it",
+          "EC3 capture watch: the 6 s grace starts over at the wake, so a tap slow to resume isn't stopped 2 s after it",
           "\(wokeSteps)")
 
     // A service restart during the sleep still closes the capture; its first try comes 1 s after the wake.
@@ -9675,7 +9675,7 @@ do {
     let early = restarted.tick(callbacks: nil, reading: false, source: .nowPlaying(nil), at: 10.5)
     let first = restarted.tick(callbacks: nil, reading: false, source: .nowPlaying(nil), at: 11)
     check(stop == .stopped(.serviceRestarted) && held.allSatisfy { $0 == .none } && early == .none && first == .tryOpen(1),
-          "capture watch: a service restart during the sleep still closes the capture, and its first try comes 1 s after the wake",
+          "EC3 capture watch: a service restart during the sleep still closes the capture, and its first try comes 1 s after the wake",
           "\(stop) \(held.filter { $0 != .none }) \(early) \(first)")
 
     // covers: S332, S335 (the 60 s after a wake take none of the 5 tries)

@@ -1348,14 +1348,14 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | EC2 Bluetooth fresh link: switching the speaker off and on before the second restart cancels it | S325 |
 | EC2 Bluetooth fresh link: a sleep before the 2 s restart is due cancels it | S325 |
 | EC2 Bluetooth fresh link: a new return starts the second restart's clock over | S325 |
-| automation consent: only one Apple event is in flight per undecided player, and it isn't read meanwhile | S336 |
-| automation consent: a hung send for Spotify doesn't stop Music's readings | S336 |
-| automation consent: -1743 counts as denied and success as allowed, for readings and commands | S336 |
-| automation consent: after a denial a later allowed answer is followed, and a reading refused after that is denied again | S336 |
-| automation consent: a timeout or a missing player sends again later | S336 |
-| automation consent: before the explanation was read, a player already allowed is read through an event that can't prompt | S336 |
-| automation consent: any reply but -1743 counts as allowed, so it isn't sent again every reading | S336 |
-| automation consent: a reading that times out sends the one waiting Apple event before any further reading | S336 |
+| EC14 automation consent: only one Apple event is in flight per undecided player, and it isn't read meanwhile | S336 |
+| EC14 automation consent: a hung send for Spotify doesn't stop Music's readings | S336 |
+| EC14 automation consent: -1743 counts as denied and success as allowed, for readings and commands | S336 |
+| EC14 automation consent: after a denial a later allowed answer is followed, and a reading refused after that is denied again | S336 |
+| EC14 automation consent: a timeout or a missing player sends again later | S336 |
+| EC14 automation consent: before the explanation was read, a player already allowed is read through an event that can't prompt | S336 |
+| EC14 automation consent: any reply but -1743 counts as allowed, so it isn't sent again every reading | S336 |
+| EC14 automation consent: a reading that times out sends the one waiting Apple event before any further reading | S336 |
 | capture watch: no callback for 2 s after the first asks for a capture reopen, a service restart asks at once, a quiet source never does | S335 |
 | capture watch: a tap that stops calling back while the source is paused never ends the session | S335 |
 | capture watch: the first try comes 1 s after the stop and is kept once it delivered for 5 s | S335 |
@@ -1390,9 +1390,9 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | output runaway: reported once per attach; a reopened output, with a new attach token, is reported again | S347 |
 | output stall: an output switched off for a failed start leaves its stall, so its could-not-start notice stays | S334 |
 | output stall: a stalled output whose device leaves the list ends its stall; listed again, a refusal is tried every 3 s | S331 |
-| output stall and capture watch: neither fires from the will-sleep notice to the wake; an output counts 2 s from the wake, the capture its 6 s grace | S334, S335 |
-| capture watch: the 6 s grace starts over at the wake, so a tap slow to resume isn't stopped 2 s after it | S334, S335 |
-| capture watch: a service restart during the sleep still closes the capture, and its first try comes 1 s after the wake | S334, S335 |
+| EC3 output stall and capture watch: neither fires from the will-sleep notice to the wake; an output counts 2 s from the wake, the capture its 6 s grace | S334, S335 |
+| EC3 capture watch: the 6 s grace starts over at the wake, so a tap slow to resume isn't stopped 2 s after it | S334, S335 |
+| EC3 capture watch: a service restart during the sleep still closes the capture, and its first try comes 1 s after the wake | S334, S335 |
 | capture watch: a capture failing for 15 s after a wake keeps being tried and is kept once it opens | S332, S335 |
 | capture watch: a capture still failing 60 s after a wake gets its 5 tries, then the session stops | S332, S335 |
 | capture watch: a session rebuilt inside a wake's window keeps it, so its failing tries take none of the 5 | S332, S335 |
