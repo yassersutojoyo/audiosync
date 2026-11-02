@@ -252,12 +252,12 @@ pub mod tests {
         ));
         assert!(started.elapsed() >= Duration::from_millis(190));
 
-        let mut child = Command::new("cmd.exe")
-            .args(["/c", "exit", "0"])
-            .spawn()
-            .unwrap();
+        // The child ends 1 s after WAIT (ping counts whole seconds), as a
+        // plain cmd.exe did under heavy parallel test load.
+        let past_wait = u32::try_from(WAIT.as_secs()).unwrap() + 1;
+        let mut child = sleeper(past_wait).spawn().unwrap();
         let pid = child.id();
-        assert!(wait_for_exit(pid, WAIT));
+        assert!(wait_for_exit(pid, Duration::from_secs(60)));
         let _ = child.wait();
     }
 
@@ -402,8 +402,11 @@ pub mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
 
         let mut exits = Command::new("cmd.exe");
-        exits.args(["/c", "exit", "3"]);
-        let start = start_and_wait(&mut exits, made_up_old(2), Duration::from_secs(10));
+        // Exits 1 s after WAIT, as late as a plain `exit 3` did under heavy
+        // parallel test load.
+        let late_exit = format!("ping -n {} 127.0.0.1 >nul & exit 3", WAIT.as_secs() + 2);
+        exits.args(["/c", &late_exit]);
+        let start = start_and_wait(&mut exits, made_up_old(2), Duration::from_secs(60));
         assert!(
             matches!(start, Start::Exited { code: Some(3), .. }),
             "{start:?}"

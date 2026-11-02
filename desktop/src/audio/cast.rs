@@ -3909,9 +3909,11 @@ pub mod tests {
     }
 
     /// Polls until the fake was asked to start a session, for a lookup
-    /// that answers on its own thread.
+    /// that answers on its own thread, which a loaded PC can starve for
+    /// seconds.
     fn poll_until_started(fake: &FakeCast, cast: &mut CastSpeakers) {
-        for _ in 0..400 {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < deadline {
             cast.poll();
             if !fake.state().started.is_empty() {
                 return;
@@ -4273,7 +4275,11 @@ pub mod tests {
     fn a_browse_moves_the_reported_volume_of_a_speaker_added_by_address() {
         let fake = FakeCast::default();
         let mut cast = CastSpeakers::new(fake.link(), DebugLog::default());
-        cast.set_probe(|_| true);
+        // The reach check answers as late as it did on a loaded PC.
+        cast.set_probe(|_| {
+            thread::sleep(Duration::from_secs(4));
+            true
+        });
         cast.add_address(address("192.0.2.30"));
         let manual = address("192.0.2.30").device_id().to_string();
         assert_eq!(cast.set_enabled(&manual, true), Ok(()));
