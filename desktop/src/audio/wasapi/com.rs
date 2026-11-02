@@ -701,20 +701,19 @@ mod tests {
     /// A wait long enough that a drop that waits it fails the test.
     const LONG: Duration = Duration::from_secs(10);
 
-    /// A worker whose thread ends `ending` after `told` closes, raising
-    /// `ended` as it goes.
+    /// A worker whose thread ends once `told` closes, raising `ended` as it
+    /// goes.
     fn ending_worker(
         stuck: &'static StuckThreads,
         timeout: Duration,
         told: mpsc::Receiver<()>,
         ended: &Arc<AtomicBool>,
-        ending: Duration,
     ) -> Worker {
         let ended = Arc::clone(ended);
         let (worker, ()) = spawn_worker_within("audiosync-test", timeout, stuck, move |ready| {
             if ready.ok(()) {
                 let _ = told.recv();
-                thread::sleep(ending);
+                thread::sleep(Duration::from_millis(20));
                 ended.store(true, Ordering::Release);
             }
         })
@@ -745,7 +744,7 @@ mod tests {
         static STUCK: StuckThreads = StuckThreads::new();
         let (tell, told) = mpsc::channel();
         let ended = Arc::new(AtomicBool::new(false));
-        let worker = ending_worker(&STUCK, LONG, told, &ended, Duration::from_millis(20));
+        let worker = ending_worker(&STUCK, LONG, told, &ended);
         assert!(!worker.is_finished());
         drop(tell);
         let started = Instant::now();
@@ -796,8 +795,7 @@ mod tests {
         // joined if it ends within it.
         let (tell, told) = mpsc::channel();
         let ended = Arc::new(AtomicBool::new(false));
-        // It ends late, as a loaded PC runs it.
-        let worker = ending_worker(&STUCK, LONG, told, &ended, STUCK_GRACE * 2);
+        let worker = ending_worker(&STUCK, LONG, told, &ended);
         drop(tell);
         let started = Instant::now();
         drop(worker);

@@ -398,10 +398,10 @@ mod tests {
         let gate = Arc::new(Gate::default());
         let _open = OpensOnDrop(gate.clone());
         let started = Instant::now();
-        // The thread waits a deadline already past, as a loaded PC ran it.
-        thread::sleep(APP_WAIT + SLACK);
         let given_up = within(hung::<bool>(&gate), started + APP_WAIT).unwrap_err();
-        // The app's own answer, E_FAIL, comes only once the gate opens.
+        assert!(started.elapsed() >= APP_WAIT);
+        // A wait for the app's answer would hold the thread until the gate
+        // gives up, then end here with the app's E_FAIL.
         assert_eq!(given_up.code(), ERROR_TIMEOUT.to_hresult());
     }
 
