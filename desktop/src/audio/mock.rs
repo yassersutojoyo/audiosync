@@ -22,7 +22,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, SystemTime};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant, SystemTime};
 
 use audiosync_core::eq::EqProcessor;
 use audiosync_core::reader::Reader;
@@ -1513,6 +1514,35 @@ impl Controller<MockDriver> {
         if let Some(cast) = lock(link).feeds.cast.as_mut() {
             cast.push(&vec![level; frames * 2], frames);
         }
+    }
+
+    /// Hands the running capture's AirPlay feed stereo frames whose every
+    /// sample is `level`, in real time on a thread of its own as a real
+    /// capture does, until the capture ends.
+    pub fn feed_airplay_live(&self, level: f32) -> JoinHandle<()> {
+        let link = self.driver().capture.clone();
+        thread::spawn(move || {
+            let Some(link) = link else {
+                return;
+            };
+            let frames = SESSION_RATE as usize / 100;
+            let block = vec![level; frames * 2];
+            let started = Instant::now();
+            let mut fed = 0.0;
+            loop {
+                {
+                    let mut link = lock(&link);
+                    let Some(feed) = link.feeds.airplay.as_mut() else {
+                        return;
+                    };
+                    while fed < started.elapsed().as_secs_f64() * f64::from(SESSION_RATE) {
+                        feed.push(&block, frames, Instant::now());
+                        fed += frames as f64;
+                    }
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+        })
     }
 }
 
