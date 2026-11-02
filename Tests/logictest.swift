@@ -8114,10 +8114,15 @@ do {
     let windowSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let placeSource = windowSource.components(separatedBy: "private func place(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
+    let scaleSource = windowSource.components(separatedBy: "private func scaleContent(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
     // covers: S405
     check(placeSource.contains("window.setFrame(") && placeSource.contains("PanelReveal.content(")
-            && !placeSource.contains("layoutSubtreeIfNeeded") && !windowSource.contains("CATransform3DMakeScale"),
-          "menu bar panel source: the open and close step the popover window's own frame around content laid out once, never scaling a picture of the panel, so its corners stay round at every step")
+            && placeSource.contains("scaleContent(") && !placeSource.contains("layoutSubtreeIfNeeded")
+            && windowSource.components(separatedBy: "(keyPath: \"transform\")").count == 2
+            && scaleSource.contains("guard let layer = host.view.layer") && scaleSource.contains("(keyPath: \"transform\")")
+            && !scaleSource.contains("cacheDisplay("),
+          "menu bar panel source: the open and close step the popover window's own frame and scale only the live content's layer, never a picture of the panel, so its corners stay round at every step")
     // covers: S405
     check(!windowSource.contains("PanelShadowWindow") && !windowSource.contains("hasShadow = ")
             && !windowSource.contains("addChildWindow("),
