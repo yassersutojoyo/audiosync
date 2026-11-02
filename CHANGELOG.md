@@ -20,6 +20,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, Calibrate All Speakers opens with a "Before you start" list: the microphone where you listen, the Mac's own volume, with an Unmute or Set to button when it's muted or quiet, and the outputs it leaves out. Each result shows as a card with the new delay, the one it replaces and whether it was measured clearly.
 - On Windows, while more than one notice waits, the tray panel has Dismiss All beside "n more notices…", as on the Mac.
 - On Windows, the tray panel's source menu ends in Several Apps…, which opens the main window with its list of apps to send.
+- On Windows, while the Google Cast search finds no speaker, the tray panel offers Add by Address… under its list, as on the Mac.
 
 ### Changed
 

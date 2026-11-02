@@ -1937,6 +1937,7 @@ impl App {
             state.airplay_none_found || state.cast_list == ui_model::CastList::NoneFound,
         );
         self.main.set_cast_by_address(state.cast_by_address);
+        self.flyout.set_cast_by_address(state.cast_by_address);
         self.main.set_this_pc_all_hidden(state.hidden_in(true));
         self.main.set_connected_all_hidden(state.hidden_in(false));
         self.flyout.set_all_hidden(state.all_hidden());
@@ -2914,6 +2915,13 @@ impl App {
         let w = weak.clone();
         flyout.on_notice_update_button_pressed(move |button| {
             with_app(&w, |app| app.press_update_button(button))
+        });
+        let w = weak.clone();
+        flyout.on_cast_add_address_requested(move || {
+            with_app(&w, |app| {
+                app.hide_flyout();
+                app.main.invoke_cast_add_address_requested();
+            })
         });
         let w = weak.clone();
         flyout.on_open_app(move || {

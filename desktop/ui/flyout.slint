@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // zone that is on but can't play right now under it (a zone's count first) ("In use by another app",
@@ -377,6 +377,8 @@ export component TrayFlyout inherits Window {
     // AirPlay discovery runs and has found no speaker yet, short of 20 s.
     in property <bool> airplay-searching;
     in property <CastList> cast-list;
+    // A Google Cast sender runs, so Add by Address… can list a speaker.
+    in property <bool> cast-by-address;
     // Streaming is on with every speaker off.
     in property <bool> no-speaker-on;
     // The newest notice only (or none); `notice-count` counts them all.
@@ -406,6 +408,8 @@ export component TrayFlyout inherits Window {
     // Open Privacy Settings on a notice.
     callback notice-privacy-requested(int);
     callback notice-update-button-pressed(UpdateButton);
+    // Add by Address…: the main window's dialog.
+    callback cast-add-address-requested();
     callback open-app();
     callback exit-app();
     callback close-requested();
@@ -777,6 +781,17 @@ export component TrayFlyout inherits Window {
 
                     if root.connected-all-hidden: SecondaryText {
                         text: Strings.flyout-connected-hidden;
+                    }
+
+                    if root.cast-by-address && root.cast-list == CastList.none-found: HorizontalLayout {
+                        alignment: start;
+                        LinkButton {
+                            text: Strings.cast-add-address;
+                            label: Strings.cast-add-address;
+                            clicked => {
+                                root.cast-add-address-requested();
+                            }
+                        }
                     }
 
                     body-end := Rectangle {

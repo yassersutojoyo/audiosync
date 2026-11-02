@@ -645,7 +645,10 @@ mod tests {
             "if root.cast-by-address && root.cast-list == CastList.none-found: HorizontalLayout {"
         ));
         let body = handler_body(flyout, "text: Strings.cast-add-address;", "clicked");
-        assert!(body.contains("root.cast-add-address-requested();"), "{body}");
+        assert!(
+            body.contains("root.cast-add-address-requested();"),
+            "{body}"
+        );
 
         let view = include_str!("view.rs");
         let wiring = &view[view
