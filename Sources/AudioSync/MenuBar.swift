@@ -961,7 +961,6 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         steps = run
         // The content keeps its laid-out size; `place` holds its frame still on screen and scales its layer.
         host.view.autoresizingMask = []
-        host.view.wantsLayer = true
         place(window, scale: run.scale)
         if DebugTrace.enabled {
             DebugTrace.log("[AudioSync] panel \(closes ? "close" : "open") steps: \(scales.count), rest "
