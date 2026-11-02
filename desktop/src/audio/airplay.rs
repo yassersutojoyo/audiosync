@@ -1248,6 +1248,8 @@ pub struct AirPlaySpeakers {
     /// The sender stopped after an internal error, or its discovery did;
     /// reported once, until a new sender replaces it.
     stopped: bool,
+    /// The notices for the pairings a new sender dropped, until the next poll.
+    replaced: Vec<BackendEvent>,
     /// The core's panic count when the sender was handed over, so its stop
     /// logs where a panic since happened (S205).
     panics_before: u64,
@@ -1336,6 +1338,7 @@ impl AirPlaySpeakers {
             calibration_solo: None,
             volume_read_at: Instant::now(),
             stopped: false,
+            replaced: Vec::new(),
             panics_before: panic_mark(),
             store_unsaved: false,
             store_change: None,
@@ -1423,16 +1426,17 @@ impl AirPlaySpeakers {
         self.target_missing.clear();
         self.gone_targets.clear();
         self.homekit_keys.clear();
-        let pairing: Vec<String> = self
-            .pairings
-            .keys()
+        // A pairing waiting for its password says so, as `sender_stopped` does.
+        let pairing: Vec<(String, AirPlayProblem)> = self
+            .password_asks
+            .iter()
+            .filter(|(_, ask)| ask.pair)
+            .map(|(id, _)| (id.clone(), AirPlayProblem::NeedsPassword))
             .chain(
-                self.password_asks
-                    .iter()
-                    .filter(|(_, ask)| ask.pair)
-                    .map(|(id, _)| id),
+                self.pairings
+                    .keys()
+                    .map(|id| (id.clone(), AirPlayProblem::NeedsPin)),
             )
-            .cloned()
             .collect();
         self.pairings.clear();
         self.ending.clear();
@@ -1443,9 +1447,11 @@ impl AirPlaySpeakers {
         // didn't) stays, as the speaker joins with it once listed again;
         // one for a pairing goes with the pairing, and the speaker goes off.
         self.password_asks.retain(|_, ask| !ask.pair);
-        for id in pairing {
-            self.entry(&id).enabled = false;
+        let mut replaced = Vec::new();
+        for (id, problem) in pairing {
+            self.turn_off(&id, problem, &mut replaced);
         }
+        self.replaced = replaced;
         self.latency = self.link.latency();
         self.reported_us.clear();
         self.latency_frames = DEFAULT_LATENCY_FRAMES;
@@ -3571,7 +3577,7 @@ impl AirPlaySpeakers {
     /// Takes in what the sender reported since the last call and returns
     /// what the UI should know.
     pub fn poll(&mut self) -> Vec<BackendEvent> {
-        let mut events = Vec::new();
+        let mut events = std::mem::take(&mut self.replaced);
         let mut changed = false;
         while let Some(event) = self.link.poll_event() {
             match event {
@@ -8723,6 +8729,26 @@ pub mod tests {
         assert!(airplay.password_prompt().is_some());
         airplay.replace_link(FakeAirPlay::new().link());
         assert_eq!(airplay.password_prompt(), None);
+        assert!(airplay.enabled_ids().is_empty());
+        assert!(airplay.poll().contains(&BackendEvent::AirPlayFailed {
+            id: id_of(&tv),
+            problem: AirPlayProblem::NeedsPassword
+        }));
+    }
+
+    // covers: S223
+    #[test]
+    fn a_new_sender_during_a_pin_prompt_turns_the_tv_off_with_a_notice() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let tv = device(6, "Den TV", APPLE_TV_TXT);
+        pin_shown(&fake, &mut airplay, &tv);
+        airplay.replace_link(FakeAirPlay::new().link());
+        assert!(airplay.poll().contains(&BackendEvent::AirPlayFailed {
+            id: id_of(&tv),
+            problem: AirPlayProblem::NeedsPin
+        }));
+        assert_eq!(airplay.pin_prompt(), None);
         assert!(airplay.enabled_ids().is_empty());
     }
 

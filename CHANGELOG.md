@@ -25,7 +25,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, recalling a preset where no speaker can play now is titled "nothing changed" for Narrator, on the notice's Dismiss button and in the tray icon's tooltip, as on the Mac. Before, it was titled "some speakers stayed off".
 - On Windows, the main window and the tray flyout list the newest notice first, also when the window itself posted it or posted it again. Before, a notice from the window was listed after the others and could be left out.
 - On Windows, after the PC wakes from sleep, the speaker list waits 20 seconds again before it says no AirPlay or Google Cast speaker was found.
-- On Windows, an Apple TV whose pairing is cut off because AirPlay stopped turns off with the notice that it needs a PIN. Before, it turned off without saying why.
+- On Windows, a speaker whose pairing is cut off because AirPlay stopped or restarted turns off with the notice that it needs pairing with a code, or its password when the pairing was waiting for one. Before, it turned off without saying why.
 - On Windows, the web remote lists a speaker that was turned off because its pairing was refused as one to turn on at the PC, as it does for a speaker that asks for a PIN or password.
 - On Windows, a Bluetooth speaker that just connected gets the quick restart that brings it in sync on its first start, however long after connecting you turn it on, as on the Mac. Before, it got the restart only when it started within 3 seconds of connecting, and could play late for the whole stream.
 - On Windows, the "Waiting for audio" notice no longer stays up while sound comes in because the level meter read that sound first.
