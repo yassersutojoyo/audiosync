@@ -382,7 +382,8 @@ enum PanelReveal {
 enum PanelArrow {
     /// The system arrow's size, which AppKit does not publish: 13 pt is the
     /// popover's top safe area inset; the debug log measures the drawn base.
-    static let size = CGSize(width: 28, height: 13)
+    /// A point wider on each side than the 28 pt base taken for it, to cover its soft edge.
+    static let size = CGSize(width: 30, height: 13)
 
     /// Where the arrow goes on screen for the popover window at `window`:
     /// apex on the window's top edge at its middle, where the system draws its own.
