@@ -8070,7 +8070,36 @@ do {
     }
     // covers: S405
     check(contentHeld && PanelReveal.content(restContent, rest: restWindow, step: restWindow) == restContent,
-          "menu bar panel: at each step the window grows from under the icon while the content stays where it rests on screen, at its full size, so the window only clips it")
+          "menu bar panel: at each step the window grows from under the icon while the content's frame stays where it rests on screen, at its full size, its layer scaled about the arrow's tip")
+    let growRest = CGRect(x: 1000.25, y: 543.5, width: 306, height: 412)
+    let growTip = PanelReveal.tip(icon: 1153.3, rest: growRest)
+    // The layer's position at the content's middle, where Core Animation's default anchor point puts it.
+    let growOffset = CGVector(dx: -10, dy: -206)
+    let grown = revealSteps.enumerated().map { index, scale -> (tip: CGPoint, corner: CGPoint, laidCorner: CGPoint, scale: CGFloat) in
+        let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
+        let s = step.height / growRest.height
+        // Where AppKit lays the content's tip point before the transform, off by half points.
+        let laid = CGPoint(x: growTip.x + 0.5 * CGFloat(index % 3), y: growTip.y - 0.5 * CGFloat(index % 2))
+        let position = CGPoint(x: laid.x + growOffset.dx, y: laid.y + growOffset.dy)
+        let scaling = PanelReveal.contentScale(Double(s), tip: growTip, anchor: laid, offset: growOffset)
+        func drawn(_ point: CGPoint) -> CGPoint {
+            let moved = CGPoint(x: point.x - position.x, y: point.y - position.y).applying(scaling)
+            return CGPoint(x: position.x + moved.x, y: position.y + moved.y)
+        }
+        let corner = CGPoint(x: laid.x - 153, y: laid.y - 400)
+        return (drawn(laid), drawn(corner), corner, s)
+    }
+    // covers: S405
+    check(zip(grown, revealSteps).allSatisfy { step, scale in
+        abs(step.corner.x - (growTip.x - 153 * step.scale)) < 1e-9 && abs(step.corner.y - (growTip.y - 400 * step.scale)) < 1e-9
+            && abs(step.scale - CGFloat(scale)) < 0.002 && (step.scale > 0.999 || abs(step.corner.y - step.laidCorner.y) > 0.25)
+    }, "menu bar panel: at each step the content scales by the window's height about the arrow's tip, never about its own middle, so its text grows from under the icon with the panel",
+          "\(grown.map { $0.corner })")
+    // covers: S405
+    check(grown.allSatisfy { abs($0.tip.x - growTip.x) < 1e-9 && abs($0.tip.y - growTip.y) < 1e-9 }
+            && growTip == CGPoint(x: 1153, y: 956) && PanelReveal.tip(icon: 2400.6, rest: growRest) == CGPoint(x: 1306, y: 956),
+          "menu bar panel: the arrow's tip stays on the same whole screen point at every step, so the content never drifts as the window's edges snap to the pixel grid",
+          "\(growTip) \(grown.map { $0.tip })")
     let closeMotion = PanelMotion.close(reduceMotion: false)
     let closeSteps = PanelReveal.shrinks(from: 1, closeMotion, step: 1.0 / 120)
     let cutShort = PanelReveal.shrinks(from: 0.98, closeMotion, step: 1.0 / 120)
@@ -8082,6 +8111,38 @@ do {
             && cutShort.first == 0.98 && cutShort.last == closeMotion.scale,
           "menu bar panel: the close shrinks from where the panel is to its end scale on an ease-in curve, one step per 120 Hz frame",
           "\(closeSteps)")
+    let arrowFrames = (revealSteps + closeSteps).map { scale -> (window: CGRect, arrow: CGRect) in
+        let step = PanelReveal.body(growRest, scale: scale, about: growTip, pixel: 0.5)
+        return (step, PanelArrow.frame(in: step, tip: growTip))
+    }
+    // covers: S405
+    check(arrowFrames.allSatisfy { step in
+        step.arrow.midX == growTip.x && step.arrow.maxY == step.window.maxY && step.arrow.size == PanelArrow.size
+    }, "menu bar panel: the arrow drawn over the popover's own has its apex on the arrow's tip at the window's top edge, at every open and close step",
+          "\(arrowFrames.map { $0.arrow })")
+    let edgeRest = CGRect(x: 1000, y: 543, width: 306, height: 412)
+    let edgeTip = PanelReveal.tip(icon: 1040.3, rest: edgeRest)
+    let edgeArrows = (revealSteps + closeSteps).map { scale in
+        PanelArrow.frame(in: PanelReveal.body(edgeRest, scale: scale, about: edgeTip, pixel: 0.5), tip: edgeTip)
+    }
+    let cornerArrow = PanelArrow.frame(in: edgeRest, tip: PanelReveal.tip(icon: 1001.2, rest: edgeRest))
+    // covers: S405
+    check(edgeArrows.allSatisfy { $0.midX == edgeTip.x }
+            && cornerArrow.minX == edgeRest.minX + PanelArrow.cornerRoom && cornerArrow.maxY == edgeRest.maxY,
+          "menu bar panel: a panel the screen edge holds off the icon draws its arrow on the tip under the icon, kept clear of the window's rounded corner",
+          "\(edgeArrows.map { $0.midX }) \(cornerArrow)")
+    let centredRest = CGRect(x: 933, y: 422, width: 306, height: 507)
+    let centredTip = PanelReveal.tip(icon: 1086.4, rest: centredRest)
+    let centredSteps = [0.5, 1].flatMap { pixel in
+        (revealSteps + closeSteps).map { PanelReveal.body(centredRest, scale: $0, about: centredTip, pixel: pixel) }
+    }
+    // covers: S405
+    check(centredSteps.allSatisfy { step in
+        step.minX + step.width / 2 == centredTip.x && step.minX == step.minX.rounded()
+            && PanelArrow.frame(in: step, tip: centredTip).midX == centredTip.x
+    } && PanelReveal.body(centredRest, scale: 1, about: centredTip, pixel: 0.5) == centredRest,
+          "menu bar panel: every step's window is an even width on whole points centred on the arrow's tip, so the system's arrow, drawn at the window's middle, stays on the tip",
+          "\(centredSteps.filter { $0.minX + $0.width / 2 != centredTip.x })")
 }
 
 // MARK: The panel opens and closes as its own window (MenuBar.swift)
@@ -8089,10 +8150,15 @@ do {
     let windowSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let placeSource = windowSource.components(separatedBy: "private func place(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
+    let scaleSource = windowSource.components(separatedBy: "private func scaleContent(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
     // covers: S405
     check(placeSource.contains("window.setFrame(") && placeSource.contains("PanelReveal.content(")
-            && !placeSource.contains("layoutSubtreeIfNeeded") && !windowSource.contains("CATransform3DMakeScale"),
-          "menu bar panel source: the open and close step the popover window's own frame around content laid out once, never scaling a picture of the panel, so its corners stay round at every step")
+            && placeSource.contains("scaleContent(") && !placeSource.contains("layoutSubtreeIfNeeded")
+            && windowSource.components(separatedBy: "(keyPath: \"transform\")").count == 2
+            && scaleSource.contains("let content = contentLayer") && scaleSource.contains("(keyPath: \"transform\")")
+            && !scaleSource.contains("cacheDisplay("),
+          "menu bar panel source: the open and close step the popover window's own frame and scale only the live content's layer, never a picture of the panel, so its corners stay round at every step")
     // covers: S405
     check(!windowSource.contains("PanelShadowWindow") && !windowSource.contains("hasShadow = ")
             && !windowSource.contains("addChildWindow("),
@@ -8102,6 +8168,11 @@ do {
     // covers: S405
     check(dismissSource.contains("PanelReveal.shrinks(from: steps?.scale ?? 1"),
           "menu bar panel source: a close that cuts the open short shrinks from the step the open has shown")
+    let endSource = windowSource.components(separatedBy: "private func endSteps(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    // covers: S405
+    check(endSource.contains("\n        host.view.layer?.removeAnimation(forKey: Self.stepKey)"),
+          "menu bar panel source: ending the steps always hands the content back at its laid-out scale, even once the window is gone")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)

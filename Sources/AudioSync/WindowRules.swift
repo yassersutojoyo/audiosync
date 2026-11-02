@@ -298,20 +298,44 @@ enum PanelReveal {
     static func duration(_ motion: PanelMotion) -> TimeInterval { Double(scales(motion, step: step).count) * step }
 
     /// `body`, the panel's window frame, scaled by `scale` about the arrow's
-    /// tip, its edges rounded to the nearest `pixel`.
+    /// tip, its top and bottom rounded to the nearest `pixel`, its middle and
+    /// each half of its width moved by whole points; with no `pixel`, unrounded.
     static func body(_ body: CGRect, scale: Double, about tip: CGPoint, pixel: CGFloat) -> CGRect {
         let s = CGFloat(scale)
         func snap(_ value: CGFloat) -> CGFloat { pixel > 0 ? (value / pixel).rounded() * pixel : value }
         func scaled(_ value: CGFloat, _ origin: CGFloat) -> CGFloat { snap(origin + (value - origin) * s) }
-        let minX = scaled(body.minX, tip.x), maxX = scaled(body.maxX, tip.x)
+        // The system draws its arrow at the window's middle and keeps the window on whole points, so a
+        // half-point side edge put the arrow half a point off the tip on every odd width.
+        let middle = body.midX - ((body.midX - tip.x) * (1 - s)).rounded()
+        let half = body.width / 2 - (body.width / 2 * (1 - s)).rounded()
+        let minX = pixel > 0 ? middle - half : scaled(body.minX, tip.x)
+        let width = pixel > 0 ? 2 * half : scaled(body.maxX, tip.x) - minX
         let minY = scaled(body.minY, tip.y), maxY = scaled(body.maxY, tip.y)
-        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        return CGRect(x: minX, y: minY, width: width, height: maxY - minY)
     }
 
     /// Where `content`, laid out in the window at its `rest` frame, goes in the
     /// window at `step`, so it stays put on screen and the window clips it.
     static func content(_ content: CGRect, rest: CGRect, step: CGRect) -> CGRect {
         content.offsetBy(dx: rest.minX - step.minX, dy: rest.minY - step.minY)
+    }
+
+    /// The arrow's tip on screen, which the window and its content scale
+    /// about: under the icon's middle `icon`, on the top edge of the window at
+    /// `rest`, and inside it, so it stays on the panel's own screen.
+    static func tip(icon: CGFloat, rest: CGRect) -> CGPoint {
+        // Whole points, so the window's pixel-snapped steps never move the content's anchor.
+        CGPoint(x: min(max(icon, rest.minX), rest.maxX).rounded(), y: rest.maxY.rounded())
+    }
+
+    /// The transform for a layer that draws the content `scale` times its size
+    /// with the point laid at `anchor` drawn at `tip`; Core Animation applies
+    /// it about the layer's position, `offset` from `anchor`. All in the
+    /// layer's superlayer's coordinates, where the transform acts.
+    static func contentScale(_ scale: Double, tip: CGPoint, anchor: CGPoint, offset: CGVector) -> CGAffineTransform {
+        let s = CGFloat(scale)
+        return CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: tip.x - anchor.x - (1 - s) * offset.dx,
+                                 ty: tip.y - anchor.y - (1 - s) * offset.dy)
     }
 
     /// The open's spring, one scale per `step` from `motion.scale` to exactly 1
@@ -350,6 +374,25 @@ enum PanelReveal {
             let u = (low + high) / 2
             return start + (motion.scale - start) * (3 * (1 - u) + u) * u * u
         }
+    }
+}
+
+/// The arrow the panel draws over the popover's own, which the system edges
+/// in its bare material, so the arrow reads in the panel's backing like the box.
+enum PanelArrow {
+    /// 13 pt high, the popover's top safe area inset; 2 pt wider than a 28 pt base, to cover its soft edge.
+    static let size = CGSize(width: 30, height: 13)
+    /// What the arrow's base keeps clear of the window's side edges for its rounded corners;
+    /// an estimate, since AppKit does not publish the popover's corner radius.
+    static let cornerRoom: CGFloat = 10
+
+    /// Where the arrow goes on screen for the popover window at `window`:
+    /// apex on the window's top edge at the arrow's `tip`, where the system
+    /// draws its own, kept clear of the window's corners.
+    static func frame(in window: CGRect, tip: CGPoint) -> CGRect {
+        let inset = size.width / 2 + cornerRoom
+        let apex = min(max(tip.x, window.minX + inset), window.maxX - inset)
+        return CGRect(x: apex - size.width / 2, y: window.maxY - size.height, width: size.width, height: size.height)
     }
 }
 

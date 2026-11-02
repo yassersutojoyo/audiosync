@@ -681,6 +681,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var moveWatch: NSObjectProtocol?
     private var steps: PanelSteps?
     private var stepLink: CADisplayLink?
+    /// Drawn over the popover's own arrow while the panel shows (`PanelArrow`).
+    private let arrowLayer = CAShapeLayer()
+    private var arrowWatch: NSObjectProtocol?
     private var noticeWatch: AnyCancellable?
     private var speakerWatch: AnyCancellable?
     let model: AppModel
@@ -916,8 +919,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private struct PanelSteps {
         var rest: CGRect
         var content: CGRect
-        /// The menu bar icon's middle (screen x), which the window scales about.
-        var icon: CGFloat
+        /// The arrow's tip on screen (`PanelReveal.tip`), which the window and the content scale about.
+        var tip: CGPoint
+        /// The tip in the content's coordinates at rest.
+        var anchor: CGPoint
+        /// From where `anchor` lies to the content layer's position, in its superlayer.
+        var offset: CGVector
         var mask: NSView.AutoresizingMask
         var closes = false
         var began: CFTimeInterval = 0
@@ -932,6 +939,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func animateOpen(_ motion: PanelMotion) {
         guard let window = host.view.window else { return }
         window.alphaValue = 0
+        showArrow(on: window)
         if motion.grows { startSteps(window, PanelReveal.scales(motion, step: PanelReveal.step), closes: false) }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = motion.duration
@@ -946,14 +954,17 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func startSteps(_ window: NSWindow, _ scales: [Double], closes: Bool) {
         guard let holder = host.view.superview, !scales.isEmpty else { return }
         stepLink?.invalidate()
-        var run = steps ?? PanelSteps(rest: window.frame, content: holder.convert(host.view.frame, to: nil),
-                                      icon: iconMiddle ?? window.frame.midX, mask: host.view.autoresizingMask)
+        let rest = steps?.rest ?? window.frame
+        let tip = steps?.tip ?? PanelReveal.tip(icon: iconMiddle ?? rest.midX, rest: rest)
+        let anchor = steps?.anchor ?? host.view.convert(CGPoint(x: tip.x - rest.minX, y: tip.y - rest.minY), from: nil)
+        var run = steps ?? PanelSteps(rest: rest, content: holder.convert(host.view.frame, to: nil), tip: tip,
+                                      anchor: anchor, offset: layerOffset(from: anchor), mask: host.view.autoresizingMask)
         run.closes = closes
         run.began = CACurrentMediaTime()
         run.scales = scales
         run.shown = 0
         steps = run
-        // The content keeps its size; `place` holds it still on screen while the window steps.
+        // The content keeps its laid-out size; `place` holds its frame still on screen and scales its layer.
         host.view.autoresizingMask = []
         place(window, scale: run.scale)
         if DebugTrace.enabled {
@@ -973,9 +984,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             steps = run
             place(window, scale: run.scale)
             if DebugTrace.enabled {
-                DebugTrace.log(String(format: "[AudioSync] panel %@ step: %.1f ms, step %ld of %ld, scale %.4f, frame %@",
+                let laid = window.convertPoint(toScreen: host.view.convert(run.anchor, to: nil))
+                DebugTrace.log(String(format: "[AudioSync] panel %@ step: %.1f ms, step %ld of %ld, scale %.4f, frame %@, "
+                                      + "tip %@, laid %@, drawn tip %@, content scale %.4f of frame %.4f",
                                       run.closes ? "close" : "open", (CACurrentMediaTime() - run.began) * 1000, due,
-                                      run.scales.count - 1, run.scale, NSStringFromRect(window.frame)))
+                                      run.scales.count - 1, run.scale, NSStringFromRect(window.frame), NSStringFromPoint(run.tip),
+                                      NSStringFromPoint(laid), drawnTip(window, anchor: run.anchor).map(NSStringFromPoint) ?? "unknown",
+                                      Double(heldTransform.m11), Double(window.frame.height / run.rest.height)))
+                traceArrow(window, step: due, tip: run.tip)
             }
         }
         guard due == run.scales.count - 1 else { return }
@@ -988,15 +1004,143 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         }
     }
 
-    /// Sets the window to its rest frame scaled by `scale` about the icon, and
-    /// the content where it is at rest on screen, so the window clips it.
+    /// Lays the arrow over the popover's own in the window's frame view, the
+    /// one view that reaches the arrow, and keeps it there as the window steps and resizes.
+    private func showArrow(on window: NSWindow) {
+        if arrowWatch == nil {
+            arrowWatch = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window,
+                                                                queue: nil) { [weak self, weak window] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let window else { return }
+                    self.placeArrow(window)
+                }
+            }
+        }
+        DebugTrace.log("[AudioSync] panel arrow show: frame view \(window.contentView?.superview != nil), "
+                       + "its layer \(window.contentView?.superview?.layer != nil)")
+        // Added again on every open, so it stays above whatever the frame view added meanwhile.
+        arrowLayer.removeFromSuperlayer()
+        placeArrow(window)
+    }
+
+    private func placeArrow(_ window: NSWindow) {
+        guard let frameView = window.contentView?.superview else { return }
+        // The arrow needs a layer to sit in, which the frame view may lack on the first open after launch.
+        if frameView.layer == nil { frameView.wantsLayer = true }
+        guard let layer = frameView.layer else { return }
+        if arrowLayer.superlayer !== layer { layer.addSublayer(arrowLayer) }
+        let arrow = PanelArrow.frame(in: window.frame, tip: steps?.tip ?? PanelReveal.tip(icon: iconMiddle ?? window.frame.midX,
+                                                                                           rest: window.frame))
+        var fill: CGColor?
+        frameView.effectiveAppearance.performAsCurrentDrawingAppearance { fill = NSColor.audioSyncPanelBacking.cgColor }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        arrowLayer.frame = layer.bounds
+        arrowLayer.contentsScale = window.backingScaleFactor
+        let corners = [CGPoint(x: arrow.minX, y: arrow.minY), CGPoint(x: arrow.midX, y: arrow.maxY),
+                       CGPoint(x: arrow.maxX, y: arrow.minY)].map { point in
+            layer.convert(frameView.convertToLayer(frameView.convert(window.convertPoint(fromScreen: point), from: nil)),
+                          to: arrowLayer)
+        }
+        let path = CGMutablePath()
+        path.addLines(between: corners)
+        path.closeSubpath()
+        arrowLayer.path = path
+        arrowLayer.fillColor = fill
+        CATransaction.commit()
+    }
+
+    private func hideArrow() {
+        if let arrowWatch { NotificationCenter.default.removeObserver(arrowWatch) }
+        arrowWatch = nil
+        arrowLayer.removeFromSuperlayer()
+    }
+
+    /// Debug log only: where the arrow over the popover's own has its apex on
+    /// screen at this step, and how big it is.
+    private func traceArrow(_ window: NSWindow, step: Int, tip: CGPoint) {
+        let frameView = window.contentView?.superview
+        var overlay = frameView == nil ? "none, no frame view" : frameView?.layer == nil ? "none, no layer" : "none, not added"
+        var overlaySize = "none"
+        if let frame = frameView, let layer = frame.layer, arrowLayer.superlayer === layer,
+           let box = arrowLayer.path?.boundingBox {
+            let ends = [CGPoint(x: box.midX, y: box.minY), CGPoint(x: box.midX, y: box.maxY)].map { point in
+                window.convertPoint(toScreen: frame.convert(frame.convertFromLayer(arrowLayer.convert(point, to: layer)), to: nil))
+            }
+            overlay = NSStringFromPoint(ends[0].y > ends[1].y ? ends[0] : ends[1])
+            overlaySize = String(format: "%.1f x %.1f", box.width, box.height)
+        }
+        DebugTrace.log("[AudioSync] panel arrow step: step \(step), overlay apex \(overlay), "
+                       + "overlay \(overlaySize), tip \(NSStringFromPoint(tip)), frame \(NSStringFromRect(window.frame))")
+    }
+
+    /// Sets the window to its rest frame scaled by `scale` about the arrow's
+    /// tip, and the content's frame where it is at rest on screen, the content
+    /// drawn scaled as the snapped window's height about the same tip.
     private func place(_ window: NSWindow, scale: Double) {
         guard let run = steps, let holder = host.view.superview else { return }
-        let frame = PanelReveal.body(run.rest, scale: scale, about: CGPoint(x: run.icon, y: run.rest.maxY),
-                                     pixel: 1 / max(window.backingScaleFactor, 1))
+        let frame = PanelReveal.body(run.rest, scale: scale, about: run.tip, pixel: 1 / max(window.backingScaleFactor, 1))
         window.setFrame(frame, display: false)
         host.view.frame = holder.convert(PanelReveal.content(run.content, rest: run.rest, step: frame), from: nil)
+        scaleContent(scale == 1 ? nil : Double(frame.height / run.rest.height), run: run, in: window)
         window.displayIfNeeded()
+    }
+
+    private static let stepKey = "panelStep"
+
+    /// The content's layer and the view whose layer is its superlayer, where its transform acts.
+    private var contentLayer: (layer: CALayer, holder: NSView)? {
+        guard let layer = host.view.layer, let holder = host.view.superview, layer.superlayer === holder.layer else {
+            return nil
+        }
+        return (layer, holder)
+    }
+
+    /// Where `point` in the content lies in its superlayer.
+    private func inSuperlayer(_ point: CGPoint, holder: NSView) -> CGPoint {
+        holder.convertToLayer(holder.convert(point, from: host.view))
+    }
+
+    /// From where the content's `anchor` lies to its layer's position, in its superlayer.
+    private func layerOffset(from anchor: CGPoint) -> CGVector {
+        guard let content = contentLayer else { return CGVector() }
+        let laid = inSuperlayer(anchor, holder: content.holder)
+        return CGVector(dx: content.layer.position.x - laid.x, dy: content.layer.position.y - laid.y)
+    }
+
+    private var heldTransform: CATransform3D {
+        ((host.view.layer?.animation(forKey: Self.stepKey) as? CABasicAnimation)?.toValue as? NSValue)?
+            .caTransform3DValue ?? CATransform3DIdentity
+    }
+
+    /// Debug log only: where the content's tip is drawn on screen, through
+    /// its layer's live position and the transform it holds.
+    private func drawnTip(_ window: NSWindow, anchor: CGPoint) -> CGPoint? {
+        guard let content = contentLayer else { return nil }
+        let position = content.layer.position, laid = inSuperlayer(anchor, holder: content.holder)
+        let moved = CGPoint(x: laid.x - position.x, y: laid.y - position.y)
+            .applying(CATransform3DGetAffineTransform(heldTransform))
+        let drawn = content.holder.convertFromLayer(CGPoint(x: position.x + moved.x, y: position.y + moved.y))
+        return window.convertPoint(toScreen: content.holder.convert(drawn, to: nil))
+    }
+
+    /// Draws the content `scale` times its size with its tip on the tip's
+    /// screen point; with none the live content shows as laid out.
+    private func scaleContent(_ scale: Double?, run: PanelSteps, in window: NSWindow) {
+        guard let scale, let content = contentLayer else {
+            host.view.layer?.removeAnimation(forKey: Self.stepKey)
+            return
+        }
+        let tip = content.holder.convertToLayer(content.holder.convert(window.convertPoint(fromScreen: run.tip), from: nil))
+        let scaling = PanelReveal.contentScale(scale, tip: tip, anchor: inSuperlayer(run.anchor, holder: content.holder),
+                                               offset: run.offset)
+        // A held animation, not the layer's transform, which AppKit owns and resets as it lays the view out.
+        let hold = CABasicAnimation(keyPath: "transform")
+        hold.fromValue = NSValue(caTransform3D: CATransform3DMakeAffineTransform(scaling))
+        hold.toValue = hold.fromValue
+        hold.fillMode = .forwards
+        hold.isRemovedOnCompletion = false
+        content.layer.add(hold, forKey: Self.stepKey)
     }
 
     /// Ends the running open or close with the window and its content at rest.
@@ -1005,6 +1149,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         stepLink = nil
         guard let run = steps else { return }
         if let window = host.view.window { place(window, scale: 1) }
+        // Also with no window, as when a step finds it gone.
+        host.view.layer?.removeAnimation(forKey: Self.stepKey)
         host.view.autoresizingMask = run.mask
         steps = nil
     }
@@ -1147,6 +1293,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     func popoverDidClose(_ notification: Notification) {
         host.sizing = host.sizing.after(.didClose)
         endSteps()
+        hideArrow()
         // A moment later, so a quick reopen right after the close doesn't wait for it.
         whenQuiet("close rebuild", after: 0.3) { [weak self] in
             guard let self, !self.presented, self.rowsStale else { return }
