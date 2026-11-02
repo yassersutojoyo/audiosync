@@ -137,7 +137,7 @@ Music ("apps for listening, recording, creating, or performing music"), no subca
 
 ### System requirements
 
-Windows 11 (build 22000 or later), x64 only. Older versions get a message and the app exits.
+Windows 11 (build 22000 or later), x64 and ARM64, the two builds each release carries. Older versions get a message and the app exits.
 
 ### Privacy policy URL
 
