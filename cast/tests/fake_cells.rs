@@ -48,6 +48,9 @@ struct Feed {
 /// and the catch-up may be dropped as ring backlog.
 const LATE: Duration = Duration::from_millis(100);
 
+/// The sender's wait before it pays lost audio with silence (C52).
+const UNDERRUN_SLACK: Duration = Duration::from_millis(100);
+
 impl Feed {
     fn seconds(&self) -> f64 {
         self.frames.load(Ordering::SeqCst) as f64 / 48_000.0
@@ -109,7 +112,16 @@ fn feed(writer: AudioWriter, held: bool) -> Feed {
                 continue;
             }
             let start = *clock.get_or_insert_with(Instant::now);
-            for _ in 0..rushed.swap(0, Ordering::SeqCst) {
+            let blocks = rushed.swap(0, Ordering::SeqCst) as usize;
+            let mut taken = 0;
+            for _ in 0..blocks {
+                taken += writer.write_i16(&block);
+                count.fetch_add(480, Ordering::SeqCst);
+                written += 1;
+            }
+            // An overflow that ends on half a 20 ms block, which the pump's
+            // whole blocks of silence can't pay back exactly.
+            if taken < blocks * 480 && (taken / 480 + blocks) % 2 == 1 {
                 writer.write_i16(&block);
                 count.fetch_add(480, Ordering::SeqCst);
                 written += 1;
@@ -541,11 +553,17 @@ fn current_time_rounds(rushed: bool) {
     ];
     let mut seen = Vec::new();
     for round in 0..3 {
-        // A loaded PC's device thread sends the last status late.
+        // A loaded PC: the pump finds 1.5 s of audio at once, wakes late
+        // again as the feed comes back and finds its first 30 ms at once,
+        // and the device thread sends the last status late.
         if rushed && round == 1 {
             feed.rush(Duration::from_millis(1500));
         }
         for (index, time) in variants.iter().enumerate() {
+            if round == 1 && index == 5 {
+                // Taken when the feed wakes at the end of the rush's gap.
+                feed.rush(Duration::from_millis(20));
+            }
             if round == 2 && index == variants.len() - 1 {
                 device.send(Command::Pause(Duration::from_millis(2500)));
             }
@@ -580,11 +598,15 @@ fn current_time_rounds(rushed: bool) {
     // drops may only cover audio the feed wrote late, plus per stall up to
     // the 100 ms ring backlog that filled before a block counted late, plus
     // what the full ring refused while the pump was starved, which the pump
-    // pays in underrun silence on waking; with no stall, none.
+    // pays in underrun silence on waking; with no stall, none. A pump that
+    // wakes late plays audio up to 100 ms late without silence (C52), so the
+    // rush's gap may be paid up to that much short.
     assert_eq!(diagnostics.rebuffers, 0);
     let backlog = 48_000 * LATE.as_millis() as u64 / 1000;
+    let unpaid = 48_000 * UNDERRUN_SLACK.as_millis() as u64 / 1000;
     assert!(
-        diagnostics.frames_dropped <= late + stalls * backlog + diagnostics.underrun_frames,
+        diagnostics.frames_dropped
+            <= late + stalls * backlog + unpaid + diagnostics.underrun_frames,
         "{late} late in {stalls} stalls: {diagnostics:?}"
     );
     assert_eq!(
