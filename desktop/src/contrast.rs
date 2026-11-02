@@ -1027,6 +1027,7 @@ fn windows_texts_with_a_linux_twin_are_unchanged() {
 
 /// Pairing texts ask for the code a speaker shows, the word its row uses,
 /// never a PIN, as on the Mac.
+// covers: S422
 #[test]
 fn no_text_asks_for_a_pin() {
     let strings = include_str!("../ui/strings.slint");
@@ -1671,6 +1672,7 @@ fn an_equalizer_turned_off_fades_only_the_sliders() {
 /// Narrator calls the calibration results' Undo button "Undo the new
 /// delays", the label VoiceOver reads on the Mac; the button still shows
 /// Undo.
+// covers: S238
 #[test]
 fn the_calibration_undo_button_is_labeled_as_on_the_mac() {
     let strings = include_str!("../ui/strings.slint");
@@ -1686,6 +1688,7 @@ fn the_calibration_undo_button_is_labeled_as_on_the_mac() {
 
 /// The microphone notice and the calibration name the same Windows switches:
 /// the desktop apps one, and the master one, which blocks it when off.
+// covers: S355
 #[test]
 fn both_microphone_fixes_name_the_same_windows_switches() {
     let strings = include_str!("../ui/strings.slint");

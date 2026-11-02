@@ -974,6 +974,7 @@ mod tests {
         assert_eq!(inputs[0].properties.as_ref().unwrap().channels, Some(4));
     }
 
+    // covers: S417
     #[test]
     fn a_saved_input_that_is_hands_free_or_missing_is_refused_as_not_connected() {
         let mut graph = Graph::default();

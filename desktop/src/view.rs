@@ -6562,6 +6562,7 @@ mod tests {
         assert_eq!(fake.following(), None, "nothing is read while hidden");
     }
 
+    // covers: S421
     #[test]
     fn a_reading_the_sessions_report_shows_in_the_window_before_the_poll_and_is_logged() {
         use crate::debug_log;
@@ -6689,6 +6690,7 @@ mod tests {
         );
     }
 
+    // covers: S418
     #[test]
     fn the_tray_panel_is_named_so_it_isnt_taken_for_windows_quick_settings() {
         let app = app_over(MockBackend::new());
@@ -6700,6 +6702,7 @@ mod tests {
         }
     }
 
+    // covers: S420
     #[test]
     fn a_window_that_fails_to_open_says_so_plainly_and_logs_the_reason() {
         use crate::debug_log;
@@ -6787,6 +6790,7 @@ mod tests {
 
     /// The speaker list opens slim, grows one for one with the window and
     /// stops at the 644 px it had in the old 980 px default window.
+    // covers: S420
     #[test]
     fn the_speaker_list_grows_with_the_window_up_to_its_old_width() {
         use i_slint_backend_testing::ElementHandle;
@@ -6810,6 +6814,7 @@ mod tests {
 
     /// The header's switch ends with the speaker cards, also past the
     /// speaker list's widest instead of at the far side of a wide window.
+    // covers: S420
     #[test]
     fn the_header_ends_where_the_speaker_list_stops_growing() {
         use i_slint_backend_testing::ElementHandle;
@@ -9314,6 +9319,7 @@ mod tests {
     /// A zone name or zone count line cut to "…" in the half-width speaker
     /// list shows in full in a tooltip while the pointer rests on it, and a
     /// press hides the tip until the pointer leaves.
+    // covers: S420
     #[test]
     fn a_long_zone_name_shows_in_full_in_its_tooltip() {
         let mut backend = MockBackend::new();
@@ -9345,6 +9351,7 @@ mod tests {
 
     /// A speaker name cut to "…" in its In zones row shows in full in a
     /// tooltip.
+    // covers: S420
     #[test]
     fn a_long_in_zones_name_shows_in_full_in_its_tooltip() {
         let mut backend = MockBackend::new();
@@ -9371,6 +9378,7 @@ mod tests {
     /// A zone name or zone count line that fits shows no tooltip: only one
     /// cut to "…" does. An In zones name keeps its tip, the only place with
     /// its device name and the rename hint.
+    // covers: S420
     #[test]
     fn a_zone_name_that_fits_shows_no_tooltip() {
         let mut backend = MockBackend::new();
@@ -9425,12 +9433,14 @@ mod tests {
         app
     }
 
+    // covers: S420
     #[test]
     fn a_cut_pair_line_shows_in_full_in_its_tooltip() {
         let app = pair_app("The long living room speaker by the window and the bookshelf");
         shows_in_full(&app, "SpeakerRow::group-line", "SpeakerRow::group-tip");
     }
 
+    // covers: S420
     #[test]
     fn a_pair_line_that_fits_shows_no_tooltip() {
         let app = pair_app("Left");
@@ -9441,6 +9451,7 @@ mod tests {
     /// With a long zone name, the "in <zone>" link in an In zones row gives
     /// way before the speaker's name does: the name keeps 80 px and the link
     /// ends before the options button.
+    // covers: S420
     #[test]
     fn a_long_zone_name_leaves_the_in_zones_name_room() {
         use i_slint_backend_testing::ElementHandle;
@@ -10148,6 +10159,7 @@ mod tests {
     /// With the updater, More Controls ends with how updates work, naming
     /// the menu items and the notice button by their own words; without it,
     /// the Guide leaves them out as the menus do.
+    // covers: S418
     #[test]
     fn the_guide_says_how_updates_work_only_with_the_updater() {
         let app = app_over(MockBackend::new());
@@ -13597,6 +13609,7 @@ mod tests {
 
     /// A speaker the sender gave up on is off, so its notice promises no
     /// retry, in the Mac's words.
+    // covers: S356
     #[test]
     fn an_airplay_speaker_given_up_on_says_it_is_off() {
         let app = app_over(MockBackend::new());
@@ -13623,6 +13636,7 @@ mod tests {
 
     /// The TV's own controls end the stream too, so the notice blames no
     /// other app, as on the Mac.
+    // covers: C43, C114
     #[test]
     fn a_cast_speaker_that_ends_the_stream_says_it_stopped_it() {
         let app = app_over(MockBackend::new());
@@ -13983,6 +13997,7 @@ mod tests {
         }
     }
 
+    // covers: S385
     #[test]
     fn settings_from_a_newer_version_get_their_own_text() {
         let app = app_over(MockBackend::new());
@@ -14270,6 +14285,7 @@ mod tests {
     /// Mac panel's source menu ends in its submenu: the drop-down holds the
     /// sources only, and the link opens the main window's list and leaves the
     /// source as it was.
+    // covers: S419
     #[test]
     fn several_apps_under_the_flyout_sources_opens_the_main_windows_list() {
         use i_slint_backend_testing::ElementHandle;
