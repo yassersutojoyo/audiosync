@@ -1037,6 +1037,9 @@ mod tests {
             assert!(Instant::now() < deadline, "no first reading");
             thread::sleep(Duration::from_millis(5));
         }
+        wakes
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the first reading woke the card");
         while wakes.try_recv().is_ok() {}
         counts.paused.store(true, Ordering::SeqCst);
         let changed = counts.changed.lock().unwrap().clone();
