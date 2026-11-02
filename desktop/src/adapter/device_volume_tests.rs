@@ -7,12 +7,12 @@ use audiosync_core::volume::DEFAULT_LOCAL_POSITION;
 
 use super::AudioAdapter;
 use crate::DeviceVolumeHint;
-use crate::audio::backend::AudioBackend;
+use crate::audio::backend::{AudioBackend, OutputKind};
 use crate::audio::mock::{MockBackend, VolumeWrite};
 use crate::debug_log::{DebugLog, test_dir};
 use crate::settings::{self, SettingsFile};
-use crate::ui_model::Backend;
-use crate::view::speaker_item;
+use crate::ui_model::{AllPhase, AllProgress, Backend, SheetState};
+use crate::view::{calibrate_all_volume, speaker_item};
 
 const SPEAKERS: &str = "speakers";
 const HEADPHONES: &str = "headphones";
@@ -242,4 +242,68 @@ fn nothing_is_written_without_a_click() {
         "quitting removes every listener"
     );
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// covers: S197
+#[test]
+fn calibrate_all_shows_a_quiet_or_muted_reference_before_a_run_with_its_fix() {
+    let mut audio = MockBackend::empty();
+    audio.connect_output_as(SPEAKERS, "Speakers", OutputKind::BuiltIn);
+    audio.connect_output(HEADPHONES, "Headphones");
+    audio.mute_output(SPEAKERS, true);
+    audio.set_output_level(HEADPHONES, 0.13);
+    let record = audio.volume_record();
+    let mut adapter = adapter(audio);
+    let before = |adapter: &AudioAdapter<MockBackend>| {
+        let (hint, percent, id) = calibrate_all_volume(&adapter.snapshot());
+        (hint, percent, id.to_string())
+    };
+    assert_eq!(
+        before(&adapter).0,
+        DeviceVolumeHint::None,
+        "the reference is off"
+    );
+
+    adapter.set_speaker_enabled(&key(SPEAKERS), true);
+    adapter.set_speaker_enabled(&key(HEADPHONES), true);
+    let (hint, _, id) = before(&adapter);
+    assert_eq!(hint, DeviceVolumeHint::Muted, "only the reference's");
+    assert_eq!(id, key(SPEAKERS));
+
+    // The button is the row's fix: unmuted, and left at its volume.
+    adapter.fix_device_volume(&id);
+    assert_eq!(record.writes(), [unmute()]);
+    adapter.poll();
+    assert_eq!(
+        before(&adapter).0,
+        DeviceVolumeHint::None,
+        "a normal volume hides it"
+    );
+
+    adapter.audio_mut().set_output_level(SPEAKERS, 0.13);
+    adapter.poll();
+    assert_eq!(before(&adapter), (DeviceVolumeHint::Low, 13, key(SPEAKERS)));
+    adapter.fix_device_volume(&id);
+    assert_eq!(record.writes()[1..], [level(0.75)]);
+    adapter.audio_mut().set_output_level(SPEAKERS, 0.13);
+    adapter.poll();
+
+    // During a run and with its results, the section is gone.
+    let mut state = adapter.snapshot();
+    state.calibrate_all.phase = AllPhase::Running(AllProgress::Preparing);
+    assert_eq!(calibrate_all_volume(&state).0, DeviceVolumeHint::None);
+    let mut state = adapter.snapshot();
+    state.calibrate_all.sheet = Some(SheetState {
+        rows: Vec::new(),
+        airplay: None,
+        ended: None,
+        failure: None,
+        again_ended: None,
+        can_apply: false,
+        applied: false,
+        can_undo: false,
+        undone: false,
+    });
+    assert_eq!(calibrate_all_volume(&state).0, DeviceVolumeHint::None);
+    assert_eq!(before(&adapter).0, DeviceVolumeHint::Low);
 }

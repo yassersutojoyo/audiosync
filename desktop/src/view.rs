@@ -2323,6 +2323,10 @@ impl App {
         main.set_calibrate_all_outcome(card.outcome);
         main.set_calibrate_all_can_apply(card.can_apply);
         main.set_calibrate_all_can_undo(card.can_undo);
+        main.set_calibrate_all_volume(card.volume.0);
+        main.set_calibrate_all_volume_percent(card.volume.1);
+        main.set_calibrate_all_volume_id(card.volume.2);
+        main.set_calibrate_all_reference(card.reference);
         sync_model(&self.models.calibration_rows, card.rows);
         sync_model(&self.models.calibration_left_out, card.left_out);
     }
@@ -5008,6 +5012,20 @@ fn device_volume_hint(hint: Option<Hint>) -> (DeviceVolumeHint, i32) {
     }
 }
 
+/// The reference's device-volume hint under Calibrate All's "Before you
+/// start", with the speaker ID its fix goes to (spec S197).
+pub fn calibrate_all_volume(state: &AppState) -> (DeviceVolumeHint, i32, SharedString) {
+    let all = &state.calibrate_all;
+    let before = !matches!(all.phase, AllPhase::Running(_)) && all.sheet.is_none();
+    match state.speakers.iter().find(|speaker| speaker.is_reference()) {
+        Some(reference) if before => {
+            let (hint, percent) = device_volume_hint(reference.device_volume);
+            (hint, percent, reference.id.as_str().into())
+        }
+        _ => (DeviceVolumeHint::None, 0, SharedString::default()),
+    }
+}
+
 fn pin_phase(phase: ui_model::PinPhase) -> PinPhase {
     match phase {
         ui_model::PinPhase::Starting => PinPhase::Starting,
@@ -5379,6 +5397,9 @@ struct CalibrateAllCard {
     can_undo: bool,
     /// What Narrator hears when the run, Apply or Undo ends.
     said: SharedString,
+    /// The reference's hint under "Before you start" and its fix's speaker ID.
+    volume: (DeviceVolumeHint, i32, SharedString),
+    reference: SharedString,
 }
 
 /// Whether a calibration the microphone refused (`denied`) offers Open
@@ -5497,6 +5518,8 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
         can_undo: sheet.is_some_and(|sheet| sheet.can_undo),
         status,
         said,
+        volume: calibrate_all_volume(state),
+        reference: reference.into(),
     }
 }
 
@@ -13526,6 +13549,68 @@ mod tests {
         );
     }
 
+    // covers: S197, S198
+    #[test]
+    fn calibrate_alls_volume_fix_unmutes_the_reference_and_keeps_the_focus() {
+        use crate::audio::backend::OutputKind;
+        use crate::audio::mock::VolumeWrite;
+        for can_start in [false, true] {
+            let mut audio = crate::audio::mock::MockBackend::empty();
+            audio.connect_output_as("speakers", "Speakers", OutputKind::BuiltIn);
+            audio.connect_output_as("usb", "USB Speakers", OutputKind::UsbSpeakers);
+            audio.mute_output("speakers", true);
+            let record = audio.volume_record();
+            let mut adapter = crate::adapter::AudioAdapter::new(
+                audio,
+                || "09.41".to_owned(),
+                DebugLog::default(),
+            );
+            adapter.set_speaker_enabled("lc:speakers", true);
+            if can_start {
+                adapter.set_speaker_enabled("lc:usb", true);
+                adapter.set_running(true);
+            }
+            let app = app_over(adapter);
+            app.main.show().expect("the main window shows headless");
+            draw_frames();
+            assert_eq!(app.main.get_calibrate_all_can_start(), can_start);
+            assert_eq!(app.main.get_calibrate_all_volume(), DeviceVolumeHint::Muted);
+
+            // The card's stops: Calibrate All while it is enabled, then the fix.
+            let window = app.main.window();
+            let mut tabs = 0;
+            while app.main_focus.borrow().control != Some(MainControl::Calibration) {
+                assert!(tabs < 40, "the card takes the focus");
+                tab(window, 1);
+                tabs += 1;
+            }
+            if can_start {
+                tab(window, 1);
+            }
+            press(window, " ");
+            app.poll();
+            draw_frames();
+            assert_eq!(
+                record.writes(),
+                [VolumeWrite::Unmute {
+                    id: "speakers".to_owned()
+                }],
+                "can start: {can_start}"
+            );
+            assert_eq!(app.main.get_calibrate_all_volume(), DeviceVolumeHint::None);
+            if can_start {
+                // The fix's late focus-lost note clears the slot, so where the
+                // focus is shows by Shift+Tab: from Calibrate All, the card above.
+                press(window, Key::Backtab);
+            }
+            assert_eq!(
+                app.main_focus.borrow().control,
+                Some(MainControl::Equalizer),
+                "can start: {can_start}"
+            );
+        }
+    }
+
     // covers: S353, S354
     #[test]
     fn an_app_only_the_last_mix_holds_is_listed_as_not_running() {
@@ -13827,9 +13912,9 @@ mod tests {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
         // Switch, Several apps, source, master volume, Save as Preset…,
-        // Equalizer, Calibrate All, then the rows: This PC's, then the
-        // connected speakers' by name.
-        tab(window, 17);
+        // Equalizer, Calibrate All, the reference's volume fix, then the
+        // rows: This PC's, then the connected speakers' by name.
+        tab(window, 18);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -13860,7 +13945,7 @@ mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 25);
+        tab(window, 26);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -14066,7 +14151,7 @@ mod tests {
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 15);
+        tab(window, 16);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -14935,7 +15020,7 @@ mod tests {
         let window = app.main.window();
         // As in the example's order without Bedroom's row:
         // the cable row's toggle.
-        tab(window, 15);
+        tab(window, 16);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
