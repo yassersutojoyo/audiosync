@@ -3093,9 +3093,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     }
 
     /// Takes in the outputs as last listed: remembers their names and kinds,
-    /// clears the notice about a lost output that is back, hands what was
-    /// set for a device that moved to its new endpoint ID, and switches on
-    /// the auto-connect speakers that appeared.
+    /// hands what was set for a device that moved to its new endpoint ID,
+    /// and switches on the auto-connect speakers that appeared.
     fn outputs_listed(&mut self) {
         let outputs = self.audio.outputs();
         let mut listed = BTreeSet::new();
@@ -3113,11 +3112,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
             listed.insert(output.id.clone());
         }
         self.listed = listed;
-        for id in &appeared {
-            self.clear_if(speaker_subject(id), |message| {
-                matches!(message, NoticeMessage::SpeakerLost { .. })
-            });
-        }
         // Listed again, an ID left behind is an output of its own once more.
         for id in &appeared {
             self.left_behind.remove(id);
@@ -7997,6 +7991,36 @@ mod tests {
         assert!(adapter.poll());
         assert!(messages(&adapter).is_empty(), "its cause is gone");
         assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S68
+    #[test]
+    fn a_replugged_speaker_keeps_its_unplugged_notice_until_it_plays() {
+        let mut adapter = adapter();
+        turn_on(&mut adapter, SPEAKERS);
+        turn_on(&mut adapter, HEADPHONES);
+        adapter.audio_mut().disconnect_output(HEADPHONES);
+        adapter.poll();
+        let lost = NoticeMessage::SpeakerLost {
+            speaker: "Headphones".into(),
+        };
+        assert_eq!(messages(&adapter), std::slice::from_ref(&lost));
+
+        // Listed again, its device doesn't open yet.
+        adapter
+            .audio_mut()
+            .fail_output(HEADPHONES, Some(BackendError::DeviceGone));
+        adapter.audio_mut().connect_output(HEADPHONES, "Headphones");
+        adapter.poll();
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        assert_eq!(messages(&adapter), [lost]);
+
+        adapter.audio_mut().fail_output(HEADPHONES, None);
+        for _ in 0..6 {
+            adapter.poll();
+        }
+        assert_eq!(playing(&adapter), [HEADPHONES, SPEAKERS]);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
     // covers: S68

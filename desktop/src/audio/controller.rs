@@ -922,6 +922,9 @@ pub struct Controller<D: Driver> {
     /// The outputs whose stream stalled and hasn't played five seconds
     /// since (S326).
     stall_trials: BTreeMap<String, StallTrial>,
+    /// The outputs reported lost ([`BackendEvent::OutputLost`]) that
+    /// haven't played since.
+    lost: BTreeSet<String>,
     /// The outputs that ran away (S347).
     runaway: RunawayRetry,
     /// What AirPlay receivers with a screen show of the playing track.
@@ -1016,6 +1019,7 @@ impl<D: Driver> Controller<D> {
             hung: BTreeSet::new(),
             refused: BTreeMap::new(),
             stall_trials: BTreeMap::new(),
+            lost: BTreeSet::new(),
             runaway: RunawayRetry::default(),
             track_info: TrackInfo::default(),
             track_source: None,
@@ -1869,6 +1873,10 @@ impl<D: Driver> Controller<D> {
                     self.unplayable.remove(&endpoint.id);
                     self.stalled.remove(&endpoint.id);
                     self.hung.remove(&endpoint.id);
+                    // Its disconnected notice clears once it plays, not once it is
+                    // listed (S68).
+                    let was_lost = self.lost.remove(&endpoint.id);
+                    let mut refusal_told = false;
                     if let Some(refusal) = self.refused.remove(&endpoint.id)
                         && refusal.told
                     {
@@ -1879,17 +1887,18 @@ impl<D: Driver> Controller<D> {
                                 refusal.since.elapsed().as_secs()
                             )
                         });
-                        // A stall's notice shares this one and clears only
-                        // after five seconds of play (S326).
-                        let stall_told = self
-                            .stall_trials
-                            .get(&endpoint.id)
-                            .is_some_and(|trial| trial.told);
-                        if !stall_told {
-                            self.pending.push(BackendEvent::OutputPlaysAgain {
-                                id: endpoint.id.clone(),
-                            });
-                        }
+                        refusal_told = true;
+                    }
+                    // A stall's notice shares this one and clears only
+                    // after five seconds of play (S326).
+                    let stall_told = self
+                        .stall_trials
+                        .get(&endpoint.id)
+                        .is_some_and(|trial| trial.told);
+                    if (refusal_told || was_lost) && !stall_told {
+                        self.pending.push(BackendEvent::OutputPlaysAgain {
+                            id: endpoint.id.clone(),
+                        });
                     }
                     if self.busy.remove(&endpoint.id).is_some() {
                         self.log.log(|| {
@@ -2238,6 +2247,7 @@ impl<D: Driver> Controller<D> {
                 },
             );
             if enabled && out_of_stream {
+                self.lost.insert(id.clone());
                 self.pending.push(BackendEvent::OutputLost { id });
             }
         }
@@ -3328,6 +3338,7 @@ impl<D: Driver> Controller<D> {
     /// at once.
     fn release_busy(&mut self) {
         self.unplayable.clear();
+        self.lost.clear();
         self.stalled.clear();
         self.hung.clear();
         for (id, refusal) in std::mem::take(&mut self.refused) {
@@ -4214,6 +4225,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // device: switched on again, it is tried at once.
         if !enabled {
             self.calm_restarts.remove(id);
+            self.lost.remove(id);
             self.stalled.remove(id);
             self.hung.remove(id);
             if self.refused.remove(id).is_some_and(|refusal| refusal.told) {
@@ -4975,6 +4987,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             // An output whose device is still there plays again at once
             // (after a format change, say); one that isn't is lost.
             if !self.is_playing(&id) && !failures.iter().any(|(failed, _)| *failed == id) {
+                self.lost.insert(id.clone());
                 self.pending.push(BackendEvent::OutputLost { id });
             }
         }
@@ -6918,7 +6931,15 @@ mod tests {
         assert!(backend.poll().is_empty());
 
         backend.connect_output(HEADPHONES, "Headphones");
-        assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
+        assert_eq!(
+            backend.poll(),
+            [
+                BackendEvent::OutputsChanged,
+                BackendEvent::OutputPlaysAgain {
+                    id: HEADPHONES.to_owned(),
+                },
+            ]
+        );
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         assert_eq!(
             backend.playing_params(HEADPHONES).unwrap().delay_frames,
@@ -6977,7 +6998,15 @@ mod tests {
         assert!(backend.poll().is_empty(), "reported once");
 
         backend.connect_output(HEADPHONES, "Headphones");
-        assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
+        assert_eq!(
+            backend.poll(),
+            [
+                BackendEvent::OutputsChanged,
+                BackendEvent::OutputPlaysAgain {
+                    id: HEADPHONES.to_owned(),
+                },
+            ]
+        );
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         assert_eq!(
             backend.driver().renderers_started(),
@@ -7029,7 +7058,15 @@ mod tests {
 
         backend.fail_output(HEADPHONES, None);
         backend.connect_output(HEADPHONES, "Headphones");
-        assert_eq!(backend.poll(), [BackendEvent::OutputsChanged]);
+        assert_eq!(
+            backend.poll(),
+            [
+                BackendEvent::OutputsChanged,
+                BackendEvent::OutputPlaysAgain {
+                    id: HEADPHONES.to_owned(),
+                },
+            ]
+        );
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
