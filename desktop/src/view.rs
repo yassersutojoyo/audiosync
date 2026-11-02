@@ -311,6 +311,11 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 /// Narrator's scan mode, and the same words can be announced again later.
 const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(5);
 
+/// How long a live region stays empty before the words it held come back.
+/// Windows announces a live region only as it appears or its words change,
+/// so the emptied one has to reach it first, a frame or two after the change.
+const ANNOUNCEMENT_REPEAT_GAP: Duration = Duration::from_millis(100);
+
 /// The most UTF-16 units a tray icon's tooltip holds (128 with the
 /// terminating null).
 #[cfg(any(windows, target_os = "linux", test))]
@@ -804,6 +809,8 @@ pub struct App {
     out_of_range: RefCell<HashSet<String>>,
     /// Clears the announcement a while after it was made.
     announcement_timer: Timer,
+    /// Puts back an announcement emptied to be said again.
+    repeat_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
     poll_timer: Timer,
     /// Moves a microphone calibration on while one holds the outputs.
@@ -1064,6 +1071,7 @@ impl App {
             calibrate_all_announced: Cell::new(0),
             out_of_range: RefCell::default(),
             announcement_timer: Timer::default(),
+            repeat_timer: Timer::default(),
             poll_timer: Timer::default(),
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
@@ -2274,16 +2282,28 @@ impl App {
     /// Has Narrator say `text` without moving the focus, through the live
     /// region of the window it can hear: the flyout while it is open (it
     /// has the focus then), else the main window. Never both, so it is said
-    /// once. The live region empties again after a few seconds.
+    /// once. The live region empties again after a few seconds. The words
+    /// it already holds empty it first and come back
+    /// [`ANNOUNCEMENT_REPEAT_GAP`] later, so they are said again.
     fn announce(&self, text: SharedString) {
-        if self.flyout.window().is_visible() {
-            self.main.set_notice_announcement(SharedString::new());
-            self.flyout.set_notice_announcement(text);
-        } else {
-            self.flyout.set_notice_announcement(SharedString::new());
-            self.main.set_notice_announcement(text);
-        }
         let (main, flyout) = (self.main.as_weak(), self.flyout.as_weak());
+        let in_flyout = self.flyout.window().is_visible();
+        let held = if in_flyout {
+            self.flyout.get_notice_announcement()
+        } else {
+            self.main.get_notice_announcement()
+        };
+        if held == text {
+            clear_announcement(&main, &flyout);
+            let (main, flyout) = (main.clone(), flyout.clone());
+            self.repeat_timer
+                .start(TimerMode::SingleShot, ANNOUNCEMENT_REPEAT_GAP, move || {
+                    put_announcement(&main, &flyout, text.clone());
+                });
+        } else {
+            self.repeat_timer.stop();
+            put_announcement(&main, &flyout, text);
+        }
         self.announcement_timer.start(
             TimerMode::SingleShot,
             ANNOUNCEMENT_CLEARS_AFTER,
@@ -2310,6 +2330,7 @@ impl App {
     /// Empties both live regions now.
     fn clear_announcement(&self) {
         self.announcement_timer.stop();
+        self.repeat_timer.stop();
         clear_announcement(&self.main.as_weak(), &self.flyout.as_weak());
     }
 
@@ -4722,6 +4743,29 @@ fn sync_model<T: Clone + PartialEq + 'static>(model: &VecModel<T>, items: Vec<T>
 
 fn count(n: usize) -> i32 {
     i32::try_from(n).unwrap_or(i32::MAX)
+}
+
+/// Puts `text` in the flyout's live region while the flyout shows, else in
+/// the main window's, and empties the other.
+fn put_announcement(
+    main: &slint::Weak<MainWindow>,
+    flyout: &slint::Weak<TrayFlyout>,
+    text: SharedString,
+) {
+    let in_flyout = flyout
+        .upgrade()
+        .is_some_and(|flyout| flyout.window().is_visible());
+    let (said, quiet) = if in_flyout {
+        (text, SharedString::new())
+    } else {
+        (SharedString::new(), text)
+    };
+    if let Some(main) = main.upgrade() {
+        main.set_notice_announcement(quiet);
+    }
+    if let Some(flyout) = flyout.upgrade() {
+        flyout.set_notice_announcement(said);
+    }
 }
 
 /// Empties the notice live regions of the windows still there.
@@ -8229,6 +8273,24 @@ mod tests {
         app.main.invoke_airplay_delay_stepped(100);
         let ms = app.snapshot().airplay_delay_ms.expect("an AirPlay delay");
         assert_eq!(said(), format!("AirPlay Delay set to {ms} ms"));
+    }
+
+    /// Windows reads a live region only as it appears or its words change,
+    /// so the same words again empty it first and come back a moment later.
+    // covers: S220
+    #[test]
+    fn narrator_hears_every_delay_step_at_the_range_end() {
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let said = || app.main.get_notice_announcement().to_string();
+        app.main.invoke_airplay_delay_stepped(-2000);
+        assert_eq!(said(), "AirPlay Delay set to 0 ms");
+
+        app.main.invoke_airplay_delay_stepped(-10);
+        assert_eq!(said(), "", "emptied, so the same words are heard again");
+        advance_clock(Duration::from_millis(500));
+        slint::platform::update_timers_and_animations();
+        assert_eq!(said(), "AirPlay Delay set to 0 ms", "a moment later");
     }
 
     // covers: S221
