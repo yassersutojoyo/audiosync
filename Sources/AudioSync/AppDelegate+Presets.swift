@@ -169,10 +169,14 @@ extension AppDelegate {
             return
         }
         guard let typed = askPresetName(title: text.savePresetTitle, message: text.savePresetMessage,
-                                        button: text.save),
-              let saved = PresetEdit.saving(typed, scene: presetScene(), id: UUID().uuidString, to: presets,
+                                        button: text.save) else { return }
+        // The last speaker can go off while the name dialog is open.
+        guard let saved = PresetEdit.saving(typed, scene: presetScene(), id: UUID().uuidString, to: presets,
                                             numbered: text.numberedPreset),
-              let name = saved.last?.name else { return }
+              let name = saved.last?.name else {
+            showAlert(text.savePresetNeedsSpeakers, style: .informational)
+            return
+        }
         presets = saved
         pushModel()
         AccessibilityNotification.Announcement(text.presetSaved(name)).post()
