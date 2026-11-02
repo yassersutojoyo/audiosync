@@ -830,6 +830,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | presets: a recall leaves on the stereo pair or home theater that holds a stored member | S252, S342 |
 | presets: a preset saved with the MacBook speakers off switches them off on recall | S251, S252 |
 | presets: a preset saved with the MacBook speakers on switches them on on recall | S251, S252 |
+| presets: a hidden stereo pair or home theater is left off as hidden, one not listed while AirPlay 2 is off as needing it | S252 |
 | presets: the notice names a Cast member gone from the network by its last listed name | S265 |
 | presets: the notice names a gone Cast speaker added by address by its announced name, not its address | S265 |
 | presets: the notice goes once its preset is current or every member it names is on | S265 |
@@ -924,6 +925,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | eq curves: a saved curve with a preset's gains resolves to the saved curve | S270 |
 | eq curves: a saved curve with a preset's gains keeps Rename and Delete | S270 |
 | eq curves: a picked preset shows as the preset beside a saved curve with its gains | S270 |
+| curve_names_match_ignoring_case_only (`core/src/ffi.rs`) | S270 |
 | eq curves: picking that saved curve shows it again | S270 |
 | eq curves: moving a band off the picked saved curve shows Custom | S270 |
 | eq curves: a band moved off a picked preset and back shows the saved curve with its gains | S270 |

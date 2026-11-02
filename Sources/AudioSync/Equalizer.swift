@@ -96,7 +96,7 @@ enum Equalizer {
     }
 
     private static func sameName(_ a: String, _ b: String) -> Bool {
-        a.withCString { first in b.withCString { second in asc_eq_same_curve_name(first, second) } }
+        asc_eq_same_curve_name(a, b)
     }
 
     /// The gains on the controls' steps, ten of them.
