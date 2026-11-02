@@ -1255,6 +1255,9 @@ export global Strings {
         if kind == NoticeKind.presets-left-off {
             return @tr("some speakers stayed off");
         }
+        if kind == NoticeKind.presets-nothing-changed {
+            return @tr("nothing changed");
+        }
         return @tr("double audio");
     }
 
