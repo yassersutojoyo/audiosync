@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use audiosync_core::calibrate::{MAX_RATE, MIN_RATE, SIGNAL_SECONDS};
+use audiosync_core::calibrate::{self, MAX_RATE, MIN_RATE, SIGNAL_SECONDS};
 use audiosync_core::calibrate_all::{
     Class, EndReason, PlanError, RowState, Run, Sheet, Speaker, Step as RunStep, Take, ZoneSpeaker,
     airplay_wait_ms, cast_wait_ms, zone_plan,
@@ -28,7 +28,7 @@ use audiosync_core::policy::speakers::SpeakerKey;
 use super::backend::{AudioBackend, CastStatus, SourceId};
 use super::calibration::{
     CalibrationTap, Failure, LATENCY_ALLOWANCE_S, Microphone, MicrophoneError, MicrophoneId,
-    Missing, Route, SIGNAL_WAIT_S, STALL_S, WARM_UP_LIMIT_S, WARM_UP_S, ns, trim_start,
+    Missing, Route, SIGNAL_WAIT_S, STALL_S, WARM_UP_LIMIT_S, WARM_UP_S, measured, ns, trim_start,
 };
 use super::controller::device_volume::describe;
 use super::outputs::{DeviceTraits, MicKind};
@@ -1141,12 +1141,18 @@ impl AllRun {
         let Some(mut run) = self.run.take() else {
             return self.fail(rig, Failure::Unfinished, now_ns);
         };
+        let (log, rate) = (self.log.clone(), self.rate);
         let (send, receive) = mpsc::channel();
         let spawned = thread::Builder::new()
             .name("audiosync-calibrate-all".into())
             .spawn(move || {
                 run.record(&samples);
                 let _ = send.send(run);
+                log.log(|| {
+                    let label = format!("Calibrate All: row {} {:?}", step.row, step.take);
+                    let signal = calibrate::signal(rate).unwrap_or_default();
+                    measured(&label, &signal, &samples, rate)
+                });
             });
         if spawned.is_err() {
             return self.fail(rig, Failure::Unfinished, now_ns);
@@ -1316,6 +1322,8 @@ pub(crate) mod tests {
     use audiosync_core::calibrate_all::{ApplyRefusal, SharedState};
 
     use super::*;
+    use crate::audio::calibration::logged_after_estimates;
+    use crate::debug_log::{FILE_NAME, assert_in_order, test_dir};
 
     /// The lowest rate the signal is made at keeps the estimates quick.
     const MIC_RATE: u32 = 22_050;
@@ -1631,6 +1639,35 @@ pub(crate) mod tests {
             rig.capture_block();
         }
         assert!(!rig.tap.is_active(), "the music is back");
+    }
+
+    #[test]
+    fn each_recording_logs_how_clearly_the_sweep_arrived() {
+        let dir = test_dir("calibrate-all-measured-log");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let mut rig = FakeRig::new();
+        let now = rig.now.get();
+        let mut run =
+            AllRun::start(&mut rig, &BTreeSet::new(), now, log.clone()).expect("it starts");
+        run_to_end(&mut rig, &mut run, |_, _| {});
+        let messages = logged_after_estimates(&log, &dir.join(FILE_NAME));
+        for part in [
+            "Calibrate All: row 0 Reference measured: frame ",
+            "Calibrate All: row 1 Sweep(1) measured: frame ",
+            "Calibrate All: row 1 Sweep(2) measured: frame ",
+        ] {
+            assert_in_order(&messages, &[part]);
+        }
+        let measured: Vec<_> = messages
+            .iter()
+            .filter(|m| m.contains(" measured: frame "))
+            .collect();
+        assert!(measured.len() >= 3);
+        for line in measured {
+            for field in [", peak frame ", ", peak_over_floor ", ", echo_share "] {
+                assert!(line.contains(field), "{field:?} in {line:?}");
+            }
+        }
     }
 
     // covers: S235
