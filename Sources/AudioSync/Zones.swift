@@ -72,13 +72,19 @@ struct SpeakerZone: Codable, Equatable {
 
     /// `zones` as S245 keeps them: a key already in an earlier zone, or
     /// earlier in the same one, is left out, a repeated ID keeps the first
-    /// zone, and volumes are clamped to 0…100. An empty zone stays.
+    /// zone, an empty ID drops its zone, a blank name becomes the one a new
+    /// zone would get after the zones before it (S150), and volumes are
+    /// clamped to 0…100. An empty zone stays.
     static func normalized(_ zones: [SpeakerZone]) -> [SpeakerZone] {
         var ids = Set<String>()
         var taken = Set<String>()
         var out: [SpeakerZone] = []
-        for zone in zones where ids.insert(zone.id).inserted {
+        for zone in zones where !zone.id.isEmpty && ids.insert(zone.id).inserted {
             var copy = zone
+            if GroupName.cleaned(zone.name) == nil {
+                copy.name = GroupName.forNewGroup(typed: "", existing: out.map(\.name),
+                                                  numbered: UIStrings().numberedZone)
+            }
             copy.members = zone.members.filter { taken.insert($0).inserted }
             copy.volume = zone.volume.isFinite ? min(max(zone.volume, 0), 100) : defaultVolume
             out.append(copy.pruned())
@@ -121,7 +127,7 @@ extension SpeakerZone {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        name = try container.decode(String.self, forKey: .name)
+        name = (try? container.decodeIfPresent(String.self, forKey: .name)) ?? ""
         members = try container.decodeLossyList(String.self, forKey: .members)
         volume = container.decodeNumberOrNaN(forKey: .volume, of: decoder)
         do {
