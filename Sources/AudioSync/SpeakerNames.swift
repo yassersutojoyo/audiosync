@@ -37,7 +37,11 @@ struct SpeakerNames: Equatable {
     mutating func rename(key: String, to typed: String, system: String) -> Bool {
         let before = custom[key]
         let name = Self.clean(typed)
-        custom[key] = name.isEmpty || name == system || name == Self.clean(system) ? nil : name
+        // Scalar by scalar, as Windows compares: Swift's == would match "é" typed decomposed.
+        let typedScalars = Array(name.unicodeScalars)
+        let isSystem = typedScalars == Array(system.unicodeScalars)
+            || typedScalars == Array(Self.clean(system).unicodeScalars)
+        custom[key] = name.isEmpty || isSystem ? nil : name
         return custom[key] != before
     }
 
