@@ -436,7 +436,9 @@ extension AppDelegate {
         let listed = Set(listing.map(\.uid))
         clearNotices(stallRetry.settle(enabled: enabledLocal, listed: listed, nowS: now)
             .map { SpeakerKey.make(id: $0, airplay: false) })
-        refusalRetry.settle(enabled: enabledLocal, listed: listed)
+        let unlistedBusy = refusalRetry.settle(enabled: enabledLocal, listed: listed)
+        unlistedBusy.forEach { goneNotices.forget($0) }
+        clearNotices(unlistedBusy.map { SpeakerKey.make(id: $0, airplay: false) })
         clearNotices(runawayRetry.settle(enabled: enabledLocal, listed: listed)
             .map { SpeakerKey.make(id: $0, airplay: false) })
         let gone = goneNotices.settle(enabled: enabledLocal, listed: listed)   // after the stall settle, which would clear it

@@ -10591,6 +10591,16 @@ do {
             && hogAt30.tell == nil && hogRefusals.held(nowS: 132.9) == ["usb"],
           "S331 refused start: a device another process hogs gets the busy notice at once and never the disconnected one",
           "\(hogStart.failures) \(hogFirst) \(hogQuiet) \(hogAt30)")
+    _ = hogRefusals.refused("bt", nowS: 130)
+    var hogNotices = OutputGoneNotices()
+    hogNotices.refusedLost("usb")
+    let hogUnlisted = hogRefusals.settle(enabled: ["usb", "bt"], listed: [])
+    hogUnlisted.forEach { hogNotices.forget($0) }
+    let hogSwitchedOff = hogNotices.settle(enabled: [], listed: [])
+    // covers: S331
+    check(hogUnlisted == ["usb"] && hogSwitchedOff.clear.isEmpty && hogRefusals.held(nowS: 131).isEmpty,
+          "S331 refused start: a busy device that leaves the list ends its busy notice; a refused one that isn't busy keeps its own",
+          "\(hogUnlisted) \(hogSwitchedOff)")
 
     // covers: S72
     // S72: a master change gives each running local speaker its gain again;

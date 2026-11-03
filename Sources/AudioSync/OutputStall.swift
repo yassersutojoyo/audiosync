@@ -122,7 +122,8 @@ enum OutputLoss: Equatable {
 /// Local outputs whose device went while they played (S68): each gets the
 /// disconnected notice at the next sync that no longer lists its device, so
 /// one listed again at once (a Core Audio restart) gets none. An output
-/// refused for 30 s (S331) gets it too, and a busy one's notice ends the same way. Main queue only.
+/// refused for 30 s (S331) gets it too; a busy one's notice is kept here so
+/// that a switch-off or a stop ends it. Main queue only.
 struct OutputGoneNotices {
     private var gone: Set<String> = []
     /// The outputs whose disconnected notice is up.
@@ -138,6 +139,11 @@ struct OutputGoneNotices {
 
     /// Output `uid` started, and the sync clears its notice.
     mutating func started(_ uid: String) {
+        shown.remove(uid)
+    }
+
+    /// Output `uid`'s notice ended without a start: a busy device that left the list.
+    mutating func forget(_ uid: String) {
         shown.remove(uid)
     }
 
@@ -399,9 +405,13 @@ struct OutputRefusalRetry {
     }
 
     /// Forgets the outputs switched off, and those whose device left the list,
-    /// which S68 covers; listed again, a refusal starts its 30 s over.
-    mutating func settle(enabled: Set<String>, listed: Set<String>) {
+    /// which S68 covers; listed again, a refusal starts its 30 s over. Returns
+    /// the busy ones whose device left the list: their busy notice ends.
+    \discardableResult
+    mutating func settle(enabled: Set<String>, listed: Set<String>) -> Set<String> {
+        let unlistedBusy = Set(entries.filter { $0.value.busy && !listed.contains($0.key) }.keys)
         entries = entries.filter { enabled.contains($0.key) && listed.contains($0.key) }
+        return unlistedBusy
     }
 
     mutating func reset() {
