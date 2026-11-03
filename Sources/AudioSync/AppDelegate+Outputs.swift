@@ -575,7 +575,7 @@ extension AppDelegate {
                        shortName: text.speakerLostNoticeName(shownName(local: uid, system: localDevices[uid]?.name ?? "")))
             DebugTrace.log("[AudioSync] output \(number) still refused after \(Int(OutputRefusalRetry.lostAfterS)) s; "
                 + "counted as lost, still trying every \(Int(OutputRefusalRetry.retryEveryS)) s")
-        case nil:
+        case .busy?, nil:
             break
         }
         scheduleStallRetry(atS: step.retryAtS)

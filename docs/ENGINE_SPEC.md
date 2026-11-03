@@ -2636,6 +2636,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | S331 refused start: tried again every 3 s, told at the first refusal and once past 30 s; a start ends the tries | S331 |
 | S331 refused start: switching the speaker off ends its tries | S331 |
 | S331 refused start: a refused device that leaves the list and comes back starts a fresh 30 s, not counted as lost | S331 |
+| S331 refused start: a device another process hogs gets the busy notice at once and never the disconnected one | S331 |
 | calibration: an accepted answer without a finite offset changes nothing | S232 |
 | calibration: three runs within 5 ms give the middle one's offset (S232) | S232 |
 | calibration: three runs more than 5 ms apart give no offset (S232) | S232 |

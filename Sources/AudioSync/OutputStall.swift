@@ -356,6 +356,8 @@ struct OutputRefusalRetry {
     enum Tell: Equatable {
         case refused
         case lost
+        /// Another process holds the device in hog mode.
+        case busy
     }
 
     struct Step: Equatable {
@@ -372,7 +374,7 @@ struct OutputRefusalRetry {
 
     private var entries: [String: Entry] = [:]
 
-    mutating func refused(_ uid: String, nowS: Double) -> Step {
+    mutating func refused(_ uid: String, nowS: Double, busy: Bool = false) -> Step {
         let at = nowS + Self.retryEveryS
         guard let was = entries[uid] else {
             entries[uid] = Entry(sinceS: nowS, retryAtS: at, lost: false)

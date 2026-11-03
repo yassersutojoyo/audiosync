@@ -83,6 +83,21 @@ final class OutputRenderer: FadingOutput {
             }
         }
 
+        /// Whether another process holds the device in hog mode: the refusal
+        /// that gets the busy notice at once (S331).
+        var isBusy: Bool {
+            switch self {
+            case .unitNotCreated(let status), .outputNotEnabled(let status), .deviceNotBound(let status),
+                 .formatRefused(let status), .callbackNotInstalled(let status), .unitNotInitialized(let status),
+                 .deviceDidNotStart(let status):
+                return status == OSStatus(kAudioDevicePermissionsError)
+            case .deviceHogged:
+                return true
+            case .halUnitMissing, .coreUnavailable, .captureRateTooHigh:
+                return false
+            }
+        }
+
         // -10851 is the HAL output unit's invalid-device status; the SDK headers only name it kAudioUnitErr_InvalidPropertyValue.
         private static let refusals: Set<OSStatus> = [
             OSStatus(kAudioHardwareBadDeviceError), OSStatus(kAudioHardwareBadObjectError),
