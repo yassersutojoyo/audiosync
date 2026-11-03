@@ -481,7 +481,8 @@ mod tests {
     // covers: S344
     #[test]
     fn picking_the_shown_source_again_sends_it_again() {
-        let script = only_element(PAGE, "script").unwrap();
+        // A Windows checkout may give the page CRLF; the multi-line checks below expect LF.
+        let script = only_element(PAGE, "script").unwrap().replace("\r\n", "\n");
         // A native select fires change only for a pick that differs from the selection it opened
         // with, so it opens with none selected and leaving it shows the source again.
         assert!(script.contains(
