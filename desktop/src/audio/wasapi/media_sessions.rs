@@ -15,7 +15,9 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession as Session,
     GlobalSystemMediaTransportControlsSessionManager as SessionManager,
     GlobalSystemMediaTransportControlsSessionMediaProperties as MediaProperties,
+    GlobalSystemMediaTransportControlsSessionPlaybackControls as PlaybackControls,
 };
+use windows::Media::MediaPlaybackAutoRepeatMode;
 use windows::Storage::Streams::{
     Buffer, DataReader, IRandomAccessStreamWithContentType, InputStreamOptions,
 };
@@ -30,7 +32,7 @@ use crate::audio::media_sessions::{
 };
 use crate::audio::now_playing::{FittedArtwork, MediaSession, POLL_INTERVAL, RawTimeline};
 use crate::debug_log::DebugLog;
-use crate::now_playing_card::{CardArtwork, Transport};
+use crate::now_playing_card::{CardArtwork, PlayModes, Repeat, Transport};
 
 /// Starts the thread that reads Windows' sessions for both readers.
 pub fn read_media_sessions(log: DebugLog) -> (MediaSessionReader, MediaCardReader) {
@@ -174,6 +176,27 @@ impl SessionList for WindowsSessions {
         read().map_err(|error| error.to_string())
     }
 
+    fn modes(&self, (session, _): &Self::Session) -> PlayModes {
+        let Ok(info) = session.GetPlaybackInfo() else {
+            return PlayModes::default();
+        };
+        let controls = info.Controls();
+        let takes = |enabled: fn(&PlaybackControls) -> windows::core::Result<bool>| {
+            controls
+                .as_ref()
+                .is_ok_and(|controls| matches!(enabled(controls), Ok(true)))
+        };
+        PlayModes::read(
+            takes(PlaybackControls::IsShuffleEnabled),
+            info.IsShuffleActive().and_then(|on| on.Value()).ok(),
+            takes(PlaybackControls::IsRepeatEnabled),
+            info.AutoRepeatMode()
+                .and_then(|mode| mode.Value())
+                .ok()
+                .map(|mode| mode.0),
+        )
+    }
+
     fn send(
         &self,
         (session, _): &Self::Session,
@@ -184,6 +207,12 @@ impl SessionList for WindowsSessions {
             Transport::Previous => session.TrySkipPreviousAsync(),
             Transport::PlayPause => session.TryTogglePlayPauseAsync(),
             Transport::Next => session.TrySkipNextAsync(),
+            Transport::Shuffle(on) => session.TryChangeShuffleActiveAsync(on),
+            Transport::Repeat(mode) => session.TryChangeAutoRepeatModeAsync(match mode {
+                Repeat::Off => MediaPlaybackAutoRepeatMode::None,
+                Repeat::One => MediaPlaybackAutoRepeatMode::Track,
+                Repeat::All => MediaPlaybackAutoRepeatMode::List,
+            }),
         };
         operation
             .and_then(|operation| within(operation, deadline))

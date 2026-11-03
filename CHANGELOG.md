@@ -8,9 +8,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On Windows, pointing at a speaker's auto-connect bolt shows "Auto-Connect When Available", and Narrator reads it, as on the Mac.
 - On Windows, with the debug log on, Calibrate All logs the reference output's volume, whether it's muted, and the level it reads as when a run starts.
+- The Now Playing card has Shuffle and Repeat buttons beside the track buttons, for a player that takes them: Spotify and Music on the Mac, and on Windows any app whose media controls offer them. A mode that is on shows in the accent color, and Repeat goes from off to all to one where the player repeats one track.
 
 ### Changed
 
+- The main window's left column is narrower. As you widen the window, the speaker list grows to its full width first, then the left column grows back to its old width.
+- A long Now Playing title stays on one line and slowly scrolls to its end and back, so you can read all of it. With Reduce Motion on the Mac, or animation effects off on Windows, it's cut short with an ellipsis instead. With the title on one line, the Now Playing card is shorter.
 - On Windows, a zone whose speakers all play through a stereo pair or home theater says "N playing in a pair" instead of "None of N found", as on the Mac.
 - On the Mac, when calibration can't use the microphone's sample rate, its message now says to set the microphone to 48 kHz in Audio MIDI Setup and try again.
 - On Windows, the notice for several apps that aren't running says they "are not running", and "all apps except" is written in lowercase in the middle of a notice's sentence. Text that asked you to quit and reopen or restart AudioSync now says to exit AudioSync and open it again, as File > Exit names it.

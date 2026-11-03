@@ -70,6 +70,35 @@ pub fn animation_effects() -> bool {
     read.is_err() || on.as_bool()
 }
 
+/// Whether the desktop's animations are on, as the settings portal gives
+/// GNOME's `enable-animations`; off until it is read and when it can't be.
+/// Read once, off the UI thread: a missing portal can take the bus's
+/// timeout to answer.
+#[cfg(target_os = "linux")]
+pub fn animation_effects() -> bool {
+    use std::sync::{Once, OnceLock};
+
+    static READ: Once = Once::new();
+    static ON: OnceLock<bool> = OnceLock::new();
+    READ.call_once(|| {
+        std::thread::spawn(|| {
+            let read = || -> zbus::Result<bool> {
+                let reply = zbus::blocking::Connection::session()?.call_method(
+                    Some("org.freedesktop.portal.Desktop"),
+                    "/org/freedesktop/portal/desktop",
+                    Some("org.freedesktop.portal.Settings"),
+                    "ReadOne",
+                    &("org.gnome.desktop.interface", "enable-animations"),
+                )?;
+                let value: zbus::zvariant::OwnedValue = reply.body().deserialize()?;
+                Ok(bool::try_from(value)?)
+            };
+            let _ = ON.set(read().unwrap_or(false));
+        });
+    });
+    ON.get().copied().unwrap_or(false)
+}
+
 /// Windows' own default double-click time.
 pub const DEFAULT_DOUBLE_CLICK_MS: i64 = 500;
 

@@ -88,6 +88,11 @@ pub trait SessionList {
     /// The session's timeline as it reports it now.
     fn timeline(&self, session: &Self::Session) -> Result<RawTimeline, String>;
 
+    /// Shuffle and repeat as the session reports them now.
+    fn modes(&self, _session: &Self::Session) -> crate::now_playing_card::PlayModes {
+        crate::now_playing_card::PlayModes::default()
+    }
+
     /// Sends `command` to the session and waits for the app until
     /// `deadline`: whether it took it.
     fn send(
@@ -568,6 +573,7 @@ impl<L: SessionList> Reader<L> {
             artist: session.artist,
             playing: session.playing,
             artwork,
+            modes: self.sessions.modes(&listing.listed[index].1),
         })
     }
 

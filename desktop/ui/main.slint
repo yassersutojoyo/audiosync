@@ -26,6 +26,25 @@ export { Palette } from "std-widgets.slint";
 export { Tokens } from "tokens.slint";
 export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, GuideStepItem, MixAppItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, ZoneChoice, ZoneItem, ZoneTarget } from "types.slint";
 
+// The main window's left column: the speaker list widens first, to its full
+// width, then the left column, from narrow to wide.
+global MainColumns {
+    public pure function left(window: length) -> length {
+        let room = window - 2 * Fluent.window-margin - Fluent.gap;
+        return clamp(room - Fluent.speaker-list-full, Fluent.left-column-narrow, Fluent.left-column-wide);
+    }
+}
+
+// A Now Playing title too long for its line scrolls: it rests 2 s at its
+// start, moves to its end at 30 px a second, rests 2 s and moves back.
+global Marquee {
+    public pure function offset(elapsed: duration, overflow: length) -> length {
+        let travel = overflow / 30px * 1000;
+        let at = mod(elapsed / 1ms, 2 * (2000 + travel));
+        return at < 2000 ? 0px : at < 2000 + travel ? (at - 2000) / 1000 * 30px : at < 4000 + travel ? overflow : overflow - (at - 4000 - travel) / 1000 * 30px;
+    }
+}
+
 // Speaker rows with a line between them, in a section's or a zone's card.
 component SpeakerRows inherits VerticalLayout {
     in property <[SpeakerItem]> speakers;
@@ -1127,14 +1146,38 @@ component NowPlayingCard inherits Card {
     in property <bool> playing;
     in property <bool> has-artwork;
     in property <image> artwork;
-    // Which button has the keyboard focus (0 to 2), -1 for none: the app
+    // Windows' animation effects; off, a long title is cut instead of scrolling.
+    in property <bool> animated: true;
+    // As the player reports them, -1 where it doesn't take the command:
+    // shuffle 0 off, 1 on; repeat 0 off, 1 all, 2 one.
+    in property <int> shuffle: -1;
+    in property <int> repeat: -1;
+    property <duration> shown-at;
+    // Which button has the keyboard focus (0 to 4), -1 for none: the app
     // hands the focus on before the card hides.
     in-out property <int> focused-button: -1;
-    // 0 Previous, 1 Play or Pause, 2 Next.
+    // 0 Previous, 1 Play or Pause, 2 Next, 3 Shuffle, 4 Repeat.
     callback transport(int);
 
     accessible-role: groupbox;
     accessible-label: Strings.now-playing;
+    init => {
+        root.shown-at = animation-tick();
+    }
+    changed title => {
+        root.shown-at = animation-tick();
+    }
+    // Slint leaves nothing focused when the focused button goes.
+    changed shuffle => {
+        if root.shuffle < 0 && root.focused-button == 3 {
+            root.focused-button = -1;
+        }
+    }
+    changed repeat => {
+        if root.repeat < 0 && root.focused-button == 4 {
+            root.focused-button = -1;
+        }
+    }
 
     VerticalLayout {
         spacing: 10px;
@@ -1171,14 +1214,20 @@ component NowPlayingCard inherits Card {
                 spacing: 3px;
                 horizontal-stretch: 1;
 
-                Text {
-                    text: root.title;
-                    font-weight: 600;
-                    color: Tokens.text;
-                    wrap: word-wrap;
-                    overflow: elide;
-                    // Two lines at most, as on the Mac.
-                    height: min(self.preferred-height, 2 * 19px);
+                // One line: a title too long for it scrolls (Marquee).
+                Rectangle {
+                    property <length> excess: root.animated && title-text.preferred-width > self.width ? title-text.preferred-width - self.width : 0px;
+                    height: title-text.preferred-height;
+                    clip: true;
+
+                    title-text := Text {
+                        x: parent.excess > 0 ? -Marquee.offset(animation-tick() - root.shown-at, parent.excess) : 0px;
+                        width: parent.excess > 0 ? self.preferred-width : parent.width;
+                        text: root.title;
+                        font-weight: 600;
+                        color: Tokens.text;
+                        overflow: elide;
+                    }
                 }
 
                 if root.subtitle != "": Text {
@@ -1192,7 +1241,21 @@ component NowPlayingCard inherits Card {
 
         HorizontalLayout {
             alignment: center;
-            spacing: 20px;
+            // Five buttons fit the narrow left column only this close.
+            spacing: root.shuffle >= 0 || root.repeat >= 0 ? 2px : 20px;
+
+            if root.shuffle >= 0: IconButton {
+                glyph: Glyphs.shuffle;
+                glyph-color: root.shuffle == 1 ? Tokens.teal-text : Tokens.text;
+                label: Strings.shuffle;
+                value: root.shuffle == 1 ? Strings.on : Strings.off;
+                clicked => {
+                    root.transport(3);
+                }
+                focus-changed(has) => {
+                    root.note-focus(3, has);
+                }
+            }
 
             IconButton {
                 glyph: Glyphs.previous;
@@ -1227,6 +1290,19 @@ component NowPlayingCard inherits Card {
                 }
                 focus-changed(has) => {
                     root.note-focus(2, has);
+                }
+            }
+
+            if root.repeat >= 0: IconButton {
+                glyph: root.repeat == 2 ? Glyphs.repeat-one : Glyphs.repeat-all;
+                glyph-color: root.repeat > 0 ? Tokens.teal-text : Tokens.text;
+                label: Strings.repeat;
+                value: root.repeat == 2 ? Strings.repeat-one : root.repeat == 1 ? Strings.on : Strings.off;
+                clicked => {
+                    root.transport(4);
+                }
+                focus-changed(has) => {
+                    root.note-focus(4, has);
                 }
             }
         }
@@ -1288,6 +1364,9 @@ export component MainWindow inherits Window {
     in property <bool> now-playing-playing;
     in property <bool> now-playing-has-artwork;
     in property <image> now-playing-artwork;
+    in property <bool> now-playing-animated: true;
+    in property <int> now-playing-shuffle: -1;
+    in property <int> now-playing-repeat: -1;
     in-out property <int> now-playing-focused-button: -1;
     in property <[SpeakerItem]> this-pc;
     in property <[SpeakerItem]> connected;
@@ -1541,7 +1620,16 @@ export component MainWindow inherits Window {
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
 
-    property <length> content-max-width: left-column.width + Fluent.gap + scroll.max-width;
+    property <length> content-max-width: Fluent.left-column-wide + Fluent.gap + scroll.max-width;
+    // The window's width as its columns read it: kept by a handler, since a
+    // binding on it would loop through the window's own size constraints.
+    property <length> columns-width;
+    init => {
+        self.columns-width = self.width;
+    }
+    changed width => {
+        self.columns-width = self.width;
+    }
     // The Fluent scroll bar is 14 px wide and drawn over the speaker list's content.
     property <length> scroll-gutter: 14px;
 
@@ -1909,7 +1997,7 @@ export component MainWindow inherits Window {
             // scrolls when the window is shorter than its cards (a small
             // screen, or notices showing), as the speaker list does.
             left-column := ScrollView {
-                width: 268px;
+                width: MainColumns.left(root.columns-width);
 
                 VerticalLayout {
                     // Room for the scroll bar, as in the speaker list.
@@ -2022,6 +2110,9 @@ export component MainWindow inherits Window {
                         playing: root.now-playing-playing;
                         has-artwork: root.now-playing-has-artwork;
                         artwork: root.now-playing-artwork;
+                        animated: root.now-playing-animated;
+                        shuffle: root.now-playing-shuffle;
+                        repeat: root.now-playing-repeat;
                         focused-button <=> root.now-playing-focused-button;
                         changed focused-button => {
                             root.control-focus-changed(MainControl.transport, self.focused-button >= 0);
@@ -2147,8 +2238,8 @@ export component MainWindow inherits Window {
             // every connected speaker in no zone by name.
             scroll := ScrollView {
                 horizontal-stretch: 1;
-                preferred-width: 644px;
-                max-width: 644px;
+                preferred-width: Fluent.speaker-list-full;
+                max-width: Fluent.speaker-list-full;
 
                 speaker-list := VerticalLayout {
                     spacing: Fluent.gap;

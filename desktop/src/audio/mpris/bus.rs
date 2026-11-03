@@ -244,6 +244,7 @@ impl SessionList for Players {
             Transport::Previous => "Previous",
             Transport::PlayPause => "PlayPause",
             Transport::Next => "Next",
+            Transport::Shuffle(_) | Transport::Repeat(_) => return Ok(false),
         };
         entry
             .connection

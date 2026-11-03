@@ -39,7 +39,7 @@ use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::network_profile::{self, Watch};
-use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
+use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Repeat, Transport};
 use crate::ui_model::{
     self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
     MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
@@ -1401,9 +1401,20 @@ impl App {
             )
         });
         self.main.set_now_playing_title(track.title.as_str().into());
+        #[cfg(any(windows, target_os = "linux"))]
+        self.main
+            .set_now_playing_animated(crate::platform::animation_effects());
         self.main
             .set_now_playing_subtitle(track.subtitle().as_str().into());
         self.main.set_now_playing_playing(track.playing);
+        self.main
+            .set_now_playing_shuffle(track.modes.shuffle.map_or(-1, i32::from));
+        self.main.set_now_playing_repeat(match track.modes.repeat {
+            None => -1,
+            Some(Repeat::Off) => 0,
+            Some(Repeat::All) => 1,
+            Some(Repeat::One) => 2,
+        });
         let artwork = track.artwork.as_ref().map(|artwork| {
             let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                 &artwork.rgba,
@@ -1420,9 +1431,18 @@ impl App {
     }
 
     fn send_transport(&self, button: i32) {
-        let command = match button {
-            0 => Transport::Previous,
-            1 => Transport::PlayPause,
+        let modes = self
+            .now_playing
+            .borrow()
+            .track()
+            .map(|track| track.modes)
+            .unwrap_or_default();
+        let command = match (button, modes.shuffle, modes.repeat) {
+            (0, ..) => Transport::Previous,
+            (1, ..) => Transport::PlayPause,
+            (3, Some(on), _) => Transport::Shuffle(!on),
+            (4, _, Some(repeat)) => Transport::Repeat(repeat.next()),
+            (3 | 4, ..) => return,
             _ => Transport::Next,
         };
         self.log.log(|| format!("now playing: {command:?} pressed"));
@@ -6642,6 +6662,246 @@ mod tests {
         assert_eq!(fake.following(), None, "nothing is read while hidden");
     }
 
+    /// A wider window widens the speaker list first, to its full 644 px,
+    /// then the left column, from where its master volume track ended in
+    /// the 268 px column (208 px) back to 268 px.
+    #[test]
+    fn the_main_window_widens_the_speaker_list_before_the_left_column() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        let widths = |window: f32| {
+            app.main
+                .window()
+                .set_size(slint::LogicalSize::new(window, 680.0));
+            // Runs the window's change handlers, as the event loop does.
+            slint::platform::update_timers_and_animations();
+            let width = |id: &str| element(&app, id).map_or(0.0, |column| column.size().width);
+            (
+                width("MainWindow::left-column"),
+                width("MainWindow::scroll"),
+            )
+        };
+        assert_eq!(widths(776.0), (208.0, 524.0), "at its narrowest");
+        assert_eq!(widths(896.0), (208.0, 644.0), "the speaker list first");
+        assert_eq!(widths(926.0), (238.0, 644.0), "then the left column");
+        assert_eq!(widths(956.0), (268.0, 644.0));
+        assert_eq!(widths(1100.0), (268.0, 644.0));
+    }
+
+    /// Shuffle and repeat show only while the player takes them, read the
+    /// player's own state, and a click asks for the next state.
+    #[test]
+    fn the_now_playing_card_shows_shuffle_and_repeat_only_when_the_player_takes_them() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{PlayModes, Repeat};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let shown = |label: &str| {
+            draw_frames();
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .map(|button| button.accessible_value().unwrap_or_default().to_string())
+        };
+        fake.read(Some(track("Spotify.exe", "Song", "Band", true)));
+        app.poll();
+        assert_eq!((shown("Shuffle"), shown("Repeat")), (None, None));
+
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.modes = PlayModes {
+            shuffle: Some(true),
+            repeat: Some(Repeat::All),
+        };
+        fake.read(Some(song.clone()));
+        app.poll();
+        assert_eq!(
+            (shown("Shuffle"), shown("Repeat")),
+            (Some("On".into()), Some("On".into()))
+        );
+        app.main.invoke_now_playing_transport(3);
+        app.main.invoke_now_playing_transport(4);
+        assert_eq!(
+            fake.sent(),
+            [Transport::Shuffle(false), Transport::Repeat(Repeat::One)]
+        );
+
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::One),
+        };
+        fake.read(Some(song));
+        app.poll();
+        assert_eq!(
+            (shown("Shuffle"), shown("Repeat")),
+            (Some("Off".into()), Some("One".into()))
+        );
+    }
+
+    /// A focused Shuffle or Repeat button that goes when the player stops
+    /// taking it leaves no button marked as focused.
+    #[test]
+    fn a_mode_button_that_goes_drops_its_focus_mark() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{PlayModes, Repeat};
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::Off),
+        };
+        fake.read(Some(song.clone()));
+        app.poll();
+        draw_frames();
+        for (button, modes) in [
+            (
+                3,
+                PlayModes {
+                    shuffle: None,
+                    ..song.modes
+                },
+            ),
+            (
+                4,
+                PlayModes {
+                    repeat: None,
+                    ..song.modes
+                },
+            ),
+        ] {
+            fake.read(Some(song.clone()));
+            app.poll();
+            draw_frames();
+            app.main.set_now_playing_focused_button(button);
+            fake.read(Some(crate::now_playing_card::CardTrack {
+                modes,
+                ..song.clone()
+            }));
+            app.poll();
+            draw_frames();
+            assert_eq!(
+                app.main.get_now_playing_focused_button(),
+                -1,
+                "button {button}"
+            );
+        }
+    }
+
+    /// With Shuffle and Repeat showing, all five buttons keep their size
+    /// and fit inside the card at the default 776 px window.
+    #[test]
+    fn the_five_transport_buttons_fit_the_narrow_left_column() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{PlayModes, Repeat};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::Off),
+        };
+        fake.read(Some(song));
+        app.poll();
+        draw_frames();
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        slint::platform::update_timers_and_animations();
+        // Slint's tests find only what is drawn, so a button clipped off the
+        // card is missing.
+        let span = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .map(|element| {
+                    let x = element.absolute_position().x;
+                    (x, x + element.size().width)
+                })
+        };
+        let card = span("Now Playing").expect("the card shows");
+        let column =
+            element(&app, "MainWindow::left-column").map_or(0.0, |column| column.size().width);
+        assert_eq!(
+            card.1 - card.0,
+            column - 4.0,
+            "the card stays inside the column's scroll gutter"
+        );
+        let inner = (card.0 + 12.0, card.1 - 12.0);
+        let shown = ["Shuffle", "Previous Track", "Pause", "Next Track", "Repeat"].map(span);
+        assert!(
+            shown.iter().all(Option::is_some),
+            "every button shows inside the card {inner:?}: {shown:?}"
+        );
+        let buttons = shown.map(Option::unwrap_or_default);
+        let widths = buttons.map(|(start, end)| end - start);
+        assert_eq!(
+            widths,
+            [32.0, 32.0, 40.0, 32.0, 32.0],
+            "the buttons keep their size"
+        );
+        assert!(
+            buttons[0].0 >= inner.0 && buttons[4].1 <= inner.1,
+            "the row {buttons:?} fits inside the card {inner:?}"
+        );
+        assert!(
+            buttons.windows(2).all(|pair| pair[0].1 <= pair[1].0),
+            "no button overlaps the next: {buttons:?}"
+        );
+    }
+
+    /// A Now Playing title too long for its line stays on one line and
+    /// scrolls: it rests 2 s at its start, then moves 30 px a second. With
+    /// Windows' animation effects off it stays at its start.
+    #[test]
+    fn a_long_now_playing_title_scrolls_on_one_line() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use i_slint_backend_testing::ElementHandle;
+        let title = "A title far too long for the one line the Now Playing card gives it";
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        hold_clock();
+        draw_frames();
+        fake.read(Some(track("Spotify.exe", title, "Band", true)));
+        app.poll();
+        app.main.set_now_playing_animated(true);
+        draw_frames();
+        let text = || {
+            ElementHandle::find_by_accessible_label(&app.main, title)
+                .next()
+                .expect("the title")
+        };
+        let height = text().size().height;
+        assert!(height < 30.0, "one line, {height} px high");
+        let start = text().absolute_position().x;
+        advance_clock(Duration::from_millis(1900));
+        draw_frames();
+        assert_eq!(text().absolute_position().x, start, "it rests at its start");
+        advance_clock(Duration::from_millis(1100));
+        draw_frames();
+        let moved = start - text().absolute_position().x;
+        assert!(
+            (moved - 30.0).abs() < 1.0,
+            "30 px in its first second, moved {moved}"
+        );
+
+        app.main.set_now_playing_animated(false);
+        draw_frames();
+        assert_eq!(text().absolute_position().x, start, "cut, not scrolled");
+    }
+
     // covers: S421
     #[test]
     fn a_reading_the_sessions_report_shows_in_the_window_before_the_poll_and_is_logged() {
@@ -6881,14 +7141,15 @@ mod tests {
                 .window()
                 .set_size(slint::LogicalSize::new(window_width, 680.0));
             // No draw_frames: it sets every headless window to 1000 x 720.
+            slint::platform::update_timers_and_animations();
             ElementHandle::find_by_element_id(&app.main, "MainWindow::scroll")
                 .next()
                 .expect("the speaker list")
                 .size()
                 .width
         };
-        assert_eq!(list_width(776.0), 464.0, "the default window");
-        assert_eq!(list_width(876.0), 564.0, "a wider window");
+        assert_eq!(list_width(776.0), 524.0, "the default window");
+        assert_eq!(list_width(876.0), 624.0, "a wider window");
         assert_eq!(list_width(1400.0), 644.0, "a wide window");
     }
 
@@ -6910,6 +7171,7 @@ mod tests {
             app.main
                 .window()
                 .set_size(slint::LogicalSize::new(width, 680.0));
+            slint::platform::update_timers_and_animations();
             let switch = right_edge("MainWindow::power");
             let card = right_edge("SpeakerSection::card");
             assert!(
@@ -9420,7 +9682,7 @@ mod tests {
     }
 
     /// The main window over `backend` at its narrowest, 776 px, where the
-    /// speaker list takes 464 px. draw_frames sets 1000 px again.
+    /// speaker list takes 524 px. draw_frames sets 1000 px again.
     fn narrow_app(backend: MockBackend) -> Rc<App> {
         let app = app_over(backend);
         app.main.show().unwrap();
@@ -9429,6 +9691,7 @@ mod tests {
         app.main
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
+        slint::platform::update_timers_and_animations();
         app
     }
 
@@ -9540,6 +9803,7 @@ mod tests {
         app.main
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
+        slint::platform::update_timers_and_animations();
     }
 
     /// The narrow app scrolled to a stereo pair of `member` and Right, the

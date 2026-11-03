@@ -22,6 +22,55 @@ enum WindowPlacement {
     }
 }
 
+/// How the main window's width splits between its two columns. The speaker
+/// list widens first, to its full width, then the left column, from
+/// `narrow` up to `wide`; past that the speaker list again.
+enum MainColumns {
+    /// Where the master volume slider's track ended in the 280 pt left
+    /// column: 209.5 pt, measured on docs/images/main-window-light.png.
+    static let narrow: CGFloat = 210
+    static let wide: CGFloat = 280
+    /// The speaker list's width in the widest window, 860 pt.
+    static let speakerListFull: CGFloat = 524
+
+    /// The left column's width in a window `width` points wide: the speaker list widens
+    /// first, to its full width, then this column.
+    static func left(window width: CGFloat) -> CGFloat {
+        let room = width - 2 * BrandTokens.Spacing.windowMargin - BrandTokens.Spacing.columnGap
+        return min(max(room - speakerListFull, narrow), wide)
+    }
+
+    /// An estimate, not measured: wider than the widest transport symbol, the 22 pt Play.
+    static let transportButton: CGFloat = 26
+
+    /// The gap between the Now Playing buttons, `modes` while Shuffle or
+    /// Repeat shows.
+    static func transportSpacing(modes: Bool) -> CGFloat { modes ? 12 : 28 }
+}
+
+/// A Now Playing title too long for its line scrolls: it rests at its start,
+/// moves to its end at `speed`, rests there, moves back, and repeats.
+enum Marquee {
+    /// Points a second.
+    static let speed: CGFloat = 30
+    static let pause: TimeInterval = 2
+
+    /// How far the title runs past its line; 0 when it fits or the line isn't laid out yet.
+    static func overflow(text: CGFloat, line: CGFloat) -> CGFloat {
+        line > 0 && text > line ? text - line : 0
+    }
+
+    /// How far the title has moved left `elapsed` seconds after it showed.
+    static func offset(elapsed: TimeInterval, overflow: CGFloat) -> CGFloat {
+        let travel = TimeInterval(overflow / speed)
+        let at = elapsed.truncatingRemainder(dividingBy: 2 * (pause + travel))
+        if at < pause { return 0 }
+        if at < pause + travel { return CGFloat(at - pause) * speed }
+        if at < 2 * pause + travel { return overflow }
+        return overflow - CGFloat(at - 2 * pause - travel) * speed
+    }
+}
+
 /// What a click on the menu bar icon does to its panel. The press on the icon
 /// closes the popover before the click itself arrives, and AppKit may drop
 /// that click's action or still deliver it. A click whose press is the one

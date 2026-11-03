@@ -7210,6 +7210,70 @@ do {
     }
 }
 
+// MARK: Main window columns and the Now Playing title (WindowRules.swift)
+do {
+    let columns = { (width: CGFloat) -> String in
+        let left = MainColumns.left(window: width)
+        let room = width - 2 * BrandTokens.Spacing.windowMargin - BrandTokens.Spacing.columnGap
+        return "\(Int(left)) + \(Int(min(room - left, MainColumns.speakerListFull)))"
+    }
+    check(columns(696) == "210 + 430",
+          "main window: at its narrowest the left column is narrow and the speaker list takes the rest", columns(696))
+    check(columns(790) == "210 + 524",
+          "main window: a wider window widens the speaker list first, to its full width", columns(790))
+    check(columns(825) == "245 + 524",
+          "main window: past the speaker list's full width the left column widens", columns(825))
+    check(columns(860) == "280 + 524" && columns(900) == "280 + 524",
+          "main window: the left column stops at 280 pt and the speaker list stays at its full width",
+          "\(columns(860)), \(columns(900))")
+
+    check(Marquee.overflow(text: 300, line: 200) == 100 && Marquee.overflow(text: 150, line: 200) == 0
+            && Marquee.overflow(text: 300, line: 0) == 0,
+          "now playing: a title scrolls by what runs past its line, never before the line is laid out")
+    let marquee = [0, 1.9, 3, 4, 5.9, 7, 8, 9.9, 11].map { Marquee.offset(elapsed: $0, overflow: 60) }
+    check(marquee == [0, 0, 30, 60, 60, 30, 0, 0, 30],
+          "now playing: a long title rests 2 s, scrolls 30 pt a second to its end, rests 2 s and scrolls back",
+          "\(marquee)")
+    check(Marquee.offset(elapsed: 5, overflow: 0) == 0, "now playing: a title that fits stays put")
+
+    // Each symbol is estimated at 26 pt (MainColumns.transportButton), not measured.
+    let row = 5 * MainColumns.transportButton + 4 * MainColumns.transportSpacing(modes: true)
+    check(row <= MainColumns.narrow - 2 * BrandTokens.Spacing.cardPadding,
+          "now playing: with Shuffle and Repeat, all five buttons fit the narrow left column's card", "\(row) pt")
+    check(MainColumns.transportSpacing(modes: false) == 28,
+          "now playing: without Shuffle or Repeat the three buttons keep their spacing")
+}
+
+// MARK: Now Playing shuffle and repeat (NowPlaying.swift)
+do {
+    typealias Repeat = NowPlayingMonitor.RepeatMode
+    let musicCycle = [Repeat.off, .all, .one].map { $0.next(withOne: true) }
+    check(musicCycle == [.all, .one, .off], "now playing: Music's repeat goes off, all, one and back to off",
+          "\(musicCycle)")
+    let spotifyCycle = [Repeat.off, .all].map { $0.next(withOne: false) }
+    check(spotifyCycle == [.all, .off], "now playing: Spotify's repeat goes on and off", "\(spotifyCycle)")
+
+    let spotifyModes = NowPlayingMonitor.modes(NowPlayingMonitor.spotify, shuffle: "true", repeating: "false")
+    check(spotifyModes.shuffle == true && spotifyModes.repeatMode == .off,
+          "now playing: Spotify's shuffling and repeating read as on and off", "\(spotifyModes)")
+    let musicModes = NowPlayingMonitor.modes(NowPlayingMonitor.music, shuffle: "false", repeating: "one")
+    check(musicModes.shuffle == false && musicModes.repeatMode == .one,
+          "now playing: Music's shuffle and song repeat read as off and one", "\(musicModes)")
+    let unread = NowPlayingMonitor.modes(NowPlayingMonitor.spotify, shuffle: "", repeating: "")
+    check(unread.shuffle == nil && unread.repeatMode == nil,
+          "now playing: a player that gives no shuffle or repeat shows neither button", "\(unread)")
+
+    let verbs = [
+        NowPlayingMonitor.verb(.shuffle(true), bundleID: NowPlayingMonitor.spotify),
+        NowPlayingMonitor.verb(.repeatMode(.all), bundleID: NowPlayingMonitor.spotify),
+        NowPlayingMonitor.verb(.shuffle(false), bundleID: NowPlayingMonitor.music),
+        NowPlayingMonitor.verb(.repeatMode(.one), bundleID: NowPlayingMonitor.music),
+    ]
+    check(verbs == ["set shuffling to true", "set repeating to true",
+                    "set shuffle enabled to false", "set song repeat to one"],
+          "now playing: shuffle and repeat use each player's own scripting terms", "\(verbs)")
+}
+
 // MARK: Windows and the view model (WindowRules.swift)
 // covers: S211, S212, S214
 do {

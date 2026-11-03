@@ -25,12 +25,16 @@ final class NowPlayingMonitor {
         var position: Position? = nil
         /// As the explicit pause reads it (`ExplicitPause.playerState`).
         var playerState: Bool? = nil
+        /// Nil where the player doesn't take the command, which hides its button.
+        var shuffle: Bool? = nil
+        var repeatMode: RepeatMode? = nil
 
         /// Leaves `position` out: it moves on all the time, and only a jump
         /// is news (`Position.jumped`).
         static func == (a: Track, b: Track) -> Bool {
             a.bundleID == b.bundleID && a.title == b.title && a.artist == b.artist
                 && a.album == b.album && a.isPlaying == b.isPlaying && a.playerState == b.playerState
+                && a.shuffle == b.shuffle && a.repeatMode == b.repeatMode
                 && (a.artwork == nil) == (b.artwork == nil)
         }
     }
@@ -231,11 +235,48 @@ final class NowPlayingMonitor {
 
         private static func track(_ t: Track, playing: Bool) -> Track {
             Track(bundleID: t.bundleID, appName: t.appName, title: t.title, artist: t.artist, album: t.album,
-                  isPlaying: playing, artwork: t.artwork, position: t.position, playerState: t.playerState)
+                  isPlaying: playing, artwork: t.artwork, position: t.position, playerState: t.playerState,
+                  shuffle: t.shuffle, repeatMode: t.repeatMode)
         }
     }
 
-    enum Command { case playPause, next, previous }
+    enum RepeatMode: Equatable {
+        case off, all, one
+
+        /// Music repeats one song too; Spotify's dictionary has only on and off.
+        func next(withOne: Bool) -> RepeatMode {
+            switch self {
+            case .off: return .all
+            case .all: return withOne ? .one : .off
+            case .one: return .off
+            }
+        }
+    }
+
+    enum Command: Equatable { case playPause, next, previous, shuffle(Bool), repeatMode(RepeatMode) }
+
+    /// The shuffle and repeat fields a reading returns, empty for a player
+    /// that does not take them.
+    static func modes(_ bundleID: String, shuffle: String, repeating: String)
+        -> (shuffle: Bool?, repeatMode: RepeatMode?) {
+        let repeatModes: [String: RepeatMode] = bundleID == spotify
+            ? ["false": .off, "true": .all]
+            : ["off": .off, "all": .all, "one": .one]
+        return (["true": true, "false": false][shuffle], repeatModes[repeating])
+    }
+
+    static func verb(_ command: Command, bundleID: String) -> String {
+        switch command {
+        case .playPause: return "playpause"
+        case .next: return "next track"
+        case .previous: return "previous track"
+        case .shuffle(let on):
+            return bundleID == spotify ? "set shuffling to \(on)" : "set shuffle enabled to \(on)"
+        case .repeatMode(let mode):
+            if bundleID == spotify { return "set repeating to \(mode != .off)" }
+            return "set song repeat to \(mode)"
+        }
+    }
 
     static let spotify = "com.spotify.client"
     static let music = "com.apple.Music"
@@ -324,6 +365,7 @@ final class NowPlayingMonitor {
     private let scripts = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.nowplaying")
     private var artworkCache: [String: NSImage] = [:]   // "bundleID|title|album" → image
     private var denied: Set<String> = []                 // players refusing our Apple Events
+    private var modeTerms: [String: Bool] = [:]          // whether a player's mode script compiles
     private lazy var consent: AutomationConsent = {
         let consent = AutomationConsent(queue: self.scripts) { app, mayPrompt, done in
             DispatchQueue.global(qos: .userInitiated).async { done(NowPlayingMonitor.sendConsentEvent(app, mayPrompt: mayPrompt)) }
@@ -375,12 +417,7 @@ final class NowPlayingMonitor {
 
     func send(_ command: Command) {
         guard let bundleID = controlledBundleID else { return }
-        let verb: String
-        switch command {
-        case .playPause: verb = "playpause"
-        case .next: verb = "next track"
-        case .previous: verb = "previous track"
-        }
+        let verb = Self.verb(command, bundleID: bundleID)
         scripts.async { [weak self] in
             guard let self else { return }
             guard self.consent.mayCommand(bundleID) else {
@@ -563,6 +600,7 @@ final class NowPlayingMonitor {
         let appName = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
             ?? bundleID
         let isPlaying = parts[0] == "playing"
+        let modes = readModes(bundleID)
         var position: Position?
         if parts.count >= 6, let elapsedMs = Int(parts[4]), let lengthMs = Int(parts[5]), lengthMs > 0 {
             position = Position(elapsed: Double(min(max(0, elapsedMs), lengthMs)) / 1000,
@@ -570,7 +608,47 @@ final class NowPlayingMonitor {
         }
         return .track(Track(bundleID: bundleID, appName: appName, title: parts[1], artist: parts[2],
                             album: parts[3], isPlaying: isPlaying, artwork: nil, position: position,
-                            playerState: ExplicitPause.playerState(parts[0])))
+                            playerState: ExplicitPause.playerState(parts[0]),
+                            shuffle: modes.shuffle, repeatMode: modes.repeatMode))
+    }
+
+    /// Shuffle and repeat in a script of their own: a term the player lacks fails only this
+    /// one, which hides the two buttons and leaves the track.
+    private func readModes(_ bundleID: String) -> (shuffle: Bool?, repeatMode: RepeatMode?) {
+        let sep = "\u{1F}"
+        // Spotify says whether the track takes shuffle and repeat; Music always does.
+        let (shuffle, repeating) = bundleID == Self.spotify
+            ? ("if shuffling enabled then set sh to shuffling as string",
+               "if repeating enabled then set rp to repeating as string")
+            : ("set sh to shuffle enabled as string", "set rp to song repeat as string")
+        let script = """
+            with timeout of 2 seconds
+                if application id "\(bundleID)" is not running then return ""
+                tell application id "\(bundleID)"
+                    set sh to ""
+                    set rp to ""
+                    try
+                        \(shuffle)
+                    end try
+                    try
+                        \(repeating)
+                    end try
+                    return sh & "\(sep)" & rp
+                end tell
+            end timeout
+            """
+        if modeTerms[bundleID] == nil {
+            var error: NSDictionary?
+            let compiles = NSAppleScript(source: script)?.compileAndReturnError(&error) ?? false
+            modeTerms[bundleID] = compiles
+            if !compiles {
+                DebugTrace.log("Now Playing: \(bundleID) lacks the shuffle or repeat terms, "
+                               + "so those buttons stay hidden: \(error.map { "\($0)" } ?? "")")
+            }
+        }
+        guard modeTerms[bundleID] == true else { return (nil, nil) }
+        let parts = run(target: bundleID, script)?.stringValue?.components(separatedBy: sep) ?? []
+        return parts.count == 2 ? Self.modes(bundleID, shuffle: parts[0], repeating: parts[1]) : (nil, nil)
     }
 
     private func artwork(for t: Track) -> NSImage? {

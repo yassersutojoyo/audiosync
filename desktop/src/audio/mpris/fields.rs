@@ -49,6 +49,7 @@ impl Controls {
             Transport::Previous => self.previous,
             Transport::PlayPause => self.play_pause,
             Transport::Next => self.next,
+            Transport::Shuffle(_) | Transport::Repeat(_) => false,
         }
     }
 }
