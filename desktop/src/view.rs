@@ -1401,7 +1401,7 @@ impl App {
             )
         });
         self.main.set_now_playing_title(track.title.as_str().into());
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         self.main
             .set_now_playing_animated(crate::platform::animation_effects());
         self.main
