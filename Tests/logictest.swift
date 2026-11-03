@@ -7456,6 +7456,17 @@ do {
     // covers: S245
     check(added.map(\.members) == [["ap:native:den"], [], ["lc:usb", "cc:kitchen"]] && added[2].volume == 100,
           "zones: a new zone takes its speakers from their zones, once each, at full volume")
+    func newZoneOutcome(_ reads: [[String]], typed: String?) -> NewZoneFromActive.Outcome {
+        var onReads = reads
+        return NewZoneFromActive.run(onKeys: { onReads.removeFirst() }, askName: { typed })
+    }
+    // covers: S245
+    check(newZoneOutcome([["lc:usb", "ap:native:den"], ["ap:native:den"]], typed: "Desk")
+          == .create(name: "Desk", members: ["ap:native:den"]),
+          "zones: New Zone from Active Speakers leaves out a speaker turned off while its name prompt is open")
+    // covers: S245
+    check(newZoneOutcome([["lc:usb"], []], typed: "Desk") == .needsSpeakers,
+          "zones: New Zone from Active Speakers makes no zone when every speaker turned off while its name prompt is open")
     // covers: S245
     check(ZoneEdit.removing("cc:kitchen", from: [kitchen]).map(\.members) == [[]],
           "zones: Remove from Zone leaves the emptied zone in place")

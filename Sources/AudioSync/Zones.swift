@@ -229,6 +229,24 @@ enum ZoneEdit {
     }
 }
 
+/// New Zone from Active Speakers (S245): `onKeys` gives the speakers that are
+/// on, in the windows' order, and `askName` runs the name prompt.
+enum NewZoneFromActive {
+    enum Outcome: Equatable {
+        case needsSpeakers
+        case cancelled
+        case create(name: String, members: [String])
+    }
+
+    static func run(onKeys: () -> [String], askName: () -> String?) -> Outcome {
+        guard !onKeys().isEmpty else { return .needsSpeakers }
+        guard let typed = askName() else { return .cancelled }
+        // Read again: a phone or an unplug can turn a speaker off while the prompt is open.
+        let members = onKeys()
+        return members.isEmpty ? .needsSpeakers : .create(name: typed, members: members)
+    }
+}
+
 /// A zone member as a click on its zone sees it (S246, S247).
 struct ZoneMemberFacts: Equatable {
     enum Kind: Equatable { case local, airplay, airplay2, cast }
