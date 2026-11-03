@@ -568,6 +568,7 @@ impl<L: SessionList> Reader<L> {
             artist: session.artist,
             playing: session.playing,
             artwork,
+            modes: crate::now_playing_card::PlayModes::default(),
         })
     }
 

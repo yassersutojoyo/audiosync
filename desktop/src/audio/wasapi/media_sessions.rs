@@ -184,6 +184,7 @@ impl SessionList for WindowsSessions {
             Transport::Previous => session.TrySkipPreviousAsync(),
             Transport::PlayPause => session.TryTogglePlayPauseAsync(),
             Transport::Next => session.TrySkipNextAsync(),
+            Transport::Shuffle(_) | Transport::Repeat(_) => return Ok(false),
         };
         operation
             .and_then(|operation| within(operation, deadline))

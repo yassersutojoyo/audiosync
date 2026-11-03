@@ -6672,6 +6672,58 @@ mod tests {
         assert_eq!(widths(1100.0), (268.0, 644.0));
     }
 
+    /// Shuffle and repeat show only while the player takes them, read the
+    /// player's own state, and a click asks for the next state.
+    #[test]
+    fn the_now_playing_card_shows_shuffle_and_repeat_only_when_the_player_takes_them() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{PlayModes, Repeat};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let shown = |label: &str| {
+            draw_frames();
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .map(|button| button.accessible_value().unwrap_or_default().to_string())
+        };
+        fake.read(Some(track("Spotify.exe", "Song", "Band", true)));
+        app.poll();
+        assert_eq!((shown("Shuffle"), shown("Repeat")), (None, None));
+
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.modes = PlayModes {
+            shuffle: Some(true),
+            repeat: Some(Repeat::All),
+        };
+        fake.read(Some(song.clone()));
+        app.poll();
+        assert_eq!(
+            (shown("Shuffle"), shown("Repeat")),
+            (Some("On".into()), Some("On".into()))
+        );
+        app.main.invoke_now_playing_transport(3);
+        app.main.invoke_now_playing_transport(4);
+        assert_eq!(
+            fake.sent(),
+            [Transport::Shuffle(false), Transport::Repeat(Repeat::One)]
+        );
+
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::One),
+        };
+        fake.read(Some(song));
+        app.poll();
+        assert_eq!(
+            (shown("Shuffle"), shown("Repeat")),
+            (Some("Off".into()), Some("One".into()))
+        );
+    }
+
     /// A Now Playing title too long for its line stays on one line and
     /// scrolls: it rests 2 s at its start, then moves 30 px a second. With
     /// Windows' animation effects off it stays at its start.

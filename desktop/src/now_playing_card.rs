@@ -56,6 +56,48 @@ pub enum Transport {
     Previous,
     PlayPause,
     Next,
+    /// Shuffle turned on (true) or off.
+    Shuffle(bool),
+    Repeat(Repeat),
+}
+
+/// A player's repeat setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Repeat {
+    Off,
+    All,
+    One,
+}
+
+impl Repeat {
+    /// The setting a click on the repeat button asks for: off, all, one,
+    /// then off again.
+    pub fn next(self) -> Repeat {
+        self
+    }
+}
+
+/// Shuffle and repeat as the session reports them; `None` where it doesn't
+/// take that command or doesn't say, which hides the button.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayModes {
+    pub shuffle: Option<bool>,
+    pub repeat: Option<Repeat>,
+}
+
+impl PlayModes {
+    /// From a session's playback info: whether it takes shuffle and repeat,
+    /// and their state, `repeat` as Windows numbers it (0 none, 1 track,
+    /// 2 list).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn read(
+        _shuffle_enabled: bool,
+        _shuffle: Option<bool>,
+        _repeat_enabled: bool,
+        _repeat: Option<i32>,
+    ) -> PlayModes {
+        PlayModes::default()
+    }
 }
 
 /// A track's artwork for the card: square, premultiplied RGBA.
@@ -138,6 +180,7 @@ pub struct CardTrack {
     pub artist: String,
     pub playing: bool,
     pub artwork: Option<CardArtwork>,
+    pub modes: PlayModes,
 }
 
 impl CardTrack {
@@ -313,6 +356,7 @@ pub mod fake {
             artist: artist.into(),
             playing,
             artwork: None,
+            modes: PlayModes::default(),
         }
     }
 }
@@ -327,6 +371,37 @@ mod tests {
         let mut card = NowPlayingCard::default();
         card.set_controls(fake.controls());
         card
+    }
+
+    #[test]
+    fn repeat_goes_off_all_one_and_a_mode_shows_only_when_the_session_takes_it() {
+        assert_eq!(
+            [Repeat::Off, Repeat::All, Repeat::One].map(Repeat::next),
+            [Repeat::All, Repeat::One, Repeat::Off]
+        );
+        let modes = |shuffle, repeat| PlayModes { shuffle, repeat };
+        assert_eq!(
+            PlayModes::read(true, Some(true), true, Some(2)),
+            modes(Some(true), Some(Repeat::All))
+        );
+        assert_eq!(
+            PlayModes::read(true, Some(false), true, Some(1)),
+            modes(Some(false), Some(Repeat::One))
+        );
+        assert_eq!(
+            PlayModes::read(true, Some(false), true, Some(0)),
+            modes(Some(false), Some(Repeat::Off))
+        );
+        assert_eq!(
+            PlayModes::read(false, Some(true), false, Some(2)),
+            PlayModes::default(),
+            "a session that doesn't take them"
+        );
+        assert_eq!(
+            PlayModes::read(true, None, true, None),
+            PlayModes::default(),
+            "a state the session doesn't report is never assumed"
+        );
     }
 
     fn player() -> Option<CardSource> {

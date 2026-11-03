@@ -7236,6 +7236,36 @@ do {
     check(Marquee.offset(elapsed: 5, overflow: 0) == 0, "now playing: a title that fits stays put")
 }
 
+// MARK: Now Playing shuffle and repeat (NowPlaying.swift)
+do {
+    typealias Repeat = NowPlayingMonitor.RepeatMode
+    let musicCycle = [Repeat.off, .all, .one].map { $0.next(withOne: true) }
+    check(musicCycle == [.all, .one, .off], "now playing: Music's repeat goes off, all, one and back to off",
+          "\(musicCycle)")
+    let spotifyCycle = [Repeat.off, .all].map { $0.next(withOne: false) }
+    check(spotifyCycle == [.all, .off], "now playing: Spotify's repeat goes on and off", "\(spotifyCycle)")
+
+    let spotifyModes = NowPlayingMonitor.modes(NowPlayingMonitor.spotify, shuffle: "true", repeating: "false")
+    check(spotifyModes.shuffle == true && spotifyModes.repeatMode == .off,
+          "now playing: Spotify's shuffling and repeating read as on and off", "\(spotifyModes)")
+    let musicModes = NowPlayingMonitor.modes(NowPlayingMonitor.music, shuffle: "false", repeating: "one")
+    check(musicModes.shuffle == false && musicModes.repeatMode == .one,
+          "now playing: Music's shuffle and song repeat read as off and one", "\(musicModes)")
+    let unread = NowPlayingMonitor.modes(NowPlayingMonitor.spotify, shuffle: "", repeating: "")
+    check(unread.shuffle == nil && unread.repeatMode == nil,
+          "now playing: a player that gives no shuffle or repeat shows neither button", "\(unread)")
+
+    let verbs = [
+        NowPlayingMonitor.verb(.shuffle(true), bundleID: NowPlayingMonitor.spotify),
+        NowPlayingMonitor.verb(.repeatMode(.all), bundleID: NowPlayingMonitor.spotify),
+        NowPlayingMonitor.verb(.shuffle(false), bundleID: NowPlayingMonitor.music),
+        NowPlayingMonitor.verb(.repeatMode(.one), bundleID: NowPlayingMonitor.music),
+    ]
+    check(verbs == ["set shuffling to true", "set repeating to true",
+                    "set shuffle enabled to false", "set song repeat to one"],
+          "now playing: shuffle and repeat use each player's own scripting terms", "\(verbs)")
+}
+
 // MARK: Windows and the view model (WindowRules.swift)
 // covers: S211, S212, S214
 do {

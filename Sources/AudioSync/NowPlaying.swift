@@ -235,7 +235,30 @@ final class NowPlayingMonitor {
         }
     }
 
-    enum Command { case playPause, next, previous }
+    enum RepeatMode: Equatable {
+        case off, all, one
+
+        /// Music repeats one song too; Spotify's dictionary has only on and off.
+        func next(withOne: Bool) -> RepeatMode { self }
+    }
+
+    enum Command: Equatable { case playPause, next, previous, shuffle(Bool), repeatMode(RepeatMode) }
+
+    /// The shuffle and repeat fields a reading returns, empty for a player
+    /// that does not take them.
+    static func modes(_ bundleID: String, shuffle: String, repeating: String)
+        -> (shuffle: Bool?, repeatMode: RepeatMode?) {
+        (nil, nil)
+    }
+
+    static func verb(_ command: Command, bundleID: String) -> String {
+        switch command {
+        case .playPause: return "playpause"
+        case .next: return "next track"
+        case .previous: return "previous track"
+        case .shuffle, .repeatMode: return ""
+        }
+    }
 
     static let spotify = "com.spotify.client"
     static let music = "com.apple.Music"
@@ -375,12 +398,7 @@ final class NowPlayingMonitor {
 
     func send(_ command: Command) {
         guard let bundleID = controlledBundleID else { return }
-        let verb: String
-        switch command {
-        case .playPause: verb = "playpause"
-        case .next: verb = "next track"
-        case .previous: verb = "previous track"
-        }
+        let verb = Self.verb(command, bundleID: bundleID)
         scripts.async { [weak self] in
             guard let self else { return }
             guard self.consent.mayCommand(bundleID) else {
