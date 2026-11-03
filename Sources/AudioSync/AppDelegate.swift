@@ -460,6 +460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
             // device-list change: a device that lingers in Core Audio's list
             // without being alive leaves the speaker list at once.
             guard let self else { return }
+            self.goneNotices.lost(lostUID, loss)
             switch loss {
             case .formatChanged:
                 // Its device stays listed: it starts again now, in the new format (S330).
@@ -473,7 +474,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
                 self.devicesChanged()
             case .deviceGone:
                 self.noteRelinked(lostUID)   // it may return inside one rescan, never missing from a list
-                self.goneNotices.deviceGone(lostUID)
                 DebugTrace.log("[AudioSync] output lost: \(lostUID); waiting for the device to return")
                 self.devicesChanged()
             }
