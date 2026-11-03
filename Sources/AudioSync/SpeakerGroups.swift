@@ -68,11 +68,11 @@ enum GroupName {
 
     /// The name for a new group: what was typed, or else the first of
     /// `numbered(2)`, `numbered(3)`… after the existing groups that no group
-    /// already uses ("Group 2" when one group exists).
-    static func forNewGroup(typed: String, existing: [String],
+    /// already uses ("Group 2" when one group exists), nor `alsoTaken`.
+    static func forNewGroup(typed: String, existing: [String], alsoTaken: [String] = [],
                             numbered: (Int) -> String) -> String {
         if let name = cleaned(typed) { return name }
-        let taken = Set(existing)
+        let taken = Set(existing + alsoTaken)
         var n = existing.count + 1
         while taken.contains(numbered(n)) { n += 1 }
         return numbered(n)

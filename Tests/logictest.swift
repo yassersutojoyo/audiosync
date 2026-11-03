@@ -758,6 +758,16 @@ do {
                          SpeakerZone(id: "n2", name: "Zone 3", members: ["lc:a"], volume: 30),
                          SpeakerZone(id: "n3", name: "Zone 4", members: ["ap:c"], volume: 100)],
           "zones: a stored zone without a name is named as a new zone, one without an ID is dropped", "\(blankNamed)")
+    stored.values[Keys.zones] = Data(#"""
+        [{"id":"a","members":[]},
+         {"id":"b","name":"Zone 1","members":[]},
+         {"id":"c","name":5,"members":[]}]
+        """#.utf8)
+    let laterNamed = store.load().zones
+    check(laterNamed == [SpeakerZone(id: "a", name: "Zone 2", members: [], volume: 100),
+                         SpeakerZone(id: "b", name: "Zone 1", members: [], volume: 100),
+                         SpeakerZone(id: "c", name: "Zone 3", members: [], volume: 100)],
+          "zones: a numbered name skips a later zone's name, and a name that isn't text is numbered", "\(laterNamed)")
 
     // covers: S286 (the Mac host: a kept name is saved, moves and leaves with its key; older zones load unchanged)
     let unnamed = [SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:native:X", "lc:blank"], volume: 80),

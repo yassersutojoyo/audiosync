@@ -319,7 +319,7 @@ struct LossyDecoded<T: Decodable>: Decodable {
 /// only: never a value, a name or a map's key (privacy).
 enum StoredTrace {
     static let settingsKey = CodingUserInfoKey(rawValue: "settingsKey")!
-    private static let fieldNames: Set = ["members", "zones", "memberNames", "volume", "master"]
+    private static let fieldNames: Set = ["members", "zones", "memberNames", "volume", "master", "name"]
 
     static func log(_ decoder: Decoder, _ path: [CodingKey], _ outcome: String) {
         DebugTrace.log("[AudioSync] settings: \((decoder.userInfo[settingsKey] as? String) ?? "?")\(pathText(path)) unreadable, \(outcome)")
