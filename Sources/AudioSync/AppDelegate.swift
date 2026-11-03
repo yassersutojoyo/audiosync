@@ -149,12 +149,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The delays were migrated to offsets (S179), in this launch or before.
     private var localDelaysMigrated: Bool
     /// Each AirPlay speaker's own volume s, by output ID (S290): unrounded,
-    /// above 100 when the zone or the master is below 100.
+    /// above 100 when the zone is below 100.
     var airplayVolume: [String: Double] {
         didSet { if airplayVolume != oldValue { store.save(levels: airplayVolume, forKey: Keys.airplayVolumes) } }
     }
     /// A level set on an AirPlay speaker while its k was 0, by output ID,
-    /// which its row shows until s, its zone or the master moves (S290).
+    /// which its row shows until s or its zone moves (S290).
     var airplayHeldLevel: [String: Double] = [:]
     var airPlayVolumeLog = RemoteVolumeLog()
     var groups: [SpeakerGroup] {
