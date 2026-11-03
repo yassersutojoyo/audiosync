@@ -6741,6 +6741,64 @@ mod tests {
         );
     }
 
+    /// With Shuffle and Repeat showing, all five buttons keep their size
+    /// and fit inside the card at the default 776 px window.
+    #[test]
+    fn the_five_transport_buttons_fit_the_narrow_left_column() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{PlayModes, Repeat};
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::Off),
+        };
+        fake.read(Some(song));
+        app.poll();
+        draw_frames();
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        slint::platform::update_timers_and_animations();
+        // Slint's tests find only what is drawn, so a button clipped off the
+        // card is missing.
+        let span = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .map(|element| {
+                    let x = element.absolute_position().x;
+                    (x, x + element.size().width)
+                })
+        };
+        let card = span("Now Playing").expect("the card shows");
+        let inner = (card.0 + 12.0, card.1 - 12.0);
+        let shown = ["Shuffle", "Previous Track", "Pause", "Next Track", "Repeat"].map(span);
+        assert!(
+            shown.iter().all(Option::is_some),
+            "every button shows inside the card {inner:?}: {shown:?}"
+        );
+        let buttons = shown.map(Option::unwrap_or_default);
+        let widths = buttons.map(|(start, end)| end - start);
+        assert_eq!(
+            widths,
+            [32.0, 32.0, 40.0, 32.0, 32.0],
+            "the buttons keep their size"
+        );
+        assert!(
+            buttons[0].0 >= inner.0 && buttons[4].1 <= inner.1,
+            "the row {buttons:?} fits inside the card {inner:?}"
+        );
+        assert!(
+            buttons.windows(2).all(|pair| pair[0].1 <= pair[1].0),
+            "no button overlaps the next: {buttons:?}"
+        );
+    }
+
     /// A Now Playing title too long for its line stays on one line and
     /// scrolls: it rests 2 s at its start, then moves 30 px a second. With
     /// Windows' animation effects off it stays at its start.

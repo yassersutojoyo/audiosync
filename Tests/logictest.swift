@@ -7234,6 +7234,12 @@ do {
           "now playing: a long title rests 2 s, scrolls 30 pt a second to its end, rests 2 s and scrolls back",
           "\(marquee)")
     check(Marquee.offset(elapsed: 5, overflow: 0) == 0, "now playing: a title that fits stays put")
+
+    let row = 5 * MainColumns.transportButton + 4 * MainColumns.transportSpacing(modes: true)
+    check(row <= MainColumns.narrow - 2 * BrandTokens.Spacing.cardPadding,
+          "now playing: with Shuffle and Repeat, all five buttons fit the narrow left column's card", "\(row) pt")
+    check(MainColumns.transportSpacing(modes: false) == 28,
+          "now playing: without Shuffle or Repeat the three buttons keep their spacing")
 }
 
 // MARK: Now Playing shuffle and repeat (NowPlaying.swift)

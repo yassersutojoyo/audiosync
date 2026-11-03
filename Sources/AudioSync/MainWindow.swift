@@ -278,7 +278,8 @@ struct MainView: View {
                     }
                     Spacer(minLength: 0)
                 }
-                HStack(spacing: 28) {
+                HStack(spacing: MainColumns.transportSpacing(
+                    modes: track.shuffle != nil || track.repeatMode != nil)) {
                     if let shuffle = track.shuffle {
                         modeButton("shuffle", .shuffle(!shuffle), on: shuffle, label: t.shuffle,
                                    value: shuffle ? t.on : t.off)
