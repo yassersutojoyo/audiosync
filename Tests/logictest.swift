@@ -743,8 +743,21 @@ do {
     check(oneBadZone == [SpeakerZone(id: "z1", name: "Kitchen", members: ["lc:a", "ap:b"], volume: 100,
                                      memberNames: ["lc:a": "Desk"]),
                          SpeakerZone(id: "z2", name: "Den", members: ["lc:c"], volume: 100),
+                         SpeakerZone(id: "z3", name: "Zone 3", members: [], volume: 100),
                          SpeakerZone(id: "z4", name: "Fine", members: [], volume: 40)],
           "zones: a stored value that can't be read loses only that value, or its zone, never the others", "\(oneBadZone)")
+    // covers: S245, S150
+    stored.values[Keys.zones] = Data(#"""
+        [{"id":"","name":"Lost","members":["lc:a"]},
+         {"id":"n1","name":"Zone 2","members":["lc:x"]},
+         {"id":"n2","members":["lc:a"],"volume":30},
+         {"id":"n3","name":"  ","members":["ap:c"]}]
+        """#.utf8)
+    let blankNamed = store.load().zones
+    check(blankNamed == [SpeakerZone(id: "n1", name: "Zone 2", members: ["lc:x"], volume: 100),
+                         SpeakerZone(id: "n2", name: "Zone 3", members: ["lc:a"], volume: 30),
+                         SpeakerZone(id: "n3", name: "Zone 4", members: ["ap:c"], volume: 100)],
+          "zones: a stored zone without a name is named as a new zone, one without an ID is dropped", "\(blankNamed)")
 
     // covers: S286 (the Mac host: a kept name is saved, moves and leaves with its key; older zones load unchanged)
     let unnamed = [SpeakerZone(id: "z1", name: "Kitchen", members: ["ap:native:X", "lc:blank"], volume: 80),
