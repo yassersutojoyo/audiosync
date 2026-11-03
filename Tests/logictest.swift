@@ -5925,6 +5925,21 @@ do {
         check(!links.begin(uid: "bt", ticket: calmTicket, session: 1) && links.held.isEmpty,
               "EC2 Bluetooth fresh link: the second restart runs only once")
     }
+    do {
+        var defaultLog = DefaultDeviceLog()
+        let launchLine = defaultLog.note("output", uid: "builtin")
+        let sameLine = defaultLog.note("output", uid: "builtin")
+        let headsetLine = defaultLog.note("output", uid: "sony-a2dp")
+        let handsFreeInLine = defaultLog.note("input", uid: "sony-hfp")
+        let goneLine = defaultLog.note("output", uid: nil)
+        check(launchLine == "default output device: builtin" && sameLine == nil
+                && headsetLine == "default output device: builtin → sony-a2dp"
+                && handsFreeInLine == "default input device: sony-hfp"
+                && goneLine == "default output device: sony-a2dp → none",
+              "Default devices: each change of the default output or input is logged from the old UID to the new, a repeat is not",
+              "\(String(describing: launchLine)) \(String(describing: sameLine)) \(String(describing: headsetLine)) "
+                + "\(String(describing: handsFreeInLine)) \(String(describing: goneLine))")
+    }
     // covers: S325 (what cancels the second restart, and a new return starting its clock over)
     do {
         func cameBack(_ links: FreshLinkWatch, at now: Double) -> Int {
