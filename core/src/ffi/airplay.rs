@@ -1865,10 +1865,11 @@ impl AscAirPlay {
         if let Some(path) = self.session_paths.get(id) {
             return *path == ProtocolPath::AirPlay2;
         }
+        // Legacy credentials keep the preference off it (P214).
         self.airplay2
             && info.device.choose_path_preferring(
                 true,
-                self.airplay2_preferred,
+                self.airplay2_preferred && !self.store.contains(id),
                 self.airplay1_outcome.get(id).copied(),
                 self.identity.get(id).is_some(),
             ) == Ok(ProtocolPath::AirPlay2)

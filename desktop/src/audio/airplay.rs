@@ -1935,10 +1935,11 @@ impl AirPlaySpeakers {
         }
         let outcome = self.airplay1_outcome.get(id).copied();
         let homekit_stored = self.store.homekit(id).is_some();
+        // Legacy credentials keep the preference off it (P214).
         reached_over_airplay2(
             info,
             self.link.airplay2(),
-            self.link.airplay2_preferred(),
+            self.link.airplay2_preferred() && !self.store.contains(id),
             outcome,
             homekit_stored,
         )

@@ -2196,8 +2196,10 @@ impl Driver {
             }
             let device = &speaker.device;
             let outcome = self.airplay1_outcome(key, speaker);
-            let preferred = super::planned_path(device, true, self.airplay2_preferred, outcome)
-                == Ok(ProtocolPath::AirPlay2);
+            // Legacy credentials keep the preference off it (P214).
+            let prefers = self.airplay2_preferred && speaker.options.credentials.is_none();
+            let preferred =
+                super::planned_path(device, true, prefers, outcome) == Ok(ProtocolPath::AirPlay2);
             // Only the preference sends it there: AirPlay 1 plays it
             // rather than waiting for a taken AirPlay 2 place (P214).
             let fallback = device.choose_path(true, outcome) == Ok(ProtocolPath::AirPlay1)
