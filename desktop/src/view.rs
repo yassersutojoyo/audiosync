@@ -4238,26 +4238,18 @@ impl App {
             Some(CurveMatch::User(index)) => Some(&state.equalizer_curves[index]),
             _ => None,
         };
-        if shown.is_none() && state.equalizer_curves.len() >= eq::MAX_USER_CURVES {
-            *self.dialog_purpose.borrow_mut() = DialogPurpose::Message;
-            dialog.set_heading(strings.get_save_curve_title());
-            dialog.set_message(strings.invoke_curves_full(count(eq::MAX_USER_CURVES)));
-            dialog.set_show_field(false);
-            dialog.set_confirm_label(strings.get_ok());
-        } else {
-            let name = shown.map_or_else(
-                || strings.invoke_numbered_curve(count(state.equalizer_curves.len() + 1)),
-                |curve| curve.name.as_str().into(),
-            );
-            *self.dialog_purpose.borrow_mut() = DialogPurpose::SaveCurve;
-            dialog.set_heading(strings.get_save_curve_title());
-            dialog.set_message(strings.get_save_curve_message());
-            dialog.set_placeholder(strings.get_curve_name_field_label());
-            dialog.set_field_label(strings.get_curve_name_field_label());
-            dialog.set_name(name);
-            dialog.set_show_field(true);
-            dialog.set_confirm_label(strings.get_save());
-        }
+        let name = shown.map_or_else(
+            || strings.invoke_numbered_curve(count(state.equalizer_curves.len() + 1)),
+            |curve| curve.name.as_str().into(),
+        );
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::SaveCurve;
+        dialog.set_heading(strings.get_save_curve_title());
+        dialog.set_message(strings.get_save_curve_message());
+        dialog.set_placeholder(strings.get_curve_name_field_label());
+        dialog.set_field_label(strings.get_curve_name_field_label());
+        dialog.set_name(name);
+        dialog.set_show_field(true);
+        dialog.set_confirm_label(strings.get_save());
         self.open_dialog();
     }
 
@@ -13058,6 +13050,42 @@ mod tests {
             );
             assert_eq!(app.main.get_equalizer_curve(), "Mine");
         }
+    }
+
+    // covers: S270
+    #[test]
+    fn a_full_list_saves_over_a_taken_name_and_refuses_a_new_one() {
+        let app = app_over(MockBackend::new());
+        let eq_window = &app.equalizer;
+        let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
+        let mut curves = Vec::new();
+        eq::save_curve(&mut curves, "Mine", &eq::PRESETS[rock].gains_db);
+        for n in 1..eq::MAX_USER_CURVES {
+            eq::save_curve(&mut curves, &format!("Other {n}"), &[0.0; eq::BAND_COUNT]);
+        }
+        app.update(|b| b.set_equalizer_curves(curves));
+        eq_window.invoke_preset_selected(eq::PRESETS.len() as i32);
+        let moved = eq::PRESETS[rock].gains_db[0] as f32 + 3.0;
+        eq_window.invoke_gain_changed(0, moved);
+        assert_eq!(eq_window.get_preset_index(), -1, "Custom");
+
+        eq_window.invoke_save_curve();
+        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
+        app.zone_dialog.invoke_confirmed("Mine".into());
+        assert!(!app.zone_dialog.window().is_visible(), "no full message");
+        let state = app.snapshot();
+        assert_eq!(state.equalizer_curves.len(), eq::MAX_USER_CURVES);
+        assert_eq!(state.equalizer_curves[0].gains_db[0], f64::from(moved));
+
+        eq_window.invoke_gain_changed(0, 0.0);
+        eq_window.invoke_save_curve();
+        app.zone_dialog.invoke_confirmed("New".into());
+        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
+        assert_eq!(
+            app.zone_dialog.get_message(),
+            "You can keep up to 50 saved curves. Delete one, then save again."
+        );
+        assert_eq!(app.snapshot().equalizer_curves.len(), eq::MAX_USER_CURVES);
     }
 
     fn first_band_gain(app: &App) -> f64 {

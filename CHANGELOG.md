@@ -35,6 +35,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, Hidden Speakers names a speaker that is found by the kind it has now, such as AirPlay 2, as on the Mac. Before, it kept the kind the speaker had when you hid it.
 - On Windows, a speaker that was disconnected keeps its notice until it plays again, as on the Mac. Before, the notice went away as soon as the speaker connected, even while it stayed silent for up to 30 seconds.
 - On Windows, the Several Apps list sorts an app whose name starts with an accented letter, such as "Éclair", with its plain letter, as on the Mac. Before, it was listed after every other app.
+- On Windows, with 50 saved curves you can save over one of them by its name, as on the Mac. Before, Save Curve said the list was full.
 
 ## [0.8.0] - 2026-11-02
 
