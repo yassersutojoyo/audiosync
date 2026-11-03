@@ -14878,6 +14878,15 @@ do {
             && t.castNote(CastRow(status: .idle, muted: false, volumeFixed: false, group: nil)) == nil
             && t.helpText.contains("click\nAdd by Address… under"),
           "cast row: a device added by address says so under its name, and the Guide names the action")
+    let browsedRow = "0123456789abcdef0123456789abcdef"
+    var keptBrowsed = CastModel()
+    keptBrowsed.apply(.appeared(CastDevice(id: browsedRow, name: "Den"), offsetMs: nil))
+    var keptBrowsedList = CastManualList(stored: nil)
+    keptBrowsed.keep(den, addedAs: browsedRow, in: &keptBrowsedList)
+    // covers: C18
+    check(keptBrowsedList.addresses == [den] && keptBrowsed.manualAddresses[browsedRow] == den
+            && keptBrowsed.removeManual(browsedRow) == den && keptBrowsed.devices[browsedRow] != nil,
+          "cast: Add by Address with the address of a speaker a browse lists keeps the address, and the row can be removed")
 
     let manualID = "manual:192.0.2.9:8009", realID = "00112233445566778899aabbccddeeff"
     let identified: (String) -> CastDeviceChange? = { former in
