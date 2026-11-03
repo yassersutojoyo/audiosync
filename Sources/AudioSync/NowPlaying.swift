@@ -563,11 +563,6 @@ final class NowPlayingMonitor {
         // Spotify's duration is in ms, Music's in seconds. Whole ms avoid the locale's decimal
         // separator; rounding outside the tell block keeps scripting additions away from the player.
         let durationToMs = bundleID == Self.spotify ? 1 : 1000
-        // Spotify says whether the track takes shuffle and repeat; Music always does.
-        let (readShuffle, readRepeat) = bundleID == Self.spotify
-            ? ("if shuffling enabled then set sh to shuffling as string",
-               "if repeating enabled then set rp to repeating as string")
-            : ("set sh to shuffle enabled as string", "set rp to song repeat as string")
         let script = """
             with timeout of 2 seconds
                 if application id "\(bundleID)" is not running then return "stopped"
@@ -576,15 +571,6 @@ final class NowPlayingMonitor {
                     if s is "stopped" then return s
                     set t to current track
                     set trackText to s & "\(sep)" & (name of t) & "\(sep)" & (artist of t) & "\(sep)" & (album of t)
-                    set sh to ""
-                    set rp to ""
-                    try
-                        \(readShuffle)
-                    end try
-                    try
-                        \(readRepeat)
-                    end try
-                    set trackText to trackText & "\(sep)" & sh & "\(sep)" & rp
                     set p to missing value
                     set d to missing value
                     try
@@ -613,10 +599,9 @@ final class NowPlayingMonitor {
         let appName = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
             ?? bundleID
         let isPlaying = parts[0] == "playing"
-        let modes: (shuffle: Bool?, repeatMode: RepeatMode?) = parts.count >= 6
-            ? Self.modes(bundleID, shuffle: parts[4], repeating: parts[5]) : (nil, nil)
+        let modes = readModes(bundleID)
         var position: Position?
-        if parts.count >= 8, let elapsedMs = Int(parts[6]), let lengthMs = Int(parts[7]), lengthMs > 0 {
+        if parts.count >= 6, let elapsedMs = Int(parts[4]), let lengthMs = Int(parts[5]), lengthMs > 0 {
             position = Position(elapsed: Double(min(max(0, elapsedMs), lengthMs)) / 1000,
                                 length: Double(lengthMs) / 1000, readAt: readAt, playing: isPlaying)
         }
@@ -624,6 +609,35 @@ final class NowPlayingMonitor {
                             album: parts[3], isPlaying: isPlaying, artwork: nil, position: position,
                             playerState: ExplicitPause.playerState(parts[0]),
                             shuffle: modes.shuffle, repeatMode: modes.repeatMode))
+    }
+
+    /// Shuffle and repeat in a script of their own: a term the player lacks fails only this
+    /// one, which hides the two buttons and leaves the track.
+    private func readModes(_ bundleID: String) -> (shuffle: Bool?, repeatMode: RepeatMode?) {
+        let sep = "\u{1F}"
+        // Spotify says whether the track takes shuffle and repeat; Music always does.
+        let (shuffle, repeating) = bundleID == Self.spotify
+            ? ("if shuffling enabled then set sh to shuffling as string",
+               "if repeating enabled then set rp to repeating as string")
+            : ("set sh to shuffle enabled as string", "set rp to song repeat as string")
+        let script = """
+            with timeout of 2 seconds
+                if application id "\(bundleID)" is not running then return ""
+                tell application id "\(bundleID)"
+                    set sh to ""
+                    set rp to ""
+                    try
+                        \(shuffle)
+                    end try
+                    try
+                        \(repeating)
+                    end try
+                    return sh & "\(sep)" & rp
+                end tell
+            end timeout
+            """
+        let parts = run(target: bundleID, script)?.stringValue?.components(separatedBy: sep) ?? []
+        return parts.count == 2 ? Self.modes(bundleID, shuffle: parts[0], repeating: parts[1]) : (nil, nil)
     }
 
     private func artwork(for t: Track) -> NSImage? {
