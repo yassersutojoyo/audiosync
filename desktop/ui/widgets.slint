@@ -42,6 +42,12 @@ export global Fluent {
     out property <length> name-inset: 56px;
     // The delay column every speaker row lines up on.
     out property <length> delay-column: 76px;
+    // The main window's left column: narrow, ending where its master volume
+    // track ended in the 268 px column (slider-inset short of the slider's
+    // end), and wide; and the speaker list's full width (MainColumns).
+    out property <length> left-column-narrow: 208px;
+    out property <length> left-column-wide: 268px;
+    out property <length> speaker-list-full: 644px;
     // How far inside its box the style's slider track starts (measured on
     // screen: 10 px at 100 %).
     out property <length> slider-inset: 10px;

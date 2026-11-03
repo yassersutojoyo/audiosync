@@ -1401,6 +1401,9 @@ impl App {
             )
         });
         self.main.set_now_playing_title(track.title.as_str().into());
+        #[cfg(windows)]
+        self.main
+            .set_now_playing_animated(crate::platform::animation_effects());
         self.main
             .set_now_playing_subtitle(track.subtitle().as_str().into());
         self.main.set_now_playing_playing(track.playing);
@@ -6654,6 +6657,8 @@ mod tests {
             app.main
                 .window()
                 .set_size(slint::LogicalSize::new(window, 680.0));
+            // Runs the window's change handlers, as the event loop does.
+            slint::platform::update_timers_and_animations();
             let width = |id: &str| element(&app, id).map_or(0.0, |column| column.size().width);
             (
                 width("MainWindow::left-column"),
@@ -6668,7 +6673,8 @@ mod tests {
     }
 
     /// A Now Playing title too long for its line stays on one line and
-    /// scrolls: it rests 2 s at its start, then moves 30 px a second.
+    /// scrolls: it rests 2 s at its start, then moves 30 px a second. With
+    /// Windows' animation effects off it stays at its start.
     #[test]
     fn a_long_now_playing_title_scrolls_on_one_line() {
         use crate::now_playing_card::fake::{FakeControls, track};
@@ -6683,6 +6689,7 @@ mod tests {
         draw_frames();
         fake.read(Some(track("Spotify.exe", title, "Band", true)));
         app.poll();
+        app.main.set_now_playing_animated(true);
         draw_frames();
         let text = || {
             ElementHandle::find_by_accessible_label(&app.main, title)
@@ -6702,6 +6709,10 @@ mod tests {
             (moved - 30.0).abs() < 1.0,
             "30 px in its first second, moved {moved}"
         );
+
+        app.main.set_now_playing_animated(false);
+        draw_frames();
+        assert_eq!(text().absolute_position().x, start, "cut, not scrolled");
     }
 
     // covers: S421
@@ -6943,14 +6954,15 @@ mod tests {
                 .window()
                 .set_size(slint::LogicalSize::new(window_width, 680.0));
             // No draw_frames: it sets every headless window to 1000 x 720.
+            slint::platform::update_timers_and_animations();
             ElementHandle::find_by_element_id(&app.main, "MainWindow::scroll")
                 .next()
                 .expect("the speaker list")
                 .size()
                 .width
         };
-        assert_eq!(list_width(776.0), 464.0, "the default window");
-        assert_eq!(list_width(876.0), 564.0, "a wider window");
+        assert_eq!(list_width(776.0), 524.0, "the default window");
+        assert_eq!(list_width(876.0), 624.0, "a wider window");
         assert_eq!(list_width(1400.0), 644.0, "a wide window");
     }
 
@@ -6972,6 +6984,7 @@ mod tests {
             app.main
                 .window()
                 .set_size(slint::LogicalSize::new(width, 680.0));
+            slint::platform::update_timers_and_animations();
             let switch = right_edge("MainWindow::power");
             let card = right_edge("SpeakerSection::card");
             assert!(
@@ -9482,7 +9495,7 @@ mod tests {
     }
 
     /// The main window over `backend` at its narrowest, 776 px, where the
-    /// speaker list takes 464 px. draw_frames sets 1000 px again.
+    /// speaker list takes 524 px. draw_frames sets 1000 px again.
     fn narrow_app(backend: MockBackend) -> Rc<App> {
         let app = app_over(backend);
         app.main.show().unwrap();
@@ -9491,6 +9504,7 @@ mod tests {
         app.main
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
+        slint::platform::update_timers_and_animations();
         app
     }
 
@@ -9602,6 +9616,7 @@ mod tests {
         app.main
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
+        slint::platform::update_timers_and_animations();
     }
 
     /// The narrow app scrolled to a stereo pair of `member` and Right, the

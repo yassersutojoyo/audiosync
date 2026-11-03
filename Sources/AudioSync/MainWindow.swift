@@ -114,6 +114,7 @@ struct MainView: View {
     @StateObject private var gearAnchor = MenuAnchor.Box()
     @StateObject private var sheetRoom = SheetRoom()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
+    @StateObject private var windowWidth = WindowWidth()
 
     var body: some View {
         let t = model.text
@@ -131,7 +132,7 @@ struct MainView: View {
                         Card { CalibrateAllButton(model: model) }
                     }
                 }
-                .frame(width: 280)
+                .frame(width: MainColumns.split(window: windowWidth.points).left)
                 FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
                     let all = model.layout
                     let layout = model.zonelessLayout
@@ -176,6 +177,7 @@ struct MainView: View {
         .padding(.bottom, 20)
         .frame(minWidth: 696, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity, alignment: .topLeading)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sheetRoom.height = $0 }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth.points = $0 }
         // A click no row or control takes closes the delay panels, applying
         // what was typed. Behind everything, so the header can still drag
         // the window.
@@ -270,7 +272,7 @@ struct MainView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(track.title).font(.body.weight(.semibold)).lineLimit(2)
+                        ScrollingTitle(text: track.title).font(.body.weight(.semibold))
                         Text(track.artist.isEmpty ? track.appName : track.artist)
                             .font(.callout).foregroundStyle(Brand.secondaryText).lineLimit(1)
                     }
@@ -517,6 +519,48 @@ private struct LocalNetworkHintView: View {
                 .help(text.openSettingsHint)
         }
     }
+}
+
+/// The main window's width, which sets its left column's (`MainColumns`).
+private final class WindowWidth: ObservableObject {
+    @Published var points: CGFloat = 0
+}
+
+/// The Now Playing title on one line. A title too long for it scrolls to its
+/// end and back (`Marquee`); with Reduce Motion it is cut with an ellipsis.
+private struct ScrollingTitle: View {
+    let text: String
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @StateObject private var line = MarqueeLine()
+
+    var body: some View {
+        let overflow = reduceMotion ? 0 : Marquee.overflow(text: line.textWidth, line: line.width)
+        Text(text)
+            .lineLimit(1)
+            .opacity(overflow > 0 ? 0 : 1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { line.width = $0 }
+            .overlay(alignment: .leading) {
+                TimelineView(.animation(paused: overflow == 0)) { context in
+                    Text(text)
+                        .fixedSize()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { line.textWidth = $0 }
+                        .offset(x: -Marquee.offset(elapsed: context.date.timeIntervalSince(line.start),
+                                                   overflow: overflow))
+                        .opacity(overflow > 0 ? 1 : 0)
+                }
+            }
+            .clipped()
+            .onChange(of: text) { line.start = .now }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(text)
+    }
+}
+
+private final class MarqueeLine: ObservableObject {
+    @Published var width: CGFloat = 0
+    @Published var textWidth: CGFloat = 0
+    var start = Date()
 }
 
 /// A rounded panel on the window background.

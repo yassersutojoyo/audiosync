@@ -36,7 +36,8 @@ enum MainColumns {
     /// The left column's and the speaker list's widths in a window `width` points wide.
     static func split(window width: CGFloat) -> (left: CGFloat, right: CGFloat) {
         let room = width - 2 * BrandTokens.Spacing.windowMargin - BrandTokens.Spacing.columnGap
-        return (wide, room - wide)
+        let left = min(max(room - speakerListFull, narrow), wide)
+        return (left, room - left)
     }
 }
 
@@ -49,12 +50,17 @@ enum Marquee {
 
     /// How far the title runs past its line; 0 when it fits or the line isn't laid out yet.
     static func overflow(text: CGFloat, line: CGFloat) -> CGFloat {
-        0
+        line > 0 && text > line ? text - line : 0
     }
 
     /// How far the title has moved left `elapsed` seconds after it showed.
     static func offset(elapsed: TimeInterval, overflow: CGFloat) -> CGFloat {
-        0
+        let travel = TimeInterval(overflow / speed)
+        let at = elapsed.truncatingRemainder(dividingBy: 2 * (pause + travel))
+        if at < pause { return 0 }
+        if at < pause + travel { return CGFloat(at - pause) * speed }
+        if at < 2 * pause + travel { return overflow }
+        return overflow - CGFloat(at - 2 * pause - travel) * speed
     }
 }
 

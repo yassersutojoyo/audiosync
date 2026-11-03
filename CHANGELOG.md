@@ -11,6 +11,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
+- The main window's left column is narrower. As you widen the window, the speaker list grows to its full width first, then the left column grows back to its old width.
+- A long Now Playing title stays on one line and slowly scrolls to its end and back, so you can read all of it. With Reduce Motion on the Mac, or animation effects off on Windows, it's cut short with an ellipsis instead. The Now Playing card is shorter on Windows.
 - On Windows, a zone whose speakers all play through a stereo pair or home theater says "N playing in a pair" instead of "None of N found", as on the Mac.
 - On the Mac, when calibration can't use the microphone's sample rate, its message now says to set the microphone to 48 kHz in Audio MIDI Setup and try again.
 - On Windows, the notice for several apps that aren't running says they "are not running", and "all apps except" is written in lowercase in the middle of a notice's sentence. Text that asked you to quit and reopen or restart AudioSync now says to exit AudioSync and open it again, as File > Exit names it.
