@@ -61,6 +61,8 @@ zeroize = "1.8.1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
+    # StartupTask: Launch at Sign-In in an MSIX install (src/launch_at_login.rs).
+    "ApplicationModel",
     # The playing track for AirPlay receivers: Windows' media sessions, and
     # their artwork decoded, scaled and encoded as a JPEG
     # (src/audio/wasapi/media.rs, media_sessions.rs).
@@ -68,6 +70,8 @@ windows = { version = "0.62", features = [
     "Foundation_Collections",
     "Graphics_Imaging",
     "Media_Control",
+    # ApplicationData's folders: an MSIX install's data and debug log (src/package.rs).
+    "Storage_Search",
     "Storage_Streams",
     "Wdk_System_SystemServices",
     "Win32_Devices_FunctionDiscovery",
@@ -94,6 +98,8 @@ windows = { version = "0.62", features = [
     "Win32_Security_Cryptography",
     # MoveFileExW with write-through: the updater's swap (src/updater/files.rs).
     "Win32_Storage_FileSystem",
+    # GetCurrentPackageFullName: whether the app runs from an MSIX package.
+    "Win32_Storage_Packaging_Appx",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     # SetConsoleCtrlHandler: Ctrl-C or Ctrl-Break quits as Quit does (src/platform.rs).

@@ -35,9 +35,18 @@ pub const QUIT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 pub const RELEASE_PAGE: &str = "https://github.com/yassersutojoyo/audiosync/releases/latest";
 
 /// Whether this exe updates itself: only a build the release CI job made
-/// for a push to main or to a release/ branch, which sets `AUDIOSYNC_RELEASE_BUILD` to `1`.
+/// for a push to main or to a release/ branch, which sets `AUDIOSYNC_RELEASE_BUILD` to `1`,
+/// and never one that runs from an MSIX package.
 pub fn enabled() -> bool {
-    marked(option_env!("AUDIOSYNC_RELEASE_BUILD")) && !cfg!(test)
+    runs(
+        marked(option_env!("AUDIOSYNC_RELEASE_BUILD")),
+        crate::package::current(),
+    ) && !cfg!(test)
+}
+
+/// A package's files are read-only and the Microsoft Store updates them.
+fn runs(release: bool, package: Option<&crate::package::Package>) -> bool {
+    release && package.is_none()
 }
 
 fn marked(value: Option<&str>) -> bool {
@@ -752,6 +761,14 @@ pub fn install_dir() -> Option<PathBuf> {
 /// The updater of this exe, or `None` when it doesn't update itself.
 pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
     if !enabled() {
+        if let Some(package) = crate::package::current() {
+            log.log(|| {
+                format!(
+                    "updater: off: {} is updated by the Microsoft Store",
+                    package.full_name
+                )
+            });
+        }
         return None;
     }
     let install_dir = install_dir()?;
@@ -1029,6 +1046,19 @@ pub mod tests {
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../Info.plist"))
                 .expect("Info.plist is readable");
         assert!(plist.contains(&format!("<string>{FEED_URL}</string>")));
+    }
+
+    #[test]
+    fn a_packaged_copy_never_updates_itself() {
+        let package = crate::package::Package {
+            full_name: "AudioSync_0.8.0.0_x64__test".to_owned(),
+            local_folder: None,
+            local_cache: None,
+        };
+        assert!(!runs(true, Some(&package)));
+        assert!(!runs(false, Some(&package)));
+        assert!(runs(true, None));
+        assert!(!runs(false, None));
     }
 
     // covers: S296

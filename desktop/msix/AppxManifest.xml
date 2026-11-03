@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The MSIX package manifest for the Microsoft Store. scripts/make_msix.sh fills
+  in @VERSION@ from desktop/Cargo.toml.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  IgnorableNamespaces="uap uap3 rescap desktop uap10">
+
+  <!-- PLACEHOLDER: Name and Publisher come from Partner Center's Product identity page once the Store account exists. -->
+  <Identity
+    Name="PLACEHOLDER.AudioSync"
+    Publisher="CN=PLACEHOLDER-PARTNER-CENTER-PUBLISHER-ID"
+    Version="@VERSION@"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>AudioSync</DisplayName>
+    <!-- PLACEHOLDER: the publisher display name from Partner Center. -->
+    <PublisherDisplayName>PLACEHOLDER Publisher Display Name</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- 22000 is the first Windows 11 build, the oldest the app runs on (desktop/src/os_version.rs). -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="AudioSync" Executable="audiosync.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="AudioSync"
+        Description="Play your PC's sound on AirPlay speakers, Google Cast speakers and the PC's own outputs at the same time."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+      <Extensions>
+        <!-- Launch at Sign-In in a packaged install, where the Run key is virtualized (desktop/src/launch_at_login.rs). -->
+        <desktop:Extension Category="windows.startupTask" Executable="audiosync.exe" EntryPoint="Windows.FullTrustApplication" uap10:Parameters="--background">
+          <desktop:StartupTask TaskId="AudioSyncStartup" Enabled="false" DisplayName="AudioSync" />
+        </desktop:Extension>
+        <!-- audiosync.exe on the PATH, so a shell's environment (AUDIOSYNC_DEBUG) reaches the packaged app. -->
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="audiosync.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:AppExecutionAlias>
+            <desktop:ExecutionAlias Alias="audiosync.exe" />
+          </uap3:AppExecutionAlias>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- AirPlay and Cast speakers on the home network, and Web Remote's server that phones there connect to. -->
+    <Capability Name="privateNetworkClientServer" />
+    <!-- The same on a network Windows counts as Public. -->
+    <Capability Name="internetClientServer" />
+    <!-- audiosync.exe is a desktop app, so it runs with full trust rather than in an app container. -->
+    <rescap:Capability Name="runFullTrust" />
+    <!-- Calibrate with Microphone, and an input device as the source. -->
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>

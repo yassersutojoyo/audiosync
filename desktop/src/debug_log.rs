@@ -202,6 +202,18 @@ pub fn log_path(setting: Option<&OsStr>, dir: &Path) -> Option<PathBuf> {
     (setting == Some(OsStr::new("1"))).then(|| dir.join(FILE_NAME))
 }
 
+/// The log's folder: the temporary folder, or in an MSIX install the
+/// package's local cache folder, which goes with the package; the exe's
+/// copy may have a log in the temporary folder that Windows would open in
+/// place.
+#[cfg(any(not(target_os = "linux"), test))]
+fn log_dir(package: Option<&crate::package::Package>, temp: PathBuf) -> Option<PathBuf> {
+    match package {
+        Some(package) => package.local_cache.clone(),
+        None => Some(temp),
+    }
+}
+
 /// With `AUDIOSYNC_DEBUG=1`, set to `1` to keep auto-connect off for one
 /// launch, so a debug run never switches on the household's speakers.
 pub const NO_AUTO_CONNECT_VAR: &str = "AUDIOSYNC_NO_AUTO_CONNECT";
@@ -226,7 +238,8 @@ pub fn env_skips_auto_connect() -> bool {
 #[cfg(not(target_os = "linux"))]
 fn env_path() -> (Option<PathBuf>, Option<String>) {
     let setting = std::env::var_os(ENV_VAR);
-    (log_path(setting.as_deref(), &std::env::temp_dir()), None)
+    let dir = log_dir(crate::package::current(), std::env::temp_dir());
+    (dir.and_then(|dir| log_path(setting.as_deref(), &dir)), None)
 }
 
 /// On Linux the log lives in the state folder, which outlasts a sign-out
@@ -489,6 +502,24 @@ mod tests {
             assert_eq!(log_path(Some(OsStr::new(value)), dir), None, "{value:?}");
         }
         assert_eq!(log_path(None, dir), None);
+    }
+
+    #[test]
+    fn a_packaged_copy_logs_to_the_package_cache_folder_only() {
+        let temp = PathBuf::from("temp");
+        let package = crate::package::Package {
+            full_name: "AudioSync_0.8.0.0_x64__test".to_owned(),
+            local_folder: None,
+            local_cache: Some(PathBuf::from("package").join("LocalCache")),
+        };
+        assert_eq!(log_dir(Some(&package), temp.clone()), package.local_cache);
+        let no_cache = crate::package::Package {
+            local_cache: None,
+            ..package
+        };
+        // Never the temporary folder, which the exe's copy logs to.
+        assert_eq!(log_dir(Some(&no_cache), temp.clone()), None);
+        assert_eq!(log_dir(None, temp.clone()), Some(temp));
     }
 
     // covers: S170

@@ -54,6 +54,7 @@ mod network_profile;
 mod now_playing_card;
 mod os;
 mod os_version;
+mod package;
 mod placement;
 mod platform;
 mod remote;
@@ -148,6 +149,8 @@ fn main() -> ExitCode {
         )
     });
     log.log(|| format!("system: {}", platform::system_summary()));
+    #[cfg(windows)]
+    log.log(package::this_log_line);
     if let Some(version) = platform::windows_version()
         && !os_version::is_supported(version)
     {

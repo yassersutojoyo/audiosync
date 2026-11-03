@@ -150,9 +150,21 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// The app's data folder, [`FOLDER_NAME`] in its base, or `None` when the
 /// system names no folder for it (`crate::os::data_base`). The folder may
 /// not exist yet.
+///
+/// An MSIX install uses the package's local folder instead: Windows would
+/// open a file the exe's copy left in `%LOCALAPPDATA%\AudioSync` in place but
+/// put a renamed-over one in the package, splitting one store across both.
 #[cfg(os_backend)]
 pub fn folder() -> Option<PathBuf> {
-    crate::os::data_base().map(|base| base.join(FOLDER_NAME))
+    folder_for(crate::package::current(), crate::os::data_base())
+}
+
+#[cfg(os_backend)]
+fn folder_for(package: Option<&crate::package::Package>, base: Option<PathBuf>) -> Option<PathBuf> {
+    match package {
+        Some(package) => package.local_folder.clone(),
+        None => base.map(|base| base.join(FOLDER_NAME)),
+    }
 }
 
 /// A new file at `path` for writing; an error when anything is there,
@@ -242,6 +254,32 @@ pub fn copies_kept_aside(folder: &Path, stem: &str) -> Vec<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::debug_log::test_dir;
+
+    #[cfg(os_backend)]
+    #[test]
+    fn a_packaged_copy_keeps_its_data_in_the_package_folder_only() {
+        let base = PathBuf::from("local");
+        let package = crate::package::Package {
+            full_name: "AudioSync_0.8.0.0_x64__test".to_owned(),
+            local_folder: Some(PathBuf::from("package").join("LocalState")),
+            local_cache: None,
+        };
+        assert_eq!(
+            folder_for(Some(&package), Some(base.clone())),
+            package.local_folder
+        );
+        let no_folder = crate::package::Package {
+            local_folder: None,
+            ..package
+        };
+        // Never the unpackaged copy's folder, which Windows would share.
+        assert_eq!(folder_for(Some(&no_folder), Some(base.clone())), None);
+        assert_eq!(
+            folder_for(None, Some(base.clone())),
+            Some(base.join(FOLDER_NAME))
+        );
+        assert_eq!(folder_for(None, None), None);
+    }
 
     // covers: S385
     #[test]

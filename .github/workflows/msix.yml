@@ -1,0 +1,72 @@
+name: MSIX
+
+# Only a version tag or a manual run builds the Store package; branch pushes never run this.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: msix.yml-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SLINT_COMPILER_DENY_WARNINGS: '1'
+
+jobs:
+  msix:
+    name: Unsigned MSIX (x64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rust toolchain (stable, with the x86_64-pc-windows-msvc target)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version
+
+      # Left unmarked as a release build, so the updater stays off: the Store
+      # delivers updates to a packaged install.
+      - name: Build
+        working-directory: desktop
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc
+
+      - name: The executable carries the manifest and the version information
+        shell: pwsh
+        working-directory: desktop
+        run: |
+          $exe = (Resolve-Path "target/x86_64-pc-windows-msvc/release/audiosync.exe").Path
+          # The manifest is stored as plain text in the executable.
+          $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($exe))
+          foreach ($entry in '{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}', 'PerMonitorV2') {
+            if (-not $text.Contains($entry)) { throw "the embedded manifest lacks $entry" }
+          }
+          $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+          if ($info.ProductName -ne 'AudioSync') { throw "unexpected product name '$($info.ProductName)'" }
+          "audiosync.exe $($info.ProductVersion) for x64: manifest and version information present"
+
+      - name: Third-party notices (THIRD-PARTY-NOTICES.txt)
+        working-directory: desktop
+        run: python -I ../scripts/windows_notices.py x86_64-pc-windows-msvc
+
+      - name: Pack the MSIX
+        run: |
+          scripts/make_msix.sh \
+            desktop/target/x86_64-pc-windows-msvc/release/audiosync.exe \
+            desktop/target/x86_64-pc-windows-msvc/release/THIRD-PARTY-NOTICES.txt
+
+      - name: Upload the unsigned MSIX (workflow artifact, not a release)
+        uses: actions/upload-artifact@v5
+        with:
+          name: audiosync-msix-x64
+          path: dist/msix/*.msix
+          if-no-files-found: error

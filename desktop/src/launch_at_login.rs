@@ -3,6 +3,8 @@
 //! (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, documented in
 //! "Run and RunOnce Registry Keys") as a value named `AudioSync` that starts
 //! this exe with [`BACKGROUND_FLAG`], and removes that value to turn it off.
+//! An MSIX install, where Windows virtualizes that key, uses the package's
+//! startup task instead.
 //!
 //! What the menus show is read again from the registry, never kept in the
 //! settings, so a change made in Task Manager or Settings > Apps > Startup
@@ -345,13 +347,19 @@ fn settled(message: &NoticeMessage, status: Status) -> bool {
     }
 }
 
-/// The store the app uses: the registry on Windows, the autostart file on
-/// Linux, memory elsewhere and in tests, so no test reads or changes the
-/// user's startup list.
+/// The store the app uses: on Windows the package's startup task in an MSIX
+/// install (which virtualizes the Run key) and the registry otherwise, the
+/// autostart file on Linux, memory elsewhere and in tests, so no test reads
+/// or changes the user's startup list.
 pub fn system_store() -> Box<dyn StartupStore> {
     #[cfg(all(windows, not(test)))]
     {
-        Box::new(registry::RegistryStore)
+        let store: Box<dyn StartupStore> = if crate::package::current().is_some() {
+            Box::new(startup_task::StartupTaskStore::new())
+        } else {
+            Box::new(registry::RegistryStore)
+        };
+        store
     }
     #[cfg(all(target_os = "linux", not(test)))]
     {
@@ -537,6 +545,83 @@ mod registry {
             status
                 .is_ok()
                 .then(|| data[..(size as usize).min(data.len())].to_vec())
+        }
+    }
+}
+
+#[cfg(all(windows, not(test)))]
+mod startup_task {
+    use windows::ApplicationModel::{StartupTask, StartupTaskState};
+    use windows::core::HSTRING;
+
+    use super::StartupStore;
+
+    /// The `desktop:StartupTask` TaskId in desktop/msix/AppxManifest.xml.
+    const TASK_ID: &str = "AudioSyncStartup";
+
+    /// The package's startup task, which starts this exe in the background;
+    /// looked up once, since the menus read its state every few seconds.
+    pub struct StartupTaskStore(windows::core::Result<StartupTask>);
+
+    impl StartupTaskStore {
+        pub fn new() -> StartupTaskStore {
+            StartupTaskStore(
+                StartupTask::GetAsync(&HSTRING::from(TASK_ID)).and_then(|op| op.join()),
+            )
+        }
+
+        fn task(&self) -> Result<&StartupTask, String> {
+            self.0.as_ref().map_err(|e| e.to_string())
+        }
+
+        fn state(&self) -> Option<StartupTaskState> {
+            self.0.as_ref().ok()?.State().ok()
+        }
+    }
+
+    fn listed(state: StartupTaskState) -> bool {
+        matches!(
+            state,
+            StartupTaskState::Enabled
+                | StartupTaskState::EnabledByPolicy
+                | StartupTaskState::DisabledByUser
+        )
+    }
+
+    impl StartupStore for StartupTaskStore {
+        // The task can only start this exe, so a listed one reads as its command.
+        fn run_value(&self) -> Option<String> {
+            listed(self.state()?)
+                .then(super::own_exe)
+                .flatten()
+                .map(|exe| super::run_command(&exe))
+        }
+
+        fn set_run_value(&mut self, _: &str) -> Result<(), String> {
+            let state = self
+                .task()?
+                .RequestEnableAsync()
+                .and_then(|op| op.join())
+                .map_err(|e| e.to_string())?;
+            if listed(state) {
+                Ok(())
+            } else {
+                Err(format!("Windows kept the startup task off ({})", state.0))
+            }
+        }
+
+        fn remove_run_value(&mut self) -> Result<(), String> {
+            self.task()?.Disable().map_err(|e| e.to_string())?;
+            // Disable leaves a task a policy enabled as it was.
+            if self.state() == Some(StartupTaskState::EnabledByPolicy) {
+                return Err("a policy keeps the startup task on".to_owned());
+            }
+            Ok(())
+        }
+
+        // Turned off in Settings or Task Manager reads as StartupApproved's flag.
+        fn approval(&self) -> Option<Vec<u8>> {
+            (self.state()? == StartupTaskState::DisabledByUser).then(|| vec![1])
         }
     }
 }
