@@ -6513,6 +6513,17 @@ mod tests {
         );
     }
 
+    /// The sender picks AirPlay 2 or AirPlay 1 per speaker, so the File menu
+    /// offers no choice between them.
+    #[test]
+    fn the_file_menu_has_no_airplay2_item() {
+        let main = include_str!("../ui/main.slint");
+        assert!(
+            !main.contains("Strings.airplay2-"),
+            "the File menu still has an AirPlay 2 item"
+        );
+    }
+
     #[test]
     fn turning_airplay2_on_says_it_applies_at_the_next_launch_until_turned_back() {
         let app = app_over(MockBackend::new());
