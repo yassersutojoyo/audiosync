@@ -137,13 +137,8 @@ struct OutputGoneNotices {
         shown.insert(uid)
     }
 
-    /// Output `uid` started, and the sync clears its notice.
+    /// Output `uid` started, or its busy device left the list, and the sync clears its notice.
     mutating func started(_ uid: String) {
-        shown.remove(uid)
-    }
-
-    /// Output `uid`'s notice ended without a start: a busy device that left the list.
-    mutating func forget(_ uid: String) {
         shown.remove(uid)
     }
 
@@ -407,7 +402,7 @@ struct OutputRefusalRetry {
     /// Forgets the outputs switched off, and those whose device left the list,
     /// which S68 covers; listed again, a refusal starts its 30 s over. Returns
     /// the busy ones whose device left the list: their busy notice ends.
-    \discardableResult
+    @discardableResult
     mutating func settle(enabled: Set<String>, listed: Set<String>) -> Set<String> {
         let unlistedBusy = Set(entries.filter { $0.value.busy && !listed.contains($0.key) }.keys)
         entries = entries.filter { enabled.contains($0.key) && listed.contains($0.key) }

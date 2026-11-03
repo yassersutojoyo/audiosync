@@ -10594,11 +10594,12 @@ do {
     _ = hogRefusals.refused("bt", nowS: 130)
     var hogNotices = OutputGoneNotices()
     hogNotices.refusedLost("usb")
+    hogNotices.refusedLost("bt")
     let hogUnlisted = hogRefusals.settle(enabled: ["usb", "bt"], listed: [])
-    hogUnlisted.forEach { hogNotices.forget($0) }
+    hogUnlisted.forEach { hogNotices.started($0) }
     let hogSwitchedOff = hogNotices.settle(enabled: [], listed: [])
     // covers: S331
-    check(hogUnlisted == ["usb"] && hogSwitchedOff.clear.isEmpty && hogRefusals.held(nowS: 131).isEmpty,
+    check(hogUnlisted == ["usb"] && hogSwitchedOff.clear == ["bt"] && hogRefusals.held(nowS: 131).isEmpty,
           "S331 refused start: a busy device that leaves the list ends its busy notice; a refused one that isn't busy keeps its own",
           "\(hogUnlisted) \(hogSwitchedOff)")
 
