@@ -8785,6 +8785,11 @@ do {
     // covers: S228
     check(!untouched.rename(key: usb, to: longSystem, system: longSystem) && untouched.custom.isEmpty,
           "speaker names: a system name over 60 scalars typed again stores no name")
+    var cafeNames = SpeakerNames()
+    // covers: S228
+    check(cafeNames.rename(key: usb, to: "Cafe\u{0301}", system: "Caf\u{00E9}")
+              && cafeNames.renamed(key: usb)?.unicodeScalars.count == 5,
+          "speaker names: the system name typed in another Unicode form is kept as a name, as on Windows")
 
     stored.values[AppSettings.Keys.speakerNames] = ["a": 5, "b": "  ", "c": "Den"] as [String: Any]
     check(store.load().speakerNames.custom == ["c": "Den"],
