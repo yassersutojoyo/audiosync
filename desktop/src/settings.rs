@@ -669,8 +669,13 @@ where
     Ok(entries
         .into_iter()
         .filter_map(|(id, pair)| {
+            // A whole float such as 2.0 counts, as the Mac reads it.
             let pair = pair
                 .as_u64()
+                .or_else(|| {
+                    let pair = pair.as_f64().filter(|pair| pair.fract() == 0.0)?;
+                    Some(pair as u64)
+                })
                 .filter(|pair| (1..=MAX_INPUT_PAIR).contains(pair))?;
             Some((id, u16::try_from(pair).ok()?))
         })
@@ -2860,11 +2865,15 @@ mod tests {
 
         let text = r#"{"version": 2, "master_volume": 40, "input_pairs": {
             "kept": 2, "first": 0, "negative": -1, "text": "3", "half": 1.5,
-            "beyond": 512, "": 1
+            "beyond": 512, "": 1, "whole": 2.0, "two and a half": 2.5,
+            "float beyond": 512.0, "float zero": 0.0, "float negative": -1.0
         }}"#;
         let (read, found) = Settings::from_json(text).expect("one odd entry spoils nothing");
         assert_eq!(read.master_volume, 40.0);
-        assert_eq!(read.input_pairs, BTreeMap::from([("kept".to_owned(), 2)]));
+        assert_eq!(
+            read.input_pairs,
+            BTreeMap::from([("kept".to_owned(), 2), ("whole".to_owned(), 2)])
+        );
         assert_eq!(
             found,
             Loaded::Read {
