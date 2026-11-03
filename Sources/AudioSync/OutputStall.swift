@@ -122,7 +122,7 @@ enum OutputLoss: Equatable {
 /// Local outputs whose device went while they played (S68): each gets the
 /// disconnected notice at the next sync that no longer lists its device, so
 /// one listed again at once (a Core Audio restart) gets none. An output
-/// refused for 30 s (S331) gets it too. Main queue only.
+/// refused for 30 s (S331) gets it too, and a busy one's notice ends the same way. Main queue only.
 struct OutputGoneNotices {
     private var gone: Set<String> = []
     /// The outputs whose disconnected notice is up.
@@ -346,7 +346,8 @@ struct OutputRunawayReports {
 
 /// A listed output whose device refuses its start (S331): it stays on and is
 /// tried again every 3 s for as long as the user leaves it on; refused for
-/// 30 s, it counts as lost. Uptime, which stands still while the Mac sleeps.
+/// 30 s, it counts as lost, unless another process holds the device, which
+/// gets the busy notice at once instead. Uptime, which stands still while the Mac sleeps.
 /// Main queue only.
 struct OutputRefusalRetry {
     static let retryEveryS = 3.0
@@ -370,6 +371,7 @@ struct OutputRefusalRetry {
         var sinceS: Double
         var retryAtS: Double
         var lost: Bool
+        var busy: Bool
     }
 
     private var entries: [String: Entry] = [:]
@@ -377,11 +379,12 @@ struct OutputRefusalRetry {
     mutating func refused(_ uid: String, nowS: Double, busy: Bool = false) -> Step {
         let at = nowS + Self.retryEveryS
         guard let was = entries[uid] else {
-            entries[uid] = Entry(sinceS: nowS, retryAtS: at, lost: false)
-            return Step(retryAtS: at, tell: .refused)
+            entries[uid] = Entry(sinceS: nowS, retryAtS: at, lost: false, busy: busy)
+            return Step(retryAtS: at, tell: busy ? .busy : .refused)
         }
-        let lost = nowS - was.sinceS >= Self.lostAfterS
-        entries[uid] = Entry(sinceS: was.sinceS, retryAtS: at, lost: lost)
+        let lost = !busy && nowS - was.sinceS >= Self.lostAfterS
+        entries[uid] = Entry(sinceS: was.sinceS, retryAtS: at, lost: lost, busy: busy)
+        if busy { return Step(retryAtS: at, tell: was.busy ? nil : .busy) }
         return Step(retryAtS: at, tell: lost && !was.lost ? .lost : nil)
     }
 

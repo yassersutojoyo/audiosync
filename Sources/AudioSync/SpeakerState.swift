@@ -248,6 +248,7 @@ extension LocalOutputSync {
                 }
                 if known?.isRefusal == true {
                     failure.refusal = String(describing: startError)   // the host logs it once, not every 3 s
+                    failure.busy = known?.isBusy == true
                 } else {
                     DebugTrace.log("[AudioSync] local output \(uid) failed to start: \(startError)")
                 }
