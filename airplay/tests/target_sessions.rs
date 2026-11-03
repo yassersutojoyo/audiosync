@@ -727,6 +727,66 @@ fn a_member_refused_on_airplay1_moves_the_whole_target_to_airplay2() {
     sender.shutdown();
 }
 
+/// A sender that prefers AirPlay 2, as the host apps start it (P214).
+fn start_preferring() -> (Sender, HostAudio) {
+    let config = SenderConfig {
+        airplay2: true,
+        airplay2_preferred: true,
+        ..SenderConfig::default()
+    };
+    let (sender, writer) = Sender::start(config).expect("the sender starts");
+    (sender, HostAudio::start(writer))
+}
+
+fn dual_of(receiver: &NetReceiver, server: &Ap2Server, n: u8) -> Device {
+    let raop = receiver.record(n, PCM_TXT);
+    let airplay = airplay_record(server.address.port(), n, "0x0,0x10040");
+    Device::from_records(DeviceKey::Id(device_id(n)), Some(&raop), Some(&airplay)).expect("device")
+}
+
+fn records(server: &Ap2Server) -> usize {
+    let keys = server.fake().keys();
+    keys.iter().filter(|key| *key == "RECORD").count()
+}
+
+// covers: P231, P177
+#[test]
+fn a_speaker_that_fell_back_to_airplay1_joins_its_target_on_airplay2() {
+    let _serial = serial();
+    let (a1, b1) = (
+        NetReceiver::start(Behavior::default()),
+        NetReceiver::start(Behavior::default()),
+    );
+    let mut refusing_once = FakeAp2::new();
+    refusing_once.status_once.insert("RECORD".to_owned(), 403);
+    let a2 = Ap2Server::start(refusing_once);
+    let b2 = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start_preferring();
+    let mut events = Events::default();
+    let (da, db) = (dual_of(&a1, &a2, 1), dual_of(&b1, &b2, 2));
+    sender.add_speaker(da.clone(), options());
+    assert!(
+        playing(&mut events, &sender, &da.key, 1),
+        "{:?}",
+        events.of(&da.key)
+    );
+    assert_eq!(records(&a2), 1, "AirPlay 2 was tried first");
+
+    // The host hands the speaker to its pair while its session tears down.
+    sender.remove_speaker(&da.key);
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    sender.add_target(target, options(), |_, _| {});
+    assert!(
+        wait_until(LONG, || records(&b2) == 1),
+        "{:?}",
+        events.of(&db.key)
+    );
+    let both = wait_until(LONG, || records(&a2) == 2);
+    events.drain(&sender);
+    assert!(both, "both members on AirPlay 2: {:?}", events.of(&da.key));
+    sender.shutdown();
+}
+
 fn ptp_fake() -> FakeAp2 {
     let mut fake = FakeAp2::new();
     fake.info_body = plist(dict(&[
