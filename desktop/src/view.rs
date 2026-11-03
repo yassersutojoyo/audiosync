@@ -6741,6 +6741,59 @@ mod tests {
         );
     }
 
+    /// A focused Shuffle or Repeat button that goes when the player stops
+    /// taking it leaves no button marked as focused.
+    #[test]
+    fn a_mode_button_that_goes_drops_its_focus_mark() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{PlayModes, Repeat};
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::Off),
+        };
+        fake.read(Some(song.clone()));
+        app.poll();
+        draw_frames();
+        for (button, modes) in [
+            (
+                3,
+                PlayModes {
+                    shuffle: None,
+                    ..song.modes
+                },
+            ),
+            (
+                4,
+                PlayModes {
+                    repeat: None,
+                    ..song.modes
+                },
+            ),
+        ] {
+            fake.read(Some(song.clone()));
+            app.poll();
+            draw_frames();
+            app.main.set_now_playing_focused_button(button);
+            fake.read(Some(crate::now_playing_card::CardTrack {
+                modes,
+                ..song.clone()
+            }));
+            app.poll();
+            draw_frames();
+            assert_eq!(
+                app.main.get_now_playing_focused_button(),
+                -1,
+                "button {button}"
+            );
+        }
+    }
+
     /// With Shuffle and Repeat showing, all five buttons keep their size
     /// and fit inside the card at the default 776 px window.
     #[test]
