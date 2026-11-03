@@ -274,16 +274,21 @@ extension AppDelegate {
     /// New Zone from Active Speakers: the speakers that are on, in the
     /// windows' order, leave their zones for the new one.
     func promptNewZone() {
-        let layout = appModel.layout
-        let members = (layout.thisMac + layout.connected).filter(\.enabled).map(\.key)
-        guard !members.isEmpty else {
+        let outcome = NewZoneFromActive.run(
+            onKeys: {
+                let layout = appModel.layout
+                return (layout.thisMac + layout.connected).filter(\.enabled).map(\.key)
+            },
+            askName: { askZoneName(title: text.newZoneTitle, message: text.newZoneMessage, button: text.create) })
+        switch outcome {
+        case .needsSpeakers:
             menuBar?.close()
             showAlert(text.newZoneNeedsSpeakers, style: .informational)
-            return
+        case .cancelled:
+            break
+        case let .create(name, members):
+            addZone(named: name, members: members)
         }
-        guard let typed = askZoneName(title: text.newZoneTitle, message: text.newZoneMessage,
-                                      button: text.create) else { return }
-        addZone(named: typed, members: members)
     }
 
     /// New Zone… in a speaker's Move to Zone menu: a zone of that speaker.
