@@ -14885,8 +14885,9 @@ do {
     keptBrowsed.keep(den, addedAs: browsedRow, in: &keptBrowsedList)
     // covers: C18
     check(keptBrowsedList.addresses == [den] && keptBrowsed.manualAddresses[browsedRow] == den
+            && keptBrowsed.foundIDs[den.text] == browsedRow
             && keptBrowsed.removeManual(browsedRow) == den && keptBrowsed.devices[browsedRow] != nil,
-          "cast: Add by Address with the address of a speaker a browse lists keeps the address, and the row can be removed")
+          "cast: Add by Address with the address of a speaker a browse lists keeps the address and its id, and the row can be removed")
 
     let manualID = "manual:192.0.2.9:8009", realID = "00112233445566778899aabbccddeeff"
     let identified: (String) -> CastDeviceChange? = { former in

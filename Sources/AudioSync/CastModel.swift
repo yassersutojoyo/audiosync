@@ -722,6 +722,7 @@ struct CastModel {
     /// in place of an earlier one of the same device, also when a browse
     /// lists it already, so it comes back once multicast DNS fails (C18).
     mutating func keep(_ address: CastManualAddress, addedAs id: String, in list: inout CastManualList) {
+        if !id.hasPrefix(Self.manualPrefix) { foundIDs[address.text] = id }
         if let before = addedManually(id, address: address) { list.remove(before) }
         list.add(address)
     }
