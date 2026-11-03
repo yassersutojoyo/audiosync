@@ -365,6 +365,7 @@ final class NowPlayingMonitor {
     private let scripts = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.nowplaying")
     private var artworkCache: [String: NSImage] = [:]   // "bundleID|title|album" → image
     private var denied: Set<String> = []                 // players refusing our Apple Events
+    private var modeTerms: [String: Bool] = [:]          // whether a player's mode script compiles
     private lazy var consent: AutomationConsent = {
         let consent = AutomationConsent(queue: self.scripts) { app, mayPrompt, done in
             DispatchQueue.global(qos: .userInitiated).async { done(NowPlayingMonitor.sendConsentEvent(app, mayPrompt: mayPrompt)) }
@@ -636,6 +637,16 @@ final class NowPlayingMonitor {
                 end tell
             end timeout
             """
+        if modeTerms[bundleID] == nil {
+            var error: NSDictionary?
+            let compiles = NSAppleScript(source: script)?.compileAndReturnError(&error) ?? false
+            modeTerms[bundleID] = compiles
+            if !compiles {
+                DebugTrace.log("Now Playing: \(bundleID) lacks the shuffle or repeat terms, "
+                               + "so those buttons stay hidden: \(error.map { "\($0)" } ?? "")")
+            }
+        }
+        guard modeTerms[bundleID] == true else { return (nil, nil) }
         let parts = run(target: bundleID, script)?.stringValue?.components(separatedBy: sep) ?? []
         return parts.count == 2 ? Self.modes(bundleID, shuffle: parts[0], repeating: parts[1]) : (nil, nil)
     }
