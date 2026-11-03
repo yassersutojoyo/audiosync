@@ -1480,6 +1480,11 @@ do {
             && lookingText.networkSpeakersNote(airPlayNone: true, cast: .quiet, airPlaySearching: false)
                 == lookingText.airPlayNoneFound(),
           "AirPlay search: Connected Speakers says it is looking, not the network advice, during the first look")
+    check(lookingText.panelNoSpeakers(airPlaySearching: true, networkEmpty: lookingText.lookingForSpeakers)
+            == lookingText.lookingForSpeakers
+            && lookingText.panelNoSpeakers(airPlaySearching: false, networkEmpty: lookingText.airPlayNoneFound())
+                == lookingText.noSpeakers,
+          "AirPlay search: the empty menu bar panel says it is looking during the first look, \"No speakers found\" after")
     check(due(.denied, empty: t0, at: t0) == nil && due(.allowed, empty: t0, at: t0) == nil
             && due(.unknown, up: false, empty: t0, at: t0) == nil && due(.unknown, empty: nil, at: t0) == nil,
           "local network: no hint falls due when access is known, the engine isn't up or speakers were found (S101)")

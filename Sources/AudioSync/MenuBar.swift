@@ -1632,7 +1632,8 @@ struct MenuBarView: View {
             EmptyView()   // the problem below says why
         } else if count == 0 {
             Text(layout.thisMac.isEmpty
-                 ? (model.hidden.inThisMac || model.hidden.inConnected ? t.panelAllHidden : t.noSpeakers)
+                 ? (model.hidden.inThisMac || model.hidden.inConnected ? t.panelAllHidden
+                    : t.panelNoSpeakers(airPlaySearching: model.airplaySearching, networkEmpty: model.networkEmptyText))
                  : model.hidden.inConnected ? t.panelConnectedHidden : model.networkEmptyText)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)

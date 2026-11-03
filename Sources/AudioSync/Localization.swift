@@ -1168,6 +1168,11 @@ struct UIStrings {
     let deviceVolumeHelp = "macOS has its own volume for each output, and it limits AudioSync's slider."
 
     let noSpeakers = "No speakers found"
+    /// The menu bar panel's list with no speaker and nothing hidden.
+    /// `networkEmpty`: the main window's Connected Speakers note.
+    func panelNoSpeakers(airPlaySearching: Bool, networkEmpty: String) -> String {
+        noSpeakers
+    }
     let masterVolume = "Master volume"
     let openApp = "Open AudioSync"
     let quitApp = "Quit AudioSync"
