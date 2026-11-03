@@ -24,7 +24,7 @@ fn unset_variables_follow_the_builds_flag_with_the_switch_off() {
     assert!(!mode.switch);
     let config = mode.config();
     assert_eq!(config.airplay2, AIRPLAY2_AUTO);
-    assert!(!config.airplay2_preferred);
+    assert_eq!(config.airplay2_preferred, AIRPLAY2_AUTO);
     let airplay2_only = choice(None, None, Services::AirPlay2);
     if AIRPLAY2_AUTO {
         assert_eq!(
@@ -88,14 +88,14 @@ fn zero_and_other_values_read_as_the_apps_read_them() {
 }
 
 #[test]
-fn a_dual_receiver_stays_on_airplay1_until_the_switch_prefers_airplay2() {
+fn a_dual_receiver_takes_airplay2_while_the_flag_is_on() {
     assert_eq!(
         choice(Some("0"), None, Services::Both),
         "AirPlay 1 and 2, AirPlay 2 auto off -> AirPlay 1"
     );
     assert_eq!(
         choice(Some("1"), None, Services::Both),
-        "AirPlay 1 and 2, AirPlay 2 auto on -> AirPlay 1"
+        "AirPlay 1 and 2, AirPlay 2 auto on -> AirPlay 2"
     );
     assert_eq!(
         choice(Some("0"), Some("1"), Services::Both),

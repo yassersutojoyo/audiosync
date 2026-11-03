@@ -8436,7 +8436,7 @@ pub mod tests {
 
     // covers: S312
     #[test]
-    fn the_airplay2_flag_keeps_the_path_on_and_the_switch_prefers_airplay2() {
+    fn the_airplay2_flag_keeps_the_path_on_and_prefers_airplay2() {
         // Spec S312: with the flag off the switch alone sets the path.
         for (saved, env, on) in [
             (false, None, false),
@@ -8447,9 +8447,7 @@ pub mod tests {
             assert_eq!(config.airplay2, on);
             assert!(!config.airplay2_preferred);
         }
-        let off = airplay2_config(false, None, true);
-        assert!(off.airplay2 && !off.airplay2_preferred);
-        for (saved, env) in [(true, None), (false, Some("1"))] {
+        for (saved, env) in [(false, None), (true, None), (false, Some("1"))] {
             let on = airplay2_config(saved, env, true);
             assert!(on.airplay2 && on.airplay2_preferred);
         }
@@ -8457,12 +8455,12 @@ pub mod tests {
 
     // covers: S312
     #[test]
-    fn with_nothing_switched_the_path_is_on_and_airplay1_comes_first() {
+    fn with_nothing_switched_the_path_is_on_and_airplay2_comes_first() {
         let config = airplay2_config(false, None, airplay2_auto(None));
         assert!(config.airplay2, "AirPlay 2 only receivers play");
         assert!(
-            !config.airplay2_preferred,
-            "receivers that speak both take AirPlay 1"
+            config.airplay2_preferred,
+            "receivers that speak both take AirPlay 2"
         );
     }
 

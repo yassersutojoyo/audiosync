@@ -1,7 +1,7 @@
-//! AirPlay 2 per receiver (S312, P214) over loopback fake receivers: with
-//! the flag on, a device only AirPlay 2 can serve plays over AirPlay 2 while
-//! the switch is off, a device that speaks both stays on AirPlay 1 until the
-//! switch prefers AirPlay 2, and with the flag off nothing changes.
+//! AirPlay 2 per receiver (S312, P214, P231) over loopback fake receivers:
+//! with the flag on, every AirPlay 2 capable device plays over AirPlay 2
+//! whatever the switch says, a device that speaks both falling back to
+//! AirPlay 1, and with the flag off nothing changes.
 
 mod common;
 
@@ -149,7 +149,7 @@ fn play_dual(config: SenderConfig, id: u8) -> (Vec<String>, Vec<String>) {
 }
 
 #[test]
-fn the_flag_turns_the_path_on_and_the_switch_into_a_preference() {
+fn the_flag_turns_the_path_and_the_preference_on() {
     assert!(airplay2_auto(None), "on by default");
     assert_eq!(AIRPLAY2_AUTO_ENV, "AUDIOSYNC_AIRPLAY2_AUTO");
     assert!(airplay2_auto(Some("1")));
@@ -160,10 +160,13 @@ fn the_flag_turns_the_path_on_and_the_switch_into_a_preference() {
 
     let off = switch(true, false);
     assert!(off.airplay2, "the path is on with the switch off");
-    assert!(!off.airplay2_preferred);
+    assert!(
+        off.airplay2_preferred,
+        "AirPlay 2 is preferred with the switch off"
+    );
     let on = switch(true, true);
     assert!(on.airplay2);
-    assert!(on.airplay2_preferred, "the switch prefers AirPlay 2");
+    assert!(on.airplay2_preferred);
 }
 
 #[test]
@@ -182,11 +185,11 @@ fn with_the_flag_on_an_airplay2_only_device_plays_over_airplay2_with_the_switch_
 }
 
 #[test]
-fn with_the_flag_on_a_dual_device_stays_on_airplay1_with_the_switch_off() {
+fn with_the_flag_on_a_dual_device_plays_over_airplay2_with_the_switch_off() {
     let _serial = serial();
     let (ap1, ap2) = play_dual(switch(true, false), 62);
-    assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
-    assert!(ap2.is_empty(), "nothing over AirPlay 2: {ap2:?}");
+    assert!(ap1.is_empty(), "no AirPlay 1 attempt first: {ap1:?}");
+    assert!(ap2.contains(&"RECORD".to_owned()), "{ap2:?}");
 }
 
 /// The sender as the apps build it with no setting touched and no
@@ -213,11 +216,11 @@ fn with_nothing_switched_an_airplay2_only_device_plays_over_airplay2() {
 
 // covers: P2
 #[test]
-fn with_nothing_switched_a_dual_device_plays_over_airplay1() {
+fn with_nothing_switched_a_dual_device_plays_over_airplay2() {
     let _serial = serial();
     let (ap1, ap2) = play_dual(untouched(), 67);
-    assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
-    assert!(ap2.is_empty(), "nothing over AirPlay 2: {ap2:?}");
+    assert!(ap1.is_empty(), "no AirPlay 1 attempt first: {ap1:?}");
+    assert!(ap2.contains(&"RECORD".to_owned()), "{ap2:?}");
 }
 
 // covers: P214, P169

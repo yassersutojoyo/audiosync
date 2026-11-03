@@ -4769,12 +4769,9 @@ mod tests {
 
     // covers: S312
     #[test]
-    fn with_the_flag_on_the_path_is_on_and_the_switch_prefers_airplay2() {
-        assert!(!sender_config(false, None, None).airplay2_preferred);
-        let off = sender_config(false, None, Some("1"));
-        assert!(off.airplay2, "AirPlay 2 only receivers play");
-        assert!(!off.airplay2_preferred, "receivers that speak both stay");
-        for (setting, switch) in [(true, None), (false, Some("1"))] {
+    fn with_the_flag_on_the_path_is_on_and_airplay2_preferred() {
+        assert!(sender_config(false, None, None).airplay2_preferred);
+        for (setting, switch) in [(false, None), (true, None), (false, Some("1"))] {
             let on = sender_config(setting, switch, Some("1"));
             assert!(on.airplay2 && on.airplay2_preferred);
         }
@@ -4782,10 +4779,11 @@ mod tests {
 
     // covers: S312
     #[test]
-    fn with_the_flag_on_only_the_switch_lists_a_dual_receiver_on_airplay2() {
+    fn only_the_preference_lists_a_dual_receiver_on_airplay2() {
         let mut handle = create_with(quiet);
-        // The flag on, the switch off.
+        // The path on without the preference: the flag off, the switch on.
         inside(handle).airplay2 = true;
+        inside(handle).airplay2_preferred = false;
         let airplay = airplay2_only();
         let only =
             Device::from_records(airplay.device_key(), None, Some(&airplay)).expect("a device");
@@ -4806,7 +4804,7 @@ mod tests {
             "AirPlay 1 drives it"
         );
 
-        // The switch on prefers AirPlay 2.
+        // The flag on prefers AirPlay 2.
         inside(handle).airplay2_preferred = true;
         let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
         assert_ne!(report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2, 0);
@@ -4864,6 +4862,8 @@ mod tests {
     fn a_refusal_the_sender_didnt_remember_keeps_no_outcome() {
         let mut handle = create_with(quiet);
         inside(handle).airplay2 = true;
+        // Only without the preference does AirPlay 1 come first (P2).
+        inside(handle).airplay2_preferred = false;
         let airplay = airplay2_only();
         let own = raop("02005E005305", "Living Room", OPEN);
         let both = Device::from_records(airplay.device_key(), Some(&own), Some(&airplay))
@@ -4892,6 +4892,8 @@ mod tests {
     fn a_remembered_airplay1_outcome_survives_the_hosts_removal() {
         let mut handle = create_with(quiet);
         inside(handle).airplay2 = true;
+        // Only without the preference does AirPlay 1 come first (P2).
+        inside(handle).airplay2_preferred = false;
         let airplay = airplay2_only();
         let own = raop("02005E005305", "Living Room", OPEN);
         let both = Device::from_records(airplay.device_key(), Some(&own), Some(&airplay))
