@@ -4812,6 +4812,32 @@ mod tests {
         unsafe { asc_airplay_destroy(&mut handle) };
     }
 
+    // A dual Apple TV paired over AirPlay 1 stays there under the
+    // preference, so its PIN flags ask for nothing (P214).
+    // covers: P214
+    #[test]
+    fn a_dual_apple_tv_with_legacy_credentials_stays_on_airplay1_under_the_preference() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        inside(handle).airplay2_preferred = true;
+        let mut airplay = airplay2_only();
+        airplay.txt.push(b"flags=0x200".to_vec());
+        let own = raop("02005E005305", "Den TV", APPLE_TV);
+        let tv = Device::from_records(airplay.device_key(), Some(&own), Some(&airplay))
+            .expect("a device");
+        let credentials = audiosync_airplay::pairing::Credentials::new(
+            "0123456789ABCDEF",
+            [7; audiosync_airplay::pairing::SECRET_BYTES],
+        )
+        .expect("valid credentials");
+        let _ = inside(handle).store.insert("02005E005305", credentials);
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(ReceiverInfo::new(tv))));
+        assert_eq!(report.availability, AIRPLAY_AVAILABLE);
+        assert_eq!(report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2, 0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
     // covers: S313
     #[test]
     fn a_dual_receiver_is_listed_on_the_path_its_session_takes() {

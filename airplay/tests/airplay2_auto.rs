@@ -12,9 +12,10 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ProtocolPath, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
+use audiosync_airplay::pairing::{Credentials, SECRET_BYTES};
 use audiosync_airplay::sender::{
-    AIRPLAY2_AUTO, AIRPLAY2_AUTO_ENV, Sender, SenderConfig, SpeakerEvent, SpeakerOptions,
-    SpeakerState, airplay2_auto,
+    AIRPLAY2_AUTO, AIRPLAY2_AUTO_ENV, Sender, SenderConfig, SenderEvent, SpeakerEvent,
+    SpeakerOptions, SpeakerState, airplay2_auto,
 };
 use audiosync_airplay::volume::Volume;
 
@@ -334,4 +335,31 @@ fn a_dual_device_whose_airplay2_setup_is_refused_plays_over_airplay1() {
     assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
     // The host never hears the AirPlay 2 refusal, so it asks for nothing.
     assert_eq!(errors(&events, &key), [], "{:?}", events.of(&key));
+}
+
+// covers: P214
+#[test]
+fn a_dual_device_with_legacy_credentials_stays_on_airplay1_under_the_preference() {
+    let _serial = serial();
+    let airplay1 = NetReceiver::start(Behavior::default());
+    let server = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start(untouched());
+    let device = dual(&airplay1, &server, 71);
+    let key = device.key.clone();
+    let mut paired = options();
+    paired.credentials =
+        Some(Credentials::new("0123456789ABCDEF", [7; SECRET_BYTES]).expect("credentials"));
+    sender.add_speaker(device, paired);
+    let mut events = Events::default();
+    let path = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Path(_) } if *k == key)
+    });
+    sender.shutdown();
+    assert_eq!(
+        path,
+        Some(SenderEvent::Speaker {
+            key,
+            event: SpeakerEvent::Path(ProtocolPath::AirPlay1),
+        })
+    );
 }

@@ -4882,6 +4882,35 @@ pub mod tests {
             .expect("a device")
     }
 
+    /// An Apple TV that speaks both: a RAOP service with the legacy
+    /// pairing and an AirPlay service whose flags ask for a PIN.
+    pub fn dual_apple_tv(id: u8, name: &str) -> Device {
+        let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
+        let address = vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)))];
+        let raop = ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: format!("{device_id}@{name}"),
+            host: format!("speaker-{id}.local"),
+            port: 7000,
+            txt: APPLE_TV_TXT.iter().map(|s| s.as_bytes().to_vec()).collect(),
+            addresses: address.clone(),
+        };
+        let airplay = ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: name.to_owned(),
+            host: format!("speaker-{id}.local"),
+            port: 7000,
+            txt: vec![
+                format!("deviceid={device_id}").into_bytes(),
+                b"features=0x0,0x40".to_vec(),
+                b"flags=0x200".to_vec(),
+            ],
+            addresses: address,
+        };
+        Device::from_records(DeviceKey::Id(device_id), Some(&raop), Some(&airplay))
+            .expect("a device")
+    }
+
     /// The ID the backend gives `device`.
     pub fn id_of(device: &Device) -> String {
         speaker_id(&device.key)
@@ -6613,6 +6642,30 @@ pub mod tests {
         second.appear(&den);
         airplay.poll();
         assert!(airplay.speakers()[0].airplay2, "Retry ended the session");
+    }
+
+    /// A dual Apple TV paired over AirPlay 1 stays there under the AirPlay 2
+    /// preference, so its PIN flags ask for nothing (P214).
+    // covers: P214
+    #[test]
+    fn a_dual_apple_tv_with_legacy_credentials_stays_open_under_the_preference() {
+        use crate::audio::pairings::tests::credentials;
+
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        fake.set_airplay2_preferred(true);
+        let tv = dual_apple_tv(16, "Den TV");
+        let id = id_of(&tv);
+        let mut store = PairingStore::in_memory();
+        store
+            .insert(&id, credentials("0123456789ABCDEF", 0xA5))
+            .expect("stored");
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        let row = &airplay.speakers()[0];
+        assert_eq!(row.availability, AirPlayAvailability::Open);
+        assert!(!row.airplay2, "AirPlay 1 plays it");
     }
 
     // covers: P177, P218, S313
