@@ -45,7 +45,7 @@ enum MainColumns {
 
     /// The gap between the Now Playing buttons, `modes` while Shuffle or
     /// Repeat shows.
-    static func transportSpacing(modes: Bool) -> CGFloat { 28 }
+    static func transportSpacing(modes: Bool) -> CGFloat { modes ? 16 : 28 }
 }
 
 /// A Now Playing title too long for its line scrolls: it rests at its start,

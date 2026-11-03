@@ -1232,7 +1232,8 @@ component NowPlayingCard inherits Card {
 
         HorizontalLayout {
             alignment: center;
-            spacing: 20px;
+            // Five buttons fit the narrow left column only this close.
+            spacing: root.shuffle >= 0 || root.repeat >= 0 ? 4px : 20px;
 
             if root.shuffle >= 0: IconButton {
                 glyph: Glyphs.shuffle;
