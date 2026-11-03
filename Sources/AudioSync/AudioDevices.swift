@@ -214,9 +214,22 @@ struct AudioDevices: Sendable {
 /// switch of either, such as a headset that reconnects, is logged from the
 /// old device's UID to the new one's.
 struct DefaultDeviceLog {
+    private var last: [String: String] = [:]
+
     /// The line for `role`'s default now being `uid` (nil: none), or nil when it is the one last seen.
     mutating func note(_ role: String, uid: String?) -> String? {
-        nil
+        let now = uid ?? "none"
+        let before = last.updateValue(now, forKey: role)
+        guard before != now else { return nil }
+        return "default \(role) device: " + (before.map { "\($0) → " } ?? "") + now
+    }
+
+    /// The UID of macOS's default device for `selector` (`kAudioHardwarePropertyDefaultOutputDevice`
+    /// or `…InputDevice`), nil when there is none.
+    static func uid(_ selector: AudioObjectPropertySelector) -> String? {
+        guard let id = HALProperty.uint32(of: AudioObjectID(kAudioObjectSystemObject), selector),
+              id != kAudioObjectUnknown else { return nil }
+        return HALProperty.string(of: id, kAudioDevicePropertyDeviceUID)
     }
 }
 

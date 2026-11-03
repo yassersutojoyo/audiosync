@@ -325,6 +325,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     /// The listeners on Core Audio's system object, by property, so a service
     /// restart can remove them before it adds them again.
     private var systemListeners: [(AudioObjectPropertySelector, AudioObjectPropertyListenerBlock)] = []
+    /// The default output and input last logged (`observeDefaultDevices`).
+    private var defaultDevices = DefaultDeviceLog()
     /// The app quits macOS or the capture already reported (`appQuit`).
     private var quitReports = AppLifecycle.QuitReports()
     /// The source picker's input lines last written to the debug log (`pushSources`).
@@ -656,6 +658,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         if status == noErr { systemListeners.append((kAudioHardwarePropertyDevices, listener)) }
         if status != noErr { DebugTrace.log("[AudioSync] device list listener not added: \(status)") }
         observeServiceRestart()
+        observeDefaultDevices()
+    }
+
+    /// Logs every change of macOS's default output and input: a source app
+    /// that follows the default re-routes then, which can pause what it plays.
+    private func observeDefaultDevices() {
+        for (selector, role) in [(kAudioHardwarePropertyDefaultOutputDevice, "output"),
+                                 (kAudioHardwarePropertyDefaultInputDevice, "input")] {
+            let logChange = { [weak self] in
+                guard let line = self?.defaultDevices.note(role, uid: DefaultDeviceLog.uid(selector)) else { return }
+                DebugTrace.log("[AudioSync] " + line)
+            }
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                     mElement: kAudioObjectPropertyElementMain)
+            let listener: AudioObjectPropertyListenerBlock = { _, _ in logChange() }
+            let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address,
+                                                             DispatchQueue.main, listener)
+            if status == noErr { systemListeners.append((selector, listener)) }
+            if status != noErr { DebugTrace.log("[AudioSync] default \(role) device listener not added: \(status)") }
+            logChange()
+        }
     }
 
     /// Core Audio's server restarted (S335): every device object is new, and
