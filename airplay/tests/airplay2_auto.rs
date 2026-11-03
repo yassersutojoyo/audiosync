@@ -314,3 +314,21 @@ fn with_the_flag_off_everything_stays_as_today() {
         assert!(ap2.is_empty(), "switch {on}: {ap2:?}");
     }
 }
+
+// covers: P231
+#[test]
+fn a_dual_device_whose_airplay2_setup_is_refused_plays_over_airplay1() {
+    let _serial = serial();
+    let airplay1 = NetReceiver::start(Behavior::default());
+    let mut refusing = FakeAp2::new();
+    refusing.status.insert("RECORD".to_owned(), 403);
+    let server = Ap2Server::start(refusing);
+    let (sender, _host) = start(switch(true, true));
+    let (events, key) = play(&sender, dual(&airplay1, &server, 70));
+    sender.shutdown();
+    assert!(server.fake().keys().contains(&"RECORD".to_owned()));
+    let ap1 = airplay1_keys(&airplay1);
+    assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
+    // The host never hears the AirPlay 2 refusal, so it asks for nothing.
+    assert_eq!(errors(&events, &key), [], "{:?}", events.of(&key));
+}
