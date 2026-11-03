@@ -1153,6 +1153,46 @@ fn the_guide_describes_several_apps_and_now_playing_on_both_hosts() {
     }
 }
 
+// covers: S416
+#[test]
+fn the_guide_has_the_ten_topics_the_spec_names() {
+    let help = include_str!("../ui/help.slint");
+    let strings = include_str!("../ui/strings.slint");
+    let topics = [
+        ("start", "First Steps"),
+        ("sync", "Sync"),
+        ("calibration", "Calibration"),
+        ("volume", "Volume"),
+        ("bluetooth", "Bluetooth"),
+        ("double", "Hearing Sound Twice"),
+        ("more", "More Controls"),
+        ("airplay", "AirPlay"),
+        ("remote", "Web Remote"),
+        ("notices", "Notices"),
+    ];
+    for (key, title) in topics {
+        assert!(
+            help.contains(&format!("title: Strings.help-{key}-title;")),
+            "the Guide shows the {title} topic"
+        );
+        assert!(
+            strings.contains(&format!(
+                "out property <string> help-{key}-title: @tr(\"{title}\");"
+            )),
+            "the {key} topic is titled {title}"
+        );
+    }
+    let shown = help
+        .lines()
+        .filter(|line| {
+            line.trim_start().starts_with("title: Strings.help-")
+                && line.contains("-title;")
+                && !line.contains("Strings.help-title;")
+        })
+        .count();
+    assert_eq!(shown, topics.len(), "the Guide shows no other topic");
+}
+
 /// The Windows and Linux Guides name a Cast group's members, a zone's
 /// double-click rename, AirPlay 2 code pairing and the AirPlay volume
 /// scale, as the Mac Guide does.

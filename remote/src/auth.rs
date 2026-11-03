@@ -1221,6 +1221,44 @@ mod tests {
 
     // covers: S372
     #[test]
+    fn a_copy_kept_aside_takes_the_next_number_when_its_name_is_taken() {
+        let path = scratch("auth-kept-aside-numbered");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let taken = path.with_file_name("remote-devices.ignored-1800000000.json");
+        fs::write(&taken, "earlier").unwrap();
+        for (bytes, name) in [
+            (&b"second"[..], "remote-devices.ignored-1800000000-2.json"),
+            (&b"third"[..], "remote-devices.ignored-1800000000-3.json"),
+        ] {
+            let copy = keep_aside(&path, bytes, 1_800_000_000).unwrap();
+            assert_eq!(copy, path.with_file_name(name));
+            assert_eq!(fs::read(&copy).unwrap(), bytes);
+        }
+        assert_eq!(fs::read(&taken).unwrap(), b"earlier");
+    }
+
+    // covers: S372
+    #[test]
+    fn while_the_copy_fails_the_save_writes_nothing() {
+        // A name the file system takes but whose copy name is too long for it.
+        let path = scratch("auth-copy-fails").with_file_name(format!("{}.json", "d".repeat(240)));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let token = random_token().unwrap();
+        let text = json!({ "version": 1, "devices": [hex(&token_hash(&token)), "zz"] }).to_string();
+        fs::write(&path, &text).unwrap();
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), day_zero());
+        let snapshot = store.take_rewrite().expect("the bad entry is written out");
+        assert!(DeviceFile::default().save(snapshot).is_err());
+        assert_eq!(fs::read(&path).unwrap(), text.into_bytes());
+        let files: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(files, [path]);
+    }
+
+    // covers: S372
+    #[test]
     fn an_unreadable_device_costs_only_that_device_and_the_file_is_kept_aside_first() {
         let path = scratch("auth-one-bad-device");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
