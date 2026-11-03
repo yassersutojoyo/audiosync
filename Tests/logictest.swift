@@ -7210,6 +7210,32 @@ do {
     }
 }
 
+// MARK: Main window columns and the Now Playing title (WindowRules.swift)
+do {
+    let columns = { (width: CGFloat) -> String in
+        let split = MainColumns.split(window: width)
+        return "\(Int(split.left)) + \(Int(split.right))"
+    }
+    check(columns(696) == "210 + 430",
+          "main window: at its narrowest the left column is narrow and the speaker list takes the rest", columns(696))
+    check(columns(790) == "210 + 524",
+          "main window: a wider window widens the speaker list first, to its full width", columns(790))
+    check(columns(825) == "245 + 524",
+          "main window: past the speaker list's full width the left column widens", columns(825))
+    check(columns(860) == "280 + 524" && columns(900) == "280 + 564",
+          "main window: the left column stops at 280 pt and the speaker list takes the rest",
+          "\(columns(860)), \(columns(900))")
+
+    check(Marquee.overflow(text: 300, line: 200) == 100 && Marquee.overflow(text: 150, line: 200) == 0
+            && Marquee.overflow(text: 300, line: 0) == 0,
+          "now playing: a title scrolls by what runs past its line, never before the line is laid out")
+    let marquee = [0, 1.9, 3, 4, 5.9, 7, 8, 9.9, 11].map { Marquee.offset(elapsed: $0, overflow: 60) }
+    check(marquee == [0, 0, 30, 60, 60, 30, 0, 0, 30],
+          "now playing: a long title rests 2 s, scrolls 30 pt a second to its end, rests 2 s and scrolls back",
+          "\(marquee)")
+    check(Marquee.offset(elapsed: 5, overflow: 0) == 0, "now playing: a title that fits stays put")
+}
+
 // MARK: Windows and the view model (WindowRules.swift)
 // covers: S211, S212, S214
 do {

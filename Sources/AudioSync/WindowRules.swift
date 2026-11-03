@@ -22,6 +22,42 @@ enum WindowPlacement {
     }
 }
 
+/// How the main window's width splits between its two columns. The speaker
+/// list widens first, to its full width, then the left column, from
+/// `narrow` up to `wide`; past that the speaker list again.
+enum MainColumns {
+    /// Where the master volume slider's track ended in the 280 pt left
+    /// column: 209.5 pt, measured on docs/images/main-window-light.png.
+    static let narrow: CGFloat = 210
+    static let wide: CGFloat = 280
+    /// The speaker list's width in the widest window, 860 pt.
+    static let speakerListFull: CGFloat = 524
+
+    /// The left column's and the speaker list's widths in a window `width` points wide.
+    static func split(window width: CGFloat) -> (left: CGFloat, right: CGFloat) {
+        let room = width - 2 * BrandTokens.Spacing.windowMargin - BrandTokens.Spacing.columnGap
+        return (wide, room - wide)
+    }
+}
+
+/// A Now Playing title too long for its line scrolls: it rests at its start,
+/// moves to its end at `speed`, rests there, moves back, and repeats.
+enum Marquee {
+    /// Points a second.
+    static let speed: CGFloat = 30
+    static let pause: TimeInterval = 2
+
+    /// How far the title runs past its line; 0 when it fits or the line isn't laid out yet.
+    static func overflow(text: CGFloat, line: CGFloat) -> CGFloat {
+        0
+    }
+
+    /// How far the title has moved left `elapsed` seconds after it showed.
+    static func offset(elapsed: TimeInterval, overflow: CGFloat) -> CGFloat {
+        0
+    }
+}
+
 /// What a click on the menu bar icon does to its panel. The press on the icon
 /// closes the popover before the click itself arrives, and AppKit may drop
 /// that click's action or still deliver it. A click whose press is the one

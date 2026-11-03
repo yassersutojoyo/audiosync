@@ -6642,6 +6642,68 @@ mod tests {
         assert_eq!(fake.following(), None, "nothing is read while hidden");
     }
 
+    /// A wider window widens the speaker list first, to its full 644 px,
+    /// then the left column, from where its master volume track ended in
+    /// the 268 px column (208 px) back to 268 px.
+    #[test]
+    fn the_main_window_widens_the_speaker_list_before_the_left_column() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        let widths = |window: f32| {
+            app.main
+                .window()
+                .set_size(slint::LogicalSize::new(window, 680.0));
+            let width = |id: &str| element(&app, id).map_or(0.0, |column| column.size().width);
+            (
+                width("MainWindow::left-column"),
+                width("MainWindow::scroll"),
+            )
+        };
+        assert_eq!(widths(776.0), (208.0, 524.0), "at its narrowest");
+        assert_eq!(widths(896.0), (208.0, 644.0), "the speaker list first");
+        assert_eq!(widths(926.0), (238.0, 644.0), "then the left column");
+        assert_eq!(widths(956.0), (268.0, 644.0));
+        assert_eq!(widths(1100.0), (268.0, 644.0));
+    }
+
+    /// A Now Playing title too long for its line stays on one line and
+    /// scrolls: it rests 2 s at its start, then moves 30 px a second.
+    #[test]
+    fn a_long_now_playing_title_scrolls_on_one_line() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use i_slint_backend_testing::ElementHandle;
+        let title = "A title far too long for the one line the Now Playing card gives it";
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        hold_clock();
+        draw_frames();
+        fake.read(Some(track("Spotify.exe", title, "Band", true)));
+        app.poll();
+        draw_frames();
+        let text = || {
+            ElementHandle::find_by_accessible_label(&app.main, title)
+                .next()
+                .expect("the title")
+        };
+        let height = text().size().height;
+        assert!(height < 30.0, "one line, {height} px high");
+        let start = text().absolute_position().x;
+        advance_clock(Duration::from_millis(1900));
+        draw_frames();
+        assert_eq!(text().absolute_position().x, start, "it rests at its start");
+        advance_clock(Duration::from_millis(1100));
+        draw_frames();
+        let moved = start - text().absolute_position().x;
+        assert!(
+            (moved - 30.0).abs() < 1.0,
+            "30 px in its first second, moved {moved}"
+        );
+    }
+
     // covers: S421
     #[test]
     fn a_reading_the_sessions_report_shows_in_the_window_before_the_poll_and_is_logged() {
