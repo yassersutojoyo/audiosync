@@ -1825,9 +1825,10 @@ struct UIStrings {
           preset curves and curves you save yourself. It shapes the sound on
           every speaker at once.
         - Now Playing: while Spotify or Music is open with a track, the window
-          shows it with play/pause and skip, and AirPlay speakers with a
-          screen, such as a TV, show its title and artwork. Other apps aren't
-          shown: macOS doesn't let apps read the system-wide Now Playing info.
+          shows it with play/pause, skip, shuffle and repeat, and AirPlay
+          speakers with a screen, such as a TV, show its title and artwork.
+          Other apps aren't shown: macOS doesn't let apps read the
+          system-wide Now Playing info.
           macOS asks once for Automation access to Spotify or Music.
         - Virtual devices (loopback drivers, meeting apps, aggregate devices) are
           hidden unless you use them; Show Virtual Devices in the gear menu
