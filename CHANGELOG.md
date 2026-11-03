@@ -30,6 +30,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - When the input is unplugged before any sound arrives, only the notice that it's not connected shows. Before, the waiting-for-audio notice showed next to it, on the Mac even when it came up first and on Windows when it was already showing.
 - On the Mac, a channel pair you pick while the input is unplugged plays once it's plugged back in, as on Windows. Before, the old pair could play while the picker showed the new one, or streaming stopped.
 - On the Mac, when the last speaker goes off while you type a preset's name, Save says to turn on the speakers you want in the preset first, as on Windows. Before, the preset wasn't saved and nothing said so.
+- On the Mac, a Bluetooth speaker that stops playing and drops off now shows that it was disconnected, as on Windows. Before, its row stayed on with no notice.
 
 ## [0.8.0] - 2026-11-02
 

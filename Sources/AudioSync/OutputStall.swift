@@ -132,6 +132,14 @@ struct OutputGoneNotices {
         gone.insert(uid)
     }
 
+    /// The engine dropped output `uid` for `loss` while its speaker stays on.
+    /// A stall or a runaway counts too, since a Bluetooth device can leave the
+    /// list with its alive flag still true (S334); a format change keeps it listed.
+    mutating func lost(_ uid: String, _ loss: OutputLoss) {
+        if case .formatChanged = loss { return }
+        deviceGone(uid)
+    }
+
     mutating func refusedLost(_ uid: String) {
         shown.insert(uid)
     }

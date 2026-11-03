@@ -5787,6 +5787,26 @@ do {
               "EC1 unplug: the disconnected notice ends when the speaker is switched off or streaming stops; one that played again keeps none",
               "\(switchedOff) \(stopped) \(afterStop)")
     }
+    // covers: S68, S334 (a stall or a runaway whose device then leaves the list gets the disconnected notice, as on Windows)
+    do {
+        var lossNotices = OutputGoneNotices()
+        var lossRetry = OutputStallRetry()
+        lossNotices.lost("bt", .stalled(quietS: 2, sign: .none))
+        lossNotices.lost("usb", .ranAway(percent: 60))
+        lossNotices.lost("hdmi", .stalled(quietS: 2, sign: .none))
+        let lossStep = lossRetry.stalled("hdmi", nowS: 10)
+        lossRetry.settle(enabled: ["bt", "usb", "hdmi"], listed: ["hdmi"], nowS: 10.1)
+        let lossLeft = lossNotices.settle(enabled: ["bt", "usb", "hdmi"], listed: ["hdmi"])
+        lossRetry.started("hdmi", nowS: 10.5)
+        let lossStayed = lossNotices.settle(enabled: ["bt", "usb", "hdmi"], listed: ["hdmi"])
+        lossNotices.lost("hdmi", .formatChanged(old: OutputDeviceFormat(rate: 48000, channels: 2),
+                                                new: OutputDeviceFormat(rate: 44100, channels: 2)))
+        let lossFormat = lossNotices.settle(enabled: ["bt", "usb", "hdmi"], listed: [])
+        check(lossLeft.post == ["bt", "usb"] && lossStayed.post.isEmpty && lossFormat.post.isEmpty
+                && lossStep == .reopenNow && lossRetry.tracked == ["hdmi"],
+              "EC2 Bluetooth: a stall or a runaway whose device leaves the list gets the disconnected notice; one still listed is reopened with none",
+              "\(lossLeft) \(lossStayed) \(lossFormat) \(lossStep) \(lossRetry.tracked)")
+    }
     check(LocalOutputSync.plan(enabled: ["usb"], active: [], available: ["usb", "builtin"]) == P(attach: ["usb"], detach: []),
           "EC1 replug: the speaker is attached again once its device is listed")
     check(LocalOutputSync.plan(enabled: [], active: ["usb"], available: ["usb"]) == P(attach: [], detach: ["usb"]),
