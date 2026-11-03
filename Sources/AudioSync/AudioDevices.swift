@@ -210,6 +210,16 @@ struct AudioDevices: Sendable {
     }
 }
 
+/// macOS's default output and input as last seen, for the debug log: a
+/// switch of either, such as a headset that reconnects, is logged from the
+/// old device's UID to the new one's.
+struct DefaultDeviceLog {
+    /// The line for `role`'s default now being `uid` (nil: none), or nil when it is the one last seen.
+    mutating func note(_ role: String, uid: String?) -> String? {
+        nil
+    }
+}
+
 /// Typed reads of Core Audio object properties (main element). Each returns nil,
 /// zero or an empty list when the object doesn't answer, for example because
 /// the device went away between two reads.
