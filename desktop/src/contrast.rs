@@ -631,13 +631,10 @@ fn keyboard_shortcuts_are_declared() {
 /// the PTP ports, and the note that discovery has found
 /// no speaker yet (alone, or with Google Cast's in one sentence), which
 /// shows only while it runs, as does the note that it still looks. The note and row state for a speaker waiting
-/// for the one AirPlay 2 slot show only behind the AirPlay 2 switch, whose
-/// File menu item says it is experimental, as do the notice that turning
-/// the item on or off applies at the next launch and its short name.
-/// The item reads AirPlay 2 (Experimental) with the flag on or off (spec S313).
-/// The row note and notice for a speaker that plays only AirPlay 2 name
-/// that item, and show only for a receiver the sender found; so does the
-/// note on a zone's stereo pair or home theater that needs it.
+/// for the one AirPlay 2 slot show only while the sender's AirPlay 2 path
+/// is on. The row note and notice for a speaker that plays only AirPlay 2
+/// show only for a receiver the sender found; so does the note on a zone's
+/// stereo pair or home theater that needs it.
 /// The calibration results' AirPlay lines, a zone run's line on whom the
 /// shared AirPlay delay moves included, show only when an AirPlay speaker
 /// took part, so the sender ran. The live input note shows only while an
@@ -660,7 +657,6 @@ fn no_text_promises_airplay() {
                 || line.contains("doesn't support yet")
                 || line.contains("return @tr(\"{} plays only AirPlay 2, so it's off.")
                 || line.contains("return @tr(\"AirPlay 2 is off\");")
-                || line.contains("return @tr(\"AirPlay 2 is off until AudioSync reopens\");")
                 || line.contains("property <string> airplay-delay-")
                 || line
                     .contains("notice-airplay-stopped: @tr(\"AirPlay stopped or couldn't start.")
@@ -694,14 +690,7 @@ fn no_text_promises_airplay() {
                     "waits while AudioSync plays to AirPlay 2 speakers on another network."
                 )
                 || line.contains("@tr(\"Waiting: AirPlay 2 speakers on another network\")")
-                || line.contains("airplay2-experimental: @tr(\"AirPlay 2 (Experimental)\")")
-                || line.contains("airplay2-prefer: @tr(\"Prefer AirPlay 2\")")
                 || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
-                || line.contains("property <string> notice-airplay2-on-next-launch: @tr(")
-                || line.contains("property <string> notice-airplay2-off-next-launch: @tr(")
-                || line.contains("property <string> notice-airplay2-prefer-on-next-launch: @tr(")
-                || line.contains("property <string> notice-airplay2-prefer-off-next-launch: @tr(")
-                || line.contains("return @tr(\"AirPlay 2 after restart\");")
                 || line.contains(
                     "network-none-found: root.public-network ? \
                      @tr(\"No AirPlay or Google Cast speakers found yet.",
@@ -720,8 +709,6 @@ fn no_text_promises_airplay() {
                     "help-airplay-title",
                     "help-airplay",
                     "help-airplay-linux",
-                    "help-airplay-prefer",
-                    "help-airplay-linux-prefer",
                     "help-calibration",
                     "help-calibration-linux",
                 ]
@@ -1218,12 +1205,7 @@ fn the_guide_matches_the_mac_guide_on_groups_zones_codes_and_volume() {
                 .contains("AirPlay speakers use the AirPlay volume scale.")
         );
     }
-    for name in [
-        "help-airplay",
-        "help-airplay-prefer",
-        "help-airplay-linux",
-        "help-airplay-linux-prefer",
-    ] {
+    for name in ["help-airplay", "help-airplay-linux"] {
         assert!(
             text(name)
                 .contains("An Apple TV, or a speaker reached over AirPlay 2, that asks for a code")

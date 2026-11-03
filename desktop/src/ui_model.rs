@@ -776,10 +776,6 @@ pub enum NoticeMessage {
     /// The Run value is written, but Task Manager or Settings has AudioSync
     /// turned off as a startup app; it is turned on again there.
     LaunchAtLoginOffInSettings,
-    /// File > AirPlay 2 (Experimental) was turned on (`on`) or off, which
-    /// applies once AudioSync is quit and opened again; `prefer`: the item
-    /// is Prefer AirPlay 2, under the AirPlay 2 flag (spec S313).
-    AirPlay2NextLaunch { on: bool, prefer: bool },
     /// The web remote listens while a connected network is Public, where
     /// anyone on it can reach the pairing page.
     RemoteOnPublicNetwork,
@@ -819,7 +815,6 @@ impl NoticeMessage {
             self,
             Self::SourceSwitched { .. }
                 | Self::WaitingForAudio { .. }
-                | Self::AirPlay2NextLaunch { .. }
                 | Self::GroupsBecameZones
                 | Self::Update(
                     UpdaterNotice::Available { .. }
@@ -1841,12 +1836,6 @@ pub trait Backend {
         false
     }
 
-    /// Whether the AirPlay 2 item reads Prefer AirPlay 2 (spec S313): not
-    /// until a relabel is decided, though AirPlay 2 is automatic (S312).
-    fn airplay2_auto(&self) -> bool {
-        false
-    }
-
     /// The windows' own settings changed; they are saved with the rest.
     fn set_view_settings(&mut self, _settings: ViewSettings) {}
 
@@ -1916,9 +1905,6 @@ pub struct ViewSettings {
     pub window: Option<WindowFrame>,
     /// File > Web Remote.
     pub remote: crate::remote::RemoteSettings,
-    /// File > AirPlay 2 (Experimental), as saved; the sender reads it at
-    /// launch only.
-    pub airplay2_experimental: bool,
     /// File > Check for Updates Automatically.
     pub check_updates_automatically: bool,
     /// The last update check that read the appcast, Unix seconds.
@@ -3469,13 +3455,6 @@ mod tests {
     #[test]
     fn only_notices_that_report_a_change_show_the_info_glyph() {
         assert!(NoticeMessage::GroupsBecameZones.reports_a_change());
-        assert!(
-            NoticeMessage::AirPlay2NextLaunch {
-                on: true,
-                prefer: false
-            }
-            .reports_a_change()
-        );
         assert!(
             NoticeMessage::SourceSwitched {
                 source: SourceName::Named("Spotify".into())

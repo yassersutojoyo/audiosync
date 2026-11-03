@@ -26,10 +26,8 @@ pub fn backend<D: Driver + 'static>(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,
     );
-    // Read at launch only, like the Mac: a change applies at the next launch.
     let read = settings_file.load();
-    let airplay2 = read.0.airplay2_experimental;
-    start_airplay(&mut audio, airplay2, log);
+    start_airplay(&mut audio, log);
     let (cast_file, cast_unread) = start_cast(&mut audio, log);
     audio.set_track_reader(track_reader);
     audio.set_receiver_labels(labels.clone());
@@ -141,19 +139,19 @@ fn receiver_labels(strings: &Strings<'_>) -> ReceiverLabels {
 /// which keeps the way to start a new one when the user retries. Without a
 /// sender the app runs on with local outputs only; without discovery no
 /// AirPlay speaker is listed.
-fn start_airplay<D: Driver>(audio: &mut Controller<D>, airplay2: bool, log: &DebugLog) {
+fn start_airplay<D: Driver>(audio: &mut Controller<D>, log: &DebugLog) {
     let starter_log = log.clone();
     audio.start_airplay(
-        Box::new(move || start_sender(airplay2, &starter_log)),
+        Box::new(move || start_sender(&starter_log)),
         open_pairings(log),
     );
 }
 
 /// A new AirPlay sender, browsing for receivers when its discovery could
 /// start, and the feed for its input; `None` when it couldn't start.
-fn start_sender(airplay2: bool, log: &DebugLog) -> Option<audio::airplay::StartedSender> {
+fn start_sender(log: &DebugLog) -> Option<audio::airplay::StartedSender> {
     use audio::airplay::{FeedSlot, SenderLink, StartedSender};
-    let (link, input) = match SenderLink::start(airplay2) {
+    let (link, input) = match SenderLink::start() {
         Ok(started) => started,
         Err(error) => {
             log.log(|| format!("AirPlay: the sender couldn't start: {error}"));

@@ -113,20 +113,12 @@ struct UiState {
     appearance: ui_model::Appearance,
     /// File > Web Remote.
     remote: crate::remote::RemoteSettings,
-    /// File > AirPlay 2 (Experimental) as saved, which applies at the next
-    /// launch.
-    airplay2_experimental: bool,
-    /// What the item was at launch: the mode the running sender has.
-    airplay2_at_launch: bool,
     /// File > Check for Updates Automatically, as saved.
     check_updates_automatically: bool,
     /// The last update check that read the appcast, Unix seconds.
     last_update_check: Option<u64>,
     /// The version the updater stopped offering at launch (spec S316).
     update_record: Option<ui_model::UpdateRecord>,
-    /// Says the item applies at the next launch, while it differs from
-    /// `airplay2_at_launch`.
-    airplay2_notice: Option<ui_model::Notice>,
     /// A message the name dialog couldn't show while it asked for a name.
     dialog_notice: Option<ui_model::Notice>,
     listed_virtual: ListedVirtual,
@@ -431,12 +423,9 @@ const LOGIN_CHECK: Duration = Duration::from_secs(2);
 /// The Settings page where Windows turns startup apps on or off.
 const STARTUP_APPS_PAGE: &str = "ms-settings:startupapps";
 
-/// The AirPlay 2 (Experimental) notice's id, next to Launch at Sign-In's
+/// The web remote's Public network notice's id, next to Launch at Sign-In's
 /// and as far from the backend's.
-const AIRPLAY2_NOTICE_ID: u64 = launch_at_login::NOTICE_ID - 1;
-
-/// The web remote's Public network notice's id, next to those.
-const REMOTE_PUBLIC_NOTICE_ID: u64 = AIRPLAY2_NOTICE_ID - 1;
+const REMOTE_PUBLIC_NOTICE_ID: u64 = launch_at_login::NOTICE_ID - 2;
 
 /// The Windows updater's notice's id, next to those.
 const UPDATER_NOTICE_ID: u64 = REMOTE_PUBLIC_NOTICE_ID - 1;
@@ -1178,9 +1167,6 @@ impl App {
     fn every_notice(&self) -> AppState {
         let mut state = self.backend.borrow().snapshot();
         state.notices.extend(self.login.borrow().notice().cloned());
-        state
-            .notices
-            .extend(self.ui.borrow().airplay2_notice.clone());
         state.notices.extend(self.remote_public_notice());
         state.notices.extend(self.updater_notice());
         state.notices.extend(self.ui.borrow().dialog_notice.clone());
@@ -1239,11 +1225,8 @@ impl App {
 
     /// Dismisses the window's own notice `id`; false if it is the backend's.
     fn dismiss_own_notice(&self, id: u64) -> bool {
-        let airplay2 =
-            id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
         let dialog = id == DIALOG_NOTICE_ID && self.ui.borrow_mut().dialog_notice.take().is_some();
-        airplay2
-            || dialog
+        dialog
             || self.login.borrow_mut().dismiss(id)
             || self.dismiss_remote_notice(id)
             || self.dismiss_updater_notice(id)
@@ -1347,17 +1330,9 @@ impl App {
         self.remember_view();
         let changed = self.backend.borrow_mut().poll();
         if self.backend.borrow_mut().take_view_restored() {
-            let (remote, airplay2, airplay2_at_launch) = {
-                let ui = self.ui.borrow();
-                (ui.remote, ui.airplay2_experimental, ui.airplay2_at_launch)
-            };
-            // The window keeps its frame, and the sender its AirPlay 2 path.
+            let remote = self.ui.borrow().remote;
+            // The window keeps its frame.
             self.restore_view(false);
-            self.ui.borrow_mut().airplay2_at_launch = airplay2_at_launch;
-            let read = self.ui.borrow().airplay2_experimental;
-            if read != airplay2 {
-                self.set_airplay2_experimental(read);
-            }
             if self.ui.borrow().remote != remote {
                 self.restore_remote_again();
             }
@@ -1876,7 +1851,6 @@ impl App {
                 .map_or_else(SharedString::default, |kind| {
                     calibration_left_out(&strings, kind)
                 });
-            row.availability = with_switch(row.availability, ui.airplay2_experimental);
             row.cast_group_note = cast_group_note(&strings, speaker);
             row.group_note = group_note(&strings, speaker);
             if let Some(zone) = state.zone_of(&speaker.id) {
@@ -1981,7 +1955,6 @@ impl App {
             })
             .collect();
         let show_virtual = ui.show_virtual;
-        let airplay2_experimental = ui.airplay2_experimental;
         let check_updates_automatically = ui.check_updates_automatically;
         let airplay_typed = ui
             .airplay_delay_draft
@@ -2248,7 +2221,6 @@ impl App {
         }
         self.main.set_equalizer_on(state.equalizer.enabled);
         self.main.set_show_virtual_devices(show_virtual);
-        self.main.set_airplay2_experimental(airplay2_experimental);
         self.main.set_launch_at_login(self.login.borrow().is_on());
         self.main.set_updater_available(self.has_updater());
         self.help.set_updater_available(self.has_updater());
@@ -2890,10 +2862,6 @@ impl App {
         let w = weak.clone();
         main.on_notice_update_button_pressed(move |button| {
             with_app(&w, |app| app.press_update_button(button))
-        });
-        let w = weak.clone();
-        main.on_airplay2_experimental_toggled(move |on| {
-            with_app(&w, |app| app.set_airplay2_experimental(on))
         });
         let w = weak.clone();
         main.on_notice_guide_requested(move |id| with_app(&w, |app| app.show_guide(id)));
@@ -3673,36 +3641,6 @@ impl App {
         self.refresh();
     }
 
-    /// Saved for the next launch: the running sender keeps the mode it
-    /// started with, which a notice says until the item is back to it.
-    fn set_airplay2_experimental(&self, on: bool) {
-        let prefer = self.backend.borrow().airplay2_auto();
-        {
-            let mut ui = self.ui.borrow_mut();
-            ui.airplay2_experimental = on;
-            ui.airplay2_notice = (on != ui.airplay2_at_launch).then(|| ui_model::Notice {
-                id: AIRPLAY2_NOTICE_ID,
-                subject: "AirPlay 2 (Experimental)".to_owned(),
-                message: NoticeMessage::AirPlay2NextLaunch { on, prefer },
-                time: crate::platform::notice_time(),
-                post: ui_model::next_post(),
-            });
-        }
-        self.log.log(|| {
-            format!(
-                "{}: turned {}; applies at the next launch",
-                if prefer {
-                    "Prefer AirPlay 2"
-                } else {
-                    "AirPlay 2 (experimental)"
-                },
-                if on { "on" } else { "off" }
-            )
-        });
-        self.remember_view();
-        self.refresh();
-    }
-
     fn show_virtual_devices(&self, on: bool) {
         {
             let mut ui = self.ui.borrow_mut();
@@ -3748,7 +3686,6 @@ impl App {
             appearance: self.ui.borrow().appearance,
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
             remote: self.ui.borrow().remote,
-            airplay2_experimental: self.ui.borrow().airplay2_experimental,
             check_updates_automatically: self.ui.borrow().check_updates_automatically,
             last_update_check: self.ui.borrow().last_update_check,
             update_record: self.ui.borrow().update_record.clone(),
@@ -3765,14 +3702,9 @@ impl App {
     /// Without `with_frame` the main window keeps its size and place.
     fn restore_view(&self, with_frame: bool) {
         let saved = self.backend.borrow().view_settings();
-        let airplay2_auto = self.backend.borrow().airplay2_auto();
-        self.main.set_airplay2_auto(airplay2_auto);
-        self.help.set_airplay2_auto(airplay2_auto);
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
         self.ui.borrow_mut().appearance = saved.appearance;
         self.ui.borrow_mut().remote = saved.remote;
-        self.ui.borrow_mut().airplay2_experimental = saved.airplay2_experimental;
-        self.ui.borrow_mut().airplay2_at_launch = saved.airplay2_experimental;
         self.ui.borrow_mut().check_updates_automatically = saved.check_updates_automatically;
         self.ui.borrow_mut().last_update_check = saved.last_update_check;
         self.ui.borrow_mut().update_record = saved.update_record.clone();
@@ -4986,16 +4918,6 @@ fn availability(a: ui_model::Availability) -> Availability {
     }
 }
 
-/// A receiver that needs AirPlay 2 while the switch is on: this launch runs
-/// without it, and the next one plays it.
-fn with_switch(availability: Availability, airplay2_switch: bool) -> Availability {
-    if airplay2_switch && availability == Availability::Airplay2NotYet {
-        Availability::Airplay2NextLaunch
-    } else {
-        availability
-    }
-}
-
 fn airplay_problem(problem: ui_model::AirPlayProblem) -> AirPlayProblem {
     use ui_model::AirPlayProblem as P;
     match problem {
@@ -5991,12 +5913,6 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::LaunchAtLoginOffInSettings => {
             strings.get_notice_launch_at_login_off_in_settings()
         }
-        NoticeMessage::AirPlay2NextLaunch { on, prefer } => match (on, prefer) {
-            (true, false) => strings.get_notice_airplay2_on_next_launch(),
-            (false, false) => strings.get_notice_airplay2_off_next_launch(),
-            (true, true) => strings.get_notice_airplay2_prefer_on_next_launch(),
-            (false, true) => strings.get_notice_airplay2_prefer_off_next_launch(),
-        },
         NoticeMessage::RemoteOnPublicNetwork => strings.get_remote_public_network(),
         NoticeMessage::GroupsBecameZones => strings.get_notice_groups_became_zones(),
         NoticeMessage::Update(notice) => update_notice_text(strings, notice),
@@ -6173,7 +6089,6 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
         NoticeMessage::LaunchAtLoginFailed => (NoticeKind::LaunchAtLoginFailed, ""),
         NoticeMessage::LaunchAtLoginNotRemoved => (NoticeKind::LaunchAtLoginNotRemoved, ""),
         NoticeMessage::LaunchAtLoginOffInSettings => (NoticeKind::LaunchAtLoginOffInSettings, ""),
-        NoticeMessage::AirPlay2NextLaunch { .. } => (NoticeKind::Airplay2NextLaunch, ""),
         NoticeMessage::RemoteOnPublicNetwork => (NoticeKind::RemotePublicNetwork, ""),
         NoticeMessage::GroupsBecameZones => (NoticeKind::GroupsBecameZones, ""),
         NoticeMessage::Update(_) => (NoticeKind::Update, ""),
@@ -6524,60 +6439,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn turning_airplay2_on_says_it_applies_at_the_next_launch_until_turned_back() {
-        let app = app_over(MockBackend::new());
-        assert!(app.snapshot().notices.is_empty());
-
-        app.main.invoke_airplay2_experimental_toggled(true);
-        let notices = app.snapshot().notices;
-        assert_eq!(notices.len(), 1);
-        assert_eq!(
-            notices[0].message,
-            NoticeMessage::AirPlay2NextLaunch {
-                on: true,
-                prefer: false
-            }
-        );
-        assert_eq!(app.main.get_notices().row_count(), 1);
-        let strings = app.main.global::<Strings>();
-        assert_eq!(
-            notice_item(&strings, &notices[0]).message,
-            "AirPlay 2 (Experimental) is on. Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you exit AudioSync and open it again."
-        );
-        let mut off = notices[0].clone();
-        off.message = NoticeMessage::AirPlay2NextLaunch {
-            on: false,
-            prefer: false,
-        };
-        assert_eq!(
-            notice_item(&strings, &off).message,
-            "AirPlay 2 (Experimental) is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you exit AudioSync and open it again."
-        );
-        // Under the AirPlay 2 flag the item is Prefer AirPlay 2 (spec S313).
-        let mut preferred = notices[0].clone();
-        preferred.message = NoticeMessage::AirPlay2NextLaunch {
-            on: false,
-            prefer: true,
-        };
-        assert_eq!(
-            notice_item(&strings, &preferred).message,
-            "Prefer AirPlay 2 is off. Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you exit AudioSync and open it again."
-        );
-
-        app.main.invoke_airplay2_experimental_toggled(false);
-        assert!(app.snapshot().notices.is_empty());
-        assert_eq!(app.main.get_notices().row_count(), 0);
-
-        app.main.invoke_airplay2_experimental_toggled(true);
-        app.main.invoke_notice_dismissed(AIRPLAY2_NOTICE_ID as i32);
-        assert!(app.snapshot().notices.is_empty());
-        assert!(
-            app.ui.borrow().airplay2_experimental,
-            "dismissing keeps it on"
-        );
-    }
-
     // covers: P213
     #[test]
     fn the_now_playing_play_pause_tells_the_backend_what_the_card_showed() {
@@ -6846,16 +6707,11 @@ mod tests {
         let file = ViewSettings {
             appearance: ui_model::Appearance::Dark,
             show_virtual_devices: true,
-            airplay2_experimental: true,
             ..ViewSettings::default()
         };
         *late_view.borrow_mut() = Some(file.clone());
         app.poll();
         assert_eq!(app.main.get_appearance(), crate::Appearance::Dark);
-        assert!(
-            app.ui.borrow().airplay2_notice.is_some(),
-            "the sender keeps its path until the next launch"
-        );
         app.save_settings();
         assert_eq!(app.backend.borrow().view_settings(), file);
     }
@@ -7772,19 +7628,6 @@ mod tests {
     }
 
     #[test]
-    fn an_airplay2_row_waits_for_the_next_launch_once_the_switch_is_on() {
-        assert_eq!(
-            with_switch(Availability::Airplay2NotYet, false),
-            Availability::Airplay2NotYet
-        );
-        assert_eq!(
-            with_switch(Availability::Airplay2NotYet, true),
-            Availability::Airplay2NextLaunch
-        );
-        assert_eq!(with_switch(Availability::Open, true), Availability::Open);
-    }
-
-    #[test]
     fn a_calibrations_ending_is_announced_once() {
         let mut announced = None;
         let mut calibration = ui_model::CalibrationState {
@@ -8168,15 +8011,11 @@ mod tests {
                 "{note}"
             );
         }
-        for guide in [
-            strings.get_help_airplay(),
-            strings.get_help_airplay_prefer(),
-        ] {
-            assert!(
-                guide.contains("Windows Firewall allows AudioSync"),
-                "{guide}"
-            );
-        }
+        assert!(
+            strings
+                .get_help_airplay()
+                .contains("Windows Firewall allows AudioSync")
+        );
         strings.set_public_network(true);
         assert!(
             strings
@@ -8186,8 +8025,8 @@ mod tests {
     }
 
     /// The Guide's AirPlay section says what the sender does: AirPlay 2
-    /// speakers play by default, and the switch keeps its label.
-    // covers: S312, S313
+    /// speakers play by default, and no AirPlay 2 switch is named.
+    // covers: S312
     #[test]
     fn the_airplay_guide_plays_airplay_2_by_default() {
         let app = app_over(MockBackend::new());
@@ -8195,9 +8034,10 @@ mod tests {
         for guide in [strings.get_help_airplay(), strings.get_help_airplay_linux()] {
             assert!(!guide.contains("off at first"), "{guide}");
             assert!(
-                guide.contains("unless AirPlay 2 (Experimental), in the File menu, is on"),
+                guide.contains("uses AirPlay 2, or AirPlay 1 when it was paired over AirPlay 1"),
                 "{guide}"
             );
+            assert!(!guide.contains("(Experimental)"), "{guide}");
         }
     }
 
@@ -14265,14 +14105,6 @@ mod tests {
             NoticeMessage::LaunchAtLoginFailed,
             NoticeMessage::LaunchAtLoginNotRemoved,
             NoticeMessage::LaunchAtLoginOffInSettings,
-            NoticeMessage::AirPlay2NextLaunch {
-                on: true,
-                prefer: false,
-            },
-            NoticeMessage::AirPlay2NextLaunch {
-                on: false,
-                prefer: true,
-            },
             NoticeMessage::RemoteOnPublicNetwork,
         ];
         for message in messages {
@@ -15676,12 +15508,12 @@ mod tests {
             time: "09.40".into(),
             post: 0,
         };
-        let airplay2 = notice(
-            AIRPLAY2_NOTICE_ID,
-            "AirPlay 2 (Experimental)",
-            NoticeMessage::AirPlay2NextLaunch {
-                on: true,
-                prefer: false,
+        let dialog = notice(
+            DIALOG_NOTICE_ID,
+            "dialog",
+            NoticeMessage::DialogMessage {
+                title: "Rename".to_owned(),
+                text: "Taken".to_owned(),
             },
         );
         let capture = notice(1, "source", NoticeMessage::CaptureLost);
@@ -15690,8 +15522,8 @@ mod tests {
             &strings,
             &[
                 &[],
-                std::slice::from_ref(&airplay2),
-                &[capture, airplay2.clone()],
+                std::slice::from_ref(&dialog),
+                &[capture, dialog.clone()],
             ],
         );
         assert!(tooltip.ends_with(&format!("Notice: {title}")), "{tooltip}");
@@ -15759,12 +15591,12 @@ mod tests {
             backend.post(subject, NoticeMessage::CaptureLost, "09.40");
         }
         let app = app_over(backend);
-        app.ui.borrow_mut().airplay2_notice = Some(ui_model::Notice {
-            id: AIRPLAY2_NOTICE_ID,
-            subject: "AirPlay 2 (Experimental)".to_owned(),
-            message: NoticeMessage::AirPlay2NextLaunch {
-                on: true,
-                prefer: false,
+        app.ui.borrow_mut().dialog_notice = Some(ui_model::Notice {
+            id: DIALOG_NOTICE_ID,
+            subject: "dialog".to_owned(),
+            message: NoticeMessage::DialogMessage {
+                title: "Rename".to_owned(),
+                text: "Taken".to_owned(),
             },
             time: "09.41".to_owned(),
             post: 0,
@@ -15773,44 +15605,38 @@ mod tests {
         let id = |item: Option<NoticeItem>| item.map(|n| n.id as u64);
         assert_eq!(
             id(app.main.get_notices().row_data(0)),
-            Some(AIRPLAY2_NOTICE_ID)
+            Some(DIALOG_NOTICE_ID)
         );
         assert_eq!(app.main.get_notices().row_count(), MAIN_NOTICE_LIMIT);
         assert_eq!(
             id(app.flyout.get_notices().row_data(0)),
-            Some(AIRPLAY2_NOTICE_ID)
+            Some(DIALOG_NOTICE_ID)
         );
     }
 
     /// The notice the main window and the flyout list first after a window
-    /// notice posted at `times[0]`, one posted after it at `times[1]` and
-    /// the first one posted again at `times[2]`.
-    fn first_after_a_window_repost(times: [&str; 3]) -> (Option<u64>, Option<u64>) {
+    /// notice posted at `times[0]`, a backend notice posted after it and the
+    /// first one posted again at `times[1]`.
+    fn first_after_a_window_repost(times: [&str; 2]) -> (Option<u64>, Option<u64>) {
         let app = app_over(MockBackend::new());
-        let airplay2 = |time: &str| ui_model::Notice {
-            id: AIRPLAY2_NOTICE_ID,
-            subject: "AirPlay 2 (Experimental)".to_owned(),
-            message: NoticeMessage::AirPlay2NextLaunch {
-                on: true,
-                prefer: false,
-            },
-            time: time.to_owned(),
-            post: ui_model::next_post(),
-        };
-        app.ui.borrow_mut().airplay2_notice = Some(airplay2(times[0]));
-        app.refresh();
-        app.ui.borrow_mut().dialog_notice = Some(ui_model::Notice {
+        app.update(|b| b.set_speaker_enabled("local:desk", true));
+        app.save_preset("Evening");
+        app.update(|b| b.hide_speaker("local:desk", "USB"));
+        let dialog = |time: &str| ui_model::Notice {
             id: DIALOG_NOTICE_ID,
             subject: "dialog".to_owned(),
             message: NoticeMessage::DialogMessage {
                 title: "Rename".to_owned(),
                 text: "Taken".to_owned(),
             },
-            time: times[1].to_owned(),
+            time: time.to_owned(),
             post: ui_model::next_post(),
-        });
+        };
+        app.ui.borrow_mut().dialog_notice = Some(dialog(times[0]));
         app.refresh();
-        app.ui.borrow_mut().airplay2_notice = Some(airplay2(times[2]));
+        app.recall_preset(&preset_ids(&app)[0]);
+        app.refresh();
+        app.ui.borrow_mut().dialog_notice = Some(dialog(times[1]));
         app.refresh();
         let id = |item: Option<NoticeItem>| item.map(|n| n.id as u64);
         (
@@ -15824,9 +15650,9 @@ mod tests {
     // covers: S153
     #[test]
     fn a_window_notice_reposted_after_another_moves_to_the_top() {
-        let first = Some(AIRPLAY2_NOTICE_ID);
+        let first = Some(DIALOG_NOTICE_ID);
         assert_eq!(
-            first_after_a_window_repost(["09.40", "09.41", "09.42"]),
+            first_after_a_window_repost(["09.40", "09.42"]),
             (first, first)
         );
     }
@@ -15836,9 +15662,9 @@ mod tests {
     // covers: S153
     #[test]
     fn a_window_notice_reposted_in_the_same_minute_moves_to_the_top() {
-        let first = Some(AIRPLAY2_NOTICE_ID);
+        let first = Some(DIALOG_NOTICE_ID);
         assert_eq!(
-            first_after_a_window_repost(["09.41", "09.41", "09.41"]),
+            first_after_a_window_repost(["09.41", "09.41"]),
             (first, first)
         );
     }
@@ -15854,23 +15680,19 @@ mod tests {
         }
         let app = app_over(backend);
         let oldest = app.snapshot().notices.last().map(|n| n.id);
-        app.ui.borrow_mut().airplay2_notice = Some(ui_model::Notice {
-            id: AIRPLAY2_NOTICE_ID,
-            subject: "AirPlay 2 (Experimental)".to_owned(),
-            message: NoticeMessage::AirPlay2NextLaunch {
-                on: true,
-                prefer: false,
+        app.ui.borrow_mut().dialog_notice = Some(ui_model::Notice {
+            id: DIALOG_NOTICE_ID,
+            subject: "dialog".to_owned(),
+            message: NoticeMessage::DialogMessage {
+                title: "Rename".to_owned(),
+                text: "Taken".to_owned(),
             },
             time: "09.41".to_owned(),
             post: 0,
         });
         app.refresh();
         let listed: Vec<u64> = app.main.get_notices().iter().map(|n| n.id as u64).collect();
-        assert_eq!(
-            listed.first(),
-            Some(&AIRPLAY2_NOTICE_ID),
-            "the newest stays"
-        );
+        assert_eq!(listed.first(), Some(&DIALOG_NOTICE_ID), "the newest stays");
         assert!(!listed.contains(&oldest.unwrap()), "the oldest dropped off");
         assert_eq!(app.main.get_notices().row_count(), MAIN_NOTICE_LIMIT);
         assert_eq!(
@@ -15923,12 +15745,12 @@ mod tests {
         app.update(|b| b.set_speaker_enabled("local:desk", true));
         app.save_preset("Evening");
         app.update(|b| b.hide_speaker("local:desk", "USB"));
-        app.ui.borrow_mut().airplay2_notice = Some(ui_model::Notice {
-            id: AIRPLAY2_NOTICE_ID,
-            subject: "AirPlay 2 (Experimental)".to_owned(),
-            message: NoticeMessage::AirPlay2NextLaunch {
-                on: true,
-                prefer: false,
+        app.ui.borrow_mut().dialog_notice = Some(ui_model::Notice {
+            id: DIALOG_NOTICE_ID,
+            subject: "dialog".to_owned(),
+            message: NoticeMessage::DialogMessage {
+                title: "Rename".to_owned(),
+                text: "Taken".to_owned(),
             },
             time: "09.40".to_owned(),
             post: 0,
@@ -15937,7 +15759,7 @@ mod tests {
         let id = |item: Option<NoticeItem>| item.map(|n| n.id as u64);
         assert_eq!(
             id(app.main.get_notices().row_data(0)),
-            Some(AIRPLAY2_NOTICE_ID)
+            Some(DIALOG_NOTICE_ID)
         );
 
         app.recall_preset(&preset_ids(&app)[0]);
@@ -15946,7 +15768,7 @@ mod tests {
             .snapshot()
             .notices
             .iter()
-            .find(|n| n.id != AIRPLAY2_NOTICE_ID)
+            .find(|n| n.id != DIALOG_NOTICE_ID)
             .map(|n| n.id);
         assert!(presets.is_some(), "the recall posts a notice");
         assert_eq!(id(app.main.get_notices().row_data(0)), presets);

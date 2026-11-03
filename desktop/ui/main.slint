@@ -1310,11 +1310,6 @@ export component MainWindow inherits Window {
     // A release build that updates itself shows the updater's menu items.
     in property <bool> updater-available;
     in property <bool> check-updates-automatically;
-    // File > AirPlay 2 (Experimental): as saved; it applies at the next launch.
-    in property <bool> airplay2-experimental;
-    // The AirPlay 2 flag of this launch (spec S312): the item reads Prefer
-    // AirPlay 2 while it is on.
-    in property <bool> airplay2-auto;
     // The AirPlay delay, shown while an AirPlay sender runs: what its field
     // shows (the applied value, or what is being typed).
     in property <bool> airplay-delay-shown;
@@ -1477,7 +1472,6 @@ export component MainWindow inherits Window {
     callback launch-at-login-toggled(bool);
     callback check-updates-automatically-toggled(bool);
     callback check-for-updates-requested();
-    callback airplay2-experimental-toggled(bool);
     // File > Web Remote…
     callback remote-requested();
     callback notice-dismissed(int);
@@ -1609,15 +1603,6 @@ export component MainWindow inherits Window {
                 title: Strings.menu-remote;
                 activated => {
                     root.remote-requested();
-                }
-            }
-
-            MenuItem {
-                title: root.airplay2-auto ? Strings.airplay2-prefer : Strings.airplay2-experimental;
-                checkable: true;
-                checked: root.airplay2-experimental;
-                activated => {
-                    root.airplay2-experimental-toggled(!root.airplay2-experimental);
                 }
             }
 

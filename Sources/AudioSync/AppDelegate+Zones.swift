@@ -52,9 +52,9 @@ extension AppDelegate {
             let receiver = NativeAirPlayID.receiver(id)
             let isTarget = receiver.map { NativeTarget.kind($0) != nil } ?? false
             let overAirPlay2 = receiver.map { model?.reachedOverAirPlay2($0) == true } ?? false
-            // The AirPlay 2 flag keeps the path on whatever the switch says (S246, S312).
+            // The AirPlay 2 flag keeps the path on (S246, S312).
             let airPlay2On = asc_airplay2_auto()
-                || AppSettings.airPlay2On(setting: airPlay2AtLaunch, environment: ProcessInfo.processInfo.environment)
+                || AppSettings.airPlay2On(environment: ProcessInfo.processInfo.environment)
             // A member its target holds leaves the rows; the target's row stands for it.
             let target = listed ? nil : receiver.flatMap { model?.holdingTarget($0, on: on) }
             let facts = ZoneMemberFacts(kind: isTarget || overAirPlay2 ? .airplay2 : .airplay, listed: listed, on: on,

@@ -300,12 +300,10 @@ pub struct SenderLink {
 
 impl SenderLink {
     /// Starts the sender, whose stream and threads run from now on, and
-    /// gives its audio input for the capture. `saved_airplay2` is File >
-    /// AirPlay 2 (Experimental), or Prefer AirPlay 2 under the flag, as read
-    /// at launch.
-    pub fn start(saved_airplay2: bool) -> io::Result<(SenderLink, InputWriter)> {
+    /// gives its audio input for the capture.
+    pub fn start() -> io::Result<(SenderLink, InputWriter)> {
         let config = airplay2_config(
-            saved_airplay2,
+            false,
             std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
             airplay2_auto_on(),
         );
@@ -11579,7 +11577,7 @@ pub mod tests {
     #[test]
     fn a_loopback_receiver_is_listed_and_plays_through_the_real_sender() {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start(false).expect("the sender starts");
+        let (link, input) = SenderLink::start().expect("the sender starts");
         link.sender
             .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(
                 receiver.record(),
@@ -11672,7 +11670,7 @@ pub mod tests {
     /// gives how the audio the receiver got ends and whether a TEARDOWN came.
     fn tail_at(quit: bool) -> (Tail, bool) {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start(false).expect("the sender starts");
+        let (link, input) = SenderLink::start().expect("the sender starts");
         let mut record = receiver.record();
         // PCM only, so the receiver's packets read as they are.
         record.txt.retain(|entry| !entry.starts_with(b"cn="));
@@ -11869,7 +11867,7 @@ pub mod tests {
         zone: f64,
     ) -> (LoopbackReceiver, InputWriter, AirPlaySpeakers, String) {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start(false).expect("the sender starts");
+        let (link, input) = SenderLink::start().expect("the sender starts");
         link.sender
             .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(
                 receiver.record(),

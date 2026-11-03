@@ -18,9 +18,6 @@ struct UIStrings {
     /// How numbers such as percentages are written: the user's locale (the
     /// logic suite fixes one).
     var locale = Locale.autoupdatingCurrent
-    /// Whether the AirPlay 2 switch reads as the preference the build's flag
-    /// makes it (S312): not until a relabel is decided (S313).
-    var airPlay2Auto = false
     /// Whether this build checks for updates, so the Guide names Check for
     /// Updates… only when the app menu has it.
     var updatesOn = false
@@ -887,19 +884,6 @@ struct UIStrings {
     /// itself while the group is listed (P176).
     func nativeAirPlayPlaysInGroup(name: String, group: String) -> String {
         "\(name) plays as part of \(group), so it stays off by itself."
-    }
-
-    /// The AirPlay 2 switch in the gear menu and the AudioSync menu, off at
-    /// first; the sender reads it at launch. Under the AirPlay 2 flag it only
-    /// moves speakers that also play AirPlay 1 (S313).
-    var airPlay2Toggle: String { airPlay2Auto ? "Prefer AirPlay 2" : "AirPlay 2 (Experimental)" }
-    /// Its subtitle in both menus, its tooltip and VoiceOver hint. The stop
-    /// sentence only once the user turns off AirPlay 2 that this launch runs.
-    func airPlay2Note(on: Bool, onAtLaunch: Bool) -> String {
-        let stops = !on && onAtLaunch
-        return stops
-            ? "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
-            : "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
     }
 
     // MARK: AirPlay pairing prompt
@@ -1985,17 +1969,14 @@ struct UIStrings {
         updatesOn ? "\n- Updates: choose \(menuCheckForUpdates) in the AudioSync menu to\n  look for a newer version." : ""
     }
 
-    /// The Guide's lines on the AirPlay 2 switch, which the AirPlay 2 flag
-    /// turns into a preference (S312, S313).
+    /// The Guide's lines on which AirPlay a speaker plays over (S312).
     private var guideAirPlay2Note: String {
         """
             AudioSync plays to AirPlay 2 speakers, stereo pairs and home theater
-            groups. A speaker that plays both AirPlay 1 and AirPlay 2 uses AirPlay 1
-            unless '\(airPlay2Toggle)', in the gear menu or the AudioSync menu, is
-            on; turn it on, then quit and reopen AudioSync. While another speaker
-            plays over AirPlay 2, such a speaker plays over AirPlay 1, and its row
-            says AirPlay. A stereo pair or home theater group shows as one row, and
-            its note names the speakers in it.
+            groups. A speaker that plays both AirPlay 1 and AirPlay 2 uses AirPlay 2,
+            or AirPlay 1 when it was paired over AirPlay 1 or AirPlay 2 can't take
+            it; then its row says AirPlay. A stereo pair or home theater group shows
+            as one row, and its note names the speakers in it.
             """
     }
 

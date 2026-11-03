@@ -665,8 +665,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The AirPlay 2 flag of this launch (spec S312): the AirPlay 2 path is
     /// on whatever the switch says.
     airplay2_auto: bool,
-    /// Whether the sender's AirPlay 2 path is on this launch: the switch as
-    /// saved at launch, or `AUDIOSYNC_AIRPLAY2`.
+    /// Whether `AUDIOSYNC_AIRPLAY2` turns the sender's AirPlay 2 path on this
+    /// launch.
     airplay2_at_launch: bool,
     /// `AUDIOSYNC_AIRPLAY2`, which turns the sender's AirPlay 2 path on with
     /// the switch off.
@@ -1002,15 +1002,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
             appearance: saved.appearance,
             window: saved.window,
             remote: saved.remote,
-            airplay2_experimental: saved.airplay2_experimental,
             check_updates_automatically: saved.check_updates_automatically,
             last_update_check: saved.last_update_check,
             update_record: saved.update_record.clone(),
         };
-        self.airplay2_at_launch = crate::audio::airplay::airplay2_on(
-            saved.airplay2_experimental,
-            self.airplay2_switch_env.as_deref(),
-        );
+        self.airplay2_at_launch =
+            crate::audio::airplay::airplay2_on(false, self.airplay2_switch_env.as_deref());
         self.saved = saved;
     }
 
@@ -1158,7 +1155,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .audio
                 .cast_on_to_save()
                 .or_else(|| self.cast_unrestored.clone()),
-            airplay2_experimental: self.view.airplay2_experimental,
             check_updates_automatically: self.view.check_updates_automatically,
             last_update_check: self.view.last_update_check,
             update_record: self.view.update_record.clone(),
@@ -10769,7 +10765,6 @@ mod tests {
             let row = state.speaker(&ap(&den)).unwrap();
             assert_eq!(row.kind, dual_kind, "preferred {preferred}");
             assert_eq!(row.availability, Availability::Open);
-            assert!(!adapter.airplay2_auto(), "the item keeps its label");
         }
     }
 
@@ -14097,7 +14092,6 @@ mod tests {
                 on: true,
                 port: 8123,
             },
-            airplay2_experimental: true,
             check_updates_automatically: false,
             last_update_check: Some(1_800_000_000),
             update_record: None,
@@ -14130,7 +14124,6 @@ mod tests {
         assert_eq!(state.equalizer, equalizer);
         assert_eq!(state.equalizer_curves, curves);
         assert!(adapter.view_settings().show_virtual_devices);
-        assert!(adapter.view_settings().airplay2_experimental);
         assert_eq!(
             adapter.view_settings().appearance,
             ui_model::Appearance::Light
@@ -16098,33 +16091,6 @@ mod tests {
         );
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
         assert!(crate::data_folder::copies_kept_aside(&dir, "settings.ignored").is_empty());
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    // covers: S212
-    #[test]
-    fn the_airplay2_path_is_the_one_the_sender_read_even_if_the_file_is_held_after() {
-        let dir = test_dir("adapter-settings-airplay2-read-once");
-        let path = dir.join(settings::FILE_NAME);
-        let on = Settings {
-            airplay2_experimental: true,
-            ..Settings::default()
-        };
-        std::fs::write(&path, on.to_json()).expect("written");
-        let file = SettingsFile::at(path.clone());
-        let sender_read = file.load();
-        std::fs::remove_file(&path).expect("removed");
-        std::fs::create_dir(&path).expect("held");
-        let adapter = AudioAdapter::launched(
-            launch_audio(),
-            || "09.41".to_owned(),
-            DebugLog::default(),
-            sender_read,
-            file,
-            true,
-        );
-        assert!(adapter.airplay2_at_launch, "as the sender started");
-        assert!(adapter.view_settings().airplay2_experimental);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -18988,11 +18954,11 @@ mod tests {
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
     }
 
-    /// The switch applies at the next launch (as on the Mac), so a stereo
-    /// pair still needs AirPlay 2 after it is saved on.
+    /// While the sender's AirPlay 2 path is off, a stereo pair needs AirPlay 2
+    /// (as on the Mac).
     // covers: S265
     #[test]
-    fn a_stereo_pair_needs_airplay2_until_the_switch_saved_on_is_relaunched() {
+    fn a_stereo_pair_needs_airplay2_while_the_path_is_off() {
         use crate::audio::airplay::tests::stereo_pair;
 
         let (mut adapter, fake, _) = airplay2_adapter(false);
@@ -19023,23 +18989,13 @@ mod tests {
 
         adapter.recall_preset("preset:1");
         assert_eq!(reasons(&adapter), [PresetLeftOff::NeedsAirPlay2]);
-
-        let mut view = adapter.view_settings();
-        view.airplay2_experimental = true;
-        adapter.set_view_settings(view);
-        adapter.recall_preset("preset:1");
-        assert_eq!(
-            reasons(&adapter),
-            [PresetLeftOff::NeedsAirPlay2],
-            "the sender keeps the launch value until the next launch"
-        );
     }
 
-    /// The zone side of the test above: the click plan still sees the pair
-    /// needing AirPlay 2 until the next launch.
+    /// The zone side of the test above: the click plan sees the pair needing
+    /// AirPlay 2.
     // covers: S265
     #[test]
-    fn a_zone_stereo_pair_needs_airplay2_until_the_switch_saved_on_is_relaunched() {
+    fn a_zone_stereo_pair_needs_airplay2_while_the_path_is_off() {
         use crate::audio::airplay::tests::stereo_pair;
 
         let (mut adapter, fake, _) = airplay2_adapter(false);
@@ -19061,15 +19017,10 @@ mod tests {
             assert!(pair_member.needs_airplay2);
         };
         check(&adapter);
-
-        let mut view = adapter.view_settings();
-        view.airplay2_experimental = true;
-        adapter.set_view_settings(view);
-        check(&adapter);
     }
 
-    /// `AUDIOSYNC_AIRPLAY2` turns the sender's AirPlay 2 path on with the
-    /// switch off, so a pair it can't find is not found, not short of AirPlay 2.
+    /// `AUDIOSYNC_AIRPLAY2` turns the sender's AirPlay 2 path on, so a pair it
+    /// can't find is not found, not short of AirPlay 2.
     // covers: S265
     #[test]
     fn with_the_airplay2_variable_set_a_stereo_pair_does_not_need_airplay2() {
