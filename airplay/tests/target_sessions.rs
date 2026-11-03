@@ -19,7 +19,8 @@ use std::time::{Duration, Instant};
 use audiosync_airplay::ap2::bodies;
 use audiosync_airplay::clock::SenderClock;
 use audiosync_airplay::discovery::{
-    BrowseEvent, Browser, Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
+    BrowseEvent, Browser, Device, DeviceId, DeviceKey, ProtocolPath, ScopedAddr, ServiceKind,
+    ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, Warning};
 use audiosync_airplay::pairing::{Credentials, SECRET_BYTES};
@@ -822,6 +823,39 @@ fn a_target_member_whose_airplay2_setup_fails_stays_on_airplay2() {
     sender.shutdown();
     assert_eq!(errors(&events, &da.key), vec![ErrorKind::Refused]);
     assert!(a1.log().requests.is_empty(), "no AirPlay 1 for one member");
+}
+
+// covers: P214, P177
+#[test]
+fn a_target_whose_members_hold_legacy_credentials_stays_on_airplay1_under_the_preference() {
+    let _serial = serial();
+    let (a1, b1) = (
+        NetReceiver::start(Behavior::default()),
+        NetReceiver::start(Behavior::default()),
+    );
+    let (a2, b2) = (
+        Ap2Server::start(FakeAp2::new()),
+        Ap2Server::start(FakeAp2::new()),
+    );
+    let (sender, _host) = start_preferring();
+    let (da, db) = (dual_of(&a1, &a2, 1), dual_of(&b1, &b2, 2));
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    sender.add_target(target, options(), |_, own| {
+        own.credentials =
+            Some(Credentials::new("0123456789ABCDEF", [7; SECRET_BYTES]).expect("credentials"));
+    });
+    let mut events = Events::default();
+    let path = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key, event: SpeakerEvent::Path(_) } if *key == da.key)
+    });
+    sender.shutdown();
+    assert_eq!(
+        path,
+        Some(SenderEvent::Speaker {
+            key: da.key.clone(),
+            event: SpeakerEvent::Path(ProtocolPath::AirPlay1),
+        })
+    );
 }
 
 fn ptp_fake() -> FakeAp2 {
