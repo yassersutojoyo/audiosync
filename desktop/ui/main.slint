@@ -1167,6 +1167,17 @@ component NowPlayingCard inherits Card {
     changed title => {
         root.shown-at = animation-tick();
     }
+    // Slint leaves nothing focused when the focused button goes.
+    changed shuffle => {
+        if root.shuffle < 0 && root.focused-button == 3 {
+            root.focused-button = -1;
+        }
+    }
+    changed repeat => {
+        if root.repeat < 0 && root.focused-button == 4 {
+            root.focused-button = -1;
+        }
+    }
 
     VerticalLayout {
         spacing: 10px;
