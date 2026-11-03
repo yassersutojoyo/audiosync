@@ -45,13 +45,12 @@ extension AppDelegate {
         sendPlayback()
         native.setZones(nativeZoneVolumes())
         if let settings = equalizerModel?.settings { native.setEqualizer(settings) }
-        let airPlay2On = AppSettings.airPlay2On(setting: airPlay2AtLaunch,
-                                                environment: ProcessInfo.processInfo.environment)
-        // Under the AirPlay 2 flag the path is on and the switch only prefers it (S312).
+        let airPlay2On = AppSettings.airPlay2On(environment: ProcessInfo.processInfo.environment)
+        // Under the AirPlay 2 flag the path is on and preferred (S312).
         let airPlay2Line = asc_airplay2_auto()
-            ? (airPlay2On ? ", AirPlay 2 on by the flag, preferred" : ", AirPlay 2 on by the flag, not preferred")
+            ? ", AirPlay 2 on by the flag, preferred"
             : (airPlay2On ? ", AirPlay 2 on" : ", AirPlay 2 off")
-        native.start(master: masterVolume, airPlay2: airPlay2AtLaunch) { [weak self] started in
+        native.start(master: masterVolume) { [weak self] started in
             DebugTrace.log("[AudioSync] native AirPlay: "
                 + (started ? "the sender and its discovery started" : "the sender or its discovery could not start")
                 + airPlay2Line)

@@ -73,8 +73,6 @@ struct AppSettings: Equatable {
         static let equalizerCurves = "equalizerCurves"
         static let webRemote = "webRemoteEnabled"
         static let webRemotePort = "webRemotePort"
-        /// The AirPlay 2 switch (P2), off when missing; read once per launch.
-        static let airPlay2 = "airPlay2Enabled"
         /// Google Cast devices added by address (C18), as `CastManualAddress.text` strings.
         static let castManualAddresses = "castManualAddresses"
         /// The `id` a browse found at each of those addresses (C18), by
@@ -148,13 +146,11 @@ struct AppSettings: Equatable {
     var inputPairs: [String: Int] = [:]
     var webRemote = false
     var webRemotePort = RemotePort.default
-    var airPlay2 = false
 
-    /// Whether the sender runs AirPlay 2: the setting, or AUDIOSYNC_AIRPLAY2=1
-    /// in the environment, which the core reads too and which CI and debug
-    /// runs still use (P2).
-    static func airPlay2On(setting: Bool, environment: [String: String]) -> Bool {
-        setting || environment["AUDIOSYNC_AIRPLAY2"] == "1"
+    /// Whether AUDIOSYNC_AIRPLAY2=1 turns the sender's AirPlay 2 path on; the
+    /// core reads it too, and CI and debug runs use it (P2).
+    static func airPlay2On(environment: [String: String]) -> Bool {
+        environment["AUDIOSYNC_AIRPLAY2"] == "1"
     }
     /// D0 of the migration: what a local speaker without a delay of its own
     /// played with before the local delay model (S77, S179).
@@ -208,7 +204,6 @@ struct AppSettings: Equatable {
         s.inputPairs = channelPairs(read(Keys.inputChannelPairs))
         s.webRemote = read(Keys.webRemote) as? Bool ?? false
         s.webRemotePort = read(Keys.webRemotePort).flatMap(number).flatMap(RemotePort.stored) ?? RemotePort.default
-        s.airPlay2 = read(Keys.airPlay2) as? Bool ?? false
         return s
     }
 
@@ -510,8 +505,6 @@ struct SettingsStore {
     func save(webRemote: Bool) { write(webRemote, Keys.webRemote) }
 
     func save(webRemotePort: Int) { write(webRemotePort, Keys.webRemotePort) }
-
-    func save(airPlay2: Bool) { write(airPlay2, Keys.airPlay2) }
 
     /// On a first install the Mac's own output starts on, once: the UID to
     /// switch on, or nil. An empty list (Core Audio not answering yet) waits

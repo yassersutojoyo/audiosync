@@ -77,14 +77,17 @@ impl Driver {
                     member == key && options.homekit_credentials.is_some()
                 })
         };
+        // Legacy credentials keep the preference off a member (P214).
+        let prefers = |key: &DeviceKey| {
+            self.airplay2_preferred
+                && !members
+                    .iter()
+                    .any(|(member, options, _)| member == key && options.credentials.is_some())
+        };
         let airplay2 = self.airplay2
             && in_view.iter().any(|device| {
-                device.choose_path_preferring(
-                    true,
-                    self.airplay2_preferred,
-                    None,
-                    paired(&device.key),
-                ) == Ok(ProtocolPath::AirPlay2)
+                device.choose_path_preferring(true, prefers(&device.key), None, paired(&device.key))
+                    == Ok(ProtocolPath::AirPlay2)
             });
         self.driven.insert(
             id.clone(),
@@ -135,6 +138,7 @@ impl Driver {
                 return false;
             }
             speaker.target = Some(id.clone());
+            speaker.airplay1_fallback = false;
             return true;
         }
         self.speakers.insert(

@@ -224,8 +224,7 @@ struct MainView: View {
         .background(WindowDragArea { model.closeDelayPanels() }.accessibilityHidden(true))
     }
 
-    /// The gear's menu is AppKit's, so the AirPlay 2 note can sit under its
-    /// switch as a wrapping row (`MenuNoteItem`); it opens under the gear.
+    /// The gear's menu is AppKit's; it opens under the gear.
     private func gearMenu(_ t: UIStrings) -> some View {
         Button {
             if let anchor = gearAnchor.view { GearMenu.make(model: model, text: t).popUp(under: anchor) }
@@ -1780,12 +1779,6 @@ private enum GearMenu {
             model.actions.setSwitchWhenSourceQuits(!model.switchWhenSourceQuits)
         })
         menu.addItem(MenuAction.item(t.webRemoteMenu) { model.actions.openWebRemote() })
-        let airPlay2 = MenuAction { model.actions.setAirPlay2(!model.airPlay2) }
-        for entry in MenuNoteItem.airPlay2Items(text: t, on: model.airPlay2, onAtLaunch: model.airPlay2AtLaunch,
-                                                action: #selector(MenuAction.choose(_:)), target: airPlay2) {
-            entry.representedObject = entry.target
-            menu.addItem(entry)
-        }
         menu.addItem(.separator())
         menu.addItem(MenuAction.item(t.guideTitle) { model.actions.openGuide() })
         return menu

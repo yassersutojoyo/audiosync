@@ -836,9 +836,6 @@ pub struct Settings {
         deserialize_with = "or_default"
     )]
     pub cast_on: Option<String>,
-    /// File > AirPlay 2 (Experimental); read at launch only (spec P170).
-    #[serde(deserialize_with = "bool_or_false")]
-    pub airplay2_experimental: bool,
     /// File > Check for Updates Automatically (spec S305), on by default.
     #[serde(deserialize_with = "bool_or_true")]
     pub check_updates_automatically: bool,
@@ -990,7 +987,6 @@ impl Default for Settings {
             cast_addresses: Vec::new(),
             cast_found_ids: BTreeMap::new(),
             cast_on: None,
-            airplay2_experimental: false,
             check_updates_automatically: true,
             last_update_check: None,
             update_record: None,
@@ -1285,7 +1281,6 @@ impl Settings {
                 })
                 .collect(),
             cast_on: self.cast_on.filter(|id| usable_id(id)),
-            airplay2_experimental: self.airplay2_experimental,
             check_updates_automatically: self.check_updates_automatically,
             last_update_check: self.last_update_check,
             update_record: self.update_record,
@@ -1480,7 +1475,6 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("cast_addresses", Value::is_array),
         ("cast_found_ids", Value::is_object),
         ("cast_on", reads::<Option<String>>),
-        ("airplay2_experimental", Value::is_boolean),
         ("check_updates_automatically", Value::is_boolean),
         ("last_update_check", reads::<Option<u64>>),
         ("update_record", reads::<Option<UpdateRecord>>),
@@ -1918,7 +1912,6 @@ mod tests {
                 "00112233445566778899aabbccddeeff".to_owned(),
             )]),
             cast_on: Some("4a1f9d2e-7b3c-4e8a-9f60-1c2d3e4f5a6b".to_owned()),
-            airplay2_experimental: true,
             check_updates_automatically: false,
             last_update_check: Some(1_800_000_000),
             update_record: Some(UpdateRecord {
@@ -2401,7 +2394,6 @@ mod tests {
             cast_addresses,
             cast_found_ids,
             cast_on,
-            airplay2_experimental,
             check_updates_automatically,
             last_update_check,
             update_record,
@@ -2435,7 +2427,6 @@ mod tests {
         assert_ne!(cast_addresses, default.cast_addresses);
         assert_ne!(cast_found_ids, default.cast_found_ids);
         assert_ne!(cast_on, default.cast_on);
-        assert_ne!(airplay2_experimental, default.airplay2_experimental);
         assert_ne!(
             check_updates_automatically,
             default.check_updates_automatically
@@ -2592,17 +2583,6 @@ mod tests {
         let (low, found) = read(r#"{"version": 2, "remote": {"on": true, "port": 80}}"#);
         assert_eq!(low.remote.port, audiosync_remote::DEFAULT_PORT);
         assert!(matches!(found, Loaded::Read { adjusted: true, .. }));
-    }
-
-    // covers: S312
-    #[test]
-    fn airplay2_is_off_in_a_file_that_does_not_name_it() {
-        let read = |json: &str| Settings::from_json(json).expect("read").0;
-        assert!(!Settings::default().airplay2_experimental);
-        assert!(!read(r#"{"version": 2}"#).airplay2_experimental);
-        let on = read(r#"{"version": 2, "airplay2_experimental": true}"#);
-        assert!(on.airplay2_experimental);
-        assert!(read(&on.to_json()).airplay2_experimental);
     }
 
     // covers: S305, S316
@@ -3609,14 +3589,13 @@ mod tests {
 
         let flags = read_beside_a_kept_master(
             r#""speaker_zones_migrated": "yes", "speaker_presets_migrated": null,
-               "show_virtual_devices": 1, "airplay2_experimental": "on",
+               "show_virtual_devices": 1,
                "check_updates_automatically": "no", "when_source_quits": 5,
                "last_update_check": -5"#,
         );
         assert!(flags.speaker_zones_migrated);
         assert!(flags.speaker_presets_migrated);
         assert!(!flags.show_virtual_devices);
-        assert!(!flags.airplay2_experimental);
         assert!(flags.check_updates_automatically);
         assert_eq!(
             flags.when_source_quits,

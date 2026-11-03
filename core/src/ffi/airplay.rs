@@ -1865,10 +1865,11 @@ impl AscAirPlay {
         if let Some(path) = self.session_paths.get(id) {
             return *path == ProtocolPath::AirPlay2;
         }
+        // Legacy credentials keep the preference off it (P214).
         self.airplay2
             && info.device.choose_path_preferring(
                 true,
-                self.airplay2_preferred,
+                self.airplay2_preferred && !self.store.contains(id),
                 self.airplay1_outcome.get(id).copied(),
                 self.identity.get(id).is_some(),
             ) == Ok(ProtocolPath::AirPlay2)
@@ -2519,7 +2520,7 @@ pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
     create_with(live_browser)
 }
 
-/// [`asc_airplay_create`] with the app's AirPlay 2 setting: AirPlay 2 is on
+/// [`asc_airplay_create`] with an AirPlay 2 switch: AirPlay 2 is on
 /// when `airplay2` is or when the environment variable turns it on (P2);
 /// off, the sender makes no AirPlay 2 traffic (P170).
 #[unsafe(no_mangle)]
@@ -2540,8 +2541,8 @@ pub extern "C" fn asc_airplay2_auto() -> bool {
     airplay2_auto(std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref())
 }
 
-/// The sender's configuration for the app's AirPlay 2 setting and the two
-/// environment variables' values: the switch is the setting or
+/// The sender's configuration for an AirPlay 2 switch and the two
+/// environment variables' values: the switch is `setting` or
 /// `AUDIOSYNC_AIRPLAY2`, and `AUDIOSYNC_AIRPLAY2_AUTO` (or the build's flag)
 /// decides what it means (S312).
 fn sender_config(setting: bool, switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
@@ -4769,12 +4770,9 @@ mod tests {
 
     // covers: S312
     #[test]
-    fn with_the_flag_on_the_path_is_on_and_the_switch_prefers_airplay2() {
-        assert!(!sender_config(false, None, None).airplay2_preferred);
-        let off = sender_config(false, None, Some("1"));
-        assert!(off.airplay2, "AirPlay 2 only receivers play");
-        assert!(!off.airplay2_preferred, "receivers that speak both stay");
-        for (setting, switch) in [(true, None), (false, Some("1"))] {
+    fn with_the_flag_on_the_path_is_on_and_airplay2_preferred() {
+        assert!(sender_config(false, None, None).airplay2_preferred);
+        for (setting, switch) in [(false, None), (true, None), (false, Some("1"))] {
             let on = sender_config(setting, switch, Some("1"));
             assert!(on.airplay2 && on.airplay2_preferred);
         }
@@ -4782,10 +4780,11 @@ mod tests {
 
     // covers: S312
     #[test]
-    fn with_the_flag_on_only_the_switch_lists_a_dual_receiver_on_airplay2() {
+    fn only_the_preference_lists_a_dual_receiver_on_airplay2() {
         let mut handle = create_with(quiet);
-        // The flag on, the switch off.
+        // The path on without the preference: the flag off, the switch on.
         inside(handle).airplay2 = true;
+        inside(handle).airplay2_preferred = false;
         let airplay = airplay2_only();
         let only =
             Device::from_records(airplay.device_key(), None, Some(&airplay)).expect("a device");
@@ -4806,10 +4805,36 @@ mod tests {
             "AirPlay 1 drives it"
         );
 
-        // The switch on prefers AirPlay 2.
+        // The flag on prefers AirPlay 2.
         inside(handle).airplay2_preferred = true;
         let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
         assert_ne!(report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2, 0);
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // A dual Apple TV paired over AirPlay 1 stays there under the
+    // preference, so its PIN flags ask for nothing (P214).
+    // covers: P214
+    #[test]
+    fn a_dual_apple_tv_with_legacy_credentials_stays_on_airplay1_under_the_preference() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        inside(handle).airplay2_preferred = true;
+        let mut airplay = airplay2_only();
+        airplay.txt.push(b"flags=0x200".to_vec());
+        let own = raop("02005E005305", "Den TV", APPLE_TV);
+        let tv = Device::from_records(airplay.device_key(), Some(&own), Some(&airplay))
+            .expect("a device");
+        let credentials = audiosync_airplay::pairing::Credentials::new(
+            "0123456789ABCDEF",
+            [7; audiosync_airplay::pairing::SECRET_BYTES],
+        )
+        .expect("valid credentials");
+        let _ = inside(handle).store.insert("02005E005305", credentials);
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(ReceiverInfo::new(tv))));
+        assert_eq!(report.availability, AIRPLAY_AVAILABLE);
+        assert_eq!(report.flags & AIRPLAY_FLAG_OVER_AIRPLAY2, 0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }
@@ -4864,6 +4889,8 @@ mod tests {
     fn a_refusal_the_sender_didnt_remember_keeps_no_outcome() {
         let mut handle = create_with(quiet);
         inside(handle).airplay2 = true;
+        // Only without the preference does AirPlay 1 come first (P2).
+        inside(handle).airplay2_preferred = false;
         let airplay = airplay2_only();
         let own = raop("02005E005305", "Living Room", OPEN);
         let both = Device::from_records(airplay.device_key(), Some(&own), Some(&airplay))
@@ -4892,6 +4919,8 @@ mod tests {
     fn a_remembered_airplay1_outcome_survives_the_hosts_removal() {
         let mut handle = create_with(quiet);
         inside(handle).airplay2 = true;
+        // Only without the preference does AirPlay 1 come first (P2).
+        inside(handle).airplay2_preferred = false;
         let airplay = airplay2_only();
         let own = raop("02005E005305", "Living Room", OPEN);
         let both = Device::from_records(airplay.device_key(), Some(&own), Some(&airplay))

@@ -32,7 +32,7 @@ AirPlay speakers play about two seconds late. The speakers on your PC don't. Pla
 AudioSync captures the sound once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. The source can be everything the PC plays, one app, several apps, every app except the ones you pick, or an input device such as a microphone or line in.
 
 What it plays to:
-- AirPlay speakers, through AudioSync's own sender. Speakers that only do AirPlay 2, stereo pairs and home theater groups play as they are. A speaker that does both AirPlay 1 and AirPlay 2 uses AirPlay 1 unless you turn on AirPlay 2 (Experimental) in the File menu.
+- AirPlay speakers, through AudioSync's own sender. Speakers that only do AirPlay 2, stereo pairs and home theater groups play as they are. A speaker that does both AirPlay 1 and AirPlay 2 uses AirPlay 2, or AirPlay 1 when it was paired over AirPlay 1 or AirPlay 2 can't take it.
 - Google Cast speakers and Google Home speaker groups, one at a time. Cast has no shared clock, so you set its offset by ear once and AudioSync remembers it.
 - Any output Windows lists: built-in speakers, the headphone jack, HDMI, USB and Bluetooth.
 

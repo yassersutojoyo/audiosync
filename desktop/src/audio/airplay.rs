@@ -262,8 +262,8 @@ impl StartedSender {
 /// or couldn't start; `None` when it couldn't start (it logs why).
 pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender>>;
 
-/// Whether the AirPlay 2 path runs (spec P2, P170): when the saved setting
-/// is on, or the environment variable turns it on without a rebuild.
+/// Whether the AirPlay 2 path runs (spec P2, P170): when `saved` is on, or
+/// the environment variable turns it on without a rebuild.
 pub fn airplay2_on(saved: bool, env: Option<&str>) -> bool {
     saved || airplay2_switch(env)
 }
@@ -279,8 +279,8 @@ pub fn airplay2_auto_on() -> bool {
     airplay2_auto(std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref())
 }
 
-/// The sender's AirPlay 2 path and preference (S312): the switch is the
-/// saved setting or `switch_env`, and the flag `auto` decides what it means.
+/// The sender's AirPlay 2 path and preference (S312): the switch is `saved`
+/// (false since the menu item went) or `switch_env`, and the flag `auto` decides.
 /// On Windows the driver thread runs as a Pro Audio task (S323).
 pub fn airplay2_config(saved: bool, switch_env: Option<&str>, auto: bool) -> SenderConfig {
     SenderConfig {
@@ -300,12 +300,10 @@ pub struct SenderLink {
 
 impl SenderLink {
     /// Starts the sender, whose stream and threads run from now on, and
-    /// gives its audio input for the capture. `saved_airplay2` is File >
-    /// AirPlay 2 (Experimental), or Prefer AirPlay 2 under the flag, as read
-    /// at launch.
-    pub fn start(saved_airplay2: bool) -> io::Result<(SenderLink, InputWriter)> {
+    /// gives its audio input for the capture.
+    pub fn start() -> io::Result<(SenderLink, InputWriter)> {
         let config = airplay2_config(
-            saved_airplay2,
+            false,
             std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
             airplay2_auto_on(),
         );
@@ -1935,10 +1933,11 @@ impl AirPlaySpeakers {
         }
         let outcome = self.airplay1_outcome.get(id).copied();
         let homekit_stored = self.store.homekit(id).is_some();
+        // Legacy credentials keep the preference off it (P214).
         reached_over_airplay2(
             info,
             self.link.airplay2(),
-            self.link.airplay2_preferred(),
+            self.link.airplay2_preferred() && !self.store.contains(id),
             outcome,
             homekit_stored,
         )
@@ -4882,6 +4881,35 @@ pub mod tests {
             .expect("a device")
     }
 
+    /// An Apple TV that speaks both: a RAOP service with the legacy
+    /// pairing and an AirPlay service whose flags ask for a PIN.
+    pub fn dual_apple_tv(id: u8, name: &str) -> Device {
+        let device_id = DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, id]);
+        let address = vec![ScopedAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)))];
+        let raop = ServiceRecord {
+            kind: ServiceKind::Raop,
+            instance: format!("{device_id}@{name}"),
+            host: format!("speaker-{id}.local"),
+            port: 7000,
+            txt: APPLE_TV_TXT.iter().map(|s| s.as_bytes().to_vec()).collect(),
+            addresses: address.clone(),
+        };
+        let airplay = ServiceRecord {
+            kind: ServiceKind::AirPlay,
+            instance: name.to_owned(),
+            host: format!("speaker-{id}.local"),
+            port: 7000,
+            txt: vec![
+                format!("deviceid={device_id}").into_bytes(),
+                b"features=0x0,0x40".to_vec(),
+                b"flags=0x200".to_vec(),
+            ],
+            addresses: address,
+        };
+        Device::from_records(DeviceKey::Id(device_id), Some(&raop), Some(&airplay))
+            .expect("a device")
+    }
+
     /// The ID the backend gives `device`.
     pub fn id_of(device: &Device) -> String {
         speaker_id(&device.key)
@@ -6613,6 +6641,30 @@ pub mod tests {
         second.appear(&den);
         airplay.poll();
         assert!(airplay.speakers()[0].airplay2, "Retry ended the session");
+    }
+
+    /// A dual Apple TV paired over AirPlay 1 stays there under the AirPlay 2
+    /// preference, so its PIN flags ask for nothing (P214).
+    // covers: P214
+    #[test]
+    fn a_dual_apple_tv_with_legacy_credentials_stays_open_under_the_preference() {
+        use crate::audio::pairings::tests::credentials;
+
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        fake.set_airplay2_preferred(true);
+        let tv = dual_apple_tv(16, "Den TV");
+        let id = id_of(&tv);
+        let mut store = PairingStore::in_memory();
+        store
+            .insert(&id, credentials("0123456789ABCDEF", 0xA5))
+            .expect("stored");
+        let mut airplay = AirPlaySpeakers::new(fake.link(), 100.0, DebugLog::default(), store);
+        fake.appear(&tv);
+        airplay.poll();
+        let row = &airplay.speakers()[0];
+        assert_eq!(row.availability, AirPlayAvailability::Open);
+        assert!(!row.airplay2, "AirPlay 1 plays it");
     }
 
     // covers: P177, P218, S313
@@ -8436,7 +8488,7 @@ pub mod tests {
 
     // covers: S312
     #[test]
-    fn the_airplay2_flag_keeps_the_path_on_and_the_switch_prefers_airplay2() {
+    fn the_airplay2_flag_keeps_the_path_on_and_prefers_airplay2() {
         // Spec S312: with the flag off the switch alone sets the path.
         for (saved, env, on) in [
             (false, None, false),
@@ -8447,9 +8499,7 @@ pub mod tests {
             assert_eq!(config.airplay2, on);
             assert!(!config.airplay2_preferred);
         }
-        let off = airplay2_config(false, None, true);
-        assert!(off.airplay2 && !off.airplay2_preferred);
-        for (saved, env) in [(true, None), (false, Some("1"))] {
+        for (saved, env) in [(false, None), (true, None), (false, Some("1"))] {
             let on = airplay2_config(saved, env, true);
             assert!(on.airplay2 && on.airplay2_preferred);
         }
@@ -8457,12 +8507,12 @@ pub mod tests {
 
     // covers: S312
     #[test]
-    fn with_nothing_switched_the_path_is_on_and_airplay1_comes_first() {
+    fn with_nothing_switched_the_path_is_on_and_airplay2_comes_first() {
         let config = airplay2_config(false, None, airplay2_auto(None));
         assert!(config.airplay2, "AirPlay 2 only receivers play");
         assert!(
-            !config.airplay2_preferred,
-            "receivers that speak both take AirPlay 1"
+            config.airplay2_preferred,
+            "receivers that speak both take AirPlay 2"
         );
     }
 
@@ -11527,7 +11577,7 @@ pub mod tests {
     #[test]
     fn a_loopback_receiver_is_listed_and_plays_through_the_real_sender() {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start(false).expect("the sender starts");
+        let (link, input) = SenderLink::start().expect("the sender starts");
         link.sender
             .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(
                 receiver.record(),
@@ -11620,7 +11670,7 @@ pub mod tests {
     /// gives how the audio the receiver got ends and whether a TEARDOWN came.
     fn tail_at(quit: bool) -> (Tail, bool) {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start(false).expect("the sender starts");
+        let (link, input) = SenderLink::start().expect("the sender starts");
         let mut record = receiver.record();
         // PCM only, so the receiver's packets read as they are.
         record.txt.retain(|entry| !entry.starts_with(b"cn="));
@@ -11817,7 +11867,7 @@ pub mod tests {
         zone: f64,
     ) -> (LoopbackReceiver, InputWriter, AirPlaySpeakers, String) {
         let receiver = LoopbackReceiver::start();
-        let (link, input) = SenderLink::start(false).expect("the sender starts");
+        let (link, input) = SenderLink::start().expect("the sender starts");
         link.sender
             .start_discovery_with(Box::new(OneService(Some(BrowseEvent::Resolved(
                 receiver.record(),

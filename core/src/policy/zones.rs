@@ -322,7 +322,7 @@ pub enum Step {
     /// Not listed, or hidden: left alone.
     Absent,
     /// A pair or theater target while AirPlay 2 is off: left alone, and its
-    /// row reads "Needs AirPlay 2 (Experimental)".
+    /// row reads "Needs AirPlay 2".
     NeedsAirPlay2,
     /// It plays as part of a target: left alone, and its row reads "Plays as
     /// part of <target>".

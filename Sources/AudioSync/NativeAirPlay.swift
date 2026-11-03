@@ -89,16 +89,15 @@ final class NativeAirPlay {
         self.onEvent = onEvent
     }
 
-    /// Creates the sender at `master` (0 to 100), with AirPlay 2 when
-    /// `airPlay2` is on or the environment variable turns it on, installs its
+    /// Creates the sender at `master` (0 to 100), installs its
     /// input and starts discovery, on the queue. `completion` gets, on the
     /// main queue, whether all of it worked; when the sender can't start or
     /// multicast DNS can't browse, nothing is left running and nothing else
     /// happens.
-    func start(master: Double, airPlay2: Bool, completion: @escaping (Bool) -> Void) {
+    func start(master: Double, completion: @escaping (Bool) -> Void) {
         queue.async { [weak self] in
             guard let self else { return }
-            let latency = self.startOnQueue(master: master, airPlay2: airPlay2)
+            let latency = self.startOnQueue(master: master)
             DispatchQueue.main.async {
                 if let latency, self.model.latencyMs == 0 { self.model.latencyMs = latency }
                 completion(latency != nil)
@@ -562,9 +561,9 @@ final class NativeAirPlay {
     // MARK: - On the queue
 
     /// The sender's L in ms once it runs, or nil when it couldn't start.
-    private func startOnQueue(master: Double, airPlay2: Bool) -> Double? {
+    private func startOnQueue(master: Double) -> Double? {
         if let handle { return asc_airplay_latency_ms(handle) }
-        guard let created = asc_airplay_create_with_airplay2(airPlay2) else { return nil }
+        guard let created = asc_airplay_create() else { return nil }
         handle = created
         // Before discovery, so a paired Apple TV is listed as able to play
         // from its first report.

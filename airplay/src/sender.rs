@@ -184,11 +184,11 @@ pub fn airplay2_auto(value: Option<&str>) -> bool {
 impl SenderConfig {
     /// The AirPlay 2 path and preference for the flag `auto` and the user's
     /// switch (S312): with the flag off the switch turns the path on; with
-    /// it on the path is always on and the switch prefers AirPlay 2.
+    /// it on the path is always on and AirPlay 2 is preferred (P231).
     pub fn with_airplay2_switch(self, auto: bool, switch: bool) -> SenderConfig {
         SenderConfig {
             airplay2: auto || switch,
-            airplay2_preferred: auto && switch,
+            airplay2_preferred: auto,
             ..self
         }
     }

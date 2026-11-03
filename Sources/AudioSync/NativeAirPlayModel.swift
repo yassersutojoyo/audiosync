@@ -408,7 +408,7 @@ enum NativeTurnOff: Equatable {
     case refused
     /// This sender can't play to it.
     case cantPlay
-    /// It plays only AirPlay 2, which the AirPlay 2 switch turns on at the next launch.
+    /// It plays only AirPlay 2, which this launch runs without.
     case needsAirPlay2
     /// It turned NTP timing down, and PTP timing isn't available.
     case timingUnavailable

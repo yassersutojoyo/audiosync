@@ -18,7 +18,7 @@ import Synchronization
 ///
 /// Main thread only, except the three static members below. Clause numbers
 /// refer to docs/ENGINE_SPEC.md, case IDs to docs/EDGE_CASES.md.
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - One copy at a time (main.swift)
 
@@ -192,12 +192,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     var showVirtualDevices: Bool {
         didSet { if showVirtualDevices != oldValue { store.save(showVirtualDevices: showVirtualDevices) } }
     }
-    /// The AirPlay 2 switch as the user left it; the sender reads
-    /// `airPlay2AtLaunch`, since it can't change mode while speakers play.
-    var airPlay2: Bool {
-        didSet { if airPlay2 != oldValue { store.save(airPlay2: airPlay2) } }
-    }
-    let airPlay2AtLaunch: Bool
     var appearance: AppAppearance {
         didSet {
             guard appearance != oldValue else { return }
@@ -360,8 +354,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         appearance = saved.appearance
         whenSourceQuits = saved.whenSourceQuits
         inputPairs = saved.inputPairs
-        airPlay2 = saved.airPlay2
-        airPlay2AtLaunch = saved.airPlay2
         super.init()
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
@@ -418,8 +410,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
         handleEngineEvents()
         setUpMenuBar()
         AppUpdater.start()
-        NSApp.mainMenu = MainMenu.make(text: text, airPlay2: airPlay2, airPlay2AtLaunch: airPlay2AtLaunch,
-                                       appMenuDelegate: self)
+        NSApp.mainMenu = MainMenu.make(text: text)
         mainWindow = MainWindowController(model: appModel)
         launchAtLogin = SMAppService.mainApp.status == .enabled
 

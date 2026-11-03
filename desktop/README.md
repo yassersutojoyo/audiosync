@@ -173,8 +173,8 @@ Not supported yet: speakers that need another kind of pairing (the Apple
 TV code is the one AudioSync does). They're listed with a note saying so,
 and AudioSync never connects to them. Speakers that only play AirPlay 2
 play with nothing to turn on. A speaker that does both AirPlay 1 and AirPlay 2
-still uses AirPlay 1 unless you turn on File > AirPlay 2 (Experimental), then
-quit and reopen AudioSync.
+uses AirPlay 2, or AirPlay 1 when it was paired over AirPlay 1 or AirPlay 2
+can't take it.
 
 ### Google Cast
 

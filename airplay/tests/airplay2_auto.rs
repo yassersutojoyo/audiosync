@@ -1,7 +1,7 @@
-//! AirPlay 2 per receiver (S312, P214) over loopback fake receivers: with
-//! the flag on, a device only AirPlay 2 can serve plays over AirPlay 2 while
-//! the switch is off, a device that speaks both stays on AirPlay 1 until the
-//! switch prefers AirPlay 2, and with the flag off nothing changes.
+//! AirPlay 2 per receiver (S312, P214, P231) over loopback fake receivers:
+//! with the flag on, every AirPlay 2 capable device plays over AirPlay 2
+//! whatever the switch says, a device that speaks both falling back to
+//! AirPlay 1, and with the flag off nothing changes.
 
 mod common;
 
@@ -12,13 +12,15 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ProtocolPath, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
+use audiosync_airplay::homekit::HomeKitCredentials;
+use audiosync_airplay::pairing::{Credentials, SECRET_BYTES};
 use audiosync_airplay::sender::{
-    AIRPLAY2_AUTO, AIRPLAY2_AUTO_ENV, Sender, SenderConfig, SpeakerEvent, SpeakerOptions,
-    SpeakerState, airplay2_auto,
+    AIRPLAY2_AUTO, AIRPLAY2_AUTO_ENV, Sender, SenderConfig, SenderEvent, SpeakerEvent,
+    SpeakerOptions, SpeakerState, airplay2_auto,
 };
 use audiosync_airplay::volume::Volume;
 
-use common::ap2::{Ap2Server, FakeAp2};
+use common::ap2::{Ap2Server, FakeAp2, dict, int, plist};
 use common::key;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 
@@ -149,7 +151,7 @@ fn play_dual(config: SenderConfig, id: u8) -> (Vec<String>, Vec<String>) {
 }
 
 #[test]
-fn the_flag_turns_the_path_on_and_the_switch_into_a_preference() {
+fn the_flag_turns_the_path_and_the_preference_on() {
     assert!(airplay2_auto(None), "on by default");
     assert_eq!(AIRPLAY2_AUTO_ENV, "AUDIOSYNC_AIRPLAY2_AUTO");
     assert!(airplay2_auto(Some("1")));
@@ -160,10 +162,13 @@ fn the_flag_turns_the_path_on_and_the_switch_into_a_preference() {
 
     let off = switch(true, false);
     assert!(off.airplay2, "the path is on with the switch off");
-    assert!(!off.airplay2_preferred);
+    assert!(
+        off.airplay2_preferred,
+        "AirPlay 2 is preferred with the switch off"
+    );
     let on = switch(true, true);
     assert!(on.airplay2);
-    assert!(on.airplay2_preferred, "the switch prefers AirPlay 2");
+    assert!(on.airplay2_preferred);
 }
 
 #[test]
@@ -182,11 +187,11 @@ fn with_the_flag_on_an_airplay2_only_device_plays_over_airplay2_with_the_switch_
 }
 
 #[test]
-fn with_the_flag_on_a_dual_device_stays_on_airplay1_with_the_switch_off() {
+fn with_the_flag_on_a_dual_device_plays_over_airplay2_with_the_switch_off() {
     let _serial = serial();
     let (ap1, ap2) = play_dual(switch(true, false), 62);
-    assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
-    assert!(ap2.is_empty(), "nothing over AirPlay 2: {ap2:?}");
+    assert!(ap1.is_empty(), "no AirPlay 1 attempt first: {ap1:?}");
+    assert!(ap2.contains(&"RECORD".to_owned()), "{ap2:?}");
 }
 
 /// The sender as the apps build it with no setting touched and no
@@ -213,11 +218,11 @@ fn with_nothing_switched_an_airplay2_only_device_plays_over_airplay2() {
 
 // covers: P2
 #[test]
-fn with_nothing_switched_a_dual_device_plays_over_airplay1() {
+fn with_nothing_switched_a_dual_device_plays_over_airplay2() {
     let _serial = serial();
     let (ap1, ap2) = play_dual(untouched(), 67);
-    assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
-    assert!(ap2.is_empty(), "nothing over AirPlay 2: {ap2:?}");
+    assert!(ap1.is_empty(), "no AirPlay 1 attempt first: {ap1:?}");
+    assert!(ap2.contains(&"RECORD".to_owned()), "{ap2:?}");
 }
 
 // covers: P214, P169
@@ -313,4 +318,152 @@ fn with_the_flag_off_everything_stays_as_today() {
         assert!(ap1.contains(&"RECORD".to_owned()), "switch {on}: {ap1:?}");
         assert!(ap2.is_empty(), "switch {on}: {ap2:?}");
     }
+}
+
+// covers: P231
+#[test]
+fn a_dual_device_whose_airplay2_setup_is_refused_plays_over_airplay1() {
+    let _serial = serial();
+    let airplay1 = NetReceiver::start(Behavior::default());
+    let mut refusing = FakeAp2::new();
+    refusing.status.insert("RECORD".to_owned(), 403);
+    let server = Ap2Server::start(refusing);
+    let (sender, _host) = start(switch(true, true));
+    let (events, key) = play(&sender, dual(&airplay1, &server, 70));
+    sender.shutdown();
+    assert!(server.fake().keys().contains(&"RECORD".to_owned()));
+    let ap1 = airplay1_keys(&airplay1);
+    assert!(ap1.contains(&"RECORD".to_owned()), "{ap1:?}");
+    // The host never hears the AirPlay 2 refusal, so it asks for nothing.
+    assert_eq!(errors(&events, &key), [], "{:?}", events.of(&key));
+}
+
+// covers: P214
+#[test]
+fn a_dual_device_with_legacy_credentials_stays_on_airplay1_under_the_preference() {
+    let _serial = serial();
+    let airplay1 = NetReceiver::start(Behavior::default());
+    let server = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start(untouched());
+    let device = dual(&airplay1, &server, 71);
+    let key = device.key.clone();
+    let mut paired = options();
+    paired.credentials =
+        Some(Credentials::new("0123456789ABCDEF", [7; SECRET_BYTES]).expect("credentials"));
+    sender.add_speaker(device, paired);
+    let mut events = Events::default();
+    let path = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Path(_) } if *k == key)
+    });
+    sender.shutdown();
+    assert_eq!(
+        path,
+        Some(SenderEvent::Speaker {
+            key,
+            event: SpeakerEvent::Path(ProtocolPath::AirPlay1),
+        })
+    );
+}
+
+fn records(server: &Ap2Server) -> usize {
+    let keys = server.fake().keys();
+    keys.iter().filter(|key| *key == "RECORD").count()
+}
+
+/// Waits for the speaker's first error.
+fn first_error(events: &mut Events, sender: &Sender, key: &DeviceKey) -> Option<ErrorKind> {
+    match events.wait_for(sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if k == key)
+    }) {
+        Some(SenderEvent::Speaker {
+            event: SpeakerEvent::Error(error),
+            ..
+        }) => Some(error.error.kind),
+        _ => None,
+    }
+}
+
+// covers: P231
+#[test]
+fn a_dual_device_whose_airplay2_wants_a_pin_plays_over_airplay1_without_asking() {
+    let _serial = serial();
+    let airplay1 = NetReceiver::start(Behavior::default());
+    let mut pin = FakeAp2::new();
+    pin.info_body = plist(dict(&[("statusFlags", int(0x204))]));
+    let server = Ap2Server::start(pin);
+    let (sender, _host) = start(untouched());
+    let (events, key) = play(&sender, dual(&airplay1, &server, 72));
+    sender.shutdown();
+    assert!(
+        !server.fake().keys().is_empty(),
+        "AirPlay 2 was tried first"
+    );
+    assert!(airplay1_keys(&airplay1).contains(&"RECORD".to_owned()));
+    assert_eq!(
+        errors(&events, &key),
+        [],
+        "no PIN prompt: {:?}",
+        events.of(&key)
+    );
+}
+
+// covers: P231
+#[test]
+fn a_fallback_refused_on_airplay1_too_stays_off_airplay2_until_the_next_start() {
+    let _serial = serial();
+    let mut refusing = Behavior::default();
+    refusing.status.insert("ANNOUNCE".to_owned(), 403);
+    let airplay1 = NetReceiver::start(refusing);
+    let mut refusing_record = FakeAp2::new();
+    refusing_record.status.insert("RECORD".to_owned(), 403);
+    let server = Ap2Server::start(refusing_record);
+    let (sender, _host) = start(untouched());
+    let device = dual(&airplay1, &server, 73);
+    let key = device.key.clone();
+    sender.add_speaker(device, options());
+    let mut events = Events::default();
+    assert_eq!(
+        first_error(&mut events, &sender, &key),
+        Some(ErrorKind::Refused)
+    );
+    sender.shutdown();
+    assert!(airplay1_keys(&airplay1).contains(&"ANNOUNCE".to_owned()));
+    assert_eq!(records(&server), 1, "one AirPlay 2 attempt");
+}
+
+/// HomeKit credentials the fake knows, as a PIN pairing leaves them.
+fn known_to(server: &Ap2Server) -> HomeKitCredentials {
+    let id = "00000000-0000-4000-8000-000000000231";
+    let seed = [0x31; 32];
+    let mut fake = server.fake();
+    let public = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
+    fake.hap.paired.push((id.as_bytes().to_vec(), public));
+    let receiver = fake.hap.public_key();
+    let blob = [&[1][..], id.as_bytes(), &seed, &receiver, &fake.hap.id].concat();
+    HomeKitCredentials::from_bytes(&blob).expect("credentials")
+}
+
+// covers: P231, P2
+#[test]
+fn a_homekit_paired_dual_device_never_falls_back_to_airplay1() {
+    let _serial = serial();
+    let airplay1 = NetReceiver::start(Behavior::default());
+    let mut refusing = FakeAp2::new();
+    refusing.status.insert("RECORD".to_owned(), 403);
+    let server = Ap2Server::start(refusing);
+    let (sender, _host) = start(untouched());
+    let device = dual(&airplay1, &server, 74);
+    let key = device.key.clone();
+    let mut paired = options();
+    paired.homekit_credentials = Some(known_to(&server));
+    sender.add_speaker(device, paired);
+    let mut events = Events::default();
+    assert_eq!(
+        first_error(&mut events, &sender, &key),
+        Some(ErrorKind::Refused)
+    );
+    sender.shutdown();
+    assert!(airplay1_keys(&airplay1).is_empty());
 }

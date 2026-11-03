@@ -3861,53 +3861,14 @@ do {
             && UIStrings().nativeAirPlayPtpOtherNetwork(name: "Loft")
             == "Loft waits while AudioSync plays to AirPlay 2 speakers on another network. Turn those speakers off and Loft starts.",
           "S285 native airplay: both waiting notices read as on Windows")
-    let lets = "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
-    let stops = "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
-    // covers: S313
-    check(UIStrings(airPlay2Auto: false).airPlay2Note(on: false, onAtLaunch: true) == stops
-            && UIStrings(airPlay2Auto: false).airPlay2Note(on: true, onAtLaunch: true) == lets
-            && UIStrings(airPlay2Auto: false).airPlay2Note(on: true, onAtLaunch: false) == lets
-            && UIStrings(airPlay2Auto: false).airPlay2Note(on: false, onAtLaunch: false) == lets,
-          "AirPlay 2 switch: its note says AirPlay 2 stops only once turned off from a launch that runs it, as on Windows")
-    let preferring = UIStrings(airPlay2Auto: true)
-    check(preferring.airPlay2Toggle == "Prefer AirPlay 2"
-            && UIStrings(airPlay2Auto: false).airPlay2Toggle == "AirPlay 2 (Experimental)"
-            && preferring.airPlay2Note(on: true, onAtLaunch: false)
-                == "Speakers that play both AirPlay 1 and AirPlay 2 use AirPlay 2 once you quit and reopen AudioSync."
-            && preferring.airPlay2Note(on: false, onAtLaunch: true)
-                == "Speakers that play both AirPlay 1 and AirPlay 2 go back to AirPlay 1 once you quit and reopen AudioSync."
-            && preferring.helpText.contains("unless 'Prefer AirPlay 2'")
-            && !preferring.helpText.contains("(Experimental)"),
-          "S313 AirPlay 2 switch: under the AirPlay 2 flag it reads Prefer AirPlay 2, in its note and the Guide too")
-    // covers: S312, S313 (on by default, the switch keeps its label)
-    check(asc_airplay2_auto() == (ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY2_AUTO"] != "0")
-            && UIStrings().airPlay2Toggle == "AirPlay 2 (Experimental)",
-          "S312 AirPlay 2 switch: AirPlay 2 is on by default and the switch keeps its label")
-    // covers: S312, S313 (the Guide the app shows)
+    // covers: S312 (on by default)
+    check(asc_airplay2_auto() == (ProcessInfo.processInfo.environment["AUDIOSYNC_AIRPLAY2_AUTO"] != "0"),
+          "S312 AirPlay 2: on by default")
+    // covers: S312 (the Guide the app shows)
     check(!UIStrings().helpText.contains("off at first")
-            && UIStrings().helpText.contains("uses AirPlay 1\nunless 'AirPlay 2 (Experimental)', in the gear menu"),
-          "S312 Guide: AirPlay 2 speakers play by default, and the switch keeps its label")
-    // The menu classes are main-actor bound; top-level code runs on the main thread.
-    MainActor.assumeIsolated {
-        let noteMenu = NSMenu()
-        MenuNoteItem.airPlay2Items(text: UIStrings(airPlay2Auto: false), on: true, onAtLaunch: true,
-                                   action: #selector(NSApplication.terminate(_:))).forEach(noteMenu.addItem)
-        let noteRow = noteMenu.items.last as? MenuNoteItem
-        // covers: S313
-        check(noteMenu.items.count == 2 && noteMenu.items[0].title == "AirPlay 2 (Experimental)"
-                && noteMenu.items[0].state == .on && noteMenu.items[0].toolTip == lets
-                && noteRow?.note == lets && noteRow?.view != nil && !(noteRow?.isEnabled ?? true),
-              "AirPlay 2 switch: its note is a row of its own under it, not a subtitle the menus don't show")
-        let oneLine = NSFont.menuFont(ofSize: NSFont.smallSystemFontSize).boundingRectForFont.height
-        // covers: S313
-        check((noteRow?.view?.frame.height ?? 0) > oneLine * 1.5,
-              "AirPlay 2 switch: its note wraps onto more than one line instead of widening the menu",
-              "\(noteRow?.view?.frame.height ?? 0) vs one line \(oneLine)")
-        MenuNoteItem.refresh(noteMenu, below: #selector(NSApplication.terminate(_:)), note: stops)
-        // covers: S313
-        check(noteRow?.note == stops && noteMenu.items[0].toolTip == stops,
-              "AirPlay 2 switch: turned off from a launch that runs it, the note under it says AirPlay 2 stops")
-    }
+            && UIStrings().helpText.contains("uses AirPlay 2,\nor AirPlay 1 when it was paired over AirPlay 1")
+            && !UIStrings().helpText.contains("(Experimental)"),
+          "S312 Guide: a speaker that plays both uses AirPlay 2, and no AirPlay 2 switch is named")
     // The gear menu is held only by the click that opens it, and AppKit can send
     // the chosen item's action after the pop-up call has returned.
     MainActor.assumeIsolated {
@@ -8367,8 +8328,6 @@ do {
     // covers: S227 (the Mac's default when nothing is stored)
     check(fresh.whenSourceQuits == .system,
           "settings: Switch to All System Audio When the Source App Quits is on when nothing is stored (S227)")
-    // covers: P2
-    check(!fresh.airPlay2, "settings: AirPlay 2 is off when nothing is stored (P2)")
 
     var wanted = AppSettings()
     wanted.source = .input(uid: "usb-mic")
@@ -8383,7 +8342,6 @@ do {
     wanted.showVirtualDevices = true
     wanted.appearance = .dark
     wanted.whenSourceQuits = .stop
-    wanted.airPlay2 = true
     store.save(source: wanted.source)
     store.save(ids: wanted.enabledAirPlay, forKey: Keys.enabledAirPlay)
     store.save(ids: wanted.enabledLocal, forKey: Keys.enabledLocal)
@@ -8396,28 +8354,16 @@ do {
     store.save(showVirtualDevices: wanted.showVirtualDevices)
     store.save(appearance: wanted.appearance)
     store.save(whenSourceQuits: wanted.whenSourceQuits)
-    store.save(airPlay2: wanted.airPlay2)
     check(store.load() == wanted, "settings: every saved setting comes back unchanged")
     check(stored.values[Keys.whenSourceQuits] as? String == "stop" && store.load().whenSourceQuits == .stop,
           "settings: Switch to All System Audio When the Source App Quits turned off stays off (S227)")
-    // covers: P2
-    check(stored.values[Keys.airPlay2] as? Bool == true, "settings: the AirPlay 2 switch is stored as a Bool")
-    store.save(airPlay2: false)
-    // covers: P2
-    check(!store.load().airPlay2, "settings: AirPlay 2 switched off again reads back off")
-    stored.values[Keys.airPlay2] = "yes"
-    // covers: P2
-    check(!store.load().airPlay2, "settings: an AirPlay 2 value that isn't a Bool reads as off")
-    store.save(airPlay2: true)
-
     // covers: P170
-    check(!AppSettings.airPlay2On(setting: false, environment: [:])
-            && !AppSettings.airPlay2On(setting: false, environment: ["AUDIOSYNC_AIRPLAY2": "0"]),
-          "settings: AirPlay 2 stays off with the switch off and no AUDIOSYNC_AIRPLAY2=1 (P170)")
+    check(!AppSettings.airPlay2On(environment: [:])
+            && !AppSettings.airPlay2On(environment: ["AUDIOSYNC_AIRPLAY2": "0"]),
+          "settings: AirPlay 2 stays off without AUDIOSYNC_AIRPLAY2=1 (P170)")
     // covers: P2
-    check(AppSettings.airPlay2On(setting: true, environment: [:])
-            && AppSettings.airPlay2On(setting: false, environment: ["AUDIOSYNC_AIRPLAY2": "1"]),
-          "settings: the switch or AUDIOSYNC_AIRPLAY2=1 turns AirPlay 2 on")
+    check(AppSettings.airPlay2On(environment: ["AUDIOSYNC_AIRPLAY2": "1"]),
+          "settings: AUDIOSYNC_AIRPLAY2=1 turns AirPlay 2 on")
     check(stored.values[Keys.enabledAirPlay] as? [String] == ["airplay-1", "airplay-2"],
           "settings: a set of speakers is stored as a sorted list")
     store.save(source: .system)
@@ -8526,7 +8472,7 @@ do {
         (Keys.localOffsets, "localOffsetMsByUID"),
         (Keys.airPlayDelay, "airPlayDelayMs"), (Keys.nativeAirPlayAdjustment, "nativeAirPlayAdjustmentMs"),
         (Keys.localDelaysMigrated, "localDelayModelMigrated"), (Keys.speakerNames, "speakerNamesByKey"),
-        (Keys.airPlay2, "airPlay2Enabled"), (Keys.zones, "speakerZones"),
+        (Keys.zones, "speakerZones"),
         (Keys.zonesMigrated, "speakerZonesMigrated"), (Keys.zonesNoticeDue, "speakerZonesNoticeDue"),
         (Keys.presets, "speakerPresets"), (Keys.presetsMigrated, "speakerPresetsMigrated"),
     ]

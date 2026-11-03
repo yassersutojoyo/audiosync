@@ -308,6 +308,9 @@ struct Speaker {
     /// Its retry waits out a back-off the receiver asked for (P154), which
     /// discovery listing it again doesn't cut short (P142).
     receiver_wait: bool,
+    /// Its AirPlay 2 setup failed, so its sessions go over AirPlay 1 until
+    /// the host adds it again (P231).
+    airplay1_fallback: bool,
 }
 
 impl Speaker {
@@ -337,6 +340,7 @@ impl Speaker {
             started_as: StartKind::Host,
             restarting: false,
             receiver_wait: false,
+            airplay1_fallback: false,
         }
     }
 
@@ -1413,6 +1417,7 @@ impl Driver {
         let path_switch = self.airplay2
             && !closing
             && !alac_retry
+            && !speaker.airplay1_fallback
             && matches!(speaker.phase, Phase::Active(_))
             && matches!(error.kind, ErrorKind::Unsupported(_) | ErrorKind::Refused)
             && speaker.device.choose_path(true, Some(error.kind)) == Ok(ProtocolPath::AirPlay2);
@@ -1423,11 +1428,13 @@ impl Driver {
         if path_switch {
             self.remember_outcome(key, error.kind, "an AirPlay 1 attempt");
         }
+        let fallback = was_ap2 && !closing && !alac_retry && self.falls_back(key, error.kind);
         // Soon after the sender's own TEARDOWN, a member that refuses or
         // asks for pairing is still letting go of the old session (P181).
         let settling = !closing
             && !alac_retry
             && !path_switch
+            && !fallback
             && target.is_some()
             && self.settling(key, error.kind, now);
         if settling {
@@ -1437,9 +1444,10 @@ impl Driver {
             return;
         };
         speaker.receiver_wait = false;
+        speaker.airplay1_fallback |= fallback;
         let retry_at = if closing {
             None
-        } else if alac_retry || path_switch {
+        } else if alac_retry || path_switch || fallback {
             Some(now)
         } else if settling {
             speaker.backoff.on_failure(ErrorKind::Lost, now)
@@ -1449,7 +1457,7 @@ impl Driver {
         } else {
             speaker.backoff.on_failure(error.kind, now)
         };
-        speaker.ap2_retry = was_ap2 && retry_at.is_some();
+        speaker.ap2_retry = was_ap2 && retry_at.is_some() && !fallback;
         speaker.next_start = StartKind::Retry;
         let next = match retry_at {
             _ if closing => Phase::Idle,
@@ -1464,20 +1472,24 @@ impl Driver {
         } else {
             error.kind.user_reason()
         };
-        self.emit_speaker(
-            key,
-            SpeakerEvent::Error(SpeakerError {
-                error,
-                reason,
-                retry_at,
-            }),
-        );
+        if fallback {
+            self.log_fallback(key, error.kind);
+        } else {
+            self.emit_speaker(
+                key,
+                SpeakerEvent::Error(SpeakerError {
+                    error,
+                    reason,
+                    retry_at,
+                }),
+            );
+        }
         if closing {
             self.stopped(key);
         } else if alac_retry {
             self.directory.remember_pcm_refused(key);
             self.start_session(key, StartKind::Host, now);
-        } else if path_switch {
+        } else if path_switch || fallback {
             if let Some(id) = &target {
                 self.move_target_to_airplay2(id, key, now);
             }
@@ -1487,7 +1499,7 @@ impl Driver {
             self.emit_speaker(key, SpeakerEvent::State(state));
         }
         // A session that retries keeps its place; one that gave up hands it on.
-        if was_ap2 && retry_at.is_none() {
+        if was_ap2 && (retry_at.is_none() || fallback) {
             self.wake_ap2_waiter(now);
         }
     }
@@ -1920,6 +1932,7 @@ impl Driver {
         speaker.options = options;
         speaker.counters = counters;
         speaker.removing = false;
+        speaker.airplay1_fallback = false;
         // Its target went while it tore down: the host owns it alone now.
         if speaker
             .target
@@ -2178,16 +2191,23 @@ impl Driver {
             speaker.device = device;
         }
         self.speakers.get(key).is_some_and(|speaker| {
+            if speaker.device.verdict.airplay2 && self.target_on_airplay2(speaker) {
+                return true;
+            }
+            if speaker.airplay1_fallback {
+                return false;
+            }
             let device = &speaker.device;
             let outcome = self.airplay1_outcome(key, speaker);
-            let preferred = super::planned_path(device, true, self.airplay2_preferred, outcome)
-                == Ok(ProtocolPath::AirPlay2);
+            // Legacy credentials keep the preference off it (P214).
+            let prefers = self.airplay2_preferred && speaker.options.credentials.is_none();
+            let preferred =
+                super::planned_path(device, true, prefers, outcome) == Ok(ProtocolPath::AirPlay2);
             // Only the preference sends it there: AirPlay 1 plays it
             // rather than waiting for a taken AirPlay 2 place (P214).
             let fallback = device.choose_path(true, outcome) == Ok(ProtocolPath::AirPlay1)
                 && self.ap2_place_taken(key);
-            (preferred && !fallback)
-                || (device.verdict.airplay2 && self.target_on_airplay2(speaker))
+            preferred && !fallback
         })
     }
 
@@ -3491,6 +3511,7 @@ mod tests {
                 started_as: StartKind::Host,
                 restarting: false,
                 receiver_wait: false,
+                airplay1_fallback: false,
             },
         );
 
@@ -3651,6 +3672,7 @@ mod tests {
                 started_as: StartKind::Host,
                 restarting: false,
                 receiver_wait: false,
+                airplay1_fallback: false,
             },
         );
 

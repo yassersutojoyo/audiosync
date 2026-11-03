@@ -371,7 +371,7 @@ pub enum LeftOff {
     /// No speaker with its key is listed.
     NotFound,
     Hidden,
-    /// "Needs AirPlay 2 (Experimental)".
+    /// "Needs AirPlay 2".
     NeedsAirPlay2,
     /// "Plays as part of <target>".
     InTarget,

@@ -35,6 +35,41 @@ impl Driver {
         });
     }
 
+    /// Whether a speaker whose AirPlay 2 session failed with `kind` goes
+    /// on over AirPlay 1 instead (P231): a setup failure of a speaker only
+    /// the preference sent to AirPlay 2, once per host start.
+    pub(super) fn falls_back(&self, key: &DeviceKey, kind: ErrorKind) -> bool {
+        let setup_failure = matches!(
+            kind,
+            ErrorKind::Refused
+                | ErrorKind::Unsupported(_)
+                | ErrorKind::PairingRequired
+                | ErrorKind::PairingFailed
+                | ErrorKind::Timeout
+        );
+        setup_failure
+            && !self.homekit_paired(key)
+            && self.speakers.get(key).is_some_and(|speaker| {
+                let device = &speaker.device;
+                matches!(&speaker.phase, Phase::Ap2(active) if active.stream_id.is_none())
+                    && !speaker.airplay1_fallback
+                    && speaker.target.is_none()
+                    && device.choose_path(true, self.airplay1_outcome(key, speaker))
+                        == Ok(ProtocolPath::AirPlay1)
+                    && device
+                        .airplay1_plan(speaker.options.credentials.is_some())
+                        .is_ok()
+            })
+    }
+
+    pub(super) fn log_fallback(&mut self, key: &DeviceKey, kind: ErrorKind) {
+        self.emit(SenderEvent::PathLog {
+            key: key.clone(),
+            line: format!("AirPlay 2 setup ended in {kind:?}: AirPlay 1 path"),
+            remembered: self.airplay1_outcomes.get(key).copied(),
+        });
+    }
+
     pub(super) fn forget_outcome(&mut self, key: &DeviceKey, reason: &str) {
         if let Some(kind) = self.airplay1_outcomes.remove(key) {
             self.emit(SenderEvent::PathLog {

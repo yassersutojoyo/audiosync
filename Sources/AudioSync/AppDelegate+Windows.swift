@@ -402,10 +402,6 @@ extension AppDelegate {
             self?.whenSourceQuits = on ? .system : .stop
             self?.pushModel()
         }
-        a.setAirPlay2 = { [weak self] on in
-            self?.airPlay2 = on
-            self?.pushModel()
-        }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
         a.transport = { [weak self] command in self?.sendTransport(command) }
         a.quit = { NSApp.terminate(nil) }
@@ -567,8 +563,6 @@ extension AppDelegate {
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
-        publish(\.airPlay2, airPlay2)
-        publish(\.airPlay2AtLaunch, airPlay2AtLaunch)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
         followCalibrationContext()
@@ -880,12 +874,6 @@ extension AppDelegate {
         pushModel()
     }
 
-    /// Saved now; the sender reads it at the next launch (`airPlay2AtLaunch`).
-    @objc func toggleAirPlay2(_ sender: Any?) {
-        airPlay2.toggle()
-        pushModel()
-    }
-
     /// One of the Appearance submenu's items; each carries its choice's raw value.
     @objc func chooseAppearance(_ sender: Any?) {
         guard let raw = (sender as? NSMenuItem)?.representedObject as? String,
@@ -908,8 +896,6 @@ extension AppDelegate {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         case #selector(toggleSwitchWhenSourceQuits(_:)):
             menuItem.state = whenSourceQuits == .system ? .on : .off
-        case #selector(toggleAirPlay2(_:)):
-            menuItem.state = airPlay2 ? .on : .off
         case #selector(recallPresetFromMenu(_:)):
             let id = menuItem.representedObject as? String
             menuItem.state = appModel.presets.contains { $0.id == id && $0.current } ? .on : .off
@@ -917,16 +903,6 @@ extension AppDelegate {
             break
         }
         return true
-    }
-
-    /// The AudioSync menu, before it opens: the AirPlay 2 note follows the
-    /// switch, which the gear menu may have changed. The SDK declares this
-    /// requirement nonisolated; AppKit calls it on the main thread.
-    nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
-        MainActor.assumeIsolated {
-            MenuNoteItem.refresh(menu, below: #selector(toggleAirPlay2(_:)),
-                                 note: text.airPlay2Note(on: airPlay2, onAtLaunch: airPlay2AtLaunch))
-        }
     }
 }
 
