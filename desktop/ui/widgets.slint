@@ -96,6 +96,9 @@ export global Glyphs {
     out property <string> music-note: "\u{EC4F}";
     out property <string> previous: "\u{E892}";
     out property <string> next: "\u{E893}";
+    out property <string> shuffle: "\u{E8B1}";
+    out property <string> repeat-all: "\u{E8EE}";
+    out property <string> repeat-one: "\u{E8ED}";
     out property <string> play: "\u{E768}";
     out property <string> pause: "\u{E769}";
     out property <string> presets: "\u{E728}";
@@ -225,6 +228,15 @@ export global Glyphs {
         }
         if glyph == root.next {
             return "M12.5 3 V13";
+        }
+        if glyph == root.shuffle {
+            return "M2 4.5 H5 L11 11.5 H14 M2 11.5 H5 L11 4.5 H14 M12 2.5 L14 4.5 L12 6.5 M12 9.5 L14 11.5 L12 13.5";
+        }
+        if glyph == root.repeat-all {
+            return "M3 9 V6 Q3 4.5 4.5 4.5 H13 M11 2.5 L13 4.5 L11 6.5 M13 7 V10 Q13 11.5 11.5 11.5 H3 M5 9.5 L3 11.5 L5 13.5";
+        }
+        if glyph == root.repeat-one {
+            return "M3 9 V6 Q3 4.5 4.5 4.5 H13 M11 2.5 L13 4.5 L11 6.5 M13 7 V10 Q13 11.5 11.5 11.5 H3 M5 9.5 L3 11.5 L5 13.5 M7.25 7.25 L8 6.5 V9.5";
         }
         if glyph == root.presets {
             return "M4 2 H12 V14 L8 10.75 L4 14 Z";
@@ -499,6 +511,8 @@ export component KindIcon inherits Rectangle {
 export component IconButton inherits Rectangle {
     in property <string> glyph;
     in property <string> label;
+    // A toggle's state for Narrator, such as On or Off.
+    in property <string> value;
     in property <bool> enabled: true;
     in property <color> glyph-color: Tokens.text;
     in property <length> glyph-size: 16px;
@@ -515,6 +529,7 @@ export component IconButton inherits Rectangle {
     forward-focus: focus;
     accessible-role: button;
     accessible-label: root.label;
+    accessible-value: root.value;
     accessible-enabled: root.enabled;
     accessible-action-default => {
         root.clicked();

@@ -1150,11 +1150,15 @@ component NowPlayingCard inherits Card {
     in property <image> artwork;
     // Windows' animation effects; off, a long title is cut instead of scrolling.
     in property <bool> animated: true;
+    // As the player reports them, -1 where it doesn't take the command:
+    // shuffle 0 off, 1 on; repeat 0 off, 1 all, 2 one.
+    in property <int> shuffle: -1;
+    in property <int> repeat: -1;
     property <duration> shown-at;
-    // Which button has the keyboard focus (0 to 2), -1 for none: the app
+    // Which button has the keyboard focus (0 to 4), -1 for none: the app
     // hands the focus on before the card hides.
     in-out property <int> focused-button: -1;
-    // 0 Previous, 1 Play or Pause, 2 Next.
+    // 0 Previous, 1 Play or Pause, 2 Next, 3 Shuffle, 4 Repeat.
     callback transport(int);
 
     accessible-role: groupbox;
@@ -1230,6 +1234,19 @@ component NowPlayingCard inherits Card {
             alignment: center;
             spacing: 20px;
 
+            if root.shuffle >= 0: IconButton {
+                glyph: Glyphs.shuffle;
+                glyph-color: root.shuffle == 1 ? Tokens.teal-text : Tokens.text;
+                label: Strings.shuffle;
+                value: root.shuffle == 1 ? Strings.on : Strings.off;
+                clicked => {
+                    root.transport(3);
+                }
+                focus-changed(has) => {
+                    root.note-focus(3, has);
+                }
+            }
+
             IconButton {
                 glyph: Glyphs.previous;
                 label: Strings.previous-track;
@@ -1263,6 +1280,19 @@ component NowPlayingCard inherits Card {
                 }
                 focus-changed(has) => {
                     root.note-focus(2, has);
+                }
+            }
+
+            if root.repeat >= 0: IconButton {
+                glyph: root.repeat == 2 ? Glyphs.repeat-one : Glyphs.repeat-all;
+                glyph-color: root.repeat > 0 ? Tokens.teal-text : Tokens.text;
+                label: Strings.repeat;
+                value: root.repeat == 2 ? Strings.repeat-one : root.repeat == 1 ? Strings.on : Strings.off;
+                clicked => {
+                    root.transport(4);
+                }
+                focus-changed(has) => {
+                    root.note-focus(4, has);
                 }
             }
         }
@@ -1325,6 +1355,8 @@ export component MainWindow inherits Window {
     in property <bool> now-playing-has-artwork;
     in property <image> now-playing-artwork;
     in property <bool> now-playing-animated: true;
+    in property <int> now-playing-shuffle: -1;
+    in property <int> now-playing-repeat: -1;
     in-out property <int> now-playing-focused-button: -1;
     in property <[SpeakerItem]> this-pc;
     in property <[SpeakerItem]> connected;
@@ -2069,6 +2101,8 @@ export component MainWindow inherits Window {
                         has-artwork: root.now-playing-has-artwork;
                         artwork: root.now-playing-artwork;
                         animated: root.now-playing-animated;
+                        shuffle: root.now-playing-shuffle;
+                        repeat: root.now-playing-repeat;
                         focused-button <=> root.now-playing-focused-button;
                         changed focused-button => {
                             root.control-focus-changed(MainControl.transport, self.focused-button >= 0);

@@ -279,11 +279,21 @@ struct MainView: View {
                     Spacer(minLength: 0)
                 }
                 HStack(spacing: 28) {
+                    if let shuffle = track.shuffle {
+                        modeButton("shuffle", .shuffle(!shuffle), on: shuffle, label: t.shuffle,
+                                   value: shuffle ? t.on : t.off)
+                    }
                     transportButton("backward.fill", .previous, label: t.previousTrack)
                     transportButton(track.isPlaying ? "pause.fill" : "play.fill", .playPause,
                                     label: track.isPlaying ? t.pause : t.play)
                         .font(.system(size: 22))
                     transportButton("forward.fill", .next, label: t.nextTrack)
+                    if let mode = track.repeatMode {
+                        modeButton(mode == .one ? "repeat.1" : "repeat",
+                                   .repeatMode(mode.next(withOne: track.bundleID == NowPlayingMonitor.music)),
+                                   on: mode != .off, label: t.repeatMode,
+                                   value: mode == .one ? t.repeatOne : mode == .all ? t.on : t.off)
+                    }
                 }
                 .font(.system(size: 16))
                 .frame(maxWidth: .infinity)
@@ -299,6 +309,18 @@ struct MainView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
         .accessibilityLabel(label)
+        .help(label)
+    }
+
+    private func modeButton(_ symbol: String, _ command: NowPlayingMonitor.Command, on: Bool,
+                            label: String, value: String) -> some View {
+        Button { model.actions.transport(command) } label: {
+            Image(systemName: symbol)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(on ? Brand.tealText : Color.primary)
+        .accessibilityLabel(label)
+        .accessibilityValue(value)
         .help(label)
     }
 

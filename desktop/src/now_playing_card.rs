@@ -73,7 +73,11 @@ impl Repeat {
     /// The setting a click on the repeat button asks for: off, all, one,
     /// then off again.
     pub fn next(self) -> Repeat {
-        self
+        match self {
+            Repeat::Off => Repeat::All,
+            Repeat::All => Repeat::One,
+            Repeat::One => Repeat::Off,
+        }
     }
 }
 
@@ -91,12 +95,20 @@ impl PlayModes {
     /// 2 list).
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn read(
-        _shuffle_enabled: bool,
-        _shuffle: Option<bool>,
-        _repeat_enabled: bool,
-        _repeat: Option<i32>,
+        shuffle_enabled: bool,
+        shuffle: Option<bool>,
+        repeat_enabled: bool,
+        repeat: Option<i32>,
     ) -> PlayModes {
-        PlayModes::default()
+        PlayModes {
+            shuffle: shuffle.filter(|_| shuffle_enabled),
+            repeat: match repeat.filter(|_| repeat_enabled) {
+                Some(0) => Some(Repeat::Off),
+                Some(1) => Some(Repeat::One),
+                Some(2) => Some(Repeat::All),
+                _ => None,
+            },
+        }
     }
 }
 

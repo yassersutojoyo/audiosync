@@ -25,12 +25,16 @@ final class NowPlayingMonitor {
         var position: Position? = nil
         /// As the explicit pause reads it (`ExplicitPause.playerState`).
         var playerState: Bool? = nil
+        /// Nil where the player doesn't take the command, which hides its button.
+        var shuffle: Bool? = nil
+        var repeatMode: RepeatMode? = nil
 
         /// Leaves `position` out: it moves on all the time, and only a jump
         /// is news (`Position.jumped`).
         static func == (a: Track, b: Track) -> Bool {
             a.bundleID == b.bundleID && a.title == b.title && a.artist == b.artist
                 && a.album == b.album && a.isPlaying == b.isPlaying && a.playerState == b.playerState
+                && a.shuffle == b.shuffle && a.repeatMode == b.repeatMode
                 && (a.artwork == nil) == (b.artwork == nil)
         }
     }
@@ -231,7 +235,8 @@ final class NowPlayingMonitor {
 
         private static func track(_ t: Track, playing: Bool) -> Track {
             Track(bundleID: t.bundleID, appName: t.appName, title: t.title, artist: t.artist, album: t.album,
-                  isPlaying: playing, artwork: t.artwork, position: t.position, playerState: t.playerState)
+                  isPlaying: playing, artwork: t.artwork, position: t.position, playerState: t.playerState,
+                  shuffle: t.shuffle, repeatMode: t.repeatMode)
         }
     }
 
@@ -239,7 +244,13 @@ final class NowPlayingMonitor {
         case off, all, one
 
         /// Music repeats one song too; Spotify's dictionary has only on and off.
-        func next(withOne: Bool) -> RepeatMode { self }
+        func next(withOne: Bool) -> RepeatMode {
+            switch self {
+            case .off: return .all
+            case .all: return withOne ? .one : .off
+            case .one: return .off
+            }
+        }
     }
 
     enum Command: Equatable { case playPause, next, previous, shuffle(Bool), repeatMode(RepeatMode) }
@@ -248,7 +259,10 @@ final class NowPlayingMonitor {
     /// that does not take them.
     static func modes(_ bundleID: String, shuffle: String, repeating: String)
         -> (shuffle: Bool?, repeatMode: RepeatMode?) {
-        (nil, nil)
+        let repeatModes: [String: RepeatMode] = bundleID == spotify
+            ? ["false": .off, "true": .all]
+            : ["off": .off, "all": .all, "one": .one]
+        return (["true": true, "false": false][shuffle], repeatModes[repeating])
     }
 
     static func verb(_ command: Command, bundleID: String) -> String {
@@ -256,7 +270,11 @@ final class NowPlayingMonitor {
         case .playPause: return "playpause"
         case .next: return "next track"
         case .previous: return "previous track"
-        case .shuffle, .repeatMode: return ""
+        case .shuffle(let on):
+            return bundleID == spotify ? "set shuffling to \(on)" : "set shuffle enabled to \(on)"
+        case .repeatMode(let mode):
+            if bundleID == spotify { return "set repeating to \(mode != .off)" }
+            return "set song repeat to \(mode)"
         }
     }
 
@@ -545,6 +563,11 @@ final class NowPlayingMonitor {
         // Spotify's duration is in ms, Music's in seconds. Whole ms avoid the locale's decimal
         // separator; rounding outside the tell block keeps scripting additions away from the player.
         let durationToMs = bundleID == Self.spotify ? 1 : 1000
+        // Spotify says whether the track takes shuffle and repeat; Music always does.
+        let (readShuffle, readRepeat) = bundleID == Self.spotify
+            ? ("if shuffling enabled then set sh to shuffling as string",
+               "if repeating enabled then set rp to repeating as string")
+            : ("set sh to shuffle enabled as string", "set rp to song repeat as string")
         let script = """
             with timeout of 2 seconds
                 if application id "\(bundleID)" is not running then return "stopped"
@@ -553,6 +576,15 @@ final class NowPlayingMonitor {
                     if s is "stopped" then return s
                     set t to current track
                     set trackText to s & "\(sep)" & (name of t) & "\(sep)" & (artist of t) & "\(sep)" & (album of t)
+                    set sh to ""
+                    set rp to ""
+                    try
+                        \(readShuffle)
+                    end try
+                    try
+                        \(readRepeat)
+                    end try
+                    set trackText to trackText & "\(sep)" & sh & "\(sep)" & rp
                     set p to missing value
                     set d to missing value
                     try
@@ -581,14 +613,17 @@ final class NowPlayingMonitor {
         let appName = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
             ?? bundleID
         let isPlaying = parts[0] == "playing"
+        let modes: (shuffle: Bool?, repeatMode: RepeatMode?) = parts.count >= 6
+            ? Self.modes(bundleID, shuffle: parts[4], repeating: parts[5]) : (nil, nil)
         var position: Position?
-        if parts.count >= 6, let elapsedMs = Int(parts[4]), let lengthMs = Int(parts[5]), lengthMs > 0 {
+        if parts.count >= 8, let elapsedMs = Int(parts[6]), let lengthMs = Int(parts[7]), lengthMs > 0 {
             position = Position(elapsed: Double(min(max(0, elapsedMs), lengthMs)) / 1000,
                                 length: Double(lengthMs) / 1000, readAt: readAt, playing: isPlaying)
         }
         return .track(Track(bundleID: bundleID, appName: appName, title: parts[1], artist: parts[2],
                             album: parts[3], isPlaying: isPlaying, artwork: nil, position: position,
-                            playerState: ExplicitPause.playerState(parts[0])))
+                            playerState: ExplicitPause.playerState(parts[0]),
+                            shuffle: modes.shuffle, repeatMode: modes.repeatMode))
     }
 
     private func artwork(for t: Track) -> NSImage? {

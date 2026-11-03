@@ -39,7 +39,7 @@ use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::network_profile::{self, Watch};
-use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Transport};
+use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Repeat, Transport};
 use crate::ui_model::{
     self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
     MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
@@ -1407,6 +1407,14 @@ impl App {
         self.main
             .set_now_playing_subtitle(track.subtitle().as_str().into());
         self.main.set_now_playing_playing(track.playing);
+        self.main
+            .set_now_playing_shuffle(track.modes.shuffle.map_or(-1, i32::from));
+        self.main.set_now_playing_repeat(match track.modes.repeat {
+            None => -1,
+            Some(Repeat::Off) => 0,
+            Some(Repeat::All) => 1,
+            Some(Repeat::One) => 2,
+        });
         let artwork = track.artwork.as_ref().map(|artwork| {
             let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                 &artwork.rgba,
@@ -1423,9 +1431,18 @@ impl App {
     }
 
     fn send_transport(&self, button: i32) {
-        let command = match button {
-            0 => Transport::Previous,
-            1 => Transport::PlayPause,
+        let modes = self
+            .now_playing
+            .borrow()
+            .track()
+            .map(|track| track.modes)
+            .unwrap_or_default();
+        let command = match (button, modes.shuffle, modes.repeat) {
+            (0, ..) => Transport::Previous,
+            (1, ..) => Transport::PlayPause,
+            (3, Some(on), _) => Transport::Shuffle(!on),
+            (4, _, Some(repeat)) => Transport::Repeat(repeat.next()),
+            (3 | 4, ..) => return,
             _ => Transport::Next,
         };
         self.log.log(|| format!("now playing: {command:?} pressed"));

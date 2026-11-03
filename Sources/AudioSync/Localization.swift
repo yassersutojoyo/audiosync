@@ -112,6 +112,10 @@ struct UIStrings {
     let dismissAllNotices = "Dismiss All"
     let previousTrack = "Previous Track"
     let nextTrack = "Next Track"
+    let shuffle = "Shuffle"
+    let repeatMode = "Repeat"
+    /// The repeat button's state when it repeats the one song.
+    let repeatOne = "One"
     let play = "Play"
     let pause = "Pause"
     /// What AirPlay speakers with a screen, such as a TV, show while AudioSync

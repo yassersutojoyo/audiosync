@@ -8,6 +8,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - On Windows, pointing at a speaker's auto-connect bolt shows "Auto-Connect When Available", and Narrator reads it, as on the Mac.
 - On Windows, with the debug log on, Calibrate All logs the reference output's volume, whether it's muted, and the level it reads as when a run starts.
+- The Now Playing card has Shuffle and Repeat buttons beside the track buttons, for a player that takes them: Spotify and Music on the Mac, and on Windows any app whose media controls offer them. A mode that is on shows in the accent color, and Repeat goes from off to all to one where the player repeats one track.
 
 ### Changed
 
