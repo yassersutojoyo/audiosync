@@ -36,6 +36,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a speaker that was disconnected keeps its notice until it plays again, as on the Mac. Before, the notice went away as soon as the speaker connected, even while it stayed silent for up to 30 seconds.
 - On Windows, the Several Apps list sorts an app whose name starts with an accented letter, such as "Éclair", with its plain letter, as on the Mac. Before, it was listed after every other app.
 - On Windows, with 50 saved curves you can save over one of them by its name, as on the Mac. Before, Save Curve said the list was full.
+- On Windows, an AirPlay speaker that drops off the network while playing now shows Reconnecting… and its notice while AudioSync tries again, as on the Mac. Before, its row stayed on with no word that it had stopped.
 
 ## [0.8.0] - 2026-11-02
 

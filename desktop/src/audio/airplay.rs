@@ -4535,12 +4535,6 @@ impl AirPlaySpeakers {
                     && problem.retried()
                 {
                     added.state = SpeakerState::Retrying { at };
-                    if !self.listed.contains_key(id) {
-                        // It played on after its announcement lapsed: it
-                        // stays in the sender, with no retry notice for a
-                        // speaker the list no longer shows.
-                        return true;
-                    }
                     if !self.asleep && added.reconnecting() {
                         events.push(BackendEvent::AirPlayTrouble {
                             id: id.to_owned(),
@@ -8280,6 +8274,42 @@ pub mod tests {
         );
         assert_eq!(fake.take_calls(), []);
         assert_eq!(airplay.speakers().len(), 1);
+        assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
+    }
+
+    // covers: S222
+    #[test]
+    fn a_speaker_playing_on_after_its_announcement_lapsed_shows_reconnecting_once_its_retries_fail()
+    {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let id = id_of(&kitchen);
+        fake.appear(&kitchen);
+        airplay.poll();
+        airplay.set_enabled(&id, true).unwrap();
+        airplay.set_streaming(true);
+        fake.state(&kitchen, SpeakerState::Playing);
+        airplay.poll();
+        fake.gone(&kitchen);
+        airplay.poll();
+        fake.take_calls();
+
+        let mut troubles = 0;
+        for _ in 0..4 {
+            fake.fail(&kitchen, ErrorKind::Lost);
+            troubles += airplay
+                .poll()
+                .iter()
+                .filter(|event| {
+                    matches!(event, BackendEvent::AirPlayTrouble { id: trouble, .. } if *trouble == id)
+                })
+                .count();
+        }
+        assert_eq!(troubles, 1, "the notice comes with the second failed retry");
+        assert_eq!(fake.take_calls(), []);
+        assert_eq!(airplay.speakers().len(), 1, "its row stays");
+        assert!(!airplay.speakers()[0].playing);
         assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
     }
 
