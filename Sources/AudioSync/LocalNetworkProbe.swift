@@ -73,6 +73,12 @@ enum AirPlaySearch {
         return now.timeIntervalSince(emptySince) < LocalNetworkHint.emptyBeforeHint
     }
 
+    /// Whether a running sender's discovery ended its first look with no
+    /// speaker listed, as Windows' `airplay-none-found`.
+    static func foundNone(access: LocalNetworkAccess, senderUp: Bool, emptySince: Date?, now: Date) -> Bool {
+        !isSearching(access: access, senderUp: senderUp, emptySince: emptySince, now: now)
+    }
+
     /// When the first look ends if nothing changes, while that is ahead of
     /// `now`: no event says so, so the host reconciles then.
     static func endsAt(access: LocalNetworkAccess, senderUp: Bool, emptySince: Date?, now: Date) -> Date? {

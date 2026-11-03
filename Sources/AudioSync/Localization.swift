@@ -1170,9 +1170,8 @@ struct UIStrings {
     let noSpeakers = "No speakers found"
     /// The menu bar panel's list with no speaker and nothing hidden: "No
     /// speakers found" waits for AirPlay's first look, as on Windows.
-    /// `networkEmpty`: the main window's Connected Speakers note.
-    func panelNoSpeakers(airPlaySearching: Bool, networkEmpty: String) -> String {
-        airPlaySearching ? networkEmpty : noSpeakers
+    func panelNoSpeakers(airPlayFoundNone: Bool, networkEmpty: String) -> String {
+        airPlayFoundNone ? noSpeakers : networkEmpty
     }
     let masterVolume = "Master volume"
     let openApp = "Open AudioSync"

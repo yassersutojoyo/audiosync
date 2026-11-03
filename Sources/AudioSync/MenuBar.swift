@@ -283,6 +283,8 @@ final class AppModel: ObservableObject {
     @Published var localNetworkHint: LocalNetworkHint = .none
     /// AirPlay discovery takes its first look (`AirPlaySearch`).
     @Published var airplaySearching = false
+    /// The first look ended with no AirPlay speaker (`AirPlaySearch.foundNone`).
+    @Published var airplayFoundNone = false
     /// Streaming with every speaker off (`StreamingPolicy.showsNoSpeakerOn`).
     @Published var noSpeakerOn = false
     @Published var nowPlaying: NowPlayingMonitor.Track?
@@ -1633,7 +1635,7 @@ struct MenuBarView: View {
         } else if count == 0 {
             Text(layout.thisMac.isEmpty
                  ? (model.hidden.inThisMac || model.hidden.inConnected ? t.panelAllHidden
-                    : t.panelNoSpeakers(airPlaySearching: model.airplaySearching, networkEmpty: model.networkEmptyText))
+                    : t.panelNoSpeakers(airPlayFoundNone: model.airplayFoundNone, networkEmpty: model.networkEmptyText))
                  : model.hidden.inConnected ? t.panelConnectedHidden : model.networkEmptyText)
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)

@@ -558,6 +558,9 @@ extension AppDelegate {
         publish(\.airplaySearching, AirPlaySearch.isSearching(
             access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
             emptySince: airplayEmptySince, now: Date()))
+        publish(\.airplayFoundNone, AirPlaySearch.foundNone(
+            access: localNetworkProbe.access, senderUp: nativeStarts.isUp,
+            emptySince: airplayEmptySince, now: Date()))
         if let equalizerModel { publish(\.equalizerOn, equalizerModel.settings.enabled) }
         publishEqualizerCurve()
         rememberZoneNames()
