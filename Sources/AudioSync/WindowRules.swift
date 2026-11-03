@@ -33,11 +33,11 @@ enum MainColumns {
     /// The speaker list's width in the widest window, 860 pt.
     static let speakerListFull: CGFloat = 524
 
-    /// The left column's and the speaker list's widths in a window `width` points wide.
-    static func split(window width: CGFloat) -> (left: CGFloat, right: CGFloat) {
+    /// The left column's width in a window `width` points wide: the speaker list widens
+    /// first, to its full width, then this column.
+    static func left(window width: CGFloat) -> CGFloat {
         let room = width - 2 * BrandTokens.Spacing.windowMargin - BrandTokens.Spacing.columnGap
-        let left = min(max(room - speakerListFull, narrow), wide)
-        return (left, room - left)
+        return min(max(room - speakerListFull, narrow), wide)
     }
 
     /// Wider than the widest transport symbol, the 22 pt Play.

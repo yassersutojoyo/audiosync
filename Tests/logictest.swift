@@ -7213,8 +7213,9 @@ do {
 // MARK: Main window columns and the Now Playing title (WindowRules.swift)
 do {
     let columns = { (width: CGFloat) -> String in
-        let split = MainColumns.split(window: width)
-        return "\(Int(split.left)) + \(Int(split.right))"
+        let left = MainColumns.left(window: width)
+        let room = width - 2 * BrandTokens.Spacing.windowMargin - BrandTokens.Spacing.columnGap
+        return "\(Int(left)) + \(Int(min(room - left, MainColumns.speakerListFull)))"
     }
     check(columns(696) == "210 + 430",
           "main window: at its narrowest the left column is narrow and the speaker list takes the rest", columns(696))
@@ -7222,8 +7223,8 @@ do {
           "main window: a wider window widens the speaker list first, to its full width", columns(790))
     check(columns(825) == "245 + 524",
           "main window: past the speaker list's full width the left column widens", columns(825))
-    check(columns(860) == "280 + 524" && columns(900) == "280 + 564",
-          "main window: the left column stops at 280 pt and the speaker list takes the rest",
+    check(columns(860) == "280 + 524" && columns(900) == "280 + 524",
+          "main window: the left column stops at 280 pt and the speaker list stays at its full width",
           "\(columns(860)), \(columns(900))")
 
     check(Marquee.overflow(text: 300, line: 200) == 100 && Marquee.overflow(text: 150, line: 200) == 0

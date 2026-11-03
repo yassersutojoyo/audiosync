@@ -26,14 +26,12 @@ export { Palette } from "std-widgets.slint";
 export { Tokens } from "tokens.slint";
 export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, GuideStepItem, MixAppItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, ZoneChoice, ZoneItem, ZoneTarget } from "types.slint";
 
-// How the main window's width splits between its columns: the speaker list
-// widens first, to its full width, then the left column, from narrow to
-// wide; past that the speaker list again.
+// The main window's left column: the speaker list widens first, to its full
+// width, then the left column, from narrow to wide.
 global MainColumns {
-    public pure function split(window: length) -> { left: length, right: length } {
+    public pure function left(window: length) -> length {
         let room = window - 2 * Fluent.window-margin - Fluent.gap;
-        let left = clamp(room - Fluent.speaker-list-full, Fluent.left-column-narrow, Fluent.left-column-wide);
-        return { left: left, right: room - left };
+        return clamp(room - Fluent.speaker-list-full, Fluent.left-column-narrow, Fluent.left-column-wide);
     }
 }
 
@@ -1988,7 +1986,7 @@ export component MainWindow inherits Window {
             // scrolls when the window is shorter than its cards (a small
             // screen, or notices showing), as the speaker list does.
             left-column := ScrollView {
-                width: MainColumns.split(root.columns-width).left;
+                width: MainColumns.left(root.columns-width);
 
                 VerticalLayout {
                     // Room for the scroll bar, as in the speaker list.

@@ -132,7 +132,7 @@ struct MainView: View {
                         Card { CalibrateAllButton(model: model) }
                     }
                 }
-                .frame(width: MainColumns.split(window: windowWidth.points).left)
+                .frame(width: MainColumns.left(window: windowWidth.points))
                 FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
                     let all = model.layout
                     let layout = model.zonelessLayout
@@ -169,7 +169,7 @@ struct MainView: View {
                 }
                 // Slim by default; a wider window widens it up to 524 pt, its
                 // width in the old 860 pt window. 360 still fits a zone header.
-                .frame(minWidth: 360, maxWidth: 524, maxHeight: .infinity)
+                .frame(minWidth: 360, maxWidth: MainColumns.speakerListFull, maxHeight: .infinity)
             }
         }
         .padding(.horizontal, BrandTokens.Spacing.windowMargin)
