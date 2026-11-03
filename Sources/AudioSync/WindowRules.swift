@@ -40,12 +40,12 @@ enum MainColumns {
         return min(max(room - speakerListFull, narrow), wide)
     }
 
-    /// Wider than the widest transport symbol, the 22 pt Play.
-    static let transportButton: CGFloat = 24
+    /// An estimate, not measured: wider than the widest transport symbol, the 22 pt Play.
+    static let transportButton: CGFloat = 26
 
     /// The gap between the Now Playing buttons, `modes` while Shuffle or
     /// Repeat shows.
-    static func transportSpacing(modes: Bool) -> CGFloat { modes ? 16 : 28 }
+    static func transportSpacing(modes: Bool) -> CGFloat { modes ? 12 : 28 }
 }
 
 /// A Now Playing title too long for its line scrolls: it rests at its start,
