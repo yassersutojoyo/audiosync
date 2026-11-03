@@ -1742,6 +1742,8 @@ pub trait Backend {
     /// notice.
     fn recall_preset(&mut self, id: &str);
     fn dismiss_notice(&mut self, id: u64);
+    /// Test helper: clears every backend notice.
+    #[cfg(test)]
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
@@ -3054,6 +3056,7 @@ impl Backend for MockBackend {
         self.state.notices.retain(|n| n.id != id);
     }
 
+    #[cfg(test)]
     fn dismiss_all_notices(&mut self) {
         self.state.notices.clear();
     }

@@ -26,6 +26,7 @@ use audiosync_core::meter;
 use audiosync_core::policy::device_volume::Hint;
 use audiosync_core::policy::presets::new_preset_name;
 use audiosync_core::policy::source_quit::WhenSourceQuits;
+use audiosync_core::policy::speakers::MAX_NOTICES;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 
 mod cast_address;
@@ -1165,6 +1166,13 @@ impl App {
     }
 
     pub fn snapshot(&self) -> AppState {
+        let mut state = self.every_notice();
+        keep_newest_notices(&mut state.notices, self.notice_announcer.borrow().posted());
+        state
+    }
+
+    /// [`App::snapshot`] with every notice, also those past the capacity.
+    fn every_notice(&self) -> AppState {
         let mut state = self.backend.borrow().snapshot();
         state.notices.extend(self.login.borrow().notice().cloned());
         state
@@ -1219,28 +1227,33 @@ impl App {
     }
 
     fn dismiss_notice(&self, id: u64) {
-        let airplay2 =
-            id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
-        let dialog = id == DIALOG_NOTICE_ID && self.ui.borrow_mut().dialog_notice.take().is_some();
-        if airplay2
-            || dialog
-            || self.login.borrow_mut().dismiss(id)
-            || self.dismiss_remote_notice(id)
-            || self.dismiss_updater_notice(id)
-        {
+        if self.dismiss_own_notice(id) {
             self.refresh();
         } else {
             self.update(|b| b.dismiss_notice(id));
         }
     }
 
+    /// Dismisses the window's own notice `id`; false if it is the backend's.
+    fn dismiss_own_notice(&self, id: u64) -> bool {
+        let airplay2 =
+            id == AIRPLAY2_NOTICE_ID && self.ui.borrow_mut().airplay2_notice.take().is_some();
+        let dialog = id == DIALOG_NOTICE_ID && self.ui.borrow_mut().dialog_notice.take().is_some();
+        airplay2
+            || dialog
+            || self.login.borrow_mut().dismiss(id)
+            || self.dismiss_remote_notice(id)
+            || self.dismiss_updater_notice(id)
+    }
+
+    /// Dismisses the listed notices only: one that dropped off stays.
     fn dismiss_all_notices(&self) {
-        self.login.borrow_mut().dismiss_notice();
-        self.ui.borrow_mut().airplay2_notice = None;
-        self.ui.borrow_mut().dialog_notice = None;
-        self.dismiss_remote_notice(REMOTE_PUBLIC_NOTICE_ID);
-        self.dismiss_updater_notice(UPDATER_NOTICE_ID);
-        self.update(|b| b.dismiss_all_notices());
+        for notice in self.snapshot().notices {
+            if !self.dismiss_own_notice(notice.id) {
+                self.backend.borrow_mut().dismiss_notice(notice.id);
+            }
+        }
+        self.refresh();
     }
 
     /// Changes the backend, then shows the result everywhere.
@@ -1797,7 +1810,9 @@ impl App {
         if let Some((id, text)) = gone {
             self.backend.borrow_mut().rename_speaker(&id, &text);
         }
-        let state = self.snapshot();
+        // The announcer keeps every notice's place in time, also one that
+        // dropped off, so the list doesn't take it for news when it is back.
+        let mut state = self.every_notice();
         let strings = self.strings();
         let became_mix = {
             let mut ui = self.ui.borrow_mut();
@@ -2043,6 +2058,8 @@ impl App {
         notices.sort_by_key(|n| {
             std::cmp::Reverse(posted.iter().position(|&id| u64::try_from(n.id) == Ok(id)))
         });
+        notices.truncate(MAX_NOTICES);
+        keep_newest_notices(&mut state.notices, &posted);
         let mut notice_said = None;
         match announcement {
             Announcement::Say(title) => {
@@ -4747,6 +4764,22 @@ fn input_pair_choice(
         .collect();
     let (playing, _) = InputPair::resolve(state.input_pair, channels);
     (labels, i32::from(playing.index))
+}
+
+/// Keeps the newest [`MAX_NOTICES`] of `notices`, in their order. The older
+/// ones drop off without their dismiss action, so a dropped download goes
+/// on. `posted` is [`NoticeAnnouncer::posted`]; a notice missing from it was
+/// posted since, and ranks newest, by id.
+fn keep_newest_notices(notices: &mut Vec<ui_model::Notice>, posted: &[u64]) {
+    let posted_at = |n: &ui_model::Notice| {
+        let at = posted.iter().position(|&id| id == n.id);
+        (at.unwrap_or(usize::MAX), n.id)
+    };
+    let mut times: Vec<_> = notices.iter().map(posted_at).collect();
+    times.sort_unstable();
+    if let Some(&oldest_kept) = times.iter().rev().nth(MAX_NOTICES - 1) {
+        notices.retain(|n| posted_at(n) >= oldest_kept);
+    }
 }
 
 /// The newest `limit` notices: what a window lists. A window that shows
@@ -15721,6 +15754,77 @@ mod tests {
         assert_eq!(
             first_after_a_window_repost(["09.41", "09.41", "09.41"]),
             (first, first)
+        );
+    }
+
+    /// Past the capacity the oldest notice is in no list, so the flyout's
+    /// count is what the main window lists.
+    // covers: S423
+    #[test]
+    fn the_flyout_counts_only_the_notices_the_main_window_lists() {
+        let mut backend = MockBackend::new();
+        for subject in ["a", "b", "c", "d"] {
+            backend.post(subject, NoticeMessage::CaptureLost, "09.40");
+        }
+        let app = app_over(backend);
+        let oldest = app.snapshot().notices.last().map(|n| n.id);
+        app.ui.borrow_mut().airplay2_notice = Some(ui_model::Notice {
+            id: AIRPLAY2_NOTICE_ID,
+            subject: "AirPlay 2 (Experimental)".to_owned(),
+            message: NoticeMessage::AirPlay2NextLaunch {
+                on: true,
+                prefer: false,
+            },
+            time: "09.41".to_owned(),
+            post: 0,
+        });
+        app.refresh();
+        let listed: Vec<u64> = app.main.get_notices().iter().map(|n| n.id as u64).collect();
+        assert_eq!(
+            listed.first(),
+            Some(&AIRPLAY2_NOTICE_ID),
+            "the newest stays"
+        );
+        assert!(!listed.contains(&oldest.unwrap()), "the oldest dropped off");
+        assert_eq!(app.main.get_notices().row_count(), MAIN_NOTICE_LIMIT);
+        assert_eq!(
+            usize::try_from(app.flyout.get_notice_count()).ok(),
+            Some(app.main.get_notices().row_count())
+        );
+    }
+
+    /// Dismiss All closes only the listed notices: a running download
+    /// whose notice dropped off goes on.
+    // covers: S423
+    #[cfg(windows)]
+    #[test]
+    fn dismiss_all_leaves_a_download_whose_notice_dropped_off() {
+        let mut backend = MockBackend::new();
+        for subject in ["a", "b", "c", "d"] {
+            backend.post(subject, NoticeMessage::CaptureLost, "09.40");
+        }
+        let app = app_over(backend);
+        let oldest_first: Vec<u64> = app.snapshot().notices.iter().rev().map(|n| n.id).collect();
+        *app.updater.borrow_mut() = Some(crate::updater::tests::downloading(
+            "dismiss-all-dropped-off",
+        ));
+        // As if the download started before the four were posted.
+        *app.notice_announcer.borrow_mut() = NoticeAnnouncer {
+            posted: Some(
+                std::iter::once(UPDATER_NOTICE_ID)
+                    .chain(oldest_first)
+                    .collect(),
+            ),
+            ..NoticeAnnouncer::default()
+        };
+        app.refresh();
+        app.main.invoke_notices_dismissed_all();
+        assert!(
+            matches!(
+                app.updater.borrow().as_ref().and_then(|u| u.notice()),
+                Some(ui_model::UpdaterNotice::Downloading { .. })
+            ),
+            "the download runs on"
         );
     }
 

@@ -5597,6 +5597,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
     }
 
+    #[cfg(test)]
     fn dismiss_all_notices(&mut self) {
         if self.notices.get(&NoticeSubject::DoubleAudio).is_some() {
             self.remember_heard_twice_dismissal();

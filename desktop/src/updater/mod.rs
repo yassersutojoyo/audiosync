@@ -822,6 +822,15 @@ pub mod tests {
         (Updater::new(f.env), f.fetch)
     }
 
+    /// An updater whose download runs, as far as its work and notice tell;
+    /// no worker fetches anything.
+    pub(crate) fn downloading(name: &str) -> Updater {
+        let (mut updater, _) = updater(name);
+        updater.work = Work::Installing;
+        updater.set_notice(Some(UpdaterNotice::Downloading { percent: Some(40) }));
+        updater
+    }
+
     /// Holds the fetch of one kind after its first byte until the test
     /// opens the gate, so the test can act while it runs.
     struct GatedFetch {

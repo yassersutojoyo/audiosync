@@ -269,10 +269,6 @@ impl LaunchAtLogin {
         id == NOTICE_ID && self.notice.take().is_some()
     }
 
-    pub fn dismiss_notice(&mut self) {
-        self.notice = None;
-    }
-
     /// Reads the entry again; returns whether what the windows show changed.
     /// A notice whose cause went (the user fixed it in Settings) goes too.
     pub fn reread(&mut self) -> bool {
