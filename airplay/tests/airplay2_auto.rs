@@ -12,6 +12,7 @@ use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ProtocolPath, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
+use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::pairing::{Credentials, SECRET_BYTES};
 use audiosync_airplay::sender::{
     AIRPLAY2_AUTO, AIRPLAY2_AUTO_ENV, Sender, SenderConfig, SenderEvent, SpeakerEvent,
@@ -19,7 +20,7 @@ use audiosync_airplay::sender::{
 };
 use audiosync_airplay::volume::Volume;
 
-use common::ap2::{Ap2Server, FakeAp2};
+use common::ap2::{Ap2Server, FakeAp2, dict, int, plist};
 use common::key;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 
@@ -362,4 +363,107 @@ fn a_dual_device_with_legacy_credentials_stays_on_airplay1_under_the_preference(
             event: SpeakerEvent::Path(ProtocolPath::AirPlay1),
         })
     );
+}
+
+fn records(server: &Ap2Server) -> usize {
+    let keys = server.fake().keys();
+    keys.iter().filter(|key| *key == "RECORD").count()
+}
+
+/// Waits for the speaker's first error.
+fn first_error(events: &mut Events, sender: &Sender, key: &DeviceKey) -> Option<ErrorKind> {
+    match events.wait_for(sender, LONG, |event| {
+        matches!(event, SenderEvent::Speaker { key: k, event: SpeakerEvent::Error(_) } if k == key)
+    }) {
+        Some(SenderEvent::Speaker {
+            event: SpeakerEvent::Error(error),
+            ..
+        }) => Some(error.error.kind),
+        _ => None,
+    }
+}
+
+// covers: P231
+#[test]
+fn a_dual_device_whose_airplay2_wants_a_pin_plays_over_airplay1_without_asking() {
+    let _serial = serial();
+    let airplay1 = NetReceiver::start(Behavior::default());
+    let mut pin = FakeAp2::new();
+    pin.info_body = plist(dict(&[("statusFlags", int(0x204))]));
+    let server = Ap2Server::start(pin);
+    let (sender, _host) = start(untouched());
+    let (events, key) = play(&sender, dual(&airplay1, &server, 72));
+    sender.shutdown();
+    assert!(
+        !server.fake().keys().is_empty(),
+        "AirPlay 2 was tried first"
+    );
+    assert!(airplay1_keys(&airplay1).contains(&"RECORD".to_owned()));
+    assert_eq!(
+        errors(&events, &key),
+        [],
+        "no PIN prompt: {:?}",
+        events.of(&key)
+    );
+}
+
+// covers: P231
+#[test]
+fn a_fallback_refused_on_airplay1_too_stays_off_airplay2_until_the_next_start() {
+    let _serial = serial();
+    let mut refusing = Behavior::default();
+    refusing.status.insert("ANNOUNCE".to_owned(), 403);
+    let airplay1 = NetReceiver::start(refusing);
+    let mut refusing_record = FakeAp2::new();
+    refusing_record.status.insert("RECORD".to_owned(), 403);
+    let server = Ap2Server::start(refusing_record);
+    let (sender, _host) = start(untouched());
+    let device = dual(&airplay1, &server, 73);
+    let key = device.key.clone();
+    sender.add_speaker(device, options());
+    let mut events = Events::default();
+    assert_eq!(
+        first_error(&mut events, &sender, &key),
+        Some(ErrorKind::Refused)
+    );
+    sender.shutdown();
+    assert!(airplay1_keys(&airplay1).contains(&"ANNOUNCE".to_owned()));
+    assert_eq!(records(&server), 1, "one AirPlay 2 attempt");
+}
+
+/// HomeKit credentials the fake knows, as a PIN pairing leaves them.
+fn known_to(server: &Ap2Server) -> HomeKitCredentials {
+    let id = "00000000-0000-4000-8000-000000000231";
+    let seed = [0x31; 32];
+    let mut fake = server.fake();
+    let public = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
+    fake.hap.paired.push((id.as_bytes().to_vec(), public));
+    let receiver = fake.hap.public_key();
+    let blob = [&[1][..], id.as_bytes(), &seed, &receiver, &fake.hap.id].concat();
+    HomeKitCredentials::from_bytes(&blob).expect("credentials")
+}
+
+// covers: P231, P2
+#[test]
+fn a_homekit_paired_dual_device_never_falls_back_to_airplay1() {
+    let _serial = serial();
+    let airplay1 = NetReceiver::start(Behavior::default());
+    let mut refusing = FakeAp2::new();
+    refusing.status.insert("RECORD".to_owned(), 403);
+    let server = Ap2Server::start(refusing);
+    let (sender, _host) = start(untouched());
+    let device = dual(&airplay1, &server, 74);
+    let key = device.key.clone();
+    let mut paired = options();
+    paired.homekit_credentials = Some(known_to(&server));
+    sender.add_speaker(device, paired);
+    let mut events = Events::default();
+    assert_eq!(
+        first_error(&mut events, &sender, &key),
+        Some(ErrorKind::Refused)
+    );
+    sender.shutdown();
+    assert!(airplay1_keys(&airplay1).is_empty());
 }

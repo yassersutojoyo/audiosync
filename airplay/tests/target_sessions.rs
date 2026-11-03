@@ -787,6 +787,43 @@ fn a_speaker_that_fell_back_to_airplay1_joins_its_target_on_airplay2() {
     sender.shutdown();
 }
 
+// covers: P231, P177
+#[test]
+fn a_target_member_whose_airplay2_setup_fails_stays_on_airplay2() {
+    let _serial = serial();
+    let (a1, b1) = (
+        NetReceiver::start(Behavior::default()),
+        NetReceiver::start(Behavior::default()),
+    );
+    let mut refusing = FakeAp2::new();
+    refusing.status.insert("RECORD".to_owned(), 403);
+    let a2 = Ap2Server::start(refusing);
+    let b2 = Ap2Server::start(FakeAp2::new());
+    let (sender, _host) = start_preferring();
+    let mut events = Events::default();
+    let (da, db) = (dual_of(&a1, &a2, 1), dual_of(&b1, &b2, 2));
+    let target = pair(vec![member(Some(&da), 1), member(Some(&db), 2)], None);
+    sender.add_target(target, options(), |_, _| {});
+    assert!(
+        playing(&mut events, &sender, &db.key, 1),
+        "{:?}",
+        events.of(&db.key)
+    );
+    assert!(
+        events
+            .wait_state(&sender, &da.key, 1, LONG, |s| matches!(
+                s,
+                SpeakerState::Retrying { .. }
+            ))
+            .is_some(),
+        "{:?}",
+        events.of(&da.key)
+    );
+    sender.shutdown();
+    assert_eq!(errors(&events, &da.key), vec![ErrorKind::Refused]);
+    assert!(a1.log().requests.is_empty(), "no AirPlay 1 for one member");
+}
+
 fn ptp_fake() -> FakeAp2 {
     let mut fake = FakeAp2::new();
     fake.info_body = plist(dict(&[

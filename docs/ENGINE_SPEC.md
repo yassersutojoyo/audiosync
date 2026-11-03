@@ -4931,7 +4931,7 @@ The release side:
 | with_the_flag_on_the_path_is_on_and_airplay2_preferred (`core/src/ffi/airplay.rs`) | S312 |
 | only_the_preference_lists_a_dual_receiver_on_airplay2 (`core/src/ffi/airplay.rs`) | S312 |
 | an_airplay2_speaker_row_says_airplay_2_only_with_the_switch_on (`desktop/src/adapter.rs`) | S312 |
-| under_the_airplay2_flag_only_the_switch_moves_a_dual_receiver_to_airplay2 (`desktop/src/adapter.rs`) | S312 |
+| under_the_airplay2_flag_the_preference_moves_a_dual_receiver_to_airplay2 (`desktop/src/adapter.rs`) | S312 |
 | with_nothing_switched_the_path_is_on_and_airplay2_comes_first (`desktop/src/audio/airplay.rs`) | S312 |
 | the_airplay2_flag_keeps_the_path_on_and_prefers_airplay2 (`desktop/src/audio/airplay.rs`) | S312 |
 | the_airplay2_switch_is_off_unless_the_setting_or_the_variable_turns_it_on (`desktop/src/audio/airplay.rs`) | S312 |

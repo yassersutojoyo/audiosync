@@ -10742,11 +10742,11 @@ mod tests {
     }
 
     /// Under the AirPlay 2 flag (spec S312) the sender's path is on with the
-    /// switch off: an AirPlay 2 only receiver plays over AirPlay 2, one that
-    /// speaks both stays on AirPlay 1 until the switch prefers AirPlay 2.
+    /// switch off: an AirPlay 2 only receiver plays over AirPlay 2, and one
+    /// that speaks both follows the sender's preference, which the flag sets.
     // covers: S312
     #[test]
-    fn under_the_airplay2_flag_only_the_switch_moves_a_dual_receiver_to_airplay2() {
+    fn under_the_airplay2_flag_the_preference_moves_a_dual_receiver_to_airplay2() {
         for (preferred, dual_kind) in [(false, SpeakerKind::AirPlay), (true, SpeakerKind::AirPlay2)]
         {
             let mut audio = MockBackend::empty();
