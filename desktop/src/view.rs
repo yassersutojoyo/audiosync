@@ -6829,6 +6829,13 @@ mod tests {
                 })
         };
         let card = span("Now Playing").expect("the card shows");
+        let column =
+            element(&app, "MainWindow::left-column").map_or(0.0, |column| column.size().width);
+        assert_eq!(
+            card.1 - card.0,
+            column - 4.0,
+            "the card stays inside the column's scroll gutter"
+        );
         let inner = (card.0 + 12.0, card.1 - 12.0);
         let shown = ["Shuffle", "Previous Track", "Pause", "Next Track", "Repeat"].map(span);
         assert!(
