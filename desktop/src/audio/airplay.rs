@@ -262,8 +262,8 @@ impl StartedSender {
 /// or couldn't start; `None` when it couldn't start (it logs why).
 pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender>>;
 
-/// Whether the AirPlay 2 path runs (spec P2, P170): when the saved setting
-/// is on, or the environment variable turns it on without a rebuild.
+/// Whether the AirPlay 2 path runs (spec P2, P170): when `saved` is on, or
+/// the environment variable turns it on without a rebuild.
 pub fn airplay2_on(saved: bool, env: Option<&str>) -> bool {
     saved || airplay2_switch(env)
 }
@@ -279,8 +279,8 @@ pub fn airplay2_auto_on() -> bool {
     airplay2_auto(std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref())
 }
 
-/// The sender's AirPlay 2 path and preference (S312): the switch is the
-/// saved setting or `switch_env`, and the flag `auto` decides what it means.
+/// The sender's AirPlay 2 path and preference (S312): the switch is `saved`
+/// (false since the menu item went) or `switch_env`, and the flag `auto` decides.
 /// On Windows the driver thread runs as a Pro Audio task (S323).
 pub fn airplay2_config(saved: bool, switch_env: Option<&str>, auto: bool) -> SenderConfig {
     SenderConfig {

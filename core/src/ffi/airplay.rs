@@ -2520,7 +2520,7 @@ pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
     create_with(live_browser)
 }
 
-/// [`asc_airplay_create`] with the app's AirPlay 2 setting: AirPlay 2 is on
+/// [`asc_airplay_create`] with an AirPlay 2 switch: AirPlay 2 is on
 /// when `airplay2` is or when the environment variable turns it on (P2);
 /// off, the sender makes no AirPlay 2 traffic (P170).
 #[unsafe(no_mangle)]
@@ -2541,8 +2541,8 @@ pub extern "C" fn asc_airplay2_auto() -> bool {
     airplay2_auto(std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref())
 }
 
-/// The sender's configuration for the app's AirPlay 2 setting and the two
-/// environment variables' values: the switch is the setting or
+/// The sender's configuration for an AirPlay 2 switch and the two
+/// environment variables' values: the switch is `setting` or
 /// `AUDIOSYNC_AIRPLAY2`, and `AUDIOSYNC_AIRPLAY2_AUTO` (or the build's flag)
 /// decides what it means (S312).
 fn sender_config(setting: bool, switch: Option<&str>, auto: Option<&str>) -> SenderConfig {

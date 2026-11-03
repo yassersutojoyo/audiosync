@@ -799,8 +799,7 @@ struct UIStrings {
 
     /// The receiver plays only AirPlay 2, and this launch runs without it.
     func nativeAirPlayNeedsAirPlay2(name: String) -> String {
-        "\(name) plays only AirPlay 2, so it's off. Turn on AirPlay 2 (Experimental) in the gear menu "
-            + "or the AudioSync menu, then quit and reopen AudioSync."
+        "\(name) needs AirPlay 2, which this launch of AudioSync runs without, so it's off."
     }
 
     /// The receiver turned NTP timing down, and PTP timing isn't available.
@@ -1209,8 +1208,8 @@ struct UIStrings {
     func zoneMemberInTarget(_ target: String) -> String { "Plays as part of \(target)" }
     /// The zone menu's way to put that target in the member's place.
     func useTargetInstead(_ target: String) -> String { "Use \(target) Instead" }
-    /// A stereo pair or home theater in a zone while the AirPlay 2 switch is off.
-    let needsAirPlay2 = "Needs AirPlay 2 (Experimental)"
+    /// A stereo pair or home theater in a zone while this launch runs without AirPlay 2.
+    let needsAirPlay2 = "Needs AirPlay 2"
     /// A zone member that isn't listed right now.
     let zoneMemberNotFound = "Not found"
     /// A Cast member a zone click left off (S246).

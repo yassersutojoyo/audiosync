@@ -313,7 +313,7 @@ export global Strings {
     // Notes on a zone member's row: a stereo pair or home theater while
     // AirPlay 2 is off, a member that isn't listed (with its name when none
     // is known), and a Cast member a zone click left off (S246).
-    out property <string> needs-airplay2: @tr("Needs AirPlay 2 (Experimental)");
+    out property <string> needs-airplay2: @tr("Needs AirPlay 2");
     out property <string> zone-member-not-found: @tr("Not found");
     out property <string> unknown-device: @tr("Unknown device");
     out property <string> cast-stayed-off: @tr("Stayed off, since one Cast speaker plays at a time");
@@ -860,7 +860,7 @@ export global Strings {
             return @tr("{} needs a kind of pairing AudioSync for Windows can't do yet, so it's off.", speaker);
         }
         if problem == AirPlayProblem.airplay2-not-yet {
-            return @tr("{} plays only AirPlay 2, so it's off. Turn on File > AirPlay 2 (Experimental), then exit AudioSync and open it again.", speaker);
+            return @tr("{} needs AirPlay 2, which this launch of AudioSync runs without, so it's off.", speaker);
         }
         if problem == AirPlayProblem.timing-unavailable {
             return @tr("{} needs PTP timing, which isn't available, so it's off. If another app is using port 319 or 320, close it, then turn the speaker on again.", speaker);

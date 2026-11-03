@@ -655,7 +655,7 @@ fn no_text_promises_airplay() {
                 || line.contains("couldn't read your AirPlay pairings when it started,")
                 || line.contains("not supported yet")
                 || line.contains("doesn't support yet")
-                || line.contains("return @tr(\"{} plays only AirPlay 2, so it's off.")
+                || line.contains("return @tr(\"{} needs AirPlay 2, which this launch of AudioSync")
                 || line.contains("return @tr(\"AirPlay 2 is off\");")
                 || line.contains("property <string> airplay-delay-")
                 || line
@@ -690,7 +690,7 @@ fn no_text_promises_airplay() {
                     "waits while AudioSync plays to AirPlay 2 speakers on another network."
                 )
                 || line.contains("@tr(\"Waiting: AirPlay 2 speakers on another network\")")
-                || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2 (Experimental)\")")
+                || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2\")")
                 || line.contains(
                     "network-none-found: root.public-network ? \
                      @tr(\"No AirPlay or Google Cast speakers found yet.",

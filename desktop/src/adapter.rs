@@ -663,13 +663,13 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The windows' own settings.
     view: ViewSettings,
     /// The AirPlay 2 flag of this launch (spec S312): the AirPlay 2 path is
-    /// on whatever the switch says.
+    /// on whatever `AUDIOSYNC_AIRPLAY2` says.
     airplay2_auto: bool,
     /// Whether `AUDIOSYNC_AIRPLAY2` turns the sender's AirPlay 2 path on this
     /// launch.
     airplay2_at_launch: bool,
     /// `AUDIOSYNC_AIRPLAY2`, which turns the sender's AirPlay 2 path on with
-    /// the switch off.
+    /// the flag off.
     airplay2_switch_env: Option<String>,
     /// What a session does when the app it captures quits (spec S227).
     when_source_quits: WhenSourceQuits,

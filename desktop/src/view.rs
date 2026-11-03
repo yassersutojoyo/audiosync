@@ -11250,7 +11250,7 @@ mod tests {
         let strings = app.strings();
         assert_eq!(
             zone_note(&strings, ui_model::ZoneNote::NeedsAirPlay2),
-            "Needs AirPlay 2 (Experimental)"
+            "Needs AirPlay 2"
         );
         let mut state = app.snapshot();
         let zone = state.zones[0].clone();
