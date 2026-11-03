@@ -135,6 +135,7 @@ impl Driver {
                 return false;
             }
             speaker.target = Some(id.clone());
+            speaker.airplay1_fallback = false;
             return true;
         }
         self.speakers.insert(

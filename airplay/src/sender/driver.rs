@@ -1932,6 +1932,7 @@ impl Driver {
         speaker.options = options;
         speaker.counters = counters;
         speaker.removing = false;
+        speaker.airplay1_fallback = false;
         // Its target went while it tore down: the host owns it alone now.
         if speaker
             .target
@@ -1954,7 +1955,6 @@ impl Driver {
             Phase::Waiting(_) | Phase::Unannounced | Phase::Failed | Phase::Idle => {
                 speaker.backoff = Backoff::with_unit(self.retry_unit);
                 speaker.airplay1_outcome = None;
-                speaker.airplay1_fallback = false;
                 self.start_session(&key, StartKind::Host, now);
             }
         }
@@ -2191,6 +2191,9 @@ impl Driver {
             speaker.device = device;
         }
         self.speakers.get(key).is_some_and(|speaker| {
+            if speaker.device.verdict.airplay2 && self.target_on_airplay2(speaker) {
+                return true;
+            }
             if speaker.airplay1_fallback {
                 return false;
             }
@@ -2204,8 +2207,7 @@ impl Driver {
             // rather than waiting for a taken AirPlay 2 place (P214).
             let fallback = device.choose_path(true, outcome) == Ok(ProtocolPath::AirPlay1)
                 && self.ap2_place_taken(key);
-            (preferred && !fallback)
-                || (device.verdict.airplay2 && self.target_on_airplay2(speaker))
+            preferred && !fallback
         })
     }
 
