@@ -1187,6 +1187,37 @@ fn a_source_pick_reaches_the_app_and_a_refused_one_says_why() {
     assert!(remote.received.lock().unwrap().is_empty());
 }
 
+// covers: S344
+#[test]
+fn an_input_source_never_reaches_the_phone() {
+    let remote = start("source-input");
+    let token = pair(&remote);
+    let token = Some(token.as_str());
+    let text = SAMPLE.replacen(
+        "\"speakers\"",
+        r#""sources": [
+            {"id": "system", "name": "All System Audio", "kind": "system"},
+            {"id": "input:usb", "name": "USB Mic", "kind": "input"}
+        ], "source_id": "input:usb", "speakers""#,
+        1,
+    );
+    remote.server.publish_json(&text).unwrap();
+    let state = get(&remote, "/api/state", token).json();
+    assert_eq!(
+        state["sources"],
+        json!([{"id": "system", "name": "All System Audio",
+        "kind": "system", "available": true, "notice": null}])
+    );
+    assert_eq!(state["source_id"], Value::Null);
+
+    let reply = post(&remote, "/api/source", token, "{\"id\": \"input:usb\"}");
+    assert_eq!(
+        (reply.status, reply.error().as_str()),
+        (404, "unknown_source")
+    );
+    assert!(remote.received.lock().unwrap().is_empty());
+}
+
 /// Spotify and Chrome run; Zoom is listed only because a mix holds it.
 fn mixable(calibrating: bool) -> String {
     SAMPLE.replacen(
