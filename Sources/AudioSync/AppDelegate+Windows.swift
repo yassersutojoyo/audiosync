@@ -859,6 +859,21 @@ extension AppDelegate {
 
     @objc func refreshDevices(_ sender: Any?) { rescanDevices() }
 
+    @objc func toggleShowVirtualDevices(_ sender: Any?) { setShowVirtualDevices(!showVirtualDevices) }
+
+    /// The sheet belongs to the main window, as from the panel's row.
+    @objc func addCastByAddress(_ sender: Any?) {
+        showMainWindow()
+        if MainWindowSheet.castAdd.mayOpen(calibrateShown: appModel.calibrateAll.shown,
+                                           castAddShown: appModel.castAddShown) {
+            appModel.castAddShown = true
+        }
+    }
+
+    @objc func toggleAutomaticUpdateChecks(_ sender: Any?) {
+        AppUpdater.checksAutomatically.toggle()
+    }
+
     /// Command-S: the delays typed in the open delay panels apply, and the
     /// panels stay open.
     @objc func applyTypedDelay(_ sender: Any?) { appModel.applyDelayTyping() }
@@ -896,6 +911,12 @@ extension AppDelegate {
             menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
         case #selector(toggleSwitchWhenSourceQuits(_:)):
             menuItem.state = whenSourceQuits == .system ? .on : .off
+        case #selector(toggleShowVirtualDevices(_:)):
+            menuItem.state = showVirtualDevices ? .on : .off
+        case #selector(addCastByAddress(_:)):
+            return appModel.castCanAdd
+        case #selector(toggleAutomaticUpdateChecks(_:)):
+            menuItem.state = AppUpdater.checksAutomatically ? .on : .off
         case #selector(recallPresetFromMenu(_:)):
             let id = menuItem.representedObject as? String
             menuItem.state = appModel.presets.contains { $0.id == id && $0.current } ? .on : .off

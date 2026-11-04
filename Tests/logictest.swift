@@ -16941,5 +16941,27 @@ do {
           "equalizer band: the accessibility API sees a slider, not an unknown element")
 }
 
+// MARK: Main menu: the items the Windows menus have too
+do {
+    let menuWords = UIStrings()
+    let mainMenuSource = (try? String(contentsOfFile: "Sources/AudioSync/MainMenu.swift", encoding: .utf8)) ?? ""
+    let speakersMenuSource = mainMenuSource.components(separatedBy: "let speakers = submenu(").dropFirst().first?
+        .components(separatedBy: "let window = submenu(").first ?? ""
+    let menuCommands = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
+    check(menuWords.menuCheckUpdatesAutomatically == "Check for Updates Automatically"
+            && mainMenuSource.contains("item(t.menuCheckUpdatesAutomatically, #selector(AppDelegate.toggleAutomaticUpdateChecks(_:)))")
+            && menuCommands.contains("menuItem.state = AppUpdater.checksAutomatically ? .on : .off"),
+          "main menu: Check for Updates Automatically follows Check for Updates…, worded as on Windows, checked from Sparkle's setting")
+    check(menuWords.showVirtualDevices == "Show Virtual Devices"
+            && speakersMenuSource.contains("item(t.showVirtualDevices, #selector(AppDelegate.toggleShowVirtualDevices(_:)))")
+            && menuCommands.contains("setShowVirtualDevices(!showVirtualDevices)")
+            && menuCommands.contains("menuItem.state = showVirtualDevices ? .on : .off"),
+          "main menu: Speakers > Show Virtual Devices sets and checks the setting the gear menu does")
+    check(menuWords.castAddByAddress == "Add by Address…"
+            && speakersMenuSource.contains("item(t.castAddByAddress, #selector(AppDelegate.addCastByAddress(_:)))")
+            && menuCommands.contains("case #selector(addCastByAddress(_:)):\n            return appModel.castCanAdd"),
+          "main menu: Speakers > Add by Address… is offered only while Cast can add a speaker, worded as on Windows")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

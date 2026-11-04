@@ -11,7 +11,10 @@ enum MainMenu {
 
         let app = submenu(of: main, title: t.appName)
         app.addItem(AboutPanel.menuItem(text: t))
-        if let update = AppUpdater.menuItem(text: t) { app.addItem(update) }
+        if let update = AppUpdater.menuItem(text: t) {
+            app.addItem(update)
+            app.addItem(item(t.menuCheckUpdatesAutomatically, #selector(AppDelegate.toggleAutomaticUpdateChecks(_:))))
+        }
         app.addItem(.separator())
         let appearance = NSMenu(title: t.appearance)
         for choice in AppAppearance.allCases {
@@ -58,6 +61,8 @@ enum MainMenu {
         let hidden = NSMenu(title: t.hiddenSpeakers)
         hidden.delegate = HiddenSpeakersMenu.shared   // filled each time it opens
         speakers.addItem(withTitle: t.hiddenSpeakers, action: nil, keyEquivalent: "").submenu = hidden
+        speakers.addItem(item(t.showVirtualDevices, #selector(AppDelegate.toggleShowVirtualDevices(_:))))
+        speakers.addItem(item(t.castAddByAddress, #selector(AppDelegate.addCastByAddress(_:))))
 
         let window = submenu(of: main, title: t.menuWindow)
         window.addItem(item(t.menuMinimize, #selector(NSWindow.performMiniaturize(_:)), "m"))

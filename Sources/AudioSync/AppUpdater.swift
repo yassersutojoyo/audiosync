@@ -26,6 +26,22 @@ enum AppUpdater {
         #endif
     }
 
+    /// Sparkle keeps this setting in the user defaults itself.
+    static var checksAutomatically: Bool {
+        get {
+            #if canImport(Sparkle)
+            return controller?.updater.automaticallyChecksForUpdates ?? false
+            #else
+            return false
+            #endif
+        }
+        set {
+            #if canImport(Sparkle)
+            controller?.updater.automaticallyChecksForUpdates = newValue
+            #endif
+        }
+    }
+
     /// "Check for Updates…", or nil when updates are off, so the menu leaves it out.
     static func menuItem(text: UIStrings) -> NSMenuItem? {
         #if canImport(Sparkle)
