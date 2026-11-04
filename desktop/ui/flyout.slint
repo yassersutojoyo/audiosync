@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, Wordmark, ZoneArrowFocus } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // zone that is on but can't play right now under it (a zone's count first) ("In use by another app",
@@ -356,6 +356,7 @@ export component TrayFlyout inherits Window {
     // AirPlay speaker; empty hides it.
     in property <string> live-input-hint;
     in property <float> master-volume;
+    in property <int> master-volume-waves;
     // The speakers in no zone: this PC's, then the connected ones.
     in property <[SpeakerItem]> this-pc;
     in property <[SpeakerItem]> speakers;
@@ -386,6 +387,7 @@ export component TrayFlyout inherits Window {
     callback several-apps-requested();
     callback input-pair-selected(int);
     callback master-volume-changed(float);
+    callback master-mute-toggled();
     callback speaker-toggled(string);
     callback zone-toggled(string);
     // A zone's speakers shown (true) or hidden; the flyout keeps its own
@@ -702,9 +704,12 @@ export component TrayFlyout inherits Window {
                     VerticalLayout {
                         spacing: 2px;
 
-                        VolumeSlider {
+                        MasterVolume {
                             volume: root.master-volume;
-                            label: Strings.master-volume;
+                            waves: root.master-volume-waves;
+                            mute-toggled => {
+                                root.master-mute-toggled();
+                            }
                             changed(value) => {
                                 root.master-volume-changed(value);
                             }
