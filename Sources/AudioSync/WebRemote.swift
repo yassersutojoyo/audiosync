@@ -253,6 +253,7 @@ final class WebRemote {
         let listed = rows()
         let (sources, current) = sourceList()
         return RemoteSnapshot(computerName: computerName, master: model.master, nowPlaying: playing, rows: listed,
+                              hiddenSpeakers: model.hidden.present,
                               zones: host.zones().map { RemoteZoneRow($0, listed: listed) }, presets: host.presets(),
                               calibrating: RemoteSnapshot.calibrating(model.calibration, model.calibrateAll),
                               sources: sources, sourceID: current,

@@ -272,6 +272,11 @@ pub fn snapshot(
             playing: track.playing,
         }),
         speakers,
+        hidden_speakers: state
+            .hidden
+            .iter()
+            .filter(|hidden| hidden.present.is_some())
+            .count() as u32,
         zones: zones(state, &listed_now),
         presets: state
             .presets
@@ -1412,6 +1417,31 @@ pub(crate) mod tests {
             "the page lists none of Studio's members"
         );
         assert!(State::from_json(&snapshot.to_json(0)).is_ok());
+    }
+
+    // covers: S343, S360
+    #[test]
+    fn the_snapshot_counts_the_hidden_speakers_present() {
+        let hidden = |id: &str, present: Option<SpeakerKind>| crate::ui_model::HiddenSpeaker {
+            id: id.into(),
+            name: id.into(),
+            kind_text: String::new(),
+            present,
+        };
+        let mut state = state();
+        state.speakers.clear();
+        state.hidden = vec![
+            hidden("kitchen", Some(SpeakerKind::Cast)),
+            hidden("desk", Some(SpeakerKind::Usb)),
+            hidden("attic", None),
+        ];
+        let snapshot = snapshot(&state, not_virtual, None, "Desk PC", &Text);
+        let written: serde_json::Value = serde_json::from_str(&snapshot.to_json(0)).unwrap();
+        assert_eq!(written["speakers"], serde_json::json!([]));
+        assert_eq!(
+            written["hidden_speakers"], 2,
+            "one that isn't found isn't counted"
+        );
     }
 
     // covers: S340

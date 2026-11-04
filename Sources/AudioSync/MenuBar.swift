@@ -78,6 +78,7 @@ final class AppModel: ObservableObject {
         var menu: [HiddenSpeakers.MenuItem] = []
         var inThisMac = false
         var inConnected = false
+        var present = 0
     }
 
     /// A zone as the windows show it (S245 to S247).

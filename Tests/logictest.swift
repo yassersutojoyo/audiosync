@@ -15606,6 +15606,9 @@ do {
     check(!snapshot.json.contains("Microsoft Teams Audio")
           && command.map { RemoteAction.plan($0, rows: remoteRows) } == [],
           "hidden speakers: the remote snapshot loses a hidden speaker, and a command naming it changes nothing")
+    // covers: S343, S360
+    check(snapshot.json.contains("\"hidden_speakers\":0"),
+          "web remote: the snapshot carries the hidden speaker count, 0 when none is hidden", snapshot.json)
 
     // Rediscovery: the same key comes back in a new list and stays hidden.
     hidden.hide(key: "cast:nest-1", name: "Nest", kind: "Google Cast")

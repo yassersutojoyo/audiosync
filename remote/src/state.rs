@@ -18,6 +18,8 @@ pub struct State {
     pub now_playing: Option<NowPlaying>,
     /// In the app's order.
     pub speakers: Vec<Speaker>,
+    /// The speakers present that the app hides, which `speakers` leaves out.
+    pub hidden_speakers: u32,
     /// In the app's order; empty without zones.
     pub zones: Vec<Zone>,
     /// In the app's order; empty without presets.
@@ -427,6 +429,10 @@ impl State {
             }
             speakers.push(speaker);
         }
+        let hidden_speakers = match root.get("hidden_speakers") {
+            None => 0,
+            Some(_) => count_field(root, "hidden_speakers", "")?,
+        };
         let mut zones = Vec::new();
         let mut zone_ids = HashSet::new();
         let mut taken = HashSet::new();
@@ -481,6 +487,7 @@ impl State {
             master_volume,
             now_playing,
             speakers,
+            hidden_speakers,
             zones,
             presets,
             calibrating,
@@ -572,6 +579,7 @@ impl State {
             "master": { "volume": self.master_volume },
             "now_playing": now_playing,
             "speakers": speakers,
+            "hidden_speakers": self.hidden_speakers,
             "zones": zones,
             "presets": presets,
             "calibrating": self.calibrating,
@@ -993,6 +1001,26 @@ mod tests {
             r#"[{"id": "a.exe", "name": "A", "running": true}, {"id": "a.exe", "name": "B", "running": false}]"#,
         ] {
             assert!(State::from_json(&with_mix_apps(bad)).is_err(), "{bad}");
+        }
+    }
+
+    // covers: S343, S360
+    #[test]
+    fn the_hidden_speaker_count_goes_out_and_is_0_without_the_field() {
+        let with = |count: &str| {
+            SAMPLE.replacen(
+                "\"speakers\"",
+                &format!("\"hidden_speakers\": {count}, \"speakers\""),
+                1,
+            )
+        };
+        let written = |json: &str| -> Value {
+            serde_json::from_str(&State::from_json(json).unwrap().to_json(1)).unwrap()
+        };
+        assert_eq!(written(&with("3"))["hidden_speakers"], 3);
+        assert_eq!(written(SAMPLE)["hidden_speakers"], 0);
+        for bad in ["-1", "1.5", "\"3\"", "null"] {
+            assert!(State::from_json(&with(bad)).is_err(), "{bad}");
         }
     }
 
