@@ -11,10 +11,13 @@ use std::time::{Duration, Instant};
 
 use ed25519_dalek::VerifyingKey;
 
-use super::appcast::{self, Arch, Update};
+use super::appcast::{self, Arch, Os, Update};
+use super::appimage;
 use super::archive;
 use super::fetch::{self, Fetch, FetchError, Kind};
-use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full, is_locked};
+#[cfg(windows)]
+use super::files::is_locked;
+use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full};
 use super::relaunch::Launch;
 use super::signature;
 use super::swap::{self, Rename, StepLog, SwapError, Swapped};
@@ -33,7 +36,14 @@ pub struct Env {
     pub files: Arc<dyn Files>,
     pub temp_root: PathBuf,
     pub install_dir: PathBuf,
+    /// The running exe's file name in `install_dir`: `audiosync.exe`, or
+    /// on Linux the AppImage's own name (spec S424).
+    pub exe_name: String,
+    /// A Linux copy not started from an AppImage: it fetches nothing, and a
+    /// manual check points to the release page (spec S424).
+    pub not_appimage: bool,
     pub key: VerifyingKey,
+    pub os: Os,
     pub arch: Arch,
     pub running: Version,
     pub system: Version,
@@ -85,13 +95,13 @@ pub fn check(env: &Env) -> Checked {
             }
         )
     });
-    match appcast::pick(&read, env.arch, &env.running, &env.system) {
+    match appcast::pick(&read, env.os, env.arch, &env.running, &env.system) {
         Some(update) => {
             env.log.log(|| {
                 format!(
                     "updater: update {} picked for {} (running {})",
                     update.version_text,
-                    env.arch.os_value(),
+                    env.arch.os_value(env.os),
                     env.running
                 )
             });
@@ -101,7 +111,7 @@ pub fn check(env: &Env) -> Checked {
             env.log.log(|| {
                 format!(
                     "updater: no update for {} above {}",
-                    env.arch.os_value(),
+                    env.arch.os_value(env.os),
                     env.running
                 )
             });
@@ -219,6 +229,7 @@ pub fn install(
 /// A handle on `dir` that shares reading and writing but not deleting, so
 /// another copy's `remove_leftovers` (the same user in another session)
 /// sees the folder in use and leaves it.
+#[cfg(windows)]
 fn hold(dir: &Path) -> io::Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows::Win32::Storage::FileSystem::{
@@ -231,7 +242,19 @@ fn hold(dir: &Path) -> io::Result<fs::File> {
         .open(dir)
 }
 
+/// Linux has no share modes; the temp folder is the user's own.
+#[cfg(not(windows))]
+fn hold(dir: &Path) -> io::Result<fs::File> {
+    fs::File::open(dir)
+}
+
+#[cfg(not(windows))]
+fn held_elsewhere(_: &Path) -> bool {
+    false
+}
+
 /// Whether another copy holds `dir` through `hold`.
+#[cfg(windows)]
 fn held_elsewhere(dir: &Path) -> bool {
     use std::os::windows::fs::OpenOptionsExt;
     use windows::Win32::Storage::FileSystem::{DELETE, FILE_FLAG_BACKUP_SEMANTICS};
@@ -348,38 +371,36 @@ fn install_in(
         return Installed::Cancelled;
     }
 
-    let unpacked = archive::unpack(&bytes, env.arch);
-    drop(bytes);
-    env.log.log(|| match &unpacked {
-        Ok(unpacked) => format!(
-            "updater: unpacked {}{}",
-            archive::EXE_NAME,
-            if unpacked.notices.is_some() {
-                " and the notices"
-            } else {
-                ""
-            }
-        ),
-        Err(error) => format!("updater: the zip is refused ({error})"),
-    });
-    let unpacked = match unpacked {
-        Ok(unpacked) => unpacked,
-        Err(_) => return Installed::BrokenDownload,
-    };
-    // The signature covers the bytes only, not the version the appcast names.
-    match archive::product_version(&unpacked.exe) {
-        Some(reported) if reported == update.version && reported > env.running => {}
-        reported => {
-            env.log.log(|| {
-                format!(
-                    "updater: the zip is refused (its exe reports version {}, not {})",
-                    reported.map_or_else(|| "none".to_owned(), |v| v.to_string()),
-                    update.version_text
-                )
-            });
+    let unpacked = if env.os == Os::Linux {
+        let fits = appimage::fits(&bytes, env.arch);
+        // The signature covers the bytes only, not the version the appcast names.
+        let stamped = appimage::stamped_version(&bytes);
+        let wanted = stamped
+            .as_ref()
+            .is_some_and(|stamped| *stamped == update.version && *stamped > env.running);
+        env.log.log(|| {
+            format!(
+                "updater: the download {} an AppImage for {}, stamped {}",
+                if fits { "is" } else { "is refused, not" },
+                env.arch.os_value(env.os),
+                stamped.as_ref().map_or("with no version".to_owned(), |v| {
+                    format!("{v}{}", if wanted { "" } else { ", refused" })
+                })
+            )
+        });
+        if !fits || !wanted {
             return Installed::BrokenDownload;
         }
-    }
+        archive::Unpacked {
+            exe: bytes,
+            notices: None,
+        }
+    } else {
+        match unzip(env, update, bytes) {
+            Some(unpacked) => unpacked,
+            None => return Installed::BrokenDownload,
+        }
+    };
     // The last point where a Cancel or a quit still leaves the install
     // folder untouched; past it, a quit waits for the guard.
     let closed = closed.lock().unwrap_or_else(PoisonError::into_inner);
@@ -390,6 +411,7 @@ fn install_in(
     let mut steps = StepLog::new();
     let swapped = swap::swap(
         &env.install_dir,
+        &env.exe_name,
         &unpacked.exe,
         unpacked.notices.as_deref(),
         &files,
@@ -409,6 +431,40 @@ fn install_in(
         Err(SwapError::RestoreFailed { renames }) => Installed::RestoreFailed { renames },
         Err(SwapError::Blocked) => Installed::Blocked,
         Err(SwapError::Vanished) => Installed::Vanished,
+    }
+}
+
+/// The exe and notices of the verified zip `bytes`, when the exe reports
+/// the offered version (spec S300).
+fn unzip(env: &Env, update: &Update, bytes: Vec<u8>) -> Option<archive::Unpacked> {
+    let unpacked = archive::unpack(&bytes, env.arch);
+    drop(bytes);
+    env.log.log(|| match &unpacked {
+        Ok(unpacked) => format!(
+            "updater: unpacked {}{}",
+            archive::EXE_NAME,
+            if unpacked.notices.is_some() {
+                " and the notices"
+            } else {
+                ""
+            }
+        ),
+        Err(error) => format!("updater: the zip is refused ({error})"),
+    });
+    let unpacked = unpacked.ok()?;
+    // The signature covers the bytes only, not the version the appcast names.
+    match archive::product_version(&unpacked.exe) {
+        Some(reported) if reported == update.version && reported > env.running => Some(unpacked),
+        reported => {
+            env.log.log(|| {
+                format!(
+                    "updater: the zip is refused (its exe reports version {}, not {})",
+                    reported.map_or_else(|| "none".to_owned(), |v| v.to_string()),
+                    update.version_text
+                )
+            });
+            None
+        }
     }
 }
 
@@ -442,7 +498,7 @@ fn code(error: &io::Error) -> i32 {
 
 /// Deletes the `.new` files in the install folder, unless another copy holds
 /// an update folder, and every temp folder an earlier update left; the `.bak` stays.
-pub fn remove_leftovers(install_dir: &Path, temp_root: &Path, log: &DebugLog) {
+pub fn remove_leftovers(install_dir: &Path, exe_name: &str, temp_root: &Path, log: &DebugLog) {
     // A held temp folder means another copy may be between swap steps 1 and 4.
     let swapping = fs::read_dir(temp_root).is_ok_and(|entries| {
         entries.flatten().any(|entry| {
@@ -451,7 +507,7 @@ pub fn remove_leftovers(install_dir: &Path, temp_root: &Path, log: &DebugLog) {
         })
     });
     for name in [
-        format!("{}.new", archive::EXE_NAME),
+        format!("{exe_name}.new"),
         format!("{}.new", archive::NOTICES_NAME),
     ] {
         let path = install_dir.join(&name);
@@ -520,7 +576,7 @@ pub fn periodic_check(
         && matches!(launch_check(true, started, now), LaunchCheck::Due(_))
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub mod tests {
     use super::*;
     use crate::updater::archive::tests::{fake_exe, fake_exe_reporting, zip_of};
@@ -585,7 +641,10 @@ pub mod tests {
                 files,
                 temp_root,
                 install_dir,
+                exe_name: archive::EXE_NAME.to_owned(),
+                not_appimage: false,
                 key: key.verifying_key(),
+                os: Os::Windows,
                 arch: Arch::X64,
                 running: Version::parse("0.8.0").unwrap(),
                 system: Version::parse("10.0.26100").unwrap(),
@@ -758,7 +817,7 @@ pub mod tests {
         let port = serve(files);
         let feed = |name: &str| format!("http://127.0.0.1:{port}/{name}");
         let winhttp = Arc::new(fetch::WinHttp {
-            user_agent: fetch::user_agent("0.8.0", "x64"),
+            user_agent: fetch::user_agent("Windows", "0.8.0", "x64"),
             plain_loopback: true,
         });
         let setup = |name: &str, feed_name: &str| {
@@ -805,7 +864,7 @@ pub mod tests {
         );
 
         let plain = fetch::WinHttp {
-            user_agent: fetch::user_agent("0.8.0", "x64"),
+            user_agent: fetch::user_agent("Windows", "0.8.0", "x64"),
             plain_loopback: false,
         };
         assert!(
@@ -852,7 +911,7 @@ pub mod tests {
         });
         let url = |path: &str| format!("http://127.0.0.1:{port}{path}");
         let winhttp = fetch::WinHttp {
-            user_agent: fetch::user_agent("0.8.0", "x64"),
+            user_agent: fetch::user_agent("Windows", "0.8.0", "x64"),
             plain_loopback: true,
         };
 
@@ -1022,6 +1081,105 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    /// A Linux copy run from `AudioSync-0.8.0-x86_64.AppImage`, offered
+    /// `appimage` as 0.9.0 under `os`, signed with a new throwaway key.
+    fn appimage_fixture(name: &str, os: &str, appimage: &[u8]) -> Fixture {
+        let mut f = fixture(name, false, Arc::new(RealFiles), DebugLog::default());
+        f.env.os = Os::Linux;
+        f.env.exe_name = "AudioSync-0.8.0-x86_64.AppImage".to_owned();
+        fs::remove_file(f.env.install_dir.join(archive::EXE_NAME)).unwrap();
+        fs::write(f.env.install_dir.join(&f.env.exe_name), b"old appimage").unwrap();
+        let key = test_key::new();
+        let signed = test_key::sign(&key, appimage);
+        let mut fetch = MemoryFetch::default();
+        fetch.files.insert(
+            FEED.to_owned(),
+            appcast_with(os, appimage.len(), &signed).into_bytes(),
+        );
+        fetch.files.insert(ZIP_URL.to_owned(), appimage.to_vec());
+        f.fetch = Arc::new(fetch);
+        f.env.fetch = f.fetch.clone();
+        f.env.key = key.verifying_key();
+        f
+    }
+
+    // covers: S424
+    #[test]
+    fn an_appimage_update_replaces_the_appimage_under_its_own_name() {
+        let appimage = appimage::tests::stamped(62, "0.9.0");
+        let f = appimage_fixture("appimage", "linux-x86_64", &appimage);
+        let update = update_of(&f.env);
+        assert!(matches!(run(&f.env, &update), Installed::Done(_)));
+        let live = f.env.install_dir.join(&f.env.exe_name);
+        assert_eq!(fs::read(&live).unwrap(), appimage);
+        assert_eq!(
+            fs::read(
+                f.env
+                    .install_dir
+                    .join("AudioSync-0.8.0-x86_64.AppImage.bak")
+            )
+            .unwrap(),
+            b"old appimage"
+        );
+        assert!(!f.env.install_dir.join(archive::EXE_NAME).exists());
+        assert!(!f.env.install_dir.join(archive::NOTICES_NAME).exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&live).unwrap().permissions().mode() & 0o111,
+                0o111
+            );
+        }
+        assert!(temp_folders(&f.env).is_empty());
+
+        // A Windows zip, or an AppImage for the other arch, changes nothing.
+        let windows = fixture(
+            "appimage-zip",
+            false,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        let mut zip_env = appimage_fixture("appimage-zip-linux", "linux-x86_64", &appimage).env;
+        zip_env.fetch = windows.env.fetch.clone();
+        zip_env.key = windows.env.key;
+        assert_eq!(check(&zip_env), Checked::UpToDate);
+        let arm = appimage::tests::stamped(183, "0.9.0");
+        let other = appimage_fixture("appimage-arm", "linux-x86_64", &arm);
+        let update = update_of(&other.env);
+        assert_eq!(run(&other.env, &update), Installed::BrokenDownload);
+        assert_eq!(
+            fs::read(other.env.install_dir.join(&other.env.exe_name)).unwrap(),
+            b"old appimage"
+        );
+    }
+
+    // covers: S424
+    #[test]
+    fn a_signed_appimage_not_stamped_with_the_offered_version_is_refused() {
+        // An older signed AppImage served as 0.9.0 would install and be
+        // offered again after every start.
+        for (case, appimage) in [
+            (
+                "unstamped",
+                appimage::tests::fake_appimage(62, b"old build"),
+            ),
+            ("running", appimage::tests::stamped(62, "0.8.0")),
+            ("older", appimage::tests::stamped(62, "0.7.1")),
+            ("other", appimage::tests::stamped(62, "0.9.1")),
+        ] {
+            let f = appimage_fixture(&format!("appimage-stamp-{case}"), "linux-x86_64", &appimage);
+            let update = update_of(&f.env);
+            assert_eq!(run(&f.env, &update), Installed::BrokenDownload, "{case}");
+            assert_eq!(
+                fs::read(f.env.install_dir.join(&f.env.exe_name)).unwrap(),
+                b"old appimage",
+                "{case}"
+            );
+            assert!(temp_folders(&f.env).is_empty(), "{case}");
+        }
+    }
+
     // covers: S298
     #[test]
     fn a_download_over_its_length_or_the_cap_stops_and_is_deleted() {
@@ -1120,7 +1278,12 @@ pub mod tests {
         fs::write(install.join("audiosync.exe.bak"), b"previous").unwrap();
         fs::create_dir_all(f.env.temp_root.join("AudioSync-update-abc").join("inner")).unwrap();
         fs::create_dir_all(f.env.temp_root.join("Other-folder")).unwrap();
-        remove_leftovers(install, &f.env.temp_root, &DebugLog::default());
+        remove_leftovers(
+            install,
+            archive::EXE_NAME,
+            &f.env.temp_root,
+            &DebugLog::default(),
+        );
         assert!(!install.join("audiosync.exe.new").exists());
         assert!(!install.join("THIRD-PARTY-NOTICES.txt.new").exists());
         assert!(install.join("audiosync.exe.bak").exists());
@@ -1138,7 +1301,12 @@ pub mod tests {
     impl Fetch for SweptMidDownload {
         fn get(&self, url: &str, kind: Kind, sink: &mut fetch::Sink<'_>) -> Result<(), FetchError> {
             if kind == Kind::Download {
-                remove_leftovers(&self.install_dir, &self.temp_root, &DebugLog::default());
+                remove_leftovers(
+                    &self.install_dir,
+                    archive::EXE_NAME,
+                    &self.temp_root,
+                    &DebugLog::default(),
+                );
             }
             self.inner.get(url, kind, sink)
         }
@@ -1176,7 +1344,12 @@ pub mod tests {
         let update = update_of(&f.env);
         let (install_dir, temp_root) = (f.env.install_dir.clone(), f.env.temp_root.clone());
         AFTER_CREATE.set(Some(Box::new(move || {
-            remove_leftovers(&install_dir, &temp_root, &DebugLog::default());
+            remove_leftovers(
+                &install_dir,
+                archive::EXE_NAME,
+                &temp_root,
+                &DebugLog::default(),
+            );
         })));
         let done = run(&f.env, &update);
         assert!(matches!(done, Installed::Done(_)), "{done:?}");
@@ -1201,7 +1374,12 @@ pub mod tests {
                 && let Some(install_dir) = from.parent()
                 && let Some(root) = install_dir.parent()
             {
-                remove_leftovers(install_dir, &root.join("temp"), &DebugLog::default());
+                remove_leftovers(
+                    install_dir,
+                    archive::EXE_NAME,
+                    &root.join("temp"),
+                    &DebugLog::default(),
+                );
             }
             RealFiles.rename(from, to)
         }
@@ -1278,7 +1456,12 @@ pub mod tests {
         let log = DebugLog::new(Some(path.clone()));
         let f = fixture("log", false, Arc::new(RealFiles), log.clone());
         fs::write(f.env.install_dir.join("audiosync.exe.new"), b"x").unwrap();
-        remove_leftovers(&f.env.install_dir, &f.env.temp_root, &log);
+        remove_leftovers(
+            &f.env.install_dir,
+            archive::EXE_NAME,
+            &f.env.temp_root,
+            &log,
+        );
         let update = update_of(&f.env);
         assert!(matches!(run(&f.env, &update), Installed::Done(_)));
         assert!(log.flush(crate::debug_log::TEST_FLUSH));

@@ -587,6 +587,8 @@ export global Strings {
     }
     out property <string> notice-update-relaunch-failed: @tr("The new version couldn't start, so AudioSync put the old version back. The running version stays. You can download the new version from the release page.");
     out property <string> notice-update-blocked: @tr("Windows security blocked the update file, so nothing was installed. The running version stays. You can download the new version from the release page.");
+    // Linux: a copy not started from an AppImage, such as one a .deb installed.
+    out property <string> notice-update-not-appimage: @tr("Only the AppImage of AudioSync updates itself, and this copy wasn't started from one. You can download the new version from the release page.");
 
     // Windows audio couldn't be reached at startup, so AudioSync exits;
     // `detail` is the system's reason.

@@ -23,16 +23,17 @@ VERSION=x.y.z
 NOTES=path/to/release-notes.md          # your local notes file, not committed
 ./make-dmg.sh                               # → AudioSync.dmg
 ditto -c -k --keepParent /Applications/AudioSync.app "AudioSync-$VERSION.zip"
-# Windows preview below: put both Windows zips here first; a release without them sets ONLY=--mac-only
+# Windows preview and Linux below: put both Windows zips and both AppImages here first;
+# a release without them sets ONLY=--mac-only
 ONLY=
 scripts/sign_appcast.sh $ONLY "$VERSION"    # → appcast.xml, for the app's updater
 cp scripts/install.sh install.sh
 ASSETS=(AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml install.sh THIRD_PARTY_NOTICES.md)
 shasum -a 256 "${ASSETS[@]}" > SHA256SUMS.txt
-# the zips must still be the ones signed (same length), and every zip that goes on the
-# release needs its appcast item, under the right sparkle:os
-# (joined with &&, so a failed check stops before the tag)
-python3 -I scripts/check_appcast.py $ONLY appcast.xml "$VERSION" AudioSync-"$VERSION"*.zip \
+# the zips and AppImages (*[pe]: .zip and .AppImage) must still be the ones signed (same
+# length), and every one that goes on the release needs its appcast item, under the right
+# sparkle:os (joined with &&, so a failed check stops before the tag)
+python3 -I scripts/check_appcast.py $ONLY appcast.xml "$VERSION" AudioSync-"$VERSION"*[pe] \
   && python3 -I scripts/check_appcast.py --assets $ONLY appcast.xml "$VERSION" "${ASSETS[@]}" SHA256SUMS.txt \
   && git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION" \
   && gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
@@ -68,9 +69,11 @@ The Windows app updates itself from the same `appcast.xml` as the Mac (`docs/ENG
 
 Say plainly in the release notes that it's an unsigned preview (SmartScreen will warn on first launch), Windows 11 only, and what its AirPlay reaches: receivers that take AirPlay 1, with a password prompt for a receiver that has one and a code prompt for an Apple TV that asks for one, while AirPlay 2 is experimental: AirPlay 2-only speakers, stereo pairs and home theater groups play by default, and a speaker that does both uses AirPlay 2, or AirPlay 1 when it was paired over AirPlay 1 or AirPlay 2 can't take it (and whether each was tried on a real speaker or Apple TV). The app carries Slint's attribution in its About dialog (see `THIRD_PARTY_NOTICES.md`), so the release notes need no badge.
 
-## Linux AppImage
+## Linux AppImage and .deb
 
-A release with a Linux build attaches, from the Linux CI run of the release commit, the `AudioSync-$VERSION-x86_64.AppImage` and its `.sha256` from `audiosync-linux-x86_64`, and both files from `appimage-runtime-sources`: `type2-runtime-20251108.tar.gz` (the runtime's source with its libfuse patch) and `fuse-3.15.0.tar.xz` (libfuse, LGPL-2.1). The runtime inside the AppImage links libfuse statically, so its source goes with every copy. Add all of them to `ASSETS` above.
+A release with a Linux build attaches, from a green Linux CI run of the release commit's push to `release/x.y.z` (only a push to `main` or a `release/` branch builds an AppImage whose updater is on), `AudioSync-$VERSION-x86_64.AppImage` and `AudioSync-$VERSION-amd64.deb` with their `.sha256` files from `audiosync-linux-x86_64`, `AudioSync-$VERSION-aarch64.AppImage` and `AudioSync-$VERSION-arm64.deb` with theirs from `audiosync-linux-aarch64`, and both files from `appimage-runtime-sources`: `type2-runtime-20251108.tar.gz` (the runtime's source with its libfuse patch) and `fuse-3.15.0.tar.xz` (libfuse, LGPL-2.1). The runtime inside each AppImage links libfuse statically, so its source goes with every copy; both architectures' runtimes build from these two files. Add all of them to `ASSETS` above under exactly these names, so they're in `SHA256SUMS.txt`, which the Linux install script checks the AppImage against.
+
+The AppImage updates itself from the same `appcast.xml` (`docs/ENGINE_SPEC.md` S424). Put both AppImages next to `AudioSync-$VERSION.zip` before you run `scripts/sign_appcast.sh`, and it signs each with the same EdDSA key and adds one item per AppImage, `sparkle:os` `linux-x86_64` or `linux-aarch64`, with the Mac item's versions. It stops when either AppImage is missing, and `scripts/check_appcast.py` checks that each one is a type 2 AppImage for its architecture whose version stamp (S424) says `$VERSION`, so an AppImage from an older run stops here. The S310 Mac check covers these items as it does the Windows ones. The `.deb` files get no item: a copy a `.deb` installed doesn't update itself, and its Check for Updates points to the release page. A release without the Linux files needs `ONLY=--mac-only` as one without the Windows zips does. The AppImages and `.deb` files compile in Slint as the Windows exe does, so the source archive below goes with them too.
 
 ## Sources and license obligations
 

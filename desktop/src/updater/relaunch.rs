@@ -4,17 +4,21 @@
 
 use std::ffi::OsString;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+#[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
     CreateEventW, EVENT_MODIFY_STATE, OpenEventW, OpenProcess, PROCESS_SYNCHRONIZE, ResetEvent,
     SetEvent, WaitForMultipleObjects, WaitForSingleObject,
 };
+#[cfg(windows)]
 use windows::core::PCWSTR;
 
 pub const MARKER: &str = "--relaunched-from";
@@ -116,6 +120,7 @@ pub fn marked_parent(args: impl IntoIterator<Item = OsString>) -> Option<u32> {
 
 /// Waits at most `timeout` for process `pid` to end; true once it has (or
 /// it can't be opened, which means it is gone).
+#[cfg(windows)]
 pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
     // SAFETY: a plain open of a process id; the handle is closed below.
     let Ok(process) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
@@ -129,13 +134,69 @@ pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
     ended
 }
 
+/// Waits at most `timeout` for process `pid` to end; true once it has, or
+/// only its zombie is left for its parent to reap.
+#[cfg(not(windows))]
+pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
+    let gone = || match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(_) => true,
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .is_none_or(|(_, rest)| matches!(rest.trim_start().chars().next(), Some('Z' | 'X'))),
+    };
+    let deadline = Instant::now() + timeout;
+    while !gone() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
 /// The name of the start signal of a new instance whose old process is `old`.
+#[cfg(windows)]
 pub fn signal_name(old: u32) -> String {
     format!("Local\\AudioSync-update-started-{old}")
 }
 
+/// Linux: the start signal of a new instance whose old process is `old`, a
+/// file in `dir` (spec S424).
+#[cfg_attr(windows, allow(dead_code))]
+pub fn signal_file(dir: &Path, old: u32) -> PathBuf {
+    dir.join(format!("AudioSync-update-started-{old}"))
+}
+
+/// The user's runtime folder, which only the user can write to.
+#[cfg(not(windows))]
+fn signal_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from)
+}
+
+/// Makes the start signal the old process `old` waits for; false when that
+/// process is gone.
+#[cfg(not(windows))]
+pub fn signal_started(old: u32) -> bool {
+    !wait_for_exit(old, Duration::ZERO) && make_signal(&signal_file(&signal_dir(), old))
+}
+
+/// Creates `signal` as a new file only the user can read; never through a
+/// link or over a file already there, since the folder may be the shared
+/// temp folder.
+#[cfg(not(windows))]
+fn make_signal(signal: &Path) -> bool {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(signal)
+        .is_ok()
+}
+
 /// Sets the start signal the old process `old` waits on; false when there
 /// is none (that process is gone).
+#[cfg(windows)]
 pub fn signal_started(old: u32) -> bool {
     let name = wide(&signal_name(old));
     // SAFETY: a NUL-terminated name that outlives the call.
@@ -150,6 +211,7 @@ pub fn signal_started(old: u32) -> bool {
     set
 }
 
+#[cfg(windows)]
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
@@ -188,9 +250,51 @@ impl Launch for ProcessLaunch {
     }
 }
 
+/// Linux: [`start_and_watch`] for the signal file named after `own`.
+#[cfg(not(windows))]
+pub fn start_and_wait(command: &mut Command, own: u32, wait: Duration) -> Start {
+    start_and_watch(command, &signal_file(&signal_dir(), own), wait)
+}
+
+/// Runs `command` as a child process and waits up to `wait` for the file
+/// `signal` to appear, which it takes; a child that neither makes it nor
+/// ends in time is ended. A file left from an earlier try is removed first.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn start_and_watch(command: &mut Command, signal: &Path, wait: Duration) -> Start {
+    let _ = std::fs::remove_file(signal);
+    let mut child = match command.stdin(Stdio::null()).spawn() {
+        Ok(child) => child,
+        Err(error) => return Start::Failed(error),
+    };
+    let pid = child.id();
+    let deadline = Instant::now() + wait;
+    loop {
+        if std::fs::remove_file(signal).is_ok() {
+            return Start::Signalled { pid };
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            // A child that signals and then ends counts as started.
+            if std::fs::remove_file(signal).is_ok() {
+                return Start::Signalled { pid };
+            }
+            return Start::Exited {
+                pid,
+                code: status.code(),
+            };
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Start::TimedOut { pid };
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Runs `command` as a child process, never through the shell, and waits up
 /// to `wait` for the start signal named after `own`; a child that neither
 /// signals nor ends in time is ended.
+#[cfg(windows)]
 pub fn start_and_wait(command: &mut Command, own: u32, wait: Duration) -> Start {
     let name = wide(&signal_name(own));
     // SAFETY: a NUL-terminated name that outlives the call.
@@ -231,7 +335,7 @@ pub fn start_and_wait(command: &mut Command, own: u32, wait: Duration) -> Start 
     start
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub mod tests {
     use std::time::Instant;
 
@@ -422,5 +526,118 @@ pub mod tests {
             wait_for_exit(pid, Duration::from_secs(2)),
             "the child was ended"
         );
+    }
+
+    /// A command that runs `script` through the platform's shell.
+    fn shell(script: &str) -> Command {
+        #[cfg(windows)]
+        let command = {
+            use std::os::windows::process::CommandExt;
+            // cmd.exe reads its own quotes, not the escaped ones `arg` writes.
+            let mut command = Command::new("cmd.exe");
+            command.arg("/c").raw_arg(script);
+            command
+        };
+        #[cfg(not(windows))]
+        let command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", script]);
+            command
+        };
+        command
+    }
+
+    // covers: S424
+    #[test]
+    fn the_linux_start_signal_is_a_file_the_new_instance_makes() {
+        let dir = crate::updater::tests::test_dir("file-signal");
+        let signal = signal_file(&dir, 4242);
+        assert_eq!(signal.file_name().unwrap(), "AudioSync-update-started-4242");
+        // A file an earlier try left is no signal of this start.
+        std::fs::write(&signal, b"").unwrap();
+        let start = start_and_watch(&mut shell("exit 3"), &signal, Duration::from_secs(10));
+        assert!(
+            matches!(start, Start::Exited { code: Some(3), .. }),
+            "{start:?}"
+        );
+
+        let make = if cfg!(windows) {
+            format!(
+                "type nul > \"{}\" & ping -n 3 127.0.0.1 >nul",
+                signal.display()
+            )
+        } else {
+            format!(": > '{}'; sleep 2", signal.display())
+        };
+        let start = start_and_watch(&mut shell(&make), &signal, Duration::from_secs(10));
+        assert!(matches!(start, Start::Signalled { .. }), "{start:?}");
+        assert!(!signal.exists(), "the signal is taken");
+
+        let started = Instant::now();
+        let quiet = if cfg!(windows) {
+            "ping -n 30 127.0.0.1 >nul"
+        } else {
+            "sleep 30"
+        };
+        let start = start_and_watch(&mut shell(quiet), &signal, Duration::from_millis(300));
+        assert!(matches!(start, Start::TimedOut { .. }), "{start:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("audiosync-relaunch-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // covers: S424
+    #[test]
+    fn the_signal_file_is_new_private_and_never_follows_a_link() {
+        let dir = test_dir("signal");
+        let signal = signal_file(&dir, 4242);
+        assert!(make_signal(&signal));
+        let mode = std::fs::metadata(&signal).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        // A file already there, or a link someone put there, is no signal.
+        assert!(!make_signal(&signal));
+        std::fs::remove_file(&signal).unwrap();
+        let target = dir.join("target");
+        std::fs::write(&target, b"kept").unwrap();
+        std::os::unix::fs::symlink(&target, &signal).unwrap();
+        assert!(!make_signal(&signal));
+        assert_eq!(std::fs::read(&target).unwrap(), b"kept");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // covers: S424
+    #[test]
+    fn a_new_instance_that_makes_the_file_counts_as_started() {
+        let dir = test_dir("watch");
+        let signal = signal_file(&dir, 4242);
+        let mut command = Command::new("sh");
+        command.args(["-c", &format!(": > '{}'; sleep 2", signal.display())]);
+        let start = start_and_watch(&mut command, &signal, Duration::from_secs(10));
+        assert!(matches!(start, Start::Signalled { .. }), "{start:?}");
+        assert!(!signal.exists(), "the signal is taken");
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 3"]);
+        let start = start_and_watch(&mut command, &signal, Duration::from_secs(10));
+        let Start::Exited { pid, code: Some(3) } = &start else {
+            panic!("{start:?}");
+        };
+        assert!(
+            wait_for_exit(*pid, Duration::from_secs(2)),
+            "the child ended"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

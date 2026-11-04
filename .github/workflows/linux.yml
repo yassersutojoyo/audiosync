@@ -17,11 +17,7 @@ permissions:
 
 env:
   SLINT_COMPILER_DENY_WARNINGS: '1'
-  # The pinned AppImage tools (MIT), checked against these SHA-256 sums.
-  APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
-  APPIMAGETOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
-  RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
-  RUNTIME_SHA256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+
   # The runtime's source (with its patch to libfuse's mount.c) and that of the
   # libfuse it links statically (LGPL-2.1), as its build fetches it; both go
   # with each release that ships the AppImage (RELEASE.md).
@@ -61,12 +57,33 @@ jobs:
           echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
   appimage:
-    name: AppImage (x86_64) and tray smoke test
+    name: AppImage and .deb (${{ matrix.arch }}) and tray smoke test
     # Ubuntu 24.04's glibc 2.39 is the oldest the AppImage runs on.
     needs: proven
     if: needs.proven.outputs.skip != 'true'
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      # The pinned AppImage tools (MIT), checked against these SHA-256 sums.
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            loader: ld-linux-x86-64.so.2
+            appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+            runtime_sha256: 2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            loader: ld-linux-aarch64.so.1
+            appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+            runtime_sha256: 00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    env:
+      ARCH: ${{ matrix.arch }}
+      APPIMAGETOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${{ matrix.arch }}.AppImage
+      APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
+      RUNTIME_URL: https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-${{ matrix.arch }}
+      RUNTIME_SHA256: ${{ matrix.runtime_sha256 }}
     defaults:
       run:
         working-directory: desktop
@@ -100,26 +117,53 @@ jobs:
           echo "$RUNTIME_SHA256  runtime" | sha256sum -c -
           chmod +x appimagetool
 
+      # A push to main or a release/ branch makes the build the updater runs in
+      # (spec S293, S424), as the Windows release build does.
       - name: Release build
+        env:
+          AUDIOSYNC_RELEASE_BUILD: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) && '1' || '' }}
         run: cargo build --locked --release
 
       # Fails if a crate's license isn't on desktop/deny.toml's list.
       - name: Third-party notices
-        run: python3 -I ../scripts/windows_notices.py x86_64-unknown-linux-gnu --output target/release/THIRD-PARTY-NOTICES.txt
+        run: python3 -I ../scripts/windows_notices.py "$ARCH-unknown-linux-gnu" --output target/release/THIRD-PARTY-NOTICES.txt
 
-      - name: AppImage
+      - name: AppImage and .deb
         run: |
           version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "audiosync-desktop"))')
           mkdir -p ../dist
           ../scripts/build_appimage.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt \
             "$RUNNER_TEMP/appimage-tools/appimagetool" "$RUNNER_TEMP/appimage-tools/runtime" \
-            "../dist/AudioSync-$version-x86_64.AppImage"
+            "../dist/AudioSync-$version-$ARCH.AppImage"
+          ../scripts/build_deb.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt "$version" \
+            "../dist/AudioSync-$version-$(dpkg --print-architecture).deb"
+
+      - name: Check the .deb (fields, files, install and remove)
+        working-directory: dist
+        run: |
+          deb=$(ls AudioSync-*.deb)
+          sha256sum -c "$deb.sha256"
+          dpkg-deb --info "$deb"
+          contents=$(dpkg-deb --contents "$deb")
+          for file in ./usr/bin/audiosync ./usr/share/applications/io.github.yassersutojoyo.audiosync.desktop \
+            ./usr/share/metainfo/io.github.yassersutojoyo.audiosync.metainfo.xml \
+            ./usr/share/icons/hicolor/256x256/apps/io.github.yassersutojoyo.audiosync.png \
+            ./usr/share/doc/audiosync/copyright ./usr/share/doc/audiosync/THIRD-PARTY-NOTICES.txt; do
+            echo "$contents" | grep -q " $file\$" || { echo "the .deb lacks $file"; exit 1; }
+          done
+          sudo apt-get install -y "./$deb"
+          test -x /usr/bin/audiosync
+          dpkg -s audiosync | grep -q '^Status: install ok installed'
+          sudo apt-get remove -y audiosync
+          test ! -e /usr/bin/audiosync
 
       - name: Check the AppImage (layout, linked libraries, .desktop and AppStream files)
         working-directory: dist
         run: |
-          appimage=$(ls AudioSync-*-x86_64.AppImage)
+          appimage=$(ls AudioSync-*-"$ARCH".AppImage)
           sha256sum -c "$appimage.sha256"
+          # The version stamp the updater and the release check read (spec S424).
+          [ "$(tail -c 32 "$appimage" | head -c 16)" = AudioSyncVersion ] || { echo "the AppImage has no version stamp"; exit 1; }
           rm -rf squashfs-root
           "./$appimage" --appimage-extract > /dev/null
           root=squashfs-root
@@ -136,7 +180,7 @@ jobs:
           desktop-file-validate "$root/usr/share/applications/io.github.yassersutojoyo.audiosync.desktop"
           appstreamcli validate --no-net "$root/usr/share/metainfo/io.github.yassersutojoyo.audiosync.metainfo.xml"
           # Direct needs only: linking another system library has to be a deliberate change here.
-          allowed="libfontconfig.so.1 libssl.so.3 libcrypto.so.3 libgcc_s.so.1 libm.so.6 libc.so.6 ld-linux-x86-64.so.2 libdl.so.2 libpthread.so.0"
+          allowed="libfontconfig.so.1 libssl.so.3 libcrypto.so.3 libgcc_s.so.1 libm.so.6 libc.so.6 ${{ matrix.loader }} libdl.so.2 libpthread.so.0"
           required="libfontconfig.so.1 libc.so.6"
           if grep -q '^pipewire *=' ../desktop/Cargo.toml; then
             allowed="$allowed libpipewire-0.3.so.0"
@@ -153,20 +197,24 @@ jobs:
           echo "Highest glibc symbol version: $(objdump -T "$root/usr/bin/audiosync" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
           file "$appimage"
 
-      - name: Upload the AppImage and its notices (workflow artifact, not a release)
+      - name: Upload the AppImage, the .deb and the notices (workflow artifact, not a release)
         uses: actions/upload-artifact@v5
         with:
-          name: audiosync-linux-x86_64
+          name: audiosync-linux-${{ matrix.arch }}
           path: |
-            dist/AudioSync-*-x86_64.AppImage
-            dist/AudioSync-*-x86_64.AppImage.sha256
+            dist/AudioSync-*.AppImage
+            dist/AudioSync-*.AppImage.sha256
+            dist/AudioSync-*.deb
+            dist/AudioSync-*.deb.sha256
             desktop/target/release/THIRD-PARTY-NOTICES.txt
           if-no-files-found: error
           retention-days: 7
 
       # The runtime inside the AppImage is a separate program; its source and
-      # that of the libfuse it links statically go with each release.
+      # that of the libfuse it links statically go with each release. Both
+      # architectures' runtimes build from the same two archives.
       - name: Sources of the AppImage runtime
+        if: matrix.arch == 'x86_64'
         run: |
           mkdir -p ../dist/runtime-sources
           cd ../dist/runtime-sources
@@ -177,6 +225,7 @@ jobs:
           sha256sum ./* | tee SHA256SUMS
 
       - name: Upload the runtime sources (workflow artifact)
+        if: matrix.arch == 'x86_64'
         uses: actions/upload-artifact@v5
         with:
           name: appimage-runtime-sources
@@ -192,8 +241,8 @@ jobs:
           mkdir -p ../dist/smoke
           ../scripts/build_appimage.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt \
             "$RUNNER_TEMP/appimage-tools/appimagetool" "$RUNNER_TEMP/appimage-tools/runtime" \
-            ../dist/smoke/AudioSync-smoke-x86_64.AppImage
+            "../dist/smoke/AudioSync-smoke-$ARCH.AppImage"
 
       - name: Tray smoke test (with and without a StatusNotifier watcher)
         working-directory: .
-        run: Tests/linux-tray-smoke.sh dist/smoke/AudioSync-smoke-x86_64.AppImage desktop/target/release/examples/sni_watcher_stub "$RUNNER_TEMP/tray-smoke"
+        run: Tests/linux-tray-smoke.sh "dist/smoke/AudioSync-smoke-$ARCH.AppImage" desktop/target/release/examples/sni_watcher_stub "$RUNNER_TEMP/tray-smoke"

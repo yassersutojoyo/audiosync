@@ -598,6 +598,7 @@ dependencies = [
  "image",
  "libc",
  "md-5 0.11.0",
+ "native-tls",
  "pipewire",
  "plist",
  "png",

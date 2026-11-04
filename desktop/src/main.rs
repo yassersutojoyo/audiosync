@@ -67,7 +67,10 @@ mod speaker_names;
 #[rustfmt::skip]
 mod tokens;
 mod ui_model;
-#[cfg(windows)]
+// Linux test builds compile it only for its Linux-only tests; the window
+// wires it up in release builds.
+#[cfg(any(windows, target_os = "linux"))]
+#[cfg_attr(all(test, not(windows)), allow(dead_code))]
 mod updater;
 mod view;
 
@@ -121,10 +124,10 @@ const PREVIEW_PRESETS_VAR: &str = "AUDIOSYNC_PREVIEW_PRESETS";
 fn main() -> ExitCode {
     // After Restart Now the quitting copy still holds the single instance;
     // claiming it first would hand this launch over to that copy.
-    #[cfg(windows)]
+    #[cfg(any(windows, all(target_os = "linux", not(test))))]
     let updater::relaunch::Claimed { instance, note } =
         updater::relaunch::claim_after(std::env::args_os(), os::claim_instance);
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, all(target_os = "linux", not(test)))))]
     let (instance, note) = (os::claim_instance(), None::<String>);
     let Some(instance) = instance else {
         if let Some(note) = note {
@@ -134,9 +137,9 @@ fn main() -> ExitCode {
         }
         return ExitCode::SUCCESS;
     };
-    #[cfg(windows)]
+    #[cfg(any(windows, all(target_os = "linux", not(test))))]
     let relaunched = updater::relaunch::marked_parent(std::env::args_os()).is_some();
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, all(target_os = "linux", not(test)))))]
     let relaunched = false;
     let log = DebugLog::from_env(relaunched);
     log.log(|| {

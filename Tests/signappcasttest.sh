@@ -1,10 +1,10 @@
 #!/bin/bash
 # Checks scripts/sign_appcast.sh's choice between a release with Windows zips
-# and a Mac-only one, without a Mac or a signing key: the script must stop
-# before signing anything. A fake uname reports Darwin and SPARKLE_BIN points
+# and AppImages and a Mac-only one, without a Mac or a signing key: the script
+# must stop before signing anything. A fake uname reports Darwin and SPARKLE_BIN points
 # at an empty folder, so an accepted release stops at "generate_appcast not
 # found" on any host. Usage: Tests/signappcasttest.sh (run by Tests/run-tests.sh).
-# covers: S311
+# covers: S311, S424
 set -o errexit -o nounset -o pipefail
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/audiosync-signappcast-XXXXXX")
@@ -18,10 +18,12 @@ release=$tmp/release
 mac_zip=$release/AudioSync-0.8.0.zip
 x64_zip=AudioSync-0.8.0-windows-x64.zip
 arm64_zip=AudioSync-0.8.0-windows-arm64.zip
+x86_64_appimage=AudioSync-0.8.0-x86_64.AppImage
+aarch64_appimage=AudioSync-0.8.0-aarch64.AppImage
 
-# lay <zip names…>: the release folder holds the Mac zip and these.
+# lay <file names…>: the release folder holds the Mac zip and these.
 lay() {
-  rm -f "$release"/*.zip
+  rm -f "$release"/*.zip "$release"/*.AppImage
   : > "$mac_zip"
   local name
   for name in "$@"; do : > "$release/$name"; done
@@ -60,7 +62,13 @@ lay "$arm64_zip"
 expect "only the arm64 zip: refused, naming the x64 zip" "$x64_zip" "generate_appcast not found" \
   -- 0.8.0 "$mac_zip"
 lay "$x64_zip" "$arm64_zip"
-expect "both Windows zips: on to the signing tools" "generate_appcast not found" "windows" \
+expect "both Windows zips, no AppImages: refused, naming the x86_64 AppImage" "$x86_64_appimage" \
+  "generate_appcast not found" -- 0.8.0 "$mac_zip"
+lay "$x64_zip" "$arm64_zip" "$x86_64_appimage"
+expect "one AppImage: refused, naming the aarch64 AppImage" "$aarch64_appimage" "generate_appcast not found" \
+  -- 0.8.0 "$mac_zip"
+lay "$x64_zip" "$arm64_zip" "$x86_64_appimage" "$aarch64_appimage"
+expect "both Windows zips and both AppImages: on to the signing tools" "generate_appcast not found" "windows" \
   -- 0.8.0 "$mac_zip"
 lay
 expect "--mac-only without Windows zips: on to the signing tools" "generate_appcast not found" "windows" \
@@ -68,6 +76,9 @@ expect "--mac-only without Windows zips: on to the signing tools" "generate_appc
 lay "$x64_zip" "$arm64_zip"
 expect "--mac-only with Windows zips next to it: refused, naming one" "$x64_zip" "generate_appcast not found" \
   -- --mac-only 0.8.0 "$mac_zip"
+lay "$aarch64_appimage"
+expect "--mac-only with an AppImage next to it: refused, naming it" "$aarch64_appimage" \
+  "generate_appcast not found" -- --mac-only 0.8.0 "$mac_zip"
 lay
 expect "an unknown option: usage" "usage:" "generate_appcast not found" -- --mac 0.8.0 "$mac_zip"
 

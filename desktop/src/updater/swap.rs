@@ -4,7 +4,7 @@
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use super::archive::{EXE_NAME, NOTICES_NAME};
+use super::archive::NOTICES_NAME;
 use super::files::{Files, is_blocked, is_disk_full, remove_if_there};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -63,9 +63,10 @@ impl Pair {
 }
 
 /// How far a pair got, for the restore.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Progress {
-    name: &'static str,
+    name: String,
+    exe: bool,
     renamed_aside: bool,
     renamed_in: bool,
 }
@@ -74,21 +75,24 @@ pub struct Progress {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Swapped(Vec<Progress>);
 
-/// Installs `exe` (and `notices`) into `dir` in place of the running files.
+/// Installs `exe` (and `notices`) into `dir` in place of the running files,
+/// the exe under `exe_name`.
 pub fn swap(
     dir: &Path,
+    exe_name: &str,
     exe: &[u8],
     notices: Option<&[u8]>,
     files: &dyn Files,
     log: &mut StepLog,
 ) -> Result<Swapped, SwapError> {
     let mut done: Vec<Progress> = Vec::new();
-    let mut parts = vec![(EXE_NAME, exe)];
-    parts.extend(notices.map(|bytes| (NOTICES_NAME, bytes)));
-    for (name, source) in parts {
+    let mut parts = vec![(exe_name, exe, true)];
+    parts.extend(notices.map(|bytes| (NOTICES_NAME, bytes, false)));
+    for (name, source, is_exe) in parts {
         let pair = Pair::new(dir, name);
         let mut progress = Progress {
-            name,
+            name: name.to_owned(),
+            exe: is_exe,
             renamed_aside: false,
             renamed_in: false,
         };
@@ -115,7 +119,7 @@ fn swap_one(
     log: &mut StepLog,
     progress: &mut Progress,
 ) -> Result<(), SwapError> {
-    let is_exe = name == EXE_NAME;
+    let is_exe = progress.exe;
     let leftover = remove_if_there(files, &pair.new);
     logged(log, format!("1: remove a leftover {name}.new"), leftover).map_err(in_use)?;
     let created = logged(
@@ -126,7 +130,12 @@ fn swap_one(
     let mut out = match created {
         Ok(out) => out,
         Err(error) if is_blocked(&error) => return Err(SwapError::Blocked),
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied && is_exe => {
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
+            ) && is_exe =>
+        {
             return Err(SwapError::ReadOnly);
         }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Err(SwapError::InUse),
@@ -205,7 +214,7 @@ fn restore(
     log: &mut StepLog,
 ) -> Result<(), SwapError> {
     for progress in done.iter().rev() {
-        let pair = Pair::new(dir, progress.name);
+        let pair = Pair::new(dir, &progress.name);
         let result = remove_if_there(files, &pair.new);
         log.push((
             restore_line("remove", &pair.new),
@@ -214,7 +223,7 @@ fn restore(
     }
     let mut renames = Vec::new();
     for progress in done.iter().rev() {
-        let pair = Pair::new(dir, progress.name);
+        let pair = Pair::new(dir, &progress.name);
         if progress.renamed_in && !progress.renamed_aside {
             let result = files.remove(&pair.live);
             log.push((
@@ -231,18 +240,23 @@ fn restore(
                 result.as_ref().err().map_or(0, code),
             ));
             if result.is_err() {
-                renames.push(Rename {
-                    bak: file_name(&pair.bak),
-                    live: file_name(&pair.live),
-                });
+                renames.push((
+                    progress.exe,
+                    Rename {
+                        bak: file_name(&pair.bak),
+                        live: file_name(&pair.live),
+                    },
+                ));
             }
         }
     }
     if renames.is_empty() {
         return Ok(());
     }
-    renames.sort_by_key(|rename| rename.live != EXE_NAME);
-    Err(SwapError::RestoreFailed { renames })
+    renames.sort_by_key(|(exe, _)| !exe);
+    Err(SwapError::RestoreFailed {
+        renames: renames.into_iter().map(|(_, rename)| rename).collect(),
+    })
 }
 
 fn restore_line(what: &str, path: &Path) -> String {
@@ -266,11 +280,12 @@ pub fn undo_completed(
     restore(dir, &swapped.0, files, log)
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::updater::archive::EXE_NAME;
     use crate::updater::files::{RealFiles, Sink};
     use crate::updater::tests::test_dir;
 
@@ -352,7 +367,7 @@ mod tests {
         let (dir, exe, notices) = install("swap-ok");
         std::fs::write(dir.join("audiosync.exe.bak"), b"older").unwrap();
         let mut log = StepLog::new();
-        swap(&dir, exe, Some(notices), &RealFiles, &mut log).expect("the swap works");
+        swap(&dir, EXE_NAME, exe, Some(notices), &RealFiles, &mut log).expect("the swap works");
         assert_eq!(read(dir.join(EXE_NAME)), "new exe");
         assert_eq!(read(dir.join("audiosync.exe.bak")), "old exe");
         assert_eq!(read(dir.join(NOTICES_NAME)), "new notices");
@@ -366,7 +381,7 @@ mod tests {
         let (dir, exe, _) = install("leftover-new");
         std::fs::write(dir.join("audiosync.exe.new"), b"stale").unwrap();
         let mut log = StepLog::new();
-        swap(&dir, exe, None, &RealFiles, &mut log).expect("the swap works");
+        swap(&dir, EXE_NAME, exe, None, &RealFiles, &mut log).expect("the swap works");
         assert_eq!(read(dir.join(EXE_NAME)), "new exe");
         assert!(!dir.join("audiosync.exe.new").exists());
 
@@ -378,7 +393,7 @@ mod tests {
                 .then(|| io::Error::from(io::ErrorKind::AlreadyExists))
         });
         assert_eq!(
-            swap(&dir, exe, None, &files, &mut log),
+            swap(&dir, EXE_NAME, exe, None, &files, &mut log),
             Err(SwapError::InUse)
         );
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
@@ -392,7 +407,7 @@ mod tests {
             (op == "rename" && file_name(path) == EXE_NAME).then(|| io::Error::from_raw_os_error(5))
         });
         let mut log = StepLog::new();
-        let result = swap(&dir, exe, Some(notices), &files, &mut log);
+        let result = swap(&dir, EXE_NAME, exe, Some(notices), &files, &mut log);
         // The rename back targets audiosync.exe too, which this double
         // refuses, so the restore names the .bak.
         assert_eq!(
@@ -412,7 +427,7 @@ mod tests {
                 && !refused.swap(true, std::sync::atomic::Ordering::SeqCst))
             .then(|| io::Error::from_raw_os_error(5))
         });
-        let result = swap(&dir, exe, Some(notices), &files, &mut log);
+        let result = swap(&dir, EXE_NAME, exe, Some(notices), &files, &mut log);
         assert_eq!(
             result,
             Err(SwapError::Failed {
@@ -439,7 +454,7 @@ mod tests {
         });
         let mut log = StepLog::new();
         assert_eq!(
-            swap(&dir, exe, None, &files, &mut log),
+            swap(&dir, EXE_NAME, exe, None, &files, &mut log),
             Err(SwapError::Vanished)
         );
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
@@ -455,7 +470,19 @@ mod tests {
         });
         let mut log = StepLog::new();
         assert_eq!(
-            swap(&dir, exe, None, &files, &mut log),
+            swap(&dir, EXE_NAME, exe, None, &files, &mut log),
+            Err(SwapError::ReadOnly)
+        );
+        assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
+
+        // Linux: an AppImage on a read-only mount (EROFS).
+        let (dir, exe, _) = install("read-only-mount");
+        let files = failing(|op, path| {
+            (op == "create" && file_name(path) == "audiosync.exe.new")
+                .then(|| io::Error::from(io::ErrorKind::ReadOnlyFilesystem))
+        });
+        assert_eq!(
+            swap(&dir, EXE_NAME, exe, None, &files, &mut StepLog::new()),
             Err(SwapError::ReadOnly)
         );
         assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
@@ -475,7 +502,7 @@ mod tests {
             .unwrap();
         let mut log = StepLog::new();
         assert_eq!(
-            swap(&dir, exe, None, &RealFiles, &mut log),
+            swap(&dir, EXE_NAME, exe, None, &RealFiles, &mut log),
             Err(SwapError::InUse)
         );
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
@@ -519,7 +546,7 @@ mod tests {
         let (dir, exe, _) = install("swap-disk-full-copy");
         let mut log = StepLog::new();
         assert_eq!(
-            swap(&dir, exe, None, &FullDisk, &mut log),
+            swap(&dir, EXE_NAME, exe, None, &FullDisk, &mut log),
             Err(SwapError::DiskFull)
         );
         assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
@@ -601,7 +628,7 @@ mod tests {
             refused.then(|| io::Error::from_raw_os_error(5))
         });
         let mut log = StepLog::new();
-        let result = swap(&dir, exe, Some(notices), &files, &mut log);
+        let result = swap(&dir, EXE_NAME, exe, Some(notices), &files, &mut log);
         assert_eq!(
             result,
             Err(SwapError::RestoreFailed {
@@ -619,7 +646,7 @@ mod tests {
             (op == "rename" && file_name(path) == NOTICES_NAME)
                 .then(|| io::Error::from_raw_os_error(5))
         });
-        let result = swap(&dir, exe, Some(notices), &files, &mut log);
+        let result = swap(&dir, EXE_NAME, exe, Some(notices), &files, &mut log);
         assert_eq!(
             result,
             Err(SwapError::RestoreFailed {
@@ -634,7 +661,7 @@ mod tests {
     fn a_failed_relaunch_restores_the_bak() {
         let (dir, exe, notices) = install("relaunch-failed");
         let mut log = StepLog::new();
-        let swapped = swap(&dir, exe, Some(notices), &RealFiles, &mut log).unwrap();
+        let swapped = swap(&dir, EXE_NAME, exe, Some(notices), &RealFiles, &mut log).unwrap();
         undo_completed(&dir, &swapped, &RealFiles, &mut log).expect("the undo works");
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
         assert_eq!(read(dir.join(NOTICES_NAME)), "old notices");

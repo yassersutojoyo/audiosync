@@ -16,13 +16,15 @@
 # keeps Sparkle's signature; docs/DEVELOPMENT.md ("Signing") says why, and why
 # to click Allow rather than Always Allow.
 #
-# AudioSync-VERSION-windows-x64.zip and -arm64.zip must sit next to ZIP: each
-# gets its own item, signed by Sparkle's sign_update (run under the same name)
-# with the same key, and scripts/check_appcast.py checks the result. Without
-# them it stops, since Windows users would never see the release; --mac-only
-# writes a Mac-only appcast instead and refuses when Windows zips are there.
-# The final check gets the same choice, so it fails an appcast missing either OS.
-# covers: S311
+# AudioSync-VERSION-windows-x64.zip and -arm64.zip, and the Linux
+# AudioSync-VERSION-x86_64.AppImage and -aarch64.AppImage, must sit next to
+# ZIP: each gets its own item, signed by Sparkle's sign_update (run under the
+# same name) with the same key, and scripts/check_appcast.py checks the
+# result. Without them it stops, since Windows or Linux users would never see
+# the release; --mac-only writes a Mac-only appcast instead and refuses when
+# any of them is there. The final check gets the same choice, so it fails an
+# appcast missing any OS.
+# covers: S311, S424
 #
 # Environment:
 #   SPARKLE_BIN   the folder holding generate_appcast, when it isn't in the
@@ -54,16 +56,18 @@ if [ $# = 2 ]; then zip=$(absolute "$2"); else zip="$ROOT/AudioSync-$version.zip
 zip_dir=$(dirname -- "$zip")
 x64_zip="$zip_dir/AudioSync-$version-windows-x64.zip"
 arm64_zip="$zip_dir/AudioSync-$version-windows-arm64.zip"
+x86_64_appimage="$zip_dir/AudioSync-$version-x86_64.AppImage"
+aarch64_appimage="$zip_dir/AudioSync-$version-aarch64.AppImage"
 missing=""
-for windows_zip in "$x64_zip" "$arm64_zip"; do
+for windows_zip in "$x64_zip" "$arm64_zip" "$x86_64_appimage" "$aarch64_appimage"; do
   if [ "$mac_only" = yes ] && [ -f "$windows_zip" ]; then
-    die "--mac-only, but $windows_zip is there: leave out --mac-only to add the Windows items, or move the Windows zips away"
+    die "--mac-only, but $windows_zip is there: leave out --mac-only to add the Windows and Linux items, or move the Windows zips and AppImages away"
   elif [ "$mac_only" = no ] && [ ! -f "$windows_zip" ]; then
     missing="$missing${missing:+ and }$windows_zip"
   fi
 done
 [ -z "$missing" ] \
-  || die "$missing not found: put both Windows zips next to $zip (RELEASE.md names them), or pass --mac-only for a release without Windows"
+  || die "$missing not found: put both Windows zips and both AppImages next to $zip (RELEASE.md names them), or pass --mac-only for a release without Windows and Linux"
 
 [ "$(uname -s)" = Darwin ] || die "Sparkle's tools run on macOS only"
 
@@ -123,10 +127,14 @@ if [ "$mac_only" = no ]; then
   }
   x64_signature=$(signature_of "$x64_zip")
   arm64_signature=$(signature_of "$arm64_zip")
+  x86_64_signature=$(signature_of "$x86_64_appimage")
+  aarch64_signature=$(signature_of "$aarch64_appimage")
   python3 -I scripts/check_appcast.py "$work/archives/appcast.xml" "$version" "$zip" "$x64_zip" "$arm64_zip" \
+    "$x86_64_appimage" "$aarch64_appimage" \
     --add "$x64_zip" "$x64_signature" --add "$arm64_zip" "$arm64_signature" \
-    || die "appcast.xml with the Windows items fails the S311 checks above"
-  signed_for="$(basename "$zip") and both Windows zips"
+    --add "$x86_64_appimage" "$x86_64_signature" --add "$aarch64_appimage" "$aarch64_signature" \
+    || die "appcast.xml with the Windows and Linux items fails the S311 and S424 checks above"
+  signed_for="$(basename "$zip"), both Windows zips and both AppImages"
 else
   python3 -I scripts/check_appcast.py --mac-only "$work/archives/appcast.xml" "$version" "$zip" \
     || die "appcast.xml fails the S311 checks above"

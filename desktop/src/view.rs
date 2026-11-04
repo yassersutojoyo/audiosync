@@ -829,8 +829,8 @@ pub struct App {
     /// backend's notices are about audio.
     login: RefCell<LaunchAtLogin>,
     login_timer: Timer,
-    /// The Windows updater, in a release build only.
-    #[cfg(windows)]
+    /// The updater, in a Windows or Linux release build only.
+    #[cfg(any(windows, all(target_os = "linux", not(test))))]
     updater: RefCell<Option<crate::updater::Updater>>,
     /// The Now Playing card, and the source it was last given.
     now_playing: RefCell<NowPlayingCard>,
@@ -859,7 +859,7 @@ impl MenuBarTheme {
 }
 
 /// Runs `action` on the app if it still exists.
-#[cfg(windows)]
+#[cfg(any(windows, all(target_os = "linux", not(test))))]
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1049,7 +1049,7 @@ fn fitted_main_frame(
 impl App {
     /// The windows over `backend`; what they do themselves goes to `log`.
     pub fn new(backend: Box<dyn Backend>, log: DebugLog) -> Result<Rc<App>, slint::PlatformError> {
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", not(test))))]
         let log_for_updater = log.clone();
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
@@ -1122,7 +1122,7 @@ impl App {
                 launch_at_login::own_exe(),
             )),
             login_timer: Timer::default(),
-            #[cfg(windows)]
+            #[cfg(any(windows, all(target_os = "linux", not(test))))]
             updater: RefCell::new(crate::updater::for_this_exe(log_for_updater)),
             now_playing: RefCell::default(),
             now_playing_source: RefCell::default(),
@@ -3532,14 +3532,14 @@ impl App {
     }
 
     fn has_updater(&self) -> bool {
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", not(test))))]
         return self.updater.borrow().is_some();
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, all(target_os = "linux", not(test)))))]
         return false;
     }
 
     fn updater_notice(&self) -> Option<ui_model::Notice> {
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", not(test))))]
         return self.updater.borrow().as_ref().and_then(|updater| {
             updater.notice().map(|notice| ui_model::Notice {
                 id: UPDATER_NOTICE_ID,
@@ -3549,7 +3549,7 @@ impl App {
                 post: updater.notice_post(),
             })
         });
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, all(target_os = "linux", not(test)))))]
         return None;
     }
 
@@ -3557,7 +3557,7 @@ impl App {
         if id != UPDATER_NOTICE_ID {
             return false;
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", not(test))))]
         if let Some(updater) = self.updater.borrow_mut().as_mut() {
             updater.dismiss();
             return true;
@@ -3567,7 +3567,7 @@ impl App {
 
     /// The launch check (spec S305), once the saved settings are in.
     fn launch_update_check(&self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", not(test))))]
         {
             let (automatic, last, record) = {
                 let ui = self.ui.borrow();
@@ -3586,7 +3586,7 @@ impl App {
 
     /// The updater's record of a version that didn't install (spec S316),
     /// into the settings.
-    #[cfg(windows)]
+    #[cfg(any(windows, all(target_os = "linux", not(test))))]
     fn keep_update_record(&self) {
         let record = match self.updater.borrow().as_ref() {
             Some(updater) => updater.record().cloned(),
@@ -3599,7 +3599,7 @@ impl App {
     /// At quit, before the settings are saved: after a swap whose exe
     /// Windows security removed, the old one comes back (spec S315).
     pub fn updater_at_exit(&self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", not(test))))]
         {
             let changed = match self.updater.borrow_mut().as_mut() {
                 Some(updater) => updater.at_quit(),
@@ -3635,7 +3635,7 @@ impl App {
     /// Takes the updater worker's news; a check that read the appcast
     /// stores its time. Then starts the daily check when due (spec S305).
     fn poll_updater(&self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", not(test))))]
         {
             let polled = match self.updater.borrow_mut().as_mut() {
                 Some(updater) => updater.poll(),
@@ -3679,7 +3679,7 @@ impl App {
 
     /// Help > Check for Updates…, whatever the switch and the time say.
     fn check_for_updates(&self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", not(test))))]
         if let Some(updater) = self.updater.borrow_mut().as_mut() {
             updater.check(crate::updater::Trigger::Manual);
         }
@@ -3687,7 +3687,7 @@ impl App {
     }
 
     fn press_update_button(&self, button: UpdateButton) {
-        #[cfg(windows)]
+        #[cfg(any(windows, all(target_os = "linux", not(test))))]
         {
             use crate::updater::{Action, UpdaterButton};
             let button = match button {
@@ -3716,7 +3716,7 @@ impl App {
                 }
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, all(target_os = "linux", not(test)))))]
         let _ = button;
         self.refresh();
     }
@@ -6234,6 +6234,7 @@ fn update_notice_text(strings: &Strings<'_>, notice: &ui_model::UpdaterNotice) -
         }
         N::RelaunchFailed => strings.get_notice_update_relaunch_failed(),
         N::Blocked => strings.get_notice_update_blocked(),
+        N::NotAppImage => strings.get_notice_update_not_appimage(),
     }
 }
 
@@ -10642,6 +10643,7 @@ mod tests {
             },
             N::RelaunchFailed,
             N::Blocked,
+            N::NotAppImage,
         ];
         let mut texts = HashSet::new();
         for notice in notices {

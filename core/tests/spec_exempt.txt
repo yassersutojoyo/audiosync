@@ -192,3 +192,4 @@ S420 Windows and Linux hosts only: the main window's speaker list width, its too
 S421 Windows host only: media sessions read when Windows reports a change; the desktop tests in the clause's test map table check it.
 S422 Hosts only: pairing texts that ask for a code; the Mac logic checks "pairing texts: …" and the desktop test named in the clause check it.
 S423 Hosts only: the notice cap across the engine's and the window's own notices; the desktop tests named in the clause check it.
+S424 Linux host only: the AppImage updater of section 19 (desktop/src/updater); the desktop tests marked S424 check it, on Windows with the Linux paths picked at run time and on Linux for the file, rename and start signal code only Linux runs.

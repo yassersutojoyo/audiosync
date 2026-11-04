@@ -39,6 +39,9 @@ impl Files for RealFiles {
     fn create(&self, path: &Path, exclusive: bool) -> io::Result<Box<dyn Sink>> {
         let mut options = OpenOptions::new();
         options.write(true);
+        // The new AppImage runs as it is (spec S424).
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o755);
         if exclusive {
             options.create_new(true);
         } else {
@@ -60,6 +63,20 @@ impl Files for RealFiles {
     }
 }
 
+/// A rename, then the folder flushed so the rename is on disk.
+#[cfg(not(windows))]
+fn move_write_through(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
+    if !replace && fs::symlink_metadata(to).is_ok() {
+        return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+    }
+    fs::rename(from, to)?;
+    if let Some(dir) = to.parent() {
+        File::open(dir)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn move_write_through(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Storage::FileSystem::{
@@ -255,5 +272,40 @@ impl Files for Retrying<'_> {
     }
     fn open(&self, path: &Path) -> io::Result<File> {
         self.retried("open", path, || self.inner.open(path))
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    // covers: S424
+    #[test]
+    fn a_new_appimage_runs_and_a_rename_replaces_only_when_asked() {
+        let dir = std::env::temp_dir().join(format!("audiosync-files-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let new = dir.join("AudioSync.AppImage.new");
+        let live = dir.join("AudioSync.AppImage");
+        RealFiles
+            .create(&new, true)
+            .unwrap()
+            .write_all(b"new")
+            .unwrap();
+        let mode = fs::metadata(&new).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "{mode:o}");
+        assert!(RealFiles.create(&new, true).is_err());
+        fs::write(&live, b"old").unwrap();
+        assert_eq!(
+            RealFiles.rename(&new, &live).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&live).unwrap(), b"old");
+        RealFiles.replace(&new, &live).unwrap();
+        assert_eq!(fs::read(&live).unwrap(), b"new");
+        assert!(!new.exists());
+        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -6,6 +6,32 @@ use super::version::Version;
 
 const SPARKLE_NS: &str = "http://www.andymatuschak.org/xml-namespaces/sparkle";
 
+/// The system the app was built for, which sets the enclosure's form: a zip
+/// on Windows, the AppImage itself on Linux (spec S424).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Os {
+    Windows,
+    Linux,
+}
+
+impl Os {
+    pub const fn own() -> Os {
+        if cfg!(target_os = "linux") {
+            Os::Linux
+        } else {
+            Os::Windows
+        }
+    }
+
+    /// The name in the user agent.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Os::Windows => "Windows",
+            Os::Linux => "Linux",
+        }
+    }
+}
+
 /// The architecture the exe was built for, which an emulated x64 build on an
 /// ARM64 PC keeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,11 +49,13 @@ impl Arch {
         }
     }
 
-    /// The `sparkle:os` value of this architecture's enclosure.
-    pub const fn os_value(self) -> &'static str {
-        match self {
-            Arch::X64 => "windows-x64",
-            Arch::Arm64 => "windows-arm64",
+    /// The `sparkle:os` value of this architecture's enclosure on `os`.
+    pub const fn os_value(self, os: Os) -> &'static str {
+        match (os, self) {
+            (Os::Windows, Arch::X64) => "windows-x64",
+            (Os::Windows, Arch::Arm64) => "windows-arm64",
+            (Os::Linux, Arch::X64) => "linux-x86_64",
+            (Os::Linux, Arch::Arm64) => "linux-aarch64",
         }
     }
 
@@ -44,6 +72,14 @@ impl Arch {
         match self {
             Arch::X64 => 0x8664,
             Arch::Arm64 => 0xAA64,
+        }
+    }
+
+    /// The ELF header's machine field (EM_X86_64, EM_AARCH64).
+    pub const fn elf_machine(self) -> u16 {
+        match self {
+            Arch::X64 => 62,
+            Arch::Arm64 => 183,
         }
     }
 }
@@ -186,8 +222,15 @@ pub struct Update {
     pub enclosure: Enclosure,
 }
 
-/// The update for `arch` above `running`, on Windows `system`, or `None`.
-pub fn pick(appcast: &Appcast, arch: Arch, running: &Version, system: &Version) -> Option<Update> {
+/// The update for `os` and `arch` above `running`, on system version
+/// `system`, or `None`.
+pub fn pick(
+    appcast: &Appcast,
+    os: Os,
+    arch: Arch,
+    running: &Version,
+    system: &Version,
+) -> Option<Update> {
     let mut best: Option<Update> = None;
     for item in &appcast.items {
         if item.channel.is_some() {
@@ -206,7 +249,7 @@ pub fn pick(appcast: &Appcast, arch: Arch, running: &Version, system: &Version) 
         let Some(enclosure) = item
             .enclosures
             .iter()
-            .find(|enclosure| enclosure.os.as_deref() == Some(arch.os_value()))
+            .find(|enclosure| enclosure.os.as_deref() == Some(arch.os_value(os)))
         else {
             continue;
         };
@@ -299,7 +342,8 @@ mod tests {
             windows_item("0.8.1", "windows-x64")
         ));
         let appcast = parse(&text).expect("the feed reads");
-        let update = pick(&appcast, Arch::X64, &v("0.8"), &win11()).expect("an update");
+        let update =
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.8"), &win11()).expect("an update");
         assert_eq!(update.version_text, "0.8.1");
     }
 
@@ -326,9 +370,11 @@ mod tests {
             windows_item("1.0", "windows-arm64"),
         ));
         let appcast = parse(&text).expect("the feed reads");
-        let update = pick(&appcast, Arch::X64, &v("0.7.0"), &win11()).expect("an update");
+        let update =
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.7.0"), &win11()).expect("an update");
         assert_eq!(update.enclosure.url, "https://e.invalid/ok.zip");
-        let arm = pick(&appcast, Arch::Arm64, &v("0.7.0"), &win11()).expect("an update");
+        let arm =
+            pick(&appcast, Os::Windows, Arch::Arm64, &v("0.7.0"), &win11()).expect("an update");
         assert_eq!(arm.version_text, "1.0");
     }
 
@@ -342,10 +388,44 @@ mod tests {
             windows_item("0.8.5", "windows-x64")
         ));
         let appcast = parse(&text).expect("the feed reads");
-        let update = pick(&appcast, Arch::X64, &v("0.7.0"), &win11()).expect("an update");
+        let update =
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.7.0"), &win11()).expect("an update");
         assert_eq!(update.version_text, "0.9.0");
-        assert_eq!(pick(&appcast, Arch::X64, &v("0.9"), &win11()), None);
-        assert_eq!(pick(&appcast, Arch::X64, &v("1.0"), &win11()), None);
-        assert_eq!(pick(&appcast, Arch::Arm64, &v("0.1"), &win11()), None);
+        assert_eq!(
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.9"), &win11()),
+            None
+        );
+        assert_eq!(
+            pick(&appcast, Os::Windows, Arch::X64, &v("1.0"), &win11()),
+            None
+        );
+        assert_eq!(
+            pick(&appcast, Os::Windows, Arch::Arm64, &v("0.1"), &win11()),
+            None
+        );
+    }
+
+    // covers: S424
+    #[test]
+    fn a_linux_copy_picks_the_appimage_of_its_own_arch_and_windows_ignores_it() {
+        let text = feed(&format!(
+            "{}{}{}{}",
+            windows_item("0.9.0", "windows-x64"),
+            windows_item("0.9.0", "linux-x86_64"),
+            windows_item("0.9.0", "linux-aarch64"),
+            windows_item("1.0.0", "linux"),
+        ));
+        let appcast = parse(&text).expect("the feed reads");
+        let x64 = pick(&appcast, Os::Linux, Arch::X64, &v("0.8.0"), &v("0")).expect("an update");
+        assert_eq!(x64.enclosure.os.as_deref(), Some("linux-x86_64"), "{x64:?}");
+        let arm = pick(&appcast, Os::Linux, Arch::Arm64, &v("0.8.0"), &v("0")).expect("an update");
+        assert_eq!(arm.enclosure.os.as_deref(), Some("linux-aarch64"));
+        let windows =
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.8.0"), &win11()).expect("an update");
+        assert_eq!(windows.enclosure.os.as_deref(), Some("windows-x64"));
+        assert_eq!(
+            pick(&appcast, Os::Windows, Arch::Arm64, &v("0.8.0"), &win11()),
+            None
+        );
     }
 }
