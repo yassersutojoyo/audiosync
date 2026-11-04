@@ -1,6 +1,6 @@
 #!/bin/bash
 # Installs or updates the AudioSync AppImage for the current user from a GitHub release.
-#   curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install-linux.sh | bash
+#   curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install-linux.sh | bash
 #   curl -fsSL .../install-linux.sh | bash -s -- 0.9.0     a given version instead of the latest
 #   scripts/install-linux.sh --dry-run [VERSION]          print what it would download, change nothing
 # Checks the AppImage against the release's SHA256SUMS.txt before anything is
@@ -9,6 +9,9 @@
 set -o errexit -o nounset -o pipefail
 
 REPO=yassersutojoyo/audiosync
+# The release key's public half ("ssh-ed25519 AAAA..."). Empty until that key exists
+# (RELEASE.md, "Signed checksums"); until then the install trusts the tag over HTTPS alone.
+RELEASE_KEY=""
 API="https://api.github.com/repos/$REPO/releases/latest"
 ID=io.github.yassersutojoyo.audiosync
 BIN="$HOME/.local/bin"
@@ -28,6 +31,22 @@ tag_from_json() {
   tr ',{}' '\n' \
     | sed -n 's/^[[:space:]]*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n 1
+}
+
+# Checks SHA256SUMS.txt against the SHA256SUMS.txt.sig on the same tag, when the tag has one.
+check_signature() {   # check_signature <release URL> <SHA256SUMS.txt path>
+  [ -n "$RELEASE_KEY" ] || return 0
+  local sig="$2.sig" code
+  code=$(curl -sSL -o "$sig" -w '%{http_code}' "$1/SHA256SUMS.txt.sig") || fail "couldn't download $1/SHA256SUMS.txt.sig"
+  case $code in
+    200) ;;
+    404) return 0 ;;   # a release from before the key
+    *) fail "couldn't download $1/SHA256SUMS.txt.sig (HTTP $code)" ;;
+  esac
+  command -v ssh-keygen >/dev/null || fail "ssh-keygen is missing, so the release's signature can't be checked. Nothing was installed."
+  printf 'audiosync-release %s\n' "$RELEASE_KEY" > "$2.signers"
+  ssh-keygen -Y verify -f "$2.signers" -I audiosync-release -n file -s "$sig" < "$2" >/dev/null 2>&1 \
+    || fail "SHA256SUMS.txt doesn't carry the release key's signature. Nothing was installed."
 }
 
 valid_version() {
@@ -124,6 +143,7 @@ main() {
   trap 'rm -rf "$tmp"' EXIT
 
   curl -fsSL -o "$tmp/SHA256SUMS.txt" "$base/SHA256SUMS.txt" || fail "couldn't download $base/SHA256SUMS.txt"
+  check_signature "$base" "$tmp/SHA256SUMS.txt"
   local expected
   expected=$(awk -v f="$appimage" '$2 == f || $2 == "*" f { print $1; exit }' "$tmp/SHA256SUMS.txt")
   local hex='^[0-9a-fA-F]{64}$'

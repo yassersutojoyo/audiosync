@@ -2,6 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Security
+
+- The Terminal and PowerShell installs now fetch the install script from the latest release instead of the main branch, so a change pushed to the code no longer reaches anyone's install before it ships in a release. The new commands are in the README.
+
 ## [0.8.6] - 2026-11-04
 
 ### Changed
