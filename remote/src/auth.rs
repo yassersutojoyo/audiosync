@@ -239,8 +239,9 @@ fn unix_seconds(time: SystemTime) -> u64 {
 #[derive(Clone, Copy, Debug)]
 struct Device {
     hash: TokenHash,
-    /// The token before the last rotation, and when it was replaced.
-    previous: Option<(TokenHash, u64)>,
+    /// The token before the last rotation, and when the new one was first
+    /// presented: until then the answer carrying it may never have arrived.
+    previous: Option<(TokenHash, Option<u64>)>,
     /// When `hash` was issued, or read from the file.
     issued: u64,
     /// Where it paired ([`net::pairing_address`]); none for a device from a
@@ -435,7 +436,8 @@ impl TokenStore {
     }
 
     /// The device whose current token is `token`, or whose replaced one is
-    /// and still in [`ROTATION_GRACE`] at `now`; true when it is the current.
+    /// while the new one is unused or was first used less than
+    /// [`ROTATION_GRACE`] before `now`; true when it is the current.
     fn position(&self, token: &str, now: u64) -> Option<(usize, bool)> {
         if token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return None;
@@ -447,9 +449,9 @@ impl TokenStore {
             .enumerate()
             .fold(None, |found, (index, device)| {
                 let current = equal_in_constant_time(&device.hash, &hash);
-                let replaced = device.previous.is_some_and(|(old, at)| {
+                let replaced = device.previous.is_some_and(|(old, used)| {
                     equal_in_constant_time(&old, &hash)
-                        & (now.abs_diff(at) < ROTATION_GRACE.as_secs())
+                        & used.is_none_or(|at| now.abs_diff(at) < ROTATION_GRACE.as_secs())
                 });
                 if current || replaced {
                     Some((index, current))
@@ -497,32 +499,39 @@ impl TokenStore {
         }
         let from = net::pairing_address(peer);
         let mut bound = false;
+        let mut first_use = false;
         let found = match self.position(token, now) {
             Some((index, _)) if self.devices[index].peer.is_some_and(|at| at != from) => {
                 self.devices.remove(index);
                 None
             }
-            Some((index, _)) => {
+            Some((index, current)) => {
                 let device = &mut self.devices[index];
                 bound = device.peer.replace(from).is_none();
                 device.seen = now;
+                if current
+                    && let Some((_, used)) = &mut device.previous
+                    && used.is_none()
+                {
+                    *used = Some(now);
+                    first_use = true;
+                }
                 Some(device.id)
             }
             None => None,
         };
-        let changed =
-            bound || self.devices.len() != before || self.devices.iter().any(Device::needs_saving);
+        let changed = bound
+            || first_use
+            || self.devices.len() != before
+            || self.devices.iter().any(Device::needs_saving);
         (found, changed.then(|| self.snapshot()))
     }
 
     /// A new token for the device whose current token is `token`, once that
-    /// one is [`ROTATE_AFTER`] old at `now`; the old one then works for
-    /// [`ROTATION_GRACE`]. The snapshot holds the new token's hash.
-    pub fn rotate(
-        &mut self,
-        token: &str,
-        now: SystemTime,
-    ) -> Result<Option<(String, Snapshot)>, RandomError> {
+    /// one is [`ROTATE_AFTER`] old at `now`. The old one works until the new
+    /// one is first presented to [`TokenStore::check`], then for
+    /// [`ROTATION_GRACE`]; the file gets the new one at that first use.
+    pub fn rotate(&mut self, token: &str, now: SystemTime) -> Result<Option<String>, RandomError> {
         let now = unix_seconds(now);
         let Some((index, true)) = self.position(token, now) else {
             return Ok(None);
@@ -532,10 +541,10 @@ impl TokenStore {
         }
         let fresh = random_token()?;
         let device = &mut self.devices[index];
-        device.previous = Some((device.hash, now));
+        device.previous = Some((device.hash, None));
         device.hash = token_hash(&fresh);
         device.issued = now;
-        Ok(Some((fresh, self.snapshot())))
+        Ok(Some(fresh))
     }
 
     /// Remembers a new device's token, paired from `peer` and seen at `now`,
@@ -588,7 +597,14 @@ impl TokenStore {
             devices: self
                 .devices
                 .iter()
-                .map(|device| (device.hash, device.seen, device.peer))
+                .map(|device| {
+                    // The file keeps the token the phone is known to hold.
+                    let hash = match device.previous {
+                        Some((old, None)) => old,
+                        _ => device.hash,
+                    };
+                    (hash, device.seen, device.peer)
+                })
                 .collect(),
             generation: self.generation,
             keep_first: self.damaged.clone(),
@@ -1288,7 +1304,7 @@ mod tests {
         let old = random_token().unwrap();
         let _ = store.add(&old, peer(10), start);
         let due = start + ROTATE_AFTER;
-        let (new, _) = store.rotate(&old, due).unwrap().expect("a new token");
+        let new = store.rotate(&old, due).unwrap().expect("a new token");
         // The answer that carried `new` never reached the phone.
         let lost = due + ROTATION_GRACE * 5;
         assert!(store.check(&old, peer(10), lost).0.is_some());
@@ -1315,24 +1331,28 @@ mod tests {
         assert!(store.rotate(&old, early).unwrap().is_none());
 
         let due = start + ROTATE_AFTER;
-        let (new, _) = store.rotate(&old, due).unwrap().expect("a new token");
+        let new = store.rotate(&old, due).unwrap().expect("a new token");
         assert_ne!(new, old);
-        let late = due + ROTATION_GRACE - Duration::from_secs(1);
-        assert_eq!(store.check(&old, peer(10), late).0, device);
+        assert_eq!(store.check(&old, peer(10), due).0, device);
         assert!(
-            store.rotate(&old, late).unwrap().is_none(),
+            store.rotate(&old, due).unwrap().is_none(),
             "only the current rotates"
         );
+        let (used, snapshot) = store.check(&new, peer(10), due);
+        assert_eq!(used, device);
+        let snapshot = snapshot.expect("the first use writes the new token");
+        assert_eq!(snapshot.devices[0].0, token_hash(&new));
+        let late = due + ROTATION_GRACE - Duration::from_secs(1);
+        assert_eq!(store.check(&old, peer(10), late).0, device);
         assert!(!store.contains(&old, due + ROTATION_GRACE));
         assert_eq!(store.check(&new, peer(10), due + DAY).0, device);
         assert!(store.holds(device.unwrap(), due + DAY));
 
-        let (_, snapshot) = store.rotate(&new, due + DAY).unwrap().unwrap();
+        assert!(store.rotate(&new, due + DAY).unwrap().is_some());
         assert!(
             store.remove(&new).is_some(),
             "unpaired by its replaced token"
         );
-        assert_eq!(snapshot.devices.len(), 1);
     }
 
     // covers: S425, S372
