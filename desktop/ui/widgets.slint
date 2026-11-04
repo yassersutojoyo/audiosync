@@ -453,6 +453,8 @@ export component Glyph inherits HorizontalLayout {
     if Platform.os != OperatingSystemType.windows && root.glyph != "": Rectangle {
         min-width: root.font-size;
         min-height: root.font-size;
+        // Keeps its size in a row, as the Windows glyph's text does.
+        horizontal-stretch: 0;
 
         if Glyphs.outline(root.glyph) != "": Path {
             x: (parent.width - self.width) / 2;
