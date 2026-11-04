@@ -12,15 +12,12 @@ plays except AudioSync itself, or an input device such as a microphone or line
 in, and plays it on
 the outputs you turn on, each at its own delay and volume, through the
 equalizer. AirPlay speakers on your network show up under Connected Speakers,
-through AudioSync's own sender ([`../airplay`](../airplay)); that part hasn't
-been tried with a real speaker yet. Local playback has had a short first
-listen on one Windows 11 PC (a USB-C in-ear and wired speakers on the jack,
-playing together); Bluetooth outputs haven't been tried yet. CI builds and
+through AudioSync's own sender ([`../airplay`](../airplay)). CI builds and
 tests it. [docs/WINDOWS_UI.md](../docs/WINDOWS_UI.md) maps each
 part of the Mac main window to its Windows counterpart and lists the keyboard
 shortcuts.
 
-## Trying the preview exe
+## Running the exe
 
 Since 0.7.1 the zips are on the
 [Releases](https://github.com/yassersutojoyo/audiosync/releases) page, or build
@@ -31,8 +28,7 @@ build you make yourself, you write that file as shown below), and run it.
 - **What you need:** Windows 11 (build 22000 or later) on x64 or ARM64. On
   anything older the app says so and exits.
 - **SmartScreen:** the exe isn't code-signed, so the first time Windows may
-  say it protected your PC. Click More info, then Run anyway. That's expected
-  for this preview.
+  say it protected your PC. Click More info, then Run anyway.
 - **Firewall:** the first time AudioSync looks for AirPlay speakers, Windows
   Firewall may ask whether it can use the network. Allow it on private
   networks. If your Wi-Fi or Ethernet is set to Public, Windows will probably
@@ -287,8 +283,7 @@ cargo check --target aarch64-pc-windows-msvc
   device notifications, what kind of device each output is); the rest is
   plain Rust over `audiosync-core` (which outputs play, at what delay and
   volume, what gets captured, the equalizer in the capture path) and is
-  tested on any host with an in-memory mock driver. On real hardware it has
-  had a short first listen on one Windows 11 PC; Bluetooth not tried yet.
+  tested on any host with an in-memory mock driver.
 - `ui/`: the Slint files, compiled by `build.rs`. `strings.slint` holds every
   user-facing string, `tokens.slint` (generated from `brand/tokens.json`) the
   colors and sizes
