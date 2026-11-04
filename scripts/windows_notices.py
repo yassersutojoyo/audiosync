@@ -4,7 +4,7 @@
     python3 -I scripts/windows_notices.py <target triple> [--output <file>]
 
 The target is a Windows triple (x86_64-pc-windows-msvc, aarch64-pc-windows-msvc)
-or x86_64-unknown-linux-gnu. The file covers everything compiled into the
+or x86_64- or aarch64-unknown-linux-gnu. The file covers everything compiled into the
 executable (audiosync.exe, or audiosync on Linux) for that target:
 AudioSync's own code (the app, audiosync-core, audiosync-airplay,
 audiosync-cast and audiosync-remote, under the
@@ -60,7 +60,7 @@ NOTICE_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT")
 # The Unlicense has no standard text below, so a crate under it alone (ksni)
 # must ship this file; crates that also ship another license keep theirs.
 UNLICENSE_PREFIX = "UNLICENSE"
-LINUX_TARGET = "x86_64-unknown-linux-gnu"
+LINUX_TARGETS = ("x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu")
 # Slint's crates are "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
 # LicenseRef-Slint-Software-3.0"; public builds take the GPL-3.0-only option.
 SLINT_ELECTED = "GPL-3.0-only"
@@ -1040,7 +1040,7 @@ def build(target):
                   for name in sorted(os.listdir(os.path.join(WINDOWS, "ui"))) if name.endswith(".slint"))
 
     own = own_license(local)
-    linux = target == LINUX_TARGET
+    linux = target in LINUX_TARGETS
     out = Notices()
     out.add(
         "AudioSync for {}: third-party notices".format("Linux" if linux else "Windows"),
@@ -1127,11 +1127,11 @@ def default_output(target):
 
 def main():
     parser = argparse.ArgumentParser(description="Write THIRD-PARTY-NOTICES.txt for a Windows or Linux build.")
-    parser.add_argument("target", help="Rust target triple, e.g. x86_64-pc-windows-msvc or " + LINUX_TARGET)
+    parser.add_argument("target", help="Rust target triple, e.g. x86_64-pc-windows-msvc or " + LINUX_TARGETS[0])
     parser.add_argument("--output", help="file to write (default: next to the executable)")
     args = parser.parse_args()
-    if not (re.match(r"^[a-z0-9_]+-pc-windows-[a-z0-9]+$", args.target) or args.target == LINUX_TARGET):
-        parser.error("'{}' isn't a Windows target triple or {}".format(args.target, LINUX_TARGET))
+    if not (re.match(r"^[a-z0-9_]+-pc-windows-[a-z0-9]+$", args.target) or args.target in LINUX_TARGETS):
+        parser.error("'{}' isn't a Windows target triple or one of {}".format(args.target, ", ".join(LINUX_TARGETS)))
     output = args.output or default_output(args.target)
     try:
         lines, count = build(args.target)
@@ -1139,7 +1139,7 @@ def main():
         print("windows_notices.py: {}".format(error), file=sys.stderr)
         return 1
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-    newline = "\n" if args.target == LINUX_TARGET else "\r\n"
+    newline = "\n" if args.target in LINUX_TARGETS else "\r\n"
     with open(output, "w", encoding="utf-8", newline=newline) as handle:
         handle.write("\n".join(lines))
     print("Wrote {}: {} crates, the Rust standard library, Slint, fonts and icons".format(

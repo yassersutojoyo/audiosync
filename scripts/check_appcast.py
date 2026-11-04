@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Checks a release appcast.xml against docs/ENGINE_SPEC.md S311.
+"""Checks a release appcast.xml against docs/ENGINE_SPEC.md S311 and S424.
 
 The appcast must hold exactly one Mac item and one item each for
-windows-x64 and windows-arm64; with --mac-only it must hold the Mac item and
-no Windows item, and refuses Windows zips. A release is taken to carry
-Windows unless --mac-only says otherwise, so a forgotten Windows zip fails
-here instead of leaving Windows users without the update. Every item has
+windows-x64, windows-arm64, linux-x86_64 and linux-aarch64; with --mac-only
+it must hold the Mac item and no other, and refuses Windows zips and
+AppImages. A release is taken to carry Windows and Linux unless --mac-only
+says otherwise, so a forgotten Windows zip or AppImage fails here instead
+of leaving its users without the update. Every item has
 one enclosure with a sparkle:edSignature, a url ending in
 releases/download/v<version>/<zip name> and a length; every
 item carries the release's sparkle:shortVersionString and one shared
@@ -15,6 +16,9 @@ THIRD-PARTY-NOTICES.txt at its top level, with an audiosync.exe whose
 version information names VERSION as its ProductVersion and marks it as a
 release build (AudioSyncReleaseBuild 1). A zip whose name has windows-x64
 or windows-arm64 in it is that architecture's; any other zip is the Mac's.
+An AppImage (AudioSync-VERSION-x86_64.AppImage or -aarch64.AppImage) must
+be a type 2 AppImage for its architecture; its version is not checked, as
+it sits inside the AppImage's file system.
 
 It does not verify signatures: it only checks that sparkle:edSignature is a
 well-formed Ed25519 signature. Sparkle's updater on the Mac and AudioSync's
@@ -22,19 +26,21 @@ own on Windows check the signature against the public key.
 
 Exit status 0 means the appcast passes; 1 prints one line per problem.
 
-scripts/sign_appcast.sh also uses it to write the Windows items: --add takes
-a Windows zip and the signature Sparkle's sign_update made over it, adds its
+scripts/sign_appcast.sh also uses it to write the Windows and Linux items:
+--add takes a Windows zip or an AppImage and the signature Sparkle's
+sign_update made over it, adds its
 item next to the Mac item in APPCAST, then checks the result. --strays fails
 on Windows-looking zips in a folder that aren't named as the script expects.
 
 --assets checks a release's asset names, before upload and after: every zip
-among them needs an appcast item whose sparkle:os matches the zip, and every
-item's zip must be among them. The names come as arguments (paths count by
-file name) or, with --assets-file, from a file holding the output of
+and AppImage among them needs an appcast item whose sparkle:os matches it,
+and every item's file must be among them. The names come as arguments (paths
+count by file name) or, with --assets-file, from a file holding the output of
 `gh release view TAG --json assets` or one name per line. It also wants a
-Mac item and, without --mac-only, an item for each Windows architecture.
-With the gh output, each item's length must also be its zip's attached size.
-An appcast with Windows items also needs the S310 Mac check on record: the
+Mac item and, without --mac-only, an item for each Windows and Linux
+architecture. With the gh output, each item's length must also be its file's
+attached size. An appcast with Windows or Linux items also needs the S310
+Mac check on record: the
 date it passed in S310_MAC_CHECK_PASSED below or in the
 AUDIOSYNC_S310_MAC_CHECK environment variable (YYYY-MM-DD).
 
@@ -64,14 +70,18 @@ from xml.sax.saxutils import escape, quoteattr
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 WINDOWS_ARCHES = ("windows-x64", "windows-arm64")
+LINUX_ARCHES = ("linux-x86_64", "linux-aarch64")
+OTHER_ARCHES = WINDOWS_ARCHES + LINUX_ARCHES
+# An AppImage's ELF machine field (System V ABI: 62 is x86-64, 183 AArch64).
+ELF_MACHINES = {"linux-x86_64": 62, "linux-aarch64": 183}
 MAC_OS = ("", "macos")
-MAC_ONLY_HINT = "pass --mac-only for a release without Windows"
+MAC_ONLY_HINT = "pass --mac-only for a release without Windows and Linux"
 WINDOWS_ZIP_FILES = {"audiosync.exe", "THIRD-PARTY-NOTICES.txt"}
 ED25519_SIGNATURE_BYTES = 64
 # The S310 check runs once: set this to the date it passed, so later releases need no variable.
 S310_MAC_CHECK_PASSED = ""
 S310_VARIABLE = "AUDIOSYNC_S310_MAC_CHECK"
-S310_REFUSAL = (f"the appcast carries Windows items, but no S310 Mac check is on record: point the "
+S310_REFUSAL = (f"the appcast carries Windows or Linux items, but no S310 Mac check is on record: point the "
                 f"Mac app at this appcast and check that it offers the Mac update only (RELEASE.md), "
                 f"then set {S310_VARIABLE} to that check's date (YYYY-MM-DD) and record the date as "
                 f"S310_MAC_CHECK_PASSED in scripts/check_appcast.py")
@@ -101,7 +111,15 @@ def zip_os(path):
     for arch in WINDOWS_ARCHES:
         if arch in name:
             return arch
+    if name.endswith(".AppImage"):
+        for arch in LINUX_ARCHES:
+            if arch.removeprefix("linux-") in name:
+                return arch
     return "macos"
+
+
+def users(os_name):
+    return "Mac" if os_name == "macos" else "Windows" if os_name in WINDOWS_ARCHES else "Linux"
 
 
 def item_value(item, enclosure, name):
@@ -120,13 +138,15 @@ def is_signature(text):
         return False
 
 
-def windows_zip_name(version, arch):
+def release_file_name(version, arch):
+    if arch in LINUX_ARCHES:
+        return f"AudioSync-{version}-{arch.removeprefix('linux-')}.AppImage"
     return f"AudioSync-{version}-{arch}.zip"
 
 
 def stray_zips(folder, version):
     """Zips in folder that look like Windows zips but that sign_appcast.sh won't pick up."""
-    wanted = {windows_zip_name(version, arch) for arch in WINDOWS_ARCHES}
+    wanted = {release_file_name(version, arch) for arch in WINDOWS_ARCHES}
     return sorted(name for name in os.listdir(folder)
                   if name.endswith(".zip") and "windows" in name.lower() and name not in wanted)
 
@@ -187,6 +207,20 @@ def windows_zip_problems(path, version):
     return problems
 
 
+def appimage_problems(path, arch):
+    """A type 2 AppImage is a 64-bit little-endian ELF with AI and 2 at byte 8 (AppImage spec)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(20)
+    except OSError as error:
+        return [f"{path}: not readable ({error})"]
+    machine = struct.unpack_from("<H", head, 18)[0] if len(head) == 20 else None
+    if head[:6] != b"\x7fELF\x02\x01" or head[8:11] != b"AI\x02" or machine != ELF_MACHINES[arch]:
+        return [f"{path}: not a type 2 AppImage for {arch} (ELF machine {machine!r}; "
+                f"expected {ELF_MACHINES[arch]})"]
+    return []
+
+
 def check(appcast, version, zips, mac_only=False):
     """One line per way the appcast and zips break S311; empty when they pass."""
     version = version[1:] if version.startswith("v") else version
@@ -204,12 +238,14 @@ def check(appcast, version, zips, mac_only=False):
         zip_by_os[os_name] = path
         if os_name != "macos":
             if mac_only:
-                problems.append(f"{path}: a Windows zip, but --mac-only says the release has none")
+                problems.append(f"{path}: a {users(os_name)} file, but --mac-only says the release has none")
+            elif os_name in LINUX_ARCHES:
+                problems += appimage_problems(path, os_name)
             else:
                 problems += windows_zip_problems(path, version)
     if zips and not mac_only:
-        problems += [f"no {arch} zip given ({MAC_ONLY_HINT})"
-                     for arch in WINDOWS_ARCHES if arch not in zip_by_os]
+        problems += [f"no {arch} {'AppImage' if arch in LINUX_ARCHES else 'zip'} given ({MAC_ONLY_HINT})"
+                     for arch in OTHER_ARCHES if arch not in zip_by_os]
 
     items_by_os = {}
     build_numbers = set()
@@ -223,9 +259,9 @@ def check(appcast, version, zips, mac_only=False):
         os_name = enclosure.get(sparkle("os"), "") if enclosure is not None else ""
         if os_name in MAC_OS:
             os_name = "macos"
-        elif os_name not in WINDOWS_ARCHES:
+        elif os_name not in OTHER_ARCHES:
             problems.append(f"{label}: sparkle:os {os_name!r} is neither the Mac's nor "
-                            f"{' nor '.join(WINDOWS_ARCHES)}")
+                            f"{' nor '.join(OTHER_ARCHES)}")
         label = f"item {number} ({os_name})"
         items_by_os.setdefault(os_name, []).append(item)
 
@@ -266,7 +302,7 @@ def check(appcast, version, zips, mac_only=False):
     macs = len(items_by_os.get("macos", []))
     if macs != 1:
         problems.append(f"{macs} Mac items; expected 1")
-    for arch in WINDOWS_ARCHES:
+    for arch in OTHER_ARCHES:
         count = len(items_by_os.get(arch, []))
         want = 0 if mac_only else 1
         if count != want:
@@ -322,28 +358,29 @@ def asset_problems(appcast, version, assets, mac_only=False):
             os_name = enclosure.get(sparkle("os"), "")
             os_name = "macos" if os_name in MAC_OS else os_name
             item_oses.add(os_name)
-            if mac_only and os_name in WINDOWS_ARCHES:
+            if mac_only and os_name in OTHER_ARCHES:
                 problems.append(f"item {number}: a {os_name} item, but --mac-only says the "
                                 f"release has none")
             if os_name != zip_os(name):
                 problems.append(f"item {number}: {name} with sparkle:os {os_name!r}; "
                                 f"expected {zip_os(name)!r}")
     for name in sorted(assets):
-        if name.endswith(".zip") and name not in item_zips:
+        if name.endswith((".zip", ".AppImage")) and name not in item_zips:
             problems.append(f"{name} is attached but has no appcast item, so "
-                            f"{'Windows' if zip_os(name) != 'macos' else 'Mac'} users never see this release")
+                            f"{users(zip_os(name))} users never see this release")
     if "macos" not in item_oses:
         problems.append("no Mac item in the appcast, so Mac users never see this release")
     if not mac_only:
-        problems += [f"no {arch} item in the appcast, so Windows users never see this release "
-                     f"({MAC_ONLY_HINT})" for arch in WINDOWS_ARCHES if arch not in item_oses]
-    if item_oses & set(WINDOWS_ARCHES) and s310_mac_check() is None:
+        problems += [f"no {arch} item in the appcast, so {users(arch)} users never see this release "
+                     f"({MAC_ONLY_HINT})" for arch in OTHER_ARCHES if arch not in item_oses]
+    if item_oses & set(OTHER_ARCHES) and s310_mac_check() is None:
         problems.append(S310_REFUSAL)
     return problems
 
 
 def add_windows(text, version, signed):
-    """The appcast text with one item per (Windows zip, signature) added after the Mac item.
+    """The appcast text with one item per (Windows zip or AppImage, signature) added after the
+    Mac item.
 
     Each item takes the Mac item's versions and publication date, and its URL
     sits in the Mac item's download folder.
@@ -368,9 +405,10 @@ def add_windows(text, version, signed):
     blocks = []
     for path, signature in signed:
         name = os.path.basename(path)
-        arch = next((arch for arch in WINDOWS_ARCHES if name == windows_zip_name(version, arch)), None)
+        arch = next((arch for arch in OTHER_ARCHES if name == release_file_name(version, arch)), None)
         if arch is None:
-            raise ValueError(f"{name} is not named AudioSync-{version}-windows-x64.zip or -arm64.zip")
+            raise ValueError(f"{name} is not named AudioSync-{version}-windows-x64.zip, -arm64.zip, "
+                             f"-x86_64.AppImage or -aarch64.AppImage")
         if not is_signature(signature):
             raise ValueError(f"the signature given for {name} is not a base64 Ed25519 signature")
         lines = ["        <item>", f"            <title>{escape(short)}</title>"]
@@ -448,8 +486,12 @@ def fixture_item(zip_path, version="0.8.0", build="80", os_attr=None, sig=True,
     }
 
 
+def fake_appimage(machine):
+    return b"\x7fELF\x02\x01\x01\x00AI\x02" + bytes(5) + struct.pack("<HH", 2, machine) + b"squashfs"
+
+
 def self_test():
-    # covers: S311, S310
+    # covers: S311, S310, S424
     global S310_MAC_CHECK_PASSED
     failures = []
     cases = 0
@@ -476,11 +518,19 @@ def self_test():
             write_zip(exes[case], {**windows, "audiosync.exe": exe})
         write_zip(extra, {**windows, "readme.txt": "x"})
         write_zip(nested, {"audiosync/audiosync.exe": "MZ", "THIRD-PARTY-NOTICES.txt": "n"})
+        linux_x64 = os.path.join(folder, "AudioSync-0.8.0-x86_64.AppImage")
+        linux_arm = os.path.join(folder, "AudioSync-0.8.0-aarch64.AppImage")
+        x64_as_arm = os.path.join(folder, "nested", "AudioSync-0.8.0-aarch64.AppImage")
+        for path, machine in ((linux_x64, 62), (linux_arm, 183), (x64_as_arm, 62)):
+            with open(path, "wb") as f:
+                f.write(fake_appimage(machine))
 
         def good():
             return [fixture_item(mac),
                     fixture_item(x64, os_attr="windows-x64"),
-                    fixture_item(arm, os_attr="windows-arm64")]
+                    fixture_item(arm, os_attr="windows-arm64"),
+                    fixture_item(linux_x64, os_attr="linux-x86_64"),
+                    fixture_item(linux_arm, os_attr="linux-aarch64")]
 
         def run(name, items, zips, want, version="0.8.0", mac_only=False):
             nonlocal cases
@@ -494,8 +544,14 @@ def self_test():
             elif not any(want in line for line in got):
                 failures.append(f"{name}: expected a line with {want!r}, got {got}")
 
-        everything = [mac, x64, arm]
+        everything = [mac, x64, arm, linux_x64, linux_arm]
         run("full release", good(), everything, None)
+        run("Linux items missing", good()[:3], everything[:3], "0 linux-x86_64 items; expected 1")
+        run("an AppImage given without its item", good()[:4], everything, "0 linux-aarch64 items")
+        run("an x86_64 AppImage named aarch64", good()[:4] + [fixture_item(x64_as_arm, os_attr="linux-aarch64")],
+            everything[:4] + [x64_as_arm], "not a type 2 AppImage for linux-aarch64")
+        run("an AppImage with --mac-only", good()[:1], [mac, linux_x64], "a Linux file, but --mac-only",
+            mac_only=True)
         run("tag form of the version", good(), everything, None, version="v0.8.0")
         run("Mac only, no zips", good()[:1], [], None, mac_only=True)
         run("Mac only, Mac zip", good()[:1], [mac], None, mac_only=True)
@@ -585,8 +641,11 @@ def self_test():
             elif want is not None and not any(want in line for line in got):
                 failures.append(f"{name}: expected a line with {want!r}, got {got}")
 
-        added("items add_windows writes", [(x64, FIXTURE_SIGNATURE), (arm, FIXTURE_SIGNATURE)],
+        added("items add_windows writes", [(x64, FIXTURE_SIGNATURE), (arm, FIXTURE_SIGNATURE),
+                                           (linux_x64, FIXTURE_SIGNATURE), (linux_arm, FIXTURE_SIGNATURE)],
               everything, None)
+        added("add_windows without the AppImages", [(x64, FIXTURE_SIGNATURE), (arm, FIXTURE_SIGNATURE)],
+              everything, "0 linux-x86_64 items")
         added("add_windows with the x64 zip only", [(x64, FIXTURE_SIGNATURE)], everything,
               "0 windows-arm64 items")
         added("add_windows given a value that is not a signature", [(x64, "c2ln")], everything, "refused")
@@ -629,7 +688,7 @@ def self_test():
                 failures.append(f"{name}: expected exit 1 and a line with {want!r}, got {got}: {lines!r}")
 
         names = [os.path.basename(path) for path in everything]
-        other_assets = ["AudioSync-0.8.0.dmg", "SHA256SUMS.txt", "appcast.xml"]
+        other_assets = ["AudioSync-0.8.0.dmg", "AudioSync-0.8.0-amd64.deb", "SHA256SUMS.txt", "appcast.xml"]
         x64_name, arm_name = names[1], names[2]
         S310_MAC_CHECK_PASSED = ""
         os.environ.pop(S310_VARIABLE, None)
@@ -659,6 +718,14 @@ def self_test():
                        f"{x64_name} is attached but has no appcast item")
         against_assets("arm64 zip attached without its item", good()[:2], names + other_assets,
                        f"{arm_name} is attached but has no appcast item")
+        against_assets("an AppImage attached without its item", good()[:4], names + other_assets,
+                       f"{names[4]} is attached but has no appcast item, so Linux users")
+        against_assets("Windows assets without the Linux items", good()[:3], names[:3] + other_assets,
+                       "no linux-x86_64 item in the appcast, so Linux users")
+        linux_wrong_os = good()
+        linux_wrong_os[4]["os"] = ' sparkle:os="linux-x86_64"'
+        against_assets("Linux item with the other arch's sparkle:os", linux_wrong_os, names + other_assets,
+                       f"{names[4]} with sparkle:os 'linux-x86_64'; expected 'linux-aarch64'")
         against_assets("an item whose zip is not attached", good(), names[:2] + other_assets,
                        f"{arm_name}, which is not attached")
         against_assets("Mac zip attached without its item", good()[1:], names + other_assets,
@@ -706,19 +773,19 @@ def main(argv):
     parser.add_argument("--self-test", action="store_true",
                         help="check the checker on fixture appcasts and zips in a temp folder")
     parser.add_argument("--add", nargs=2, action="append", default=[], metavar=("ZIP", "SIGNATURE"),
-                        help="add a Windows zip's item, signed by sign_update, before the check")
+                        help="add a Windows zip's or an AppImage's item, signed by sign_update, before the check")
     parser.add_argument("--strays", nargs=2, metavar=("FOLDER", "VERSION"),
                         help="fail on Windows-looking zips in FOLDER that aren't named for VERSION")
     parser.add_argument("--assets", action="store_true",
                         help="compare the release's asset names (instead of ZIPs) with the appcast items")
     parser.add_argument("--mac-only", action="store_true",
-                        help="the release has no Windows zips: want the Mac item only")
+                        help="the release has no Windows zips or AppImages: want the Mac item only")
     parser.add_argument("--assets-file", metavar="FILE",
                         help="with --assets: read the names from FILE (gh release view --json "
                              "assets output, or one per line; - is stdin)")
     parser.add_argument("appcast", nargs="?", help="the release's appcast.xml")
     parser.add_argument("version", nargs="?", help="the release version, such as 0.8.0 or v0.8.0")
-    parser.add_argument("zips", nargs="*", help="the release's zips (Mac and Windows)")
+    parser.add_argument("zips", nargs="*", help="the release's zips (Mac and Windows) and AppImages")
     args = parser.parse_intermixed_args(argv)
     if args.self_test:
         return self_test()
@@ -752,7 +819,7 @@ def main(argv):
         return 1 if problems else 0
     if args.add:
         if args.mac_only:
-            parser.error("--add writes Windows items; it takes no --mac-only")
+            parser.error("--add writes Windows and Linux items; it takes no --mac-only")
         try:
             with open(args.appcast, encoding="utf-8") as f:
                 text = add_windows(f.read(), args.version, [tuple(pair) for pair in args.add])

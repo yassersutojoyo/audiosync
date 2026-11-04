@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Packs a Linux build of the desktop app into an x86_64 AppImage.
+# Packs a Linux build of the desktop app into an AppImage for the machine it runs on (x86_64 or aarch64).
 #
 #   scripts/build_appimage.sh <audiosync> <THIRD-PARTY-NOTICES.txt> <appimagetool> <runtime> <output>
 #
@@ -36,6 +36,6 @@ install -m 644 "$repo/LICENSE" "$appdir/usr/share/doc/audiosync/LICENSE"
 install -m 644 "$linux/RUNTIME-NOTICES.txt" "$appdir/usr/share/doc/audiosync/RUNTIME-NOTICES.txt"
 
 # appimagetool is an AppImage itself; extracting it needs no FUSE on the runner.
-APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 "$tool" --runtime-file "$runtime" "$appdir" "$output"
+APPIMAGE_EXTRACT_AND_RUN=1 ARCH=$(uname -m) "$tool" --runtime-file "$runtime" "$appdir" "$output"
 (cd "$(dirname "$output")" && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
 echo "Wrote $output"
