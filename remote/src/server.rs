@@ -554,7 +554,9 @@ impl Shared {
     /// A new token in place of `token` once it is due ([`auth::ROTATE_AFTER`]).
     fn rotate(&self, token: &str) -> Option<String> {
         let rotated = lock(&self.devices).rotate(token, SystemTime::now());
-        rotated.ok().flatten()
+        let (fresh, snapshot) = rotated.ok().flatten()?;
+        self.save(snapshot);
+        Some(fresh)
     }
 
     /// Hands `command` to the app; false once the server is stopping.

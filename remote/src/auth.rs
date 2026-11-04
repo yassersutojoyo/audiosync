@@ -301,7 +301,9 @@ pub enum LoadProblem {
 #[must_use = "a change reaches the file only once its snapshot is saved"]
 pub struct Snapshot {
     path: Option<PathBuf>,
-    devices: Vec<(TokenHash, u64, Option<IpAddr>)>,
+    /// The token the phone is known to hold, last seen, the pairing address
+    /// and a new token waiting for its first use.
+    devices: Vec<(TokenHash, u64, Option<IpAddr>, Option<TokenHash>)>,
     generation: u64,
     /// The damaged file as read, to keep aside before writing over it.
     keep_first: Option<Arc<[u8]>>,
@@ -342,16 +344,26 @@ impl DeviceFile {
             .iter()
             .map(|(hash, ..)| hex(hash))
             .collect();
-        let seen: Vec<u64> = snapshot.devices.iter().map(|(_, seen, _)| *seen).collect();
+        let seen: Vec<u64> = snapshot.devices.iter().map(|(_, seen, ..)| *seen).collect();
         let peers: Vec<Option<String>> = snapshot
             .devices
             .iter()
-            .map(|(.., peer)| peer.map(|peer| peer.to_string()))
+            .map(|(_, _, peer, _)| peer.map(|peer| peer.to_string()))
             .collect();
-        // "seen" and "peers" sit beside "devices" so a reader of the older layout still counts them.
-        let text =
-            json!({ "version": FILE_VERSION, "devices": hashes, "seen": seen, "peers": peers })
-                .to_string();
+        let pending: Vec<Option<String>> = snapshot
+            .devices
+            .iter()
+            .map(|(.., pending)| pending.map(|hash| hex(&hash)))
+            .collect();
+        // These sit beside "devices" so a reader of the older layout still counts them.
+        let text = json!({
+            "version": FILE_VERSION,
+            "devices": hashes,
+            "seen": seen,
+            "peers": peers,
+            "pending": pending,
+        })
+        .to_string();
         write_replacing(path, text.as_bytes())?;
         written.generation = snapshot.generation;
         Ok(())
@@ -530,8 +542,13 @@ impl TokenStore {
     /// A new token for the device whose current token is `token`, once that
     /// one is [`ROTATE_AFTER`] old at `now`. The old one works until the new
     /// one is first presented to [`TokenStore::check`], then for
-    /// [`ROTATION_GRACE`]; the file gets the new one at that first use.
-    pub fn rotate(&mut self, token: &str, now: SystemTime) -> Result<Option<String>, RandomError> {
+    /// [`ROTATION_GRACE`]. The snapshot keeps both until that first use, so
+    /// a restart in between keeps both working.
+    pub fn rotate(
+        &mut self,
+        token: &str,
+        now: SystemTime,
+    ) -> Result<Option<(String, Snapshot)>, RandomError> {
         let now = unix_seconds(now);
         let Some((index, true)) = self.position(token, now) else {
             return Ok(None);
@@ -544,7 +561,7 @@ impl TokenStore {
         device.previous = Some((device.hash, None));
         device.hash = token_hash(&fresh);
         device.issued = now;
-        Ok(Some(fresh))
+        Ok(Some((fresh, self.snapshot())))
     }
 
     /// Remembers a new device's token, paired from `peer` and seen at `now`,
@@ -597,13 +614,9 @@ impl TokenStore {
             devices: self
                 .devices
                 .iter()
-                .map(|device| {
-                    // The file keeps the token the phone is known to hold.
-                    let hash = match device.previous {
-                        Some((old, None)) => old,
-                        _ => device.hash,
-                    };
-                    (hash, device.seen, device.peer)
+                .map(|device| match device.previous {
+                    Some((old, None)) => (old, device.seen, device.peer, Some(device.hash)),
+                    _ => (device.hash, device.seen, device.peer, None),
                 })
                 .collect(),
             generation: self.generation,
@@ -630,6 +643,10 @@ fn parse_file(bytes: &[u8], now: u64) -> Option<(Vec<Device>, bool, usize)> {
         .get("peers")
         .and_then(Value::as_array)
         .filter(|peers| peers.len() == entries.len());
+    let pending = value
+        .get("pending")
+        .and_then(Value::as_array)
+        .filter(|pending| pending.len() == entries.len());
     let mut rewrite = seen.is_none();
     let mut skipped = 0;
     let mut devices = Vec::with_capacity(entries.len());
@@ -650,9 +667,17 @@ fn parse_file(bytes: &[u8], now: u64) -> Option<(Vec<Device>, bool, usize)> {
             .and_then(|peers| peers[index].as_str())
             .and_then(|text| text.parse().ok())
             .map(net::pairing_address);
+        // A rotation whose new token was not used yet: both keep working.
+        let (hash, previous) = match pending
+            .and_then(|pending| pending[index].as_str())
+            .and_then(from_hex)
+        {
+            Some(new) => (new, Some((hash, None))),
+            None => (hash, None),
+        };
         devices.push(Device {
             hash,
-            previous: None,
+            previous,
             issued: now,
             peer,
             seen,
@@ -1304,7 +1329,7 @@ mod tests {
         let old = random_token().unwrap();
         let _ = store.add(&old, peer(10), start);
         let due = start + ROTATE_AFTER;
-        let new = store.rotate(&old, due).unwrap().expect("a new token");
+        let (new, _) = store.rotate(&old, due).unwrap().expect("a new token");
         // The answer that carried `new` never reached the phone.
         let lost = due + ROTATION_GRACE * 5;
         assert!(store.check(&old, peer(10), lost).0.is_some());
@@ -1329,7 +1354,8 @@ mod tests {
         let old = random_token().unwrap();
         device_file.save(store.add(&old, peer(10), start)).unwrap();
         let due = start + ROTATE_AFTER;
-        let new = store.rotate(&old, due).unwrap().expect("a new token");
+        let (new, snapshot) = store.rotate(&old, due).unwrap().expect("a new token");
+        device_file.save(snapshot).unwrap();
         let later = due + DAY;
         let (_, snapshot) = store.check(&old, peer(10), later);
         device_file.save(snapshot.expect("a day later")).unwrap();
@@ -1353,7 +1379,7 @@ mod tests {
         assert!(store.rotate(&old, early).unwrap().is_none());
 
         let due = start + ROTATE_AFTER;
-        let new = store.rotate(&old, due).unwrap().expect("a new token");
+        let (new, _) = store.rotate(&old, due).unwrap().expect("a new token");
         assert_ne!(new, old);
         assert_eq!(store.check(&old, peer(10), due).0, device);
         assert!(
