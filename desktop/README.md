@@ -1,6 +1,6 @@
-# AudioSync for Windows
+# AudioSync for Windows and Linux
 
-This folder is the start of a Windows 11 version of AudioSync, written in Rust
+This folder is the Windows 11 and Linux version of AudioSync, written in Rust
 with a [Slint](https://slint.dev) interface. The audio work comes from
 `audiosync-core` in [`../core`](../core), the crate the macOS app links too.
 
@@ -47,7 +47,7 @@ build you make yourself, you write that file as shown below), and run it.
   notification area, next to the clock. To quit, right-click the tray icon and
   choose Exit AudioSync, or use File > Exit in the main window.
 - **Where your stuff is:** your choices (source, the last mix of apps, speakers
-  with their delays and volumes, master volume, groups, auto-connect, the
+  with their delays and volumes, master volume, zones, presets, auto-connect, the
   equalizer, where the window was) are saved in
   `%LOCALAPPDATA%\AudioSync\settings.json`. Next to
   it sit `airplay-pairings.dat`, the Apple TV pairings, encrypted for your
@@ -280,7 +280,9 @@ cargo check --target aarch64-pc-windows-msvc
 - `src/main.rs`: startup
 - `src/os/`: the per-system code behind one interface: `windows.rs` (the
   WASAPI backend and media sessions, single instance, tray icon,
-  `%LOCALAPPDATA%`, DPAPI, the PC's name and the time format), `other.rs`
+  `%LOCALAPPDATA%`, DPAPI, the PC's name and the time format), `linux.rs`
+  with `xdg/`, `status_notifier.rs` and `tray_watch.rs` (the PipeWire backend,
+  MPRIS, the file lock, the tray icon or window-only mode), `other.rs`
   (the UI-only build) and `engine.rs`, which starts the AirPlay sender, the
   Google Cast host and the adapter over any audio driver
 - `src/single_instance.rs`: one copy per Windows session; a second launch
@@ -290,10 +292,10 @@ cargo check --target aarch64-pc-windows-msvc
   (off Windows it runs the window, on Windows it backs the
   `AUDIOSYNC_PREVIEW_ZONES` and `AUDIOSYNC_PREVIEW_PRESETS` previews),
   unit-tested
-- `src/adapter.rs`: the `Backend` on Windows. It turns what the window asks
+- `src/adapter.rs`: the `Backend` on Windows and Linux. It turns what the window asks
   for into audio backend calls, with the session rules of `audiosync-core`
   (switching a speaker on starts streaming, a source that quits stops it), and
-  keeps what the audio backend doesn't: the chosen source, groups,
+  keeps what the audio backend doesn't: the chosen source, zones,
   auto-connect marks and notices. Unit-tested over the audio backend's mock
 - `src/view.rs`: fills the windows from the backend, turns user actions into
   backend calls, and polls the backend twice a second for what happens on its
@@ -306,7 +308,8 @@ cargo check --target aarch64-pc-windows-msvc
 - `src/audio/`: the audio backend the adapter drives. `wasapi/` is the
   Windows part (process loopback and input device capture, one render
   stream per output,
-  device notifications, what kind of device each output is); the rest is
+  device notifications, what kind of device each output is), `pipewire/`
+  the Linux one; the rest is
   plain Rust over `audiosync-core` (which outputs play, at what delay and
   volume, what gets captured, the equalizer in the capture path) and is
   tested on any host with an in-memory mock driver.
