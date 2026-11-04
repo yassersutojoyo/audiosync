@@ -1319,6 +1319,28 @@ mod tests {
         assert!(!store.contains(&old, used + ROTATION_GRACE));
     }
 
+    // covers: S425, S372
+    #[test]
+    fn both_tokens_survive_a_restart_before_the_new_one_is_used() {
+        let path = scratch("auth-pending");
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
+        let device_file = DeviceFile::default();
+        let old = random_token().unwrap();
+        device_file.save(store.add(&old, peer(10), start)).unwrap();
+        let due = start + ROTATE_AFTER;
+        let new = store.rotate(&old, due).unwrap().expect("a new token");
+        let later = due + DAY;
+        let (_, snapshot) = store.check(&old, peer(10), later);
+        device_file.save(snapshot.expect("a day later")).unwrap();
+
+        let (mut reopened, _) = TokenStore::open_at(Some(path), later);
+        assert!(reopened.check(&old, peer(10), later).0.is_some());
+        assert!(reopened.check(&new, peer(10), later).0.is_some());
+        assert!(reopened.contains(&old, later + ROTATION_GRACE - Duration::from_secs(1)));
+        assert!(!reopened.contains(&old, later + ROTATION_GRACE));
+    }
+
     // covers: S425
     #[test]
     fn a_token_is_replaced_after_ten_minutes_and_the_old_one_lasts_a_minute() {
