@@ -7228,7 +7228,7 @@ do {
             && !calibrateRowSource.contains("Spacer(") && !calibrateRowSource.contains("ScrollingTitle"),
           "left column: Calibrate All Speakers fits whole on one still line at the slim width",
           calibrateRowSource.isEmpty ? "no CalibrateAllButton source" : "\(calibrateRoom) pt")
-    let marquee =[0, 1.9, 3, 4, 5.9, 7, 8, 9.9, 11].map { Marquee.offset(elapsed: $0, overflow: 60) }
+    let marquee = [0, 1.9, 3, 4, 5.9, 7, 8, 9.9, 11].map { Marquee.offset(elapsed: $0, overflow: 60) }
     check(marquee == [0, 0, 30, 60, 60, 30, 0, 0, 30],
           "now playing: a long title rests 2 s, scrolls 30 pt a second to its end, rests 2 s and scrolls back",
           "\(marquee)")
