@@ -11,13 +11,14 @@
 </p>
 
 <p align="center">
-  Multiroom audio for your Mac: play its sound on AirPlay speakers, Bluetooth speakers and every other output macOS knows, plus Google Cast, all at once and in sync. A free, open-source Airfoil alternative.
+  Multiroom audio for your Mac or Windows PC: play its sound on AirPlay speakers, Bluetooth speakers and every other output it knows, plus Google Cast, all at once and in sync. A free, open-source Airfoil alternative.
 </p>
 
 <p align="center">
   <a href="https://github.com/yassersutojoyo/audiosync/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/yassersutojoyo/audiosync/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <a href="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml"><img alt="Windows CI" src="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml/badge.svg?branch=main"></a>
   <img alt="macOS 15+" src="https://img.shields.io/badge/macOS-15%2B-black?logo=apple">
+  <img alt="Windows 11 preview" src="https://img.shields.io/badge/Windows%2011-preview-0078D4">
   <img alt="GPL-3.0-or-later license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue">
   <img alt="Alpha" src="https://img.shields.io/badge/status-alpha-E3A21A">
 </p>
@@ -31,7 +32,7 @@
 
 AirPlay speakers play about two seconds late. Local speakers don't. Play the same song on both and you get an echo.
 
-AudioSync fixes that. It grabs your Mac's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. Mac app, menu bar panel, free, alpha.
+AudioSync fixes that. It grabs your computer's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. One app for macOS and Windows 11 (a preview there), with a Linux version on the way. Free, alpha.
 
 ## New in 0.8
 
@@ -72,22 +73,28 @@ The Windows parts are in the Windows preview, out since 0.7.1.
 - If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
 - Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
 - Diagrams in the Guide.
-- AirPlay 2 is in there, still experimental. See below.
+- AirPlay 2 is in there, still experimental then.
 
 The rest is in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## What it does
 
 - Source: all system audio, one app, several apps (or every app except the ones you check), or an input device (mic, audio interface).
-- Outputs: AirPlay speakers, Apple TVs, Google Cast speakers, and anything macOS can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
+- Outputs: AirPlay speakers, Apple TVs, Google Cast speakers, and anything your computer can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
 - A delay per local speaker (−2 to +20 s), plus one AirPlay delay.
-- Volume per speaker and master, a 10-band EQ, zones that switch on and off together, each with its own volume, auto-connect, launch at login, Now Playing for Spotify and Music.
+- Volume per speaker and master, a 10-band EQ, zones that switch on and off together, each with its own volume, presets, Calibrate with Microphone, rename and hide speakers, auto-connect, launch at login, and the Web Remote.
+- Now Playing: Spotify and Music on the Mac, any app that shows in Windows' media controls on Windows, any MPRIS player on Linux.
+- On the Mac it lives in the menu bar. On Windows it's a window plus a tray icon with its own panel. On Linux it sits in the tray when your desktop has a StatusNotifier host, and runs as a plain window when it doesn't.
+
+Everything in this list is in all three versions, except where a line says otherwise.
 
 Like Airfoil, but less. Not made by Rogue Amoeba, no shared code.
 
-Google Cast speakers work in both the Mac and the Windows app, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. A speaker group made in the Google Home app plays as one speaker, with one volume and one offset, and its row names the members once the group reports them. A speaker in the group keeps its own row and is busy while the group plays. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait up to 20 s. Past that a notice tells you how far ahead AirPlay plays.
+Google Cast speakers work in every version, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. A speaker group made in the Google Home app plays as one speaker, with one volume and one offset, and its row names the members once the group reports them. A speaker in the group keeps its own row and is busy while the group plays. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait up to 20 s. Past that a notice tells you how far ahead AirPlay plays.
 
 ## Install
+
+### macOS
 
 - Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), open it and drag AudioSync to Applications. Needs macOS 15 or later.
 - The disk image is about 5.9 MB.
@@ -99,6 +106,17 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 - HomePods: in the Home app, set Allow Speaker & TV Access to "Anyone on the Same Network", on a network you trust. Not "Everyone".
 - Build it yourself: Xcode 16 command line tools, [rustup](https://rustup.rs), then `./setup.sh`. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
+### Windows (preview)
+
+- Get the zip for your PC (x64 or ARM64) from the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. Needs Windows 11. It's one exe with no installer: unzip it into a folder of its own and run it. [desktop/README.md](desktop/README.md#trying-the-preview-exe) has the details.
+- The exe isn't signed, so the first time you open it Windows SmartScreen may say it protected your PC. Click More info, then Run anyway, to open it.
+- Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch and while the app runs, at most once a day. Nothing downloads until you click Download and Install.
+
+### Linux (not released yet)
+
+- Built from the same code as the Windows app, but not released yet. CI builds an x86_64 AppImage (glibc 2.39 or newer, PipeWire from your system), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the details.
+- It captures and plays through PipeWire. Its data lives in `$XDG_DATA_HOME/audiosync`, and launch at login is an XDG autostart entry.
+
 ## Use
 
 - Leave the macOS sound output on a local device, not a HomePod.
@@ -107,7 +125,7 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 - Speaker plays too early? Raise its delay. Too late? Lower it, below zero if needed. Bluetooth usually ends up around −150 to −300 ms.
 - Mac plays before the HomePod? Raise the AirPlay delay. After? Lower it.
 - Speakers that want a code or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
-- More in the AudioSync Guide, in the gear menu.
+- More in the AudioSync Guide, in the gear menu on the Mac and under Help > AudioSync Guide on Windows and Linux.
 
 ## What doesn't work (yet)
 
@@ -115,19 +133,9 @@ Google Cast speakers work in both the Mac and the Windows app, one at a time. Ca
 - Speakers that only do AirPlay 2 play out of the box. A speaker that does both AirPlay 1 and AirPlay 2 uses AirPlay 2, or AirPlay 1 when it was paired over AirPlay 1 or AirPlay 2 can't take it. It plays up to 16 AirPlay 2 speakers at once, but so far I've only tried it on one AirPlay 2 TV, never on several at once. Speakers waiting for the network or for a free slot have only met emulated receivers so far. A stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
 - Not tried on a HomePod yet. If yours fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
-- On the Mac, Now Playing only works with Spotify and Music.
+- The Windows and Linux versions pick AirPlay 1 or AirPlay 2 the same way and ask for codes and passwords like the Mac, but neither has been tried on a real AirPlay or Cast speaker yet. On Windows, local playback has had one short listen on one PC, and Bluetooth outputs there haven't been tried. The Linux version hasn't run on a real Linux machine yet.
 
-## Windows
-
-A Windows 11 version (x64 and ARM64) is out as a preview since 0.7.1, with the same Rust engine and its own AirPlay sender. The zips are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. CI builds it too, and [desktop/README.md](desktop/README.md#trying-the-preview-exe) says how to try a build. It plays to AirPlay and Google Cast speakers (AirPlay 2 out of the box, with AirPlay 1 first for a speaker that does both, as on the Mac), it asks for AirPlay codes and passwords, and it hasn't been tried on a real speaker yet.
-
-Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch and while the app runs, at most once a day. Nothing downloads until you click Download and Install.
-
-The exe isn't signed, so the first time you open it Windows SmartScreen may say it protected your PC. Click More info, then Run anyway, to open it.
-
-## Linux
-
-There's a Linux preview too, built from the same code as the Windows app. Not released yet. CI builds an x86_64 AppImage (glibc 2.39 or newer, PipeWire from your system), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the details. It captures the whole system or one app through PipeWire and plays to AirPlay and Google Cast speakers (AirPlay 2 as on Windows) and to your local PipeWire outputs. Like the Windows build, it hasn't been tried on a real speaker yet. It sits in the tray when your desktop has a StatusNotifier host, and runs as a plain window when it doesn't. Its data lives in `$XDG_DATA_HOME/audiosync`, launch at login is an XDG autostart entry, and now playing comes from MPRIS players.
+## Linux: a silent output
 
 If you hear the source twice and have no output to spare, a PipeWire null sink gives you one that plays nothing out loud. For this session only (it's gone after a restart, or with `pactl unload-module` and the number it printed):
 
