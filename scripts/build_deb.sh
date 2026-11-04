@@ -35,7 +35,9 @@ install -m 644 "$notices" "$root/usr/share/doc/audiosync/THIRD-PARTY-NOTICES.txt
   echo
   echo "Files: *"
   echo "Copyright: yassersutojoyo"
-  echo "License: GPL-3.0-or-later"
+  echo "License: GPL-3.0-only"
+  echo " AudioSync's own code is GPL-3.0-or-later; it compiles in Slint under GPL-3.0-only,"
+  echo " so this binary as a whole is GPL-3.0-only."
   echo " The full text is in /usr/share/common-licenses/GPL-3. Third-party code"
   echo " compiled into audiosync is listed in THIRD-PARTY-NOTICES.txt here."
 } > "$root/usr/share/doc/audiosync/copyright"
