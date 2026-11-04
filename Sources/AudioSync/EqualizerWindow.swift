@@ -245,8 +245,9 @@ struct VerticalSlider: View {
             let mid = h / 2
             let y = mid - CGFloat(value / range) * (h / 2 - 8)
             ZStack(alignment: .top) {
+                // Full `.secondary` keeps the track and knob edge at 3:1, as PowerSwitch does.
                 Capsule()
-                    .fill(Color.secondary.opacity(0.2))
+                    .fill(Color.secondary)
                     .frame(width: 4)
                     .frame(maxWidth: .infinity)
                 Rectangle()
@@ -255,12 +256,13 @@ struct VerticalSlider: View {
                     .offset(y: min(y, mid))
                     .frame(maxWidth: .infinity)
                 Rectangle()
-                    .fill(Color.secondary.opacity(0.5))
+                    .fill(Color.primary)
                     .frame(width: 12, height: 1)
                     .offset(y: mid)
                     .frame(maxWidth: .infinity)
                 Circle()
                     .fill(Color.white)
+                    .overlay(Circle().strokeBorder(Color.secondary, lineWidth: 1))
                     .shadow(color: .black.opacity(0.3), radius: 1.5, y: 0.5)
                     .frame(width: 16, height: 16)
                     .offset(y: y - 8)
