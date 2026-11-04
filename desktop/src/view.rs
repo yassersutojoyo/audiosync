@@ -1687,7 +1687,8 @@ impl App {
         let Some(applied) = crate::backdrop::apply(window, frame) else {
             return false;
         };
-        if self.frames.borrow_mut().insert(name, applied) != Some(applied) {
+        // Only Windows 11 has these frames.
+        if self.frames.borrow_mut().insert(name, applied) != Some(applied) && cfg!(windows) {
             self.log.log(|| {
                 let what = match frame {
                     Frame::Titled => "Mica title bar",
@@ -3289,13 +3290,7 @@ impl App {
     /// window is made at the height the layout has before the message wraps,
     /// and Windows doesn't grow it when the message gets longer (a wrong PIN).
     fn fit_pin_dialog(&self) {
-        let window = self.pin_dialog.window();
-        let size = window.size().to_logical(window.scale_factor());
-        let fit = self.pin_dialog.get_fit_height();
-        // Before the native window exists there is no width to fit to.
-        if size.width > 0.0 && size.height < fit {
-            window.set_size(slint::LogicalSize::new(size.width, fit));
-        }
+        grow_to_fit(self.pin_dialog.window(), self.pin_dialog.get_fit_height());
     }
 
     /// Pair: the PIN goes to the pairing; the dialog stays open until it
@@ -4547,6 +4542,7 @@ impl App {
             return;
         }
         self.zone_dialog.invoke_prepare();
+        grow_to_fit(self.zone_dialog.window(), self.zone_dialog.get_fit_height());
         self.equalizer.set_name_dialog_open(true);
         crate::platform::bring_to_front(self.zone_dialog.window());
     }
@@ -4716,6 +4712,17 @@ impl App {
             window.set_size(slint::LogicalSize::new(size.width, height));
         }
         height
+    }
+}
+
+/// Grows a dialog to `fit`, its layout's lowest height at its width. X11
+/// shows it at the height before its message wraps, and no window manager
+/// grows it.
+fn grow_to_fit(window: &slint::Window, fit: f32) {
+    let size = window.size().to_logical(window.scale_factor());
+    // Before the native window exists there is no width to fit to.
+    if size.width > 0.0 && size.height < fit {
+        window.set_size(slint::LogicalSize::new(size.width, fit));
     }
 }
 
@@ -7278,6 +7285,19 @@ mod tests {
         assert!(log.flush(debug_log::TEST_FLUSH));
         let written = std::fs::read_to_string(&path).unwrap_or_default();
         assert!(written.contains("the raw reason"), "{written}");
+    }
+
+    /// The window frames are Windows 11's, so no other system logs them.
+    #[test]
+    fn only_windows_logs_the_window_frame() {
+        use crate::debug_log;
+        let path = debug_log::test_dir("view-frame-log").join(debug_log::FILE_NAME);
+        let log = DebugLog::new(Some(path.clone()));
+        let app = app_logging(MockBackend::new(), log.clone());
+        app.apply_frame(app.main.window(), "main window", Frame::Titled);
+        assert!(log.flush(debug_log::TEST_FLUSH));
+        let written = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(cfg!(windows) || !written.contains("Mica"), "{written}");
     }
 
     // covers: S212
@@ -10568,6 +10588,51 @@ mod tests {
             "buttons end at {bottom}, window {} high",
             size.height
         );
+    }
+
+    fn assert_window_fits(window: &slint::Window, fit: f32, what: &str) {
+        let height = window.size().to_logical(window.scale_factor()).height;
+        assert!(
+            height >= fit,
+            "{what}: window {height} high, layout needs {fit}"
+        );
+    }
+
+    /// X11 shows a dialog at its layout's height before the message wraps,
+    /// and no window manager grows it: the name field and the buttons of
+    /// Save Preset were cut off.
+    #[test]
+    fn the_zone_dialog_grows_to_show_its_field_and_buttons() {
+        let app = app_over(MockBackend::new());
+        let dialog = &app.zone_dialog;
+        // The size X11 gave it.
+        dialog
+            .window()
+            .set_size(slint::LogicalSize::new(380.0, 153.0));
+        app.ask_save_preset();
+        assert!(dialog.window().is_visible());
+        assert_window_fits(dialog.window(), dialog.get_fit_height(), "Save Preset");
+    }
+
+    /// The same for Add by Address, at opening and once a turned-down
+    /// address puts its reason above the field.
+    #[test]
+    fn the_add_by_address_dialog_grows_to_show_its_buttons() {
+        let app = app_over(MockBackend::new());
+        let dialog = &app.cast_address_dialog;
+        let window = dialog.window();
+        window.set_size(slint::LogicalSize::new(420.0, 153.0));
+        app.ask_cast_address();
+        let opened = dialog.get_fit_height();
+        assert_window_fits(window, opened, "opened");
+        type_text(window, "bad address:99999");
+        press(window, Key::Return);
+        assert!(!dialog.get_error().is_empty(), "turned down");
+        // The event loop's turn after the key.
+        slint::platform::update_timers_and_animations();
+        let fit = dialog.get_fit_height();
+        assert!(fit > opened, "the reason's row adds {fit} - {opened}");
+        assert_window_fits(window, fit, "turned down");
     }
 
     #[test]

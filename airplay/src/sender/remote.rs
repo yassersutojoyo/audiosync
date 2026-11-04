@@ -4,7 +4,7 @@
 //! connection threads answer from without asking the driver, so every
 //! answer goes out within 100 ms whatever the driver is doing.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, SocketAddrV6, TcpListener, TcpStream};
 use std::panic::{self, AssertUnwindSafe};
@@ -121,9 +121,29 @@ struct Table {
     sessions: HashMap<u32, Entry>,
     /// Each speaker's rate limit, with its name for the summary line.
     rates: HashMap<DeviceKey, (String, RateLimit)>,
+    /// The requests each session's log already has, by Active-Remote,
+    /// command and status (P195).
+    logged: HashSet<(u32, String, u16)>,
 }
 
+/// How many logged requests [`Table::logged`] keeps; once full, a request
+/// not among them is logged each time.
+const LOGGED_CAP: usize = 64;
+
 impl Table {
+    /// Whether this request is the first of its kind in the session, so
+    /// a receiver polling a command every second leaves one line (P195).
+    fn first_logged(&mut self, remote: u32, what: &str, status: u16) -> bool {
+        let key = (remote, what.to_owned(), status);
+        if self.logged.contains(&key) {
+            return false;
+        }
+        if self.logged.len() < LOGGED_CAP {
+            self.logged.insert(key);
+        }
+        true
+    }
+
     /// A connection from `peer` may be served: some running session's
     /// speaker, or a member of its target, has that address (P190).
     fn admits(&self, peer: IpAddr) -> bool {
@@ -449,6 +469,7 @@ impl Server {
             for remote in &gone {
                 table.sessions.remove(remote);
             }
+            table.logged.retain(|(remote, _, _)| !gone.contains(remote));
         }
         for remote in &gone {
             self.live.remove(remote);
@@ -760,7 +781,8 @@ fn handle(stream: &mut TcpStream, peer: IpAddr, head: &dacp::RequestHead, shared
     if let Some(over) = ended {
         shared.log(over_limit_line(&who, over));
     }
-    if answer.command.is_none() {
+    let first = |remote| lock(&shared.table).first_logged(remote, &what, answer.status);
+    if answer.command.is_none() && answer.remote.is_none_or(first) {
         let note = if answer.status == 204 {
             ", no event"
         } else {

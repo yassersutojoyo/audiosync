@@ -1456,6 +1456,36 @@ fn dacp_log_lines() {
     sender.shutdown();
 }
 
+/// A receiver that polls a command the server doesn't take (one asks
+/// `getproperty` every second) leaves one line per session, not one a second.
+// covers: P195
+#[test]
+fn dacp_a_repeated_request_is_logged_once_per_session() {
+    let _serial = serial();
+    let receiver = NetReceiver::start(Behavior::default());
+    let (sender, _host) = start();
+    let mut events = Events::default();
+    let (_, remote) = play(&sender, &mut events, &receiver, 1);
+    let mut client = Client::connect(LOOPBACK, sender.dacp_counters().port());
+    for _ in 0..5 {
+        let polled = client.request("/ctrl-int/1/getproperty?dmcp.volume", Some(&remote));
+        assert_eq!(polled.status, 400);
+        let polled = client.request("/ctrl-int/1/beginff", Some(&remote));
+        assert_eq!(polled.status, 204);
+    }
+    let last = client.request("/ctrl-int/1/getspeakers", Some(&remote));
+    assert_eq!(last.status, 400);
+    let count = |lines: &[String], part: &str| lines.iter().filter(|l| l.contains(part)).count();
+    assert!(wait_until(LONG, || {
+        events.drain(&sender);
+        count(&log_lines(&events), "/ctrl-int/1/getspeakers") == 1
+    }));
+    let lines = log_lines(&events);
+    assert_eq!(count(&lines, "/ctrl-int/1/getproperty"), 1, "{lines:?}");
+    assert_eq!(count(&lines, "/ctrl-int/1/beginff"), 1, "{lines:?}");
+    sender.shutdown();
+}
+
 // covers: P195
 #[test]
 fn dacp_name_conflicts_are_logged() {

@@ -28,7 +28,11 @@ export component ZoneNameDialog inherits Dialog {
     background: Tokens.background;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
-    preferred-width: 380px;
+    // A fixed width: X11 showed it at its layout's narrowest.
+    width: 380px;
+
+    // The height its layout needs at its width, which the window grows to.
+    out property <length> fit-height: root.min-height;
 
     // Bumped each time the dialog opens, so the name field takes the cursor.
     property <int> focus-request;
@@ -414,6 +418,9 @@ export component CastAddressDialog inherits Dialog {
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
     preferred-width: 420px;
+
+    // The height its layout needs at its width, which the window grows to.
+    out property <length> fit-height: root.min-height;
 
     // Bumped each time the dialog opens or turns an address down, so the
     // field takes the cursor.

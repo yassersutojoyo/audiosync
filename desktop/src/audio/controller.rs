@@ -2466,13 +2466,13 @@ impl<D: Driver> Controller<D> {
             match moved {
                 VolumeMove::Master => self
                     .log
-                    .log(|| format!("master volume: {}", self.policy.master())),
+                    .log(|| format!("master volume: {}", logged_volume(self.policy.master()))),
                 VolumeMove::Output(id) => self.log.log(|| {
                     let (gain, returned_db) = self.played_gain(&id);
                     format!(
                         "output {} volume: {} (gain {gain:.3}, EQ headroom returned {returned_db:.2} dB)",
                         label(&self.names, &id),
-                        self.policy.settings(&id).volume,
+                        logged_volume(self.policy.settings(&id).volume),
                     )
                 }),
                 VolumeMove::AirPlay(id) => {
@@ -5414,6 +5414,12 @@ fn describe_fresh_link(output: &str, age: Option<u64>) -> String {
     )
 }
 
+/// A volume slider position for the log: a dragged slider gives long
+/// fractions such as 27.536231994628906.
+fn logged_volume(volume: f64) -> f64 {
+    (volume * 100.0).round() / 100.0
+}
+
 /// The log line of an output that started: the output as [`label`] names
 /// it, how its stream is set up, its hold-back in ms, its volume slider
 /// position, the gain it plays at and, for a Bluetooth output, what its
@@ -5433,8 +5439,9 @@ fn describe_output_start(
         String::new()
     };
     format!(
-        "output {label} started: {}; delay {hold_back_ms} ms, volume {volume} (gain {gain:.3}){bluetooth}",
+        "output {label} started: {}; delay {hold_back_ms} ms, volume {} (gain {gain:.3}){bluetooth}",
         describe_stream(setup),
+        logged_volume(volume),
     )
 }
 
@@ -5539,7 +5546,7 @@ fn describe_status(
             output.label,
             output.hold_back_ms,
             output.delay_frames,
-            output.volume,
+            logged_volume(output.volume),
             output.gain,
             output.lag_frames,
             counters.primes,
@@ -10836,6 +10843,26 @@ mod tests {
         backend.log_rested_volumes(now + VOLUME_LOG_PAUSE);
         backend.log_rested_volumes(now + 2 * VOLUME_LOG_PAUSE);
         assert_eq!(logged(&log, &dir), ["master volume: 80"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_logged_volume_is_rounded_to_two_decimals() {
+        let (mut backend, log, dir) = logged_backend("controller-volume-rounded");
+        backend.set_output_volume(HEADPHONES, 27.536_231_994_628_906);
+        backend.set_master_volume(63.333_333_333);
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
+        let messages = logged(&log, &dir);
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.starts_with("output \"Headphones\" (headphones) volume: 27.54 (")),
+            "{messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m == "master volume: 63.33"),
+            "{messages:?}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

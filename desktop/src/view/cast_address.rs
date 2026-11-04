@@ -9,9 +9,9 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
-use slint::{ComponentHandle, SharedString, TimerMode};
+use slint::{ComponentHandle, SharedString, Timer, TimerMode};
 
-use super::{App, with_app};
+use super::{App, grow_to_fit, with_app};
 use crate::audio::cast_address::CastAddress;
 use crate::ui_model::CastAddressError;
 
@@ -58,6 +58,7 @@ impl App {
             return;
         }
         dialog.invoke_prepare();
+        grow_to_fit(dialog.window(), dialog.get_fit_height());
         crate::platform::bring_to_front(dialog.window());
         self.log.log(|| "cast address dialog: opened".to_owned());
     }
@@ -132,6 +133,14 @@ impl App {
         dialog.set_error(reason);
         dialog.set_refusals(dialog.get_refusals() % 2 + 1);
         dialog.invoke_prepare();
+        // The reason's row is built after this event, so its height counts
+        // only then.
+        let dialog = dialog.as_weak();
+        Timer::single_shot(Duration::ZERO, move || {
+            if let Some(dialog) = dialog.upgrade() {
+                grow_to_fit(dialog.window(), dialog.get_fit_height());
+            }
+        });
     }
 
     fn close_cast_address(&self) {

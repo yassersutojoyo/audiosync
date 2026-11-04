@@ -3018,9 +3018,15 @@ impl<A: AudioBackend> AudioAdapter<A> {
         if shows != shown {
             self.log.log(|| {
                 if shows {
-                    "AirPlay: discovery has found no receiver in 20 s; the speaker list asks to \
-                     check the network and Windows Firewall"
-                        .to_owned()
+                    let check = if cfg!(windows) {
+                        "the network and Windows Firewall"
+                    } else {
+                        "the network"
+                    };
+                    format!(
+                        "AirPlay: discovery has found no receiver in 20 s; the speaker list asks to \
+                         check {check}"
+                    )
                 } else if browsing {
                     "AirPlay: a receiver is listed; the no-receiver note goes".to_owned()
                 } else {
@@ -12555,6 +12561,24 @@ mod tests {
             "an empty AirPlay list after 20 seconds needs a hint"
         );
         assert!(messages(&adapter).is_empty(), "a note, not a notice");
+    }
+
+    #[test]
+    fn the_none_found_log_line_names_windows_firewall_only_on_windows() {
+        let fake = FakeAirPlay::new();
+        let mut adapter =
+            adapter_starting_airplay(vec![Some(StartedSender::browsing(fake.link(), None))]);
+        let dir = test_dir("adapter-none-found-log");
+        adapter.log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        poll_times(&mut adapter, POLLS_IN_20_S);
+        assert!(adapter.log.flush(TEST_FLUSH));
+        let messages = read_messages(&dir.join(FILE_NAME));
+        let line = messages
+            .iter()
+            .find(|m| m.contains("found no receiver"))
+            .expect("the note is logged");
+        assert_eq!(line.contains("Windows Firewall"), cfg!(windows), "{line}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The flyout's empty list says it is looking until the none-found note
