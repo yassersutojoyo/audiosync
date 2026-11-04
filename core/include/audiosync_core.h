@@ -2483,6 +2483,14 @@ double asc_cast_offset_ms(AscCast *cast, const char *id);
 double asc_cast_set_hold_back(AscCast *cast, double hold_back_ms);
 
 /*
+ * Takes the formats and offsets of memory_json, a stored memory, for each
+ * device field the handle's memory holds none of, so a value set since
+ * launch wins. Store asc_cast_memory_json afterwards. Returns false for a
+ * NULL or dead handle or text asc_cast_memory_reads refuses.
+ */
+bool asc_cast_fill_memory(AscCast *cast, const char *memory_json);
+
+/*
  * The device memory to store between runs, as JSON: per device, the format
  * that last worked and the offset. NUL-terminated UTF-8 that the handle
  * owns, valid until the next asc_cast_memory_json call on it or its destroy.

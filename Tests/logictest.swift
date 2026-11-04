@@ -14286,6 +14286,57 @@ do {
     }
 }
 
+// MARK: Google Cast device memory: a file unread at launch is merged into the memory before the first save
+// covers: S367
+do {
+    let mergeDir = FileManager.default.temporaryDirectory.appendingPathComponent("audiosync-cast-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: mergeDir) }
+    let mergeURL = CastMemoryFile.file(in: mergeDir)
+    let fileOnlyID = "0123456789abcdef0123456789abcdef"
+    let zeroedID = "fedcba9876543210fedcba9876543210"
+    try? FileManager.default.createDirectory(at: mergeDir.appendingPathComponent("AudioSync"), withIntermediateDirectories: true)
+    try? Data("{\"\(fileOnlyID)\": {\"offsetMs\": 700, \"format\": \"flac\"}, \"\(zeroedID)\": {\"offsetMs\": 300}}".utf8)
+        .write(to: mergeURL)
+    try? FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: mergeURL.path)
+    // Skipped when running as root, where the mode doesn't stop the read.
+    if (try? Data(contentsOf: mergeURL)) == nil {
+        var lateStore = CastMemoryStore(url: mergeURL)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: mergeURL.path)
+        var lateSender = asc_cast_create(lateStore.json)
+        let zeroSet = asc_cast_set_offset(lateSender, zeroedID, 0)
+        let lateJSON = asc_cast_memory_json(lateSender).map { String(cString: $0) } ?? ""
+        let mergeKept = try? lateStore.save(lateJSON, filling: lateSender)
+        var mergedModel = CastModel()
+        mergedModel.memoryUnread = true
+        for mergedID in [fileOnlyID, zeroedID] {
+            mergedModel.apply(.appeared(CastDevice(id: mergedID, name: mergedID), offsetMs: nil))
+        }
+        _ = mergedModel.setOffset(zeroedID, ms: 0)
+        for mergedID in [fileOnlyID, zeroedID] {
+            let mergedMs = asc_cast_offset_ms(lateSender, mergedID)
+            mergedModel.apply(.changed(CastDevice(id: mergedID, name: mergedID), offsetMs: mergedMs >= 0 ? mergedMs : nil))
+        }
+        check(lateStore.merged && mergedModel.offset(of: fileOnlyID) == 700 && mergedModel.offset(of: zeroedID) == 0,
+              "cast memory: after the merge a row shows the file's offset, and one set since launch stays",
+              "\(mergedModel.offsets)")
+        asc_cast_destroy(&lateSender)
+        var rereadSender = asc_cast_create(CastMemoryStore(url: mergeURL).json)
+        let rereadJSON = asc_cast_memory_json(rereadSender).map { String(cString: $0) } ?? ""
+        check(lateStore.json == nil && zeroSet && mergeKept == .some(nil)
+                && asc_cast_offset_ms(rereadSender, fileOnlyID) == 700 && rereadJSON.contains("\"format\":\"flac\"")
+                && asc_cast_offset_ms(rereadSender, zeroedID) == 0,
+              "cast memory: a file unread at launch that reads by the first save keeps its entries, and one set since launch wins",
+              rereadJSON)
+        asc_cast_destroy(&rereadSender)
+    }
+
+    var unreadModel = CastModel()
+    let zeroWhenRead = unreadModel.setOffset(zeroedID, ms: 0)
+    unreadModel.memoryUnread = true
+    check(zeroWhenRead == nil && unreadModel.setOffset(zeroedID, ms: 0) == 0 && unreadModel.offset(of: zeroedID) == 0,
+          "cast memory: while the file is unread, 0 ms set on a device with no offset is stored")
+}
+
 // MARK: Guide illustrations: each finds its place in the text, in order (GuideLayout)
 do {
     let t = UIStrings()

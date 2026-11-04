@@ -502,6 +502,9 @@ struct CastModel {
     /// Devices whose offset the app wrote this run. Their memory reads are
     /// ignored, since one taken before the write can arrive after it.
     private var offsetsWritten: Set<String> = []
+    /// The memory file was there at launch but couldn't be read: 0 ms on a
+    /// device without an offset is stored, or the file's offset would merge in.
+    var memoryUnread = false
     /// The playing group's members as its session last reported them; nil
     /// until it does, and once the session is over.
     private(set) var members: [CastMember]?
@@ -1144,7 +1147,8 @@ struct CastModel {
     /// The user's offset for `id`, as the field takes it; nil when unchanged
     /// or not a number.
     mutating func setOffset(_ id: String, ms: Double) -> Double? {
-        guard let clamped = Self.clampedOffset(ms), offset(of: id) != clamped else { return nil }
+        let stored: Double? = offsets[id] ?? (memoryUnread ? nil : 0)
+        guard let clamped = Self.clampedOffset(ms), stored != clamped else { return nil }
         offsets[id] = clamped > 0 ? clamped : nil
         offsetsWritten.insert(id)
         return clamped
@@ -1384,6 +1388,12 @@ struct CastMemoryStore {
     /// The text for the core; nil when there is no file or it isn't text.
     let json: String?
     private var pending: Pending
+    /// A save merged the file unread at launch into the sender's memory.
+    private(set) var merged = false
+    var unread: Bool {
+        if case .recheck = pending { return true }
+        return false
+    }
 
     private enum Pending {
         case none
@@ -1409,11 +1419,21 @@ struct CastMemoryStore {
     }
 
     /// Writes `json` over the file; returns the copy kept aside, which only
-    /// the first save of a run whose file didn't read makes.
-    mutating func save(_ json: String) throws -> URL? {
+    /// the first save of a run whose file didn't read makes. A file unread at
+    /// launch that reads now is merged into `sender`'s memory first, which
+    /// is then written instead.
+    mutating func save(_ json: String, filling sender: OpaquePointer? = nil) throws -> URL? {
+        var json = json
         if case .recheck = pending {
             switch Self.read(url) {
-            case .success(let data?): pending = CastMemoryFile.reads(data) ? .none : .keep(data)
+            case .success(let data?) where CastMemoryFile.reads(data):
+                pending = .none
+                if let sender, let text = String(data: data, encoding: .utf8), asc_cast_fill_memory(sender, text),
+                   let raw = asc_cast_memory_json(sender) {
+                    json = String(cString: raw)
+                    merged = true
+                }
+            case .success(let data?): pending = .keep(data)
             case .success(nil): pending = .none
             case .failure(let error): throw Problem.unreadable(error)
             }

@@ -2095,6 +2095,34 @@ pub unsafe extern "C" fn asc_cast_offset_ms(cast: *mut AscCast, id: *const c_cha
     }
 }
 
+/// Takes the formats and offsets of `memory_json`, a stored memory, for each
+/// device field the handle's memory holds none of, so a value set since
+/// launch wins. Store [`asc_cast_memory_json`] afterwards. False for a null
+/// or dead handle or text [`asc_cast_memory_reads`] refuses.
+///
+/// # Safety
+///
+/// `cast` is null or a live handle, called under the threading contract;
+/// `memory_json` is null or a NUL-terminated string, unchanged during the
+/// call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_fill_memory(
+    cast: *mut AscCast,
+    memory_json: *const c_char,
+) -> bool {
+    // SAFETY: as the caller's.
+    let Some(memory) = unsafe { host_text(memory_json) }.and_then(DeviceMemory::read_json) else {
+        return false;
+    };
+    // SAFETY: as the caller's.
+    unsafe {
+        live(cast, false, |cast| {
+            cast.host.fill_memory(&memory);
+            true
+        })
+    }
+}
+
 /// The device memory to store between runs, as JSON: per device, the
 /// format that last worked (C84) and the offset (C77). The string is
 /// NUL-terminated UTF-8 owned by the handle, valid until the next call of
@@ -3616,6 +3644,44 @@ mod tests {
         }
         // SAFETY: null is allowed.
         assert!(!unsafe { asc_cast_memory_reads(ptr::null()) });
+    }
+
+    // CAST_SPEC: C77, C84
+    #[test]
+    fn filling_the_memory_takes_a_files_entries_only_where_it_holds_none() {
+        let set = c"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+        let zeroed = c"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+        let kitchen = CString::new(KITCHEN).unwrap();
+        let stored = CString::new(format!(
+            r#"{{"{}": {{"offsetMs": 100}}, "{}": {{"offsetMs": 300}}, "{KITCHEN}": {{"offsetMs": 500, "format": "flac"}}}}"#,
+            set.to_str().unwrap(),
+            zeroed.to_str().unwrap(),
+        ))
+        .unwrap();
+        // SAFETY: null is allowed.
+        let handle = unsafe { asc_cast_create(ptr::null()) };
+        assert!(!handle.is_null());
+        // SAFETY: a live handle, used by this thread only, and NUL-terminated strings or null.
+        let json = unsafe {
+            assert!(asc_cast_set_offset(handle, set.as_ptr(), 200.0));
+            assert!(asc_cast_set_offset(handle, zeroed.as_ptr(), 0.0));
+            assert!(asc_cast_fill_memory(handle, stored.as_ptr()));
+            for refused in [c"not json", c"[]", c"{\"version\": 999}"] {
+                assert!(
+                    !asc_cast_fill_memory(handle, refused.as_ptr()),
+                    "{refused:?}"
+                );
+            }
+            assert!(!asc_cast_fill_memory(handle, ptr::null()));
+            assert_eq!(asc_cast_offset_ms(handle, set.as_ptr()), 200.0);
+            assert_eq!(asc_cast_offset_ms(handle, zeroed.as_ptr()), 0.0);
+            assert_eq!(asc_cast_offset_ms(handle, kitchen.as_ptr()), 500.0);
+            text(asc_cast_memory_json(handle))
+        };
+        assert!(json.contains(r#""format":"flac""#), "{json}");
+        destroy(handle);
+        // SAFETY: null is allowed.
+        assert!(!unsafe { asc_cast_fill_memory(ptr::null_mut(), stored.as_ptr()) });
     }
 
     #[test]

@@ -22,13 +22,14 @@ extension AppDelegate {
         sender.setMaster(masterVolume)
         if let settings = equalizerModel?.settings { sender.setEqualizer(settings) }
         castModel.foundIDs = store.castFoundIDs
-        sender.start { [weak self] running, discovering in
-            self?.castSenderStarted(sender, running: running, discovering: discovering)
+        sender.start { [weak self] running, discovering, memoryUnread in
+            self?.castSenderStarted(sender, running: running, discovering: discovering, memoryUnread: memoryUnread)
         }
     }
 
-    private func castSenderStarted(_ sender: CastSender, running: Bool, discovering: Bool) {
+    private func castSenderStarted(_ sender: CastSender, running: Bool, discovering: Bool, memoryUnread: Bool) {
         guard castSender === sender else { return }
+        castModel.memoryUnread = memoryUnread
         if !running {
             DebugTrace.log("[AudioSync] Cast: the sender could not start")
             castSender = nil

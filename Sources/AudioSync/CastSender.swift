@@ -49,6 +49,8 @@ final class CastSender {
     private var track: TrackMetadata.Fields?
     private var artwork: Data?
     private var underruns = CastUnderruns()
+    /// The devices as the latest change listed them, by ID.
+    private var listed: [String: CastDevice] = [:]
 
     init(memoryURL: URL?, onChanges: @escaping ([CastDeviceChange]) -> Void,
          onEvents: @escaping ([CastEvent]) -> Void) {
@@ -58,14 +60,15 @@ final class CastSender {
     }
 
     /// Creates the sender and starts discovery. `completion` gets, on the
-    /// main queue, whether the sender runs and whether discovery does.
-    func start(completion: @escaping (_ running: Bool, _ discovering: Bool) -> Void) {
+    /// main queue, whether the sender runs, whether discovery does and
+    /// whether the memory file was there but couldn't be read.
+    func start(completion: @escaping (_ running: Bool, _ discovering: Bool, _ memoryUnread: Bool) -> Void) {
         queue.async { [weak self] in
             guard let self else { return }
             self.memory = self.memoryURL.map(CastMemoryStore.init(url:))
             guard let created = asc_cast_create_in(self.memory?.json,
                                                    self.memoryURL?.deletingLastPathComponent().path) else {
-                DispatchQueue.main.async { completion(false, false) }
+                DispatchQueue.main.async { completion(false, false, false) }
                 return
             }
             self.handle = created
@@ -78,12 +81,13 @@ final class CastSender {
                 CastTap.install(taken)
             }
             let discovering = asc_cast_start_discovery(created)
+            let unread = self.memory?.unread ?? false
             let timer = DispatchSource.makeTimerSource(queue: self.queue)
             timer.schedule(deadline: .now() + Self.pollInterval, repeating: Self.pollInterval)
             timer.setEventHandler { [weak self] in self?.poll() }
             timer.resume()
             self.timer = timer
-            DispatchQueue.main.async { completion(true, discovering) }
+            DispatchQueue.main.async { completion(true, discovering, unread) }
         }
     }
 
@@ -401,12 +405,27 @@ final class CastSender {
         guard !LaunchAutoConnect.skipped, let handle, memory != nil,
               let raw = asc_cast_memory_json(handle) else { return }
         let json = String(cString: raw)   // valid only until the next call of its kind
+        let wasMerged = memory?.merged ?? false
         do {
-            if let kept = try memory?.save(json) {
+            if let kept = try memory?.save(json, filling: handle) {
                 DispatchQueue.main.async { DebugTrace.log("[AudioSync] Cast: the device memory didn't read; kept aside as \(kept.lastPathComponent)") }
+            }
+            if !wasMerged, memory?.merged == true {
+                // Queued behind the poll that saved, whose changes carry the offsets from before the merge.
+                queue.async { [weak self] in self?.sendListedOffsets() }
             }
         } catch {
             DispatchQueue.main.async { DebugTrace.log("[AudioSync] Cast: the device memory couldn't be saved: \(error)") }
+        }
+    }
+
+    /// The listed devices again, with the offsets a merge filled in.
+    private func sendListedOffsets() {
+        guard let handle, !listed.isEmpty else { return }
+        let changes = listed.values.map { CastDeviceChange.changed($0, offsetMs: offset(handle, $0.id)) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.active else { return }
+            self.onChanges(changes)
         }
     }
 
@@ -443,7 +462,13 @@ final class CastSender {
         var rawDevice = AscCastDevice()
         return Self.drain { () -> CastDeviceChange?? in
             guard asc_cast_next_device(handle, &rawDevice) else { return nil }
-            return .some(CastDeviceChange(rawDevice, offsetMs: { self.offset(handle, $0) }))
+            let change = CastDeviceChange(rawDevice, offsetMs: { self.offset(handle, $0) })
+            switch change {
+            case .appeared(let device, _, _, _)?, .changed(let device, _)?: self.listed[device.id] = device
+            case .gone(let id)?: self.listed[id] = nil
+            case nil: break
+            }
+            return .some(change)
         }
     }
 
