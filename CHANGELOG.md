@@ -7,6 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Security
 
 - The Web Remote no longer lists microphones and other input devices, and it refuses a switch to one, so a paired phone can't turn a microphone on from afar. You can still pick an input on the computer.
+- A phone paired with the Web Remote now only works from the network address it paired from, and its sign-in cookie is swapped for a new one every 10 minutes while you use it. If your phone gets a new address on the Wi-Fi, the remote asks for the pairing code again.
 
 ## [0.8.6] - 2026-11-04
 

@@ -375,8 +375,8 @@ struct Shared {
     sink: Mutex<Option<CommandSink>>,
     events: Mutex<VecDeque<ServerEvent>>,
     connections: Mutex<Vec<Connection>>,
-    /// The open event streams, oldest first, with the token each belongs to.
-    streams: Mutex<Vec<(u64, String, Arc<TcpStream>)>>,
+    /// The open event streams, oldest first, with the device each belongs to.
+    streams: Mutex<Vec<(u64, u64, Arc<TcpStream>)>>,
     next_stream: AtomicU64,
 }
 
@@ -467,14 +467,14 @@ impl Shared {
         }
     }
 
-    /// Registers a new event stream for `token`, dropping the device's
+    /// Registers a new event stream for `device`, dropping the device's
     /// streams their page closed, then ending its oldest beyond
     /// [`MAX_STREAMS_PER_DEVICE`].
-    fn open_stream(&self, token: &str, probe: TcpStream) -> u64 {
+    fn open_stream(&self, device: u64, probe: TcpStream) -> u64 {
         let id = self.next_stream.fetch_add(1, Ordering::SeqCst);
         let probes: Vec<(u64, Arc<TcpStream>)> = lock(&self.streams)
             .iter()
-            .filter(|(_, owner, _)| owner == token)
+            .filter(|(_, owner, _)| *owner == device)
             .map(|(id, _, probe)| (*id, Arc::clone(probe)))
             .collect();
         // A closed page's stream lingers until a write fails; evicting a live one would mark its page replaced.
@@ -487,10 +487,10 @@ impl Shared {
             let mut streams = lock(&self.streams);
             let before = streams.len();
             streams.retain(|(id, _, _)| !gone.contains(id));
-            streams.push((id, token.to_owned(), Arc::new(probe)));
+            streams.push((id, device, Arc::new(probe)));
             let mine: Vec<u64> = streams
                 .iter()
-                .filter(|(_, owner, _)| owner == token)
+                .filter(|(_, owner, _)| *owner == device)
                 .map(|(id, _, _)| *id)
                 .collect();
             let excess = mine.len().saturating_sub(MAX_STREAMS_PER_DEVICE);
@@ -533,17 +533,30 @@ impl Shared {
             .is_some_and(|state| state.calibrating)
     }
 
-    /// The paired device's token, and whether it came under [`TOKEN_COOKIE`].
-    fn paired(&self, request: &Request, port: u16) -> Option<(String, bool)> {
+    /// The paired device's token and ID, and whether the token came under
+    /// [`TOKEN_COOKIE`]; none when it is unknown or sent from another address
+    /// than its device paired from.
+    fn paired(&self, request: &Request, from: IpAddr, port: u16) -> Option<(String, u64, bool)> {
         let (token, old_name) = match request.cookie(&token_cookie_name(port)) {
             Some(token) => (token, false),
             None => (request.cookie(TOKEN_COOKIE)?, true),
         };
-        let (paired, snapshot) = lock(&self.devices).check(token, SystemTime::now());
+        let (device, snapshot) = lock(&self.devices).check(token, from, SystemTime::now());
+        if device.is_none() && snapshot.is_some() {
+            self.wake_streams();
+        }
         if let Some(snapshot) = snapshot {
             self.save(snapshot);
         }
-        paired.then(|| (token.to_owned(), old_name))
+        device.map(|device| (token.to_owned(), device, old_name))
+    }
+
+    /// A new token in place of `token` once it is due ([`auth::ROTATE_AFTER`]).
+    fn rotate(&self, token: &str) -> Option<String> {
+        let rotated = lock(&self.devices).rotate(token, SystemTime::now());
+        let (fresh, snapshot) = rotated.ok().flatten()?;
+        self.save(snapshot);
+        Some(fresh)
     }
 
     /// Hands `command` to the app; false once the server is stopping.
@@ -997,7 +1010,7 @@ fn admit(
 /// What a request gets: one response, or the event stream.
 enum Answer {
     Response(Response),
-    Events { token: String, cookies: Vec<String> },
+    Events { device: u64, cookies: Vec<String> },
 }
 
 impl From<Response> for Answer {
@@ -1052,7 +1065,7 @@ fn serve(
         let _ = http::write_response(&mut stream, &Response::error(&text::bad_host()), csp);
         return;
     };
-    if shared.paired(&request, local.port()).is_some() {
+    if shared.paired(&request, from, local.port()).is_some() {
         if !shared.mark_paired(paired) {
             return;
         }
@@ -1065,7 +1078,7 @@ fn serve(
         Answer::Response(response) => {
             let _ = http::write_response(&mut stream, &response, csp);
         }
-        Answer::Events { token, cookies } => stream_events(stream, &token, &cookies, shared),
+        Answer::Events { device, cookies } => stream_events(stream, device, &cookies, shared),
     }
 }
 
@@ -1193,7 +1206,7 @@ fn route(
     if request.method != method {
         return method_not_allowed(allow);
     }
-    let Some((token, old_name)) = shared.paired(request, local.port()) else {
+    let Some((token, device, old_name)) = shared.paired(request, from, local.port()) else {
         return error(text::not_paired());
     };
     if api.writes() && shared.calibrating() {
@@ -1203,8 +1216,12 @@ fn route(
     let mut cookies = Vec::new();
     if old_name {
         cookies.push(token_cookie(TOKEN_COOKIE, "", 0));
-        if !matches!(api, ApiRoute::Unpair) {
-            cookies.push(token_cookie(&name, &token, COOKIE_MAX_AGE));
+    }
+    if !matches!(api, ApiRoute::Unpair) {
+        let renewed = shared.rotate(&token);
+        if old_name || renewed.is_some() {
+            let value = renewed.as_deref().unwrap_or(&token);
+            cookies.push(token_cookie(&name, value, COOKIE_MAX_AGE));
         }
     }
     let answer = match api {
@@ -1212,7 +1229,7 @@ fn route(
             Some((_, json)) => Response::json(200, json.to_string()).into(),
             None => error(text::not_ready()),
         },
-        ApiRoute::Events => return Answer::Events { token, cookies },
+        ApiRoute::Events => return Answer::Events { device, cookies },
         ApiRoute::Master => master(request, shared),
         ApiRoute::Unpair => unpair(&token, from, &name, shared),
         ApiRoute::Speaker(id) => speaker(request, id, shared),
@@ -1313,7 +1330,7 @@ fn pair(request: &Request, from: IpAddr, port: u16, shared: &Shared) -> Answer {
         shared.report(ServerEvent::PairFailed { from, why: outcome });
         return error(failure);
     }
-    let snapshot = lock(&shared.devices).add(&token, SystemTime::now());
+    let snapshot = lock(&shared.devices).add(&token, from, SystemTime::now());
     shared.save(snapshot);
     shared.report(ServerEvent::Paired { from });
     if let Some(next_code) = next_code {
@@ -1485,12 +1502,12 @@ fn preset(request: &Request, id: Option<String>, shared: &Shared) -> Answer {
 /// for a heartbeat, so the page can tell a dead stream. It ends when the
 /// server stops, the device is forgotten or the device opens a stream too
 /// many, which sends a last `replaced` event.
-fn stream_events(stream: TcpStream, token: &str, cookies: &[String], shared: &Shared) {
+fn stream_events(stream: TcpStream, device: u64, cookies: &[String], shared: &Shared) {
     let Ok(probe) = stream.try_clone() else {
         return;
     };
-    let id = shared.open_stream(token, probe);
-    send_events(stream, token, cookies, id, shared);
+    let id = shared.open_stream(device, probe);
+    send_events(stream, device, cookies, id, shared);
     shared.close_stream(id);
 }
 
@@ -1514,7 +1531,7 @@ fn peek_says_closed(peek: &io::Result<usize>, windows: bool) -> bool {
     }
 }
 
-fn send_events(mut stream: TcpStream, token: &str, cookies: &[String], id: u64, shared: &Shared) {
+fn send_events(mut stream: TcpStream, device: u64, cookies: &[String], id: u64, shared: &Shared) {
     let mut headers = vec![
         ("Content-Type", "text/event-stream".to_owned()),
         ("Cache-Control", "no-store".to_owned()),
@@ -1535,7 +1552,7 @@ fn send_events(mut stream: TcpStream, token: &str, cookies: &[String], id: u64, 
             let mut published = lock(&shared.published);
             loop {
                 if shared.stopped.load(Ordering::SeqCst)
-                    || !lock(&shared.devices).contains(token, SystemTime::now())
+                    || !lock(&shared.devices).holds(device, SystemTime::now())
                 {
                     return;
                 }
@@ -1950,7 +1967,7 @@ mod tests {
         let shared = &server.shared;
         let token = auth::random_token().unwrap();
         let paired_at = SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60);
-        let _ = lock(&shared.devices).add(&token, paired_at);
+        let _ = lock(&shared.devices).add(&token, IpAddr::V4(Ipv4Addr::LOCALHOST), paired_at);
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
@@ -2058,7 +2075,7 @@ mod tests {
         let phone = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let old = auth::random_token().unwrap();
         let paired_at = SystemTime::now() - Duration::from_secs(60 * 60);
-        let _ = lock(&server.shared.devices).add(&old, paired_at);
+        let _ = lock(&server.shared.devices).add(&old, phone, paired_at);
 
         let request = state_request(&host, local.port(), &old);
         let answer = route(&request, &host, phone, local, &server.shared);
