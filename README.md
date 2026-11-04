@@ -106,7 +106,7 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 
 - Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), open it and drag AudioSync to Applications. Needs macOS 15 or later. Your audio is never written to disk.
 - The first launch takes one extra step, because AudioSync isn't notarized. When macOS says it can't verify the app, click Done, then go to System Settings → Privacy & Security, click Open Anyway and confirm with your password. After that it opens like any other app. Only Apple's paid Developer Program would remove that step, and I'm not in it.
-- Or, from Terminal: `curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash`. It downloads the latest release's zip, checks it against the release's SHA-256 checksums, puts AudioSync in Applications and opens it. A copy downloaded by curl isn't flagged as downloaded, so macOS doesn't ask for the extra step. Run it again to update.
+- Or, from Terminal: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.sh | bash`. It downloads the latest release's zip, checks it against the release's SHA-256 checksums, puts AudioSync in Applications and opens it. A copy downloaded by curl isn't flagged as downloaded, so macOS doesn't ask for the extra step. Run it again to update.
 - Coming from 0.6 or older, replace the app by hand once. Later versions can update themselves (the app asks on its second launch).
 - HomePods: in Allow Speaker & TV Access, pick “Anyone on the Same Network” on a network you trust, not Everyone.
 - Build it yourself: see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
@@ -115,13 +115,13 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 
 - Get the zip for your PC (x64 or ARM64) from the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. Needs Windows 11. It's one exe with no installer: unzip it into a folder of its own and run it. [desktop/README.md](desktop/README.md#running-the-exe) has the details.
 - The exe isn't signed, so the first time you open it Windows SmartScreen may say it protected your PC. Click More info, then Run anyway, to open it.
-- Or, from PowerShell: `irm https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.ps1 | iex`. It picks the zip for your PC, checks it against the release's SHA-256 checksums, puts AudioSync in your user folder with a Start menu shortcut (no admin needed) and opens it. A copy fetched this way isn't marked as downloaded, so SmartScreen doesn't ask. Run it again to update.
+- Or, from PowerShell: `irm https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.ps1 | iex`. It picks the zip for your PC, checks it against the release's SHA-256 checksums, puts AudioSync in your user folder with a Start menu shortcut (no admin needed) and opens it. A copy fetched this way isn't marked as downloaded, so SmartScreen doesn't ask. Run it again to update.
 - Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch and while the app runs, at most once a day. Nothing downloads until you click Download and Install.
 
 ### Linux
 
 - Get the AppImage for your machine (x86_64 or aarch64) from the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page, make it executable and run it. It needs glibc 2.39 or newer and PipeWire, and it updates itself, like the Windows version.
-- Or, from a terminal: `curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install-linux.sh | bash`. It downloads the latest release's AppImage for your machine, checks it against the release's SHA-256 checksums, and puts it in `~/.local/bin` with an app menu entry and opens it, no sudo. Run it again to update.
+- Or, from a terminal: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install-linux.sh | bash`. It downloads the latest release's AppImage for your machine, checks it against the release's SHA-256 checksums, and puts it in `~/.local/bin` with an app menu entry and opens it, no sudo. Run it again to update.
 - On Debian or Ubuntu there's a `.deb` too (amd64 or arm64): `sudo apt install ./AudioSync-<version>-amd64.deb`. A copy from the `.deb` doesn't update itself, so get the next one from Releases.
 - It's built from the same code as the Windows app. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the build details.
 - It captures and plays through PipeWire. Its data lives in `$XDG_DATA_HOME/audiosync`, and launch at login is an XDG autostart entry.
