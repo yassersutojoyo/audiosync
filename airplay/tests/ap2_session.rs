@@ -406,7 +406,7 @@ fn pairing_goes_on_the_session_connection() {
     let mut fake = FakeAp2::new();
     fake.challenge = Some((
         "POST /pair-setup".to_owned(),
-        "Digest realm=\"raop\", nonce=\"abc\"".to_owned(),
+        "Digest realm=\"raop\", nonce=\"abc\", qop=\"auth\"".to_owned(),
     ));
     let mut config = ap2_config();
     config.password = Some(Secret::new("hunter2".to_owned()));
@@ -427,7 +427,7 @@ fn pairing_goes_on_the_session_connection() {
     let mut fake = FakeAp2::new();
     fake.challenge = Some((
         "POST /pair-setup".to_owned(),
-        "Digest realm=\"raop\", nonce=\"abc\"".to_owned(),
+        "Digest realm=\"raop\", nonce=\"abc\", qop=\"auth\"".to_owned(),
     ));
     let rig = Ap2Rig::new(ap2_config(), fake);
     assert_eq!(kind(&rig), Some(ErrorKind::PasswordRequired));
