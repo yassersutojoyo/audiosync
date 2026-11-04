@@ -386,23 +386,26 @@ fn options_goes_first_and_the_receivers_sealed_key_is_kept_when_it_opens() {
     assert_eq!(error.kind, ErrorKind::PairingFailed);
     assert_eq!(error.status, Some(403));
 
-    // The sealed answer: kept when it opens, ignored when it is missing,
-    // doesn't open or is too large to read; pairing completes either way.
-    for (answer, kept) in [
-        (SealAnswer::Sealed, true),
-        (SealAnswer::Empty, false),
-        (SealAnswer::Tampered, false),
-        (SealAnswer::Oversized, false),
+    // The sealed answer: kept when it opens; one that is missing, doesn't
+    // open or is too large to read fails the pairing and hands over nothing.
+    let atv = FakeAppleTv::new(PIN);
+    let credentials = pair(&atv);
+    assert_eq!(atv.paired(), [credentials.public_key()]);
+    assert_eq!(credentials.receiver_key(), Some(atv.receiver_key()));
+    for answer in [
+        SealAnswer::Empty,
+        SealAnswer::Tampered,
+        SealAnswer::Oversized,
     ] {
         let atv = FakeAppleTv::new(PIN);
         atv.answer_seal_with(answer);
-        let credentials = pair(&atv);
-        assert_eq!(atv.paired(), [credentials.public_key()], "{answer:?}");
-        assert_eq!(
-            credentials.receiver_key(),
-            kept.then(|| atv.receiver_key()),
-            "{answer:?}"
-        );
+        let mut link = PairLink::new(apple_tv_receiver(&atv));
+        link.connect();
+        link.submit(PIN, &mut TestEntropy::new());
+        assert_eq!(link.paired(), None, "{answer:?}");
+        let (error, wrong_pin) = link.failure().expect("failed");
+        assert_eq!(error.kind, ErrorKind::PairingFailed, "{answer:?}");
+        assert!(!wrong_pin, "{answer:?}");
     }
 }
 
@@ -998,7 +1001,8 @@ fn a_receiver_signature_that_fails_the_check_ends_the_session_before_the_sender_
     assert_eq!(link.keys(), ["POST /pair-verify"]);
     assert!(link.closed);
 
-    // Without the receiver's key there is nothing to check.
+    // Credentials an older version stored without the receiver's key can't
+    // tell this impostor apart: not paired, and the signature never leaves.
     let without_key =
         Credentials::new(credentials.client_id(), *credentials.secret()).expect("credentials");
     let mut config = common::config();
@@ -1007,13 +1011,9 @@ fn a_receiver_signature_that_fails_the_check_ends_the_session_before_the_sender_
     ));
     let mut link = Link::new(config, apple_tv_receiver(&atv));
     link.connect();
-    assert_eq!(link.session.state(), State::Playing);
-    assert!(
-        !link
-            .events
-            .iter()
-            .any(|event| matches!(event, SessionEvent::Warning(_)))
-    );
+    assert_eq!(session_kinds(&link), [ErrorKind::PairingRequired]);
+    assert_eq!(link.keys(), ["POST /pair-verify"]);
+    assert!(link.closed);
 }
 
 // covers: P58, P136
