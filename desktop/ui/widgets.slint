@@ -1243,7 +1243,7 @@ export component MasterVolume inherits HorizontalLayout {
 
     IconButton {
         glyph: Glyphs.master-volume(root.waves);
-        label: root.waves == 0 ? Strings.unmute : Strings.mute;
+        label: root.waves == 0 ? Strings.unmute-master : Strings.mute-master;
         clicked => {
             root.mute-toggled();
         }

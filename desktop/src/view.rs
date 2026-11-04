@@ -219,20 +219,24 @@ impl TypedDelay {
     }
 }
 
-/// Whether a delay field holds a draft: `typed`, the text it shows instead of
-/// the applied value, isn't `applied` as the field shows it. A draft applies
-/// only on Enter or leaving the field, so the field marks it.
-/// The waves on the master volume's speaker: none at 0, then one below
-/// 34, two below 67 and three up to 100, as Windows' own volume icon steps.
+/// The waves on the master volume's speaker, by the rounded level: none at
+/// 0, one up to 33, two up to 66, three above, as on the Mac.
 fn volume_waves(volume: f64) -> i32 {
     match volume {
-        v if v <= 0.0 => 0,
-        v if v < 34.0 => 1,
-        v if v < 67.0 => 2,
+        v if v < 0.5 => 0,
+        v if v < 33.5 => 1,
+        v if v < 66.5 => 2,
         _ => 3,
     }
 }
 
+/// The lowest master level Unmute brings back: stepping down to 0 passes
+/// every level, and one of 1 would sound muted still.
+const UNMUTE_FLOOR: f64 = 5.0;
+
+/// Whether a delay field holds a draft: `typed`, the text it shows instead of
+/// the applied value, isn't `applied` as the field shows it. A draft applies
+/// only on Enter or leaving the field, so the field marks it.
 fn is_draft(typed: Option<&str>, applied: &str) -> bool {
     typed.is_some_and(|text| text != applied)
 }
@@ -848,9 +852,9 @@ pub struct App {
     now_playing_source: RefCell<Option<CardSource>>,
     /// The networks' profiles while a note says no speaker was found.
     network_watch: RefCell<Option<Watch>>,
-    /// The master volume a click on its speaker muted; the next click
-    /// there brings it back.
-    unmute_to: Cell<Option<f64>>,
+    /// The last master level of at least `UNMUTE_FLOOR`, which Unmute
+    /// brings back; 50 until one is seen.
+    unmute_to: Cell<f64>,
 }
 
 /// The main window's native window and the menu bar theme last sent to it.
@@ -1141,7 +1145,7 @@ impl App {
             now_playing: RefCell::default(),
             now_playing_source: RefCell::default(),
             network_watch: RefCell::default(),
-            unmute_to: Cell::new(None),
+            unmute_to: Cell::new(50.0),
         });
         let sessions = i32::try_from(audiosync_airplay::sender::AIRPLAY2_SESSIONS);
         app.main
@@ -1463,19 +1467,19 @@ impl App {
         true
     }
 
-    /// The master volume's speaker: mutes to 0, or brings back what it
-    /// muted.
+    /// The master volume's speaker: mutes to 0, or brings back the last
+    /// level heard.
     fn toggle_master_mute(&self) {
-        let volume = self.snapshot().master_volume;
-        let target = if volume > 0.0 {
-            self.unmute_to.set(Some(volume));
-            0.0
-        } else if let Some(previous) = self.unmute_to.take() {
-            previous
-        } else {
-            return;
-        };
+        let muted = volume_waves(self.snapshot().master_volume) == 0;
+        let target = if muted { self.unmute_to.get() } else { 0.0 };
         self.update(|b| b.set_master_volume(target));
+    }
+
+    /// A move of a master volume slider; under 0.5 is 0, so the muted
+    /// speaker never shows while a trace still plays.
+    fn move_master_volume(&self, volume: f32) {
+        let volume = if volume < 0.5 { 0.0 } else { volume.into() };
+        self.update(|b| b.set_master_volume(volume));
     }
 
     fn send_transport(&self, button: i32) {
@@ -2326,6 +2330,9 @@ impl App {
             Some(AirPlayWait::Unknown) => strings.get_live_input_airplay_unknown(),
             None => SharedString::new(),
         };
+        if state.master_volume >= UNMUTE_FLOOR {
+            self.unmute_to.set(state.master_volume);
+        }
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
             window.show_live_input_hint(&live_hint);
@@ -2686,7 +2693,7 @@ impl App {
         });
         let w = weak.clone();
         main.on_master_volume_changed(move |volume| {
-            with_app(&w, |app| app.update(|b| b.set_master_volume(volume.into())))
+            with_app(&w, |app| app.move_master_volume(volume))
         });
         let w = weak.clone();
         main.on_master_mute_toggled(move || with_app(&w, App::toggle_master_mute));
@@ -3088,7 +3095,7 @@ impl App {
         });
         let w = weak.clone();
         flyout.on_master_volume_changed(move |volume| {
-            with_app(&w, |app| app.update(|b| b.set_master_volume(volume.into())))
+            with_app(&w, |app| app.move_master_volume(volume))
         });
         let w = weak.clone();
         flyout.on_master_mute_toggled(move || with_app(&w, App::toggle_master_mute));
@@ -13922,14 +13929,15 @@ mod tests {
     }
 
     #[test]
-    fn the_master_volume_speaker_shows_the_level_in_waves() {
+    fn the_master_volume_speaker_shows_the_rounded_level_in_waves() {
         for (volume, waves) in [
             (0.0, 0),
+            (0.49, 0),
             (0.5, 1),
-            (33.9, 1),
-            (34.0, 2),
-            (66.9, 2),
-            (67.0, 3),
+            (33.4, 1),
+            (33.5, 2),
+            (66.4, 2),
+            (66.5, 3),
             (100.0, 3),
         ] {
             assert_eq!(volume_waves(volume), waves, "{volume}");
@@ -13938,7 +13946,8 @@ mod tests {
         app.update(|b| b.set_master_volume(50.0));
         assert_eq!(app.main.get_master_volume_waves(), 2);
         assert_eq!(app.flyout.get_master_volume_waves(), 2);
-        app.update(|b| b.set_master_volume(0.0));
+        app.main.invoke_master_volume_changed(0.4);
+        assert_eq!(app.snapshot().master_volume, 0.0, "a trace snaps to 0");
         assert_eq!(app.main.get_master_volume_waves(), 0);
         assert_eq!(app.flyout.get_master_volume_waves(), 0);
     }
@@ -13946,25 +13955,26 @@ mod tests {
     #[test]
     fn a_click_on_the_master_volume_speaker_mutes_and_the_next_brings_the_level_back() {
         use i_slint_backend_testing::ElementHandle;
-        let app = app_over(MockBackend::new());
+        let mut backend = MockBackend::new();
+        Backend::set_master_volume(&mut backend, 0.0);
+        let app = app_over(backend);
         app.main.show().expect("the main window shows");
         let speaker = |label: &str| {
             draw_frames();
             ElementHandle::find_by_accessible_label(&app.main, label).next()
         };
 
-        app.update(|b| b.set_master_volume(0.0));
-        speaker("Unmute")
+        speaker("Unmute Master Volume")
             .expect("the muted speaker")
             .invoke_accessible_default_action();
         assert_eq!(
             app.snapshot().master_volume,
-            0.0,
-            "nothing muted it, so nothing comes back"
+            50.0,
+            "no level heard yet this run"
         );
 
         app.update(|b| b.set_master_volume(64.0));
-        speaker("Mute")
+        speaker("Mute Master Volume")
             .expect("the speaker")
             .invoke_accessible_default_action();
         assert_eq!(
@@ -13972,8 +13982,8 @@ mod tests {
             0.0,
             "a real 0, as the web remote reads it"
         );
-        assert!(speaker("Mute").is_none());
-        speaker("Unmute")
+        assert!(speaker("Mute Master Volume").is_none());
+        speaker("Unmute Master Volume")
             .expect("the muted speaker")
             .invoke_accessible_default_action();
         assert_eq!(app.snapshot().master_volume, 64.0);
@@ -13985,11 +13995,39 @@ mod tests {
             "the tray panel's speaker too"
         );
         app.main.invoke_master_volume_changed(12.0);
-        assert!(speaker("Mute").is_some(), "dragging up from 0 unmutes");
+        assert!(
+            speaker("Mute Master Volume").is_some(),
+            "dragging up from 0 unmutes"
+        );
         assert_eq!(app.main.get_master_volume_waves(), 1);
         app.flyout.invoke_master_mute_toggled();
         app.flyout.invoke_master_mute_toggled();
         assert_eq!(app.snapshot().master_volume, 12.0);
+    }
+
+    #[test]
+    fn stepping_the_master_volume_down_to_0_then_unmute_brings_back_5() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let window = app.main.window();
+        let master = ElementHandle::find_by_accessible_label(&app.main, "Master volume")
+            .next()
+            .expect("the master volume");
+        let (at, size) = (master.absolute_position(), master.size());
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        app.update(|b| b.set_master_volume(8.0));
+        for _ in 0..8 {
+            press(window, Key::DownArrow);
+        }
+        assert_eq!(app.snapshot().master_volume, 0.0, "Down reached 0");
+        app.main.invoke_master_mute_toggled();
+        assert_eq!(
+            app.snapshot().master_volume,
+            UNMUTE_FLOOR,
+            "the last level of at least 5, not 1"
+        );
     }
 
     /// A backend with the playing Cast speaker "cc:attic", which steps by 5.
