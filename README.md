@@ -38,14 +38,13 @@ AudioSync fixes that. It grabs your computer's audio once, sends it to your AirP
 - On Windows 11 it's multiroom audio for your PC: it plays the PC's audio on AirPlay speakers, sends desktop audio to a Google Cast speaker, and keeps Bluetooth and the other Windows outputs in sync with them.
 - On Linux it's an AirPlay sender that also plays to Google Cast and keeps Bluetooth and AirPlay speakers in sync, through PipeWire. It's out since 0.8.5.
 
-## New in 0.8
+## New in 0.8.5
 
-- Speakers that only do AirPlay 2, stereo pairs and home theater groups play out of the box, up to 16 at once.
-- An AirPlay speaker that drops off the network waits until it's back, then plays.
-- A local speaker that starts late catches up within 3 seconds.
-- Calibration no longer reads late off a wall reflection.
-- Rename a zone in place, like a speaker.
-- The Windows version updates itself: Help > Check for Updates…
+- It's a beta now, and it runs on Linux too: an AppImage for x86_64 and aarch64 that updates itself, plus a .deb.
+- One-line installs for Windows (PowerShell) and Linux (terminal), next to the Mac's Terminal one. Each checks the download before it installs anything.
+- Notices about something that failed now say what to do next, like freeing up disk space or closing the app that holds port 319 or 320.
+- The Mac and Windows apps work more alike, down to the menus, prompts and notices.
+- Still worth knowing from 0.8: AirPlay 2-only speakers, stereo pairs and home theater groups play out of the box, up to 16 at once, and the Windows version updates itself (Help > Check for Updates…).
 
 ## New in 0.7
 
