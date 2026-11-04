@@ -1112,24 +1112,31 @@ impl Pairing {
         self.send_plist(Step::Seal, body, now);
     }
 
-    /// The last answer: paired (P53). When its body is {`epk`, `authTag`}
-    /// and opens to an Ed25519 public key, the receiver's key goes into the
-    /// credentials; a missing body, one too large to read or one that
-    /// doesn't open changes nothing. The host gets the credentials (P54).
+    /// The last answer: paired (P53) when its body is {`epk`, `authTag`}
+    /// and opens to an Ed25519 public key, which goes into the credentials
+    /// the host gets (P54). A missing body, one too large to read or one
+    /// that doesn't open fails the pairing.
     fn on_sealed(&mut self, response: &Response) {
         let receiver_key = read_plist(&response.body).ok().and_then(|body| {
             let sealed = body.get("epk")?.as_data()?;
             let tag = body.get("authTag")?.as_data()?;
             keys::open_receiver_key(&self.secrets.key[..], sealed, tag)
         });
+        let Some(receiver_key) = receiver_key else {
+            self.fail_status(
+                ErrorKind::PairingFailed,
+                Method::Post,
+                response.code,
+                Some("pair-setup answer carries no receiver key that opens"),
+                false,
+            );
+            return;
+        };
         let credentials = Credentials::with_secret(&self.client_id, &self.secrets.a[..]);
         self.close();
         match credentials {
             Ok(credentials) => {
-                let credentials = match receiver_key {
-                    Some(key) => credentials.with_receiver_key(key),
-                    None => credentials,
-                };
+                let credentials = credentials.with_receiver_key(receiver_key);
                 self.outputs
                     .push_back(Output::Event(PairingEvent::Paired(credentials)));
             }
@@ -1278,11 +1285,15 @@ impl Verifier for LegacyVerifier {
 
     /// From atv_pub | atv_data (96 bytes): 00 00 00 00 | the encrypted
     /// signature, 68 bytes (P56). Another length, or an atv_pub that gives
-    /// an all-zero shared secret, is a malformed answer. With the
-    /// receiver's key in the credentials, atv_data is decrypted and checked
-    /// as its signature over atv_pub | v_pub, and a failed check ends the
-    /// verification before the sender signs (P56).
+    /// an all-zero shared secret, is a malformed answer. atv_data is
+    /// decrypted and checked as the receiver's signature over atv_pub |
+    /// v_pub, and a failed check ends the verification before the sender
+    /// signs; credentials without the receiver's key can't be checked, so
+    /// they count as not paired (P56).
     fn second_request(&mut self, first_response: &[u8]) -> Result<Vec<u8>, VerifyFailure> {
+        let Some(receiver_key) = &self.receiver_key else {
+            return Err(VerifyFailure::NotPaired);
+        };
         if first_response.len() != KEY_BYTES + RECEIVER_DATA_BYTES {
             return Err(VerifyFailure::Malformed);
         }
@@ -1294,17 +1305,15 @@ impl Verifier for LegacyVerifier {
             keys::shared_secret(&self.verify_secret, &receiver_public)
                 .ok_or(VerifyFailure::Malformed)?,
         );
-        if let Some(receiver_key) = &self.receiver_key {
-            let receiver_signature = keys::decrypt_receiver_data(&shared, &receiver_data);
-            let valid = keys::check_receiver_signature(
-                receiver_key,
-                &receiver_public,
-                &self.verify_public,
-                &receiver_signature,
-            );
-            if !valid {
-                return Err(VerifyFailure::ReceiverUnverified);
-            }
+        let receiver_signature = keys::decrypt_receiver_data(&shared, &receiver_data);
+        let valid = keys::check_receiver_signature(
+            receiver_key,
+            &receiver_public,
+            &self.verify_public,
+            &receiver_signature,
+        );
+        if !valid {
+            return Err(VerifyFailure::ReceiverUnverified);
         }
         let signature = keys::verify_signature(&self.secret, &self.verify_public, &receiver_public);
         let encrypted = keys::encrypt_signature(&shared, &receiver_data, &signature);

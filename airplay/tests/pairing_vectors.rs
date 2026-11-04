@@ -354,8 +354,13 @@ fn legacy_pairing_vector_is_reproduced() {
     );
 
     // The verifier's two bodies, with a as v_priv: 01 00 00 00 | v_pub |
-    // a_pub, then 00 00 00 00 | the encrypted signature.
-    let credentials = Credentials::new(p145::CLIENT_ID, secret).expect("credentials");
+    // a_pub, then 00 00 00 00 | the encrypted signature. The vector leaves
+    // out the receiver's Ed25519 key, so atv_data is signed again with a test
+    // key; the keystream, and with it the second body, stays the same.
+    let receiver_secret = [0x24; 32];
+    let credentials = Credentials::new(p145::CLIENT_ID, secret)
+        .expect("credentials")
+        .with_receiver_key(keys::public_key(&receiver_secret));
     assert_eq!(credentials.public_key().to_vec(), hex(p145::PUBLIC));
     let mut entropy = Scripted(vec![secret, [0x11; 32]]);
     let mut verifier = LegacyVerifier::new(&credentials, &mut entropy).expect("a verifier");
@@ -363,8 +368,9 @@ fn legacy_pairing_vector_is_reproduced() {
     assert_eq!(first[..4], [1, 0, 0, 0]);
     assert_eq!(first[4..36], hex(p145::VERIFY_PUBLIC)[..]);
     assert_eq!(&first[36..], public.as_slice());
+    let resigned = keys::verify_signature(&receiver_secret, &receiver_public, &verify_public);
     let mut answer = receiver_public.to_vec();
-    answer.extend_from_slice(&receiver_data);
+    answer.extend_from_slice(&keys::decrypt_receiver_data(&shared, &resigned));
     let second = verifier.second_request(&answer).expect("a second body");
     assert_eq!(second[..4], [0, 0, 0, 0]);
     assert_eq!(second[4..], hex(p145::ENCRYPTED_SIGNATURE)[..]);
