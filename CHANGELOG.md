@@ -2,13 +2,16 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
-## [0.8.1] - unreleased
+## [0.9.0] - unreleased
 
 ### Added
 
 - On Windows, pointing at a speaker's auto-connect bolt shows "Auto-Connect When Available", and Narrator reads it, as on the Mac.
 - On Windows, with the debug log on, Calibrate All logs the reference output's volume, whether it's muted, and the level it reads as when a run starts.
 - The Now Playing card has Shuffle and Repeat buttons beside the track buttons, for a player that takes them: Spotify and Music on the Mac, and on Windows any app whose media controls offer them. A mode that is on shows in the accent color, and Repeat goes from off to all to one where the player repeats one track.
+- AudioSync for Linux is out: an AppImage and a .deb for x86_64 and aarch64 (amd64 and arm64), built from the same code as the Windows app. It needs glibc 2.39 or newer and captures and plays through PipeWire. The AppImage updates itself the way the Windows app does; a copy installed from the .deb says where to download the new version instead.
+- One-line installs for Windows and Linux. On Windows, `scripts/install.ps1` in PowerShell puts the x64 or ARM64 zip for your PC under your own Programs folder with a Start menu shortcut, with no administrator rights. On Linux, `scripts/install-linux.sh` puts the AppImage for your machine in `~/.local/bin` with a menu entry and icon, without sudo. Both check the download against the release's `SHA256SUMS.txt` before they install anything, and when they update, they quit only the copy they installed.
+- On the Mac, the AudioSync menu has Check for Updates Automatically, and the Speakers menu has Show Virtual Devices and Add by Address…, as the Windows menus do.
 
 ### Changed
 
@@ -21,6 +24,15 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Notices that left you stuck now say what to do next. When AirPlay pairings, or on Windows your settings, couldn't be saved, the notice says to free up some space if the disk is full. A speaker without PTP timing says to close the app using port 319 or 320, a Google Cast speaker that stopped AudioSync's stream says to turn it on again, and a calibration that was interrupted or couldn't measure two speakers says how to try again. On Windows, a broken update download offers Open Release Page, and an update that doesn't fit on the disk says to free up space and try again.
 - On Windows, the tray icon's tooltip reads "AudioSync: Streaming on, 2 speakers on, 1 notice", with a colon after AudioSync instead of a dash.
 - On Windows, calibration records the microphone's raw signal when the device offers it, without the input's effects, and with them otherwise. Calibration results can differ from before on a microphone that applies them.
+- The Equalizer row shows its preset under its name. A speaker or zone name too long for its line scrolls like the Now Playing title, or is cut short with an ellipsis with Reduce Motion on the Mac or animation effects off on Windows. Notices in the main window ease in and out instead of appearing at once. On the Mac and on Windows. On the Mac, Calibrate All Speakers stays on one line without scrolling.
+- On the Mac, an Apple TV's PIN shows its digits as you type them. An AirPlay password stays hidden.
+- On the Mac, the source picker lists input devices by name, as on Windows.
+- On the Mac, the notices for an input that was unplugged, at start or while streaming, name the device, or call it "Unknown device" when it has no name, as on Windows.
+- On the Mac, the equalizer sliders draw their track, 0 dB mark and knob edge at full contrast, so a band at 0 dB is easy to read in both themes. A click gives a band keyboard focus, and VoiceOver reads it as a slider.
+- The Mac Guide covers Remove from Zone, what deleting a zone does, and a password a speaker turns down while playing, as the Windows Guide does.
+- The web remote says Master Volume, Audio Source and Input Devices, and "No speakers found" for an empty list, as the Mac and Windows apps do. When every speaker is hidden, it says so and points to Hidden Speakers.
+- On Windows, the delay hint for a local speaker, when there's a reference, adds that a negative value is for a speaker that sounds late, such as Bluetooth, as on the Mac.
+- When a preset leaves a Google Cast speaker off because it isn't on the network, the notice says "Not on the network". Before, it read as if another app was casting to it.
 
 ### Fixed
 
@@ -51,7 +63,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, when the last speaker goes off while you type a preset's name, Save says to turn on the speakers you want in the preset first, as on Windows. Before, the preset wasn't saved and nothing said so.
 - On the Mac, a Bluetooth speaker that stops playing and drops off now shows that it was disconnected, as on Windows. Before, its row stayed on with no notice.
 - On the Mac, New Zone from Active Speakers leaves out a speaker that turns off while you type the zone's name, and makes no zone when none is left on. Before, it still put that speaker in the new zone.
-- On Windows, a speaker's calibration result stays shown until you turn that speaker off, as on the Mac. Before, it went away when a Bluetooth speaker dropped out for a moment and came back.
+- On the Mac, when the saved Google Cast speakers file couldn't be read at launch, AudioSync takes in its offsets once it reads and shows them on the speaker rows, while an offset you set since launch, 0 included, wins, as on Windows.
+- On the Mac, Retry after AirPlay stopped keeps what that run learned: the passwords you typed, the speakers turned off for a refused pairing and the pairings a speaker turned down, as on Windows.
+- On the Mac, a speaker that asks for its password on the first click turns off with the notice that it needs a password when AirPlay fails while the prompt is open, as on Windows.
+- On the Mac, the web remote shows why a speaker can't play before the speaker's own note, as on Windows.
+- On Windows, a calibration result stays in the list while its speaker briefly drops out of the speaker list, and a delay that isn't a number is ignored instead of being stored as 0 or a range end.
+- On Linux under X11, the zone name and Add by Address dialogs show their text field and buttons. Before, the window could open too short for them.
 
 ## [0.8.0] - 2026-11-02
 
@@ -840,7 +857,7 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[0.8.1]: https://github.com/yassersutojoyo/audiosync/compare/v0.8.0...HEAD
+[0.9.0]: https://github.com/yassersutojoyo/audiosync/compare/v0.8.0...HEAD
 [0.8.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.8.0
 [0.7.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.1
 [0.7.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.0
