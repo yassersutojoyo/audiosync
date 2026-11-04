@@ -429,6 +429,17 @@ impl FakeAp2 {
             .find(|request| request_key(request) == key)
     }
 
+    /// `latencyMin` of the last stream SETUP (P44).
+    pub fn stream_latency_min(&self) -> Option<i64> {
+        let body = read_dict(&self.last("SETUP stream")?.body)?;
+        let streams = body.get("streams")?.as_array()?;
+        streams
+            .first()?
+            .as_dictionary()?
+            .get("latencyMin")?
+            .as_signed_integer()
+    }
+
     /// Takes what the sender wrote and gives back the answers.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
         let framed = self.framing.is_some();

@@ -113,3 +113,39 @@ fn fake_tv_latency_reaches_the_sender_as_r_s() {
         LatencySources::AUDIO_LATENCIES
     );
 }
+
+// covers: P44, P98
+#[test]
+fn fake_tv_stream_setup_asks_the_lf_in_use_when_it_is_below_the_capture_minimum() {
+    let _serial = serial();
+    for (lf, latency_min) in [(None, 11_025), (Some(4_410), 4_410)] {
+        let server = Ap2Server::start(plain_tv());
+        let (sender, writer) = Sender::start(SenderConfig {
+            airplay2: true,
+            airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+            ..SenderConfig::default()
+        })
+        .expect("the sender starts");
+        let _host = HostAudio::start(writer);
+        let mut events = Events::default();
+        if let Some(frames) = lf {
+            sender.set_latency(frames);
+            let applied = events.wait_for(&sender, LONG, |event| {
+                matches!(event, SenderEvent::Timeline { latency, .. }
+                    if *latency == Duration::from_millis(100))
+            });
+            assert!(applied.is_some(), "Lf {frames} applies before any speaker");
+        }
+        let device = device(&server);
+        let key = device.key.clone();
+        sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+        let playing = events.wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing);
+        sender.shutdown();
+        assert!(playing.is_some(), "{:?}", events.of(&key));
+        assert_eq!(
+            server.fake().stream_latency_min(),
+            Some(latency_min),
+            "Lf {lf:?}"
+        );
+    }
+}
