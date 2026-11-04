@@ -18,7 +18,7 @@
   <a href="https://github.com/yassersutojoyo/audiosync/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/yassersutojoyo/audiosync/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <a href="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml"><img alt="Windows CI" src="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml/badge.svg?branch=main"></a>
   <img alt="macOS 15+" src="https://img.shields.io/badge/macOS-15%2B-black?logo=apple">
-  <img alt="Windows 11 preview" src="https://img.shields.io/badge/Windows%2011-preview-0078D4">
+  <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4">
   <img alt="GPL-3.0-or-later license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue">
   <img alt="Alpha" src="https://img.shields.io/badge/status-alpha-E3A21A">
 </p>
@@ -32,7 +32,7 @@
 
 AirPlay speakers play about two seconds late. Local speakers don't. Play the same song on both and you get an echo.
 
-AudioSync fixes that. It grabs your computer's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. It runs on macOS and on Windows 11 (a preview there), with a Linux version on the way. Free, alpha.
+AudioSync fixes that. It grabs your computer's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. It runs on macOS and on Windows 11, with a Linux version on the way. Free, alpha.
 
 ## New in 0.8
 
@@ -41,11 +41,11 @@ AudioSync fixes that. It grabs your computer's audio once, sends it to your AirP
 - A local speaker that starts late catches up within 3 seconds.
 - Calibration no longer reads late off a wall reflection.
 - Rename a zone in place, like a speaker.
-- The Windows preview updates itself: Help > Check for Updates…
+- The Windows version updates itself: Help > Check for Updates…
 
 ## New in 0.7
 
-The Windows parts are in the Windows preview, out since 0.7.1.
+The Windows parts are in the Windows version, out since 0.7.1.
 
 - Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home. I'd leave it off whenever the computer is on a network you share with strangers, like cafe, hotel or office guest Wi-Fi.
 - Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
@@ -106,9 +106,9 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 - HomePods: in the Home app, set Allow Speaker & TV Access to "Anyone on the Same Network", on a network you trust. Not "Everyone".
 - Build it yourself: Xcode 16 command line tools, [rustup](https://rustup.rs), then `./setup.sh`. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
-### Windows (preview)
+### Windows
 
-- Get the zip for your PC (x64 or ARM64) from the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. Needs Windows 11. It's one exe with no installer: unzip it into a folder of its own and run it. [desktop/README.md](desktop/README.md#trying-the-preview-exe) has the details.
+- Get the zip for your PC (x64 or ARM64) from the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. Needs Windows 11. It's one exe with no installer: unzip it into a folder of its own and run it. [desktop/README.md](desktop/README.md#running-the-exe) has the details.
 - The exe isn't signed, so the first time you open it Windows SmartScreen may say it protected your PC. Click More info, then Run anyway, to open it.
 - Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch and while the app runs, at most once a day. Nothing downloads until you click Download and Install.
 
@@ -130,10 +130,10 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 ## What doesn't work (yet)
 
 - Everything is about two seconds late. Fine for music, bad for video and games.
-- Speakers that only do AirPlay 2 play out of the box. A speaker that does both AirPlay 1 and AirPlay 2 uses AirPlay 2, or AirPlay 1 when it was paired over AirPlay 1 or AirPlay 2 can't take it. It plays up to 16 AirPlay 2 speakers at once, but so far I've only tried it on one AirPlay 2 TV, never on several at once. Speakers waiting for the network or for a free slot have only met emulated receivers so far. A stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row. No real pair has been tried yet.
-- Not tried on a HomePod yet. If yours fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
+- Speakers that only do AirPlay 2 play out of the box. A speaker that does both AirPlay 1 and AirPlay 2 uses AirPlay 2, or AirPlay 1 when it was paired over AirPlay 1 or AirPlay 2 can't take it. It plays up to 16 AirPlay 2 speakers at once. A stereo pair, or an Apple TV with the HomePods it plays through, shows up as one speaker with one volume and one delay. Both apps show that row.
+- If a speaker fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
-- The Windows and Linux versions pick AirPlay 1 or AirPlay 2 the same way and ask for codes and passwords like the Mac, but neither has been tried on a real AirPlay or Cast speaker yet. On Windows, local playback has had one short listen on one PC, and Bluetooth outputs there haven't been tried. The Linux version hasn't run on a real Linux machine yet.
+- The Windows and Linux versions pick AirPlay 1 or AirPlay 2 the same way and ask for codes and passwords like the Mac.
 
 ## Linux: a silent output
 
@@ -159,7 +159,7 @@ context.objects = [
 ]
 ```
 
-Then send the app to Silent in pavucontrol (or make Silent the default for All System Audio). AudioSync sees it as a virtual output and keeps it out of the list until you pick View > Show Virtual Devices; you don't need to turn it on in AudioSync. The commands come from PipeWire's docs for [module-null-sink](https://docs.pipewire.org/page_pulse_module_null_sink.html) and [pipewire.conf](https://docs.pipewire.org/page_man_pipewire_conf_5.html) and its stock config's null-audio-sink example. I haven't tried this on a Linux machine yet.
+Then send the app to Silent in pavucontrol (or make Silent the default for All System Audio). AudioSync sees it as a virtual output and keeps it out of the list until you pick View > Show Virtual Devices; you don't need to turn it on in AudioSync. The commands come from PipeWire's docs for [module-null-sink](https://docs.pipewire.org/page_pulse_module_null_sink.html) and [pipewire.conf](https://docs.pipewire.org/page_man_pipewire_conf_5.html) and its stock config's null-audio-sink example.
 
 ## License and credits
 
