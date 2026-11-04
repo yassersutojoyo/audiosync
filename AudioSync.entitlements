@@ -10,5 +10,9 @@
     <!-- Now Playing: Apple Events to Spotify and Music. -->
     <key>com.apple.security.automation.apple-events</key>
     <true/>
+    <!-- The self-signed identity has no Team ID, so library validation would reject
+         Sparkle.framework; the runtime still ignores DYLD_* environment variables. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
 </dict>
 </plist>

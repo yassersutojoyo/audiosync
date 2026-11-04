@@ -56,6 +56,12 @@ check "local identity: Hardened Runtime" holds "$local_args" "--options runtime"
 check "local identity: no secure timestamp" holds "$local_args" "--timestamp=none"
 check "ad-hoc: Hardened Runtime" holds "$adhoc_args" "--options runtime"
 check "no ENTITLEMENTS: AudioSync.entitlements" [ "$(default_entitlements)" = /repo/AudioSync.entitlements ]
+# Library validation stays off only because the runtime above, which strips
+# DYLD_* variables, is on; these two would let them back in.
+lacks() { ! grep -qF "$1" AudioSync.entitlements; }
+check "AudioSync.entitlements: library validation off" grep -qF com.apple.security.cs.disable-library-validation AudioSync.entitlements
+check "AudioSync.entitlements: no allow-dyld-environment-variables" lacks com.apple.security.cs.allow-dyld-environment-variables
+check "AudioSync.entitlements: no get-task-allow" lacks com.apple.security.get-task-allow
 
 if [ "$failures" -gt 0 ]; then
   echo "FAIL: $failures check(s)"
