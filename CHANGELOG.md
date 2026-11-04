@@ -13,6 +13,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Another device on your network has a harder time posing as one of your Google Cast speakers to receive your audio. AudioSync streams only to the address it connected to and ignores announcements that try to move a known speaker somewhere else.
 - Each release now includes the Mac, Windows and Linux install scripts, so they can be fetched from the release instead of the main branch, and each script downloads the app and its checksums only from that one release.
 
+### Fixed
+
+- On Windows, a bug that crashes the audio of one speaker no longer leaves it showing as on while it plays nothing: the speaker opens again, a failed capture stops with an error, and the debug log says where it happened.
+
 ## [0.8.6] - 2026-11-04
 
 ### Changed

@@ -219,6 +219,9 @@ pub enum StallSign {
     FullPadding,
     /// The buffer stayed full and the device clock, which had run, stopped.
     FrozenClock,
+    /// The render loop panicked (a bug), which takes the stall's retries so
+    /// a loop that panics each time isn't reopened every poll.
+    Panicked,
 }
 
 /// An output stream that stopped taking frames (S326): for how long, and
@@ -254,6 +257,7 @@ impl StallSlot {
         let sign = match stall.sign {
             StallSign::FullPadding => 1,
             StallSign::FrozenClock => 2,
+            StallSign::Panicked => 3,
         };
         self.sign.store(sign, Ordering::Release);
     }
@@ -263,6 +267,7 @@ impl StallSlot {
         let sign = match self.sign.load(Ordering::Acquire) {
             1 => StallSign::FullPadding,
             2 => StallSign::FrozenClock,
+            3 => StallSign::Panicked,
             _ => return None,
         };
         Some(Stall {

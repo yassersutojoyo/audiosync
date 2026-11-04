@@ -36,7 +36,7 @@ use windows_core::implement;
 
 use super::com::{
     Apartment, Awaited, ComMemory, Event, ProAudioTask, READY_TIMEOUT, Ready, StuckThreads,
-    WINDOWS_AUDIO, Worker, awaited, device_error, float_format, read_mix_format,
+    WINDOWS_AUDIO, Worker, awaited, device_error, float_format, or_on_panic, read_mix_format,
     spawn_ready_within, spawn_worker,
 };
 use super::devices::enumerator;
@@ -432,7 +432,24 @@ fn run(
         let _ = unsafe { stream.client.Stop() };
         return;
     }
-    let lost = render_loop(&stream, &mut pipeline, sampler.as_mut(), signals);
+    let lost = or_on_panic(
+        || {
+            Some(render_loop(
+                &stream,
+                &mut pipeline,
+                sampler.as_mut(),
+                signals,
+            ))
+        },
+        None,
+    )
+    .unwrap_or_else(|| {
+        signals.stall.record(Stall {
+            span: Duration::ZERO,
+            sign: StallSign::Panicked,
+        });
+        true
+    });
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
     if lost {

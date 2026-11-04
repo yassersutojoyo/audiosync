@@ -7,7 +7,8 @@
 //! (`%TEMP%\audiosync-debug.log`; on Linux `$XDG_STATE_HOME/audiosync/debug.log`)
 //! at launch and appends one line per event,
 //! each starting with the time in UTC, to the millisecond
-//! (`2026-10-18T17:52:13.456Z`), up to [`MAX_BYTES`].
+//! (`2026-10-18T17:52:13.456Z`), up to [`MAX_BYTES`]. While it is off, only
+//! a panic's line ([`log_panics`]) is appended to that file.
 //!
 //! A message is built only while the log is on: [`DebugLog::log`] takes a
 //! closure. The thread that logs never touches the file: lines go over a
@@ -235,20 +236,23 @@ pub fn env_skips_auto_connect() -> bool {
 
 /// Where the environment asks for the log, and a line to start it with
 /// when it can't go where it should.
-#[cfg(not(target_os = "linux"))]
 fn env_path() -> (Option<PathBuf>, Option<String>) {
-    let setting = std::env::var_os(ENV_VAR);
+    path_for(std::env::var_os(ENV_VAR).as_deref())
+}
+
+/// [`env_path`] for the value `setting` of `AUDIOSYNC_DEBUG`.
+#[cfg(not(target_os = "linux"))]
+fn path_for(setting: Option<&OsStr>) -> (Option<PathBuf>, Option<String>) {
     let dir = log_dir(crate::package::current(), std::env::temp_dir());
-    (dir.and_then(|dir| log_path(setting.as_deref(), &dir)), None)
+    (dir.and_then(|dir| log_path(setting, &dir)), None)
 }
 
 /// On Linux the log lives in the state folder, which outlasts a sign-out
 /// (`crate::os::xdg::debug_log_file`); the temporary folder only when that
 /// can't be made.
 #[cfg(target_os = "linux")]
-fn env_path() -> (Option<PathBuf>, Option<String>) {
-    let setting = std::env::var_os(ENV_VAR);
-    let Some(fallback) = log_path(setting.as_deref(), &std::env::temp_dir()) else {
+fn path_for(setting: Option<&OsStr>) -> (Option<PathBuf>, Option<String>) {
+    let Some(fallback) = log_path(setting, &std::env::temp_dir()) else {
         return (None, None);
     };
     match crate::os::xdg::debug_log_file(crate::os::xdg::state_base()) {
@@ -260,6 +264,48 @@ fn env_path() -> (Option<PathBuf>, Option<String>) {
             )),
         ),
     }
+}
+
+/// How long a panic's line waits to reach the file.
+const PANIC_FLUSH: Duration = Duration::from_secs(1);
+
+/// Installs a panic hook that writes `panic on thread <name>: latest panic
+/// at <file>:<line>` to `log`, or while it's off appends it to the file it
+/// would use, after running the hook that was there before, the core's,
+/// which notes the location (S205). Never the message: it may hold anything.
+pub fn log_panics(log: DebugLog) {
+    audiosync_core::ffi::airplay::panic_mark();
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mark = audiosync_core::ffi::airplay::panic_mark();
+        previous(info);
+        let at = audiosync_core::ffi::airplay::latest_panic_since(mark);
+        let name = thread::current().name().unwrap_or("unnamed").to_owned();
+        // Found only now: on Linux finding it makes the state folder.
+        let fallback = (!log.enabled())
+            .then(|| path_for(Some(OsStr::new("1"))).0)
+            .flatten();
+        note_panic(
+            &log,
+            fallback.as_deref(),
+            format!("panic on thread {name}: {at}"),
+        );
+    }));
+}
+
+/// Writes a panic's `line` to `log`, or while it's off appends it to
+/// `fallback`, and waits a moment for it to land: a panic on the main thread
+/// ends the app.
+fn note_panic(log: &DebugLog, fallback: Option<&Path>, line: String) {
+    let opened;
+    let log = if log.enabled() {
+        log
+    } else {
+        opened = DebugLog::open(fallback.map(Path::to_path_buf), MAX_BYTES, false);
+        &opened
+    };
+    log.log(|| line);
+    log.flush(PANIC_FLUSH);
 }
 
 /// A writer that counts the bytes it passes on.
@@ -520,6 +566,32 @@ mod tests {
         // Never the temporary folder, which the exe's copy logs to.
         assert_eq!(log_dir(Some(&no_cache), temp.clone()), None);
         assert_eq!(log_dir(None, temp.clone()), Some(temp));
+    }
+
+    #[test]
+    fn a_panic_line_reaches_the_log_or_while_it_is_off_the_file_it_would_use() {
+        let dir = test_dir("panic-line");
+        let on = dir.join("on.log");
+        let log = DebugLog::new(Some(on.clone()));
+        let off = dir.join("off.log");
+        note_panic(&log, Some(&off), "panic on thread a".to_owned());
+        assert_eq!(read_messages(&on), ["panic on thread a"]);
+        assert!(!off.exists(), "an open log takes the line");
+        note_panic(
+            &DebugLog::default(),
+            Some(&off),
+            "panic on thread b".to_owned(),
+        );
+        note_panic(
+            &DebugLog::default(),
+            Some(&off),
+            "panic on thread c".to_owned(),
+        );
+        assert_eq!(
+            read_messages(&off),
+            ["panic on thread b", "panic on thread c"]
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     // covers: S170

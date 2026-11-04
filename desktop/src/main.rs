@@ -142,6 +142,7 @@ fn main() -> ExitCode {
     #[cfg(not(any(windows, all(target_os = "linux", not(test)))))]
     let relaunched = false;
     let log = DebugLog::from_env(relaunched);
+    debug_log::log_panics(log.clone());
     log.log(|| {
         format!(
             "AudioSync for {} {} (audiosync-core {}), process {}; times are UTC",

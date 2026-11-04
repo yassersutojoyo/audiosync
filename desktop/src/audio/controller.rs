@@ -2727,6 +2727,7 @@ impl<D: Driver> Controller<D> {
         let sign = match stall.sign {
             StallSign::FullPadding => "its buffer stayed full",
             StallSign::FrozenClock => "its device clock stood still",
+            StallSign::Panicked => "its render loop panicked",
         };
         let next = if again {
             "it stalled again within five seconds of its reopen, so it stays on and is opened \
@@ -2735,11 +2736,15 @@ impl<D: Driver> Controller<D> {
             "it is opened again"
         };
         self.log.log(|| {
-            format!(
-                "output {} stalled: it took no frame for {} ms, {sign}; {next}",
-                label(&self.names, id),
-                stall.span.as_millis()
-            )
+            let what = if stall.sign == StallSign::Panicked {
+                "stopped:".to_owned()
+            } else {
+                format!(
+                    "stalled: it took no frame for {} ms,",
+                    stall.span.as_millis()
+                )
+            };
+            format!("output {} {what} {sign}; {next}", label(&self.names, id))
         });
         let trial = self
             .stall_trials

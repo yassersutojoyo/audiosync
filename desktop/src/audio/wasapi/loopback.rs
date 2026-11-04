@@ -54,8 +54,8 @@ use windows_core::implement;
 
 use super::com::{
     Apartment, ComMemory, Event, NOT_FOUND, ProAudioTask, Ready, Worker, device_code_error,
-    device_error, float_format, input_code_error, read_mix_format, spawn_worker, system_error,
-    wave_format,
+    device_error, float_format, input_code_error, or_on_panic, read_mix_format, spawn_worker,
+    system_error, wave_format,
 };
 use super::devices::{enumerator, properties};
 use super::processes::{ProcessWatch, Watch};
@@ -356,7 +356,10 @@ fn run(
         return;
     }
     let input = matches!(target, CaptureTarget::Input { .. });
-    let result = capture_loop(&stream, &mut converter, stop, counters, input);
+    let result = or_on_panic(
+        || capture_loop(&stream, &mut converter, stop, counters, input),
+        Err(E_FAIL),
+    );
     // SAFETY: stops the stream started above.
     let _ = unsafe { stream.client.Stop() };
     if let Err(code) = result {
@@ -1151,7 +1154,10 @@ fn run_mix(
     };
     let _task = ProAudioTask::join();
     let result = if ready.ok(setup) {
-        mix_loop(&mut lanes, share, &mut converter, stop, frequency)
+        or_on_panic(
+            || mix_loop(&mut lanes, share, &mut converter, stop, frequency),
+            Err(E_FAIL),
+        )
     } else {
         Ok(())
     };

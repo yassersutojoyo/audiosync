@@ -30,7 +30,8 @@ use windows::Win32::System::Threading::WaitForMultipleObjects;
 use windows::core::{HRESULT, Interface};
 
 use super::com::{
-    Apartment, ComMemory, Event, Ready, Worker, float_format, read_mix_format, spawn_worker,
+    Apartment, ComMemory, Event, Ready, Worker, float_format, or_on_panic, read_mix_format,
+    spawn_worker,
 };
 use super::devices::{device_id, enumerator, properties, raw_processing_supported};
 use crate::audio::calibration::{Microphone, MicrophoneError, MicrophoneId, RecordingClock};
@@ -353,7 +354,8 @@ fn run(
         return;
     }
     if ready.ok(Ok(stream.id.clone())) {
-        let (written, failed) = record(&stream, &mut samples, stop, marks);
+        let (written, failed) =
+            or_on_panic(|| record(&stream, &mut samples, stop, marks), (0, true));
         samples.truncate(written);
         if failed {
             marks.stopped.store(true, Ordering::Release);

@@ -4,6 +4,7 @@
 
 use std::ffi::c_void;
 use std::marker::PhantomData;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -505,6 +506,13 @@ pub(super) fn spawn_worker_within<T: Send + 'static>(
     }
 }
 
+/// Runs a worker's streaming loop and returns what it returned, or
+/// `panicked` when it panicked (a bug), so the worker ends its stream as
+/// failed instead of leaving it on with no sound (S326).
+pub(super) fn or_on_panic<T>(body: impl FnOnce() -> T, panicked: T) -> T {
+    panic::catch_unwind(AssertUnwindSafe(body)).unwrap_or(panicked)
+}
+
 /// A failed call.
 pub(super) fn system_error(call: &'static str, error: &windows::core::Error) -> BackendError {
     BackendError::System {
@@ -829,6 +837,25 @@ mod tests {
         drop(worker);
         assert!(started.elapsed() < LONG / 2);
         assert!(!STUCK.any());
+    }
+
+    #[test]
+    fn a_worker_loop_that_panics_ends_its_stream() {
+        let _serial = crate::debug_log::PANIC_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let ended = Arc::new(AtomicBool::new(false));
+        let worker = {
+            let ended = Arc::clone(&ended);
+            thread::spawn(move || {
+                let lost = or_on_panic(|| -> bool { panic!("a test panic in the loop") }, true);
+                if lost {
+                    ended.store(true, Ordering::Release);
+                }
+            })
+        };
+        assert!(worker.join().is_ok(), "the panic stays in the loop");
+        assert!(ended.load(Ordering::Acquire), "the stream counts as ended");
     }
 
     #[test]

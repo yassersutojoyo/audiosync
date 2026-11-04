@@ -63,15 +63,15 @@ manual_is_multiple_of = "allow"
 # Unwinding, so a bug in AudioSync's own AirPlay sender (a panic on one of
 # its threads, or in a call through its C interface) stops at the
 # asc_airplay_* boundary and becomes a failed sender the app restarts,
-# instead of ending the app (src/ffi/airplay.rs, "Panics"). Every other
-# panic still ends the app, as it did when this profile aborted:
-# - one that reaches any other extern "C" function aborts there: since
+# instead of ending the app (src/ffi/airplay.rs, "Panics"). Elsewhere:
+# - a panic that reaches any other extern "C" function aborts there: since
 #   Rust 1.81 unwinding out of an extern "C" function aborts the process, so
 #   it never unwinds into the host (rust-version is above that);
-# - a thread the core spawns runs its body under catch_unwind and aborts the
-#   process on a panic, unless the thread reports its own death to the host
-#   the way the sender's threads do. Unwinding would otherwise end only that
-#   thread, silently: a new thread follows the same rule.
+# - a panic on a thread the core spawns ends only that thread. The AirPlay
+#   transport's threads catch it and report a lost connection
+#   (airplay/src/transport.rs, spawn), and a new thread should do the same;
+#   the others (Cast streaming and discovery, AirPlay pairing) don't yet, so
+#   such a thread ends silently (the Windows app's panic hook logs where).
 [profile.release]
 panic = "unwind"
 
