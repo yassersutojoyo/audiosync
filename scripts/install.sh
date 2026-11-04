@@ -11,6 +11,8 @@ REPO=yassersutojoyo/audiosync
 # The release key's public half ("ssh-ed25519 AAAA..."). Empty until that key exists
 # (RELEASE.md, "Signed checksums"); until then the install trusts the tag over HTTPS alone.
 RELEASE_KEY=""
+# The first version signed with that key; from it on a release without SHA256SUMS.txt.sig is refused.
+KEY_SINCE=""
 API="https://api.github.com/repos/$REPO/releases/latest"
 APPS=/Applications
 APP_NAME=AudioSync.app
@@ -35,13 +37,17 @@ tag_from_json() {
 }
 
 # Checks SHA256SUMS.txt against the SHA256SUMS.txt.sig on the same tag, when the tag has one.
-check_signature() {   # check_signature <release URL> <SHA256SUMS.txt path>
+check_signature() {   # check_signature <release URL> <SHA256SUMS.txt path> <version>
   [ -n "$RELEASE_KEY" ] || return 0
   local sig="$2.sig" code
   code=$(curl -sSL -o "$sig" -w '%{http_code}' "$1/SHA256SUMS.txt.sig") || fail "couldn't download $1/SHA256SUMS.txt.sig"
   case $code in
     200) ;;
-    404) return 0 ;;   # a release from before the key
+    404)
+      if [ -n "$KEY_SINCE" ] && version_at_least "$3" "$KEY_SINCE"; then
+        fail "AudioSync $3 has no SHA256SUMS.txt.sig, though every release from $KEY_SINCE on is signed. Nothing was installed."
+      fi
+      return 0 ;;   # a release from before the key
     *) fail "couldn't download $1/SHA256SUMS.txt.sig (HTTP $code)" ;;
   esac
   command -v ssh-keygen >/dev/null || fail "ssh-keygen is missing, so the release's signature can't be checked. Nothing was installed."
@@ -51,6 +57,18 @@ check_signature() {   # check_signature <release URL> <SHA256SUMS.txt path>
 }
 
 # [[ =~ ]] rather than grep, which matches line by line and would let a newline through.
+# True when version $1 is $2 or later, field by field; a -suffix is ignored.
+version_at_least() {
+  local IFS=. i x y
+  local -a a b
+  read -r -a a <<< "${1%%-*}"
+  read -r -a b <<< "${2%%-*}"
+  for ((i = 0; i < ${#a[@]} || i < ${#b[@]}; i++)); do
+    x=$((10#${a[i]:-0})) y=$((10#${b[i]:-0}))
+    [ "$x" -eq "$y" ] || { [ "$x" -gt "$y" ]; return; }
+  done
+}
+
 valid_version() {
   local re='^[0-9]+(\.[0-9]+)*(-[0-9A-Za-z.]+)?$'
   [[ $1 =~ $re ]]
@@ -125,7 +143,7 @@ main() {
   say "Downloading AudioSync $version"
   curl -fL --progress-bar -o "$tmp/$zip" "$base/$zip" || fail "couldn't download $base/$zip"
   curl -fsSL -o "$tmp/SHA256SUMS.txt" "$base/SHA256SUMS.txt" || fail "couldn't download $base/SHA256SUMS.txt"
-  check_signature "$base" "$tmp/SHA256SUMS.txt"
+  check_signature "$base" "$tmp/SHA256SUMS.txt" "$version"
 
   say "Checking the SHA-256 checksum"
   local expected actual

@@ -12,6 +12,8 @@ REPO=yassersutojoyo/audiosync
 # The release key's public half ("ssh-ed25519 AAAA..."). Empty until that key exists
 # (RELEASE.md, "Signed checksums"); until then the install trusts the tag over HTTPS alone.
 RELEASE_KEY=""
+# The first version signed with that key; from it on a release without SHA256SUMS.txt.sig is refused.
+KEY_SINCE=""
 API="https://api.github.com/repos/$REPO/releases/latest"
 ID=io.github.yassersutojoyo.audiosync
 BIN="$HOME/.local/bin"
@@ -34,19 +36,35 @@ tag_from_json() {
 }
 
 # Checks SHA256SUMS.txt against the SHA256SUMS.txt.sig on the same tag, when the tag has one.
-check_signature() {   # check_signature <release URL> <SHA256SUMS.txt path>
+check_signature() {   # check_signature <release URL> <SHA256SUMS.txt path> <version>
   [ -n "$RELEASE_KEY" ] || return 0
   local sig="$2.sig" code
   code=$(curl -sSL -o "$sig" -w '%{http_code}' "$1/SHA256SUMS.txt.sig") || fail "couldn't download $1/SHA256SUMS.txt.sig"
   case $code in
     200) ;;
-    404) return 0 ;;   # a release from before the key
+    404)
+      if [ -n "$KEY_SINCE" ] && version_at_least "$3" "$KEY_SINCE"; then
+        fail "AudioSync $3 has no SHA256SUMS.txt.sig, though every release from $KEY_SINCE on is signed. Nothing was installed."
+      fi
+      return 0 ;;   # a release from before the key
     *) fail "couldn't download $1/SHA256SUMS.txt.sig (HTTP $code)" ;;
   esac
   command -v ssh-keygen >/dev/null || fail "ssh-keygen is missing, so the release's signature can't be checked. Nothing was installed."
   printf 'audiosync-release %s\n' "$RELEASE_KEY" > "$2.signers"
   ssh-keygen -Y verify -f "$2.signers" -I audiosync-release -n file -s "$sig" < "$2" >/dev/null 2>&1 \
     || fail "SHA256SUMS.txt doesn't carry the release key's signature. Nothing was installed."
+}
+
+# True when version $1 is $2 or later, field by field; a -suffix is ignored.
+version_at_least() {
+  local IFS=. i x y
+  local -a a b
+  read -r -a a <<< "${1%%-*}"
+  read -r -a b <<< "${2%%-*}"
+  for ((i = 0; i < ${#a[@]} || i < ${#b[@]}; i++)); do
+    x=$((10#${a[i]:-0})) y=$((10#${b[i]:-0}))
+    [ "$x" -eq "$y" ] || { [ "$x" -gt "$y" ]; return; }
+  done
 }
 
 valid_version() {
@@ -143,7 +161,7 @@ main() {
   trap 'rm -rf "$tmp"' EXIT
 
   curl -fsSL -o "$tmp/SHA256SUMS.txt" "$base/SHA256SUMS.txt" || fail "couldn't download $base/SHA256SUMS.txt"
-  check_signature "$base" "$tmp/SHA256SUMS.txt"
+  check_signature "$base" "$tmp/SHA256SUMS.txt" "$version"
   local expected
   expected=$(awk -v f="$appimage" '$2 == f || $2 == "*" f { print $1; exit }' "$tmp/SHA256SUMS.txt")
   local hex='^[0-9a-fA-F]{64}$'

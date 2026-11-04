@@ -16,6 +16,8 @@ function Install-AudioSync([string]$Version, [bool]$DryRun) {
   # The release key's public half ('ssh-ed25519 AAAA...'). Empty until that key exists
   # (RELEASE.md, "Signed checksums"); until then the install trusts the tag over HTTPS alone.
   $releaseKey = ''
+  # The first version signed with that key; from it on a release without SHA256SUMS.txt.sig is refused.
+  $keySince = ''
   $dir = Join-Path $env:LOCALAPPDATA 'Programs\AudioSync'
   $exe = Join-Path $dir 'audiosync.exe'
   $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\AudioSync.lnk'
@@ -70,6 +72,11 @@ function Install-AudioSync([string]$Version, [bool]$DryRun) {
       } catch {
         # A release from before the key has no signature.
         if ([int]$_.Exception.Response.StatusCode -ne 404) { throw "AudioSync install: couldn't download $base/SHA256SUMS.txt.sig" }
+        # [version] wants two to four numeric fields: drop a -suffix and pad a bare major.
+        $plain = { param($v) $v = $v -replace '-.*$', ''; if ($v -notmatch '\.') { $v += '.0' }; [version]$v }
+        if ($keySince -and (& $plain $Version) -ge (& $plain $keySince)) {
+          throw "AudioSync install: AudioSync $Version has no SHA256SUMS.txt.sig, though every release from $keySince on is signed. Nothing was installed."
+        }
         $signed = $false
       }
       if ($signed) {

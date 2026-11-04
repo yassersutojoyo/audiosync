@@ -17,15 +17,17 @@ flunk() { echo "  FAIL  $1"; failures=$((failures + 1)); }
 
 # The fake curl prints $FIXTURES/api.json for the API, saves $FIXTURES/<file
 # name> for a download given -o, and fails like curl -f when FAKE_CURL_FAIL is set.
+# Given -w, it answers a missing file with a 404 status, as curl without -f does.
 mkdir -p "$tmp/bin" "$tmp/fixtures"
 cat > "$tmp/bin/curl" <<'EOF'
 #!/bin/bash
 [ -z "${FAKE_CURL_FAIL:-}" ] || exit 22
-out="" url=""
+out="" url="" status=""
 while [ $# -gt 0 ]; do
   case $1 in
     -o) out=$2; shift ;;
     -H) shift ;;
+    -w) status=1; shift ;;
     -*) ;;
     *) url=$1 ;;
   esac
@@ -33,7 +35,8 @@ while [ $# -gt 0 ]; do
 done
 case $url in
   */releases/latest) cat "$FIXTURES/api.json" ;;
-  *) cp "$FIXTURES/${url##*/}" "$out" ;;
+  *) if [ -n "$status" ] && [ ! -e "$FIXTURES/${url##*/}" ]; then printf 404; exit 0; fi
+     cp "$FIXTURES/${url##*/}" "$out" && { [ -z "$status" ] || printf 200; } ;;
 esac
 EOF
 chmod +x "$tmp/bin/curl"
@@ -144,7 +147,7 @@ EOF
 new_home() { home=$(mktemp -d "$tmp/home-XXXXXX"); }
 run_linux() {   # run_linux <args…>: install-linux.sh with HOME=$home
   HOME=$home XDG_DATA_HOME="" PATH="$tmp/linuxbin:$tmp/bin:$PATH" \
-    bash "$repo/scripts/install-linux.sh" "$@" 2>&1
+    bash "${LINUX_SCRIPT:-$repo/scripts/install-linux.sh}" "$@" 2>&1
 }
 
 lbase=https://github.com/yassersutojoyo/audiosync/releases/download/v0.9.0
@@ -225,6 +228,16 @@ if [ -r "/proc/$$/environ" ]; then
 else
   echo "  SKIP  linux: running copies (no /proc here)"
 fi
+
+# A stand-in key and KEY_SINCE (no real key): a release from KEY_SINCE on without
+# SHA256SUMS.txt.sig is refused, an older one installs on its checksum.
+sed -e 's/^RELEASE_KEY=""$/RELEASE_KEY="ssh-ed25519 STUB"/' -e 's/^KEY_SINCE=""$/KEY_SINCE="0.9.0"/' \
+  "$repo/scripts/install-linux.sh" > "$tmp/install-linux-keyed.sh"
+LINUX_SCRIPT=$tmp/install-linux-keyed.sh expect_linux_fail "linux: a release from KEY_SINCE on needs its signature" \
+  "has no SHA256SUMS.txt.sig" 0.9.0
+new_home
+sed -i.bak 's/^KEY_SINCE="0.9.0"$/KEY_SINCE="0.10.0"/' "$tmp/install-linux-keyed.sh"
+LINUX_SCRIPT=$tmp/install-linux-keyed.sh install_ok "linux: a release before KEY_SINCE installs without a signature"
 
 # scripts/install.ps1: a parse check and the asset it picks, wherever PowerShell is.
 ps=$(command -v pwsh || command -v powershell || true)
