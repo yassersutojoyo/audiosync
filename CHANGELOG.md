@@ -2,6 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Security
+
+- Other apps on your Mac can no longer run their own code inside AudioSync to use its microphone and audio recording permission.
+
 ## [0.8.6] - 2026-11-04
 
 ### Changed

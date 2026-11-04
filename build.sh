@@ -18,9 +18,9 @@
 #   5) quitting the running AudioSync and installing to /Applications, or
 #      ~/Applications when /Applications isn't writable
 #
-# Signing: with CODESIGN_IDENTITY when it's set (a "Developer ID Application: …"
-# name also gets the Hardened Runtime, a secure timestamp and
-# AudioSync.entitlements); otherwise with the local identity make-local-cert.sh
+# Signing: always with the Hardened Runtime and AudioSync.entitlements; with
+# CODESIGN_IDENTITY when it's set (a "Developer ID Application: …" name also
+# gets a secure timestamp); otherwise with the local identity make-local-cert.sh
 # creates on the first build. Its keychain joins the keychain search list while
 # signing and leaves it afterwards. If that identity exists but can't sign, the
 # build stops before anything is quit or installed. Ad-hoc only with
@@ -184,12 +184,12 @@ trap 'exit 130' INT TERM
 
 identity=""     # what codesign signs with: a name, a SHA-1 hash, or - (ad-hoc)
 keychain=""     # the keychain holding the local identity
-hardened=0      # Developer ID: Hardened Runtime and a secure timestamp
+developer_id=0  # Developer ID: a secure timestamp
 entitlements=""
 if [[ -n ${CODESIGN_IDENTITY:-} ]]; then
   identity=$CODESIGN_IDENTITY
   case "$identity" in
-    "Developer ID Application"*) hardened=1 ;;
+    "Developer ID Application"*) developer_id=1 ;;
   esac
   label=$identity
 elif [ "${AUDIOSYNC_ADHOC:-0}" = 1 ]; then
@@ -218,16 +218,16 @@ fi
 if [ -n "${ENTITLEMENTS:-}" ]; then
   entitlements=$(absolute "$ENTITLEMENTS")
   [ -f "$entitlements" ] || die "ENTITLEMENTS=$ENTITLEMENTS not found"
-elif [ "$hardened" = 1 ]; then
+else
   entitlements="$ROOT/AudioSync.entitlements"
 fi
 
 # sign [codesign options…] PATH
 sign() {
-  local args=(--force --sign "$identity") out
+  local args=(--force --sign "$identity" --options runtime) out
   if [ -n "$keychain" ]; then args+=(--keychain "$keychain"); fi
-  if [ "$hardened" = 1 ]; then
-    args+=(--options runtime --timestamp)
+  if [ "$developer_id" = 1 ]; then
+    args+=(--timestamp)
   else
     args+=(--timestamp=none)
   fi
@@ -260,7 +260,6 @@ sign_all || die "Signing with $label failed. Nothing was quit or installed"
 codesign --verify --deep --strict "$APP" || die "The signature of $APP doesn't verify. Nothing was quit or installed"
 restore_keychains
 echo "   Signed with $label"
-if [ "$hardened" = 1 ]; then echo "   Hardened Runtime, secure timestamp, entitlements: $(basename "$entitlements")"; fi
 
 # ---------------------------------------------------------------------------
 if [ "$install" = 0 ]; then

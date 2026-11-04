@@ -2,7 +2,7 @@
 
 ## How releases are signed
 
-I don't have an Apple Developer account, so releases go out on GitHub signed with the self-signed "AudioSync Local Code Signing" identity that `make-local-cert.sh` creates on the first `./build.sh`. They aren't notarized and don't use the Hardened Runtime (`build.sh` only enables it for a `Developer ID Application` identity). The README tells users how to get past Gatekeeper.
+I don't have an Apple Developer account, so releases go out on GitHub signed with the self-signed "AudioSync Local Code Signing" identity that `make-local-cert.sh` creates on the first `./build.sh`. They aren't notarized, but `build.sh` signs every build with the Hardened Runtime and `AudioSync.entitlements`. The README tells users how to get past Gatekeeper.
 
 `build.sh` signs ad-hoc only with `AUDIOSYNC_ADHOC=1`, or when there's no local identity and `make-local-cert.sh` can't create one, and then it says so loudly. `./build.sh --release` stops instead of signing ad-hoc, and `scripts/sign_appcast.sh` refuses a zip whose app is signed ad-hoc. If the local identity exists but can't sign, the build stops before it quits or replaces the installed app. Avoid ad-hoc for anything you ship: an ad-hoc signature changes on every build, so the System Audio Recording permission goes stale (the toggle stays on but capture is silent).
 
@@ -85,14 +85,13 @@ Releases up to 0.4.1 bundled an open-source AirPlay engine (GPL-2.0-or-later) an
 
 ## Notarized releases (not used yet)
 
-With a Developer ID, releases would get the Hardened Runtime and notarization, and users wouldn't have to approve the first launch. People on the locally signed releases would have to grant the privacy permissions once more, because the designated requirement changes with the certificate.
+With a Developer ID, releases would get a secure timestamp and notarization, and users wouldn't have to approve the first launch. People on the locally signed releases would have to grant the privacy permissions once more, because the designated requirement changes with the certificate.
 
 You'd need an Apple Developer Program membership, a Developer ID Application certificate in your login keychain, and a notarytool profile (`xcrun notarytool store-credentials audiosync-release --apple-id … --team-id … --password <app-specific-password>`). Any macOS can build the release: `build.sh` builds the core and the app for `LSMinimumSystemVersion` (macOS 15.0), and `Tests/check-app-bundle.sh` checks that the binary targets it.
 
 ```bash
-# Give the identity by its full name; a SHA-1 hash would skip the Hardened Runtime
-# and entitlements. AudioSync.entitlements (microphone, Apple Events) is applied
-# automatically.
+# Give the identity by its full name; a SHA-1 hash would skip the secure timestamp.
+# AudioSync.entitlements (microphone, Apple Events) is applied automatically.
 CODESIGN_IDENTITY="Developer ID Application: <name> (<team ID>)" ./build.sh
 APP=/Applications/AudioSync.app   # or wherever build.sh installed it
 

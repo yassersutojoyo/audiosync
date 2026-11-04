@@ -42,8 +42,8 @@ The Rust core and the native sender build with `--locked`, so their crates are e
 
 ## Signing and distribution
 
-Releases are signed with a self-signed identity that `make-local-cert.sh` keeps in its own keychain, with the keychain password in a file only your user can read. They aren't notarized and don't use the Hardened Runtime (`build.sh` turns that on only for Developer ID identities). So Gatekeeper asks you to approve the first launch, and the signature only shows that later releases come from the same key, not who made them. Check downloads against `SHA256SUMS.txt` in the release.
+Releases are signed with a self-signed identity that `make-local-cert.sh` keeps in its own keychain, with the keychain password in a file only your user can read. They use the Hardened Runtime, so another program can't load its own code into AudioSync to borrow its permissions, but they aren't notarized. So Gatekeeper asks you to approve the first launch, and the signature only shows that later releases come from the same key, not who made them. Check downloads against `SHA256SUMS.txt` in the release.
 
 On a contributor's Mac that key only signs local builds. On the Mac that builds releases it signs the public releases too, so anyone who can read that home folder could sign code that macOS treats as AudioSync for privacy permissions on every user's Mac. I keep a private backup of the keychain and its `signing-keychain.pass` file (in the AudioSync Application Support folder). Losing them would mean a new identity, and everyone would have to grant the privacy permissions again.
 
-Developer ID signing with the Hardened Runtime and notarization is a possible later step; see [`RELEASE.md`](RELEASE.md).
+Developer ID signing and notarization is a possible later step; see [`RELEASE.md`](RELEASE.md).

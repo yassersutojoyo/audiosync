@@ -33,7 +33,7 @@ A few environment variables change what the scripts do:
 
 ### Signing
 
-On the first build, `build.sh` runs `make-local-cert.sh`, which creates a self-signed "AudioSync Local Code Signing" identity in its own keychain (`~/Library/Keychains/audiosync-signing.keychain-db`), with no password prompt and no trust settings. Every build is signed with it, so macOS sees each rebuild as the same app and the System Audio Recording permission sticks.
+On the first build, `build.sh` runs `make-local-cert.sh`, which creates a self-signed "AudioSync Local Code Signing" identity in its own keychain (`~/Library/Keychains/audiosync-signing.keychain-db`), with no password prompt and no trust settings. Every build is signed with it, with the Hardened Runtime and `AudioSync.entitlements`, so macOS sees each rebuild as the same app and the System Audio Recording permission sticks.
 
 With an ad-hoc signature the code hash changes on every build, and the permission quietly stops working: the toggle in System Settings stays on, but capture is silent. That's why `build.sh` signs ad-hoc only with `AUDIOSYNC_ADHOC=1`, or when there's no local identity and `make-local-cert.sh` can't create one, and says so loudly. If the local identity exists but can't sign, the build stops before it quits or replaces the installed app.
 
