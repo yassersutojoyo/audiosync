@@ -1782,8 +1782,10 @@ struct UIStrings {
           alone, choose Only This Speaker from its ⋯ button under the zone;
           the others turn off and stay in the zone. For a mix of speakers you
           turn on again and again, save a preset instead. To move a speaker,
-          choose Move to Zone from its ⋯ button. To rename a zone, double-click
-          its name; to rename or delete it, right-click it or use its ⋯ button.
+          choose Move to Zone from its ⋯ button, or Remove from Zone to take it
+          out. To rename a zone, double-click its name; to rename or delete it,
+          right-click it or use its ⋯ button. Deleting a zone gives its speakers
+          their full rows back.
         - Presets: turn on the speakers you want and set their volumes, the
           zone volumes, Master Volume and the equalizer curve, then click
           Save as Preset… in the Presets card. Delays and the preamp aren't
@@ -1998,7 +2000,8 @@ struct UIStrings {
               menu removes that pairing. A password is asked for once each time
               AudioSync starts. If a
               code doesn't work, AudioSync asks again; if you cancel, the speaker
-              turns off. Turn it on again to retry.
+              turns off. Turn it on again to retry. If a speaker turns the password
+              down after it has started playing, it is switched off with a notice.
             - “Asks for a code every time”: the speaker is set to ask for a code
               every time. Auto-connect leaves it off, also at launch; AudioSync
               asks for the code each time you turn it on.

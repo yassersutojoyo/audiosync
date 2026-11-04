@@ -14364,6 +14364,11 @@ do {
     // covers: S407
     check(guideWords.contains("a preamp, preset curves and curves you save yourself"),
           "guide, equalizer: the line names the curves you save yourself, as on Windows")
+    check(guideWords.contains("or Remove from Zone to take it out")
+            && guideWords.contains("Deleting a zone gives its speakers their full rows back."),
+          "guide, zones: the line names Remove from Zone and what deleting a zone does, as on Windows")
+    check(guideWords.contains("If a speaker turns the password down after it has started playing, it is switched off with a notice."),
+          "guide, codes: a password turned down while playing switches the speaker off, as on Windows")
     // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
