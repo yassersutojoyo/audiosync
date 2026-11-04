@@ -12641,6 +12641,38 @@ mod tests {
         draw_frames();
     }
 
+    /// A probe wake later than this means the process went unscheduled; a
+    /// coarse timer oversleeps 1 ms by up to 15.6 ms (Windows).
+    const STALL: Duration = Duration::from_millis(20);
+
+    /// Wakes every millisecond until stopped and returns when it woke, so a
+    /// gap the whole process spent unscheduled on a loaded host shows.
+    fn scheduling_probe(
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> std::thread::JoinHandle<Vec<std::time::Instant>> {
+        std::thread::spawn(move || {
+            let mut wakes = vec![std::time::Instant::now()];
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(1));
+                wakes.push(std::time::Instant::now());
+            }
+            wakes
+        })
+    }
+
+    /// How much of `from..to` fell in probe waits longer than `STALL`.
+    fn unscheduled(
+        wakes: &[std::time::Instant],
+        from: std::time::Instant,
+        to: std::time::Instant,
+    ) -> Duration {
+        wakes
+            .windows(2)
+            .filter(|wait| wait[1].duration_since(wait[0]) > STALL)
+            .map(|wait| wait[1].min(to).saturating_duration_since(wait[0].max(from)))
+            .sum()
+    }
+
     /// What the dialog's two live regions hold, in order.
     fn cast_address_said(app: &App) -> (String, String) {
         let dialog = &app.cast_address_dialog;
@@ -12713,6 +12745,8 @@ mod tests {
 
     #[test]
     fn add_by_address_waits_for_the_check_off_the_ui_thread_and_cancel_drops_its_answer() {
+        let stop_probe = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = scheduling_probe(stop_probe.clone());
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         let speakers = app.snapshot().speakers.len();
@@ -12754,8 +12788,24 @@ mod tests {
         press(window, Key::Return);
         assert!(dialog.get_checking());
         drop(held);
+        let let_go = std::time::Instant::now();
         settle_cast_check(&app);
-        assert!(!window.is_visible(), "added once the check answered");
+        stop_probe.store(true, std::sync::atomic::Ordering::SeqCst);
+        let wakes = probe.join().expect("the probe");
+        if window.is_visible() {
+            let span = let_go.elapsed();
+            let starved = unscheduled(&wakes, let_go, let_go + span);
+            let what = format!(
+                "not added {span:?} after the check was let go (checking {}, error {:?})",
+                dialog.get_checking(),
+                dialog.get_error()
+            );
+            assert!(
+                starved * 2 <= span,
+                "inconclusive: {what}, the process went unscheduled for {starved:?} of it"
+            );
+            panic!("{what}, {starved:?} of it unscheduled");
+        }
         assert!(!dialog.get_checking());
         assert!(app.snapshot().speaker("cc:speaker.held").is_some());
     }

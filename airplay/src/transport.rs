@@ -790,7 +790,7 @@ fn ptp_loop(
         while !stop.load(Ordering::Acquire) {
             #[cfg(test)]
             let _receiving = tests::Receiving::enter(&socket);
-            match socket.recv_from(&mut buf) {
+            match recv_queued(&socket, &mut buf) {
                 Ok((0, _)) => {}
                 Ok((len, source)) => {
                     let at = Instant::now();
@@ -847,7 +847,7 @@ fn timing_loop(
         while !stop.load(Ordering::Acquire) {
             #[cfg(test)]
             let _receiving = tests::Receiving::enter(&socket);
-            match socket.recv_from(&mut buf) {
+            match recv_queued(&socket, &mut buf) {
                 Ok((0, _)) => {}
                 Ok((len, source)) => {
                     let received = Instant::now();
@@ -895,7 +895,7 @@ fn control_loop(
         while !stop.load(Ordering::Acquire) {
             #[cfg(test)]
             let _receiving = tests::Receiving::enter(&socket);
-            match socket.recv_from(&mut buf) {
+            match recv_queued(&socket, &mut buf) {
                 Ok((0, _)) => {}
                 Ok((len, source)) => {
                     if !from_receiver(source, receiver) {
@@ -995,6 +995,22 @@ fn read_queued(stream: &mut TcpStream, buf: &mut [u8]) -> io::Result<usize> {
         return Ok(0);
     }
     stream.read(buf)
+}
+
+/// Receives a datagram only once a peek within the read timeout shows one
+/// queued, so a timeout never cuts into a receive. A peek failing for
+/// another reason leaves the receive to take what it failed on: a datagram
+/// larger than `buf`, or a reset, which on Windows every peek reports again.
+fn recv_queued(socket: &UdpSocket, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+    if let Err(error) = socket.peek_from(buf).map_err(peek_error)
+        && matches!(
+            error.kind(),
+            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+        )
+    {
+        return Err(error);
+    }
+    socket.recv_from(buf)
 }
 
 /// Windows can end a blocking peek with ERROR_IO_PENDING when its timeout
@@ -1529,11 +1545,10 @@ mod tests {
         true
     }
 
-    // The UDP sockets receive with only a long backstop timeout, so a
-    // request rarely lands as a timed receive gives up (on Windows that
-    // drops it): every request of repeated bursts is answered or handed on
-    // exactly once. Closing still ends every thread at once, woken by
-    // datagrams that aren't counted.
+    // The UDP sockets receive with only a long backstop timeout: every
+    // request of repeated bursts is answered or handed on exactly once.
+    // Closing still ends every thread at once, woken by datagrams that
+    // aren't counted.
     // covers: P86, P91, P144
     #[test]
     fn no_request_of_a_burst_is_lost_and_closing_wakes_the_udp_threads() {
@@ -1609,6 +1624,137 @@ mod tests {
             received.try_recv().is_err(),
             "nothing more reached the driver"
         );
+    }
+
+    // On Windows a receive that times out as a datagram lands can drop it.
+    // With the timeout as short as it goes, so that requests keep landing
+    // as one gives up, every request still reaches the driver once.
+    // covers: P86
+    #[test]
+    fn a_request_landing_as_a_receive_times_out_reaches_the_driver() {
+        const REQUESTS: u16 = 10000;
+        let control = Arc::new(UdpSocket::bind("127.0.0.1:0").expect("control socket"));
+        control
+            .set_read_timeout(Some(Duration::from_millis(1)))
+            .expect("timeout");
+        let stop = Arc::new(AtomicBool::new(false));
+        let (events, received) = mpsc::channel();
+        let thread = thread::spawn(control_loop(
+            SessionKey(7),
+            control.clone(),
+            IpAddr::from([127, 0, 0, 1]),
+            Arc::new(SpeakerCounters::default()),
+            stop.clone(),
+            Arc::new(AtomicBool::new(false)),
+            move |event: IoEvent| events.send(event).is_ok(),
+        ));
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("receiver socket");
+        let to = control.local_addr().expect("address");
+        let mut handed = Vec::new();
+        for first in 0..REQUESTS {
+            // Each request lands at another point of the receive's timeout.
+            let land = Instant::now() + Duration::from_micros(u64::from(first) * 37 % 1500);
+            while Instant::now() < land {
+                std::hint::spin_loop();
+            }
+            receiver
+                .send_to(&resend_request(first, 1), to)
+                .expect("send");
+            while let Ok(IoEvent::Control { bytes, .. }) =
+                received.recv_timeout(Duration::from_millis(50))
+            {
+                handed.push(ResendRequest::parse(&bytes).expect("a request").first);
+                if handed.last() == Some(&first) {
+                    break;
+                }
+            }
+        }
+        while let Ok(IoEvent::Control { bytes, .. }) = received.recv_timeout(WAIT) {
+            handed.push(ResendRequest::parse(&bytes).expect("a request").first);
+        }
+        stop.store(true, Ordering::Release);
+        wake(&control);
+        thread.join().expect("the control thread");
+        let lost: Vec<u16> = (0..REQUESTS)
+            .filter(|first| !handed.contains(first))
+            .collect();
+        assert!(
+            lost.is_empty() && handed.len() == usize::from(REQUESTS),
+            "{} of {REQUESTS} requests lost: {lost:?}, {} handed on",
+            lost.len(),
+            handed.len()
+        );
+    }
+
+    // A datagram too large for the receive buffer, which fails a peek on
+    // Windows, is taken off the queue, so the request after it still
+    // reaches the driver.
+    // covers: P86
+    #[test]
+    fn a_request_after_an_oversized_datagram_reaches_the_driver() {
+        let control = Arc::new(UdpSocket::bind("127.0.0.1:0").expect("control socket"));
+        control.set_read_timeout(Some(WAIT)).expect("timeout");
+        let stop = Arc::new(AtomicBool::new(false));
+        let (events, received) = mpsc::channel();
+        let thread = thread::spawn(control_loop(
+            SessionKey(8),
+            control.clone(),
+            IpAddr::from([127, 0, 0, 1]),
+            Arc::new(SpeakerCounters::default()),
+            stop.clone(),
+            Arc::new(AtomicBool::new(false)),
+            move |event: IoEvent| events.send(event).is_ok(),
+        ));
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("receiver socket");
+        let to = control.local_addr().expect("address");
+        receiver
+            .send_to(&[0u8; DATAGRAM_BYTES + 1], to)
+            .expect("send");
+        receiver.send_to(&resend_request(5, 1), to).expect("send");
+        let handed = received.recv_timeout(WAIT);
+        stop.store(true, Ordering::Release);
+        wake(&control);
+        thread.join().expect("the control thread");
+        assert!(matches!(handed, Ok(IoEvent::Control { .. })), "{handed:?}");
+    }
+
+    // After a send to a closed port, Windows reports the reset on every
+    // peek until a receive takes it: the reset is told once and the
+    // request after it still reaches the driver.
+    // covers: P86, P141
+    #[test]
+    fn a_request_after_a_reset_reaches_the_driver() {
+        let control = Arc::new(UdpSocket::bind("127.0.0.1:0").expect("control socket"));
+        control.set_read_timeout(Some(WAIT)).expect("timeout");
+        let closed = UdpSocket::bind("127.0.0.1:0")
+            .expect("a socket")
+            .local_addr()
+            .expect("address");
+        control.send_to(&[0], closed).expect("send");
+        thread::sleep(Duration::from_millis(100));
+        let stop = Arc::new(AtomicBool::new(false));
+        let reset = Arc::new(AtomicBool::new(false));
+        let (events, received) = mpsc::channel();
+        let thread = thread::spawn(control_loop(
+            SessionKey(9),
+            control.clone(),
+            IpAddr::from([127, 0, 0, 1]),
+            Arc::new(SpeakerCounters::default()),
+            stop.clone(),
+            reset.clone(),
+            move |event: IoEvent| events.send(event).is_ok(),
+        ));
+        let receiver = UdpSocket::bind("127.0.0.1:0").expect("receiver socket");
+        let to = control.local_addr().expect("address");
+        receiver.send_to(&resend_request(5, 1), to).expect("send");
+        let handed = received.recv_timeout(WAIT);
+        stop.store(true, Ordering::Release);
+        wake(&control);
+        thread.join().expect("the control thread");
+        assert!(matches!(handed, Ok(IoEvent::Control { .. })), "{handed:?}");
+        if cfg!(windows) {
+            assert!(reset.load(Ordering::Acquire), "the reset is told");
+        }
     }
 
     // The PTP event socket receives with the long backstop too, and closing the

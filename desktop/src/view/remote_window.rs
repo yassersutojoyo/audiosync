@@ -769,9 +769,24 @@ mod tests {
     use crate::ui_model::{MockBackend, NoticeMessage};
 
     fn free_port() -> u16 {
-        // The port is free once this listener is dropped (and stays so in a test, likely enough).
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a port");
-        listener.local_addr().expect("its address").port()
+        // Scattered below the system's range per process and call, so another
+        // process takes one around this test only by rare chance.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        loop {
+            let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mixed =
+                ((u64::from(std::process::id()) << 32) | next).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let port = 10_000 + u16::try_from((mixed >> 32) % 22_768).expect("below 22768");
+            if TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok() {
+                return port;
+            }
+        }
+    }
+
+    #[test]
+    fn a_test_port_is_below_the_range_the_system_hands_out() {
+        // Other processes' port-0 binds and connections take ports from there.
+        assert!(!(32768..=65535).contains(&free_port()));
     }
 
     fn over_loopback(backend: MockBackend) -> std::rc::Rc<super::App> {
@@ -789,6 +804,41 @@ mod tests {
         .expect("sent");
         let mut answer = String::new();
         stream.read_to_string(&mut answer).expect("read");
+        answer
+    }
+
+    /// The cookie pairing with `code` gives.
+    fn pair(port: u16, code: &str) -> String {
+        let body = format!("{{\"code\":\"{code}\"}}");
+        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("connected");
+        write!(
+            stream,
+            "POST /api/pair HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nOrigin: http://127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("sent");
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).expect("read");
+        answer
+            .lines()
+            .find_map(|line| line.strip_prefix("Set-Cookie: "))
+            .and_then(|cookie| cookie.split(';').next())
+            .unwrap_or_else(|| panic!("no cookie: {answer}"))
+            .to_owned()
+    }
+
+    /// The state answer to `cookie`, empty when nothing answers.
+    fn state_as(port: u16, cookie: &str) -> String {
+        let Ok(mut stream) = TcpStream::connect((Ipv4Addr::LOCALHOST, port)) else {
+            return String::new();
+        };
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+        let _ = write!(
+            stream,
+            "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: {cookie}\r\nConnection: close\r\n\r\n"
+        );
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
         answer
     }
 
@@ -827,13 +877,18 @@ mod tests {
         );
         // Not paired, so the API turns the request down: the server answers.
         assert!(get_state(port).starts_with("HTTP/1.1 401"));
+        let cookie = pair(port, &app.remote_window.get_code());
+        assert!(state_as(port, &cookie).starts_with("HTTP/1.1 200"));
 
         app.remote_window.invoke_remote_toggled(false);
         assert!(!app.remote_listening());
         assert!(!app.remote_window.get_listening());
         assert!(!app.backend.borrow().view_settings().remote.on);
+        // Another process binds the port once it is free, as parallel test runs do.
+        let _other = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).ok();
+        // Only our server lets this cookie in.
         assert!(
-            TcpStream::connect((Ipv4Addr::LOCALHOST, port)).is_err(),
+            !state_as(port, &cookie).starts_with("HTTP/1.1 200"),
             "closed"
         );
     }
@@ -1736,12 +1791,20 @@ mod tests {
     fn without_a_usable_name_the_qr_code_has_the_ip_address_and_says_so() {
         use i_slint_backend_testing::ElementHandle;
         let app = over_loopback(MockBackend::new());
-        let port = free_port();
+        let mut port = free_port();
+        // Another process takes the port in between, as parallel test runs do.
+        let _taken = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).expect("the port");
         app.ui.borrow_mut().remote.port = port;
         app.remote.borrow_mut().host = None;
         app.main.invoke_remote_requested();
         let window = &app.remote_window;
         window.invoke_remote_toggled(true);
+        while app.remote.borrow().problem == Some(super::Problem::Port { in_use: true }) {
+            window.invoke_remote_toggled(false);
+            port = free_port();
+            app.ui.borrow_mut().remote.port = port;
+            window.invoke_remote_toggled(true);
+        }
         draw_frames();
         assert!(window.get_listening());
         // CI sets AUDIOSYNC_LAN_TESTS, so there it is the runner's own address, not 192.0.2.7.

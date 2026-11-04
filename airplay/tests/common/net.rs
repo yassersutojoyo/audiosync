@@ -724,6 +724,65 @@ pub fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> boo
     }
 }
 
+/// A probe wake later than this means the process went unscheduled; a
+/// coarse timer oversleeps 1 ms by up to 15.6 ms (Windows).
+const STALL: Duration = Duration::from_millis(20);
+
+/// Wakes every millisecond until stopped and returns when it woke, so a gap
+/// the whole process spent unscheduled on a loaded host can be told from a
+/// stall the sender caused, which leaves the probe on time.
+pub fn scheduling_probe(stop: Arc<AtomicBool>) -> JoinHandle<Vec<Instant>> {
+    thread::spawn(move || {
+        let mut wakes = vec![Instant::now()];
+        while !stop.load(Ordering::SeqCst) {
+            thread::sleep(Duration::from_millis(1));
+            wakes.push(Instant::now());
+        }
+        wakes
+    })
+}
+
+/// How much of `from..to` fell in probe waits longer than `STALL`.
+pub fn unscheduled(wakes: &[Instant], from: Instant, to: Instant) -> Duration {
+    wakes
+        .windows(2)
+        .filter(|wait| wait[1].duration_since(wait[0]) > STALL)
+        .map(|wait| wait[1].min(to).saturating_duration_since(wait[0].max(from)))
+        .sum()
+}
+
+/// The most of any `width` starting in `from..to` that fell in probe waits
+/// longer than `STALL`.
+pub fn busiest(wakes: &[Instant], from: Instant, to: Instant, width: Duration) -> Duration {
+    wakes
+        .windows(2)
+        .filter(|wait| wait[1].duration_since(wait[0]) > STALL && (from..to).contains(&wait[0]))
+        .map(|wait| unscheduled(wakes, wait[0], wait[0] + width))
+        .chain([unscheduled(wakes, from, from + width)])
+        .max()
+        .unwrap_or_default()
+}
+
+/// Fails on `what`, which took from `from` to `to`: as inconclusive when the
+/// probe saw the process unscheduled for over half of that time.
+pub fn fail_judged(
+    stop: &AtomicBool,
+    probe: JoinHandle<Vec<Instant>>,
+    from: Instant,
+    to: Instant,
+    what: &str,
+) -> ! {
+    stop.store(true, Ordering::SeqCst);
+    let wakes = probe.join().expect("the probe");
+    let span = to.saturating_duration_since(from);
+    let starved = unscheduled(&wakes, from, to);
+    assert!(
+        starved * 2 <= span,
+        "inconclusive: {what}, the process went unscheduled for {starved:?} of {span:?}"
+    );
+    panic!("{what}, {starved:?} of {span:?} unscheduled");
+}
+
 /// Every event a sender reported, kept for the test to search.
 #[derive(Default)]
 pub struct Events {

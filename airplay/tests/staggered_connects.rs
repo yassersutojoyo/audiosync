@@ -8,7 +8,7 @@ mod common;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::audio::read_pcm_payload;
@@ -28,7 +28,7 @@ use audiosync_airplay::volume::Volume;
 use common::ap2::{Ap2Server, FakeAp2};
 use common::net::{
     BLOCK_FRAMES, Behavior, Events, HostAudio, Log, NetReceiver, host_frame_of, host_samples,
-    play_times, serial, step_error, wait_until,
+    play_times, scheduling_probe, serial, step_error, unscheduled, wait_until,
 };
 
 const LONG: Duration = Duration::from_secs(15);
@@ -44,9 +44,6 @@ const MAX_GAP: Duration = Duration::from_millis(100);
 /// spacing is judged on the starts.
 const ACCEPT_LAG: Duration = Duration::from_secs(5);
 const FRAME: f64 = 1.0 / 44_100.0;
-/// A probe wake later than this means the process went unscheduled; a
-/// coarse timer oversleeps 1 ms by up to 15.6 ms (Windows).
-const STALL: Duration = Duration::from_millis(20);
 
 const PCM_TXT: &[&str] = &[
     "txtvers=1",
@@ -198,29 +195,6 @@ fn from_shared_syncs(receiver: &NetReceiver) -> Log {
     let mut log = copy(receiver);
     log.syncs.retain(|(_, _, sync)| !sync.first);
     log
-}
-
-/// Wakes every millisecond until stopped and returns when it woke, so a gap
-/// the whole process spent unscheduled on a loaded runner can be told from
-/// a stall the connects caused, which leaves the probe on time.
-fn scheduling_probe(stop: Arc<AtomicBool>) -> JoinHandle<Vec<Instant>> {
-    thread::spawn(move || {
-        let mut wakes = vec![Instant::now()];
-        while !stop.load(Ordering::SeqCst) {
-            thread::sleep(Duration::from_millis(1));
-            wakes.push(Instant::now());
-        }
-        wakes
-    })
-}
-
-/// How much of `from..to` fell in probe waits longer than `STALL`.
-fn unscheduled(wakes: &[Instant], from: Instant, to: Instant) -> Duration {
-    wakes
-        .windows(2)
-        .filter(|wait| wait[1].duration_since(wait[0]) > STALL)
-        .map(|wait| wait[1].min(to).saturating_duration_since(wait[0].max(from)))
-        .sum()
 }
 
 fn session_requests(receiver: &NetReceiver) -> usize {

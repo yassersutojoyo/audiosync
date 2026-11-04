@@ -6,8 +6,8 @@
 #
 # usage: scripts/test_loop.sh [-b <busy loops>] <crate dir> <runs per process> <processes> <cargo test target>
 #   e.g. scripts/test_loop.sh -b 16 airplay 50 8 --test ap2_samsung
-# The copies and the busy loops run at the lowest priority, so they load each
-# other without slowing the rest of the machine.
+# The busy loops run at the lowest priority and the copies at normal priority,
+# so the copies compete with the load as the app would.
 set -u
 busy=0
 while getopts b: opt; do
@@ -29,9 +29,11 @@ exe=$(echo "$build" | sed -n 's/.*Executable .*(\(.*\))$/\1/p' | tail -1)
 [ -n "$exe" ] || { echo "$build" >&2; echo "cargo built no test binary for: $*" >&2; exit 1; }
 log=target/test-loop.log
 failed=target/test-loop.failed
+passed=target/test-loop.passed
 mkdir -p target
 : > "$log"
 : > "$failed"
+: > "$passed"
 rm -f target/test-loop-*-*
 # A build in another worktree can replace the binary in the shared target dir
 # mid-loop, so the loop runs a private copy.
@@ -50,7 +52,7 @@ for p in $(seq "$procs"); do
     (
         out=target/test-loop-$p.out
         for r in $(seq "$runs"); do
-            nice -n 19 "$exe" > "$out" 2>&1 && continue
+            "$exe" > "$out" 2>&1 && { echo "$p" >> "$passed"; continue; }
             code=$?
             tests=$(sed -n 's/^test \(.*\) \.\.\. FAILED$/\1/p' "$out")
             echo "process $p run $r: exit $code ${tests:-(no test reported FAILED)}" | paste -sd ' ' - >> "$log"
@@ -62,7 +64,10 @@ for p in $(seq "$procs"); do
     copies+=("$!")
 done
 wait "${copies[@]}"
-echo "$(wc -l < "$log") of $((runs * procs)) runs failed ($crate/$log)"
+for p in $(seq "$procs"); do
+    echo "process $p: $(grep -cx "$p" "$passed") passed, $(grep -c "^process $p run " "$log") failed"
+done
+echo "$(wc -l < "$log") of $(($(wc -l < "$log") + $(wc -l < "$passed"))) runs failed ($crate/$log)"
 sort "$failed" | uniq -c | sort -rn
 ls -l target/crash-dumps 2> /dev/null
 [ ! -s "$log" ]

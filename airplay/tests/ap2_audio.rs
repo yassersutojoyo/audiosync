@@ -36,7 +36,8 @@ use common::ap2::{
     Ap2Server, FakeAp2, dict, int, open_packet, plist, read_dict, request_key, stream_key,
 };
 use common::net::{
-    Events, HostAudio, free_ptp_ports, host_frame_of, ptp_bind_v4, serial, wait_until,
+    Events, HostAudio, fail_judged, free_ptp_ports, host_frame_of, ptp_bind_v4, scheduling_probe,
+    serial, wait_until,
 };
 use common::rig::{Rig, decode, speaker};
 
@@ -838,12 +839,14 @@ fn ap2_audio_reaches_the_receiver() {
     let _serial = serial();
     let udp = Udp::bind();
     let server = Ap2Server::start(udp.fake(FakeAp2::new()));
+    let stop_probe = Arc::new(AtomicBool::new(false));
+    let probe = scheduling_probe(Arc::clone(&stop_probe));
     let clock = SenderClock::new(Instant::now());
     let (sender, _host) = start(clock, free_ptp_ports(), udp.ptp_ports());
     let mut events = Events::default();
     let speaker = device(&server, 61, "0x0,0x10040");
     let key = speaker.key.clone();
-    sender.add_speaker(speaker.clone(), options());
+    let counters = sender.add_speaker(speaker.clone(), options());
     assert!(
         playing(&mut events, &sender, &key, 1),
         "{:?} {:?}",
@@ -853,9 +856,13 @@ fn ap2_audio_reaches_the_receiver() {
 
     let shk = stream_key(&server.fake()).expect("shk");
     udp.data.keep_sender_of(&shk);
+    let window = Instant::now();
     let audio = udp.data.after(Duration::from_millis(1_500));
     assert_ne!(shk, [0; 32]);
-    assert!(audio.len() > 100, "{}", audio.len());
+    if audio.len() <= 100 {
+        let what = format!("{} packets arrived in the window", audio.len());
+        fail_judged(&stop_probe, probe, window, Instant::now(), &what);
+    }
     let (first_seq, first_rtptime) = rtp_info(&server);
     let mut heard = 0;
     for (index, (_, _, bytes)) in audio.iter().enumerate() {
@@ -890,23 +897,49 @@ fn ap2_audio_reaches_the_receiver() {
     udp.control.keep_sender(ours);
     let (_, sender_control, sync) = udp.control.wait_for(ours).expect("a sync packet");
     assert_eq!(sync.len(), 20);
-    let wanted = seq_of(&audio[3].2);
+    udp.control.take();
+    // The test is held up before it asks, as under load.
+    std::thread::sleep(Duration::from_secs(7));
+    // A packet sent just now: an earlier one may have left the sender's
+    // 1024-packet history by the time the test asks (P88).
+    let fresh = udp.data.after(Duration::from_millis(100));
+    let (_, _, packet) = fresh.last().or(audio.last()).expect("a packet");
+    let wanted = seq_of(packet);
     let request = ResendRequest {
         seq: 1,
         first: wanted,
         count: 1,
     }
     .encode();
-    udp.control.take();
+    let asked = Instant::now();
     udp.control
         .socket
         .send_to(&request, sender_control)
         .expect("a resend request");
-    let (_, _, reply) = udp
+    let Some((_, _, reply)) = udp
         .control
         .wait_for(|(_, _, bytes)| bytes.len() > 4 && bytes[1] == 0xD6)
-        .expect("a resend");
-    assert_eq!(&reply[RESEND_PREFIX_BYTES..], &audio[3].2[..]);
+    else {
+        let got: Vec<(u8, u16)> = udp
+            .control
+            .take()
+            .iter()
+            .filter(|(_, _, bytes)| bytes.len() >= 4)
+            .map(|(_, _, bytes)| (bytes[1], seq_of(bytes)))
+            .collect();
+        let what = format!(
+            "no resend came for seq {wanted}, asked {:?} after the window; the sender counted {} requests, {} resent, {} not held, {} foreign; the control socket got (type, seq) {got:x?}",
+            asked.duration_since(window),
+            counters.resend_requests(),
+            counters.packets_resent(),
+            counters.not_held(),
+            counters.foreign_datagrams(),
+        );
+        fail_judged(&stop_probe, probe, window, Instant::now(), &what);
+    };
+    stop_probe.store(true, Ordering::SeqCst);
+    probe.join().expect("the probe");
+    assert_eq!(&reply[RESEND_PREFIX_BYTES..], &packet[..]);
 
     // A new session: a new stream SETUP, a new key, a counter from 0.
     sender.remove_speaker(&key);
@@ -1145,6 +1178,8 @@ fn ap2_ptp_session() {
     let _serial = serial();
     let udp = Udp::bind();
     let server = Ap2Server::start(udp.fake(ptp_fake()));
+    let stop_probe = Arc::new(AtomicBool::new(false));
+    let probe = scheduling_probe(Arc::clone(&stop_probe));
     let origin = Instant::now();
     let local = free_ptp_ports();
     let (sender, _host) = start(SenderClock::new(origin), local, udp.ptp_ports());
@@ -1191,12 +1226,12 @@ fn ap2_ptp_session() {
     udp.general.take();
     // The second is the sender's own, by its Follow_Up times, so a reader
     // that load holds up neither shortens nor shifts it.
-    let start = stamp(&udp.general.wait_for(is(0x8)).expect("Follow_Up").2);
-    assert!(
-        udp.general
-            .wait_for(|d| is(0x8)(d) && stamp(&d.2) >= start + 1.0)
-            .is_some()
-    );
+    let (opened, _, first) = udp.general.wait_for(is(0x8)).expect("Follow_Up");
+    let start = stamp(&first);
+    let (closed, _, _) = udp
+        .general
+        .wait_for(|d| is(0x8)(d) && stamp(&d.2) >= start + 1.0)
+        .expect("the next second's Follow_Up");
     let general = udp.general.take();
     let window: Vec<u16> = general
         .iter()
@@ -1216,7 +1251,12 @@ fn ap2_ptp_session() {
         .filter(|d| is(0x0)(d) && window.contains(&header(&d.2).seq))
         .count();
     assert!(udp.general.wait_for(is(0xB)).is_some(), "Announce");
-    assert!(window.len() >= 6, "Follow_Up x{} in 1 s", window.len());
+    if window.len() < 6 {
+        let what = format!("Follow_Up x{} in 1 s", window.len());
+        fail_judged(&stop_probe, probe, opened, closed, &what);
+    }
+    stop_probe.store(true, Ordering::SeqCst);
+    probe.join().expect("the probe");
     assert!((6..=10).contains(&syncs), "Sync");
     for (_, from, bytes) in general.iter().chain(&event) {
         assert_eq!(&bytes[20..28], &identity);
@@ -1423,12 +1463,23 @@ fn ap2_ptp_clash_is_told_again_after_ptp_bound() {
     assert_eq!((told(&events), opened(&events)), (1, 0));
     // The other app lets go: the next session binds PTP and says so.
     drop(holder);
+    // Another process takes the port for one session, as parallel test runs do.
+    let other = UdpSocket::bind((ptp_bind_v4(), local.event)).expect("the port");
     attempt(&mut events, 2);
+    drop(other);
+    // A session that found the port taken is not told again; one that finds
+    // it free binds.
+    let mut sessions = 2;
+    while opened(&events) == 0 && sessions < 5 {
+        assert!(wait_until(LONG, || ports_free(local)));
+        sessions += 1;
+        attempt(&mut events, sessions);
+    }
     assert_eq!((told(&events), opened(&events)), (1, 1));
     // It takes the port again: the clash is told once more.
     assert!(wait_until(LONG, || ports_free(local)));
     let _holder = UdpSocket::bind((ptp_bind_v4(), local.event)).expect("the port");
-    attempt(&mut events, 3);
+    attempt(&mut events, sessions + 1);
     assert_eq!((told(&events), opened(&events)), (2, 1));
     sender.shutdown();
 }

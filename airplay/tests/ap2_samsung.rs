@@ -8,11 +8,12 @@ mod common;
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, UdpSocket};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use audiosync_airplay::ap2::session::VOLUME_READ_INTERVAL;
 use audiosync_airplay::dacp::RemoteCommand;
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
@@ -32,7 +33,10 @@ use plist::Value;
 use common::ap2::{
     Ap2Server, DATA_PORT, FakeAp2, RECEIVER_CONTROL_PORT, dict, int, open_packet, plist, stream_key,
 };
-use common::net::{Events, HostAudio, host_frame_of, recv_queued, serial, wait_until};
+use common::net::{
+    Events, HostAudio, busiest, fail_judged, host_frame_of, recv_queued, scheduling_probe, serial,
+    unscheduled, wait_until,
+};
 use common::rig::decode;
 
 const LONG: Duration = Duration::from_secs(15);
@@ -303,20 +307,35 @@ fn a_volume_set_the_tv_answers_500_and_applies_neither_warns_nor_goes_again() {
 fn a_volume_set_the_tv_answers_500_and_ignores_warns_once_and_goes_once_more() {
     let _serial = serial();
     let server = Ap2Server::start(FakeAp2::samsung());
+    let stop_probe = Arc::new(AtomicBool::new(false));
+    let probe = scheduling_probe(Arc::clone(&stop_probe));
     let mut tv = play_listed(&server, samsung_tv(&server), FEEDBACK);
     tv.run(Duration::from_secs(1), false);
     // From here the television keeps its level whatever it is sent.
     server.fake().applies_volume = None;
+    let set = Instant::now();
     tv.sender.set_volume(&tv.key, Volume::Db(-10.0));
     tv.run(FEEDBACK * 3, false);
-    assert_eq!(
-        volume_sets(&server),
-        [
-            "volume: -20.000000\r\n",
-            "volume: -10.000000\r\n",
-            "volume: -10.000000\r\n"
-        ]
-    );
+    let sets = volume_sets(&server);
+    let wanted = [
+        "volume: -20.000000\r\n",
+        "volume: -10.000000\r\n",
+        "volume: -10.000000\r\n",
+    ];
+    if sets != wanted {
+        let checked = Instant::now();
+        // Late or never: a late resend points at a slow chain, none at a lost one.
+        let resent = wait_until(LONG, || volume_sets(&server).len() >= 3).then(|| set.elapsed());
+        tv.events.drain(&tv.sender);
+        let what = format!(
+            "sets {sets:?}, wanted {wanted:?}; the resend came {resent:?} after the set; the receiver got {:?}; events {:?}",
+            server.fake().keys(),
+            tv.events.of(&tv.key)
+        );
+        fail_judged(&stop_probe, probe, set, checked, &what);
+    }
+    stop_probe.store(true, Ordering::SeqCst);
+    probe.join().expect("the probe");
     assert_eq!(tv.warnings(), [refused_volume()]);
     no_session_header(&server);
     tv.assert_no_error();
@@ -329,6 +348,8 @@ fn a_level_set_on_the_tv_shows_within_a_second_of_reads_and_none_go_once_stopped
     let _serial = serial();
     let begun = Instant::now();
     let server = Ap2Server::start(FakeAp2::samsung());
+    let stop_probe = Arc::new(AtomicBool::new(false));
+    let probe = scheduling_probe(Arc::clone(&stop_probe));
     let mut tv = play(&server);
     tv.run(Duration::from_secs(2), true);
     let reads = count(&server, "GET_PARAMETER");
@@ -350,6 +371,7 @@ fn a_level_set_on_the_tv_shows_within_a_second_of_reads_and_none_go_once_stopped
     );
 
     // Three presses of the remote, each between two of the host's asks.
+    let presses = Instant::now();
     let mut first_read = None;
     for (step, db) in [-25.2, -24.6, -30.0].into_iter().enumerate() {
         tv.run(Duration::from_millis(330 * step as u64), true);
@@ -395,10 +417,23 @@ fn a_level_set_on_the_tv_shows_within_a_second_of_reads_and_none_go_once_stopped
             answered.remove(failed);
             reported.ends_with(&answered)
         });
-    assert!(
-        reported.ends_with(&read) || one_failed,
-        "read {read:?}, reported {reported:?}"
-    );
+    if !(reported.ends_with(&read) || one_failed) {
+        stop_probe.store(true, Ordering::SeqCst);
+        let wakes = probe.join().expect("the probe");
+        // P184 fails a read the sender could not take for a read interval.
+        let most = busiest(&wakes, presses, Instant::now(), VOLUME_READ_INTERVAL);
+        assert!(
+            most * 2 <= VOLUME_READ_INTERVAL,
+            "inconclusive: read {read:?}, reported {reported:?}, the process went unscheduled for {most:?} of a read interval"
+        );
+        panic!(
+            "read {read:?}, reported {reported:?}, at most {most:?} of a read interval unscheduled, the slowest read answered in {:?}, events {:?}",
+            server.fake().slowest_read,
+            tv.events.of(&tv.key)
+        );
+    }
+    stop_probe.store(true, Ordering::SeqCst);
+    probe.join().expect("the probe");
     tv.assert_no_warning_unless_starved(&server, Duration::ZERO);
     tv.assert_no_error();
 
@@ -429,6 +464,9 @@ fn the_echo_of_a_level_sent_on_the_grid_is_never_a_change_made_on_the_tv() {
     fake.pause
         .insert("GET_PARAMETER".to_owned(), Duration::from_millis(300));
     let reads_seen = fake.reads_seen.clone();
+    let begun = Instant::now();
+    let stop_probe = Arc::new(AtomicBool::new(false));
+    let probe = scheduling_probe(Arc::clone(&stop_probe));
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     tv.run(Duration::from_secs(2), true);
@@ -462,6 +500,24 @@ fn the_echo_of_a_level_sent_on_the_grid_is_never_a_change_made_on_the_tv() {
             "{reports:?}"
         );
     }
+    // A check read the sender could not take for a read interval fails and
+    // warns of a refused volume (P183, P184), a stall the fake's answer time misses.
+    let slowest = server.fake().slowest_read;
+    if tv.warnings() == [refused_volume()] && slowest <= Duration::from_millis(300) + STARVED {
+        stop_probe.store(true, Ordering::SeqCst);
+        let wakes = probe.join().expect("the probe");
+        let most = busiest(&wakes, begun, Instant::now(), VOLUME_READ_INTERVAL);
+        assert!(
+            most * 2 <= VOLUME_READ_INTERVAL,
+            "inconclusive: a refused volume warned, the process went unscheduled for {most:?} of a read interval"
+        );
+        panic!(
+            "a refused volume warned, at most {most:?} of a read interval unscheduled, the slowest read answered in {slowest:?}, events {:?}",
+            tv.events.of(&tv.key)
+        );
+    }
+    stop_probe.store(true, Ordering::SeqCst);
+    probe.join().expect("the probe");
     tv.assert_no_warning_unless_starved(&server, Duration::from_millis(300));
     no_session_header(&server);
     tv.assert_no_error();
@@ -905,9 +961,13 @@ fn timeline_restart_waits_for_flush() {
         fake.reads_seen.clone()
     };
     let seen = reads.load(Ordering::SeqCst);
+    // Taken before the read leaves, as the television's hold starts when it
+    // takes the read, not when the test sees that it did.
+    let read_at = Instant::now();
     tv.sender.read_volume(&tv.key);
     assert!(wait_until(LONG, || reads.load(Ordering::SeqCst) > seen));
-    let read_at = Instant::now();
+    // The test is held up between seeing the read and going on, as under load.
+    thread::sleep(Duration::from_millis(100));
     tv.sender.restart_timeline();
     tv.run(Duration::from_secs(3), false);
 
@@ -953,11 +1013,15 @@ fn w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second() {
     let server = Ap2Server::start(fake);
     let mut tv = play(&server);
     assert!(wait_until(LONG, || audio.lock().map_or(0, |a| a.len()) >= 100));
+    let stop_probe = Arc::new(AtomicBool::new(false));
+    let probe = scheduling_probe(Arc::clone(&stop_probe));
+    let mut pauses = Vec::new();
     let mut to_flush = Vec::new();
     let mut to_quiet = Vec::new();
     for cycle in 1..=3 {
         let flushes = count(&server, "FLUSH");
         let paused = Instant::now();
+        pauses.push(paused);
         tv.sender.pause();
         let mut flushed = None;
         while flushed.is_none() && paused.elapsed() < LONG {
@@ -979,7 +1043,12 @@ fn w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second() {
                 .count();
             (late, past_flush, audio.last().expect("audio").at)
         };
-        assert_eq!(late, 0, "audio after the FLUSH of pause {cycle}");
+        if late != 0 {
+            let what = format!(
+                "{late} audio packets after the FLUSH of pause {cycle}, {past_flush} at or past its point"
+            );
+            fail_judged(&stop_probe, probe, paused, Instant::now(), &what);
+        }
         assert_eq!(
             past_flush, 0,
             "packets at or past the FLUSH point in pause {cycle}"
@@ -992,10 +1061,45 @@ fn w2_a_pause_reaches_the_samsung_as_a_flush_within_a_second() {
     }
     tv.assert_no_error();
     tv.sender.shutdown();
-    let slowest = |times: &[Duration]| times.iter().max().copied().unwrap_or_default();
-    let (flush, quiet) = (slowest(&to_flush), slowest(&to_quiet));
-    assert!(flush < QUIET_WITHIN, "pause to FLUSH {to_flush:?}");
-    assert!(quiet < QUIET_WITHIN, "pause to the last audio {to_quiet:?}");
+    stop_probe.store(true, Ordering::SeqCst);
+    let wakes = probe.join().expect("the probe");
+    let span = pauses[0].elapsed();
+    let starved = unscheduled(&wakes, pauses[0], pauses[0] + span);
+    // Starved for most of the pauses, the run shows nothing either way.
+    assert!(
+        starved * 2 <= span,
+        "the process went unscheduled for {starved:?} of the {span:?} of pauses"
+    );
+    // Time the whole process went unscheduled is the loaded host's, not
+    // the sender's (1.1-1.5 s seen at 8 copies + 16 busy loops).
+    let idle = |times: &[Duration]| -> Vec<Duration> {
+        pauses
+            .iter()
+            .zip(times)
+            .map(|(&from, &took)| unscheduled(&wakes, from, from + took))
+            .collect()
+    };
+    let (flush_idle, quiet_idle) = (idle(&to_flush), idle(&to_quiet));
+    let slowest = |times: &[Duration], idle: &[Duration]| {
+        times
+            .iter()
+            .zip(idle)
+            .map(|(took, idle)| took.saturating_sub(*idle))
+            .max()
+            .unwrap_or_default()
+    };
+    let (flush, quiet) = (
+        slowest(&to_flush, &flush_idle),
+        slowest(&to_quiet, &quiet_idle),
+    );
+    assert!(
+        flush < QUIET_WITHIN,
+        "pause to FLUSH {to_flush:?}, {flush_idle:?} of it unscheduled"
+    );
+    assert!(
+        quiet < QUIET_WITHIN,
+        "pause to the last audio {to_quiet:?}, {quiet_idle:?} of it unscheduled"
+    );
     cell(
         "W2.flush",
         &format!(
@@ -1147,7 +1251,9 @@ fn current_heard_after(audio: &Mutex<Vec<Datagram>>, current: u32, set: Instant)
     audio[named..]
         .iter()
         .filter_map(|datagram| {
-            let ahead = rtp_seconds(audio[named].rtptime, datagram.rtptime);
+            // From `current`, not the first packet kept: a thread that falls
+            // behind loses packets, the named ones too.
+            let ahead = rtp_seconds(current, datagram.rtptime);
             let after = match datagram.at.checked_duration_since(set) {
                 Some(after) => after.as_secs_f64(),
                 None => -set.duration_since(datagram.at).as_secs_f64(),
@@ -1181,12 +1287,26 @@ fn heard_seconds(audio: &Mutex<Vec<Datagram>>, from: u32, to: u32) -> f64 {
 // time of the audio it got after a pause; a seek starts a new mapping.
 #[test]
 fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
+    progress_across_a_pause_and_a_seek(Duration::ZERO);
+}
+
+// The pause's FLUSH is answered only after the resume, as under load: the
+// audio after the resume goes out late, in a burst.
+#[test]
+fn progress_stays_on_the_track_time_when_the_pause_is_answered_after_the_resume() {
+    progress_across_a_pause_and_a_seek(Duration::from_millis(2600));
+}
+
+fn progress_across_a_pause_and_a_seek(flush_answer: Duration) {
     let _serial = serial();
     let (socket, audio) = data_port();
     let mut fake = FakeAp2::samsung();
     fake.data_port = Some(socket.local_addr().expect("address").port());
     fake.info_body = samsung_info(PROGRESS_BIT, None);
+    fake.pause.insert("FLUSH".into(), flush_answer);
     let server = Ap2Server::start(fake);
+    let stop_probe = Arc::new(AtomicBool::new(false));
+    let probe = scheduling_probe(Arc::clone(&stop_probe));
     let mut tv = play_listed(
         &server,
         samsung_tv_showing(&server, PROGRESS_BIT),
@@ -1226,6 +1346,8 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
     let (seek, seek_at) = set(&mut tv, Duration::from_secs(120));
     tv.assert_no_error();
     tv.sender.shutdown();
+    stop_probe.store(true, Ordering::SeqCst);
+    let wakes = probe.join().expect("the probe");
     // A progress the sender sent on its own, such as at the resume, would
     // carry the paused time into the track.
     assert_eq!(
@@ -1259,24 +1381,81 @@ fn progress_stays_on_the_track_time_across_a_pause_and_a_seek() {
             "{what}: the television reads {read:.3} s, the track is at {wanted:.3} s"
         );
     }
-    let heard = [
+    let span = first_at.elapsed();
+    let starved = unscheduled(&wakes, first_at, first_at + span);
+    // Starved for most of the run, it shows nothing either way.
+    assert!(
+        starved * 2 <= span,
+        "the process went unscheduled for {starved:?} of the {span:?} from the first progress"
+    );
+    // A process that went unscheduled around a set names audio cut late
+    // (after) or a backlog the sender had not cut yet (before); that time
+    // is the loaded host's (+1.155 s and -0.734 s seen under load).
+    let idle = |after: f64, at: Instant| -> f64 {
+        if !after.is_finite() {
+            return 0.0;
+        }
+        let took = Duration::from_secs_f64(after.abs());
+        let (from, to) = if after < 0.0 {
+            (at.checked_sub(took).unwrap_or(at), at)
+        } else {
+            (at, at + took)
+        };
+        unscheduled(&wakes, from, to).as_secs_f64()
+    };
+    let raw = [
         current_heard_after(&audio, current, first_at),
         current_heard_after(&audio, resumed[1], resumed_at),
         current_heard_after(&audio, seek[1], seek_at),
     ];
-    assert!(
-        heard.iter().all(|after| after.abs() <= 0.5),
-        "the audio each progress names arrived {heard:?} s after it was set"
-    );
+    let excused = [
+        idle(raw[0], first_at),
+        idle(raw[1], resumed_at),
+        idle(raw[2], seek_at),
+    ];
+    let heard = [0, 1, 2].map(|i| raw[i].signum() * (raw[i].abs() - excused[i]).max(0.0));
+    if heard.iter().any(|after| after.abs() > 0.5) {
+        let since = |at: Instant| at.saturating_duration_since(first_at).as_secs_f64();
+        // Markers and RTP steps place a flush or a restart in the audio.
+        let marks: Vec<(u16, f64, f64)> = audio
+            .lock()
+            .expect("audio")
+            .windows(2)
+            .filter(|pair| pair[1].at >= first_at)
+            .filter(|pair| {
+                let packets = u32::from(pair[1].seq.wrapping_sub(pair[0].seq));
+                pair[1].marker
+                    || pair[1].rtptime.wrapping_sub(pair[0].rtptime) != packets * FRAMES_PER_PACKET
+            })
+            .map(|pair| {
+                (
+                    pair[1].seq,
+                    since(pair[1].at),
+                    rtp_seconds(seek[1], pair[1].rtptime),
+                )
+            })
+            .collect();
+        let events: Vec<(f64, &SenderEvent)> = tv
+            .events
+            .seen
+            .iter()
+            .filter(|(at, _)| *at >= first_at)
+            .map(|(at, event)| (since(*at), event))
+            .collect();
+        panic!(
+            "the audio each progress names arrived {raw:?} s after it was set, {excused:?} s of it unscheduled; sets at {:?} s; marks and RTP steps (seq, at, s from the seek's current) {marks:?}; requests {:?}; events {events:?}",
+            [first_at, resumed_at, seek_at].map(since),
+            server.fake().keys()
+        );
+    }
+    let most = |values: &[f64]| values.iter().fold(0.0_f64, |most, v| most.max(v.abs())) * 1000.0;
     let drift = (rtp_seconds(start, resumed[1]) - on_track).abs();
     cell(
         "Progress",
         &format!(
-            "fake Samsung: progress at 10 s, a 2 s pause, a seek to 120 s; each names the audio arriving then (within {:.0} ms); after the pause the first mapping is {:.0} ms off the track (limit {:.0})",
-            heard
-                .iter()
-                .fold(0.0_f64, |most, after| most.max(after.abs()))
-                * 1000.0,
+            "fake Samsung: progress at 10 s, a 2 s pause, a seek to 120 s; each names the audio arriving then (within {:.0} ms, {:.0} ms of it unscheduled); after the pause the first mapping is {:.0} ms off the track (limit {:.0})",
+            most(&raw),
+            most(&excused),
             drift * 1000.0,
             PROGRESS_SLACK * 1000.0
         ),
