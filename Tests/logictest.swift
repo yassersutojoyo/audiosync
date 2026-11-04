@@ -7298,9 +7298,31 @@ do {
           "main window: the left column stops at 280 pt and the speaker list stays at its full width",
           "\(columns(860)), \(columns(900))")
 
-    check(Marquee.overflow(text: 300, line: 200) == 100 && Marquee.overflow(text: 150, line: 200) == 0
-            && Marquee.overflow(text: 300, line: 0) == 0,
+    check(Marquee.overflow(text: 300, line: 200, reduceMotion: false) == 100
+            && Marquee.overflow(text: 150, line: 200, reduceMotion: false) == 0
+            && Marquee.overflow(text: 300, line: 0, reduceMotion: false) == 0,
           "now playing: a title scrolls by what runs past its line, never before the line is laid out")
+    check(Marquee.overflow(text: 300, line: 200, reduceMotion: true) == 0,
+          "names: with Reduce Motion a name too long for its line stays put, cut with an ellipsis")
+    check(NoticeMotion.of(reduceMotion: false) == .grow && NoticeMotion.of(reduceMotion: true) == .fade,
+          "notices: a notice opens its height and moves the columns, with Reduce Motion it only cross-fades")
+    check(NoticeMotion.fade.duration < NoticeMotion.grow.duration && NoticeMotion.grow.duration <= 0.3,
+          "notices: the open and close stay short, the Reduce Motion fade shorter still",
+          "\(NoticeMotion.grow.duration), \(NoticeMotion.fade.duration)")
+    check(NoticeMotion.grow.closeDelay > 0 && NoticeMotion.grow.closeDelay < NoticeMotion.grow.fade
+            && NoticeMotion.grow.fade <= NoticeMotion.grow.duration && NoticeMotion.fade.closeDelay == 0,
+          "notices: a closing notice fades before its room starts to close, and its fade fits the open",
+          "\(NoticeMotion.grow.closeDelay), \(NoticeMotion.grow.fade)")
+    let calibrateRowSource = ((try? String(contentsOfFile: "Sources/AudioSync/CalibrateAllViews.swift", encoding: .utf8)) ?? "")
+        .components(separatedBy: "struct CalibrateAllButton").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    // The mic is 20 pt wide; the chevron is estimated at 7 pt; "Calibrate All Speakers" measured 132.7 pt on the Mac.
+    let calibrateRoom = MainColumns.narrow - 2 * BrandTokens.Spacing.cardPadding - 20 - 7 - 2 * 8
+    check(calibrateRoom >= 133 && calibrateRowSource.contains("HStack(spacing: 8)")
+            && calibrateRowSource.contains(".frame(width: 20)") && calibrateRowSource.contains("Text(t.calibrateAll)")
+            && !calibrateRowSource.contains("Spacer(") && !calibrateRowSource.contains("ScrollingTitle"),
+          "left column: Calibrate All Speakers fits whole on one still line at the slim width",
+          calibrateRowSource.isEmpty ? "no CalibrateAllButton source" : "\(calibrateRoom) pt")
     let marquee = [0, 1.9, 3, 4, 5.9, 7, 8, 9.9, 11].map { Marquee.offset(elapsed: $0, overflow: 60) }
     check(marquee == [0, 0, 30, 60, 60, 30, 0, 0, 30],
           "now playing: a long title rests 2 s, scrolls 30 pt a second to its end, rests 2 s and scrolls back",

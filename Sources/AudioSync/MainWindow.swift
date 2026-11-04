@@ -115,10 +115,13 @@ struct MainView: View {
     @StateObject private var sheetRoom = SheetRoom()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var windowWidth = WindowWidth()
+    @StateObject private var noticeCount = NoticeCount()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let t = model.text
-        VStack(alignment: .leading, spacing: 14) {
+        // The notices carry the gap above them, so it opens and closes with them.
+        VStack(alignment: .leading, spacing: 0) {
             header(t)
             NoticeStack(model: model)
             HStack(alignment: .top, spacing: BrandTokens.Spacing.columnGap) {
@@ -171,7 +174,12 @@ struct MainView: View {
                 // width in the old 860 pt window. 360 still fits a zone header.
                 .frame(minWidth: 360, maxWidth: MainColumns.speakerListFull, maxHeight: .infinity)
             }
+            .padding(.top, NoticeStack.windowGap)
         }
+        .animation(NoticeMotion.of(reduceMotion: reduceMotion)
+                    .columns(closing: model.notices.items.count < noticeCount.shown),
+                   value: model.notices)
+        .onChange(of: model.notices.items.count, initial: true) { noticeCount.shown = model.notices.items.count }
         .padding(.horizontal, BrandTokens.Spacing.windowMargin)
         .padding(.top, 4)
         .padding(.bottom, 20)
@@ -272,8 +280,8 @@ struct MainView: View {
                     .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 3) {
                         ScrollingTitle(text: track.title).font(.body.weight(.semibold))
-                        Text(track.artist.isEmpty ? track.appName : track.artist)
-                            .font(.callout).foregroundStyle(Brand.secondaryText).lineLimit(1)
+                        ScrollingTitle(text: track.artist.isEmpty ? track.appName : track.artist)
+                            .font(.callout).foregroundStyle(Brand.secondaryText)
                     }
                     Spacer(minLength: 0)
                 }
@@ -356,16 +364,18 @@ struct MainView: View {
                         .font(.system(size: 15))
                         .foregroundStyle(accent)
                         .frame(width: 20)
-                    Text(t.equalizer).font(.body)
-                    Spacer()
-                    if model.equalizerOn {
-                        Circle().fill(accent).frame(width: 6, height: 6)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(t.equalizer).font(.body).lineLimit(1)
+                        HStack(spacing: 6) {
+                            if model.equalizerOn {
+                                Circle().fill(accent).frame(width: 6, height: 6)
+                            }
+                            ScrollingTitle(text: model.equalizerOn ? model.equalizerCurve : t.off)
+                                .font(.callout)
+                                .foregroundStyle(Brand.secondaryText)
+                        }
                     }
-                    Text(model.equalizerOn ? model.equalizerCurve : t.off)
-                        .font(.callout)
-                        .foregroundStyle(Brand.secondaryText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)
@@ -544,23 +554,32 @@ private struct LocalNetworkHintView: View {
 }
 
 /// The main window's width, which sets its left column's (`MainColumns`).
+/// How many notices the main window last showed: read while the next list
+/// renders, it tells a closing notice from an opening one. Not published, as
+/// updating it needs no new render.
+private final class NoticeCount: ObservableObject {
+    var shown = 0
+}
+
 private final class WindowWidth: ObservableObject {
     @Published var points: CGFloat = 0
 }
 
-/// The Now Playing title on one line. A title too long for it scrolls to its
-/// end and back (`Marquee`); with Reduce Motion it is cut with an ellipsis.
-private struct ScrollingTitle: View {
+/// A title or name on one line. One too long for it scrolls to its end and
+/// back (`Marquee`); with Reduce Motion it is cut with an ellipsis.
+struct ScrollingTitle: View {
     let text: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var line = MarqueeLine()
 
     var body: some View {
-        let overflow = reduceMotion ? 0 : Marquee.overflow(text: line.textWidth, line: line.width)
+        let overflow = Marquee.overflow(text: line.textWidth, line: line.width, reduceMotion: reduceMotion)
         Text(text)
             .lineLimit(1)
             .opacity(overflow > 0 ? 0 : 1)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Only a name that runs over takes the whole line, so one that
+            // fits keeps what follows it (an icon, a note) beside it.
+            .frame(maxWidth: overflow > 0 ? .infinity : nil, alignment: .leading)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { line.width = $0 }
             .overlay(alignment: .leading) {
                 TimelineView(.animation(paused: overflow == 0)) { context in
@@ -573,6 +592,8 @@ private struct ScrollingTitle: View {
                 }
             }
             .clipped()
+            // Clipping hides the scrolled text but leaves it hit-testable over the controls beside it.
+            .contentShape(Rectangle())
             .onChange(of: text) { line.start = .now }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)
@@ -680,9 +701,7 @@ private struct PresetsCard: View {
                                 .opacity(row.current ? 1 : 0)
                                 .frame(width: 14)
                                 .accessibilityHidden(true)
-                            Text(row.name)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
+                            ScrollingTitle(text: row.name)
                             Spacer(minLength: 4)
                         }
                         .frame(minHeight: rowHeight)
@@ -864,9 +883,8 @@ private struct ZoneCard: View {
                     InlineNameField(model: model, id: zone.id, placeholder: zone.name,
                                     label: model.text.nameField(for: zone.name))
                 } else {
-                    Text(zone.name)
+                    ScrollingTitle(text: zone.name)
                         .font(.body.weight(shownState == .playing ? .semibold : .regular))
-                        .lineLimit(1)
                         // Read through the switch's label, whose Rename action replaces the double-click.
                         .accessibilityHidden(true)
                         // As on a speaker's name: a double-click renames, a single
@@ -1008,9 +1026,8 @@ private struct ZoneMemberCompactRow: View {
                         InlineNameField(model: model, id: speaker.id, placeholder: speaker.systemName,
                                         label: model.text.nameField(for: speaker.systemName))
                     } else {
-                        Text(speaker.name)
+                        ScrollingTitle(text: speaker.name)
                             .font(.body.weight(state == .playing ? .semibold : .regular))
-                            .lineLimit(1)
                             .help(t.speakerNameHelp(name: speaker.name, system: speaker.systemName, renamed: speaker.isRenamed))
                             // The switch's Rename action replaces the double-click.
                             .accessibilityHidden(true)
@@ -1108,7 +1125,7 @@ private struct ZoneMemberPlaceholder: View {
             // Dimmed by the badge and secondary text, which keeps 4.5:1.
             SpeakerBadge(symbol: member.symbol, state: .off, size: 32).opacity(0.45)
             VStack(alignment: .leading, spacing: 2) {
-                Text(member.name).font(.body).foregroundStyle(Brand.secondaryText).lineLimit(1)
+                ScrollingTitle(text: member.name).font(.body).foregroundStyle(Brand.secondaryText)
                 if let note = member.note {
                     Text(note).font(.caption).foregroundStyle(Brand.secondaryText).lineLimit(2)
                 }
@@ -1173,9 +1190,8 @@ struct SpeakerRow: View {
                             InlineNameField(model: model, id: speaker.id, placeholder: speaker.systemName,
                                         label: model.text.nameField(for: speaker.systemName))
                         } else {
-                            Text(speaker.name)
+                            ScrollingTitle(text: speaker.name)
                                 .font(.body.weight(state == .playing ? .semibold : .regular))
-                                .lineLimit(1)
                                 // The note beside it wraps or truncates first.
                                 .layoutPriority(1)
                                 .help(t.speakerNameHelp(name: speaker.name, system: speaker.systemName, renamed: speaker.isRenamed))

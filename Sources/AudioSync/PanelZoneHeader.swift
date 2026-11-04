@@ -60,9 +60,8 @@ struct PanelZoneHeader: View {
 
             Button { hit(.name) } label: {
                 HStack(spacing: 0) {
-                    Text(zone.name)
+                    ScrollingTitle(text: zone.name)
                         .font(.callout.weight(shownState == .playing ? .semibold : .regular))
-                        .lineLimit(1)
                         .opacity(nonePresent ? 0.45 : 1)
                         .layoutPriority(1)
                     Spacer(minLength: 4)

@@ -48,16 +48,17 @@ enum MainColumns {
     static func transportSpacing(modes: Bool) -> CGFloat { modes ? 12 : 28 }
 }
 
-/// A Now Playing title too long for its line scrolls: it rests at its start,
+/// A title or name too long for its line scrolls: it rests at its start,
 /// moves to its end at `speed`, rests there, moves back, and repeats.
 enum Marquee {
     /// Points a second.
     static let speed: CGFloat = 30
     static let pause: TimeInterval = 2
 
-    /// How far the title runs past its line; 0 when it fits or the line isn't laid out yet.
-    static func overflow(text: CGFloat, line: CGFloat) -> CGFloat {
-        line > 0 && text > line ? text - line : 0
+    /// How far the title runs past its line; 0 when it fits, the line isn't
+    /// laid out yet, or Reduce Motion is on, which cuts it with an ellipsis.
+    static func overflow(text: CGFloat, line: CGFloat, reduceMotion: Bool) -> CGFloat {
+        !reduceMotion && line > 0 && text > line ? text - line : 0
     }
 
     /// How far the title has moved left `elapsed` seconds after it showed.
@@ -69,6 +70,27 @@ enum Marquee {
         if at < 2 * pause + travel { return overflow }
         return overflow - CGFloat(at - 2 * pause - travel) * speed
     }
+}
+
+/// How a notice comes and goes in the main window.
+enum NoticeMotion: Equatable {
+    /// Its height opens from the top as it fades in, the columns below moving
+    /// down with it, and closes the same way.
+    case grow
+    /// With Reduce Motion: a cross-fade, the columns moving at once.
+    case fade
+
+    static func of(reduceMotion: Bool) -> NoticeMotion { reduceMotion ? .fade : .grow }
+
+    /// Seconds.
+    var duration: TimeInterval { self == .grow ? 0.24 : 0.15 }
+
+    /// Seconds a closing notice fades before its room starts to close, so the
+    /// columns don't slide up under it while it still shows.
+    var closeDelay: TimeInterval { self == .grow ? 0.09 : 0 }
+
+    /// Seconds a notice takes to fade in or out.
+    var fade: TimeInterval { self == .grow ? 0.18 : duration }
 }
 
 /// What a click on the menu bar icon does to its panel. The press on the icon

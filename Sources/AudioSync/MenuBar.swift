@@ -1782,9 +1782,8 @@ private struct CompactRow: View {
             HStack(spacing: 9) {
                 SpeakerBadge(symbol: symbol, state: state, size: 24)
                 // The name goes before the availability note when both don't fit.
-                Text(name)
+                ScrollingTitle(text: name)
                     .font(.callout.weight(state == .playing ? .semibold : .regular))
-                    .lineLimit(1)
                     .layoutPriority(2)
                     .help(text.panelNameHelp(name: name, renamedFrom: renamedFrom))
                     // The button's own label reads the name; the tooltip would repeat it.
@@ -2216,14 +2215,21 @@ struct LiveInputAirPlayNote: View {
 struct NoticeStack: View {
     @ObservedObject var model: AppModel
     var compact = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The main window's gap above a notice and above the columns.
+    static let windowGap: CGFloat = 14
+    private static let listGap: CGFloat = 6
 
     var body: some View {
         let t = model.text
         let list = model.notices
+        let motion = NoticeMotion.of(reduceMotion: reduceMotion)
         if let permission = model.permissionOffer {
             PermissionCard(permission: permission, text: t,
                            proceed: { model.actions.permissionContinue(permission) },
                            later: { model.actions.permissionNotNow(permission) })
+                .padding(.top, compact ? 0 : Self.windowGap)
         }
         if compact {
             if let newest = list.newest {
@@ -2235,19 +2241,26 @@ struct NoticeStack: View {
                 }
             }
         } else if !list.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
+            // Each gap sits inside what comes or goes with it, so none is left to jump shut after.
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(list.items) { notice in
-                    NoticeBanner(notice: notice, text: t, showsTime: true, lineLimit: nil,
+                    NoticeBanner(notice: notice, text: t, showsTime: true, lineLimit: nil, card: true,
                                  dismiss: { model.actions.dismissNotice(notice.subject) },
                                  retry: { model.actions.retryAirPlay() }) { EmptyView() }
+                        .padding(.top, Self.listGap)
+                        .transition(motion.transition)
                 }
                 if list.count > 1 {
                     HStack {
                         Spacer()
                         NoticeLink(title: t.dismissAllNotices) { model.actions.dismissAllNotices() }
                     }
+                    .padding(.top, Self.listGap)
+                    .transition(motion.transition)
                 }
             }
+            .padding(.top, Self.windowGap - Self.listGap)
+            .transition(motion.transition)
         }
     }
 
@@ -2282,14 +2295,18 @@ struct NoticeBanner<Footer: View>: View {
     let text: UIStrings
     let showsTime: Bool
     let lineLimit: Int?
+    /// The main window's look, a card among its cards: a warning keeps its
+    /// orange to the icon and a thin edge.
+    var card = false
     let dismiss: () -> Void
     let retry: () -> Void
     @ViewBuilder let footer: () -> Footer
 
     var body: some View {
+        let warnCard = card && !notice.info
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: notice.info ? "info.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(notice.info ? Brand.tealText : .orange)
+                .foregroundStyle(notice.info ? Brand.tealText : warnCard ? Brand.warn : .orange)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -2332,7 +2349,13 @@ struct NoticeBanner<Footer: View>: View {
             .help(text.dismissNotice)
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill((notice.info ? Brand.teal : Color.orange).opacity(0.12)))
+        .background(RoundedRectangle(cornerRadius: card ? BrandTokens.Radius.card : 10)
+            .fill(warnCard ? Brand.warnBackground : (notice.info ? Brand.teal : Color.orange).opacity(0.12)))
+        .overlay {
+            if warnCard {
+                RoundedRectangle(cornerRadius: BrandTokens.Radius.card).strokeBorder(Brand.warn.opacity(0.28))
+            }
+        }
     }
 }
 
