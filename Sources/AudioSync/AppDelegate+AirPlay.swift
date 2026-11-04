@@ -58,13 +58,14 @@ extension AppDelegate {
     }
 
     /// The prompt for `name`, with `message` under its title, and the field
-    /// that takes the code. The field is masked for a PIN as for a password,
-    /// so both prompts look the same; only its placeholder and its VoiceOver
-    /// label say which one it asks for. Pair is the default button, Cancel
-    /// the other, and typing goes to the field.
+    /// that takes the code. A password is masked; a PIN shows its digits as
+    /// typed, so they can be checked against the ones the receiver shows.
+    /// Pair is the default button, Cancel the other, and typing goes to the
+    /// field.
     private func makeCodePrompt(name: String, password: Bool, message: String)
-        -> (alert: NSAlert, field: NSSecureTextField) {
-        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        -> (alert: NSAlert, field: NSTextField) {
+        let frame = NSRect(x: 0, y: 0, width: 240, height: 24)
+        let field: NSTextField = password ? NSSecureTextField(frame: frame) : NSTextField(frame: frame)
         field.placeholderString = password ? text.pairPasswordPlaceholder : text.pairPINOnlyPlaceholder
         field.setAccessibilityLabel(password ? text.pairPasswordFieldLabel(name: name)
                                              : text.pairPINFieldLabel(name: name))
