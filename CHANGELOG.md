@@ -6,7 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Security
 
-- The Terminal and PowerShell installs now fetch the install script from the latest release instead of the main branch, so a change pushed to the code no longer reaches anyone's install before it ships in a release. The new commands are in the README.
+- Each release now includes the Mac, Windows and Linux install scripts, so they can be fetched from the release instead of the main branch, and each script downloads the app and its checksums only from that one release.
 
 ## [0.8.6] - 2026-11-04
 
