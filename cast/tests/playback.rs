@@ -656,6 +656,33 @@ fn a_device_that_moves_during_recovery_is_reconnected_at_its_new_address() {
     moved.join();
 }
 
+// A record can name any address; only the channel's peer is the device.
+// covers: C115
+#[test]
+fn the_stream_server_answers_the_address_the_channel_connected_to_whatever_the_records_say() {
+    let device = FakeDevice::start(Behavior::default());
+    let records = GroupRecords::new(vec![device.address]);
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let config = SessionConfig {
+        records: Some(records.clone()),
+        ..config(&device)
+    };
+    let selected = Arc::new(AtomicBool::new(true));
+    let session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
+    records.set_group(vec![SocketAddr::new(
+        IpAddr::from([127, 0, 0, 2]),
+        device.address.port(),
+    )]);
+    let (address, path) = http::split_url(session.stream_url()).expect("url");
+    let request = format!("HEAD {path} HTTP/1.1\r\nHost: x\r\n\r\n");
+    let mut fetch = http::request(address, &request).expect("connects");
+    let (head, _) = http::read_response(&mut fetch, Duration::ZERO);
+    assert_eq!(http::status(&head), 200, "{head}");
+    session.stop();
+    device.join();
+}
+
 // covers: C80
 #[test]
 fn connect_retries_wait_1_s_then_double_while_the_device_stays_selected() {
