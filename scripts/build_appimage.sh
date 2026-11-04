@@ -7,6 +7,10 @@
 # files (.github/workflows/linux.yml downloads and checks them); the runtime
 # is passed in, so appimagetool downloads nothing. The AppDir is built next to
 # <output> and left there for the checks that follow.
+#
+# The AppImage ends with a version stamp the updater and the release check
+# read without running it (spec S424): "AudioSyncVersion", then the version of
+# desktop/Cargo.toml padded with NULs to 16 bytes. The squashfs ends before it.
 set -euo pipefail
 
 if [ $# -ne 5 ]; then
@@ -18,6 +22,11 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 linux="$repo/desktop/linux"
 id=io.github.yassersutojoyo.audiosync
 appdir="${output%.AppImage}.AppDir"
+version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$repo/desktop/Cargo.toml" | head -n 1)
+if [ -z "$version" ] || [ ${#version} -gt 16 ]; then
+  echo "desktop/Cargo.toml's version '$version' doesn't fit the 16-byte stamp" >&2
+  exit 1
+fi
 
 rm -rf "$appdir"
 mkdir -p "$appdir/usr/bin" "$appdir/usr/share/applications" \
@@ -37,5 +46,9 @@ install -m 644 "$linux/RUNTIME-NOTICES.txt" "$appdir/usr/share/doc/audiosync/RUN
 
 # appimagetool is an AppImage itself; extracting it needs no FUSE on the runner.
 APPIMAGE_EXTRACT_AND_RUN=1 ARCH=$(uname -m) "$tool" --runtime-file "$runtime" "$appdir" "$output"
+{
+  printf 'AudioSyncVersion%s' "$version"
+  head -c $((16 - ${#version})) /dev/zero
+} >> "$output"
 (cd "$(dirname "$output")" && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
 echo "Wrote $output"

@@ -57,7 +57,12 @@ Description: Play your computer's sound on speakers
  speaker to line them up.
 EOF
 
-dpkg-deb --root-owner-group --build "$root" "$output"
+# The same commit builds the same .deb: every time stamp is the commit's,
+# which dpkg-deb also takes for the archive members, and it sorts the files.
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$repo" log -1 --format=%ct)}
+export SOURCE_DATE_EPOCH
+find "$root" -exec touch --no-dereference --date="@$SOURCE_DATE_EPOCH" {} +
+dpkg-deb --root-owner-group -Zxz --build "$root" "$output"
 rm -rf "$root"
 (cd "$(dirname "$output")" && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
 echo "Wrote $output"

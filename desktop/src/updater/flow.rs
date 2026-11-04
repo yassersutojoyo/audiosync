@@ -370,16 +370,23 @@ fn install_in(
     }
 
     let unpacked = if env.os == Os::Linux {
-        // The signature covers the bytes; an AppImage carries no version to read.
         let fits = appimage::fits(&bytes, env.arch);
+        // The signature covers the bytes only, not the version the appcast names.
+        let stamped = appimage::stamped_version(&bytes);
+        let wanted = stamped
+            .as_ref()
+            .is_some_and(|stamped| *stamped == update.version && *stamped > env.running);
         env.log.log(|| {
             format!(
-                "updater: the download {} an AppImage for {}",
+                "updater: the download {} an AppImage for {}, stamped {}",
                 if fits { "is" } else { "is refused, not" },
-                env.arch.os_value(env.os)
+                env.arch.os_value(env.os),
+                stamped.as_ref().map_or("with no version".to_owned(), |v| {
+                    format!("{v}{}", if wanted { "" } else { ", refused" })
+                })
             )
         });
-        if !fits {
+        if !fits || !wanted {
             return Installed::BrokenDownload;
         }
         archive::Unpacked {
@@ -567,7 +574,7 @@ pub fn periodic_check(
         && matches!(launch_check(true, started, now), LaunchCheck::Due(_))
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub mod tests {
     use super::*;
     use crate::updater::archive::tests::{fake_exe, fake_exe_reporting, zip_of};

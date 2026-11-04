@@ -5,6 +5,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 use super::appcast::Arch;
+use super::version::Version;
 
 /// The folder and file name of the AppImage in `appimage`, the `APPIMAGE`
 /// variable the AppImage runtime sets to its own absolute path; `None` when
@@ -27,6 +28,19 @@ pub fn fits(bytes: &[u8], arch: Arch) -> bool {
         && bytes[5] == 1
         && bytes[8..11] == *b"AI\x02"
         && u16::from_le_bytes([bytes[18], bytes[19]]) == arch.elf_machine()
+}
+
+/// The version `scripts/build_appimage.sh` stamps as the file's last 32
+/// bytes: `AudioSyncVersion`, then the version padded with NULs to 16 bytes.
+/// The squashfs ends before it, so the AppImage runs as it is.
+pub fn stamped_version(bytes: &[u8]) -> Option<Version> {
+    let stamp = bytes.get(bytes.len().checked_sub(32)?..)?;
+    let (mark, text) = stamp.split_at(16);
+    if mark != b"AudioSyncVersion" {
+        return None;
+    }
+    let end = text.iter().position(|&b| b == 0).unwrap_or(text.len());
+    Version::parse(std::str::from_utf8(&text[..end]).ok()?)
 }
 
 #[cfg(test)]
@@ -61,7 +75,6 @@ pub mod tests {
     // covers: S424
     #[test]
     fn the_version_is_read_from_the_stamp_in_the_last_32_bytes() {
-        use super::super::version::Version;
         assert_eq!(
             stamped_version(&stamped(62, "0.9.0")),
             Version::parse("0.9.0")

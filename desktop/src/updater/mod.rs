@@ -837,7 +837,7 @@ fn running_version(text: &str, log: &DebugLog) -> Option<Version> {
     version
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub mod tests {
     use std::path::{Path, PathBuf};
 

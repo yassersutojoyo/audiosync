@@ -177,8 +177,21 @@ fn signal_dir() -> PathBuf {
 /// process is gone.
 #[cfg(not(windows))]
 pub fn signal_started(old: u32) -> bool {
-    !wait_for_exit(old, Duration::ZERO)
-        && std::fs::File::create(signal_file(&signal_dir(), old)).is_ok()
+    !wait_for_exit(old, Duration::ZERO) && make_signal(&signal_file(&signal_dir(), old))
+}
+
+/// Creates `signal` as a new file only the user can read; never through a
+/// link or over a file already there, since the folder may be the shared
+/// temp folder.
+#[cfg(not(windows))]
+fn make_signal(signal: &Path) -> bool {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(signal)
+        .is_ok()
 }
 
 /// Sets the start signal the old process `old` waits on; false when there
@@ -322,7 +335,7 @@ pub fn start_and_wait(command: &mut Command, own: u32, wait: Duration) -> Start 
     start
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub mod tests {
     use std::time::Instant;
 
@@ -618,11 +631,11 @@ mod linux_tests {
         let mut command = Command::new("sh");
         command.args(["-c", "exit 3"]);
         let start = start_and_watch(&mut command, &signal, Duration::from_secs(10));
-        let Start::Exited { pid, code: Some(3) } = start else {
+        let Start::Exited { pid, code: Some(3) } = &start else {
             panic!("{start:?}");
         };
         assert!(
-            wait_for_exit(pid, Duration::from_secs(2)),
+            wait_for_exit(*pid, Duration::from_secs(2)),
             "the child ended"
         );
         std::fs::remove_dir_all(&dir).unwrap();

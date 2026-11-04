@@ -130,7 +130,12 @@ fn swap_one(
     let mut out = match created {
         Ok(out) => out,
         Err(error) if is_blocked(&error) => return Err(SwapError::Blocked),
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied && is_exe => {
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
+            ) && is_exe =>
+        {
             return Err(SwapError::ReadOnly);
         }
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Err(SwapError::InUse),
@@ -275,7 +280,7 @@ pub fn undo_completed(
     restore(dir, &swapped.0, files, log)
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use std::sync::Mutex;
 

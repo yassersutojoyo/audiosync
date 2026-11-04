@@ -162,6 +162,8 @@ jobs:
         run: |
           appimage=$(ls AudioSync-*-"$ARCH".AppImage)
           sha256sum -c "$appimage.sha256"
+          # The version stamp the updater and the release check read (spec S424).
+          [ "$(tail -c 32 "$appimage" | head -c 16)" = AudioSyncVersion ] || { echo "the AppImage has no version stamp"; exit 1; }
           rm -rf squashfs-root
           "./$appimage" --appimage-extract > /dev/null
           root=squashfs-root

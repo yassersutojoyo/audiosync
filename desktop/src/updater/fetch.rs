@@ -469,7 +469,7 @@ mod winhttp {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub mod tests {
     use std::cell::Cell;
     use std::collections::HashMap;

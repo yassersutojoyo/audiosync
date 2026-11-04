@@ -17,8 +17,8 @@ version information names VERSION as its ProductVersion and marks it as a
 release build (AudioSyncReleaseBuild 1). A zip whose name has windows-x64
 or windows-arm64 in it is that architecture's; any other zip is the Mac's.
 An AppImage (AudioSync-VERSION-x86_64.AppImage or -aarch64.AppImage) must
-be a type 2 AppImage for its architecture; its version is not checked, as
-it sits inside the AppImage's file system.
+be a type 2 AppImage for its architecture whose version stamp, the last 32
+bytes scripts/build_appimage.sh appends, names VERSION.
 
 It does not verify signatures: it only checks that sparkle:edSignature is a
 well-formed Ed25519 signature. Sparkle's updater on the Mac and AudioSync's
@@ -207,18 +207,39 @@ def windows_zip_problems(path, version):
     return problems
 
 
-def appimage_problems(path, arch):
+def stamped_version(path):
+    """The version scripts/build_appimage.sh stamps as the file's last 32 bytes:
+    AudioSyncVersion, then the version padded with NULs to 16 bytes."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        if f.tell() < 32:
+            return None
+        f.seek(-32, os.SEEK_END)
+        stamp = f.read(32)
+    if stamp[:16] != b"AudioSyncVersion":
+        return None
+    return stamp[16:].split(b"\0", 1)[0].decode("ascii", "replace")
+
+
+def appimage_problems(path, arch, version):
     """A type 2 AppImage is a 64-bit little-endian ELF with AI and 2 at byte 8 (AppImage spec)."""
     try:
         with open(path, "rb") as f:
             head = f.read(20)
+        stamped = stamped_version(path)
     except OSError as error:
         return [f"{path}: not readable ({error})"]
+    problems = []
     machine = struct.unpack_from("<H", head, 18)[0] if len(head) == 20 else None
     if head[:6] != b"\x7fELF\x02\x01" or head[8:11] != b"AI\x02" or machine != ELF_MACHINES[arch]:
-        return [f"{path}: not a type 2 AppImage for {arch} (ELF machine {machine!r}; "
-                f"expected {ELF_MACHINES[arch]})"]
-    return []
+        problems.append(f"{path}: not a type 2 AppImage for {arch} (ELF machine {machine!r}; "
+                        f"expected {ELF_MACHINES[arch]})")
+    # An older AppImage under this release's name would be offered this update again after
+    # every install, and the updater refuses one whose stamp isn't the offered version.
+    if stamped != version:
+        problems.append(f"{path}: stamped with version {stamped!r}; expected {version!r}: "
+                        f"take it from the CI run of the push to release/x.y.z (RELEASE.md)")
+    return problems
 
 
 def check(appcast, version, zips, mac_only=False):
@@ -240,7 +261,7 @@ def check(appcast, version, zips, mac_only=False):
             if mac_only:
                 problems.append(f"{path}: a {users(os_name)} file, but --mac-only says the release has none")
             elif os_name in LINUX_ARCHES:
-                problems += appimage_problems(path, os_name)
+                problems += appimage_problems(path, os_name, version)
             else:
                 problems += windows_zip_problems(path, version)
     if zips and not mac_only:

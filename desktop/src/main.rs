@@ -67,7 +67,10 @@ mod speaker_names;
 #[rustfmt::skip]
 mod tokens;
 mod ui_model;
-#[cfg(any(windows, all(target_os = "linux", not(test))))]
+// Linux test builds compile it only for its Linux-only tests; the window
+// wires it up in release builds.
+#[cfg(any(windows, target_os = "linux"))]
+#[cfg_attr(all(test, not(windows)), allow(dead_code))]
 mod updater;
 mod view;
 
