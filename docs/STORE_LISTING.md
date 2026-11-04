@@ -24,12 +24,14 @@ Play your PC's sound on AirPlay speakers, Google Cast speakers and the PC's own 
 
 ### Description
 
-Limit: 10,000 characters, plain text, no URLs. Current: 2,272, line breaks included.
+Limit: 10,000 characters, plain text, no URLs. Current: 2,256, line breaks included.
 
 ```text
 AirPlay speakers play about two seconds late. The speakers on your PC don't. Play the same song on both and you hear an echo.
 
 AudioSync captures the sound once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. The source can be everything the PC plays, one app, several apps, every app except the ones you pick, or an input device such as a microphone or line in.
+
+Since the local speakers wait for the network ones, everything you hear is about two seconds late. Music doesn't mind. For video, a player with an audio delay setting (mpv, VLC) can hold the picture back to match.
 
 What it plays to:
 - AirPlay speakers, through AudioSync's own sender. Speakers that only do AirPlay 2, stereo pairs and home theater groups play as they are. A speaker that does both AirPlay 1 and AirPlay 2 uses AirPlay 2, or AirPlay 1 when it was paired over AirPlay 1 or AirPlay 2 can't take it.
@@ -43,14 +45,9 @@ What you can set:
 - Presets that recall which speakers are on, their volumes and the equalizer curve.
 - A 10-band equalizer, with your own curves saved next to the built-in ones.
 - Calibrate with Microphone sets a local speaker's delay for you, and Calibrate All Speakers does every speaker that's on, one after the other.
-- Web Remote lets a phone on your home network turn speakers on and off and set volumes and delays.
+- Web Remote lets a phone on your home network turn speakers on and off and set volumes and delays. It's plain HTTP, so keep it to your home network.
 
-AudioSync sits in the notification area and can start when you sign in, once you turn that on.
-
-What doesn't work yet:
-- Everything is about two seconds late. Fine for music, not for video or games.
-- The app you capture keeps playing on its own output too. AudioSync tells you when that happens and shows how to send it to an output you don't listen to, or to mute that output yourself.
-- Web Remote is plain HTTP. Keep it to your home network.
+AudioSync sits in the notification area and can start when you sign in, once you turn that on. The app you capture keeps playing on its own output too: AudioSync tells you when that happens and shows how to send it to an output you don't listen to, or to mute that output yourself.
 
 AudioSync is free and open source under GPL-3.0-or-later. The source code and issue tracker are on GitHub.
 ```
