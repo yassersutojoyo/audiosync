@@ -45,7 +45,7 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
             wf=${WORKFLOW_REF%@*}
             if n=$(gh api "repos/$REPO/actions/workflows/${wf##*/}/runs?head_sha=$SHA&status=success&per_page=100" \
-                --jq '[.workflow_runs[] | select(.head_branch | startswith("integ/"))] | length') &&
+                --jq '[.workflow_runs[] | select(.event == "push" and .head_repository.full_name == $ENV.REPO and (.head_branch | startswith("integ/")))] | length') &&
               [ "$n" -gt 0 ] 2>/dev/null; then
               skip=true
             fi
