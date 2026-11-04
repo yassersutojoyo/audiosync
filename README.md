@@ -107,7 +107,8 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 - Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), open it and drag AudioSync to Applications. Needs macOS 15 or later. Your audio is never written to disk.
 - The first launch takes one extra step, because AudioSync isn't notarized. When macOS says it can't verify the app, click Done, then go to System Settings → Privacy & Security, click Open Anyway and confirm with your password. After that it opens like any other app. Only Apple's paid Developer Program would remove that step, and I'm not in it.
 - Or, from Terminal: `curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash`. It downloads the latest release's zip, checks it against the release's SHA-256 checksums, puts AudioSync in Applications and opens it. A copy downloaded by curl isn't flagged as downloaded, so macOS doesn't ask for the extra step. Run it again to update.
-- Coming from 0.6 or older, replace the app by hand once. Later versions update themselves.
+- Coming from 0.6 or older, replace the app by hand once. Later versions can update themselves (the app asks on its second launch).
+- HomePods: in Allow Speaker & TV Access, pick “Anyone on the Same Network” on a network you trust, not Everyone.
 - Build it yourself: see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ### Windows
