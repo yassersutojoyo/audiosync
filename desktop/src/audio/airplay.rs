@@ -74,8 +74,8 @@ use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::latency::{
-    AIRPLAY_LATENCY_ENV, LATENCY_MARGIN_FRAMES, LatencySources, exceeds_largest_latency,
-    frames_to_micros, latency_override, micros_to_frames, session_latency_frames,
+    AIRPLAY_LATENCY_ENV, LatencySources, exceeds_largest_latency, frames_to_micros,
+    latency_override, session_latency_frames,
 };
 use audiosync_airplay::metadata::MetadataError;
 use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
@@ -1697,21 +1697,6 @@ impl AirPlaySpeakers {
         });
         for id in &members {
             let reported = self.reported_us.get(id).copied().unwrap_or(0);
-            if self.latency_override.is_some()
-                && reported > 0
-                && micros_to_frames(reported).saturating_add(u64::from(LATENCY_MARGIN_FRAMES))
-                    > u64::from(frames)
-                && self.latency_warned.insert(id.clone())
-            {
-                self.log.log(|| {
-                    format!(
-                        "AirPlay speaker {} warning: reports {:.0} ms, more than the Lf of {:.0} ms set by {AIRPLAY_LATENCY_ENV} leaves room for",
-                        self.label(id),
-                        reported as f64 / 1000.0,
-                        frames_to_micros(frames) as f64 / 1000.0
-                    )
-                });
-            }
             if exceeds_largest_latency(reported) && self.latency_warned.insert(id.clone()) {
                 self.log.log(|| {
                     format!(
@@ -12081,10 +12066,6 @@ pub mod tests {
         fake.report_latency(&den, 1_300_000, LatencySources::ARRIVAL_TO_RENDER);
         airplay.poll();
         assert!(latencies(&fake.take_calls()).is_empty());
-        assert_eq!(
-            airplay.latency_warned,
-            BTreeSet::from([id_of(&kitchen), id_of(&den)])
-        );
         airplay.set_enabled(&id_of(&den), false).unwrap();
         assert!(latencies(&fake.take_calls()).is_empty(), "Den left");
     }

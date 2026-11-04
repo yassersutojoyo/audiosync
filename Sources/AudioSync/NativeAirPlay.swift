@@ -472,15 +472,6 @@ final class NativeAirPlay {
     /// sounds (P201). Main queue.
     private func syncLatency(canChange: Bool) {
         let (rows, members) = model.latencyRows
-        if let frames = Self.latencyOverrideFrames {
-            for id in members.joined() where (model.receiverLatency.reportedUs[id] ?? 0) > 0
-                && Double(model.receiverLatency.reportedUs[id] ?? 0) * 0.0441 + 22_050 > Double(frames) {
-                guard latencyWarned.insert(id).inserted else { continue }
-                DebugTrace.log("[AudioSync] native AirPlay: \(model.names[id] ?? id) (\(id)) warning: reports "
-                    + String(format: "%.0f", model.receiverLatency.reportedMs(id))
-                    + " ms, more than the Lf of \(Int(frames) * 10 / 441) ms set by AirPlayLatencyMs leaves room for")
-            }
-        }
         for id in members.joined() where (model.receiverLatency.reportedUs[id] ?? 0) > 1_500_000 {
             guard latencyWarned.insert(id).inserted else { continue }
             DebugTrace.log("[AudioSync] native AirPlay: \(model.names[id] ?? id) (\(id)) warning: reports "

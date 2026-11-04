@@ -173,11 +173,13 @@ pub fn session_setup(body: &SessionSetupBody<'_>) -> Vec<u8> {
 
 /// The stream SETUP body (P44): one realtime ALAC stream with the stream
 /// key, the sender's control port and the session ID as
-/// `streamConnectionID`.
+/// `streamConnectionID`; `latencyMin` drops to the stream's Lf
+/// `latency_frames` when that is below the capture's.
 pub fn stream_setup(
     stream_key: &[u8; STREAM_KEY_BYTES],
     control_port: u16,
     session_id: u32,
+    latency_frames: u32,
 ) -> Vec<u8> {
     let stream = dict(vec![
         ("type", int(STREAM_TYPE_REALTIME)),
@@ -186,7 +188,10 @@ pub fn stream_setup(
         ("spf", int(FRAMES_PER_PACKET)),
         ("shk", Value::Data(stream_key.to_vec())),
         ("controlPort", int(i64::from(control_port))),
-        ("latencyMin", int(LATENCY_MIN)),
+        (
+            "latencyMin",
+            int(LATENCY_MIN.min(i64::from(latency_frames))),
+        ),
         ("latencyMax", int(LATENCY_MAX)),
         ("isMedia", Value::Boolean(true)),
         ("audioMode", text("default")),

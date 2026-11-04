@@ -51,6 +51,11 @@ fn the_override_reads_whole_milliseconds_and_clamps_to_the_range() {
     assert_eq!(override_latency_frames(5_000), 88_200);
     assert_eq!(override_latency_frames(u64::MAX), 88_200);
     assert_eq!(latency_override(None), Ok(None));
+    assert_eq!(
+        latency_override(Some("0")),
+        Ok(None),
+        "0 is unset, as on the Mac"
+    );
     assert_eq!(latency_override(Some("100")), Ok(Some(LOW)));
     assert_eq!(latency_override(Some("2000")), Ok(Some(88_200)));
     assert_eq!(latency_override(Some("10")), Ok(Some(LOW)));

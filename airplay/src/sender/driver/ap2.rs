@@ -252,6 +252,7 @@ impl Driver {
         config.credentials_turned_down = verifying && self.homekit_turned_down.contains(key);
         config.password = speaker.options.password.clone();
         config.device_id = self.device_id;
+        config.latency_frames = self.stream.latency_frames();
         let ptp_configured = ptp.is_some();
         config.ptp = ptp;
         config.peers = peers;

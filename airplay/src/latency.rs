@@ -145,15 +145,15 @@ pub fn override_latency_frames(ms: u64) -> u32 {
     frames.clamp(u64::from(MIN_LATENCY_FRAMES), u64::from(MAX_LATENCY_FRAMES)) as u32
 }
 
-/// The override [`AIRPLAY_LATENCY_ENV`] holds, `None` when it is unset, or
-/// why the value is ignored when it isn't whole milliseconds (P200).
+/// The override [`AIRPLAY_LATENCY_ENV`] holds, `None` when it is unset or 0,
+/// or why the value is ignored when it isn't whole milliseconds (P200).
 pub fn latency_override(value: Option<&str>) -> Result<Option<u32>, String> {
     let Some(value) = value else {
         return Ok(None);
     };
     value
         .parse::<u64>()
-        .map(|ms| Some(override_latency_frames(ms)))
+        .map(|ms| (ms > 0).then(|| override_latency_frames(ms)))
         .map_err(|_| format!("{AIRPLAY_LATENCY_ENV}={value:?} is not whole milliseconds; ignored"))
 }
 
