@@ -18,7 +18,7 @@ struct CalibrateAllButton: View {
                         .foregroundStyle(off == nil ? Brand.teal : Color.secondary)
                         .frame(width: 20)
                         .accessibilityHidden(true)
-                    Text(t.calibrateAll).font(.body)
+                    ScrollingTitle(text: t.calibrateAll).font(.body)
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
