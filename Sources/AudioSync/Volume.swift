@@ -22,6 +22,26 @@ enum VolumeCurve {
     }
 }
 
+/// The speaker beside the master slider. Muted is the master at 0, so the
+/// streams, the web remote and presets need no state of their own for it.
+enum MasterMute {
+    /// Muted when the number beside the slider reads 0.
+    static func isMuted(_ level: Double) -> Bool { level.rounded() == 0 }
+
+    /// One wave up to 33, two up to 66, three above.
+    static func symbol(level: Double) -> String {
+        if isMuted(level) { return "speaker.slash.fill" }
+        if level.rounded() < 34 { return "speaker.wave.1.fill" }
+        if level.rounded() < 67 { return "speaker.wave.2.fill" }
+        return "speaker.wave.3.fill"
+    }
+
+    /// A click mutes and remembers the level, or returns to the remembered level.
+    static func toggled(level: Double, remembered: Double) -> (level: Double, remembered: Double) {
+        isMuted(level) ? (remembered, remembered) : (0, level)
+    }
+}
+
 enum LocalOutputGain {
     /// A local speaker's linear gain through its zone, on the core's volume
     /// curve (S71, S249); 0 while a calibration plays its signal through

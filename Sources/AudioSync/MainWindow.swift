@@ -297,9 +297,9 @@ struct MainView: View {
                         .font(.system(size: 22))
                     transportButton("forward.fill", .next, label: t.nextTrack)
                     if let mode = track.repeatMode {
-                        modeButton(mode == .one ? "repeat.1" : "repeat",
+                        modeButton("arrow.2.squarepath",
                                    .repeatMode(mode.next(withOne: track.bundleID == NowPlayingMonitor.music)),
-                                   on: mode != .off, label: t.repeatMode,
+                                   on: mode != .off, one: mode == .one, label: t.repeatMode,
                                    value: mode == .one ? t.repeatOne : mode == .all ? t.on : t.off)
                     }
                 }
@@ -320,13 +320,21 @@ struct MainView: View {
         .help(label)
     }
 
-    private func modeButton(_ symbol: String, _ command: NowPlayingMonitor.Command, on: Bool,
+    /// `one`: repeat-one, a "1" inside the loop. On shows as the accent with a dot under it.
+    private func modeButton(_ symbol: String, _ command: NowPlayingMonitor.Command, on: Bool, one: Bool = false,
                             label: String, value: String) -> some View {
         Button { model.actions.transport(command) } label: {
             Image(systemName: symbol)
+                .overlay {
+                    if one { Text(verbatim: "1").font(.system(size: 7, weight: .bold)) }
+                }
+                // An overlay, so the dot leaves the row's height and centering as they are.
+                .overlay(alignment: .bottom) {
+                    Circle().frame(width: 4, height: 4).offset(y: 7).opacity(on ? 1 : 0)
+                }
         }
         .buttonStyle(.plain)
-        .foregroundStyle(on ? Brand.tealText : Color.primary)
+        .foregroundStyle(on ? Brand.tealText : Color.secondary)
         .accessibilityLabel(label)
         .accessibilityValue(value)
         .help(label)
@@ -337,15 +345,12 @@ struct MainView: View {
             VStack(alignment: .leading, spacing: 8) {
                 SectionTitle(t.masterVolumeTitle)
                 HStack(spacing: 8) {
-                    Image(systemName: "speaker.fill").foregroundStyle(.secondary).font(.caption)
-                        .accessibilityHidden(true)
+                    MasterMuteButton(model: model, text: t)
                     Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }),
                            in: 0...100)
                         .controlSize(.small)
                         .accessibilityLabel(t.masterVolume)
                         .accessibilityValue(t.volumeValue(model.master))
-                    Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary).font(.caption)
-                        .accessibilityHidden(true)
                     Text(t.volumeValue(model.master))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(Brand.secondaryText)

@@ -17003,5 +17003,23 @@ do {
           "main menu: Speakers > Add by Address… is offered only while Cast can add a speaker, worded as on Windows")
 }
 
+// MARK: Master mute
+do {
+    let glyphs = [0, 0.4, 0.6, 33, 34, 66, 67, 100].map { MasterMute.symbol(level: $0) }
+    check(glyphs == ["speaker.slash.fill", "speaker.slash.fill", "speaker.wave.1.fill", "speaker.wave.1.fill",
+                     "speaker.wave.2.fill", "speaker.wave.2.fill", "speaker.wave.3.fill", "speaker.wave.3.fill"],
+          "master mute: the speaker is struck through at 0 and shows one, two or three waves by thirds",
+          glyphs.joined(separator: ", "))
+    let muted = MasterMute.toggled(level: 72, remembered: AppSettings.defaultMaster)
+    let unmuted = MasterMute.toggled(level: muted.level, remembered: muted.remembered)
+    check(muted.level == 0 && muted.remembered == 72 && unmuted.level == 72,
+          "master mute: a click sets the master to 0 and the next click returns it to 72",
+          "\(muted) then \(unmuted)")
+    let dragged = MasterMute.toggled(level: 0, remembered: AppSettings.defaultMaster)
+    check(dragged.level == AppSettings.defaultMaster && MasterMute.isMuted(0.3) && !MasterMute.isMuted(5),
+          "master mute: a master at 0 with nothing remembered unmutes to the default level",
+          "\(dragged)")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
