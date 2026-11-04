@@ -32,7 +32,7 @@
 
 AirPlay speakers play about two seconds late. Local speakers don't. Play the same song on both and you get an echo.
 
-AudioSync fixes that. It grabs your computer's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. One app for macOS and Windows 11 (a preview there), with a Linux version on the way. Free, alpha.
+AudioSync fixes that. It grabs your computer's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. It runs on macOS and on Windows 11 (a preview there), with a Linux version on the way. Free, alpha.
 
 ## New in 0.8
 
@@ -119,11 +119,11 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 
 ## Use
 
-- Leave the macOS sound output on a local device, not a HomePod.
+- Leave your computer's sound output on a local device, not a HomePod.
 - Pick a source, click a speaker's round icon to turn it on.
-- The window doesn't open at login. Click the Dock icon.
+- On the Mac, the window doesn't open at login. Click the Dock icon.
 - Speaker plays too early? Raise its delay. Too late? Lower it, below zero if needed. Bluetooth usually ends up around −150 to −300 ms.
-- Mac plays before the HomePod? Raise the AirPlay delay. After? Lower it.
+- Your computer plays before the HomePod? Raise the AirPlay delay. After? Lower it.
 - Speakers that want a code or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
 - More in the AudioSync Guide, in the gear menu on the Mac and under Help > AudioSync Guide on Windows and Linux.
 
