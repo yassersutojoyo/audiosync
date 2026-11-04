@@ -131,7 +131,7 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 - Speakers that want a code or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
 - More in the AudioSync Guide, in the gear menu on the Mac and under Help > AudioSync Guide on Windows and Linux.
-- If something fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`.
+- If something fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log. On the Mac: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`. On Windows the steps are under [Running the exe](desktop/README.md#running-the-exe).
 
 ## Linux: a silent output
 

@@ -16,7 +16,7 @@ AudioSync
 
 ### Short description
 
-Limit: 1,000 characters, and Microsoft suggests under 270 because some views cut it there. Current: 249.
+Limit: 1,000 characters, and Microsoft suggests under 270 because some views cut it there. Current: 218.
 
 ```text
 Play your PC's sound on AirPlay speakers, Google Cast speakers and the PC's own outputs at the same time. Each speaker has its own delay, so they line up instead of echoing. Free and open source under GPL-3.0-or-later.
