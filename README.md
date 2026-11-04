@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  Multiroom audio for your Mac or Windows PC: play its sound on AirPlay speakers, Bluetooth speakers and every other output it knows, plus Google Cast, all at once and in sync. A free, open-source Airfoil alternative.
+  Multiroom audio for macOS and Windows, with Linux on the way: play your computer's sound on AirPlay speakers, Bluetooth speakers and every other output it knows, plus Google Cast, all at once and in sync. A free, open-source Airfoil alternative.
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
   <img alt="macOS 15+" src="https://img.shields.io/badge/macOS-15%2B-black?logo=apple">
   <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4">
   <img alt="GPL-3.0-or-later license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue">
-  <img alt="Alpha" src="https://img.shields.io/badge/status-alpha-E3A21A">
+  <img alt="Beta" src="https://img.shields.io/badge/status-beta-9A5B00">
 </p>
 
 <p align="center">
@@ -32,7 +32,11 @@
 
 AirPlay speakers play about two seconds late. Local speakers don't. Play the same song on both and you get an echo.
 
-AudioSync fixes that. It grabs your computer's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. It runs on macOS and on Windows 11, with a Linux version on the way. Free, alpha.
+AudioSync fixes that. It grabs your computer's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. It's free, and it's a beta, so expect rough edges.
+
+- On a Mac (macOS 15 or later) it plays system audio, one app or a mic on AirPlay speakers, Google Cast speakers, Bluetooth and every other output the Mac knows.
+- On Windows 11 it's multiroom audio for your PC: it plays the PC's audio on AirPlay speakers, sends desktop audio to a Google Cast speaker, and keeps Bluetooth and the other Windows outputs in sync with them.
+- On Linux it's an AirPlay sender that also plays to Google Cast and keeps Bluetooth and AirPlay speakers in sync, through PipeWire. Not released yet.
 
 ## New in 0.8
 

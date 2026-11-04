@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AudioSync: a free multiroom Airfoil alternative for Mac</title>
+<title>AudioSync: a free multiroom Airfoil alternative for Mac and Windows</title>
 <link rel="canonical" href="https://getaudiosync.vercel.app/">
-<meta name="description" content="Free, open-source multiroom audio for Mac. Play its sound on AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync. An Airfoil alternative.">
+<meta name="description" content="Free, open-source multiroom audio for Mac and Windows, with Linux on the way. Play your computer's sound on AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync. An Airfoil alternative.">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f1f7f6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
@@ -21,16 +21,16 @@
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="AudioSync">
-<meta property="og:title" content="AudioSync: a free multiroom Airfoil alternative for Mac">
-<meta property="og:description" content="Multiroom audio for your Mac: AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync instead of echoing. Free and open source.">
+<meta property="og:title" content="AudioSync: a free multiroom Airfoil alternative for Mac and Windows">
+<meta property="og:description" content="Multiroom audio for your Mac or Windows PC: AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync instead of echoing. Free and open source.">
 <meta property="og:image" content="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/social-preview.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
 <meta property="og:image:alt" content="The AudioSync logo and tagline beside the app's main window">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="AudioSync: a free multiroom Airfoil alternative for Mac">
-<meta name="twitter:description" content="Multiroom audio for your Mac: AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync instead of echoing. Free and open source.">
+<meta name="twitter:title" content="AudioSync: a free multiroom Airfoil alternative for Mac and Windows">
+<meta name="twitter:description" content="Multiroom audio for your Mac or Windows PC: AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync instead of echoing. Free and open source.">
 <meta name="twitter:image" content="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/social-preview.png">
 <meta name="twitter:image:alt" content="The AudioSync logo and tagline beside the app's main window">
 
@@ -39,8 +39,8 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "AudioSync",
-  "description": "A free, open-source multiroom audio app for Mac and an Airfoil alternative. It plays system, app or input audio on AirPlay, Google Cast, Bluetooth and other local outputs at the same time, in sync.",
-  "operatingSystem": "macOS",
+  "description": "A free, open-source multiroom audio app for Mac and Windows and an Airfoil alternative. It plays system, app or input audio on AirPlay, Google Cast, Bluetooth and other local outputs at the same time, in sync.",
+  "operatingSystem": "macOS, Windows",
   "applicationCategory": "MultimediaApplication",
   "offers": {
     "@type": "Offer",
@@ -324,9 +324,9 @@
 <main id="main">
   <div class="hero">
     <div class="wrap">
-      <p class="tag">Free and open source &middot; for macOS 15 and later</p>
+      <p class="tag">Free and open source &middot; for macOS 15 and Windows 11</p>
       <h1>Every speaker in the house, <span>on the same beat.</span></h1>
-      <p class="lede">AudioSync plays your Mac's audio on AirPlay speakers, Google Cast speakers and the Mac's own outputs all at once. It lines them up, so you hear one song instead of an echo. Think of it as a free Airfoil alternative that does less, on purpose.</p>
+      <p class="lede">AudioSync plays your Mac's or Windows PC's audio on AirPlay speakers, Google Cast speakers and the computer's own outputs, Bluetooth included, all at once. It lines them up, so you hear one song instead of an echo. Think of it as a free Airfoil alternative that does less, on purpose.</p>
       <div class="actions">
         <a class="btn btn-main" href="https://github.com/yassersutojoyo/audiosync/releases/latest">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
@@ -334,7 +334,7 @@
         </a>
         <a class="btn btn-quiet" href="https://github.com/yassersutojoyo/audiosync">Source on GitHub</a>
       </div>
-      <p class="fine">Free software under the GPL (GPL-3.0-or-later). Alpha, so expect a few rough edges.</p>
+      <p class="fine">Free software under the GPL (GPL-3.0-or-later). It's a beta, so expect a few rough edges.</p>
       <div class="shot-hero">
         <picture>
           <source srcset="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/main-window-dark.png" media="(prefers-color-scheme: dark)">
@@ -347,16 +347,16 @@
   <section id="what" aria-labelledby="what-title">
     <div class="wrap">
       <div class="head reveal">
-        <h2 id="what-title">One Mac, every speaker</h2>
+        <h2 id="what-title">One computer, every speaker</h2>
         <p>I wanted the music on my desk speakers and the HomePod in the next room at the same time. That's really all this does: it grabs the audio once and sends it everywhere you switch on.</p>
       </div>
       <div class="flow reveal">
         <div class="card">
           <p class="label">Plays from</p>
           <ul>
-            <li>Everything the Mac is playing</li>
-            <li>One app, along with its helper processes</li>
-            <li>An input, like a mic, a line-in or an audio interface</li>
+            <li>All system audio</li>
+            <li>One app, several apps, or every app except the ones you check</li>
+            <li>An input device, like a mic or an audio interface</li>
           </ul>
         </div>
         <div class="arrow" aria-hidden="true">
@@ -366,9 +366,8 @@
           <p class="label">Plays to, all at once</p>
           <ul>
             <li>AirPlay speakers and Apple TVs</li>
-            <li>Built-in speakers and the headphone jack</li>
-            <li>HDMI or DisplayPort, USB and Bluetooth outputs</li>
-            <li>A Google Cast speaker</li>
+            <li>Google Cast speakers</li>
+            <li>Anything your computer can play to: built-in speakers, the headphone jack, HDMI, USB and Bluetooth</li>
           </ul>
         </div>
       </div>
@@ -474,21 +473,20 @@
     <div class="wrap">
       <div class="head reveal">
         <h2 id="tradeoffs-title">Good to know first</h2>
-        <p>A few limits to keep in mind before you install it.</p>
+        <p>How the timing and the speakers work.</p>
       </div>
       <div class="card reveal">
         <ul class="limits">
           <li><span><strong>There's a two-second lag.</strong> AirPlay adds a fixed delay of about 2 s, and nothing can shorten it. You won't notice with music, but it gets in the way of video and games.</span></li>
-          <li><span><strong>You set the delays.</strong> Every output except the Mac's own speakers gets a delay you pick (AirPlay speakers share one), and AudioSync remembers it per device.</span></li>
-          <li><span><strong>Not every speaker plays yet.</strong> AudioSync streams with its own AirPlay sender. Speakers that only do AirPlay 2 play as they are. A speaker that does both uses AirPlay 2, or the original AirPlay when it was paired that way or AirPlay 2 can't take it. AirPlay 2 plays up to 16 AirPlay 2 speakers at once, but I've only tried it on one AirPlay 2 TV.</span></li>
-          <li><span><strong>Pairs and HomePods are untested.</strong> A stereo pair or a home theater group shows as one speaker, but no real pair has been tried yet. I haven't tried the new sender on a HomePod yet, so if yours doesn't show up or play, please open an issue on GitHub with the debug log.</span></li>
-          <li><span><strong>Track info is limited.</strong> Now Playing only picks up Spotify and Music.</span></li>
-          <li><span><strong>It's an alpha.</strong> Expect rough edges.</span></li>
+          <li><span><strong>You set the delays.</strong> Every output except the computer's own speakers gets a delay you pick (AirPlay speakers share one), and AudioSync remembers it per device.</span></li>
+          <li><span><strong>AirPlay 1 and AirPlay 2.</strong> AudioSync streams with its own AirPlay sender. Speakers that only do AirPlay 2 play as they are. A speaker that does both uses AirPlay 2, or the original AirPlay when it was paired that way or AirPlay 2 can't take it. Up to 16 AirPlay 2 speakers play at once, and a stereo pair or an Apple TV with the HomePods it plays through shows up as one speaker.</span></li>
+          <li><span><strong>Google Cast plays one speaker at a time.</strong> Cast has no shared clock, so you set its offset by ear and AudioSync remembers it. A speaker group made in the Google Home app plays as one speaker.</span></li>
+          <li><span><strong>It's a beta.</strong> Expect rough edges.</span></li>
         </ul>
       </div>
       <div class="card note reveal">
         <h3>Coming from Airfoil?</h3>
-        <p>The idea is the same: send the whole Mac, or one app, to AirPlay speakers and local outputs together. AudioSync just does less. It plays to AirPlay receivers, Google Cast speakers (one at a time, with an offset you set by ear) and the outputs macOS already knows about, and it needs macOS 15 or later. AirPlay 2 is still experimental, and a speaker that also does AirPlay 1 falls back to it when AirPlay 2 can't take it.</p>
+        <p>The idea is the same: send the whole computer, or one app, to AirPlay speakers and local outputs together. AudioSync just does less. It plays to AirPlay receivers, Google Cast speakers (one at a time, with an offset you set by ear) and the outputs your computer already knows about, on macOS 15 or later and on Windows 11.</p>
       </div>
     </div>
   </section>
@@ -502,7 +500,7 @@
       <div class="get">
         <div class="card reveal">
           <img class="appicon" src="/icon-192.png" width="72" height="72" alt="">
-          <h3>Download</h3>
+          <h3>Download for Mac</h3>
           <p>For macOS 15 (Sequoia) or later. Open the disk image and drag AudioSync to Applications.</p>
           <p>The disk image is about 5.9 MB, and the installed app takes about 18 MB. Besides its settings, AudioSync keeps a few small files: your AirPlay pairings, its AirPlay 2 identity, a timing cache per AirPlay 2 speaker, and the remote and Cast devices it knows. Your audio is never written to disk.</p>
           <p>The builds aren't notarized yet, so macOS blocks the first launch. To get past it:</p>
@@ -519,6 +517,18 @@
 <pre><code>curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash</code></pre>
         </div>
         <div class="card reveal">
+          <img class="appicon" src="/icon-192.png" width="72" height="72" alt="">
+          <h3>Download for Windows</h3>
+          <p>For Windows 11, on x64 or ARM64. Get the zip for your PC, unzip it into a folder of its own and run the exe. There's no installer, and from 0.8 it updates itself.</p>
+          <p>The exe isn't signed, so the first time you open it Windows SmartScreen may say it protected your PC. Click More info, then Run anyway.</p>
+          <a class="btn btn-main" href="https://github.com/yassersutojoyo/audiosync/releases/latest">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
+            Latest release
+          </a>
+          <p>Or, from PowerShell. It checks the zip, adds a Start menu shortcut, needs no admin rights, and SmartScreen doesn't ask:</p>
+<pre><code>irm https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.ps1 | iex</code></pre>
+        </div>
+        <div class="card reveal">
           <h3>Build from source</h3>
           <p>You'll need:</p>
           <ul>
@@ -532,7 +542,7 @@ cd audiosync
           <p>The first run needs a network connection and takes a while. After that, <code>./build.sh</code> is all you need. <a href="https://github.com/yassersutojoyo/audiosync/blob/main/docs/DEVELOPMENT.md">The development notes</a> have the details.</p>
         </div>
       </div>
-      <p class="soon reveal">A Windows 11 preview (x64 and ARM64) is on the Releases page, and from 0.8 it updates itself. A Linux version is in the works, but it isn't out yet.</p>
+      <p class="soon reveal">Linux: an x86_64 AppImage that captures and plays through PipeWire. Not released yet.</p>
     </div>
   </section>
 </main>

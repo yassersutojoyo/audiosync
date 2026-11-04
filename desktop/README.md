@@ -4,7 +4,7 @@ This folder is the start of a Windows 11 version of AudioSync, written in Rust
 with a [Slint](https://slint.dev) interface. The audio work comes from
 `audiosync-core` in [`../core`](../core), the crate the macOS app links too.
 
-**Status: in development, ready for a first try on a real PC.** It has the Mac
+**Status: beta.** It has the Mac
 app's screens (the main window, the equalizer, a tray icon and its panel, the
 About dialog), and on Windows they drive the real audio backend: it captures
 one app, several apps, every app except the ones you pick, everything the PC
