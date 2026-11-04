@@ -31,6 +31,12 @@ pub const MAX_DEVICES: usize = 8;
 /// A paired device that sends no request for this long is forgotten. The
 /// cookie outlives it, so a lost phone stops working on its own.
 pub const DEVICE_IDLE_LIMIT: Duration = Duration::from_secs(90 * 24 * 60 * 60);
+/// A device's token is replaced on its first request this long after it was
+/// issued; once per interval, so only one new value is in flight at a time.
+pub const ROTATE_AFTER: Duration = Duration::from_secs(10 * 60);
+/// How long a replaced token still works: requests the page sent before its
+/// browser stored the new one.
+pub const ROTATION_GRACE: Duration = Duration::from_secs(60);
 /// How far a device's last-seen time moves before the file is written again,
 /// so a busy page doesn't write it on every request.
 const SEEN_SAVE_STEP: u64 = 24 * 60 * 60;
@@ -233,9 +239,19 @@ fn unix_seconds(time: SystemTime) -> u64 {
 #[derive(Clone, Copy, Debug)]
 struct Device {
     hash: TokenHash,
+    /// The token before the last rotation, and when the new one was first
+    /// presented: until then the answer carrying it may never have arrived.
+    previous: Option<(TokenHash, Option<u64>)>,
+    /// When `hash` was issued, or read from the file.
+    issued: u64,
+    /// Where it paired ([`net::pairing_address`]); none for a device from a
+    /// file kept before addresses were, until its first request.
+    peer: Option<IpAddr>,
     seen: u64,
     /// `seen` as the last snapshot had it.
     seen_saved: u64,
+    /// Names the device to its event streams, which outlive a rotation.
+    id: u64,
 }
 
 impl Device {
@@ -259,6 +275,7 @@ pub struct TokenStore {
     path: Option<PathBuf>,
     devices: Vec<Device>,
     generation: u64,
+    next_id: u64,
     /// The file as read differs from the store: no last-seen times, idle
     /// devices or times ahead of the clock.
     rewrite: bool,
@@ -284,7 +301,9 @@ pub enum LoadProblem {
 #[must_use = "a change reaches the file only once its snapshot is saved"]
 pub struct Snapshot {
     path: Option<PathBuf>,
-    devices: Vec<(TokenHash, u64)>,
+    /// The token the phone is known to hold, last seen, the pairing address
+    /// and a new token waiting for its first use.
+    devices: Vec<(TokenHash, u64, Option<IpAddr>, Option<TokenHash>)>,
     generation: u64,
     /// The damaged file as read, to keep aside before writing over it.
     keep_first: Option<Arc<[u8]>>,
@@ -320,10 +339,31 @@ impl DeviceFile {
             keep_aside(path, bytes, unix_seconds(SystemTime::now()))?;
             written.kept_aside = true;
         }
-        let hashes: Vec<String> = snapshot.devices.iter().map(|(hash, _)| hex(hash)).collect();
-        let seen: Vec<u64> = snapshot.devices.iter().map(|(_, seen)| *seen).collect();
-        // "seen" sits beside "devices" so a reader of the older layout still counts them.
-        let text = json!({ "version": FILE_VERSION, "devices": hashes, "seen": seen }).to_string();
+        let hashes: Vec<String> = snapshot
+            .devices
+            .iter()
+            .map(|(hash, ..)| hex(hash))
+            .collect();
+        let seen: Vec<u64> = snapshot.devices.iter().map(|(_, seen, ..)| *seen).collect();
+        let peers: Vec<Option<String>> = snapshot
+            .devices
+            .iter()
+            .map(|(_, _, peer, _)| peer.map(|peer| peer.to_string()))
+            .collect();
+        let pending: Vec<Option<String>> = snapshot
+            .devices
+            .iter()
+            .map(|(.., pending)| pending.map(|hash| hex(&hash)))
+            .collect();
+        // These sit beside "devices" so a reader of the older layout still counts them.
+        let text = json!({
+            "version": FILE_VERSION,
+            "devices": hashes,
+            "seen": seen,
+            "peers": peers,
+            "pending": pending,
+        })
+        .to_string();
         write_replacing(path, text.as_bytes())?;
         written.generation = snapshot.generation;
         Ok(())
@@ -345,6 +385,7 @@ impl TokenStore {
             path,
             devices: Vec::new(),
             generation: 0,
+            next_id: 0,
             rewrite: false,
             damaged: None,
         };
@@ -359,6 +400,8 @@ impl TokenStore {
                     devices.retain(|device| !device.idle_too_long(now));
                     for device in &mut devices {
                         device.seen = device.seen.min(now);
+                        device.id = store.next_id;
+                        store.next_id += 1;
                     }
                     store.rewrite = upgraded
                         || devices.len() != read
@@ -404,7 +447,10 @@ impl TokenStore {
             .count()
     }
 
-    fn position(&self, token: &str) -> Option<usize> {
+    /// The device whose current token is `token`, or whose replaced one is
+    /// while the new one is unused or was first used less than
+    /// [`ROTATION_GRACE`] before `now`; true when it is the current.
+    fn position(&self, token: &str, now: u64) -> Option<(usize, bool)> {
         if token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             return None;
         }
@@ -414,8 +460,13 @@ impl TokenStore {
             .iter()
             .enumerate()
             .fold(None, |found, (index, device)| {
-                if equal_in_constant_time(&device.hash, &hash) {
-                    Some(index)
+                let current = equal_in_constant_time(&device.hash, &hash);
+                let replaced = device.previous.is_some_and(|(old, used)| {
+                    equal_in_constant_time(&old, &hash)
+                        & used.is_none_or(|at| now.abs_diff(at) < ROTATION_GRACE.as_secs())
+                });
+                if current || replaced {
+                    Some((index, current))
                 } else {
                     found
                 }
@@ -425,8 +476,16 @@ impl TokenStore {
     /// Whether `token` belongs to a paired device that hasn't been idle too long.
     pub fn contains(&self, token: &str, now: SystemTime) -> bool {
         let now = unix_seconds(now);
-        self.position(token)
-            .is_some_and(|index| !self.devices[index].idle_too_long(now))
+        self.position(token, now)
+            .is_some_and(|(index, _)| !self.devices[index].idle_too_long(now))
+    }
+
+    /// Whether the device [`TokenStore::check`] named `id` is still paired at `now`.
+    pub fn holds(&self, id: u64, now: SystemTime) -> bool {
+        let now = unix_seconds(now);
+        self.devices
+            .iter()
+            .any(|device| device.id == id && !device.idle_too_long(now))
     }
 
     /// A request carrying `token` at `now`: forgets the devices idle too
@@ -434,31 +493,92 @@ impl TokenStore {
     /// so a clock that jumped ahead and back keeps no device longer. The
     /// snapshot comes when the file needs writing: a device was forgotten, or
     /// a time in the file is a day or more off.
-    pub fn check(&mut self, token: &str, now: SystemTime) -> (bool, Option<Snapshot>) {
+    ///
+    /// A token sent from another address than its device paired from
+    /// forgets that device; one without an address yet is bound to `peer`.
+    /// Returns the device's ID while it stays paired.
+    pub fn check(
+        &mut self,
+        token: &str,
+        peer: IpAddr,
+        now: SystemTime,
+    ) -> (Option<u64>, Option<Snapshot>) {
         let now = unix_seconds(now);
         let before = self.devices.len();
         self.devices.retain(|device| !device.idle_too_long(now));
         for device in &mut self.devices {
             device.seen = device.seen.min(now);
         }
-        let found = self.position(token);
-        if let Some(index) = found {
-            self.devices[index].seen = now;
-        }
-        let changed = self.devices.len() != before || self.devices.iter().any(Device::needs_saving);
-        (found.is_some(), changed.then(|| self.snapshot()))
+        let from = net::pairing_address(peer);
+        let mut bound = false;
+        let mut first_use = false;
+        let found = match self.position(token, now) {
+            Some((index, _)) if self.devices[index].peer.is_some_and(|at| at != from) => {
+                self.devices.remove(index);
+                None
+            }
+            Some((index, current)) => {
+                let device = &mut self.devices[index];
+                bound = device.peer.replace(from).is_none();
+                device.seen = now;
+                if current
+                    && let Some((_, used)) = &mut device.previous
+                    && used.is_none()
+                {
+                    *used = Some(now);
+                    first_use = true;
+                }
+                Some(device.id)
+            }
+            None => None,
+        };
+        let changed = bound
+            || first_use
+            || self.devices.len() != before
+            || self.devices.iter().any(Device::needs_saving);
+        (found, changed.then(|| self.snapshot()))
     }
 
-    /// Remembers a new device's token, seen at `now`, dropping the oldest
-    /// beyond [`MAX_DEVICES`]. The token works at once, saved or not, until
-    /// the app quits.
-    pub fn add(&mut self, token: &str, now: SystemTime) -> Snapshot {
+    /// A new token for the device whose current token is `token`, once that
+    /// one is [`ROTATE_AFTER`] old at `now`. The old one works until the new
+    /// one is first presented to [`TokenStore::check`], then for
+    /// [`ROTATION_GRACE`]. The snapshot keeps both until that first use, so
+    /// a restart in between keeps both working.
+    pub fn rotate(
+        &mut self,
+        token: &str,
+        now: SystemTime,
+    ) -> Result<Option<(String, Snapshot)>, RandomError> {
+        let now = unix_seconds(now);
+        let Some((index, true)) = self.position(token, now) else {
+            return Ok(None);
+        };
+        if now.abs_diff(self.devices[index].issued) < ROTATE_AFTER.as_secs() {
+            return Ok(None);
+        }
+        let fresh = random_token()?;
+        let device = &mut self.devices[index];
+        device.previous = Some((device.hash, None));
+        device.hash = token_hash(&fresh);
+        device.issued = now;
+        Ok(Some((fresh, self.snapshot())))
+    }
+
+    /// Remembers a new device's token, paired from `peer` and seen at `now`,
+    /// dropping the oldest beyond [`MAX_DEVICES`]. The token works at once,
+    /// saved or not, until the app quits.
+    pub fn add(&mut self, token: &str, peer: IpAddr, now: SystemTime) -> Snapshot {
         let now = unix_seconds(now);
         self.devices.push(Device {
             hash: token_hash(token),
+            previous: None,
+            issued: now,
+            peer: Some(net::pairing_address(peer)),
             seen: now,
             seen_saved: now,
+            id: self.next_id,
         });
+        self.next_id += 1;
         if self.devices.len() > MAX_DEVICES {
             let excess = self.devices.len() - MAX_DEVICES;
             self.devices.drain(..excess);
@@ -470,7 +590,9 @@ impl TokenStore {
     pub fn remove(&mut self, token: &str) -> Option<Snapshot> {
         let hash = token_hash(token);
         let before = self.devices.len();
-        self.devices.retain(|device| device.hash != hash);
+        self.devices.retain(|device| {
+            device.hash != hash && device.previous.is_none_or(|(old, _)| old != hash)
+        });
         (self.devices.len() != before).then(|| self.snapshot())
     }
 
@@ -492,7 +614,10 @@ impl TokenStore {
             devices: self
                 .devices
                 .iter()
-                .map(|device| (device.hash, device.seen))
+                .map(|device| match device.previous {
+                    Some((old, None)) => (old, device.seen, device.peer, Some(device.hash)),
+                    _ => (device.hash, device.seen, device.peer, None),
+                })
                 .collect(),
             generation: self.generation,
             keep_first: self.damaged.clone(),
@@ -514,6 +639,14 @@ fn parse_file(bytes: &[u8], now: u64) -> Option<(Vec<Device>, bool, usize)> {
         .get("seen")
         .and_then(Value::as_array)
         .filter(|seen| seen.len() == entries.len());
+    let peers = value
+        .get("peers")
+        .and_then(Value::as_array)
+        .filter(|peers| peers.len() == entries.len());
+    let pending = value
+        .get("pending")
+        .and_then(Value::as_array)
+        .filter(|pending| pending.len() == entries.len());
     let mut rewrite = seen.is_none();
     let mut skipped = 0;
     let mut devices = Vec::with_capacity(entries.len());
@@ -530,10 +663,26 @@ fn parse_file(bytes: &[u8], now: u64) -> Option<(Vec<Device>, bool, usize)> {
             }
             None => now,
         };
+        let peer = peers
+            .and_then(|peers| peers[index].as_str())
+            .and_then(|text| text.parse().ok())
+            .map(net::pairing_address);
+        // A rotation whose new token was not used yet: both keep working.
+        let (hash, previous) = match pending
+            .and_then(|pending| pending[index].as_str())
+            .and_then(from_hex)
+        {
+            Some(new) => (new, Some((hash, None))),
+            None => (hash, None),
+        };
         devices.push(Device {
             hash,
+            previous,
+            issued: now,
+            peer,
             seen,
             seen_saved: seen,
+            id: 0,
         });
     }
     if devices.len() > MAX_DEVICES {
@@ -945,7 +1094,7 @@ mod tests {
             .collect();
         for token in &tokens {
             device_file
-                .save(store.add(token, SystemTime::now()))
+                .save(store.add(token, peer(10), SystemTime::now()))
                 .unwrap();
         }
         assert_eq!(store.len(), MAX_DEVICES);
@@ -987,8 +1136,8 @@ mod tests {
         let device_file = DeviceFile::default();
         let first = random_token().unwrap();
         let second = random_token().unwrap();
-        let older = store.add(&first, SystemTime::now());
-        let newer = store.add(&second, SystemTime::now());
+        let older = store.add(&first, peer(10), SystemTime::now());
+        let newer = store.add(&second, peer(10), SystemTime::now());
         device_file.save(newer).unwrap();
         device_file.save(older).unwrap();
         assert!(
@@ -1013,19 +1162,23 @@ mod tests {
         let device_file = DeviceFile::default();
         let token = random_token().unwrap();
         let other = random_token().unwrap();
-        device_file.save(store.add(&token, start)).unwrap();
-        device_file.save(store.add(&other, start)).unwrap();
+        device_file
+            .save(store.add(&token, peer(10), start))
+            .unwrap();
+        device_file
+            .save(store.add(&other, peer(10), start))
+            .unwrap();
 
         // Every request starts the ninety days over.
         let used = start + DAY * 89;
-        assert!(store.check(&token, used).0);
+        assert!(store.check(&token, peer(10), used).0.is_some());
         let idle = used + DAY * 89;
-        assert!(store.check(&token, idle).0);
+        assert!(store.check(&token, peer(10), idle).0.is_some());
         assert!(!store.contains(&other, idle), "the other went unused");
         assert_eq!(store.count_at(idle), 1);
 
-        let (paired, snapshot) = store.check(&token, idle + DAY);
-        assert!(paired);
+        let (paired, snapshot) = store.check(&token, peer(10), idle + DAY);
+        assert!(paired.is_some());
         device_file
             .save(snapshot.expect("a forgotten device is written out"))
             .unwrap();
@@ -1044,12 +1197,14 @@ mod tests {
         let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
         let device_file = DeviceFile::default();
         let token = random_token().unwrap();
-        device_file.save(store.add(&token, start)).unwrap();
-        let (paired, snapshot) = store.check(&token, start + DAY / 2);
-        assert!(paired && snapshot.is_none());
-        let (_, snapshot) = store.check(&token, start + DAY * 2);
+        device_file
+            .save(store.add(&token, peer(10), start))
+            .unwrap();
+        let (paired, snapshot) = store.check(&token, peer(10), start + DAY / 2);
+        assert!(paired.is_some() && snapshot.is_none());
+        let (_, snapshot) = store.check(&token, peer(10), start + DAY * 2);
         device_file.save(snapshot.expect("a day later")).unwrap();
-        let (_, snapshot) = store.check(&token, start + DAY * 2);
+        let (_, snapshot) = store.check(&token, peer(10), start + DAY * 2);
         assert!(snapshot.is_none());
 
         let (reopened, _) = TokenStore::open_at(Some(path), start + DAY * 2);
@@ -1091,20 +1246,27 @@ mod tests {
         let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
         let device_file = DeviceFile::default();
         let token = random_token().unwrap();
-        device_file.save(store.add(&token, start)).unwrap();
         device_file
-            .save(store.check(&token, ahead).1.expect("a year later"))
+            .save(store.add(&token, peer(10), start))
+            .unwrap();
+        device_file
+            .save(
+                store
+                    .check(&token, peer(10), ahead)
+                    .1
+                    .expect("a year later"),
+            )
             .unwrap();
 
-        let (paired, snapshot) = store.check(&token, start + DAY);
-        assert!(paired);
+        let (paired, snapshot) = store.check(&token, peer(10), start + DAY);
+        assert!(paired.is_some());
         device_file
             .save(snapshot.expect("a time ahead of the clock is written back"))
             .unwrap();
         assert!(!store.contains(&token, start + DAY * 91));
 
         device_file
-            .save(store.check(&token, ahead).1.unwrap())
+            .save(store.check(&token, peer(10), ahead).1.unwrap())
             .unwrap();
         let (mut reopened, _) = TokenStore::open_at(Some(path.clone()), start + DAY);
         DeviceFile::default()
@@ -1126,12 +1288,147 @@ mod tests {
         let (mut store, _) = TokenStore::open_at(None, start);
         let token = random_token().unwrap();
         let other = random_token().unwrap();
-        let _ = store.add(&token, start);
-        let _ = store.add(&other, start);
-        let (paired, snapshot) = store.check(&token, start + DAY * 90);
-        assert!(!paired, "the device sending the request goes too");
+        let _ = store.add(&token, peer(10), start);
+        let _ = store.add(&other, peer(10), start);
+        let (paired, snapshot) = store.check(&token, peer(10), start + DAY * 90);
+        assert!(paired.is_none(), "the device sending the request goes too");
         assert!(snapshot.is_some());
         assert!(store.is_empty());
+    }
+
+    // covers: S425
+    #[test]
+    fn a_token_works_only_from_the_address_it_paired_from() {
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(None, start);
+        let token = random_token().unwrap();
+        let _ = store.add(&token, peer(10), start);
+        let mapped = IpAddr::V6(Ipv4Addr::new(127, 0, 0, 10).to_ipv6_mapped());
+        assert!(store.check(&token, mapped, start).0.is_some());
+        let (paired, snapshot) = store.check(&token, peer(11), start);
+        assert!(paired.is_none() && snapshot.is_some());
+        assert!(
+            store.check(&token, peer(10), start).0.is_none(),
+            "forgotten"
+        );
+
+        let phone = IpAddr::V6(Ipv6Addr::new(0xfd00, 0, 0, 1, 0xa, 0xb, 0xc, 0xd));
+        let _ = store.add(&token, phone, start);
+        let temporary = IpAddr::V6(Ipv6Addr::new(0xfd00, 0, 0, 1, 1, 2, 3, 4));
+        assert!(store.check(&token, temporary, start).0.is_some());
+        let elsewhere = IpAddr::V6(Ipv6Addr::new(0xfd00, 0, 0, 2, 0xa, 0xb, 0xc, 0xd));
+        assert!(store.check(&token, elsewhere, start).0.is_none());
+        assert!(store.is_empty());
+    }
+
+    // covers: S425
+    #[test]
+    fn an_old_token_works_until_the_new_one_is_first_used() {
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(None, start);
+        let old = random_token().unwrap();
+        let _ = store.add(&old, peer(10), start);
+        let due = start + ROTATE_AFTER;
+        let (new, _) = store.rotate(&old, due).unwrap().expect("a new token");
+        // The answer that carried `new` never reached the phone.
+        let lost = due + ROTATION_GRACE * 5;
+        assert!(store.check(&old, peer(10), lost).0.is_some());
+        assert!(
+            store.rotate(&old, lost).unwrap().is_none(),
+            "no third token"
+        );
+
+        let used = lost + Duration::from_secs(1);
+        assert!(store.check(&new, peer(10), used).0.is_some());
+        assert!(store.contains(&old, used + ROTATION_GRACE - Duration::from_secs(1)));
+        assert!(!store.contains(&old, used + ROTATION_GRACE));
+    }
+
+    // covers: S425, S372
+    #[test]
+    fn both_tokens_survive_a_restart_before_the_new_one_is_used() {
+        let path = scratch("auth-pending");
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
+        let device_file = DeviceFile::default();
+        let old = random_token().unwrap();
+        device_file.save(store.add(&old, peer(10), start)).unwrap();
+        let due = start + ROTATE_AFTER;
+        let (new, snapshot) = store.rotate(&old, due).unwrap().expect("a new token");
+        device_file.save(snapshot).unwrap();
+        let later = due + DAY;
+        let (_, snapshot) = store.check(&old, peer(10), later);
+        device_file.save(snapshot.expect("a day later")).unwrap();
+
+        let (mut reopened, _) = TokenStore::open_at(Some(path), later);
+        assert!(reopened.check(&old, peer(10), later).0.is_some());
+        assert!(reopened.check(&new, peer(10), later).0.is_some());
+        assert!(reopened.contains(&old, later + ROTATION_GRACE - Duration::from_secs(1)));
+        assert!(!reopened.contains(&old, later + ROTATION_GRACE));
+    }
+
+    // covers: S425
+    #[test]
+    fn a_token_is_replaced_after_ten_minutes_and_the_old_one_lasts_a_minute() {
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(None, start);
+        let old = random_token().unwrap();
+        let _ = store.add(&old, peer(10), start);
+        let (device, _) = store.check(&old, peer(10), start);
+        let early = start + ROTATE_AFTER - Duration::from_secs(1);
+        assert!(store.rotate(&old, early).unwrap().is_none());
+
+        let due = start + ROTATE_AFTER;
+        let (new, _) = store.rotate(&old, due).unwrap().expect("a new token");
+        assert_ne!(new, old);
+        assert_eq!(store.check(&old, peer(10), due).0, device);
+        assert!(
+            store.rotate(&old, due).unwrap().is_none(),
+            "only the current rotates"
+        );
+        let (used, snapshot) = store.check(&new, peer(10), due);
+        assert_eq!(used, device);
+        let snapshot = snapshot.expect("the first use writes the new token");
+        assert_eq!(snapshot.devices[0].0, token_hash(&new));
+        let late = due + ROTATION_GRACE - Duration::from_secs(1);
+        assert_eq!(store.check(&old, peer(10), late).0, device);
+        assert!(!store.contains(&old, due + ROTATION_GRACE));
+        assert_eq!(store.check(&new, peer(10), due + DAY).0, device);
+        assert!(store.holds(device.unwrap(), due + DAY));
+
+        assert!(store.rotate(&new, due + DAY).unwrap().is_some());
+        assert!(
+            store.remove(&new).is_some(),
+            "unpaired by its replaced token"
+        );
+    }
+
+    // covers: S425, S372
+    #[test]
+    fn the_pairing_address_is_kept_in_the_file_and_an_old_file_binds_on_first_use() {
+        let path = scratch("auth-peers");
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
+        let device_file = DeviceFile::default();
+        let token = random_token().unwrap();
+        device_file
+            .save(store.add(&token, peer(10), start))
+            .unwrap();
+        let file: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(file["peers"], json!(["127.0.0.10"]));
+        let (mut reopened, _) = TokenStore::open_at(Some(path.clone()), start);
+        assert!(reopened.check(&token, peer(11), start).0.is_none());
+
+        let text = json!({ "version": 1, "devices": [hex(&token_hash(&token))] });
+        fs::write(&path, text.to_string()).unwrap();
+        let (mut old, _) = TokenStore::open_at(Some(path.clone()), start);
+        let (paired, snapshot) = old.check(&token, peer(12), start);
+        assert!(paired.is_some());
+        DeviceFile::default()
+            .save(snapshot.expect("the address is written"))
+            .unwrap();
+        let (mut reopened, _) = TokenStore::open_at(Some(path), start);
+        assert!(reopened.check(&token, peer(10), start).0.is_none());
     }
 
     // covers: S372
@@ -1326,7 +1623,7 @@ mod tests {
         let (mut store, _) = TokenStore::open(None);
         let token = random_token().unwrap();
         DeviceFile::default()
-            .save(store.add(&token, SystemTime::now()))
+            .save(store.add(&token, peer(10), SystemTime::now()))
             .unwrap();
         assert!(store.contains(&token, SystemTime::now()));
         assert!(!store.contains("", SystemTime::now()));

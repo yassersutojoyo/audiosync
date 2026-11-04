@@ -39,6 +39,18 @@ pub fn peer_group(peer: IpAddr) -> IpAddr {
     peer.to_canonical()
 }
 
+/// The address a paired device's token is bound to: an IPv4 address whole,
+/// an IPv6 address by its /64, where a phone's temporary address changes
+/// at least daily (RFC 8981).
+pub fn pairing_address(peer: IpAddr) -> IpAddr {
+    match peer.to_canonical() {
+        IpAddr::V6(address) => {
+            IpAddr::V6(Ipv6Addr::from(address.to_bits() & !u128::from(u64::MAX)))
+        }
+        v4 => v4,
+    }
+}
+
 /// Global unicast (2000::/3) whose /64 is a real link. Teredo (2001::/32)
 /// and 6to4 (2002::/16) prefixes are built from a public IPv4 address that
 /// strangers on the internet share.
