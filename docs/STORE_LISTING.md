@@ -19,7 +19,7 @@ AudioSync
 Limit: 1,000 characters, and Microsoft suggests under 270 because some views cut it there. Current: 249.
 
 ```text
-Play your PC's sound on AirPlay speakers, Google Cast speakers and the PC's own outputs at the same time. Each speaker has its own delay, so they line up instead of echoing. Free and open source under GPL-3.0-or-later. A preview, still being tested.
+Play your PC's sound on AirPlay speakers, Google Cast speakers and the PC's own outputs at the same time. Each speaker has its own delay, so they line up instead of echoing. Free and open source under GPL-3.0-or-later.
 ```
 
 ### Description
@@ -50,7 +50,6 @@ AudioSync sits in the notification area and can start when you sign in, once you
 What doesn't work yet:
 - Everything is about two seconds late. Fine for music, not for video or games.
 - The app you capture keeps playing on its own output too. AudioSync tells you when that happens and shows how to send it to an output you don't listen to, or to mute that output yourself.
-- The Windows app hasn't been tried with a real AirPlay speaker yet, and Bluetooth outputs haven't been tried on Windows.
 - Web Remote is plain HTTP. Keep it to your home network.
 
 AudioSync is free and open source under GPL-3.0-or-later. The source code and issue tracker are on GitHub.
