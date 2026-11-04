@@ -85,6 +85,32 @@ build you make yourself, you write that file as shown below), and run it.
   50 MB. [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) says what it records.
   Attach it when you report a problem.
 
+## Linux: a silent output
+
+If you hear the source twice and have no output to spare, a PipeWire null sink gives you one that plays nothing out loud. For this session only (it's gone after a restart, or with `pactl unload-module` and the number it printed):
+
+```sh
+pactl load-module module-null-sink sink_name=audiosync-silent sink_properties=device.description=Silent
+```
+
+To keep it, put this in `~/.config/pipewire/pipewire.conf.d/silent.conf` and restart PipeWire:
+
+```
+context.objects = [
+    { factory = adapter
+        args = {
+            factory.name     = support.null-audio-sink
+            node.name        = "audiosync-silent"
+            node.description = "Silent"
+            media.class      = "Audio/Sink"
+            audio.position   = "FL,FR"
+        }
+    }
+]
+```
+
+Then send the app to Silent in pavucontrol (or make Silent the default for All System Audio). AudioSync sees it as a virtual output and keeps it out of the list until you pick View > Show Virtual Devices; you don't need to turn it on in AudioSync. The commands come from PipeWire's docs for [module-null-sink](https://docs.pipewire.org/page_pulse_module_null_sink.html) and [pipewire.conf](https://docs.pipewire.org/page_man_pipewire_conf_5.html) and its stock config's null-audio-sink example.
+
 ## What you need to build it
 
 - [rustup](https://rustup.rs) with the stable MSVC toolchain, and the Visual

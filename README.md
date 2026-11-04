@@ -127,6 +127,7 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 - On Debian or Ubuntu there's a `.deb` too (amd64 or arm64): `sudo apt install ./AudioSync-<version>-amd64.deb`. A copy from the `.deb` doesn't update itself, so get the next one from Releases.
 - It's built from the same code as the Windows app. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the build details.
 - It captures and plays through PipeWire. Its data lives in `$XDG_DATA_HOME/audiosync`, and launch at login is an XDG autostart entry.
+- Hear the source twice and have no output to spare? [desktop/README.md](desktop/README.md#linux-a-silent-output) shows how to add a silent one.
 
 ## Use
 
@@ -139,32 +140,6 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
 - More in the AudioSync Guide, in the gear menu on the Mac and under Help > AudioSync Guide on Windows and Linux.
 - If something fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log. On the Mac: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`. On Windows the steps are under [Running the exe](desktop/README.md#running-the-exe).
-
-## Linux: a silent output
-
-If you hear the source twice and have no output to spare, a PipeWire null sink gives you one that plays nothing out loud. For this session only (it's gone after a restart, or with `pactl unload-module` and the number it printed):
-
-```sh
-pactl load-module module-null-sink sink_name=audiosync-silent sink_properties=device.description=Silent
-```
-
-To keep it, put this in `~/.config/pipewire/pipewire.conf.d/silent.conf` and restart PipeWire:
-
-```
-context.objects = [
-    { factory = adapter
-        args = {
-            factory.name     = support.null-audio-sink
-            node.name        = "audiosync-silent"
-            node.description = "Silent"
-            media.class      = "Audio/Sink"
-            audio.position   = "FL,FR"
-        }
-    }
-]
-```
-
-Then send the app to Silent in pavucontrol (or make Silent the default for All System Audio). AudioSync sees it as a virtual output and keeps it out of the list until you pick View > Show Virtual Devices; you don't need to turn it on in AudioSync. The commands come from PipeWire's docs for [module-null-sink](https://docs.pipewire.org/page_pulse_module_null_sink.html) and [pipewire.conf](https://docs.pipewire.org/page_man_pipewire_conf_5.html) and its stock config's null-audio-sink example.
 
 ## License and credits
 
