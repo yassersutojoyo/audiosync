@@ -7214,6 +7214,10 @@ do {
     check(NoticeMotion.fade.duration < NoticeMotion.grow.duration && NoticeMotion.grow.duration <= 0.3,
           "notices: the open and close stay short, the Reduce Motion fade shorter still",
           "\(NoticeMotion.grow.duration), \(NoticeMotion.fade.duration)")
+    check(NoticeMotion.grow.closeDelay > 0 && NoticeMotion.grow.closeDelay < NoticeMotion.grow.fade
+            && NoticeMotion.grow.fade <= NoticeMotion.grow.duration && NoticeMotion.fade.closeDelay == 0,
+          "notices: a closing notice fades before its room starts to close, and its fade fits the open",
+          "\(NoticeMotion.grow.closeDelay), \(NoticeMotion.grow.fade)")
     let marquee = [0, 1.9, 3, 4, 5.9, 7, 8, 9.9, 11].map { Marquee.offset(elapsed: $0, overflow: 60) }
     check(marquee == [0, 0, 30, 60, 60, 30, 0, 0, 30],
           "now playing: a long title rests 2 s, scrolls 30 pt a second to its end, rests 2 s and scrolls back",

@@ -84,6 +84,13 @@ enum NoticeMotion: Equatable {
 
     /// Seconds.
     var duration: TimeInterval { self == .grow ? 0.24 : 0.15 }
+
+    /// Seconds a closing notice fades before its room starts to close, so the
+    /// columns don't slide up under it while it still shows.
+    var closeDelay: TimeInterval { self == .grow ? 0.09 : 0 }
+
+    /// Seconds a notice takes to fade in or out.
+    var fade: TimeInterval { self == .grow ? 0.18 : duration }
 }
 
 /// What a click on the menu bar icon does to its panel. The press on the icon

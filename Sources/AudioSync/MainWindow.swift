@@ -115,6 +115,7 @@ struct MainView: View {
     @StateObject private var sheetRoom = SheetRoom()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var windowWidth = WindowWidth()
+    @StateObject private var noticeCount = NoticeCount()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -175,7 +176,10 @@ struct MainView: View {
             }
             .padding(.top, NoticeStack.windowGap)
         }
-        .animation(NoticeMotion.of(reduceMotion: reduceMotion).columns, value: model.notices)
+        .animation(NoticeMotion.of(reduceMotion: reduceMotion)
+                    .columns(closing: model.notices.items.count < noticeCount.shown),
+                   value: model.notices)
+        .onChange(of: model.notices.items.count, initial: true) { noticeCount.shown = model.notices.items.count }
         .padding(.horizontal, BrandTokens.Spacing.windowMargin)
         .padding(.top, 4)
         .padding(.bottom, 20)
@@ -550,6 +554,13 @@ private struct LocalNetworkHintView: View {
 }
 
 /// The main window's width, which sets its left column's (`MainColumns`).
+/// How many notices the main window last showed: read while the next list
+/// renders, it tells a closing notice from an opening one. Not published, as
+/// updating it needs no new render.
+private final class NoticeCount: ObservableObject {
+    var shown = 0
+}
+
 private final class WindowWidth: ObservableObject {
     @Published var points: CGFloat = 0
 }
@@ -581,6 +592,8 @@ struct ScrollingTitle: View {
                 }
             }
             .clipped()
+            // Clipping hides the scrolled text but leaves it hit-testable over the controls beside it.
+            .contentShape(Rectangle())
             .onChange(of: text) { line.start = .now }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)
