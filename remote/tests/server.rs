@@ -1133,8 +1133,8 @@ fn with_sources() -> State {
     let sources = r#""sources": [
         {"id": "system", "name": "All System Audio", "kind": "system", "available": true, "notice": null},
         {"id": "app:music", "name": "Music", "kind": "app", "available": true, "notice": null},
-        {"id": "input:usb", "name": "USB Mic", "kind": "input", "available": false,
-         "notice": "Allow microphone access"}
+        {"id": "app:radio", "name": "Radio", "kind": "app", "available": false,
+         "notice": "Not running"}
     ], "source_id": "system", "speakers""#;
     State::from_json(&SAMPLE.replacen("\"speakers\"", sources, 1)).unwrap()
 }
@@ -1155,7 +1155,7 @@ fn a_source_pick_reaches_the_app_and_a_refused_one_says_why() {
     let state = get(&remote, "/api/state", token).json();
     assert_eq!(state["source_id"], "system");
     assert_eq!(state["sources"][1]["name"], "Music");
-    assert_eq!(state["sources"][2]["kind"], "input");
+    assert_eq!(state["sources"][2]["kind"], "app");
     assert_eq!(state["sources"][2]["available"], false);
 
     let reply = post(&remote, "/api/source", token, "{\"id\": \"app:music\"}");
@@ -1169,7 +1169,7 @@ fn a_source_pick_reaches_the_app_and_a_refused_one_says_why() {
     remote.received.lock().unwrap().clear();
 
     for (body, status, error) in [
-        ("{\"id\": \"input:usb\"}", 409, "source_unavailable"),
+        ("{\"id\": \"app:radio\"}", 409, "source_unavailable"),
         ("{\"id\": \"app:gone\"}", 404, "unknown_source"),
         ("{\"id\": \"\"}", 404, "unknown_source"),
         ("{\"id\": 3}", 400, "bad_json"),

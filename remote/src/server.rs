@@ -21,7 +21,9 @@ use crate::auth::{
 use crate::http::{self, Request, Response};
 use crate::net;
 use crate::page::{self, PageError};
-use crate::state::{self, BodyError, Command, RangeError, State, StateError, ZoneProblem};
+use crate::state::{
+    self, BodyError, Command, RangeError, SourceKind, State, StateError, ZoneProblem,
+};
 use crate::text::{self, ApiError};
 
 /// The port the remote listens on unless the user picks another. Unassigned
@@ -719,7 +721,18 @@ impl RemoteServer {
     /// returns its revision. A snapshot equal to the current one keeps the
     /// current revision and sends nothing, unless a command reached the app
     /// since the last one: a page shows what it sent until a snapshot comes.
-    pub fn publish(&self, state: State) -> u64 {
+    pub fn publish(&self, mut state: State) -> u64 {
+        // A phone, or whoever holds its token, never turns a microphone on.
+        state
+            .sources
+            .retain(|source| source.kind != SourceKind::Input);
+        if !state
+            .sources
+            .iter()
+            .any(|source| state.source_id.as_ref() == Some(&source.id))
+        {
+            state.source_id = None;
+        }
         let mut published = lock(&self.shared.published);
         if !published.commanded && published.current.as_ref() == Some(&state) {
             return published.revision;
