@@ -871,7 +871,7 @@ extension AppDelegate {
     }
 
     @objc func toggleAutomaticUpdateChecks(_ sender: Any?) {
-        AppUpdater.checksAutomatically.toggle()
+        MainActor.assumeIsolated { AppUpdater.checksAutomatically.toggle() }
     }
 
     /// Command-S: the delays typed in the open delay panels apply, and the
@@ -916,7 +916,7 @@ extension AppDelegate {
         case #selector(addCastByAddress(_:)):
             return appModel.castCanAdd
         case #selector(toggleAutomaticUpdateChecks(_:)):
-            menuItem.state = AppUpdater.checksAutomatically ? .on : .off
+            menuItem.state = MainActor.assumeIsolated { AppUpdater.checksAutomatically } ? .on : .off
         case #selector(recallPresetFromMenu(_:)):
             let id = menuItem.representedObject as? String
             menuItem.state = appModel.presets.contains { $0.id == id && $0.current } ? .on : .off

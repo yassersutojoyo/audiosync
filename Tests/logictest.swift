@@ -16981,7 +16981,7 @@ do {
     let menuCommands = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
     check(menuWords.menuCheckUpdatesAutomatically == "Check for Updates Automatically"
             && mainMenuSource.contains("item(t.menuCheckUpdatesAutomatically, #selector(AppDelegate.toggleAutomaticUpdateChecks(_:)))")
-            && menuCommands.contains("menuItem.state = AppUpdater.checksAutomatically ? .on : .off"),
+            && menuCommands.contains("menuItem.state = MainActor.assumeIsolated { AppUpdater.checksAutomatically } ? .on : .off"),
           "main menu: Check for Updates Automatically follows Check for Updates…, worded as on Windows, checked from Sparkle's setting")
     check(menuWords.showVirtualDevices == "Show Virtual Devices"
             && speakersMenuSource.contains("item(t.showVirtualDevices, #selector(AppDelegate.toggleShowVirtualDevices(_:)))")
