@@ -2,6 +2,13 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Changed
+
+- Shuffle and Repeat in the Now Playing card show a small dot under them while they are on, and Repeat has a plainer icon.
+- The speaker before the Master Volume slider mutes and unmutes it, and its waves follow the level. Unmuting brings back the last level you had, or 50 if there was none since AudioSync started. On the Mac, the speaker after the slider is gone, so the slider is longer.
+
 ## [0.8.5] - 2026-11-04
 
 ### Added
