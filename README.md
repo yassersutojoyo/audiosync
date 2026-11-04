@@ -35,7 +35,7 @@ AirPlay speakers play about two seconds late. Local speakers don't. Play the sam
 
 AudioSync fixes that. It grabs your computer's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. It's free, and it's a beta, so expect rough edges.
 
-- On a Mac (macOS 15 or later) it plays system audio, one app or a mic on AirPlay speakers, Google Cast speakers, Bluetooth and every other output the Mac knows.
+- On a Mac with Apple silicon (macOS 15 or later) it plays system audio, one app or a mic on AirPlay speakers, Google Cast speakers, Bluetooth and every other output the Mac knows.
 - On Windows 11 it's multiroom audio for your PC: it plays the PC's audio on AirPlay speakers, sends desktop audio to a Google Cast speaker, and keeps Bluetooth and the other Windows outputs in sync with them.
 - On Linux it's an AirPlay sender that also plays to Google Cast and keeps Bluetooth and AirPlay speakers in sync, through PipeWire. It's out since 0.8.5.
 
@@ -64,7 +64,7 @@ The Windows parts are in the Windows version, out since 0.7.1.
 - Calibrate with Microphone works on Windows too.
 - Master Volume turns Google Cast speakers and groups down too.
 - A Cast speaker that doesn't show up can be added by its IP address or host name, with Add by Address… under Connected Speakers on the Mac or in the Speakers menu on Windows.
-- Cast speakers show the track that's playing, with the title, artist, album and cover.
+- Cast speakers show the track that was playing when the stream started, with the title, artist, album and cover.
 - On Windows you can rename a speaker too, with a double-click on its name.
 - Hide Speaker takes a speaker you never use out of the list, and Hidden Speakers brings it back.
 
@@ -104,7 +104,7 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 
 ### macOS
 
-- Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), open it and drag AudioSync to Applications. Needs macOS 15 or later. Your audio is never written to disk.
+- Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), open it and drag AudioSync to Applications. Needs a Mac with Apple silicon and macOS 15 or later. Your audio is never written to disk.
 - The first launch takes one extra step, because AudioSync isn't notarized. When macOS says it can't verify the app, click Done, then go to System Settings → Privacy & Security, click Open Anyway and confirm with your password. After that it opens like any other app. Only Apple's paid Developer Program would remove that step, and I'm not in it.
 - Or, from Terminal: `curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.sh | bash`. It downloads the latest release's zip, checks it against the release's SHA-256 checksums, puts AudioSync in Applications and opens it. A copy downloaded by curl isn't flagged as downloaded, so macOS doesn't ask for the extra step. Run it again to update.
 - Coming from 0.6 or older, replace the app by hand once. Later versions can update themselves (the app asks on its second launch).
