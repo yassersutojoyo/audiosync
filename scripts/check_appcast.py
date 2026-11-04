@@ -79,7 +79,7 @@ MAC_ONLY_HINT = "pass --mac-only for a release without Windows and Linux"
 WINDOWS_ZIP_FILES = {"audiosync.exe", "THIRD-PARTY-NOTICES.txt"}
 ED25519_SIGNATURE_BYTES = 64
 # The S310 check runs once: set this to the date it passed, so later releases need no variable.
-S310_MAC_CHECK_PASSED = ""
+S310_MAC_CHECK_PASSED = "2026-11-04"
 S310_VARIABLE = "AUDIOSYNC_S310_MAC_CHECK"
 S310_REFUSAL = (f"the appcast carries Windows or Linux items, but no S310 Mac check is on record: point the "
                 f"Mac app at this appcast and check that it offers the Mac update only (RELEASE.md), "
