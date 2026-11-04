@@ -125,11 +125,16 @@ while IFS= read -r -d '' f; do
   fi
 done < <(find "$app" -type f -print0)
 pass "checked $macho Mach-O files"
-case "$app_signer" in
-  "Developer ID Application"*)
-    runtime() { codesign -dv "$app" 2>&1 | grep 'flags=0x[0-9a-f]*(runtime)' >/dev/null; }
-    expect "Hardened Runtime (Developer ID)" runtime ;;
-esac
+runtime() { codesign -dv "$app" 2>&1 | grep 'flags=0x[0-9a-f]*([^)]*runtime' >/dev/null; }
+expect "Hardened Runtime" runtime
+audio_input() { codesign -d --entitlements - "$app" 2>/dev/null | grep 'com.apple.security.device.audio-input' >/dev/null; }
+expect "the microphone entitlement the runtime needs" audio_input
+app_entitlements=$(codesign -d --entitlements - "$app" 2>/dev/null || true)
+no_entitlement() { [[ $app_entitlements != *"$1"* ]]; }
+expect "no allow-dyld-environment-variables" no_entitlement com.apple.security.cs.allow-dyld-environment-variables
+expect "no get-task-allow" no_entitlement com.apple.security.get-task-allow
+lv_off_needs_runtime() { no_entitlement com.apple.security.cs.disable-library-validation || runtime; }
+expect "library validation off only under the Hardened Runtime" lv_off_needs_runtime
 
 echo "▶ Nothing besides the app and the updater"
 # AirPlay goes through the sender inside the app binary (the Rust core), so a

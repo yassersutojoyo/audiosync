@@ -315,6 +315,9 @@ Tests/signappcasttest.sh || status=1
 echo "▶ updater words (Tests/updatertexttest.sh)"
 Tests/updatertexttest.sh || status=1
 
+echo "▶ Hardened Runtime for every signing identity (Tests/hardenedruntimetest.sh)"
+Tests/hardenedruntimetest.sh || status=1
+
 if [ "$macos" = 0 ]; then
   # shellcheck source=scripts/cargo_path.sh disable=SC1091
   source scripts/cargo_path.sh
