@@ -19,6 +19,7 @@
   <a href="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml"><img alt="Windows CI" src="https://github.com/yassersutojoyo/audiosync/actions/workflows/windows.yml/badge.svg?branch=main"></a>
   <img alt="macOS 15+" src="https://img.shields.io/badge/macOS-15%2B-black?logo=apple">
   <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4">
+  <img alt="Linux, glibc 2.39+" src="https://img.shields.io/badge/Linux-glibc%202.39%2B-FCC624?logo=linux">
   <img alt="GPL-3.0-or-later license" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue">
   <img alt="Beta" src="https://img.shields.io/badge/status-beta-9A5B00">
 </p>
@@ -40,7 +41,7 @@ AudioSync fixes that. It grabs your computer's audio once, sends it to your AirP
 
 ## New in 0.8.5
 
-- It's a beta now, and it runs on Linux too: an AppImage for x86_64 and aarch64 that updates itself, plus a .deb.
+- It runs on Linux too: an AppImage for x86_64 and aarch64 that updates itself, plus a .deb.
 - One-line installs for Windows (PowerShell) and Linux (terminal), next to the Mac's Terminal one. Each checks the download before it installs anything.
 - Notices about something that failed now say what to do next, like freeing up disk space or closing the app that holds port 319 or 320.
 - The Mac and Windows apps work more alike, down to the menus, prompts and notices.
