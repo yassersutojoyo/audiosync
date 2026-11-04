@@ -219,6 +219,21 @@ impl TypedDelay {
     }
 }
 
+/// The waves on the master volume's speaker, by the rounded level: none at
+/// 0, one up to 33, two up to 66, three above, as on the Mac.
+fn volume_waves(volume: f64) -> i32 {
+    match volume {
+        v if v < 0.5 => 0,
+        v if v < 33.5 => 1,
+        v if v < 66.5 => 2,
+        _ => 3,
+    }
+}
+
+/// The lowest master level Unmute brings back: stepping down to 0 passes
+/// every level, and one of 1 would sound muted still.
+const UNMUTE_FLOOR: f64 = 5.0;
+
 /// Whether a delay field holds a draft: `typed`, the text it shows instead of
 /// the applied value, isn't `applied` as the field shows it. A draft applies
 /// only on Enter or leaving the field, so the field marks it.
@@ -837,6 +852,9 @@ pub struct App {
     now_playing_source: RefCell<Option<CardSource>>,
     /// The networks' profiles while a note says no speaker was found.
     network_watch: RefCell<Option<Watch>>,
+    /// The last master level of at least `UNMUTE_FLOOR`, which Unmute
+    /// brings back; 50 until one is seen.
+    unmute_to: Cell<f64>,
 }
 
 /// The main window's native window and the menu bar theme last sent to it.
@@ -1127,6 +1145,7 @@ impl App {
             now_playing: RefCell::default(),
             now_playing_source: RefCell::default(),
             network_watch: RefCell::default(),
+            unmute_to: Cell::new(50.0),
         });
         let sessions = i32::try_from(audiosync_airplay::sender::AIRPLAY2_SESSIONS);
         app.main
@@ -1446,6 +1465,21 @@ impl App {
             .set_now_playing_artwork(artwork.unwrap_or_default());
         self.main.set_now_playing_shown(true);
         true
+    }
+
+    /// The master volume's speaker: mutes to 0, or brings back the last
+    /// level heard.
+    fn toggle_master_mute(&self) {
+        let muted = volume_waves(self.snapshot().master_volume) == 0;
+        let target = if muted { self.unmute_to.get() } else { 0.0 };
+        self.update(|b| b.set_master_volume(target));
+    }
+
+    /// A move of a master volume slider; under 0.5 is 0, so the muted
+    /// speaker never shows while a trace still plays.
+    fn move_master_volume(&self, volume: f32) {
+        let volume = if volume < 0.5 { 0.0 } else { volume.into() };
+        self.update(|b| b.set_master_volume(volume));
     }
 
     fn send_transport(&self, button: i32) {
@@ -2296,6 +2330,9 @@ impl App {
             Some(AirPlayWait::Unknown) => strings.get_live_input_airplay_unknown(),
             None => SharedString::new(),
         };
+        if state.master_volume >= UNMUTE_FLOOR {
+            self.unmute_to.set(state.master_volume);
+        }
         for window in [&self.main as &dyn WindowState, &self.flyout] {
             window.show_state(&state, &status, source_index);
             window.show_live_input_hint(&live_hint);
@@ -2656,8 +2693,10 @@ impl App {
         });
         let w = weak.clone();
         main.on_master_volume_changed(move |volume| {
-            with_app(&w, |app| app.update(|b| b.set_master_volume(volume.into())))
+            with_app(&w, |app| app.move_master_volume(volume))
         });
+        let w = weak.clone();
+        main.on_master_mute_toggled(move || with_app(&w, App::toggle_master_mute));
         let w = weak.clone();
         main.on_equalizer_requested(move || with_app(&w, App::show_equalizer));
         let w = weak.clone();
@@ -3056,8 +3095,10 @@ impl App {
         });
         let w = weak.clone();
         flyout.on_master_volume_changed(move |volume| {
-            with_app(&w, |app| app.update(|b| b.set_master_volume(volume.into())))
+            with_app(&w, |app| app.move_master_volume(volume))
         });
+        let w = weak.clone();
+        flyout.on_master_mute_toggled(move || with_app(&w, App::toggle_master_mute));
         let w = weak.clone();
         flyout.on_speaker_toggled(move |id| with_app(&w, |app| app.toggle_speaker(&id)));
         let w = weak.clone();
@@ -4749,6 +4790,7 @@ impl WindowState for MainWindow {
         self.set_status(status.clone());
         self.set_source_index(source_index);
         self.set_master_volume(state.master_volume as f32);
+        self.set_master_volume_waves(volume_waves(state.master_volume));
         self.set_switch_source_on_quit(state.when_source_quits == WhenSourceQuits::SwitchToSystem);
     }
 
@@ -4763,6 +4805,7 @@ impl WindowState for TrayFlyout {
         self.set_status(status.clone());
         self.set_source_index(source_index);
         self.set_master_volume(state.master_volume as f32);
+        self.set_master_volume_waves(volume_waves(state.master_volume));
     }
 
     fn show_live_input_hint(&self, hint: &SharedString) {
@@ -13885,6 +13928,108 @@ mod tests {
         assert_eq!(app.snapshot().master_volume, master);
     }
 
+    #[test]
+    fn the_master_volume_speaker_shows_the_rounded_level_in_waves() {
+        for (volume, waves) in [
+            (0.0, 0),
+            (0.49, 0),
+            (0.5, 1),
+            (33.4, 1),
+            (33.5, 2),
+            (66.4, 2),
+            (66.5, 3),
+            (100.0, 3),
+        ] {
+            assert_eq!(volume_waves(volume), waves, "{volume}");
+        }
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_master_volume(50.0));
+        assert_eq!(app.main.get_master_volume_waves(), 2);
+        assert_eq!(app.flyout.get_master_volume_waves(), 2);
+        app.main.invoke_master_volume_changed(0.4);
+        assert_eq!(app.snapshot().master_volume, 0.0, "a trace snaps to 0");
+        assert_eq!(app.main.get_master_volume_waves(), 0);
+        assert_eq!(app.flyout.get_master_volume_waves(), 0);
+    }
+
+    #[test]
+    fn a_click_on_the_master_volume_speaker_mutes_and_the_next_brings_the_level_back() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        Backend::set_master_volume(&mut backend, 0.0);
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows");
+        let speaker = |label: &str| {
+            draw_frames();
+            ElementHandle::find_by_accessible_label(&app.main, label).next()
+        };
+
+        speaker("Unmute Master Volume")
+            .expect("the muted speaker")
+            .invoke_accessible_default_action();
+        assert_eq!(
+            app.snapshot().master_volume,
+            50.0,
+            "no level heard yet this run"
+        );
+
+        app.update(|b| b.set_master_volume(64.0));
+        speaker("Mute Master Volume")
+            .expect("the speaker")
+            .invoke_accessible_default_action();
+        assert_eq!(
+            app.snapshot().master_volume,
+            0.0,
+            "a real 0, as the web remote reads it"
+        );
+        assert!(speaker("Mute Master Volume").is_none());
+        speaker("Unmute Master Volume")
+            .expect("the muted speaker")
+            .invoke_accessible_default_action();
+        assert_eq!(app.snapshot().master_volume, 64.0);
+
+        app.flyout.invoke_master_mute_toggled();
+        assert_eq!(
+            app.snapshot().master_volume,
+            0.0,
+            "the tray panel's speaker too"
+        );
+        app.main.invoke_master_volume_changed(12.0);
+        assert!(
+            speaker("Mute Master Volume").is_some(),
+            "dragging up from 0 unmutes"
+        );
+        assert_eq!(app.main.get_master_volume_waves(), 1);
+        app.flyout.invoke_master_mute_toggled();
+        app.flyout.invoke_master_mute_toggled();
+        assert_eq!(app.snapshot().master_volume, 12.0);
+    }
+
+    #[test]
+    fn stepping_the_master_volume_down_to_0_then_unmute_brings_back_5() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let window = app.main.window();
+        let master = ElementHandle::find_by_accessible_label(&app.main, "Master volume")
+            .next()
+            .expect("the master volume");
+        let (at, size) = (master.absolute_position(), master.size());
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        app.update(|b| b.set_master_volume(8.0));
+        for _ in 0..8 {
+            press(window, Key::DownArrow);
+        }
+        assert_eq!(app.snapshot().master_volume, 0.0, "Down reached 0");
+        app.main.invoke_master_mute_toggled();
+        assert_eq!(
+            app.snapshot().master_volume,
+            UNMUTE_FLOOR,
+            "the last level of at least 5, not 1"
+        );
+    }
+
     /// A backend with the playing Cast speaker "cc:attic", which steps by 5.
     fn cast_backend(volume_fixed: bool) -> MockBackend {
         let mut backend = MockBackend::new();
@@ -14961,10 +15106,10 @@ mod tests {
     fn a_focused_speaker_row_that_goes_hands_the_focus_to_the_next_rows_options() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        // Switch, Several apps, source, master volume, Save as Preset…,
+        // Switch, Several apps, source, Mute, master volume, Save as Preset…,
         // Equalizer, Calibrate All, the reference's volume fix, then the
         // rows: This PC's, then the connected speakers' by name.
-        tab(window, 18);
+        tab(window, 19);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");
@@ -14995,7 +15140,7 @@ mod tests {
         draw_frames();
         // The cable row's toggle, delay and options, then the desk row's
         // toggle, delay, options, two steps and its field.
-        tab(window, 26);
+        tab(window, 27);
         press(window, "5");
         let draft = || {
             let shown = app.snapshot().speaker("local:desk").unwrap().delay_ms;
@@ -15202,7 +15347,7 @@ mod tests {
     fn a_focused_speaker_row_keeps_the_focus_when_its_list_is_rebuilt() {
         let app = main_window_with_listed_cable();
         let window = app.main.window();
-        tab(window, 16);
+        tab(window, 17);
         let bedroom = enabled(&app, "airplay:bedroom");
         press(window, " ");
         assert_ne!(
@@ -16116,7 +16261,7 @@ mod tests {
         let window = app.main.window();
         // As in the example's order without Bedroom's row:
         // the cable row's toggle.
-        tab(window, 16);
+        tab(window, 17);
         press(window, " ");
         assert!(enabled(&app, "local:cable"), "the cable row has the focus");
         press(window, " ");

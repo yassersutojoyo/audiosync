@@ -224,6 +224,8 @@ export global Glyphs {
     out property <string> timer: "\u{E916}";
     out property <string> auto-connect: "\u{E945}";
     out property <string> volume-low: "\u{E993}";
+    out property <string> volume-mid: "\u{E994}";
+    out property <string> volume-high: "\u{E995}";
     // Windows' own Mute glyph, a speaker with a cross (the icon font has
     // no speaker with a slash).
     out property <string> volume-muted: "\u{E74F}";
@@ -248,6 +250,27 @@ export global Glyphs {
             return root.volume-low;
         }
         return "";
+    }
+
+    // The master volume's speaker: crossed out at 0, then one to three
+    // waves (`volume_waves` in view.rs sets the count).
+    public pure function master-volume(waves: int) -> string {
+        if waves <= 0 {
+            return root.volume-muted;
+        }
+        if waves == 1 {
+            return root.volume-low;
+        }
+        if waves == 2 {
+            return root.volume-mid;
+        }
+        return root.volume-high;
+    }
+
+    // The icon font's Repeat reads poorly at 16 px, so these two are drawn
+    // on Windows too.
+    public pure function drawn-everywhere(glyph: string) -> bool {
+        return glyph == root.repeat-all || glyph == root.repeat-one;
     }
 
     // What the speaker is; how it is reached is the kind's glyph after the
@@ -351,6 +374,12 @@ export global Glyphs {
         if glyph == root.volume-low {
             return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10";
         }
+        if glyph == root.volume-mid {
+            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10 M11.8 4.5 A4.5 4.5 0 0 1 11.8 11.5";
+        }
+        if glyph == root.volume-high {
+            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10 M11.8 4.5 A4.5 4.5 0 0 1 11.8 11.5 M12.5 2.5 A6.5 6.5 0 0 1 12.5 13.5";
+        }
         if glyph == root.volume-muted {
             return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6.25 L14 9.75 M14 6.25 L10.5 9.75";
         }
@@ -366,11 +395,13 @@ export global Glyphs {
         if glyph == root.shuffle {
             return "M2 4.5 H5 L11 11.5 H14 M2 11.5 H5 L11 4.5 H14 M12 2.5 L14 4.5 L12 6.5 M12 9.5 L14 11.5 L12 13.5";
         }
+        // Own drawing: one rounded loop running clockwise, its arrowhead at
+        // the gap on top.
         if glyph == root.repeat-all {
-            return "M3 9 V6 Q3 4.5 4.5 4.5 H13 M11 2.5 L13 4.5 L11 6.5 M13 7 V10 Q13 11.5 11.5 11.5 H3 M5 9.5 L3 11.5 L5 13.5";
+            return "M8 4 H10.5 Q13.5 4 13.5 7 V9 Q13.5 12 10.5 12 H5.5 Q2.5 12 2.5 9 V7 Q2.5 4 5.5 4 H6.25 M4.5 2.25 L6.25 4 L4.5 5.75";
         }
         if glyph == root.repeat-one {
-            return "M3 9 V6 Q3 4.5 4.5 4.5 H13 M11 2.5 L13 4.5 L11 6.5 M13 7 V10 Q13 11.5 11.5 11.5 H3 M5 9.5 L3 11.5 L5 13.5 M7.25 7.25 L8 6.5 V9.5";
+            return "M8 4 H10.5 Q13.5 4 13.5 7 V9 Q13.5 12 10.5 12 H5.5 Q2.5 12 2.5 9 V7 Q2.5 4 5.5 4 H6.25 M4.5 2.25 L6.25 4 L4.5 5.75 M7.25 7 L8.25 6.25 V9.75";
         }
         if glyph == root.presets {
             return "M4 2 H12 V14 L8 10.75 L4 14 Z";
@@ -440,7 +471,7 @@ export component Glyph inherits HorizontalLayout {
     in property <length> font-size: 16px;
     in property <TextVerticalAlignment> vertical-alignment: center;
 
-    if Platform.os == OperatingSystemType.windows: Text {
+    if Platform.os == OperatingSystemType.windows && !Glyphs.drawn-everywhere(root.glyph): Text {
         text: root.glyph;
         font-family: "Segoe Fluent Icons";
         font-size: root.font-size;
@@ -450,7 +481,7 @@ export component Glyph inherits HorizontalLayout {
         accessible-role: none;
     }
 
-    if Platform.os != OperatingSystemType.windows && root.glyph != "": Rectangle {
+    if (Platform.os != OperatingSystemType.windows || Glyphs.drawn-everywhere(root.glyph)) && root.glyph != "": Rectangle {
         min-width: root.font-size;
         min-height: root.font-size;
         // Keeps its size in a row, as the Windows glyph's text does.
@@ -652,6 +683,8 @@ export component IconButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <color> glyph-color: Tokens.text;
     in property <length> glyph-size: 16px;
+    // A mode that is on: a dot under the glyph, in the glyph's color.
+    in property <bool> active;
     callback clicked();
     // The button gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
@@ -698,6 +731,15 @@ export component IconButton inherits Rectangle {
         color: root.glyph-color;
         font-size: root.glyph-size;
         opacity: touch.pressed ? 0.75 : 1;
+    }
+
+    if root.active: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - 7px;
+        width: 4px;
+        height: 4px;
+        border-radius: 2px;
+        background: root.glyph-color;
     }
 
     FocusRing {
@@ -1184,6 +1226,35 @@ export component VolumeSlider inherits HorizontalLayout {
         vertical-alignment: center;
         wrap: no-wrap;
         font-size: Tokens.font-size-caption;
+    }
+}
+
+// The master volume: its speaker, which shows the level and mutes or
+// unmutes on a click, then the slider and its value.
+export component MasterVolume inherits HorizontalLayout {
+    in property <float> volume;
+    // 0 while muted, else 1 to 3.
+    in property <int> waves;
+    out property <bool> slider-focused: slider.slider-focused;
+    callback changed(float);
+    callback mute-toggled();
+
+    spacing: 4px;
+
+    IconButton {
+        glyph: Glyphs.master-volume(root.waves);
+        label: root.waves == 0 ? Strings.unmute-master : Strings.mute-master;
+        clicked => {
+            root.mute-toggled();
+        }
+    }
+
+    slider := VolumeSlider {
+        volume: root.volume;
+        label: Strings.master-volume;
+        changed(value) => {
+            root.changed(value);
+        }
     }
 }
 

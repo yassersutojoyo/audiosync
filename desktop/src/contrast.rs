@@ -534,11 +534,11 @@ fn every_icon_has_a_drawing_off_windows() {
     let widgets = include_str!("../ui/widgets.slint");
     let glyph = component_body(widgets, "Glyph");
     let font = glyph
-        .find("if Platform.os == OperatingSystemType.windows: Text {")
+        .find("if Platform.os == OperatingSystemType.windows && !Glyphs.drawn-everywhere(root.glyph): Text {")
         .expect("the icon font draws only on Windows");
     assert!(glyph[font..].contains("font-family: \"Segoe Fluent Icons\";"));
     let drawing = glyph
-        .find("if Platform.os != OperatingSystemType.windows && root.glyph != \"\": Rectangle {")
+        .find("if (Platform.os != OperatingSystemType.windows || Glyphs.drawn-everywhere(root.glyph)) && root.glyph != \"\": Rectangle {")
         .expect("the drawing stands in everywhere else");
     let drawing = &glyph[drawing..];
     assert!(drawing.contains("commands: Glyphs.outline(root.glyph);"));

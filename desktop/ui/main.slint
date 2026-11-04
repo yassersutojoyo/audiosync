@@ -9,7 +9,7 @@ import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerRow, ToggleSwitch, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -1219,7 +1219,8 @@ component NowPlayingCard inherits Card {
 
             if root.shuffle >= 0: IconButton {
                 glyph: Glyphs.shuffle;
-                glyph-color: root.shuffle == 1 ? Tokens.teal-text : Tokens.text;
+                glyph-color: root.shuffle == 1 ? Tokens.teal-text : Tokens.secondary-text;
+                active: root.shuffle == 1;
                 label: Strings.shuffle;
                 value: root.shuffle == 1 ? Strings.on : Strings.off;
                 clicked => {
@@ -1268,7 +1269,8 @@ component NowPlayingCard inherits Card {
 
             if root.repeat >= 0: IconButton {
                 glyph: root.repeat == 2 ? Glyphs.repeat-one : Glyphs.repeat-all;
-                glyph-color: root.repeat > 0 ? Tokens.teal-text : Tokens.text;
+                glyph-color: root.repeat > 0 ? Tokens.teal-text : Tokens.secondary-text;
+                active: root.repeat > 0;
                 label: Strings.repeat;
                 value: root.repeat == 2 ? Strings.repeat-one : root.repeat == 1 ? Strings.on : Strings.off;
                 clicked => {
@@ -1328,6 +1330,7 @@ export component MainWindow inherits Window {
     // The several-apps list stays folded so it adds one Tab stop until opened.
     in-out property <bool> mix-open;
     in property <float> master-volume;
+    in property <int> master-volume-waves;
     in property <bool> equalizer-on;
     in property <string> equalizer-curve;
     // The Now Playing card, while a media session counts for the source.
@@ -1429,6 +1432,7 @@ export component MainWindow inherits Window {
     callback mix-app-toggled(int);
     callback mix-mode-selected(bool);
     callback master-volume-changed(float);
+    callback master-mute-toggled();
     callback equalizer-requested();
     // A Now Playing button: 0 Previous, 1 Play or Pause, 2 Next.
     callback now-playing-transport(int);
@@ -2094,9 +2098,12 @@ export component MainWindow inherits Window {
                                 text: Strings.master-volume-title;
                             }
 
-                            VolumeSlider {
+                            MasterVolume {
                                 volume: root.master-volume;
-                                label: Strings.master-volume;
+                                waves: root.master-volume-waves;
+                                mute-toggled => {
+                                    root.master-mute-toggled();
+                                }
                                 changed slider-focused => {
                                     root.control-focus-changed(MainControl.master-volume, self.slider-focused);
                                 }

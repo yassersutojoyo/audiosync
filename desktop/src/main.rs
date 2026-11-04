@@ -894,7 +894,7 @@ mod tests {
     fn the_flyout_lists_this_pc_under_the_volume_then_zones_then_connected() {
         let flyout = include_str!("../ui/flyout.slint");
         let at = |part: &str| flyout.find(part).unwrap_or_else(|| panic!("{part}"));
-        let volume = at("VolumeSlider {");
+        let volume = at("MasterVolume {");
         let this_pc = at("for speaker in root.this-pc: FlyoutRow {");
         let divider = volume + flyout[volume..].find("Divider { }").expect("a divider");
         let zones = at("for zone in root.zones: VerticalLayout {");
