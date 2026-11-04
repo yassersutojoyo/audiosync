@@ -53,7 +53,8 @@ extension AppDelegate {
         }
         let split = SpeakerLayout.split(local: local, airplay: network, tag: \.tag, name: \.name)
         return AppModel.HiddenState(menu: hiddenSpeakers.menu(present: present, text: text),
-                                    inThisMac: !split.thisMac.isEmpty, inConnected: !split.connected.isEmpty)
+                                    inThisMac: !split.thisMac.isEmpty, inConnected: !split.connected.isEmpty,
+                                    present: present.count)
     }
 }
 

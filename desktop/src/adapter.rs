@@ -66,7 +66,9 @@ use std::path::PathBuf;
 use audiosync_core::channels::InputPair;
 use audiosync_core::clock;
 use audiosync_core::eq::{EqSettings, UserCurve, sanitized_curves};
-use audiosync_core::policy::delay::{native_airplay_adjustment_ms, native_airplay_latency_ms};
+use audiosync_core::policy::delay::{
+    native_airplay_adjustment_ms, native_airplay_latency_ms, sanitize_offset_ms,
+};
 use audiosync_core::policy::presets::{
     self, LeftOff, Preset, RecallAction, RecallMember, RecallOther, RecallStep,
 };
@@ -111,7 +113,7 @@ use crate::ui_model::{
     CastRow, CastState, HiddenSpeaker, InTarget, LeftOutRow, MixApp, Notice, NoticeMessage,
     PasswordPrompt, PinPhase, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState, Source,
     SourceKind, SourceName, Speaker, SpeakerKind, SwitchName, ViewSettings, Waiting, ZoneError,
-    ZoneSheet, clamp_delay_ms,
+    ZoneSheet,
 };
 
 /// The source list is read again every this many polls, about every three
@@ -1365,9 +1367,9 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .iter()
                 .find(|output| output.is_reference)
                 .map(|output| output.id.clone()),
-            speaker_on: outputs
-                .iter()
-                .any(|output| output.id == endpoint_id && output.enabled),
+            // The switch alone, as on the Mac: a speaker gone from the list
+            // for a poll keeps its line (S395).
+            speaker_on: self.is_enabled(endpoint_id),
         }
     }
 
@@ -2609,10 +2611,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     && !keep_off.contains(&member.key),
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
-                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id))
-                    || listed
-                        .and_then(|speaker| speaker.cast.as_ref())
-                        .is_some_and(|cast| cast.offline),
+                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                offline: listed
+                    .and_then(|speaker| speaker.cast.as_ref())
+                    .is_some_and(|cast| cast.offline),
                 needs_airplay2: listed.is_none() && hidden.is_none() && self.needs_airplay2(&key),
                 in_target,
                 fixed_volume: listed
@@ -2774,6 +2776,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             LeftOff::Hidden => PresetLeftOff::Hidden,
             LeftOff::NeedsAirPlay2 => PresetLeftOff::NeedsAirPlay2,
             LeftOff::Busy => PresetLeftOff::Busy,
+            LeftOff::Offline => PresetLeftOff::Offline,
             LeftOff::InTarget => {
                 let target = match key {
                     SpeakerKey::AirPlay(id) => self.audio.airplay_holding_target(id),
@@ -5200,9 +5203,11 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
     /// A local output's delay or a Cast speaker's measured offset (never
     /// negative); an AirPlay speaker has no delay of its own (spec S180).
     fn set_speaker_delay(&mut self, id: &str, ms: f64) {
+        let Some(ms) = sanitize_offset_ms(ms).map(f64::round) else {
+            return;
+        };
         match SpeakerKey::parse(id) {
             Some(SpeakerKey::Local(endpoint_id)) => {
-                let ms = clamp_delay_ms(ms);
                 // A step at the range's end sets the offset it already has,
                 // which mustn't take the calibration's line away.
                 let changed = !self
@@ -5216,8 +5221,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 }
             }
             Some(SpeakerKey::Cast(cast_id)) => {
-                self.audio
-                    .set_cast_offset(&cast_id, clamp_delay_ms(ms).max(0.0));
+                self.audio.set_cast_offset(&cast_id, ms.max(0.0));
             }
             Some(SpeakerKey::AirPlay(_)) | None => {}
         }
@@ -13629,6 +13633,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    // covers: S175
+    #[test]
+    fn a_delay_that_isnt_a_finite_number_leaves_the_stored_one() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        let earbuds = key("bluetooth");
+        adapter.set_speaker_delay(&earbuds, -250.0);
+        for ms in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            adapter.set_speaker_delay(&earbuds, ms);
+            assert_eq!(speaker_of(&adapter, &earbuds).delay_ms, Some(-250.0));
+        }
+    }
+
     // covers: S228
     #[test]
     fn a_renamed_speaker_keeps_its_name_across_a_restart_until_it_is_cleared() {
@@ -14233,6 +14253,33 @@ mod tests {
             adapter.snapshot().calibration.phase,
             calibration::Phase::Idle
         );
+        adapter.set_speaker_enabled(&key("bluetooth"), false);
+        adapter.poll();
+        assert_eq!(
+            adapter.snapshot().calibration.phase,
+            calibration::Phase::Idle
+        );
+    }
+
+    // covers: S395
+    #[test]
+    fn a_calibrations_line_stays_while_its_speaker_drops_out_of_the_list_for_a_poll() {
+        let mut adapter = AudioAdapter::new(
+            reference_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        turn_on(&mut adapter, "builtin");
+        turn_on(&mut adapter, "bluetooth");
+        adapter.start_calibration(&key("bluetooth"));
+        let line = adapter.snapshot().calibration.phase;
+        assert_ne!(line, calibration::Phase::Idle);
+        unplug(&mut adapter, "bluetooth");
+        adapter
+            .audio_mut()
+            .connect_output_as("bluetooth", "Earbuds", OutputKind::Bluetooth);
+        adapter.poll();
+        assert_eq!(adapter.snapshot().calibration.phase, line);
         adapter.set_speaker_enabled(&key("bluetooth"), false);
         adapter.poll();
         assert_eq!(
@@ -16911,7 +16958,7 @@ mod tests {
 
     // covers: S246, S252
     #[test]
-    fn a_recall_leaves_an_offline_cast_member_off_as_busy() {
+    fn a_recall_leaves_an_offline_cast_member_off_as_offline() {
         let (mut adapter, _fake) = cast_adapter();
         let id = cc_address("192.0.2.20");
         adapter.restore(Settings {
@@ -16928,7 +16975,7 @@ mod tests {
             preset_notices(&adapter),
             [left_off_notice(
                 "Evening",
-                &[("192.0.2.20", PresetLeftOff::Busy)]
+                &[("192.0.2.20", PresetLeftOff::Offline)]
             )]
         );
     }

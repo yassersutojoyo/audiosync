@@ -51,6 +51,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, when the last speaker goes off while you type a preset's name, Save says to turn on the speakers you want in the preset first, as on Windows. Before, the preset wasn't saved and nothing said so.
 - On the Mac, a Bluetooth speaker that stops playing and drops off now shows that it was disconnected, as on Windows. Before, its row stayed on with no notice.
 - On the Mac, New Zone from Active Speakers leaves out a speaker that turns off while you type the zone's name, and makes no zone when none is left on. Before, it still put that speaker in the new zone.
+- On Windows, a speaker's calibration result stays shown until you turn that speaker off, as on the Mac. Before, it went away when a Bluetooth speaker dropped out for a moment and came back.
 
 ## [0.8.0] - 2026-11-02
 

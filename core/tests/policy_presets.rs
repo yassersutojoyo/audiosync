@@ -51,6 +51,7 @@ fn present(kind: MemberKind) -> RecallMember {
         hidden: false,
         on: false,
         busy: false,
+        offline: false,
         needs_airplay2: false,
         in_target: false,
         fixed_volume: false,
@@ -372,6 +373,21 @@ fn recall_turns_on_one_cast_or_notes_it_busy() {
         [RecallStep::LeftOff(LeftOff::Busy), RecallStep::On]
     );
     assert!(busy.needs_notice());
+}
+
+// covers: S252
+#[test]
+fn recall_notes_an_offline_cast_as_offline_not_busy() {
+    let offline = RecallMember {
+        busy: true,
+        offline: true,
+        ..present(MemberKind::Cast)
+    };
+    let plan = recall_plan(&[offline, present(MemberKind::Local)], &[], true);
+    assert_eq!(
+        plan.steps,
+        [RecallStep::LeftOff(LeftOff::Offline), RecallStep::On]
+    );
 }
 
 // covers: S252

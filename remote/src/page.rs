@@ -371,6 +371,18 @@ mod tests {
         assert!(policy.contains(&hash_source(only_element(PAGE, "style").unwrap())));
     }
 
+    // covers: S343, S360
+    #[test]
+    fn an_empty_list_with_hidden_speakers_says_so_as_the_panels_do() {
+        let script = only_element(PAGE, "script").unwrap();
+        assert!(script.contains(
+            "allHidden: \"Every speaker is hidden. Open AudioSync and choose Hidden Speakers to show one again.\","
+        ));
+        assert!(script.contains(
+            "ui.empty.textContent = TEXT[next.hidden_speakers > 0 ? \"allHidden\" : \"noSpeakers\"];"
+        ));
+    }
+
     fn line_with<'a>(needle: &str) -> &'a str {
         PAGE.lines()
             .find(|line| line.contains(needle))
@@ -580,6 +592,18 @@ mod tests {
         }
         assert!(script.contains("option.textContent = reason ? TEXT.sourceWithNotice(source.name, reason) : source.name;"));
         assert!(script.contains("group.label = heading;"));
+    }
+
+    #[test]
+    fn labels_and_the_empty_list_read_as_in_the_apps() {
+        for line in [
+            "  masterVolume: \"Master Volume\",",
+            "  source: \"Audio Source\",",
+            "  sourceInputs: \"Input Devices\",",
+            "  noSpeakers: \"No speakers found\",",
+        ] {
+            assert_eq!(line_with(line.trim()), line);
+        }
     }
 
     #[test]

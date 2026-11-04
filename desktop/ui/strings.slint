@@ -260,9 +260,10 @@ export global Strings {
     // help text.
     out property <string> preset-current: @tr("Current");
     out property <string> preset-recall-hint: @tr("Recalls this preset");
-    // Hidden and busy members in the preset notice.
+    // Hidden, busy and offline members in the preset notice.
     out property <string> preset-hidden: @tr("Hidden");
     out property <string> preset-busy: @tr("In use by another app");
+    out property <string> preset-offline: @tr("Not on the network");
     // A member the recall switched on that failed to start (spec S266).
     out property <string> preset-cant-play: @tr("Couldn't start");
     // Save as Preset… at the most presets the app keeps (spec S251).
@@ -1719,7 +1720,7 @@ export global Strings {
         if reference == "" {
             return root.sync-hint-no-reference;
         }
-        return @tr("Relative to {}. Heard this speaker first? Raise the value. Heard it late? Lower it.", reference);
+        return @tr("Relative to {}. Use a negative value for a speaker that sounds late, such as Bluetooth. Heard this speaker first? Raise the value. Heard it late? Lower it.", reference);
     }
 
     // Microphone calibration of a local speaker against the reference (spec

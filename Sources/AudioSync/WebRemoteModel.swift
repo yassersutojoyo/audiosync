@@ -250,6 +250,8 @@ struct RemoteSnapshot: Equatable {
     var master: Double
     var nowPlaying: Playing?
     var rows: [RemoteRow]
+    /// The speakers present that the app hides, which `rows` leaves out.
+    var hiddenSpeakers = 0
     var zones: [RemoteZoneRow] = []
     var presets: [RemotePresetRow] = []
     /// A microphone run holds the outputs (S258): the page takes no change.
@@ -269,6 +271,7 @@ struct RemoteSnapshot: Equatable {
             "master": ["volume": Self.volume(master)],
             "now_playing": playing,
             "speakers": rows.map(\.json),
+            "hidden_speakers": hiddenSpeakers,
             "zones": zones.map(\.json),
             "presets": presets.map(\.json),
             "calibrating": calibrating,

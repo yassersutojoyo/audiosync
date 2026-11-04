@@ -114,11 +114,13 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 
 - Get the zip for your PC (x64 or ARM64) from the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. Needs Windows 11. It's one exe with no installer: unzip it into a folder of its own and run it. [desktop/README.md](desktop/README.md#running-the-exe) has the details.
 - The exe isn't signed, so the first time you open it Windows SmartScreen may say it protected your PC. Click More info, then Run anyway, to open it.
+- Or, from PowerShell: `irm https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.ps1 | iex`. It picks the zip for your PC, checks it against the release's SHA-256 checksums, puts AudioSync in your user folder with a Start menu shortcut (no admin needed) and opens it. A copy fetched this way isn't marked as downloaded, so SmartScreen doesn't ask. Run it again to update.
 - Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch and while the app runs, at most once a day. Nothing downloads until you click Download and Install.
 
 ### Linux (not released yet)
 
 - Built from the same code as the Windows app, but not released yet. CI builds an x86_64 AppImage (glibc 2.39 or newer, PipeWire from your system), and [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the details.
+- Once a release carries the AppImage, this installs it: `curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install-linux.sh | bash`. It picks the AppImage for your machine (x86_64, or aarch64 when there is one), checks it against the release's SHA-256 checksums, puts it in `~/.local/bin` with an app menu entry and opens it, no sudo. Until then it says the release has no AppImage and changes nothing. Run it again to update.
 - It captures and plays through PipeWire. Its data lives in `$XDG_DATA_HOME/audiosync`, and launch at login is an XDG autostart entry.
 
 ## Use
