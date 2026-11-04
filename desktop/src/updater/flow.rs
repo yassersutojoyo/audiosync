@@ -1022,6 +1022,79 @@ pub mod tests {
         assert!(temp_folders(&f.env).is_empty());
     }
 
+    /// A Linux copy run from `AudioSync-0.8.0-x86_64.AppImage`, offered
+    /// `appimage` as 0.9.0 under `os`, signed with a new throwaway key.
+    fn appimage_fixture(name: &str, os: &str, appimage: &[u8]) -> Fixture {
+        let mut f = fixture(name, false, Arc::new(RealFiles), DebugLog::default());
+        f.env.os = Os::Linux;
+        f.env.exe_name = "AudioSync-0.8.0-x86_64.AppImage".to_owned();
+        fs::remove_file(f.env.install_dir.join(archive::EXE_NAME)).unwrap();
+        fs::write(f.env.install_dir.join(&f.env.exe_name), b"old appimage").unwrap();
+        let key = test_key::new();
+        let signed = test_key::sign(&key, appimage);
+        let mut fetch = MemoryFetch::default();
+        fetch.files.insert(
+            FEED.to_owned(),
+            appcast_with(os, appimage.len(), &signed).into_bytes(),
+        );
+        fetch.files.insert(ZIP_URL.to_owned(), appimage.to_vec());
+        f.fetch = Arc::new(fetch);
+        f.env.fetch = f.fetch.clone();
+        f.env.key = key.verifying_key();
+        f
+    }
+
+    // covers: S424
+    #[test]
+    fn an_appimage_update_replaces_the_appimage_under_its_own_name() {
+        let appimage = appimage::tests::fake_appimage(62, b"new appimage");
+        let f = appimage_fixture("appimage", "linux-x86_64", &appimage);
+        let update = update_of(&f.env);
+        assert!(matches!(run(&f.env, &update), Installed::Done(_)));
+        let live = f.env.install_dir.join(&f.env.exe_name);
+        assert_eq!(fs::read(&live).unwrap(), appimage);
+        assert_eq!(
+            fs::read(
+                f.env
+                    .install_dir
+                    .join("AudioSync-0.8.0-x86_64.AppImage.bak")
+            )
+            .unwrap(),
+            b"old appimage"
+        );
+        assert!(!f.env.install_dir.join(archive::EXE_NAME).exists());
+        assert!(!f.env.install_dir.join(archive::NOTICES_NAME).exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&live).unwrap().permissions().mode() & 0o111,
+                0o111
+            );
+        }
+        assert!(temp_folders(&f.env).is_empty());
+
+        // A Windows zip, or an AppImage for the other arch, changes nothing.
+        let windows = fixture(
+            "appimage-zip",
+            false,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        let mut zip_env = appimage_fixture("appimage-zip-linux", "linux-x86_64", &appimage).env;
+        zip_env.fetch = windows.env.fetch.clone();
+        zip_env.key = windows.env.key;
+        assert_eq!(check(&zip_env), Checked::UpToDate);
+        let arm = appimage::tests::fake_appimage(183, b"arm appimage");
+        let other = appimage_fixture("appimage-arm", "linux-x86_64", &arm);
+        let update = update_of(&other.env);
+        assert_eq!(run(&other.env, &update), Installed::BrokenDownload);
+        assert_eq!(
+            fs::read(other.env.install_dir.join(&other.env.exe_name)).unwrap(),
+            b"old appimage"
+        );
+    }
+
     // covers: S298
     #[test]
     fn a_download_over_its_length_or_the_cap_stops_and_is_deleted() {

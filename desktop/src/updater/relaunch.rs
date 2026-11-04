@@ -423,4 +423,48 @@ pub mod tests {
             "the child was ended"
         );
     }
+
+    /// A command that runs `script` through the platform's shell.
+    fn shell(script: &str) -> Command {
+        let mut command = Command::new(if cfg!(windows) { "cmd.exe" } else { "sh" });
+        command.args([if cfg!(windows) { "/c" } else { "-c" }, script]);
+        command
+    }
+
+    // covers: S424
+    #[test]
+    fn the_linux_start_signal_is_a_file_the_new_instance_makes() {
+        let dir = crate::updater::tests::test_dir("file-signal");
+        let signal = signal_file(&dir, 4242);
+        assert_eq!(signal.file_name().unwrap(), "AudioSync-update-started-4242");
+        // A file an earlier try left is no signal of this start.
+        std::fs::write(&signal, b"").unwrap();
+        let start = start_and_watch(&mut shell("exit 3"), &signal, Duration::from_secs(10));
+        assert!(
+            matches!(start, Start::Exited { code: Some(3), .. }),
+            "{start:?}"
+        );
+
+        let make = if cfg!(windows) {
+            format!(
+                "type nul > \"{}\" & ping -n 3 127.0.0.1 >nul",
+                signal.display()
+            )
+        } else {
+            format!(": > '{}'; sleep 2", signal.display())
+        };
+        let start = start_and_watch(&mut shell(&make), &signal, Duration::from_secs(10));
+        assert!(matches!(start, Start::Signalled { .. }), "{start:?}");
+        assert!(!signal.exists(), "the signal is taken");
+
+        let started = Instant::now();
+        let quiet = if cfg!(windows) {
+            "ping -n 30 127.0.0.1 >nul"
+        } else {
+            "sleep 30"
+        };
+        let start = start_and_watch(&mut shell(quiet), &signal, Duration::from_millis(300));
+        assert!(matches!(start, Start::TimedOut { .. }), "{start:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
 }

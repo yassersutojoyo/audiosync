@@ -299,7 +299,8 @@ mod tests {
             windows_item("0.8.1", "windows-x64")
         ));
         let appcast = parse(&text).expect("the feed reads");
-        let update = pick(&appcast, Arch::X64, &v("0.8"), &win11()).expect("an update");
+        let update =
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.8"), &win11()).expect("an update");
         assert_eq!(update.version_text, "0.8.1");
     }
 
@@ -326,9 +327,11 @@ mod tests {
             windows_item("1.0", "windows-arm64"),
         ));
         let appcast = parse(&text).expect("the feed reads");
-        let update = pick(&appcast, Arch::X64, &v("0.7.0"), &win11()).expect("an update");
+        let update =
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.7.0"), &win11()).expect("an update");
         assert_eq!(update.enclosure.url, "https://e.invalid/ok.zip");
-        let arm = pick(&appcast, Arch::Arm64, &v("0.7.0"), &win11()).expect("an update");
+        let arm =
+            pick(&appcast, Os::Windows, Arch::Arm64, &v("0.7.0"), &win11()).expect("an update");
         assert_eq!(arm.version_text, "1.0");
     }
 
@@ -342,10 +345,44 @@ mod tests {
             windows_item("0.8.5", "windows-x64")
         ));
         let appcast = parse(&text).expect("the feed reads");
-        let update = pick(&appcast, Arch::X64, &v("0.7.0"), &win11()).expect("an update");
+        let update =
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.7.0"), &win11()).expect("an update");
         assert_eq!(update.version_text, "0.9.0");
-        assert_eq!(pick(&appcast, Arch::X64, &v("0.9"), &win11()), None);
-        assert_eq!(pick(&appcast, Arch::X64, &v("1.0"), &win11()), None);
-        assert_eq!(pick(&appcast, Arch::Arm64, &v("0.1"), &win11()), None);
+        assert_eq!(
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.9"), &win11()),
+            None
+        );
+        assert_eq!(
+            pick(&appcast, Os::Windows, Arch::X64, &v("1.0"), &win11()),
+            None
+        );
+        assert_eq!(
+            pick(&appcast, Os::Windows, Arch::Arm64, &v("0.1"), &win11()),
+            None
+        );
+    }
+
+    // covers: S424
+    #[test]
+    fn a_linux_copy_picks_the_appimage_of_its_own_arch_and_windows_ignores_it() {
+        let text = feed(&format!(
+            "{}{}{}{}",
+            windows_item("0.9.0", "windows-x64"),
+            windows_item("0.9.0", "linux-x86_64"),
+            windows_item("0.9.0", "linux-aarch64"),
+            windows_item("1.0.0", "linux"),
+        ));
+        let appcast = parse(&text).expect("the feed reads");
+        let x64 = pick(&appcast, Os::Linux, Arch::X64, &v("0.8.0"), &v("0")).expect("an update");
+        assert_eq!(x64.enclosure.os.as_deref(), Some("linux-x86_64"), "{x64:?}");
+        let arm = pick(&appcast, Os::Linux, Arch::Arm64, &v("0.8.0"), &v("0")).expect("an update");
+        assert_eq!(arm.enclosure.os.as_deref(), Some("linux-aarch64"));
+        let windows =
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.8.0"), &win11()).expect("an update");
+        assert_eq!(windows.enclosure.os.as_deref(), Some("windows-x64"));
+        assert_eq!(
+            pick(&appcast, Os::Windows, Arch::Arm64, &v("0.8.0"), &win11()),
+            None
+        );
     }
 }

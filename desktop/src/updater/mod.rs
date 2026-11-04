@@ -3,10 +3,12 @@
 //! worker thread, and relaunches only on the user's click.
 
 pub mod appcast;
+pub mod appimage;
 pub mod archive;
 pub mod fetch;
 pub mod files;
 pub mod flow;
+pub mod http;
 pub mod relaunch;
 pub mod signature;
 pub mod swap;
@@ -1059,6 +1061,36 @@ pub mod tests {
         assert!(!runs(false, Some(&package)));
         assert!(runs(true, None));
         assert!(!runs(false, None));
+    }
+
+    // covers: S424
+    #[test]
+    fn a_linux_copy_not_run_from_an_appimage_fetches_nothing_and_offers_the_release_page() {
+        let mut f = fixture(
+            "not-appimage",
+            false,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        f.env.os = appcast::Os::Linux;
+        f.env.not_appimage = true;
+        let fetch = f.fetch.clone();
+        let mut updater = Updater::new(f.env);
+        updater.launch_check(true, None, 1_000);
+        updater.periodic_check(true, None, 100_000_000);
+        assert_eq!(updater.notice(), None);
+        updater.check(Trigger::Manual);
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::NotAppImage));
+        assert_eq!(
+            UpdaterNotice::NotAppImage.buttons(),
+            [UpdaterButton::OpenReleasePage]
+        );
+        assert_eq!(
+            updater.press(UpdaterButton::OpenReleasePage),
+            Action::OpenReleasePage
+        );
+        assert!(fetch.asked.lock().unwrap().is_empty());
+        assert!(!updater.poll().changed);
     }
 
     // covers: S296
