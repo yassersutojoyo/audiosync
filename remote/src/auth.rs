@@ -1282,6 +1282,29 @@ mod tests {
 
     // covers: S425
     #[test]
+    fn an_old_token_works_until_the_new_one_is_first_used() {
+        let start = day_zero();
+        let (mut store, _) = TokenStore::open_at(None, start);
+        let old = random_token().unwrap();
+        let _ = store.add(&old, peer(10), start);
+        let due = start + ROTATE_AFTER;
+        let (new, _) = store.rotate(&old, due).unwrap().expect("a new token");
+        // The answer that carried `new` never reached the phone.
+        let lost = due + ROTATION_GRACE * 5;
+        assert!(store.check(&old, peer(10), lost).0.is_some());
+        assert!(
+            store.rotate(&old, lost).unwrap().is_none(),
+            "no third token"
+        );
+
+        let used = lost + Duration::from_secs(1);
+        assert!(store.check(&new, peer(10), used).0.is_some());
+        assert!(store.contains(&old, used + ROTATION_GRACE - Duration::from_secs(1)));
+        assert!(!store.contains(&old, used + ROTATION_GRACE));
+    }
+
+    // covers: S425
+    #[test]
     fn a_token_is_replaced_after_ten_minutes_and_the_old_one_lasts_a_minute() {
         let start = day_zero();
         let (mut store, _) = TokenStore::open_at(None, start);
