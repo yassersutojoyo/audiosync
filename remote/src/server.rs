@@ -1985,6 +1985,101 @@ mod tests {
         server.stop();
     }
 
+    fn state_request(host: &str, port: u16, token: &str) -> Request {
+        let head = format!(
+            "GET /api/state HTTP/1.1\r\nHost: {host}\r\nCookie: {}={token}",
+            token_cookie_name(port)
+        );
+        http::parse_head(head.as_bytes()).unwrap()
+    }
+
+    /// The new token an answer sets, if any.
+    fn set_token(answer: &Answer) -> Option<String> {
+        let Answer::Response(response) = answer else {
+            return None;
+        };
+        response.headers.iter().find_map(|(name, value)| {
+            let value = value.strip_prefix(&format!("{TOKEN_COOKIE}_"))?;
+            let (_, rest) = value.split_once('=')?;
+            let token = rest.split(';').next()?;
+            (*name == "Set-Cookie" && !token.is_empty()).then(|| token.to_owned())
+        })
+    }
+
+    fn local_server() -> (RemoteServer, SocketAddr, String) {
+        let config = Config {
+            port: 0,
+            listen: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
+            ..Config::default()
+        };
+        let server = RemoteServer::start(config, |_: &Command| {}).unwrap();
+        let local = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), server.port());
+        let host = format!("127.0.0.1:{}", server.port());
+        (server, local, host)
+    }
+
+    // covers: S425
+    #[test]
+    fn a_token_sent_from_another_address_is_refused_and_forgotten() {
+        let (server, local, host) = local_server();
+        let phone = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10));
+        let code = server.pairing_code().unwrap();
+        let answer = route(
+            &pair_request(&host, &code),
+            &host,
+            phone,
+            local,
+            &server.shared,
+        );
+        let token = set_token(&answer).expect("a token");
+        let request = state_request(&host, local.port(), &token);
+        assert_ne!(
+            status(route(&request, &host, phone, local, &server.shared)),
+            401
+        );
+
+        let other = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20));
+        assert_eq!(
+            status(route(&request, &host, other, local, &server.shared)),
+            401
+        );
+        assert_eq!(
+            status(route(&request, &host, phone, local, &server.shared)),
+            401
+        );
+        assert_eq!(server.device_count(), 0);
+        server.stop();
+    }
+
+    // covers: S425
+    #[test]
+    fn an_old_token_gets_a_new_one_and_stops_working_after_the_grace() {
+        let (server, local, host) = local_server();
+        let phone = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let old = auth::random_token().unwrap();
+        let paired_at = SystemTime::now() - Duration::from_secs(60 * 60);
+        let _ = lock(&server.shared.devices).add(&old, paired_at);
+
+        let request = state_request(&host, local.port(), &old);
+        let answer = route(&request, &host, phone, local, &server.shared);
+        let new = set_token(&answer).expect("a new token");
+        assert_ne!(new, old);
+        let renewed = state_request(&host, local.port(), &new);
+        let answer = route(&renewed, &host, phone, local, &server.shared);
+        assert_ne!(status(answer), 401);
+        assert_ne!(
+            status(route(&request, &host, phone, local, &server.shared)),
+            401
+        );
+
+        let later = SystemTime::now() + Duration::from_secs(61);
+        let devices = lock(&server.shared.devices);
+        assert!(devices.contains(&new, later));
+        assert!(!devices.contains(&old, later));
+        drop(devices);
+        server.stop();
+    }
+
     // covers: S370
     #[test]
     fn log_lines_never_carry_a_code() {
