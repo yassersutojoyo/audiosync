@@ -1097,7 +1097,7 @@ pub mod tests {
     // covers: S424
     #[test]
     fn an_appimage_update_replaces_the_appimage_under_its_own_name() {
-        let appimage = appimage::tests::fake_appimage(62, b"new appimage");
+        let appimage = appimage::tests::stamped(62, "0.9.0");
         let f = appimage_fixture("appimage", "linux-x86_64", &appimage);
         let update = update_of(&f.env);
         assert!(matches!(run(&f.env, &update), Installed::Done(_)));
@@ -1135,7 +1135,7 @@ pub mod tests {
         zip_env.fetch = windows.env.fetch.clone();
         zip_env.key = windows.env.key;
         assert_eq!(check(&zip_env), Checked::UpToDate);
-        let arm = appimage::tests::fake_appimage(183, b"arm appimage");
+        let arm = appimage::tests::stamped(183, "0.9.0");
         let other = appimage_fixture("appimage-arm", "linux-x86_64", &arm);
         let update = update_of(&other.env);
         assert_eq!(run(&other.env, &update), Installed::BrokenDownload);
@@ -1143,6 +1143,32 @@ pub mod tests {
             fs::read(other.env.install_dir.join(&other.env.exe_name)).unwrap(),
             b"old appimage"
         );
+    }
+
+    // covers: S424
+    #[test]
+    fn a_signed_appimage_not_stamped_with_the_offered_version_is_refused() {
+        // An older signed AppImage served as 0.9.0 would install and be
+        // offered again after every start.
+        for (case, appimage) in [
+            (
+                "unstamped",
+                appimage::tests::fake_appimage(62, b"old build"),
+            ),
+            ("running", appimage::tests::stamped(62, "0.8.0")),
+            ("older", appimage::tests::stamped(62, "0.7.1")),
+            ("other", appimage::tests::stamped(62, "0.9.1")),
+        ] {
+            let f = appimage_fixture(&format!("appimage-stamp-{case}"), "linux-x86_64", &appimage);
+            let update = update_of(&f.env);
+            assert_eq!(run(&f.env, &update), Installed::BrokenDownload, "{case}");
+            assert_eq!(
+                fs::read(f.env.install_dir.join(&f.env.exe_name)).unwrap(),
+                b"old appimage",
+                "{case}"
+            );
+            assert!(temp_folders(&f.env).is_empty(), "{case}");
+        }
     }
 
     // covers: S298

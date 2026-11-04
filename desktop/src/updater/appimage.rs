@@ -46,6 +46,42 @@ pub mod tests {
         bytes
     }
 
+    /// [`fake_appimage`] stamped with `version` as `scripts/build_appimage.sh`
+    /// stamps it: `AudioSyncVersion`, then the version padded with NULs to 16
+    /// bytes, as the file's last 32 bytes.
+    pub fn stamped(machine: u16, version: &str) -> Vec<u8> {
+        let mut bytes = fake_appimage(machine, b"squashfs");
+        bytes.extend_from_slice(b"AudioSyncVersion");
+        let mut text = version.as_bytes().to_vec();
+        text.resize(16, 0);
+        bytes.extend_from_slice(&text);
+        bytes
+    }
+
+    // covers: S424
+    #[test]
+    fn the_version_is_read_from_the_stamp_in_the_last_32_bytes() {
+        use super::super::version::Version;
+        assert_eq!(
+            stamped_version(&stamped(62, "0.9.0")),
+            Version::parse("0.9.0")
+        );
+        assert_eq!(
+            stamped_version(&stamped(183, "0.10.12")),
+            Version::parse("0.10.12")
+        );
+        assert_eq!(stamped_version(&fake_appimage(62, b"no stamp")), None);
+        let mut no_mark = stamped(62, "0.9.0");
+        let at = no_mark.len() - 32;
+        no_mark[at] = b'a';
+        assert_eq!(stamped_version(&no_mark), None);
+        let mut not_dotted = stamped(62, "0.9.0");
+        let at = not_dotted.len() - 16;
+        not_dotted[at] = b'x';
+        assert_eq!(stamped_version(&not_dotted), None);
+        assert_eq!(stamped_version(&[]), None);
+    }
+
     // covers: S424
     #[test]
     fn only_an_absolute_appimage_path_is_replaced_in_place() {

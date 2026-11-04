@@ -571,3 +571,60 @@ pub mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("audiosync-relaunch-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    // covers: S424
+    #[test]
+    fn the_signal_file_is_new_private_and_never_follows_a_link() {
+        let dir = test_dir("signal");
+        let signal = signal_file(&dir, 4242);
+        assert!(make_signal(&signal));
+        let mode = std::fs::metadata(&signal).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        // A file already there, or a link someone put there, is no signal.
+        assert!(!make_signal(&signal));
+        std::fs::remove_file(&signal).unwrap();
+        let target = dir.join("target");
+        std::fs::write(&target, b"kept").unwrap();
+        std::os::unix::fs::symlink(&target, &signal).unwrap();
+        assert!(!make_signal(&signal));
+        assert_eq!(std::fs::read(&target).unwrap(), b"kept");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // covers: S424
+    #[test]
+    fn a_new_instance_that_makes_the_file_counts_as_started() {
+        let dir = test_dir("watch");
+        let signal = signal_file(&dir, 4242);
+        let mut command = Command::new("sh");
+        command.args(["-c", &format!(": > '{}'; sleep 2", signal.display())]);
+        let start = start_and_watch(&mut command, &signal, Duration::from_secs(10));
+        assert!(matches!(start, Start::Signalled { .. }), "{start:?}");
+        assert!(!signal.exists(), "the signal is taken");
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 3"]);
+        let start = start_and_watch(&mut command, &signal, Duration::from_secs(10));
+        let Start::Exited { pid, code: Some(3) } = start else {
+            panic!("{start:?}");
+        };
+        assert!(
+            wait_for_exit(pid, Duration::from_secs(2)),
+            "the child ended"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

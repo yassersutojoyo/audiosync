@@ -469,6 +469,18 @@ mod tests {
             Err(SwapError::ReadOnly)
         );
         assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
+
+        // Linux: an AppImage on a read-only mount (EROFS).
+        let (dir, exe, _) = install("read-only-mount");
+        let files = failing(|op, path| {
+            (op == "create" && file_name(path) == "audiosync.exe.new")
+                .then(|| io::Error::from(io::ErrorKind::ReadOnlyFilesystem))
+        });
+        assert_eq!(
+            swap(&dir, EXE_NAME, exe, None, &files, &mut StepLog::new()),
+            Err(SwapError::ReadOnly)
+        );
+        assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME]);
     }
 
     // covers: S302

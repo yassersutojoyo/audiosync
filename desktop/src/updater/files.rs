@@ -274,3 +274,38 @@ impl Files for Retrying<'_> {
         self.retried("open", path, || self.inner.open(path))
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    // covers: S424
+    #[test]
+    fn a_new_appimage_runs_and_a_rename_replaces_only_when_asked() {
+        let dir = std::env::temp_dir().join(format!("audiosync-files-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let new = dir.join("AudioSync.AppImage.new");
+        let live = dir.join("AudioSync.AppImage");
+        RealFiles
+            .create(&new, true)
+            .unwrap()
+            .write_all(b"new")
+            .unwrap();
+        let mode = fs::metadata(&new).unwrap().permissions().mode();
+        assert_eq!(mode & 0o111, 0o111, "{mode:o}");
+        assert!(RealFiles.create(&new, true).is_err());
+        fs::write(&live, b"old").unwrap();
+        assert_eq!(
+            RealFiles.rename(&new, &live).unwrap_err().kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(fs::read(&live).unwrap(), b"old");
+        RealFiles.replace(&new, &live).unwrap();
+        assert_eq!(fs::read(&live).unwrap(), b"new");
+        assert!(!new.exists());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}

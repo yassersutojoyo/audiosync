@@ -486,8 +486,9 @@ def fixture_item(zip_path, version="0.8.0", build="80", os_attr=None, sig=True,
     }
 
 
-def fake_appimage(machine):
-    return b"\x7fELF\x02\x01\x01\x00AI\x02" + bytes(5) + struct.pack("<HH", 2, machine) + b"squashfs"
+def fake_appimage(machine, version="0.8.0"):
+    stamp = b"AudioSyncVersion" + version.encode().ljust(16, b"\0") if version else b""
+    return b"\x7fELF\x02\x01\x01\x00AI\x02" + bytes(5) + struct.pack("<HH", 2, machine) + b"squashfs" + stamp
 
 
 def self_test():
@@ -521,9 +522,13 @@ def self_test():
         linux_x64 = os.path.join(folder, "AudioSync-0.8.0-x86_64.AppImage")
         linux_arm = os.path.join(folder, "AudioSync-0.8.0-aarch64.AppImage")
         x64_as_arm = os.path.join(folder, "nested", "AudioSync-0.8.0-aarch64.AppImage")
-        for path, machine in ((linux_x64, 62), (linux_arm, 183), (x64_as_arm, 62)):
+        stamps = {case: os.path.join(folder, case, "AudioSync-0.8.0-x86_64.AppImage")
+                  for case in ("old", "unmarked")}
+        for path, machine, version in ((linux_x64, 62, "0.8.0"), (linux_arm, 183, "0.8.0"),
+                                       (x64_as_arm, 62, "0.8.0"), (stamps["old"], 62, "0.7.1"),
+                                       (stamps["unmarked"], 62, None)):
             with open(path, "wb") as f:
-                f.write(fake_appimage(machine))
+                f.write(fake_appimage(machine, version))
 
         def good():
             return [fixture_item(mac),
@@ -552,6 +557,10 @@ def self_test():
             everything[:4] + [x64_as_arm], "not a type 2 AppImage for linux-aarch64")
         run("an AppImage with --mac-only", good()[:1], [mac, linux_x64], "a Linux file, but --mac-only",
             mac_only=True)
+        for case, want in (("old", "stamped with version '0.7.1'; expected '0.8.0'"),
+                           ("unmarked", "stamped with version None")):
+            run(f"{case} AppImage", good()[:3] + [fixture_item(stamps[case], os_attr="linux-x86_64")]
+                + good()[4:], [mac, x64, arm, stamps[case], linux_arm], want)
         run("tag form of the version", good(), everything, None, version="v0.8.0")
         run("Mac only, no zips", good()[:1], [], None, mac_only=True)
         run("Mac only, Mac zip", good()[:1], [mac], None, mac_only=True)
