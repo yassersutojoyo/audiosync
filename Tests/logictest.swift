@@ -7221,12 +7221,13 @@ do {
     let calibrateRowSource = ((try? String(contentsOfFile: "Sources/AudioSync/CalibrateAllViews.swift", encoding: .utf8)) ?? "")
         .components(separatedBy: "struct CalibrateAllButton").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
-    check("\(UIStrings().calibrateAllRowTitle) \(UIStrings().calibrateAllRowDetail)".lowercased()
-            == UIStrings().calibrateAll.lowercased()
-            && calibrateRowSource.contains("Text(t.calibrateAllRowTitle)") && calibrateRowSource.contains("Text(t.calibrateAllRowDetail)")
-            && calibrateRowSource.contains(".accessibilityLabel(t.calibrateAll)") && !calibrateRowSource.contains("ScrollingTitle"),
-          "left column: Calibrate All Speakers sits whole on two still lines like the Equalizer row, read as one name",
-          calibrateRowSource.isEmpty ? "no CalibrateAllButton source" : "")
+    // The mic is 20 pt wide; the chevron is estimated at 7 pt; "Calibrate All Speakers" measured 132.7 pt on the Mac.
+    let calibrateRoom = MainColumns.narrow - 2 * BrandTokens.Spacing.cardPadding - 20 - 7 - 2 * 8
+    check(calibrateRoom >= 133 && calibrateRowSource.contains("HStack(spacing: 8)")
+            && calibrateRowSource.contains(".frame(width: 20)") && calibrateRowSource.contains("Text(t.calibrateAll)")
+            && !calibrateRowSource.contains("Spacer(") && !calibrateRowSource.contains("ScrollingTitle"),
+          "left column: Calibrate All Speakers fits whole on one still line at the slim width",
+          calibrateRowSource.isEmpty ? "no CalibrateAllButton source" : "\(calibrateRoom) pt")
     let marquee =[0, 1.9, 3, 4, 5.9, 7, 8, 9.9, 11].map { Marquee.offset(elapsed: $0, overflow: 60) }
     check(marquee == [0, 0, 30, 60, 60, 30, 0, 0, 30],
           "now playing: a long title rests 2 s, scrolls 30 pt a second to its end, rests 2 s and scrolls back",

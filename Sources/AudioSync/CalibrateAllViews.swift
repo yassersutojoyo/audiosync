@@ -12,21 +12,17 @@ struct CalibrateAllButton: View {
         let off = CalibrateAllFlow.rowBlocker(blocker)
         VStack(alignment: .leading, spacing: 6) {
             Button { model.actions.calibrateAll() } label: {
-                HStack(spacing: 10) {
+                // Spacing 8 and no spacer: the whole name (about 133 pt) fits the slim left column.
+                HStack(spacing: 8) {
                     Image(systemName: "mic")
                         .font(.system(size: 15))
                         .foregroundStyle(off == nil ? Brand.teal : Color.secondary)
                         .frame(width: 20)
                         .accessibilityHidden(true)
-                    // Stacked as the Equalizer row: the whole name doesn't fit the slim left column.
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(t.calibrateAllRowTitle).font(.body).lineLimit(1)
-                        Text(t.calibrateAllRowDetail)
-                            .font(.callout)
-                            .foregroundStyle(Brand.secondaryText)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(t.calibrateAll)
+                        .font(.body)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)

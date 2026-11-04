@@ -384,9 +384,6 @@ struct UIStrings {
     // MARK: Calibrate All Speakers (S235 to S240)
 
     let calibrateAll = "Calibrate All Speakers"
-    /// The left column's row, `calibrateAll` on two lines.
-    let calibrateAllRowTitle = "Calibrate"
-    let calibrateAllRowDetail = "All speakers"
     let calibrateAllHint = "Put the microphone where you listen. AudioSync fades the music out, plays a short sweep "
         + "on the built-in speakers and then on each other speaker that is on, one at a time, twice each, "
         + "and fades the music back in. Headphones and virtual outputs are left out. "
