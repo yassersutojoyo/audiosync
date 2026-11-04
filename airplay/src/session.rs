@@ -81,6 +81,9 @@ pub enum VerifyFailure {
     /// The receiver's signature didn't check out against the key it gave at
     /// pairing: ReceiverUnverified (P56).
     ReceiverUnverified,
+    /// The credentials hold no receiver key to check the signature with:
+    /// PairingRequired (P56).
+    NotPaired,
 }
 
 /// Bytes of the first pair-verify answer: atv_pub (32) and atv_data (64)
@@ -1279,6 +1282,12 @@ impl Session {
                         Some(method),
                         Some(code),
                         Some("receiver signature does not match the paired key"),
+                    ),
+                    Err(VerifyFailure::NotPaired) => self.fail(
+                        ErrorKind::PairingRequired,
+                        Some(method),
+                        Some(code),
+                        Some("stored pairing has no receiver key"),
                     ),
                 }
             }

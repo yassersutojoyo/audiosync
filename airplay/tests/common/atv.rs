@@ -324,6 +324,11 @@ impl FakeAppleTv {
         self.state().paired.clear();
     }
 
+    /// Knows this client key as paired, without running a PIN pairing.
+    pub fn trust(&self, client_key: [u8; 32]) {
+        self.state().paired.push(client_key);
+    }
+
     /// The paths of the pairing requests it got, in order.
     pub fn paths(&self) -> Vec<String> {
         self.state()

@@ -2,6 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Security
+
+- Pairing an Apple TV over AirPlay 1 now fails when the Apple TV doesn't send the key that identifies it, so no other device on the network can pose as it later. An Apple TV paired by an older version without that key needs pairing again with its code the next time you turn it on.
+
 ## [0.8.6] - 2026-11-04
 
 ### Changed

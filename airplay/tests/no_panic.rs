@@ -2110,13 +2110,10 @@ fn pairing_values_from_the_receiver_survive_any_length() {
         );
         for _ in 0..8 {
             let answer = random_bytes(&mut rng, 96);
-            match verifier.second_request(&answer) {
-                Ok(second) => {
-                    assert!(receiver_key.is_none(), "a random signature passed");
-                    assert_eq!(second.len(), 68);
-                }
-                Err(_) => assert!(receiver_key.is_some()),
-            }
+            assert!(
+                verifier.second_request(&answer).is_err(),
+                "a random signature passed"
+            );
         }
     }
 
@@ -2184,8 +2181,12 @@ fn session_setup(variant: usize) -> (SessionConfig, FakeReceiver) {
             config.software_mute = true;
         }
         _ => {
-            let credentials =
-                Credentials::new("0123456789ABCDEF", [0x42; 32]).expect("credentials");
+            let atv = FakeAppleTv::new("4821");
+            let credentials = Credentials::new("0123456789ABCDEF", [0x42; 32])
+                .expect("credentials")
+                .with_receiver_key(atv.receiver_key());
+            atv.trust(credentials.public_key());
+            receiver.apple_tv = Some(atv);
             let verifier =
                 LegacyVerifier::new(&credentials, &mut TestEntropy::new()).expect("entropy");
             config.verifier = Some(Box::new(verifier) as Box<dyn Verifier>);
