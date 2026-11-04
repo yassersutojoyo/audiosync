@@ -10876,7 +10876,7 @@ mod tests {
         let strings = app.main.global::<Strings>();
         assert_eq!(
             strings.invoke_sync_hint("Speakers".into()),
-            "Relative to Speakers. Heard this speaker first? Raise the value. Heard it late? Lower it."
+            "Relative to Speakers. Use a negative value for a speaker that sounds late, such as Bluetooth. Heard this speaker first? Raise the value. Heard it late? Lower it."
         );
         assert_eq!(
             strings.invoke_sync_hint("".into()),
