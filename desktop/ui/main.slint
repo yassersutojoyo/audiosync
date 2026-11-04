@@ -9,7 +9,7 @@ import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerRow, ToggleSwitch, VolumeSlider, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -19,7 +19,7 @@ export { GuideWindow } from "guide.slint";
 export { HelpWindow } from "help.slint";
 export { RemoteWindow } from "remote.slint";
 export { Strings } from "strings.slint";
-export { NameField } from "widgets.slint";
+export { Motion, NameField } from "widgets.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
@@ -32,16 +32,6 @@ global MainColumns {
     public pure function left(window: length) -> length {
         let room = window - 2 * Fluent.window-margin - Fluent.gap;
         return clamp(room - Fluent.speaker-list-full, Fluent.left-column-narrow, Fluent.left-column-wide);
-    }
-}
-
-// A Now Playing title too long for its line scrolls: it rests 2 s at its
-// start, moves to its end at 30 px a second, rests 2 s and moves back.
-global Marquee {
-    public pure function offset(elapsed: duration, overflow: length) -> length {
-        let travel = overflow / 30px * 1000;
-        let at = mod(elapsed / 1ms, 2 * (2000 + travel));
-        return at < 2000 ? 0px : at < 2000 + travel ? (at - 2000) / 1000 * 30px : at < 4000 + travel ? overflow : overflow - (at - 4000 - travel) / 1000 * 30px;
     }
 }
 
@@ -618,12 +608,9 @@ component PresetRow inherits Rectangle {
                         opacity: root.item.current ? 1 : 0;
                     }
 
-                    Text {
+                    MarqueeText {
                         text: root.item.name;
-                        color: Tokens.text;
                         font-weight: root.item.current ? 600 : 400;
-                        overflow: elide;
-                        vertical-alignment: center;
                         horizontal-stretch: 1;
                         accessible-role: none;
                     }
@@ -784,32 +771,39 @@ component EqualizerCard inherits Rectangle {
             width: 20px;
         }
 
-        Text {
-            text: Strings.equalizer;
-            color: Tokens.text;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
-            accessible-role: none;
-        }
-
-        if root.on: VerticalLayout {
+        // The name, and under it the preset, so the narrow column fits both.
+        VerticalLayout {
             alignment: center;
-            Rectangle {
-                width: 6px;
-                height: 6px;
-                border-radius: 3px;
-                background: Tokens.teal;
-            }
-        }
+            spacing: 2px;
+            horizontal-stretch: 1;
 
-        Text {
-            text: root.on ? root.curve : Strings.off;
-            color: Tokens.secondary-text;
-            font-size: Tokens.font-size-caption;
-            overflow: elide;
-            max-width: 160px;
-            vertical-alignment: center;
-            accessible-role: none;
+            label := Text {
+                text: Strings.equalizer;
+                color: Tokens.text;
+                accessible-role: none;
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+
+                if root.on: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 6px;
+                        height: 6px;
+                        border-radius: 3px;
+                        background: Tokens.teal;
+                    }
+                }
+
+                curve := MarqueeText {
+                    text: root.on ? root.curve : Strings.off;
+                    text-color: Tokens.secondary-text;
+                    font-size: Tokens.font-size-caption;
+                    horizontal-stretch: 1;
+                    accessible-role: none;
+                }
+            }
         }
 
         Glyph {
@@ -1146,13 +1140,10 @@ component NowPlayingCard inherits Card {
     in property <bool> playing;
     in property <bool> has-artwork;
     in property <image> artwork;
-    // Windows' animation effects; off, a long title is cut instead of scrolling.
-    in property <bool> animated: true;
     // As the player reports them, -1 where it doesn't take the command:
     // shuffle 0 off, 1 on; repeat 0 off, 1 all, 2 one.
     in property <int> shuffle: -1;
     in property <int> repeat: -1;
-    property <duration> shown-at;
     // Which button has the keyboard focus (0 to 4), -1 for none: the app
     // hands the focus on before the card hides.
     in-out property <int> focused-button: -1;
@@ -1161,12 +1152,6 @@ component NowPlayingCard inherits Card {
 
     accessible-role: groupbox;
     accessible-label: Strings.now-playing;
-    init => {
-        root.shown-at = animation-tick();
-    }
-    changed title => {
-        root.shown-at = animation-tick();
-    }
     // Slint leaves nothing focused when the focused button goes.
     changed shuffle => {
         if root.shuffle < 0 && root.focused-button == 3 {
@@ -1214,27 +1199,15 @@ component NowPlayingCard inherits Card {
                 spacing: 3px;
                 horizontal-stretch: 1;
 
-                // One line: a title too long for it scrolls (Marquee).
-                Rectangle {
-                    property <length> excess: root.animated && title-text.preferred-width > self.width ? title-text.preferred-width - self.width : 0px;
-                    height: title-text.preferred-height;
-                    clip: true;
-
-                    title-text := Text {
-                        x: parent.excess > 0 ? -Marquee.offset(animation-tick() - root.shown-at, parent.excess) : 0px;
-                        width: parent.excess > 0 ? self.preferred-width : parent.width;
-                        text: root.title;
-                        font-weight: 600;
-                        color: Tokens.text;
-                        overflow: elide;
-                    }
+                MarqueeText {
+                    text: root.title;
+                    font-weight: 600;
                 }
 
-                if root.subtitle != "": Text {
+                if root.subtitle != "": MarqueeText {
                     text: root.subtitle;
                     font-size: Tokens.font-size-caption;
-                    color: Tokens.secondary-text;
-                    overflow: elide;
+                    text-color: Tokens.secondary-text;
                 }
             }
         }
@@ -1364,7 +1337,6 @@ export component MainWindow inherits Window {
     in property <bool> now-playing-playing;
     in property <bool> now-playing-has-artwork;
     in property <image> now-playing-artwork;
-    in property <bool> now-playing-animated: true;
     in property <int> now-playing-shuffle: -1;
     in property <int> now-playing-repeat: -1;
     in-out property <int> now-playing-focused-button: -1;
@@ -1372,6 +1344,8 @@ export component MainWindow inherits Window {
     in property <[SpeakerItem]> connected;
     in property <[ZoneItem]> zones;
     in property <[NoticeItem]> notices;
+    // The notices not fading out.
+    in property <int> notices-staying;
     in property <[PresetItem]> presets;
     in property <bool> can-save-preset: true;
     // After a delete: the preset row, or Save as Preset…, that takes the focus.
@@ -1883,7 +1857,9 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: Fluent.window-margin;
-        spacing: Fluent.gap;
+        // The notices and the columns bring their gap above them, so a
+        // notice opens and closes its gap with it.
+        spacing: 0px;
 
         // Header: the brand and the state on the left, the switch on the right.
         // It and the notices end with the speaker cards.
@@ -1942,6 +1918,9 @@ export component MainWindow inherits Window {
         }
 
         if root.notices.length > 0: NoticeStack {
+            eased: true;
+            staying: root.notices-staying;
+            lead: Fluent.gap;
             max-width: root.content-max-width;
             padding-right: root.scroll-gutter;
             notices: root.notices;
@@ -1973,6 +1952,7 @@ export component MainWindow inherits Window {
         }
 
         HorizontalLayout {
+            padding-top: Fluent.gap;
             spacing: Fluent.gap;
             vertical-stretch: 1;
             // Past the speaker list's widest, the extra width stays empty on the right.
@@ -2095,7 +2075,6 @@ export component MainWindow inherits Window {
                         playing: root.now-playing-playing;
                         has-artwork: root.now-playing-has-artwork;
                         artwork: root.now-playing-artwork;
-                        animated: root.now-playing-animated;
                         shuffle: root.now-playing-shuffle;
                         repeat: root.now-playing-repeat;
                         focused-button <=> root.now-playing-focused-button;

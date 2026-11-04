@@ -74,7 +74,7 @@ mod tests {
     use slint::ComponentHandle;
     use slint::platform::Key;
 
-    use super::super::tests::{app_over, draw_frames, press};
+    use super::super::tests::{app_over, draw_frames, hold_clock, let_notice_close, press};
     use crate::ui_model::{MockBackend, NoticeMessage, SourceName};
 
     fn heard_twice() -> NoticeMessage {
@@ -160,8 +160,10 @@ mod tests {
         assert!(app.help.window().is_visible(), "the Guide stays open");
 
         let id = app.snapshot().notices[0].id;
+        hold_clock();
         app.main
             .invoke_notice_dismissed(i32::try_from(id).expect("a small ID"));
+        let_notice_close();
         assert!(
             !app.help.get_show_how_shown(),
             "no notice, no Show How in the Guide"

@@ -758,7 +758,7 @@ mod tests {
     use audiosync_airplay::error::ErrorKind;
     use audiosync_airplay::sender::SpeakerState as AirPlayState;
 
-    use super::super::tests::{app_over, draw_frames, press};
+    use super::super::tests::{app_over, draw_frames, hold_clock, let_notice_close, press};
     use crate::adapter::AudioAdapter;
     use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, airplay2_tv, device, id_of};
     use crate::audio::pairings::PairingStore;
@@ -1768,8 +1768,10 @@ mod tests {
         poll_until_public(&app, true);
         assert_eq!(public_notices(&app), 1);
 
+        hold_clock();
         app.main
             .invoke_notice_dismissed(super::REMOTE_PUBLIC_NOTICE_ID as i32);
+        let_notice_close();
         assert_eq!(public_notices(&app), 0, "dismissed");
         assert!(
             app.remote_window.get_public_network(),

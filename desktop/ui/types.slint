@@ -269,6 +269,10 @@ export struct NoticeItem {
     // The notice reports a change rather than a problem: it shows the info
     // glyph in place of the warning one.
     info: bool,
+    // Posted since the last refresh: the main window eases it in.
+    fresh: bool,
+    // Dismissed in the main window and fading out before it leaves the list.
+    closing: bool,
 }
 
 // The Settings page a guide step opens, if any.

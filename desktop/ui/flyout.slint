@@ -8,7 +8,7 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
+import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, VolumeSlider, Wordmark, ZoneArrowFocus } from "widgets.slint";
 
 // A compact row: the toggle and the name, with the note of a speaker or
 // zone that is on but can't play right now under it (a zone's count first) ("In use by another app",
@@ -81,11 +81,9 @@ component PresetPicker inherits Rectangle {
                         width: 16px;
                     }
 
-                    Text {
+                    MarqueeText {
                         text: root.current != "" ? root.current : Strings.choose-preset;
-                        color: root.current != "" ? Tokens.text : Tokens.secondary-text;
-                        overflow: elide;
-                        vertical-alignment: center;
+                        text-color: root.current != "" ? Tokens.text : Tokens.secondary-text;
                         horizontal-stretch: 1;
                         accessible-role: none;
                     }
@@ -167,14 +165,12 @@ component FlyoutRow inherits HorizontalLayout {
             max-width: name-label.preferred-width;
             min-height: name-label.preferred-height;
 
-            name-label := Text {
+            name-label := MarqueeText {
                 width: 100%;
                 height: 100%;
                 text: root.name;
-                color: Tokens.text;
+                text-color: Tokens.text;
                 font-weight: root.state == RowState.playing ? 600 : 400;
-                vertical-alignment: center;
-                overflow: elide;
                 accessible-role: none;
             }
 
@@ -326,14 +322,12 @@ component FlyoutZoneHeader inherits Rectangle {
                 max-width: zone-name.preferred-width;
                 min-height: zone-name.preferred-height;
 
-                zone-name := Text {
+                zone-name := MarqueeText {
                     width: 100%;
                     height: 100%;
                     text: root.item.name;
-                    color: Tokens.text;
+                    text-color: Tokens.text;
                     font-weight: root.item.state == RowState.playing ? 600 : 400;
-                    vertical-alignment: center;
-                    overflow: elide;
                     accessible-role: none;
                 }
             }

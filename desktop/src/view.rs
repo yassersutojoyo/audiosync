@@ -48,7 +48,7 @@ use crate::ui_model::{
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
     CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GuidePage, GuideStepItem,
-    GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow, MixAppItem, NameField,
+    GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow, MixAppItem, Motion, NameField,
     NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart,
     RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, UpdateButton,
     ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
@@ -803,6 +803,9 @@ pub struct App {
     on_refresh: RefCell<Option<RefreshHook>>,
     /// Which new notice Narrator is told about.
     notice_announcer: RefCell<NoticeAnnouncer>,
+    /// The notices fading out of the main window after a dismiss. Kept here,
+    /// not in the rows, which a refresh may rebuild mid-fade.
+    closing_notices: RefCell<Vec<u64>>,
     /// The calibration ending Narrator was last told about.
     calibration_announced: RefCell<Option<(String, Phase)>>,
     /// The Calibrate All ending Narrator was last told about.
@@ -867,6 +870,40 @@ fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
     if let Some(app) = app.upgrade() {
         action(&app);
     }
+}
+
+/// Fades the main window's notices `ids` out (all listed ones for None),
+/// then dismisses those still listed.
+fn close_main_notices(weak: &Weak<App>, ids: Option<u64>) {
+    let Some(app) = weak.upgrade() else { return };
+    let ids: Vec<u64> = {
+        let mut closing = app.closing_notices.borrow_mut();
+        let new: Vec<u64> = match ids {
+            Some(id) => vec![id],
+            None => app.snapshot().notices.iter().map(|n| n.id).collect(),
+        }
+        .into_iter()
+        .filter(|id| !closing.contains(id))
+        .collect();
+        closing.extend(&new);
+        new
+    };
+    if ids.is_empty() {
+        return;
+    }
+    app.refresh();
+    // The fade's length in widgets.slint's NoticeStack.
+    let fade = if app.main.global::<Motion>().get_on() {
+        300
+    } else {
+        150
+    };
+    let weak = weak.clone();
+    Timer::single_shot(Duration::from_millis(fade), move || {
+        with_app(&weak, |app| {
+            app.dismiss_listed_notices(|id| ids.contains(&id))
+        });
+    });
 }
 
 /// Applies the open rename once the focus has left its field for another
@@ -1070,6 +1107,7 @@ impl App {
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
+            closing_notices: RefCell::default(),
             calibration_announced: RefCell::default(),
             calibrate_all_announced: Cell::new(0),
             out_of_range: RefCell::default(),
@@ -1234,8 +1272,12 @@ impl App {
 
     /// Dismisses the listed notices only: one that dropped off stays.
     fn dismiss_all_notices(&self) {
+        self.dismiss_listed_notices(|_| true);
+    }
+
+    fn dismiss_listed_notices(&self, chosen: impl Fn(u64) -> bool) {
         for notice in self.snapshot().notices {
-            if !self.dismiss_own_notice(notice.id) {
+            if chosen(notice.id) && !self.dismiss_own_notice(notice.id) {
                 self.backend.borrow_mut().dismiss_notice(notice.id);
             }
         }
@@ -1378,7 +1420,8 @@ impl App {
         self.main.set_now_playing_title(track.title.as_str().into());
         #[cfg(any(windows, target_os = "linux"))]
         self.main
-            .set_now_playing_animated(crate::platform::animation_effects());
+            .global::<Motion>()
+            .set_on(crate::platform::animation_effects());
         self.main
             .set_now_playing_subtitle(track.subtitle().as_str().into());
         self.main.set_now_playing_playing(track.playing);
@@ -1434,6 +1477,10 @@ impl App {
 
     /// Shows the main window and brings it to the front.
     pub fn show_main(&self) {
+        #[cfg(any(windows, target_os = "linux"))]
+        self.main
+            .global::<Motion>()
+            .set_on(crate::platform::animation_effects());
         let window = self.main.window();
         let position = window.position();
         let size = window.size().to_logical(window.scale_factor());
@@ -2031,10 +2078,21 @@ impl App {
             .filter(|row| !row.delay_range_hint.is_empty())
             .map(|row| (row.id.to_string(), row.delay_range_hint.clone()))
             .collect();
+        // Posted since the last refresh; none at launch.
+        let known = self.notice_announcer.borrow().posted.clone();
+        let closing = {
+            let mut closing = self.closing_notices.borrow_mut();
+            closing.retain(|id| state.notices.iter().any(|n| n.id == *id));
+            closing.clone()
+        };
         let mut notices: Vec<NoticeItem> = state
             .notices
             .iter()
-            .map(|n| notice_item(&strings, n))
+            .map(|n| NoticeItem {
+                fresh: known.as_ref().is_some_and(|ids| !ids.contains(&n.id)),
+                closing: closing.contains(&n.id),
+                ..notice_item(&strings, n)
+            })
             .collect();
         let listed: Vec<Listed> = state
             .notices
@@ -2211,6 +2269,8 @@ impl App {
         sync_model(&m.this_pc_zoned, this_pc_zoned);
         sync_model(&m.connected_zoned, connected_zoned);
         self.sync_zones(zones);
+        self.main
+            .set_notices_staying(count(main_notices.iter().filter(|n| !n.closing).count()));
         sync_model(&m.notices, main_notices);
         sync_model(&m.flyout_notices, flyout_notices);
         self.flyout.set_notice_count(count(notices.len()));
@@ -2868,9 +2928,9 @@ impl App {
         let w = weak.clone();
         main.on_appearance_chosen(move |choice| with_app(&w, |app| app.choose_appearance(choice)));
         let w = weak.clone();
-        main.on_notice_dismissed(move |id| with_app(&w, |app| app.dismiss_notice(id as u64)));
+        main.on_notice_dismissed(move |id| close_main_notices(&w, Some(id as u64)));
         let w = weak.clone();
-        main.on_notices_dismissed_all(move || with_app(&w, App::dismiss_all_notices));
+        main.on_notices_dismissed_all(move || close_main_notices(&w, None));
         let w = weak.clone();
         main.on_launch_at_login_toggled(move |on| with_app(&w, |app| app.set_launch_at_login(on)));
         let w = weak.clone();
@@ -4608,6 +4668,7 @@ impl App {
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn prepare_flyout_open(&self, animate: bool) {
         self.flyout.set_revealed(!animate);
+        self.flyout.global::<Motion>().set_on(animate);
     }
 
     pub fn hide_flyout(&self) {
@@ -5717,6 +5778,8 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         has_privacy: matches!(notice.message, NoticeMessage::MicrophoneBlocked { .. }),
         update_buttons: update_buttons(&notice.message),
         info: notice.message.reports_a_change(),
+        fresh: false,
+        closing: false,
     }
 }
 
@@ -6253,7 +6316,7 @@ mod tests {
     /// Stops Slint's clock on this thread for the rest of the test: the
     /// double-click timers then see two clicks as one double-click however
     /// long a loaded machine takes between them.
-    fn hold_clock() {
+    pub(super) fn hold_clock() {
         HELD_CLOCK.with(|clock| clock.set(Some(CLOCK_START.elapsed())));
     }
 
@@ -6360,8 +6423,10 @@ mod tests {
         assert_eq!(notices[0].message, NoticeMessage::LaunchAtLoginFailed);
         assert_eq!(app.main.get_notices().row_count(), 1);
 
+        hold_clock();
         app.main
             .invoke_notice_dismissed(launch_at_login::NOTICE_ID as i32);
+        let_notice_close();
         assert!(app.snapshot().notices.is_empty());
         assert_eq!(app.main.get_notices().row_count(), 0);
     }
@@ -6749,12 +6814,15 @@ mod tests {
         draw_frames();
         fake.read(Some(track("Spotify.exe", title, "Band", true)));
         app.poll();
-        app.main.set_now_playing_animated(true);
         draw_frames();
         let text = || {
             ElementHandle::find_by_accessible_label(&app.main, title)
                 .next()
                 .expect("the title")
+                .query_descendants()
+                .match_id("MarqueeText::label")
+                .find_first()
+                .expect("its text")
         };
         let height = text().size().height;
         assert!(height < 30.0, "one line, {height} px high");
@@ -6770,9 +6838,288 @@ mod tests {
             "30 px in its first second, moved {moved}"
         );
 
-        app.main.set_now_playing_animated(false);
+        app.main.global::<Motion>().set_on(false);
         draw_frames();
         assert_eq!(text().absolute_position().x, start, "cut, not scrolled");
+    }
+
+    /// The Equalizer card names its preset on a line of its own under
+    /// "Equalizer", so the narrow left column has room for "Electronic".
+    #[test]
+    fn the_equalizer_card_shows_its_preset_under_its_name() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        app.main.set_equalizer_on(true);
+        app.main.set_equalizer_curve("Electronic".into());
+        slint::platform::update_timers_and_animations();
+        let element = |id: &str| {
+            ElementHandle::find_by_element_id(&app.main, id)
+                .next()
+                .unwrap_or_else(|| panic!("{id}"))
+        };
+        let (label, curve) = (
+            element("EqualizerCard::label"),
+            element("EqualizerCard::curve"),
+        );
+        let under = label.absolute_position().y + label.size().height;
+        assert!(
+            curve.absolute_position().y >= under - 0.5,
+            "the preset at {} sits under the name, which ends at {under}",
+            curve.absolute_position().y
+        );
+        assert!(
+            curve.size().width >= 100.0,
+            "the preset's line is {} px wide",
+            curve.size().width
+        );
+    }
+
+    /// Calibrate All Speakers shows in full on one line inside its card in
+    /// the narrow left column.
+    #[test]
+    fn calibrate_all_speakers_shows_in_full_in_the_narrow_column() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        slint::platform::update_timers_and_animations();
+        let element = |id: &str| {
+            ElementHandle::find_by_element_id(&app.main, id)
+                .next()
+                .unwrap_or_else(|| panic!("{id}"))
+        };
+        let (button, column) = (
+            element("CalibrationCard::calibrate-button"),
+            element("MainWindow::left-column"),
+        );
+        let end = |e: &ElementHandle| e.absolute_position().x + e.size().width;
+        // The scroll bar's room and the card's padding.
+        let inside = end(&column) - 4.0 - 12.0;
+        assert!(
+            button.size().height < 40.0,
+            "one line, {} px high",
+            button.size().height
+        );
+        assert!(
+            end(&button) <= inside + 0.5,
+            "the button ends at {}, the card's inside at {inside}",
+            end(&button)
+        );
+    }
+
+    /// A speaker name too long for its row scrolls like the Now Playing
+    /// title; with Windows' animation effects off it stays cut.
+    #[test]
+    fn a_long_speaker_name_scrolls_in_its_row() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        let mut long = backend.snapshot().speaker("local:desk").unwrap().clone();
+        long.id = "local:long".into();
+        long.name = "A speaker whose name is far too long for the row the speaker list gives it, even in a wide window".into();
+        backend.add_speaker(long);
+        // From before the rows are built, which starts their scroll.
+        hold_clock();
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows");
+        app.poll();
+        draw_frames();
+        let places = || -> Vec<f32> {
+            ElementHandle::find_by_element_id(&app.main, "MarqueeText::label")
+                .map(|label| label.absolute_position().x)
+                .collect()
+        };
+        let start = places();
+        advance_clock(Duration::from_millis(3000));
+        draw_frames();
+        let moved: Vec<f32> = start
+            .iter()
+            .zip(places())
+            .map(|(was, now)| was - now)
+            .filter(|by| by.abs() > 0.5)
+            .collect();
+        assert_eq!(moved.len(), 1, "only the long name moves: {moved:?}");
+        assert!(
+            (moved[0] - 30.0).abs() < 1.0,
+            "30 px in its first second, moved {}",
+            moved[0]
+        );
+
+        app.main.global::<Motion>().set_on(false);
+        draw_frames();
+        assert_eq!(places(), start, "cut, not scrolled");
+    }
+
+    fn dialog_notice() -> ui_model::Notice {
+        ui_model::Notice {
+            id: DIALOG_NOTICE_ID,
+            subject: "dialog".to_owned(),
+            message: NoticeMessage::DialogMessage {
+                title: "Rename".to_owned(),
+                text: "Taken".to_owned(),
+            },
+            time: "09.41".to_owned(),
+            post: ui_model::next_post(),
+        }
+    }
+
+    /// A notice posted while the app runs is fresh on the refresh that
+    /// first lists it, so the main window eases it in once; the notices
+    /// there at launch and those listed before are not.
+    #[test]
+    fn only_a_notice_new_since_the_last_refresh_is_fresh() {
+        let mut backend = MockBackend::new();
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        let app = app_over(backend);
+        app.refresh();
+        let fresh = || -> Vec<bool> { app.main.get_notices().iter().map(|n| n.fresh).collect() };
+        assert_eq!(fresh(), [false], "there at launch");
+        app.ui.borrow_mut().dialog_notice = Some(dialog_notice());
+        app.refresh();
+        assert_eq!(fresh(), [true, false], "just posted");
+        app.refresh();
+        assert_eq!(fresh(), [false, false], "listed before");
+    }
+
+    /// A notice posted while the window shows opens smoothly and pushes the
+    /// columns down; a dismissed one fades and its room closes before it
+    /// leaves the list. With Windows' animation effects off it shows at once.
+    #[test]
+    fn a_notice_eases_in_and_out_of_the_main_window() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        hold_clock();
+        draw_frames();
+        let column = || {
+            ElementHandle::find_by_element_id(&app.main, "MainWindow::left-column")
+                .next()
+                .expect("the left column")
+                .absolute_position()
+                .y
+        };
+        let post = || {
+            app.ui.borrow_mut().dialog_notice = Some(dialog_notice());
+            app.refresh();
+            draw_frames();
+        };
+        let bare = column();
+        post();
+        assert_eq!(column(), bare, "the notice starts closed");
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        let opening = column();
+        advance_clock(Duration::from_millis(500));
+        draw_frames();
+        let open = column();
+        assert!(
+            bare < opening && opening < open,
+            "the columns move down smoothly: {bare}, {opening}, {open}"
+        );
+
+        let title = app
+            .main
+            .get_notices()
+            .row_data(0)
+            .expect("the notice")
+            .title;
+        let label = app.main.global::<Strings>().invoke_dismiss_notice(title);
+        ElementHandle::find_by_accessible_label(&app.main, &label)
+            .next()
+            .expect("its dismiss button")
+            .invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(
+            app.main.get_notices().row_count(),
+            1,
+            "listed while it fades"
+        );
+        assert_eq!(column(), open, "its room stays while it fades");
+        advance_clock(Duration::from_millis(600));
+        draw_frames();
+        assert_eq!(app.main.get_notices().row_count(), 0, "gone once closed");
+        assert_eq!(column(), bare);
+
+        app.main.global::<Motion>().set_on(false);
+        post();
+        assert_eq!(column(), open, "shown at once");
+    }
+
+    /// Clicks the main window's dismiss button of the notice titled `title`.
+    fn click_dismiss(app: &App, title: SharedString) {
+        use i_slint_backend_testing::ElementHandle;
+        let label = app.main.global::<Strings>().invoke_dismiss_notice(title);
+        ElementHandle::find_by_accessible_label(&app.main, &label)
+            .next()
+            .expect("its dismiss button")
+            .invoke_accessible_default_action();
+        draw_frames();
+    }
+
+    fn main_notice_titles(app: &App) -> Vec<SharedString> {
+        app.main.get_notices().iter().map(|n| n.title).collect()
+    }
+
+    /// The main window open on a backend notice and a dialog notice, with
+    /// the clock held.
+    fn two_notices_shown() -> Rc<App> {
+        let mut backend = MockBackend::new();
+        backend.post("source", NoticeMessage::CaptureLost, "09.40");
+        let app = app_over(backend);
+        app.ui.borrow_mut().dialog_notice = Some(dialog_notice());
+        app.main.show().expect("the main window shows");
+        app.refresh();
+        hold_clock();
+        draw_frames();
+        advance_clock(Duration::from_millis(600));
+        draw_frames();
+        app
+    }
+
+    /// Two notices dismissed one right after the other both go: the first
+    /// leaving the list while the second fades does not bring it back.
+    #[test]
+    fn two_notices_dismissed_within_a_fade_both_go() {
+        let app = two_notices_shown();
+        let titles = main_notice_titles(&app);
+        assert_eq!(titles.len(), 2);
+        click_dismiss(&app, titles[0].clone());
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        click_dismiss(&app, titles[1].clone());
+        advance_clock(Duration::from_millis(250));
+        draw_frames();
+        advance_clock(Duration::from_millis(600));
+        draw_frames();
+        assert_eq!(main_notice_titles(&app), Vec::<SharedString>::new());
+    }
+
+    /// A notice that clears itself while another fades out leaves at once,
+    /// and the fading one still goes.
+    #[test]
+    fn a_notice_clearing_itself_during_a_fade_keeps_the_fade_going() {
+        let app = two_notices_shown();
+        let titles = main_notice_titles(&app);
+        let dialog = app
+            .main
+            .get_notices()
+            .iter()
+            .position(|n| u64::try_from(n.id) == Ok(DIALOG_NOTICE_ID))
+            .expect("the dialog notice");
+        click_dismiss(&app, titles[1 - dialog].clone());
+        advance_clock(Duration::from_millis(100));
+        app.ui.borrow_mut().dialog_notice = None;
+        app.refresh();
+        draw_frames();
+        advance_clock(Duration::from_millis(600));
+        draw_frames();
+        assert_eq!(main_notice_titles(&app), Vec::<SharedString>::new());
     }
 
     // covers: S421
@@ -14476,6 +14823,13 @@ mod tests {
         app
     }
 
+    /// Lets a dismissed notice fade and close, which it does before the
+    /// main window drops it; the clock is held.
+    pub(super) fn let_notice_close() {
+        advance_clock(Duration::from_millis(400));
+        draw_frames();
+    }
+
     #[test]
     fn dismissing_a_notice_with_the_keyboard_focuses_the_next_then_the_switch() {
         let mut backend = MockBackend::new();
@@ -14483,11 +14837,14 @@ mod tests {
         backend.post("start", NoticeMessage::NoSpeaker, "09.41");
         let app = main_window_over(backend);
         let window = app.main.window();
+        hold_clock();
         // The streaming switch, then the newest notice's dismiss button.
         tab(window, 3);
         press(window, " ");
+        let_notice_close();
         assert_eq!(app.snapshot().notices.len(), 1, "Space dismissed it");
         press(window, " ");
+        let_notice_close();
         assert_eq!(
             app.snapshot().notices.len(),
             0,
@@ -15367,9 +15724,11 @@ mod tests {
         let ids = preset_ids(&app);
 
         // The newest notice's dismiss button, as with no preset.
+        hold_clock();
         tab(window, 3);
         app.recall_preset(&ids[0]);
         press(window, " ");
+        let_notice_close();
         assert_eq!(app.snapshot().notices.len(), 1, "Space dismissed it");
 
         app.main.set_focus_preset_id(ids[1].clone().into());

@@ -61,6 +61,140 @@ export global Fluent {
     out property <duration> normal: 167ms;
 }
 
+// Windows' Animation effects (Settings > Accessibility > Visual effects):
+// off, nothing slides or scrolls, and a name too long for its line is cut.
+export global Motion {
+    in property <bool> on: true;
+}
+
+// A line too long for its room rests 2 s at its start, moves to its end at
+// 30 px a second, rests 2 s and moves back.
+global Marquee {
+    public pure function offset(elapsed: duration, overflow: length) -> length {
+        let travel = overflow / 30px * 1000;
+        let at = mod(elapsed / 1ms, 2 * (2000 + travel));
+        return at < 2000 ? 0px : at < 2000 + travel ? (at - 2000) / 1000 * 30px : at < 4000 + travel ? overflow : overflow - (at - 4000 - travel) / 1000 * 30px;
+    }
+    public pure function resting(elapsed: duration, overflow: length) -> bool {
+        let travel = overflow / 30px * 1000;
+        let at = mod(elapsed / 1ms, 2 * (2000 + travel));
+        return at < 2000 || (at >= 2000 + travel && at < 4000 + travel);
+    }
+    // How long until the line next starts or stops moving.
+    public pure function next-change(elapsed: duration, overflow: length) -> duration {
+        let travel = overflow / 30px * 1000;
+        let at = mod(elapsed / 1ms, 2 * (2000 + travel));
+        return (at < 2000 ? 2000 - at : at < 2000 + travel ? 2000 + travel - at : at < 4000 + travel ? 4000 + travel - at : 2 * (2000 + travel) - at) * 1ms;
+    }
+}
+
+// One line of text: too long for its room, it scrolls (Marquee) and fades
+// out on the side it runs on past; with Motion off it is cut.
+export component MarqueeText inherits Rectangle {
+    in property <string> text;
+    in property <color> text-color: Tokens.text;
+    in property <length> font-size;
+    in property <int> font-weight;
+    property <duration> started;
+    property <length> excess: Motion.on && label.preferred-width > self.width ? label.preferred-width - self.width : 0px;
+    // Only a moving line reads the frame clock: a resting one draws nothing
+    // until the timer starts it again.
+    property <bool> moving;
+    property <duration> rested-at;
+    property <duration> wait: 2s;
+    property <length> offset: self.excess > 0 ? Marquee.offset(self.moving ? animation-tick() - self.started : self.rested-at, self.excess) : 0px;
+    // Slint has no alpha mask: each fade is four strips of the text, fainter
+    // toward the edge.
+    property <length> strip: 3px;
+    property <bool> fade-start: self.offset > 0;
+    property <bool> fade-end: self.offset < self.excess;
+
+    init => {
+        self.started = animation-tick();
+    }
+    changed text => {
+        self.started = animation-tick();
+        self.moving = false;
+        self.rested-at = 0ms;
+        self.wait = 2s;
+    }
+
+    // Measured from the clock, not counted per tick, so a late timer
+    // doesn't shift the scroll.
+    step := Timer {
+        interval: root.wait;
+        running: root.excess > 0;
+        triggered => {
+            let elapsed = animation-tick() - root.started;
+            root.moving = !Marquee.resting(elapsed, root.excess);
+            root.rested-at = elapsed;
+            root.wait = Marquee.next-change(elapsed, root.excess);
+        }
+    }
+
+    preferred-width: label.preferred-width;
+    preferred-height: label.preferred-height;
+    min-width: 0px;
+    clip: true;
+    accessible-role: AccessibleRole.text;
+    accessible-label: root.text;
+
+    Rectangle {
+        x: root.fade-start ? 4 * root.strip : 0px;
+        width: root.width - self.x - (root.fade-end ? 4 * root.strip : 0px);
+        clip: true;
+
+        label := Text {
+            x: -root.offset - parent.x;
+            width: root.excess > 0 ? self.preferred-width : root.width;
+            height: root.height;
+            text: root.text;
+            color: root.text-color;
+            font-size: root.font-size;
+            font-weight: root.font-weight;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+
+    for i in root.fade-start ? 4 : 0: Rectangle {
+        x: i * root.strip;
+        width: root.strip;
+        clip: true;
+
+        Text {
+            x: -root.offset - parent.x;
+            width: label.width;
+            height: root.height;
+            text: root.text;
+            color: root.text-color.transparentize(1 - (i + 1) / 5);
+            font-size: root.font-size;
+            font-weight: root.font-weight;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    for i in root.fade-end ? 4 : 0: Rectangle {
+        x: root.width - (i + 1) * root.strip;
+        width: root.strip;
+        clip: true;
+
+        Text {
+            x: -root.offset - parent.x;
+            width: label.width;
+            height: root.height;
+            text: root.text;
+            color: root.text-color.transparentize(1 - (i + 1) / 5);
+            font-size: root.font-size;
+            font-weight: root.font-weight;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+}
+
 // The app cuts a speaker name to its limit while it is typed.
 export global NameField {
     pure callback fit(string) -> string;
@@ -2033,15 +2167,13 @@ export component SpeakerRow inherits Rectangle {
                                         max-width: name-label.preferred-width;
                                         min-height: name-label.preferred-height;
 
-                                        name-label := Text {
+                                        name-label := MarqueeText {
                                             width: 100%;
                                             height: 100%;
                                             text: root.item.name;
                                             font-size: Tokens.font-size-body;
                                             font-weight: root.item.state == RowState.playing ? 600 : 400;
-                                            color: root.item.zone-dimmed ? Tokens.secondary-text : Tokens.text;
-                                            vertical-alignment: center;
-                                            overflow: elide;
+                                            text-color: root.item.zone-dimmed ? Tokens.secondary-text : Tokens.text;
                                             accessible-role: none;
                                         }
 
@@ -2645,15 +2777,13 @@ export component ZoneMemberRow inherits Rectangle {
                             max-width: name-label.preferred-width;
                             min-height: name-label.preferred-height;
 
-                            name-label := Text {
+                            name-label := MarqueeText {
                                 width: 100%;
                                 height: 100%;
                                 text: root.item.name;
                                 font-size: Tokens.font-size-body;
                                 font-weight: root.item.state == RowState.playing ? 600 : 400;
-                                color: Tokens.text;
-                                vertical-alignment: center;
-                                overflow: elide;
+                                text-color: Tokens.text;
                                 accessible-role: none;
                             }
 
@@ -2999,15 +3129,13 @@ export component ZoneHeader inherits Rectangle {
                                     max-width: name-text.preferred-width;
                                     min-height: name-text.preferred-height;
 
-                                    name-text := Text {
+                                    name-text := MarqueeText {
                                         width: 100%;
                                         height: 100%;
                                         text: root.item.name;
                                         font-size: Tokens.font-size-body;
                                         font-weight: root.item.state == RowState.playing ? 600 : 400;
-                                        color: Tokens.text;
-                                        vertical-alignment: center;
-                                        overflow: elide;
+                                        text-color: Tokens.text;
                                         accessible-role: none;
                                     }
 
@@ -3203,172 +3331,239 @@ export component NoticeStack inherits VerticalLayout {
     // (its dismiss button) and clears it: the app sets it when a refresh
     // rebuilds the stack under the focus.
     in-out property <int> focus-index: -1;
+    // The main window's notices: a fresh one opens, pushing what is below
+    // it down, and a dismissed one fades before its room closes (Motion).
+    in property <bool> eased;
+    // Room above the first notice, which opens and closes with it.
+    in property <length> lead;
+    // While eased: the notices not closing, which the Dismiss All row needs
+    // two of.
+    in property <int> staying;
 
-    spacing: 6px;
     accessible-role: groupbox;
     accessible-label: Strings.notices;
 
-    for notice[index] in root.notices: row := Rectangle {
-        // Which of the row's buttons has keyboard focus; the stack reports
-        // either one, whichever changed last.
-        property <bool> dismiss-focused;
-        property <bool> guide-focused;
-        // The update button that has focus, -1 for none.
-        property <int> update-focused: -1;
-        changed dismiss-focused => {
-            root.button-focus-changed(self.dismiss-focused || self.guide-focused);
-        }
-        changed guide-focused => {
-            root.button-focus-changed(self.dismiss-focused || self.guide-focused);
-        }
-        property <bool> focus-within: self.dismiss-focused || self.guide-focused;
-        changed focus-within => {
-            root.notice-focus-changed(notice.id, self.focus-within);
-        }
+    for notice[index] in root.notices: slot := Rectangle {
+        property <length> gap: index == 0 ? root.lead : 6px;
+        property <bool> closing: root.eased && notice.closing;
+        // How far its room is open and how visible the notice is, 0 to 1.
+        property <float> open: (root.eased && notice.fresh) || self.closing ? 0 : 1;
+        property <float> shown: self.open;
         init => {
-            if index == root.focus-index {
-                root.focus-index = -1;
-                dismiss.focus();
+            if !self.closing {
+                self.open = 1;
+                self.shown = 1;
             }
         }
+        changed closing => {
+            if self.closing {
+                self.open = 0;
+                self.shown = 0;
+            }
+        }
+        animate open {
+            duration: Motion.on ? (self.closing ? 200ms : 240ms) : 0ms;
+            delay: Motion.on && self.closing ? 90ms : 0ms;
+            easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        animate shown {
+            duration: Motion.on ? (self.closing ? 120ms : 180ms) : 150ms;
+            delay: Motion.on && !self.closing ? 60ms : 0ms;
+            easing: ease-out;
+        }
 
-        background: Tokens.notice;
-        border-radius: Fluent.radius-card;
-        border-width: 1px;
-        border-color: Fluent.stroke;
+        height: (Motion.on ? self.open : 1) * (self.gap + row.preferred-height);
+        clip: true;
 
-        HorizontalLayout {
-            padding: 12px;
-            padding-right: 8px;
-            spacing: 12px;
-
-            Glyph {
-                glyph: notice.info ? Glyphs.info : Glyphs.warning;
-                color: Tokens.text;
-                vertical-alignment: top;
-                width: 18px;
+        row := Rectangle {
+            y: slot.gap - (Motion.on ? 6px * (1 - slot.shown) : 0px);
+            width: parent.width;
+            height: self.preferred-height;
+            opacity: slot.shown;
+            // Which of the row's buttons has keyboard focus; the stack reports
+            // either one, whichever changed last.
+            property <bool> dismiss-focused;
+            property <bool> guide-focused;
+            // The update button that has focus, -1 for none.
+            property <int> update-focused: -1;
+            changed dismiss-focused => {
+                root.button-focus-changed(self.dismiss-focused || self.guide-focused);
+            }
+            changed guide-focused => {
+                root.button-focus-changed(self.dismiss-focused || self.guide-focused);
+            }
+            property <bool> focus-within: self.dismiss-focused || self.guide-focused;
+            changed focus-within => {
+                root.notice-focus-changed(notice.id, self.focus-within);
+            }
+            init => {
+                if index == root.focus-index {
+                    root.focus-index = -1;
+                    dismiss.focus();
+                }
             }
 
-            VerticalLayout {
-                spacing: 6px;
+            background: Tokens.notice;
+            border-radius: Fluent.radius-card;
+            border-width: 1px;
+            border-color: Fluent.stroke;
+
+            HorizontalLayout {
+                padding: 12px;
+                padding-right: 8px;
+                spacing: 12px;
+
+                Glyph {
+                    glyph: notice.info ? Glyphs.info : Glyphs.warning;
+                    color: Tokens.text;
+                    vertical-alignment: top;
+                    width: 18px;
+                }
 
                 VerticalLayout {
-                    spacing: 2px;
-                    accessible-role: text;
-                    accessible-label: notice.message;
+                    spacing: 6px;
 
-                    Text {
-                        text: notice.message;
-                        color: Tokens.text;
-                        font-size: Tokens.font-size-caption;
-                        wrap: word-wrap;
-                        accessible-role: none;
-                    }
-
-                    QuietText {
-                        text: notice.time;
-                    }
-                }
-
-                if notice.has-guide: HorizontalLayout {
-                    alignment: start;
-                    Button {
-                        text: Strings.notice-show-how;
-                        accessible-label: Strings.notice-show-how-label;
-                        clicked => {
-                            root.guide-requested(notice.id);
-                        }
-                        // A standard button reports focus only through has-focus.
-                        changed has-focus => {
-                            row.guide-focused = self.has-focus;
-                        }
-                    }
-                }
-
-                if notice.has-retry: HorizontalLayout {
-                    alignment: start;
-                    Button {
-                        text: Strings.notice-retry;
-                        accessible-label: Strings.notice-retry-label;
-                        clicked => {
-                            root.retry-requested(notice.id);
-                        }
-                        // A notice has no guide and Retry both, so the row's
-                        // second button focus is this one's.
-                        changed has-focus => {
-                            row.guide-focused = self.has-focus;
-                        }
-                    }
-                }
-
-                if notice.has-privacy: HorizontalLayout {
-                    alignment: start;
-                    Button {
-                        text: Strings.notice-open-privacy;
-                        accessible-label: Strings.notice-open-privacy-label;
-                        clicked => {
-                            root.privacy-requested(notice.id);
-                        }
-                        // Only the microphone notice has this button.
-                        changed has-focus => {
-                            row.guide-focused = self.has-focus;
-                        }
-                    }
-                }
-
-                if notice.update-buttons.length > 0: HorizontalLayout {
-                    alignment: start;
                     VerticalLayout {
-                        spacing: 8px;
-                        for button[button-index] in notice.update-buttons: Button {
-                            text: Strings.update-button(button);
-                            accessible-label: Strings.update-button(button);
+                        spacing: 2px;
+                        accessible-role: text;
+                        accessible-label: notice.message;
+
+                        Text {
+                            text: notice.message;
+                            color: Tokens.text;
+                            font-size: Tokens.font-size-caption;
+                            wrap: word-wrap;
+                            accessible-role: none;
+                        }
+
+                        QuietText {
+                            text: notice.time;
+                        }
+                    }
+
+                    if notice.has-guide: HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: Strings.notice-show-how;
+                            accessible-label: Strings.notice-show-how-label;
                             clicked => {
-                                root.update-button-pressed(button);
+                                root.guide-requested(notice.id);
                             }
-                            // Tab between two of these may report the gain before
-                            // the loss, so only the button holding focus clears it.
+                            // A standard button reports focus only through has-focus.
                             changed has-focus => {
-                                if self.has-focus {
-                                    row.update-focused = button-index;
-                                    row.guide-focused = true;
-                                } else if row.update-focused == button-index {
-                                    row.update-focused = -1;
-                                    row.guide-focused = false;
+                                row.guide-focused = self.has-focus;
+                            }
+                        }
+                    }
+
+                    if notice.has-retry: HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: Strings.notice-retry;
+                            accessible-label: Strings.notice-retry-label;
+                            clicked => {
+                                root.retry-requested(notice.id);
+                            }
+                            // A notice has no guide and Retry both, so the row's
+                            // second button focus is this one's.
+                            changed has-focus => {
+                                row.guide-focused = self.has-focus;
+                            }
+                        }
+                    }
+
+                    if notice.has-privacy: HorizontalLayout {
+                        alignment: start;
+                        Button {
+                            text: Strings.notice-open-privacy;
+                            accessible-label: Strings.notice-open-privacy-label;
+                            clicked => {
+                                root.privacy-requested(notice.id);
+                            }
+                            // Only the microphone notice has this button.
+                            changed has-focus => {
+                                row.guide-focused = self.has-focus;
+                            }
+                        }
+                    }
+
+                    if notice.update-buttons.length > 0: HorizontalLayout {
+                        alignment: start;
+                        VerticalLayout {
+                            spacing: 8px;
+                            for button[button-index] in notice.update-buttons: Button {
+                                text: Strings.update-button(button);
+                                accessible-label: Strings.update-button(button);
+                                clicked => {
+                                    root.update-button-pressed(button);
+                                }
+                                // Tab between two of these may report the gain before
+                                // the loss, so only the button holding focus clears it.
+                                changed has-focus => {
+                                    if self.has-focus {
+                                        row.update-focused = button-index;
+                                        row.guide-focused = true;
+                                    } else if row.update-focused == button-index {
+                                        row.update-focused = -1;
+                                        row.guide-focused = false;
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            VerticalLayout {
-                alignment: start;
-                dismiss := IconButton {
-                    glyph: Glyphs.dismiss;
-                    glyph-size: 12px;
-                    label: Strings.dismiss-notice(notice.title);
-                    clicked => {
-                        root.dismissed(notice.id);
-                    }
-                    focus-changed(focused) => {
-                        row.dismiss-focused = focused;
+                VerticalLayout {
+                    alignment: start;
+                    dismiss := IconButton {
+                        glyph: Glyphs.dismiss;
+                        glyph-size: 12px;
+                        label: Strings.dismiss-notice(notice.title);
+                        clicked => {
+                            root.dismissed(notice.id);
+                        }
+                        focus-changed(focused) => {
+                            row.dismiss-focused = focused;
+                        }
                     }
                 }
             }
         }
     }
 
-    if root.notices.length > 1: HorizontalLayout {
-        alignment: end;
-        Button {
-            text: Strings.dismiss-all-notices;
-            accessible-label: Strings.dismiss-all-notices;
-            clicked => {
-                root.dismissed-all();
+    if root.notices.length > 1: all-slot := Rectangle {
+        property <bool> closing: root.eased && root.staying < 2;
+        property <float> open: (root.eased && root.notices[0].fresh) || self.closing ? 0 : 1;
+        init => {
+            if !self.closing {
+                self.open = 1;
             }
-            changed has-focus => {
-                root.dismiss-all-focus-changed(self.has-focus);
+        }
+        changed closing => {
+            self.open = self.closing ? 0 : 1;
+        }
+        animate open {
+            duration: Motion.on ? 240ms : 0ms;
+            easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+
+        height: (Motion.on ? self.open : 1) * (6px + all-row.preferred-height);
+        clip: true;
+
+        all-row := HorizontalLayout {
+            y: 6px;
+            height: self.preferred-height;
+            alignment: end;
+            opacity: all-slot.open;
+            Button {
+                text: Strings.dismiss-all-notices;
+                accessible-label: Strings.dismiss-all-notices;
+                clicked => {
+                    root.dismissed-all();
+                }
+                changed has-focus => {
+                    root.dismiss-all-focus-changed(self.has-focus);
+                }
             }
         }
     }
