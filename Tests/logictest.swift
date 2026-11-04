@@ -5083,6 +5083,46 @@ do {
           "every time: a pairing that outlived one stream and fails in the next says it failed")
 }
 
+// MARK: A sender that fails while a first-click password prompt is open: that speaker goes off, the others rejoin
+do {
+    func sfReceiver(_ id: String, _ availability: NativeReceiver.Availability) -> NativeReceiver {
+        NativeReceiver(id: id, name: id, model: "", availability: availability, reason: nil, hints: [])
+    }
+    var sfFailed = NativeAirPlayModel()
+    sfFailed.apply(.appeared(sfReceiver("P1", .needsPassword)))
+    sfFailed.apply(.appeared(sfReceiver("P3", .needsPassword)))
+    sfFailed.apply(.appeared(sfReceiver("O1", .available)))
+    sfFailed.added("O1")
+    _ = sfFailed.apply(.state(id: "O1", .playing, retryMs: nil))
+    let sfAsked = sfFailed.turnedOnByUser("P1")
+    let sfOpen = sfFailed.nextPrompt()
+    // Its prompt waits in line behind P1's.
+    let sfQueued = sfFailed.turnedOnByUser("P3")
+    var sfHand = EveryTimeGuard()
+    sfHand.turnedOnByHand(["native:P1", "native:P3"])
+    let sfOn: Set<String> = ["native:P1", "native:P3", "native:O1"]
+    let sfOff = sfHand.streamEnded(.senderFailed, streaming: true, model: sfFailed, enabled: sfOn)
+    var sfIdleHand = EveryTimeGuard()
+    let sfIdleOff = sfIdleHand.streamEnded(.senderFailed, streaming: false, model: sfFailed, enabled: sfOn)
+    // Retry: a new sender lists both again.
+    var sfNew = NativeAirPlayModel()
+    sfNew.apply(.appeared(sfReceiver("P1", .needsPassword)))
+    sfNew.apply(.appeared(sfReceiver("O1", .available)))
+    let sfLeft = sfOn.subtracting(sfOff.map(\.id))
+    let sfRejoin = sfNew.plan(streaming: true, enabled: sfLeft)
+    let sfRelisted = sfNew.appearedAsking(sfNew.rows(enabled: sfLeft), after: [], stopped: false)
+    let sfReopened = sfNew.turnedOnByUser("P1")
+    // covers: S223
+    check(sfAsked == .prompt && sfOpen == NativePrompt(id: "P1", password: true, wrong: false) && sfQueued == .prompt
+            && sfOff == [.init(id: "native:P1", reason: .needsPassword), .init(id: "native:P3", reason: .needsPassword)]
+            && sfIdleOff == sfOff
+            && sfRejoin.add == ["O1"] && sfRejoin.turnOff.isEmpty
+            && sfRelisted == [.init(id: "P1", reason: .needsPassword)]
+            && sfReopened == .prompt && sfNew.nextPrompt() == NativePrompt(id: "P1", password: true, wrong: false),
+          "sender failure: the speaker whose password prompt was open goes off with the needs-a-password notice, the others rejoin, and Retry asks again",
+          "off \(sfOff), idle \(sfIdleOff), rejoin \(sfRejoin), relisted \(sfRelisted), reopened \(String(describing: sfReopened))")
+}
+
 // MARK: A failed start: the helpers failStart goes through (AppDelegate itself can't run here)
 // covers: S121 (the helpers only: the origin's alert rule, the stop's plan and the stream's end)
 do {
