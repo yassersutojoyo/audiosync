@@ -251,7 +251,8 @@ else
       *) flunk "install.ps1 for ${pair%%:*}: got '$got'" ;;
     esac
   done
-  if got=$("$ps" -NoProfile -File scripts/install.ps1 -DryRun -Version '1; x' 2>&1) \
+  if got=$(PROCESSOR_ARCHITECTURE=AMD64 LOCALAPPDATA=$tmp/local APPDATA=$tmp/roaming \
+      "$ps" -NoProfile -File scripts/install.ps1 -DryRun -Version '1; x' 2>&1) \
       || ! printf '%s' "$got" | grep -q "isn't a version number"; then
     flunk "install.ps1 rejects a bad version: got '$got'"
   else
