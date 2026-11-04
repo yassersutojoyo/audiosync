@@ -45,6 +45,7 @@ struct SetupChecklistCard: View {
                 .font(.body.weight(.semibold))
                 .foregroundStyle(Self.color(state))
                 .frame(width: 20)
+                // A changed row's icon swaps with a short scale so the eye finds it; Reduce Motion keeps the fade.
                 .id(state)
                 .transition(reduceMotion ? AnyTransition.opacity
                                          : AnyTransition.scale(scale: 0.6).combined(with: .opacity))
@@ -52,10 +53,10 @@ struct SetupChecklistCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(t.setupCheckTitle(check, inputs.capturePermission))
                     .font(.body.weight(.medium))
-                Text(t.setupCheckState(state))
+                Text(t.setupCheckState(check, state, inputs))
                     .font(.callout)
-                    .foregroundStyle(state == .problem ? Brand.errorText : Brand.secondaryText)
-                if let line = t.setupCheckLine(check, state, inputs.capturePermission) {
+                    .foregroundStyle(state == .problem ? Brand.warn : Brand.secondaryText)
+                if let line = t.setupCheckLine(check, state, inputs) {
                     Text(line)
                         .font(.callout)
                         .foregroundStyle(Brand.secondaryText)
@@ -65,9 +66,9 @@ struct SetupChecklistCard: View {
             .accessibilityElement(children: .combine)
             Spacer(minLength: 8)
             if state == .problem, let pane = SetupChecklist.pane(check, inputs) {
-                Button(t.setupCheckFix) { NSWorkspace.shared.open(pane.url) }
+                Button(t.openSettings) { NSWorkspace.shared.open(pane.url) }
                     .controlSize(.small)
-                    .accessibilityLabel(t.setupCheckFixLabel(check, inputs.capturePermission))
+                    .accessibilityLabel(t.setupCheckSettingsLabel(check, inputs.capturePermission))
                     .accessibilityHint(t.openSettingsHint)
                     .help(t.openSettingsHint)
             }

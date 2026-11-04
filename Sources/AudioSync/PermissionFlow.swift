@@ -215,11 +215,14 @@ struct SetupCheckInputs: Equatable {
     var captureHeard = false
     /// What macOS reports for the microphone, used when the source is an input.
     var microphone: PermissionState = .notAsked
+    /// The Local Network explanation got its Continue, so discovery may have raised macOS's prompt.
+    var networkAsked = false
     var access: LocalNetworkAccess = .unknown
     var networkHint: LocalNetworkHint = .none
     /// AirPlay discovery's first look (`AirPlaySearch`).
     var searching = false
-    var speakersFound = false
+    /// AirPlay and Google Cast speakers listed.
+    var speakerCount = 0
 }
 
 enum SetupChecklist {
@@ -253,7 +256,7 @@ enum SetupChecklist {
             if inputs.access == .allowed { return .ok }
             return inputs.access == .denied || inputs.networkHint == .possible ? .problem : .checking
         case .speakers:
-            if inputs.speakersFound { return .ok }
+            if inputs.speakerCount > 0 { return .ok }
             if state(.localNetwork, inputs, captureNotWorking: captureNotWorking) == .problem { return .problem }
             return inputs.access == .allowed && !inputs.searching ? .problem : .checking
         }

@@ -322,10 +322,11 @@ extension AppDelegate {
             capturePermission: Permission.needed(for: audioSource),
             captureHeard: SourceCapture.runHeard,
             microphone: microphonePermission(),
+            networkAsked: permissions.step(.localNetwork, state: .unknown, userAction: false) == .go,
             access: localNetworkProbe.access,
             networkHint: appModel.localNetworkHint,
             searching: appModel.airplaySearching,
-            speakersFound: !appModel.airplay.isEmpty || !appModel.cast.isEmpty))
+            speakerCount: appModel.airplay.count + appModel.cast.count))
     }
 
     private func microphonePermission() -> PermissionState {
