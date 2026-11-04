@@ -37,6 +37,9 @@ pub const STREAM_ID: i64 = 77;
 /// crate's parser does not know, such as `SETRATEANCHORTIME`; the fake
 /// reads it as a `POST` with this header.
 pub const OTHER_METHOD: &str = "X-Fake-Method";
+/// The protocol of a request that came as `HTTP/1.1` rather than
+/// `RTSP/1.0`; its answer goes back in the same protocol.
+pub const OTHER_PROTOCOL: &str = "X-Fake-Protocol";
 
 /// A deterministic random source for the session: xorshift from a seed.
 pub struct TestEntropy(pub u64);
@@ -311,6 +314,8 @@ pub struct FakeAp2 {
     unparsed: Vec<u8>,
     /// Body bytes still to pass to `parser` unchanged.
     body_left: usize,
+    /// The head passed to `parser` last, as the sender wrote it.
+    last_head: String,
 }
 
 impl FakeAp2 {
@@ -359,6 +364,7 @@ impl FakeAp2 {
             parser: Parser::new(),
             unparsed: Vec::new(),
             body_left: 0,
+            last_head: String::new(),
         }
     }
 
@@ -476,7 +482,7 @@ impl FakeAp2 {
             let request = match self.parser.next_message() {
                 Ok(Some(Message::Request(request))) => request,
                 Ok(None) => break,
-                other => panic!("the sender wrote {other:?}"),
+                Ok(Some(Message::Response(_))) | Err(_) => self.unparseable(),
             };
             self.requests.push((request.clone(), framed));
             self.answered.push(None);
@@ -516,10 +522,14 @@ impl FakeAp2 {
             if request.uri == "/pair-setup" {
                 let items = untlv(&request.body);
                 if item(&items, 6) == Some(&[1]) {
-                    self.transient = item(&items, 19).is_some();
+                    // X-Apple-HKP 4 marks a transient pair-setup (P149).
+                    self.transient = item(&items, 19).is_some()
+                        || request.headers.get("X-Apple-HKP") == Some("4");
                 }
             }
-            let mut response = if challenged {
+            let mut response = if key == "UNPARSEABLE" {
+                Response::new(400, "Bad Request")
+            } else if challenged {
                 let mut response = Response::new(401, "Unauthorized");
                 let value = self.challenge.as_ref().map(|(_, v)| v.clone());
                 response
@@ -564,7 +574,12 @@ impl FakeAp2 {
             let cseq = request.headers.get("CSeq").unwrap_or("0").to_owned();
             response.headers.push("CSeq", cseq);
             response.headers.push("Server", "AirTunes/fake");
-            let bytes = response.encode();
+            let mut bytes = response.encode();
+            if let Some(protocol) = request.headers.get(OTHER_PROTOCOL)
+                && protocol.len() == "RTSP/1.0".len()
+            {
+                bytes[..protocol.len()].copy_from_slice(protocol.as_bytes());
+            }
             let sealed = match self.framing.as_mut() {
                 Some(framing) => framing.seal(&bytes),
                 None => bytes,
@@ -619,20 +634,44 @@ impl FakeAp2 {
                 .and_then(|(_, value)| value.trim().parse().ok())
                 .unwrap_or(0);
             let start = head.len() - head.trim_start_matches(['\r', '\n']).len();
-            let method = head[start..].split(' ').next().unwrap_or_default();
             let line_end = head[start..].find("\r\n").map_or(head.len(), |i| start + i);
-            if Method::parse(method).is_some() || method.starts_with("RTSP/") {
+            let mut parts: Vec<&str> = head[start..line_end].split(' ').collect();
+            let mut added = String::new();
+            if parts.len() == 3 && !parts[0].starts_with("RTSP/") {
+                if parts[2].starts_with("HTTP/") {
+                    added.push_str(&format!("\r\n{OTHER_PROTOCOL}: {}", parts[2]));
+                    parts[2] = "RTSP/1.0";
+                }
+                if Method::parse(parts[0]).is_none() {
+                    added.push_str(&format!("\r\n{OTHER_METHOD}: {}", parts[0]));
+                    parts[0] = "POST";
+                }
+            }
+            self.last_head = head.clone();
+            if added.is_empty() {
                 self.parser.push(head.as_bytes());
                 continue;
             }
             let rewritten = format!(
-                "{}POST{}\r\n{OTHER_METHOD}: {method}{}",
+                "{}{}{added}{}",
                 &head[..start],
-                &head[start + method.len()..line_end],
+                parts.join(" "),
                 &head[line_end..]
             );
             self.parser.push(rewritten.as_bytes());
         }
+    }
+
+    /// A message the parser turned down: kept as a request with its head
+    /// as the body and answered 400, the parser started afresh.
+    fn unparseable(&mut self) -> Request {
+        self.parser = Parser::new();
+        self.unparsed.clear();
+        self.body_left = 0;
+        let mut request = Request::new(Method::Post, "*");
+        request.headers.push(OTHER_METHOD, "UNPARSEABLE");
+        request.body = std::mem::take(&mut self.last_head).into_bytes();
+        request
     }
 
     fn answer(&mut self, request: &Request, key: &str) -> Response {

@@ -1,7 +1,8 @@
 //! `fake_tv --homepod --dump`: a sender session against the HomePod profile
 //! leaves a numbered file per request, the stream SETUP's latency keys
 //! among them, and a request method the crate's parser does not know is
-//! answered instead of ending the fake.
+//! answered instead of ending the fake, as is a sender that pairs over
+//! `HTTP/1.1`.
 
 mod common;
 #[path = "../examples/fake_tv/dump.rs"]
@@ -17,10 +18,14 @@ use std::time::Duration;
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
+use audiosync_airplay::homekit::{PairSetup, SetupStep};
+use audiosync_airplay::rtsp::{Message, Parser, Response};
 use audiosync_airplay::sender::{Sender, SenderConfig, SpeakerOptions, SpeakerState};
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2, read_dict};
+use common::atv::TestEntropy;
+use common::hap::{tlv, untlv};
 use common::net::{Events, HostAudio, serial};
 use dump::Dump;
 use television::{HOMEPOD_MODEL, Pin};
@@ -125,4 +130,89 @@ fn a_method_the_parser_does_not_know_is_answered_under_its_own_name() {
     assert_eq!(text.matches("RTSP/1.0 200").count(), 2, "{text}");
     assert_eq!(fake.keys(), ["SETRATEANCHORTIME", "GET_PARAMETER"]);
     assert_eq!(fake.requests[0].0.body, b"ab");
+
+    let answer = fake.feed(b"NOT A REQUEST LINE\r\nCSeq: 11\r\n\r\n");
+    assert!(
+        answer.starts_with(b"RTSP/1.0 400"),
+        "{}",
+        String::from_utf8_lossy(&answer)
+    );
+    assert_eq!(fake.keys().last().map(String::as_str), Some("UNPARSEABLE"));
+}
+
+/// An answer the fake wrote in `HTTP/1.1`, read as the RTSP answer it is.
+fn http_answer(bytes: &[u8]) -> Response {
+    assert!(
+        bytes.starts_with(b"HTTP/1.1 "),
+        "{}",
+        String::from_utf8_lossy(bytes)
+    );
+    let mut parser = Parser::new();
+    parser.push(b"RTSP/1.0");
+    parser.push(&bytes[8..]);
+    match parser.next_message() {
+        Ok(Some(Message::Response(response))) => response,
+        other => panic!("not an answer: {other:?}"),
+    }
+}
+
+/// `request` as an `HTTP/1.1` sender writes it, its M1 without the
+/// transient flag item, so only `X-Apple-HKP: 4` marks it transient.
+fn over_http(mut request: audiosync_airplay::rtsp::Request) -> Vec<u8> {
+    let items: Vec<(u8, Vec<u8>)> = untlv(&request.body)
+        .into_iter()
+        .filter(|(kind, _)| *kind != 19)
+        .collect();
+    let refs: Vec<(u8, &[u8])> = items
+        .iter()
+        .map(|(kind, value)| (*kind, &value[..]))
+        .collect();
+    request.body = tlv(&refs);
+    let text = request.encode();
+    let line_end = text
+        .windows(2)
+        .position(|w| w == b"\r\n")
+        .expect("a request line");
+    let mut bytes = text[..line_end - "RTSP/1.0".len()].to_vec();
+    bytes.extend_from_slice(b"HTTP/1.1");
+    bytes.extend_from_slice(&text[line_end..]);
+    bytes
+}
+
+#[test]
+fn an_http_pin_start_then_a_transient_pair_setup_pairs_the_homepod() {
+    let mut fake = television::homepod(
+        television::HOMEPOD_NAME,
+        Pin::None,
+        "4821",
+        television::DEVICE_ID,
+        0,
+    );
+    let pin_start = fake.feed(
+        b"POST /pair-pin-start HTTP/1.1\r\nUser-Agent: AirPlay/320.20\r\nConnection: keep-alive\r\n\
+          X-Apple-HKP: 4\r\nContent-Type: application/octet-stream\r\n\r\n",
+    );
+    let answer = http_answer(&pin_start);
+    assert_eq!((answer.code, answer.body.len()), (200, 0));
+
+    let mut entropy = TestEntropy::new();
+    let mut setup = PairSetup::transient();
+    let mut request = setup.start();
+    let secret = loop {
+        let response = http_answer(&fake.feed(&over_http(request)));
+        match setup.handle_response(&response, &mut entropy) {
+            SetupStep::Send(next) => request = next,
+            SetupStep::Transient(secret) => break secret,
+            other => panic!("pair-setup went {other:?}"),
+        }
+    };
+    assert_eq!(
+        fake.keys(),
+        [
+            "POST /pair-pin-start",
+            "POST /pair-setup",
+            "POST /pair-setup"
+        ]
+    );
+    assert_eq!(fake.secret.as_deref(), Some(secret.expose()));
 }
