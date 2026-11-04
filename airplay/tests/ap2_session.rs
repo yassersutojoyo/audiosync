@@ -1264,3 +1264,19 @@ fn ap2_request_uri_brackets_an_ipv6_address() {
     let mapped = IpAddr::V6(Ipv4Addr::new(192, 0, 2, 10).to_ipv6_mapped());
     assert_eq!(uri(mapped), "rtsp://192.0.2.10/3141592653");
 }
+
+// covers: P232
+#[test]
+fn an_airplay2_session_sends_no_password_to_a_digest_without_qop() {
+    let mut fake = FakeAp2::new();
+    fake.challenge = Some((
+        "POST /pair-setup".to_owned(),
+        "Digest realm=\"raop\", nonce=\"abc\"".to_owned(),
+    ));
+    let mut config = ap2_config();
+    config.password = Some(Secret::new("hunter2".to_owned()));
+    let rig = Ap2Rig::new(config, fake);
+    assert_eq!(kind(&rig), Some(ErrorKind::ProtocolError));
+    let carried = |(request, _): &(Request, bool)| request.headers.contains("Authorization");
+    assert!(!rig.fake.requests.iter().any(carried));
+}
