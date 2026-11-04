@@ -394,8 +394,8 @@ export component TrayFlyout inherits Window {
     callback master-volume-changed(float);
     callback speaker-toggled(string);
     callback zone-toggled(string);
-    // A zone's speakers shown (true) or hidden; the main window's arrow
-    // shares this state.
+    // A zone's speakers shown (true) or hidden; the flyout keeps its own
+    // fold state.
     callback zone-expanded-changed(string, bool);
     callback preset-recall-requested(string);
     // Ctrl+1 to Ctrl+9: recall the preset in that place (spec S261).
