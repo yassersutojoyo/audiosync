@@ -1,5 +1,5 @@
 # Installs or updates AudioSync for the current user from a GitHub release.
-#   irm https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.ps1 | iex
+#   irm https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.ps1 | iex
 #   & ([scriptblock]::Create((irm .../install.ps1))) -Version 0.8.0   a given version instead of the latest
 #   powershell -File scripts\install.ps1 -DryRun [-Version 0.8.0]    print what it would download, change nothing
 # Checks the zip against the release's SHA256SUMS.txt before anything is
@@ -13,6 +13,11 @@ function Install-AudioSync([string]$Version, [bool]$DryRun) {
   # Windows PowerShell's progress bar slows Invoke-WebRequest down many times over.
   $ProgressPreference = 'SilentlyContinue'
   $repo = 'yassersutojoyo/audiosync'
+  # The release key's public half ('ssh-ed25519 AAAA...'). Empty until that key exists
+  # (RELEASE.md, "Signed checksums"); until then the install trusts the tag over HTTPS alone.
+  $releaseKey = ''
+  # The first version signed with that key; from it on a release without SHA256SUMS.txt.sig is refused.
+  $keySince = ''
   $dir = Join-Path $env:LOCALAPPDATA 'Programs\AudioSync'
   $exe = Join-Path $dir 'audiosync.exe'
   $shortcut = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\AudioSync.lnk'
@@ -31,7 +36,7 @@ function Install-AudioSync([string]$Version, [bool]$DryRun) {
     try {
       $Version = (Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$repo/releases/latest").tag_name
     } catch {
-      throw "AudioSync install: couldn't reach the GitHub API (it allows 60 lookups an hour per address). Name a version instead: & ([scriptblock]::Create((irm https://raw.githubusercontent.com/$repo/main/scripts/install.ps1))) -Version 0.8.0"
+      throw "AudioSync install: couldn't reach the GitHub API (it allows 60 lookups an hour per address). Name a version instead: & ([scriptblock]::Create((irm https://github.com/$repo/releases/latest/download/install.ps1))) -Version 0.8.0"
     }
     if (-not $Version) { throw 'AudioSync install: the GitHub API answer had no release tag.' }
   }
@@ -58,6 +63,35 @@ function Install-AudioSync([string]$Version, [bool]$DryRun) {
       Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS.txt" -OutFile "$tmp\SHA256SUMS.txt"
     } catch {
       throw "AudioSync install: couldn't download $base/SHA256SUMS.txt"
+    }
+    if ($releaseKey) {
+      $sig = "$tmp\SHA256SUMS.txt.sig"
+      $signed = $true
+      try {
+        Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS.txt.sig" -OutFile $sig
+      } catch {
+        # A release from before the key has no signature.
+        if ([int]$_.Exception.Response.StatusCode -ne 404) { throw "AudioSync install: couldn't download $base/SHA256SUMS.txt.sig" }
+        # [version] wants two to four numeric fields: drop a -suffix and pad a bare major.
+        $plain = { param($v) $v = $v -replace '-.*$', ''; if ($v -notmatch '\.') { $v += '.0' }; [version]$v }
+        if ($keySince -and (& $plain $Version) -ge (& $plain $keySince)) {
+          throw "AudioSync install: AudioSync $Version has no SHA256SUMS.txt.sig, though every release from $keySince on is signed. Nothing was installed."
+        }
+        $signed = $false
+      }
+      if ($signed) {
+        if (-not (Get-Command ssh-keygen -ErrorAction SilentlyContinue)) {
+          throw "AudioSync install: ssh-keygen (the Windows OpenSSH client) is missing, so the release's signature can't be checked. Nothing was installed."
+        }
+        [IO.File]::WriteAllText("$tmp\allowed_signers", "audiosync-release $releaseKey`n")
+        # Start-Process hands ssh-keygen the file itself as input; a PowerShell pipe would re-encode it.
+        $verify = Start-Process ssh-keygen -NoNewWindow -Wait -PassThru `
+          -ArgumentList '-Y', 'verify', '-f', "`"$tmp\allowed_signers`"", '-I', 'audiosync-release', '-n', 'file', '-s', "`"$sig`"" `
+          -RedirectStandardInput "$tmp\SHA256SUMS.txt" -RedirectStandardOutput "$tmp\verify.out" -RedirectStandardError "$tmp\verify.err"
+        if ($verify.ExitCode -ne 0) {
+          throw "AudioSync install: SHA256SUMS.txt doesn't carry the release key's signature. Nothing was installed."
+        }
+      }
     }
     $expected = $null
     foreach ($line in Get-Content "$tmp\SHA256SUMS.txt") {
