@@ -18,8 +18,15 @@ struct CalibrateAllButton: View {
                         .foregroundStyle(off == nil ? Brand.teal : Color.secondary)
                         .frame(width: 20)
                         .accessibilityHidden(true)
-                    ScrollingTitle(text: t.calibrateAll).font(.body)
-                    Spacer()
+                    // Stacked as the Equalizer row: the whole name doesn't fit the slim left column.
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(t.calibrateAllRowTitle).font(.body).lineLimit(1)
+                        Text(t.calibrateAllRowDetail)
+                            .font(.callout)
+                            .foregroundStyle(Brand.secondaryText)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)
