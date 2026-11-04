@@ -14520,6 +14520,19 @@ do {
     // covers: S257 (a speaker that would ask for a code stays off)
     check(groupOpen && groupNote && codeOff && codeNote && pairedOpen && pairedQuiet,
           "web remote: a Cast group plays from the phone; a speaker that would ask for a code on the Mac can't")
+    let pairedAsks = RemoteRow(Facts(id: "tv5", name: "TV 5", kind: "AirPlay", on: false, volume: 50, isAirPlay: true,
+                                     needsCode: true, paired: true, availability: .needsCode, note: t.reconnecting),
+                               text: t)
+    let everyTimeAsks = RemoteRow(Facts(id: "tv6", name: "TV 6", kind: "AirPlay", on: false, volume: 50,
+                                        isAirPlay: true, needsCode: true, paired: true, availability: .codeEveryTime,
+                                        note: t.reconnecting), text: t)
+    let ownNote = RemoteRow(Facts(id: "tv7", name: "TV 7", kind: "AirPlay", on: false, volume: 50, isAirPlay: true,
+                                  note: t.reconnecting), text: t)
+    // covers: S343
+    check(pairedAsks.notice == t.availability(.needsCode) && everyTimeAsks.notice == t.availability(.codeEveryTime)
+            && ownNote.notice == t.reconnecting,
+          "web remote: a row's availability note goes out before its own note, as on Windows",
+          "\(pairedAsks.notice ?? "nil") | \(everyTimeAsks.notice ?? "nil") | \(ownNote.notice ?? "nil")")
     // covers: S343
     check(snapshot.json == RemoteSnapshot(computerName: "Studio Mac", master: 80, nowPlaying: nil, rows: rows).json,
           "web remote: the same state gives the same text, so the core sends nothing new")

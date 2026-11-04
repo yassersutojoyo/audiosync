@@ -88,6 +88,8 @@ extension RemoteRow {
         var memberAsksPassword = false
         /// Turned off for refusing a pairing: only a switch on the Mac turns it on again.
         var refusedForCode = false
+        /// The availability note's case; open while a code prompt waits, as in the window.
+        var availability: SpeakerAvailability = .open
         /// What the window writes under the name, if anything.
         var note: String?
         var key = ""
@@ -108,7 +110,7 @@ extension RemoteRow {
         // Like the window's button: a speaker that will play still turns on.
         self.init(id: f.id, name: f.name, kind: f.kind, on: !turnsOn, volume: f.volume, delay: delay,
                   available: !codeBlocked,
-                  notice: codeBlocked ? text.remoteTurnOnInApp : f.note,
+                  notice: codeBlocked ? text.remoteTurnOnInApp : text.availability(f.availability) ?? f.note,
                   volumeAdjustable: f.castVolumeFixed != true,
                   key: f.key, waiting: f.waiting, asksForCode: codeBlocked,
                   volumeStep: f.castVolumeFixed == nil ? 1 : max(1, (100 * castStep).rounded()))
