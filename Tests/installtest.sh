@@ -260,6 +260,14 @@ else
   fi
 fi
 
+# A one-liner served from a branch runs whatever was last pushed there; a release tag pins it.
+# CHANGELOG.md keeps the old URL in a released entry.
+if found=$(git -C "$repo" grep -n -E 'raw\.githubusercontent\.com/[^ ]*/(main|master)/scripts/install' -- . ':!CHANGELOG.md'); then
+  flunk "the install one-liners fetch from a release, not a branch: $found"
+else
+  pass "the install one-liners fetch from a release, not a branch"
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "FAILED: $failures"
   exit 1
