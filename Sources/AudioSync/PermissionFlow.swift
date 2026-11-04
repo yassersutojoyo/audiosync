@@ -191,3 +191,80 @@ enum PermissionSetup {
         state == .denied || state == .askedUnknown
     }
 }
+
+/// One row of the setup checklist in the main window.
+enum SetupCheck: String, CaseIterable, Identifiable {
+    case capture
+    case localNetwork
+    case speakers
+
+    var id: String { rawValue }
+}
+
+enum SetupCheckState: Equatable {
+    case checking, ok, problem
+}
+
+/// What the checklist reads, each from something the app already watches;
+/// `AppDelegate.publishSetupChecks` fills it.
+struct SetupCheckInputs: Equatable {
+    /// The permission the chosen source needs (`Permission.needed(for:)`).
+    var capturePermission: Permission = .audioCapture
+    /// A tap captured sound in this run (`SourceCapture.runHeard`), the only
+    /// proof that audio capture is allowed.
+    var captureHeard = false
+    /// What macOS reports for the microphone, used when the source is an input.
+    var microphone: PermissionState = .notAsked
+    var access: LocalNetworkAccess = .unknown
+    var networkHint: LocalNetworkHint = .none
+    /// AirPlay discovery's first look (`AirPlaySearch`).
+    var searching = false
+    var speakersFound = false
+}
+
+enum SetupChecklist {
+    /// True once the user dismissed the checklist with every row ok.
+    static let dismissedKey = "setupChecklistDismissed"
+
+    /// Shown by itself on a first install only; Setup Checklist in the app menu shows it again.
+    static func showsAtLaunch(dismissed: Bool, usedBefore: Bool) -> Bool {
+        !dismissed && !usedBefore
+    }
+
+    /// The capture check's own verdict that sound should arrive and doesn't
+    /// (`CaptureCheck.notWorking`): its notice is the one with a Settings link.
+    static func captureNotWorking(_ notices: NoticeList) -> Bool {
+        notices.items.contains { $0.subject == Notice.capture && $0.settings != nil }
+    }
+
+    static func state(_ check: SetupCheck, _ inputs: SetupCheckInputs, captureNotWorking: Bool) -> SetupCheckState {
+        switch check {
+        case .capture:
+            if inputs.capturePermission == .microphone {
+                switch inputs.microphone {
+                case .allowed: return .ok
+                case .denied: return .problem
+                case .notAsked, .unknown: return .checking
+                }
+            }
+            if inputs.captureHeard { return .ok }
+            return captureNotWorking ? .problem : .checking
+        case .localNetwork:
+            if inputs.access == .allowed { return .ok }
+            return inputs.access == .denied || inputs.networkHint == .possible ? .problem : .checking
+        case .speakers:
+            if inputs.speakersFound { return .ok }
+            if state(.localNetwork, inputs, captureNotWorking: captureNotWorking) == .problem { return .problem }
+            return inputs.access == .allowed && !inputs.searching ? .problem : .checking
+        }
+    }
+
+    /// The System Settings pane a problem row's Fix button opens; nil: none fixes it.
+    static func pane(_ check: SetupCheck, _ inputs: SetupCheckInputs) -> PrivacyPane? {
+        switch check {
+        case .capture: return inputs.capturePermission.pane
+        case .localNetwork: return .localNetwork
+        case .speakers: return nil
+        }
+    }
+}

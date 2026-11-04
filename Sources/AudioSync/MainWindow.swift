@@ -124,6 +124,12 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 0) {
             header(t)
             NoticeStack(model: model)
+            if model.setupChecklistShown {
+                SetupChecklistCard(model: model)
+                    .padding(.top, NoticeStack.windowGap)
+                    .transition(reduceMotion ? AnyTransition.opacity
+                                             : AnyTransition.move(edge: .top).combined(with: .opacity))
+            }
             HStack(alignment: .top, spacing: BrandTokens.Spacing.columnGap) {
                 FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
                     VStack(spacing: BrandTokens.Spacing.cardGap) {
@@ -179,6 +185,8 @@ struct MainView: View {
         .animation(NoticeMotion.of(reduceMotion: reduceMotion)
                     .columns(closing: model.notices.items.count < noticeCount.shown),
                    value: model.notices)
+        .animation(reduceMotion ? Animation.linear(duration: 0.15) : Animation.easeOut(duration: 0.25),
+                   value: model.setupChecklistShown)
         .onChange(of: model.notices.items.count, initial: true) { noticeCount.shown = model.notices.items.count }
         .padding(.horizontal, BrandTokens.Spacing.windowMargin)
         .padding(.top, 4)

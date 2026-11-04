@@ -187,6 +187,8 @@ final class AppModel: ObservableObject {
         /// Continue or Not Now on the permission explanation the window offers.
         var permissionContinue: (Permission) -> Void = { _ in }
         var permissionNotNow: (Permission) -> Void = { _ in }
+        /// Dismiss on the setup checklist once every row is ok.
+        var dismissSetupChecklist: () -> Void = {}
         var toggleZone: (String) -> Void = { _ in }
         var deleteZone: (String) -> Void = { _ in }
         /// Zone ID, the name typed (`ZoneEdit.renaming`).
@@ -303,6 +305,9 @@ final class AppModel: ObservableObject {
     @Published var notices = NoticeList()
     /// The permission explanation a feature waits on (`PermissionAsks.offer`).
     @Published var permissionOffer: Permission?
+    /// The setup checklist card shows in the main window (`SetupChecklist`).
+    @Published var setupChecklistShown = false
+    @Published var setupChecks = SetupCheckInputs()
     /// The device volume hints of the switched-on local outputs, by device
     /// UID: only outputs whose macOS volume is low or muted (S196).
     @Published var deviceVolumes: [String: DeviceVolumeHint] = [:]

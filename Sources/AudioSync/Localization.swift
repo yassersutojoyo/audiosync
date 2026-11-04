@@ -1385,6 +1385,57 @@ struct UIStrings {
     }
     /// The app menu item that opens the window again.
     let setupMenu = "Set Up Permissions…"
+
+    // MARK: Setup checklist
+
+    /// The app menu item that shows the checklist card again.
+    let setupChecklistMenu = "Show Setup Checklist"
+    let setupChecklistHeading = "Setup checklist"
+    let setupChecklistDone = "All set. AudioSync can capture sound and reach your speakers."
+    let setupChecklistDismiss = "Done"
+    /// A problem row's button, which opens System Settings.
+    let setupCheckFix = "Fix"
+    func setupCheckTitle(_ check: SetupCheck, _ capture: Permission) -> String {
+        switch check {
+        case .capture: return capture == .microphone ? "Microphone access" : "System audio recording"
+        case .localNetwork: return "Local network access"
+        case .speakers: return "Speakers on your network"
+        }
+    }
+    func setupCheckState(_ state: SetupCheckState) -> String {
+        switch state {
+        case .checking: return "Checking…"
+        case .ok: return "OK"
+        case .problem: return "Not working"
+        }
+    }
+    /// The row's one line of advice; nil once it is ok.
+    func setupCheckLine(_ check: SetupCheck, _ state: SetupCheckState, _ capture: Permission) -> String? {
+        switch (check, state) {
+        case (_, .ok):
+            return nil
+        case (.capture, .checking):
+            return capture == .microphone
+                ? "macOS asks the first time you stream from an input."
+                : "Turn streaming on and play something. This turns OK once AudioSync hears it."
+        case (.capture, .problem):
+            return capture == .microphone
+                ? "Turn on AudioSync under Microphone, then turn streaming off and on again."
+                : "Turn on AudioSync under “System Audio Recording Only”, then turn streaming off and on again."
+        case (.localNetwork, .checking):
+            return "This turns OK once AudioSync starts looking for speakers."
+        case (.localNetwork, .problem):
+            return "Turn on AudioSync under Local Network."
+        case (.speakers, .checking):
+            return "Looking for AirPlay and Google Cast speakers."
+        case (.speakers, .problem):
+            return "Turn a speaker on and make sure it's on the same network as this Mac."
+        }
+    }
+    /// VoiceOver's name for a row's Fix button.
+    func setupCheckFixLabel(_ check: SetupCheck, _ capture: Permission) -> String {
+        "\(setupCheckFix), \(setupCheckTitle(check, capture))"
+    }
     /// AirPlay has found nothing for a while and AudioSync can't tell whether
     /// Local Network access is the reason.
     let localNetworkHint = "If you expect AirPlay speakers, make sure this Mac is on the same network as them, and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."

@@ -449,6 +449,7 @@ extension AppDelegate {
                 return
             case .clear:
                 clearNotices([Notice.capture])
+                publishSetupChecks()
                 return
             case .post(.waiting, let app):
                 let inDoubt = !engine.runHeard && CaptureCheck.provesPermission(audioSource)

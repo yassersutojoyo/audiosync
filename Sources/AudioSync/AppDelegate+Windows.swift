@@ -231,8 +231,9 @@ extension AppDelegate {
         ]
     }
 
-    /// From every model update while the window exists.
+    /// From every model update; the setup window's rows only while it exists.
     func refreshSetup() {
+        publishSetupChecks()
         guard let model = setupWindow?.model else { return }
         let rows = setupRows()
         if model.rows != rows { model.rows = rows }
@@ -306,6 +307,27 @@ extension AppDelegate {
         }
     }
 
+    // MARK: - Setup checklist
+
+    /// Shows the checklist on a first install, until it was dismissed.
+    func showSetupChecklistIfFirstRun() {
+        let dismissed = store.read(SetupChecklist.dismissedKey) as? Bool ?? false
+        appModel.setupChecklistShown = SetupChecklist.showsAtLaunch(dismissed: dismissed,
+                                                                    usedBefore: permissions.usedBefore)
+    }
+
+    /// Also from the capture check once sound flows: `SourceCapture.runHeard` sends no event of its own.
+    func publishSetupChecks() {
+        publish(\.setupChecks, SetupCheckInputs(
+            capturePermission: Permission.needed(for: audioSource),
+            captureHeard: SourceCapture.runHeard,
+            microphone: microphonePermission(),
+            access: localNetworkProbe.access,
+            networkHint: appModel.localNetworkHint,
+            searching: appModel.airplaySearching,
+            speakersFound: !appModel.airplay.isEmpty || !appModel.cast.isEmpty))
+    }
+
     private func microphonePermission() -> PermissionState {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return .allowed
@@ -372,6 +394,10 @@ extension AppDelegate {
         a.dismissNotice = { [weak self] subject in self?.clearNotices([subject]) }
         a.permissionContinue = { [weak self] permission in self?.resumeAfterPermission(permission) }
         a.permissionNotNow = { [weak self] permission in self?.declinePermission(permission) }
+        a.dismissSetupChecklist = { [weak self] in
+            self?.appModel.setupChecklistShown = false
+            self?.store.write(true, SetupChecklist.dismissedKey)
+        }
         a.dismissAllNotices = { [weak self] in
             guard let self, !self.appModel.notices.isEmpty else { return }
             self.appModel.notices.clearAll()
@@ -852,6 +878,11 @@ extension AppDelegate {
     @objc func showWebRemote(_ sender: Any?) { openWebRemoteWindow() }
 
     @objc func showPermissionSetup(_ sender: Any?) { openPermissionSetup() }
+
+    @objc func showSetupChecklist(_ sender: Any?) {
+        appModel.setupChecklistShown = true
+        showMainWindow()
+    }
 
     @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning, fromMenu: true) }
 

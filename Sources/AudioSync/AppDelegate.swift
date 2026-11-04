@@ -428,6 +428,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         startSafetyNet()
         if AppLifecycle.opensMainWindow(loginItemLaunch: loginItem) { showMainWindow() }
         openPermissionSetupIfFirstRun()   // before the sender, whose discovery would offer Local Network alone
+        showSetupChecklistIfFirstRun()
         // AudioSync's own sender and its discovery start, after the window,
         // so a Local Network prompt they raise comes up in front of it.
         reconcileAirPlaySpeakers()

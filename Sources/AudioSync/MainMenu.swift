@@ -27,6 +27,7 @@ enum MainMenu {
         app.addItem(item(t.switchToSystemWhenSourceQuits, #selector(AppDelegate.toggleSwitchWhenSourceQuits(_:))))
         app.addItem(.separator())
         app.addItem(item(t.setupMenu, #selector(AppDelegate.showPermissionSetup(_:))))
+        app.addItem(item(t.setupChecklistMenu, #selector(AppDelegate.showSetupChecklist(_:))))
         app.addItem(.separator())
         let services = NSMenu(title: t.menuServices)
         app.addItem(withTitle: t.menuServices, action: nil, keyEquivalent: "").submenu = services
