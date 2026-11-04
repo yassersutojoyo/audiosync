@@ -15,7 +15,9 @@ use super::appcast::{self, Arch, Os, Update};
 use super::appimage;
 use super::archive;
 use super::fetch::{self, Fetch, FetchError, Kind};
-use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full, is_locked};
+#[cfg(windows)]
+use super::files::is_locked;
+use super::files::{Files, Pause, Retrying, is_blocked, is_disk_full};
 use super::relaunch::Launch;
 use super::signature;
 use super::swap::{self, Rename, StepLog, SwapError, Swapped};
