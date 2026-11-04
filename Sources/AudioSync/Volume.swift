@@ -22,6 +22,41 @@ enum VolumeCurve {
     }
 }
 
+/// The speaker beside the master slider. Muted is the master at 0, so the
+/// streams, the web remote and presets need no state of their own for it.
+enum MasterMute {
+    /// Muted when the number beside the slider reads 0.
+    static func isMuted(_ level: Double) -> Bool { level.rounded() == 0 }
+
+    /// One wave up to 33, two up to 66, three above.
+    static func symbol(level: Double) -> String {
+        if isMuted(level) { return "speaker.slash.fill" }
+        if level.rounded() < 34 { return "speaker.wave.1.fill" }
+        if level.rounded() < 67 { return "speaker.wave.2.fill" }
+        return "speaker.wave.3.fill"
+    }
+
+    /// What unmuting returns to before the master was ever at 5 or above this run.
+    static let fallback: Double = 50
+
+    /// The level to unmute to after the master moves to `level`. A drag or
+    /// key steps down to 0 pass through near-silent levels, so those don't count.
+    static func remembered(level: Double, previous: Double) -> Double {
+        level >= 5 ? level : previous
+    }
+
+    /// The master a setter keeps: under what reads as 0, exactly 0, so the
+    /// struck-through speaker never shows over a trace of sound.
+    static func snapped(_ level: Double) -> Double {
+        isMuted(level) ? 0 : level
+    }
+
+    /// The level a click sets: 0, or back to the remembered level from 0.
+    static func toggled(level: Double, remembered: Double) -> Double {
+        isMuted(level) ? remembered : 0
+    }
+}
+
 enum LocalOutputGain {
     /// A local speaker's linear gain through its zone, on the core's volume
     /// curve (S71, S249); 0 while a calibration plays its signal through

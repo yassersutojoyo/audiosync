@@ -96,7 +96,7 @@ extension AppDelegate {
     /// AirPlay and Cast streams' samples, never a speaker's own or device volume (S413, S415).
     func setMasterVolume(_ position: Double) {
         guard let v = VolumeCurve.accepted(position) else { return }
-        masterVolume = v
+        masterVolume = MasterMute.snapped(v)
         LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
         nativeAirPlay?.setMaster(masterVolume)
         castSender?.setMaster(masterVolume)

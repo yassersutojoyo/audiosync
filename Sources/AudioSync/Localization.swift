@@ -1157,6 +1157,8 @@ struct UIStrings {
 
     let noSpeakers = "No speakers found"
     let masterVolume = "Master volume"
+    let muteMaster = "Mute Master Volume"
+    let unmuteMaster = "Unmute Master Volume"
     let openApp = "Open AudioSync"
     let quitApp = "Quit AudioSync"
     /// The menu bar panel's short Quit, next to Open AudioSync.

@@ -17003,5 +17003,31 @@ do {
           "main menu: Speakers > Add by Address… is offered only while Cast can add a speaker, worded as on Windows")
 }
 
+// MARK: Master mute
+do {
+    let glyphs = [0, 0.4, 0.6, 33, 34, 66, 67, 100].map { MasterMute.symbol(level: $0) }
+    check(glyphs == ["speaker.slash.fill", "speaker.slash.fill", "speaker.wave.1.fill", "speaker.wave.1.fill",
+                     "speaker.wave.2.fill", "speaker.wave.2.fill", "speaker.wave.3.fill", "speaker.wave.3.fill"],
+          "master mute: the speaker is struck through at 0 and shows one, two or three waves by thirds",
+          glyphs.joined(separator: ", "))
+    func unmuteLevel(after levels: [Double]) -> Double {
+        let kept = levels.reduce(MasterMute.fallback) { MasterMute.remembered(level: $1, previous: $0) }
+        return MasterMute.toggled(level: levels.last ?? 0, remembered: kept)
+    }
+    check(MasterMute.toggled(level: 72, remembered: 50) == 0 && unmuteLevel(after: [72, 0]) == 72,
+          "master mute: a click from 72 sets 0 and unmute returns to 72",
+          "\(unmuteLevel(after: [72, 0]))")
+    let keys = unmuteLevel(after: [72, 62, 52, 42, 32, 22, 12, 2, 0])
+    let remote = unmuteLevel(after: [72, 40, 3, 0.4, 0])
+    let drag = unmuteLevel(after: [72, 30, 6, 1.5, 0])
+    check(keys == 12 && remote == 40 && drag == 6,
+          "master mute: stepping or dragging down to 0 unmutes to the last level at 5 or above",
+          "keys \(keys), remote \(remote), drag \(drag)")
+    check(unmuteLevel(after: [0]) == 50 && unmuteLevel(after: [3, 0]) == 50,
+          "master mute: a master never at 5 or above this run unmutes to 50, never 100")
+    check(MasterMute.snapped(0.4) == 0 && MasterMute.snapped(0.5) == 0.5 && MasterMute.isMuted(0.3) && !MasterMute.isMuted(5),
+          "master mute: a master under 0.5 is kept as exactly 0, the level the struck speaker shows")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

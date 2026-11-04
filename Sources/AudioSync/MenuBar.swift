@@ -255,7 +255,16 @@ final class AppModel: ObservableObject {
     @Published var mixApps: [Source] = []
     @Published var mixMode: AppMixMode = .only
     @Published var mixChecked: [String] = []
-    @Published var master: Double = 100
+    @Published var master: Double = 100 {
+        didSet { masterBeforeMute = MasterMute.remembered(level: master, previous: masterBeforeMute) }
+    }
+    /// Shared by the main window and the panel, so either one unmutes what the other muted.
+    private var masterBeforeMute = MasterMute.fallback
+    func toggleMasterMute() {
+        // The level the app started at never passed through didSet.
+        masterBeforeMute = MasterMute.remembered(level: master, previous: masterBeforeMute)
+        actions.setMaster(MasterMute.toggled(level: master, remembered: masterBeforeMute))
+    }
     @Published var airplay: [Speaker] = []
     @Published var local: [Speaker] = []
     /// Google Cast speakers, by name.
@@ -1607,16 +1616,13 @@ struct MenuBarView: View {
 
     private func masterRow(_ t: UIStrings) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "speaker.fill").foregroundStyle(.secondary).font(.caption)
-                .accessibilityHidden(true)
+            MasterMuteButton(model: model, text: t)
             Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }), in: 0...100)
                 .controlSize(.small)
                 .accessibilityLabel(t.masterVolume)
                 .accessibilityValue(t.volumeValue(model.master))
-            Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary).font(.caption)
-                .accessibilityHidden(true)
+                .help(t.masterVolume)
         }
-        .help(t.masterVolume)
     }
 
     @ViewBuilder
@@ -2427,6 +2433,27 @@ struct PowerSwitch: View {
         .accessibilityLabel(text.streamingSwitch)
         .accessibilityValue(isOn ? text.on : text.off)
         .accessibilityAddTraits(.isToggle)
+    }
+}
+
+/// The speaker before the master slider: its waves follow the level and a click mutes or unmutes.
+struct MasterMuteButton: View {
+    @ObservedObject var model: AppModel
+    let text: UIStrings
+
+    var body: some View {
+        let label = MasterMute.isMuted(model.master) ? text.unmuteMaster : text.muteMaster
+        Button { model.toggleMasterMute() } label: {
+            Image(systemName: MasterMute.symbol(level: model.master))
+                // A fixed width, so the slider holds still as the waves come and go.
+                .frame(width: 18, height: 18, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .font(.caption)
+        .accessibilityLabel(label)
+        .help(label)
     }
 }
 
