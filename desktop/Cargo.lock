@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "audiosync-desktop"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "aes",
  "aes-gcm",
