@@ -2073,9 +2073,6 @@ fn problem_of(end: &SessionEnd) -> Option<CastProblem> {
         SessionEnd::Failed(SessionError::Stream(_) | SessionError::Internal) => {
             Some(CastProblem::ConnectionLost)
         }
-        SessionEnd::Failed(SessionError::CertificateChanged { .. }) => {
-            Some(CastProblem::CertificateChanged)
-        }
     }
 }
 
@@ -2346,14 +2343,6 @@ pub mod tests {
     fn a_fault_inside_the_sender_reads_as_a_lost_connection() {
         let internal = SessionEnd::Failed(SessionError::Internal);
         assert_eq!(problem_of(&internal), Some(CastProblem::ConnectionLost));
-    }
-
-    // covers: C117
-    #[test]
-    fn a_refused_certificate_reads_as_its_own_problem() {
-        let (before, after) = (Fingerprint([1; 32]), Fingerprint([2; 32]));
-        let refused = SessionEnd::Failed(SessionError::CertificateChanged { before, after });
-        assert_eq!(problem_of(&refused), Some(CastProblem::CertificateChanged));
     }
 
     // covers: C14

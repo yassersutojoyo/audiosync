@@ -492,10 +492,6 @@ fn the_format_that_worked_is_tried_first_next_time() {
     wait_for(&host, Duration::from_secs(15), ended(A));
     plays_both.join();
 
-    // Each fake has a certificate of its own, which a host pins (C117).
-    let stored = host.memory().to_json();
-    assert!(host.shutdown());
-    let mut host = CastHost::new(DeviceMemory::from_json(&stored)).expect("worker");
     // FLAC refused now: the attempt ends, and the next one starts with WAV.
     let refuses_flac = FakeDevice::start(Behavior {
         on_load_of: Some(("audio/flac", OnLoad::Error("LOAD_FAILED", json!({})))),
@@ -1017,89 +1013,96 @@ fn a_stop_or_a_quit_during_a_launch_sends_no_stop_and_only_the_platform_close() 
     silent.join();
 }
 
-/// Starts `device` as A, which C117 refuses: the attempt ends failed and
-/// never starts.
-fn start_refused(host: &mut CastHost, device: &FakeDevice) {
-    let (_feed, reader) = ring();
-    host.start(target(A, device), 48_000, Metadata::default(), reader)
-        .expect("starts");
-    let events = wait_for(host, Duration::from_secs(10), ended(A));
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, HostEvent::Started { .. })),
-        "{events:?}"
-    );
-    assert!(
-        matches!(
-            events.last(),
-            Some(HostEvent::Ended {
-                end: SessionEnd::Failed(_),
+fn certificate_changes(events: &[HostEvent]) -> Vec<(Fingerprint, Fingerprint)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            HostEvent::Session {
+                event: SessionEvent::CertificateChanged { before, after },
                 ..
-            })
-        ),
-        "{events:?}"
-    );
+            } => Some((*before, *after)),
+            _ => None,
+        })
+        .collect()
 }
 
-/// Starts `device` as A, lets it play and stops it.
-fn start_and_stop(host: &mut CastHost, device: &FakeDevice) {
-    let (_feed, reader) = ring();
-    host.start(target(A, device), 48_000, Metadata::default(), reader)
-        .expect("starts");
-    wait_for(host, Duration::from_secs(10), started(A));
-    host.stop();
-    wait_for(host, Duration::from_secs(15), ended(A));
-}
-
-// covers: C21, C117
+// covers: C21
 #[test]
-fn a_certificate_seen_only_by_a_failed_start_is_not_pinned() {
+fn a_certificate_seen_only_by_a_failed_start_is_not_recorded() {
+    let first = FakeDevice::start(Behavior::default());
     let refuses = FakeDevice::start(Behavior {
         on_load: OnLoad::Error("LOAD_FAILED", json!({})),
         ..Behavior::default()
     });
-    let first = FakeDevice::start(Behavior::default());
     let last = FakeDevice::start(Behavior::default());
     let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
-    let (_feed, reader) = ring();
-    host.start(target(A, &refuses), 48_000, Metadata::default(), reader)
-        .expect("starts");
-    wait_for(&host, Duration::from_secs(15), ended(A));
-    start_and_stop(&mut host, &first);
-    start_refused(&mut host, &last);
+    let mut events = Vec::new();
+    for device in [&first, &refuses, &last] {
+        let (_feed, reader) = ring();
+        host.start(target(A, device), 48_000, Metadata::default(), reader)
+            .expect("starts");
+        if !std::ptr::eq(device, &refuses) {
+            events.extend(wait_for(&host, Duration::from_secs(10), started(A)));
+            host.stop();
+        }
+        events.extend(wait_for(&host, Duration::from_secs(15), ended(A)));
+    }
+    assert_eq!(
+        certificate_changes(&events),
+        [(
+            Fingerprint::of(&first.certificate_der),
+            Fingerprint::of(&last.certificate_der)
+        )],
+        "{events:?}"
+    );
     assert!(host.shutdown());
-    for device in [refuses, first, last] {
+    for device in [first, refuses, last] {
         device.join();
     }
 }
 
-// Attack A of the 2026-11-04 security review: a host posing as a device
-// the sender knows answers with a certificate of its own.
-// covers: C117
+// covers: C21, C117
 #[test]
-fn a_device_back_with_a_new_certificate_is_refused_and_keeps_its_first_one() {
+fn a_device_back_with_a_new_certificate_is_logged_once_and_still_plays() {
     let device = FakeDevice::start(Behavior {
         new_certificate_each_connection: true,
         ..Behavior::default()
     });
     let mut host = CastHost::new(DeviceMemory::default()).expect("worker");
-    start_and_stop(&mut host, &device);
-    start_refused(&mut host, &device);
-    start_refused(&mut host, &device);
-    assert_eq!(device.payloads(NS_RECEIVER, "LAUNCH").len(), 1);
+    let mut events = Vec::new();
+    for _ in 0..2 {
+        let (_feed, reader) = ring();
+        host.start(target(A, &device), 48_000, Metadata::default(), reader)
+            .expect("starts");
+        events.extend(wait_for(&host, Duration::from_secs(10), started(A)));
+        host.stop();
+        events.extend(wait_for(&host, Duration::from_secs(15), ended(A)));
+    }
+    let certificates = device.certificates.lock().expect("certificates").clone();
+    assert_eq!(certificates.len(), 2);
     assert_eq!(
-        device.payloads(NS_MEDIA, "LOAD").len(),
-        1,
-        "no stream URL for the stranger"
+        certificate_changes(&events),
+        [(
+            Fingerprint::of(&certificates[0]),
+            Fingerprint::of(&certificates[1])
+        )],
+        "the first sight is recorded silently, the change once: {events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, HostEvent::Started { .. }))
+            .count(),
+        2,
+        "the changed certificate never blocks the session"
     );
     assert!(host.shutdown());
     device.join();
 }
 
-// covers: C117
+// covers: C21, C117
 #[test]
-fn a_pinned_certificate_holds_across_a_relaunch() {
+fn a_certificate_changed_across_a_relaunch_is_logged() {
     let device = FakeDevice::start(Behavior {
         new_certificate_each_connection: true,
         ..Behavior::default()
@@ -1107,40 +1110,30 @@ fn a_pinned_certificate_holds_across_a_relaunch() {
     let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("cast-fingerprints-{}.txt", std::process::id()));
     let _ = std::fs::remove_file(&path);
-    for launch in 0..2 {
+    let mut events = Vec::new();
+    for _ in 0..2 {
         let (book, error) = open_book(&path);
         assert!(error.is_none(), "{error:?}");
         let mut host = CastHost::with_fingerprints(DeviceMemory::default(), book).expect("worker");
-        if launch == 0 {
-            start_and_stop(&mut host, &device);
-        } else {
-            start_refused(&mut host, &device);
-        }
+        let (_feed, reader) = ring();
+        host.start(target(A, &device), 48_000, Metadata::default(), reader)
+            .expect("starts");
+        events.extend(wait_for(&host, Duration::from_secs(10), started(A)));
+        host.stop();
+        events.extend(wait_for(&host, Duration::from_secs(15), ended(A)));
         assert!(host.shutdown());
     }
     let certificates = device.certificates.lock().expect("certificates").clone();
-    let kept = std::fs::read_to_string(&path).expect("kept");
-    assert!(
-        kept.contains(&Fingerprint::of(&certificates[0]).to_string()),
-        "{kept}"
+    assert_eq!(
+        certificate_changes(&events),
+        [(
+            Fingerprint::of(&certificates[0]),
+            Fingerprint::of(&certificates[1])
+        )],
+        "the second launch knows the first one's certificate: {events:?}"
     );
     let _ = std::fs::remove_file(&path);
     device.join();
-}
-
-// covers: C117
-#[test]
-fn a_changed_fingerprint_never_replaces_the_pinned_one() {
-    let mut book = FingerprintBook::new();
-    let (pinned, other) = (Fingerprint([1; 32]), Fingerprint([2; 32]));
-    assert_eq!(book.record(A, pinned), FingerprintChange::First);
-    for _ in 0..2 {
-        assert_eq!(
-            book.record(A, other),
-            FingerprintChange::Changed { before: pinned }
-        );
-    }
-    assert_eq!(book.record(A, pinned), FingerprintChange::Same);
 }
 
 // covers: C21

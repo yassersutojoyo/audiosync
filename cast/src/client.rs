@@ -100,12 +100,12 @@ impl fmt::Display for Fingerprint {
 }
 
 /// What a fingerprint seen at connect means against the one recorded
-/// before (C21).
+/// before (C21). None of them blocks the connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FingerprintChange {
     First,
     Same,
-    /// Refused; `before` stays pinned (C117).
+    /// Logged, never refused.
     Changed {
         before: Fingerprint,
     },
@@ -125,7 +125,7 @@ struct BookFile {
 
 impl BookFile {
     fn save(&mut self, text: &str) {
-        // A book that can't be written keeps its pins in memory until the app quits.
+        // Diagnostics only: a book that can't be written stays in memory.
         if let Err(error) = (self.write)(&self.path, text.as_bytes())
             && let Some(report) = self.report_save_error.take()
         {
@@ -150,7 +150,7 @@ impl Drop for Saving<'_> {
     }
 }
 
-/// The fingerprint pinned per device (C21, C117).
+/// The fingerprints seen per device, for diagnostics only (C21).
 #[derive(Default)]
 pub struct FingerprintBook {
     seen: HashMap<DeviceId, Fingerprint>,
@@ -176,8 +176,8 @@ impl FingerprintBook {
         FingerprintBook::default()
     }
 
-    /// The book kept at `path`, taken through `read`, which every new
-    /// fingerprint rewrites whole through `write`. A file that is
+    /// The book kept at `path`, taken through `read`, which every new or
+    /// changed fingerprint rewrites whole through `write`. A file that is
     /// there but can't be read starts an empty book, with the error for the
     /// host's log; a missing one starts it with none.
     pub fn open(
@@ -215,10 +215,6 @@ impl FingerprintBook {
             file.report_save_error = Some(Box::new(report));
         }
         self
-    }
-
-    pub fn pinned(&self, id: DeviceId) -> Option<Fingerprint> {
-        self.seen.get(&id).copied()
     }
 
     pub fn record(&mut self, id: DeviceId, fingerprint: Fingerprint) -> FingerprintChange {
@@ -269,16 +265,12 @@ impl FingerprintBook {
         id: DeviceId,
         fingerprint: Fingerprint,
     ) -> (FingerprintChange, Option<BookFile>) {
-        let change = match self.seen.get(&id) {
+        let change = match self.seen.insert(id, fingerprint) {
             None => FingerprintChange::First,
-            Some(&before) if before == fingerprint => FingerprintChange::Same,
-            Some(&before) => FingerprintChange::Changed { before },
+            Some(before) if before == fingerprint => FingerprintChange::Same,
+            Some(before) => FingerprintChange::Changed { before },
         };
-        if change != FingerprintChange::First {
-            return (change, None);
-        }
-        self.seen.insert(id, fingerprint);
-        if self.file.is_none() && !self.saving {
+        if change == FingerprintChange::Same || (self.file.is_none() && !self.saving) {
             return (change, None);
         }
         // One `<id> <fingerprint>` line per device, as they are logged.

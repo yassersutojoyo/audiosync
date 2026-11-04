@@ -6,7 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Security
 
-- Another device on your network can no longer pose as one of your Google Cast speakers to get what this computer plays. AudioSync streams only to the address it connected to, ignores announcements that try to move a known speaker somewhere else, and remembers each speaker's security certificate the first time it plays. If that certificate changes later, AudioSync doesn't connect and tells you why.
+- Another device on your network has a harder time posing as one of your Google Cast speakers to receive your audio. AudioSync streams only to the address it connected to and ignores announcements that try to move a known speaker somewhere else.
 
 ## [0.8.6] - 2026-11-04
 

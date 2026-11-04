@@ -5084,7 +5084,6 @@ fn cast_problem(problem: ui_model::CastProblem) -> CastProblem {
         P::TakenOver => CastProblem::TakenOver,
         P::ConnectionLost => CastProblem::ConnectionLost,
         P::SearchStopped => CastProblem::SearchStopped,
-        P::CertificateChanged => CastProblem::CertificateChanged,
     }
 }
 
@@ -14629,23 +14628,6 @@ mod tests {
         assert_eq!(
             text,
             "Den TV stopped AudioSync's stream, so it's off. Turn it on again to stream to it."
-        );
-    }
-
-    // covers: C117
-    #[test]
-    fn a_cast_speaker_with_another_certificate_says_it_may_be_posed_as() {
-        let app = app_over(MockBackend::new());
-        let text = notice_text(
-            &app.strings(),
-            &NoticeMessage::CastCantPlay {
-                speaker: "Den TV".to_owned(),
-                problem: ui_model::CastProblem::CertificateChanged,
-            },
-        );
-        assert_eq!(
-            text,
-            "Den TV answered with a different security certificate than before, so AudioSync didn't connect to it. Another device on your network may be posing as this speaker."
         );
     }
 

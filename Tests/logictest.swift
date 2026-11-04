@@ -13258,18 +13258,12 @@ do {
     check(t.castList(.noneFound, localNetworkRefused: true)?.contains("Local Network") == true
             && t.castList(.noneFound)?.contains("Local Network") == false,
           "cast: none found points to Local Network access only once it was refused")
-    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .searchStopped,
-                                   .certificateChanged]
+    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .searchStopped]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
     // covers: C43, C114
     check(t.castProblem(.takenOver, name: "Den") == "Den stopped AudioSync's stream, so it's off. Turn it on again to stream to it.",
           "cast: a stream the TV's own controls or another app stopped reads as stopped, naming no other app")
-    // covers: C117
-    check(CastEnd.failed(CastError(ASC_CAST_ERROR_CERTIFICATE)).problem == .certificateChanged
-            && t.castProblem(.certificateChanged, name: "Den") == "Den answered with a different security certificate than before, "
-                + "so AudioSync didn't connect to it. Another device on your network may be posing as this speaker.",
-          "cast: a device refused for another certificate says it may be posed as")
     check(t.castResyncHelp == "Restarts the stream, with a short gap, so this speaker plays at its offset again"
             && t.calibrationFailure(.interrupted) == "Streaming, the speakers or their delays changed during the measurement. "
                 + "Leave them as they are while it measures, and try again."

@@ -57,12 +57,6 @@ pub enum SessionError {
     Stream(StreamError),
     /// A fault in the sender itself, not the device or the network (C107).
     Internal,
-    /// The device answered with another certificate than the pinned one
-    /// (C117).
-    CertificateChanged {
-        before: Fingerprint,
-        after: Fingerprint,
-    },
 }
 
 impl fmt::Display for SessionError {
@@ -73,10 +67,6 @@ impl fmt::Display for SessionError {
             SessionError::Media(error) => error.fmt(f),
             SessionError::Stream(error) => error.fmt(f),
             SessionError::Internal => f.write_str("the Cast sender hit an internal error"),
-            SessionError::CertificateChanged { before, after } => write!(
-                f,
-                "the device answered with certificate {after}, not the pinned {before}"
-            ),
         }
     }
 }
@@ -224,9 +214,8 @@ pub struct SessionConfig {
     /// A single device's latest addresses: every reconnect takes them
     /// instead of `addresses`, and the stream server answers them (C111).
     pub records: Option<GroupRecords>,
-    /// Where the device's certificate fingerprint is pinned once the start
-    /// succeeded, and checked at every connect (C21, C117); `None`, or a
-    /// group, checks nothing.
+    /// Where every connect records the device's certificate fingerprint
+    /// (C21) once the start succeeded; `None`, or a group, records nothing.
     pub fingerprints: Option<Fingerprints>,
 }
 
@@ -248,22 +237,6 @@ impl Fingerprints {
                 Some(SessionEvent::CertificateChanged { before, after })
             }
             FingerprintChange::First | FingerprintChange::Same => None,
-        }
-    }
-
-    /// Refuses a `client` whose certificate is not the pinned one (C117).
-    fn check(&self, client: &CastClient) -> Result<(), SessionError> {
-        let after = client.fingerprint();
-        let pinned = self
-            .book
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .pinned(self.id);
-        match (pinned, after) {
-            (Some(before), Some(after)) if before != after => {
-                Err(SessionError::CertificateChanged { before, after })
-            }
-            _ => Ok(()),
         }
     }
 }
@@ -441,12 +414,6 @@ impl CastSession {
         let Some(mut client) = connected else {
             return Err(SessionError::Connect(ConnectError::NoAddress));
         };
-        // A group's leader may hand over to another device (C97).
-        let fingerprints = config.fingerprints.filter(|_| group.is_none());
-        if let Some(Err(error)) = fingerprints.as_ref().map(|pins| pins.check(&client)) {
-            client.stop(teardown_budget(&quitting));
-            return Err(error);
-        }
         if group.is_some() {
             client.request_members();
         }
@@ -534,8 +501,8 @@ impl CastSession {
             return Err(error.into());
         }
         // Recorded only once the start succeeded, as a failed one drops its
-        // events.
-        session.fingerprints = fingerprints;
+        // events; a group's leader may hand over to another device (C97).
+        session.fingerprints = config.fingerprints.filter(|_| session.group.is_none());
         if let Some(event) = session
             .fingerprints
             .as_ref()
@@ -1023,10 +990,12 @@ impl CastSession {
                 }
                 None => return self.end(SessionEnd::Deselected),
             };
-            if let Some(Err(error)) =
-                (self.fingerprints.as_ref()).map(|pins| pins.check(&self.client))
+            if let Some(event) = self
+                .fingerprints
+                .as_ref()
+                .and_then(|fingerprints| fingerprints.record(&self.client))
             {
-                return self.end(SessionEnd::Failed(error));
+                self.report(event);
             }
             if self.group.is_none() {
                 self.server.admit_only(self.client.address().ip());
