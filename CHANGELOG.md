@@ -2,7 +2,7 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
-## [0.9.0] - 2026-11-04
+## [0.8.5] - 2026-11-04
 
 ### Added
 
@@ -858,7 +858,7 @@ The first public release, an early alpha.
 - Now Playing works with Spotify and Music only.
 - The prebuilt app needs macOS 26 (Tahoe) or later.
 
-[0.9.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.9.0
+[0.8.5]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.8.5
 [0.8.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.8.0
 [0.7.1]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.1
 [0.7.0]: https://github.com/yassersutojoyo/audiosync/releases/tag/v0.7.0
