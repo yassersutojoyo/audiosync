@@ -583,6 +583,18 @@ mod tests {
     }
 
     #[test]
+    fn labels_and_the_empty_list_read_as_in_the_apps() {
+        for line in [
+            "  masterVolume: \"Master Volume\",",
+            "  source: \"Audio Source\",",
+            "  sourceInputs: \"Input Devices\",",
+            "  noSpeakers: \"No speakers found\",",
+        ] {
+            assert_eq!(line_with(line.trim()), line);
+        }
+    }
+
+    #[test]
     fn the_icons_are_png_of_their_size() {
         for (icon, size) in [(ICON_180, 180u32), (ICON_512, 512)] {
             assert_eq!(&icon[..8], b"\x89PNG\r\n\x1a\n");
