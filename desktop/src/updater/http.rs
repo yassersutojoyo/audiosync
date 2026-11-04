@@ -1,7 +1,203 @@
+//! One HTTP/1.1 GET over a stream the caller opened: the Linux updater's
+//! fetch, since Linux has no system HTTP stack such as WinHTTP (spec S424).
+#![cfg_attr(windows, allow(dead_code))]
+
+use std::io::{self, Read, Write};
+use std::time::Instant;
+
+use super::fetch::{FetchError, Sink, Target, redirect_target};
+
+/// The most bytes a header block or a chunk-size line may take.
+const MAX_HEAD: usize = 64 * 1024;
+
+/// One request for `target` on `stream`: the next URL for a redirect,
+/// `None` once the body went to `sink`. Past `deadline` the read fails.
+pub fn get_on<S: Read + Write>(
+    stream: &mut S,
+    target: &Target,
+    user_agent: &str,
+    deadline: Option<Instant>,
+    sink: &mut Sink<'_>,
+) -> Result<Option<String>, FetchError> {
+    let host = if target.port == 443 {
+        target.host.clone()
+    } else {
+        format!("{}:{}", target.host, target.port)
+    };
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {user_agent}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n",
+        target.path
+    );
+    stream
+        .write_all(request.as_bytes())
+        .and_then(|()| stream.flush())
+        .map_err(failed)?;
+    let mut reader = Reader {
+        stream,
+        buffer: Vec::new(),
+        deadline,
+    };
+    let head = reader.until(b"\r\n\r\n", "the answer ended in its headers")?;
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| {
+            let mut parts = line.splitn(3, ' ');
+            if !parts.next()?.starts_with("HTTP/1.") {
+                return None;
+            }
+            parts.next()?.parse::<u16>().ok()
+        })
+        .ok_or_else(|| fail("not an HTTP answer"))?;
+    let (mut length, mut chunked, mut location) = (None, false, None);
+    for line in lines {
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim();
+        match name.trim().to_ascii_lowercase().as_str() {
+            "content-length" => {
+                length = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| fail("a Content-Length that isn't a number"))?,
+                );
+            }
+            "transfer-encoding" => chunked = value.to_ascii_lowercase().contains("chunked"),
+            "location" => location = Some(value.to_owned()),
+            _ => {}
+        }
+    }
+    if matches!(status, 301 | 302 | 303 | 307 | 308) {
+        let location = location.ok_or_else(|| fail("a redirect without a Location"))?;
+        return redirect_target(target, &location)
+            .map(Some)
+            .ok_or_else(|| fail(&format!("a redirect to {location}, not HTTPS")));
+    }
+    if status != 200 {
+        return Err(FetchError::Status(status));
+    }
+    if chunked {
+        reader.chunked(sink)?;
+    } else if let Some(length) = length {
+        reader.sized(length, sink)?;
+    } else {
+        reader.rest(sink)?;
+    }
+    Ok(None)
+}
+
+fn fail(why: &str) -> FetchError {
+    FetchError::Failed(why.to_owned())
+}
+
+fn failed(error: io::Error) -> FetchError {
+    FetchError::Failed(error.to_string())
+}
+
+struct Reader<'a, S> {
+    stream: &'a mut S,
+    buffer: Vec<u8>,
+    deadline: Option<Instant>,
+}
+
+impl<S: Read> Reader<'_, S> {
+    /// Reads more into the buffer; false at the end of the stream.
+    fn fill(&mut self) -> Result<bool, FetchError> {
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(fail("the appcast is over 30 s"));
+        }
+        let mut chunk = [0u8; 16 * 1024];
+        loop {
+            match self.stream.read(&mut chunk) {
+                Ok(read) => {
+                    self.buffer.extend_from_slice(&chunk[..read]);
+                    return Ok(read > 0);
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(failed(error)),
+            }
+        }
+    }
+
+    /// The text up to `end`, which is taken off the buffer with it.
+    fn until(&mut self, end: &[u8], short: &str) -> Result<String, FetchError> {
+        let mut searched = 0;
+        loop {
+            if let Some(at) = self.buffer[searched..]
+                .windows(end.len())
+                .position(|window| window == end)
+            {
+                let at = searched + at;
+                let text = String::from_utf8_lossy(&self.buffer[..at]).into_owned();
+                self.buffer.drain(..at + end.len());
+                return Ok(text);
+            }
+            if self.buffer.len() > MAX_HEAD {
+                return Err(fail("an answer line over 64 KiB"));
+            }
+            searched = self.buffer.len().saturating_sub(end.len() - 1);
+            if !self.fill()? {
+                return Err(fail(short));
+            }
+        }
+    }
+
+    /// Hands the buffered bytes to `sink`, at most `limit` of them.
+    fn pass(&mut self, limit: u64, sink: &mut Sink<'_>) -> Result<u64, FetchError> {
+        let count = usize::try_from(limit)
+            .unwrap_or(usize::MAX)
+            .min(self.buffer.len());
+        if count > 0 && !sink(&self.buffer[..count]) {
+            return Err(FetchError::Stopped);
+        }
+        self.buffer.drain(..count);
+        Ok(count as u64)
+    }
+
+    fn sized(&mut self, mut left: u64, sink: &mut Sink<'_>) -> Result<(), FetchError> {
+        loop {
+            left -= self.pass(left, sink)?;
+            if left == 0 {
+                return Ok(());
+            }
+            if !self.fill()? {
+                return Err(fail("the body ended short of its length"));
+            }
+        }
+    }
+
+    fn rest(&mut self, sink: &mut Sink<'_>) -> Result<(), FetchError> {
+        loop {
+            self.pass(u64::MAX, sink)?;
+            if !self.fill()? {
+                return Ok(());
+            }
+        }
+    }
+
+    fn chunked(&mut self, sink: &mut Sink<'_>) -> Result<(), FetchError> {
+        let short = "the chunked body ended early";
+        loop {
+            let line = self.until(b"\r\n", short)?;
+            let size = line.split(';').next().unwrap_or("").trim();
+            let size = u64::from_str_radix(size, 16).map_err(|_| fail("a bad chunk size"))?;
+            if size == 0 {
+                return Ok(());
+            }
+            self.sized(size, sink)?;
+            if !self.until(b"\r\n", short)?.is_empty() {
+                return Err(fail("a chunk longer than its size"));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::io::{self, Read, Write};
-
     use super::*;
 
     /// Answers with `answer` a few bytes per read and keeps what was written.

@@ -29,6 +29,7 @@ pub enum FetchError {
 pub type Sink<'a> = dyn FnMut(&[u8]) -> bool + 'a;
 
 /// Fills the buffer within `wait` when given; returns the count, 0 at the end.
+#[cfg_attr(not(windows), allow(dead_code))]
 type Read<'a> = dyn FnMut(&mut [u8], Option<Duration>) -> Result<usize, FetchError> + 'a;
 
 pub trait Fetch: Send + Sync {
@@ -86,8 +87,8 @@ pub fn redirect_target(from: &Target, location: &str) -> Option<String> {
 }
 
 /// The user agent, such as `AudioSync/0.8.0 (Windows; x64)`.
-pub fn user_agent(version: &str, arch: &str) -> String {
-    format!("AudioSync/{version} (Windows; {arch})")
+pub fn user_agent(os: &str, version: &str, arch: &str) -> String {
+    format!("AudioSync/{version} ({os}; {arch})")
 }
 
 /// Collects an appcast through `fetch`, refusing more than [`MAX_APPCAST`]
@@ -114,6 +115,7 @@ pub fn appcast(fetch: &dyn Fetch, url: &str) -> Result<Vec<u8>, FetchError> {
 
 /// Reads a body to its end, by `deadline` when given: a per-read timeout
 /// alone lets a trickling server stretch the whole body.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn read_body(
     deadline: Option<Instant>,
     now: &dyn Fn() -> Instant,
@@ -165,6 +167,47 @@ fn follow(
     Err(FetchError::Failed("more than 5 redirects".to_owned()))
 }
 
+/// HTTPS through OpenSSL (native-tls, which the Cast sender already links)
+/// and [`super::http`], with the limits of spec S294 (spec S424).
+#[cfg(target_os = "linux")]
+pub struct Tls {
+    pub user_agent: String,
+}
+
+#[cfg(target_os = "linux")]
+impl Fetch for Tls {
+    fn get(&self, url: &str, kind: Kind, sink: &mut Sink<'_>) -> Result<(), FetchError> {
+        use std::net::{TcpStream, ToSocketAddrs};
+        let deadline = (kind == Kind::Appcast).then(|| Instant::now() + APPCAST_TIMEOUT);
+        let connector = native_tls::TlsConnector::new()
+            .map_err(|error| FetchError::Failed(format!("TLS: {error}")))?;
+        follow(url, deadline, &Instant::now, &mut |url, left| {
+            let target = https_target(url)
+                .ok_or_else(|| FetchError::Failed(format!("{url} isn't HTTPS")))?;
+            let failed = |error: &dyn std::fmt::Display| {
+                FetchError::Failed(format!("{}: {error}", target.host))
+            };
+            let address = (target.host.as_str(), target.port)
+                .to_socket_addrs()
+                .map_err(|error| failed(&error))?
+                .next()
+                .ok_or_else(|| failed(&"no address"))?;
+            let connect = left.map_or(CONNECT_TIMEOUT, |left| left.min(CONNECT_TIMEOUT));
+            let tcp =
+                TcpStream::connect_timeout(&address, connect).map_err(|error| failed(&error))?;
+            let wait = Some(left.map_or(STALL_TIMEOUT, |left| left.min(STALL_TIMEOUT)));
+            tcp.set_read_timeout(wait)
+                .and_then(|()| tcp.set_write_timeout(wait))
+                .map_err(|error| failed(&error))?;
+            let mut stream = connector
+                .connect(&target.host, tcp)
+                .map_err(|error| failed(&error))?;
+            super::http::get_on(&mut stream, &target, &self.user_agent, deadline, &mut *sink)
+        })
+    }
+}
+
+#[cfg(windows)]
 pub struct WinHttp {
     pub user_agent: String,
     /// Also plain `http://127.0.0.1:<port>` URLs, for the loopback test's
@@ -172,6 +215,7 @@ pub struct WinHttp {
     pub plain_loopback: bool,
 }
 
+#[cfg(windows)]
 impl Fetch for WinHttp {
     fn get(&self, url: &str, kind: Kind, sink: &mut Sink<'_>) -> Result<(), FetchError> {
         winhttp::get(&self.user_agent, self.plain_loopback, url, kind, sink)
@@ -179,6 +223,7 @@ impl Fetch for WinHttp {
 }
 
 /// A plain `http://127.0.0.1:<port>/path` URL's target.
+#[cfg(windows)]
 fn loopback_target(url: &str) -> Option<Target> {
     let rest = url.strip_prefix("http://127.0.0.1:")?;
     let (port, path) = rest.split_at(rest.find('/')?);
@@ -189,6 +234,7 @@ fn loopback_target(url: &str) -> Option<Target> {
     })
 }
 
+#[cfg(windows)]
 mod winhttp {
     use std::ffi::c_void;
 
@@ -492,7 +538,7 @@ pub mod tests {
         assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(15));
         assert_eq!(STALL_TIMEOUT, Duration::from_secs(30));
         assert_eq!(
-            user_agent("0.8.0", "arm64"),
+            user_agent("Windows", "0.8.0", "arm64"),
             "AudioSync/0.8.0 (Windows; arm64)"
         );
 

@@ -1,6 +1,7 @@
-//! The Windows updater (spec section 19): checks the appcast the Mac reads,
-//! asks first, then downloads, verifies, unzips and swaps the exe on a
-//! worker thread, and relaunches only on the user's click.
+//! The Windows and Linux updater (spec section 19): checks the appcast the
+//! Mac reads, asks first, then downloads, verifies, unzips and swaps the exe
+//! (on Linux the AppImage, spec S424) on a worker thread, and relaunches
+//! only on the user's click.
 
 pub mod appcast;
 pub mod appimage;
@@ -19,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 
-use appcast::{Arch, Update};
+use appcast::{Arch, Os, Update};
 use flow::{Checked, Env, Installed};
 use relaunch::Start;
 use version::Version;
@@ -208,6 +209,15 @@ impl Updater {
     /// and shows Restart Now again.
     pub fn check(&mut self, trigger: Trigger) {
         self.env.log.log(|| format!("updater: {trigger:?} check"));
+        if self.env.not_appimage {
+            self.env
+                .log
+                .log(|| "updater: not started from an AppImage, nothing fetched".to_owned());
+            if trigger == Trigger::Manual {
+                self.set_notice(Some(UpdaterNotice::NotAppImage));
+            }
+            return;
+        }
         if let Some((version, _)) = &self.swapped {
             self.env
                 .log
@@ -542,7 +552,7 @@ impl Updater {
         if self.work != Work::Idle {
             return;
         }
-        let exe = self.env.install_dir.join(archive::EXE_NAME);
+        let exe = self.env.install_dir.join(&self.env.exe_name);
         self.work = Work::Restarting;
         let env = self.env.clone();
         let sender = self.sender.clone();
@@ -668,7 +678,7 @@ impl Updater {
         let Some((_, swapped)) = &self.swapped else {
             return polled.record_changed;
         };
-        if self.env.install_dir.join(archive::EXE_NAME).exists() {
+        if self.env.install_dir.join(&self.env.exe_name).exists() {
             return polled.record_changed;
         }
         let undone = undo(&self.env, swapped);
@@ -773,24 +783,41 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
         }
         return None;
     }
-    let install_dir = install_dir()?;
+    let os = Os::own();
     let arch = Arch::own();
+    // A Linux copy updates the AppImage it was started from, in place.
+    let appimage = appimage::appimage_path(std::env::var_os("APPIMAGE"));
+    let not_appimage = os == Os::Linux && appimage.is_none();
+    let (install_dir, exe_name) = match appimage {
+        Some(found) if os == Os::Linux => found,
+        _ => (install_dir()?, archive::EXE_NAME.to_owned()),
+    };
     let running = running_version(env!("CARGO_PKG_VERSION"), &log)?;
     let system = crate::platform::windows_version()
         .map(|v| Version::from_parts(&[v.major.into(), v.minor.into(), v.build.into()]))
         .unwrap_or_else(|| Version::from_parts(&[10, 0, 22000]));
     let temp_root = std::env::temp_dir();
-    flow::remove_leftovers(&install_dir, &temp_root, &log);
+    if !not_appimage {
+        flow::remove_leftovers(&install_dir, &exe_name, &temp_root, &log);
+    }
+    let user_agent = fetch::user_agent(os.name(), env!("CARGO_PKG_VERSION"), arch.name());
+    #[cfg(windows)]
+    let fetch = Arc::new(fetch::WinHttp {
+        user_agent,
+        plain_loopback: false,
+    });
+    #[cfg(not(windows))]
+    let fetch = Arc::new(fetch::Tls { user_agent });
     Some(Updater::new(Env {
         feed: FEED_URL.to_owned(),
-        fetch: Arc::new(fetch::WinHttp {
-            user_agent: fetch::user_agent(env!("CARGO_PKG_VERSION"), arch.name()),
-            plain_loopback: false,
-        }),
+        fetch,
         files: Arc::new(files::RealFiles),
         temp_root,
         install_dir,
+        exe_name,
+        not_appimage,
         key: signature::key(signature::RELEASE_KEY)?,
+        os,
         arch,
         running,
         system,

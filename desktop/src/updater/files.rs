@@ -39,6 +39,9 @@ impl Files for RealFiles {
     fn create(&self, path: &Path, exclusive: bool) -> io::Result<Box<dyn Sink>> {
         let mut options = OpenOptions::new();
         options.write(true);
+        // The new AppImage runs as it is (spec S424).
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o755);
         if exclusive {
             options.create_new(true);
         } else {
@@ -60,6 +63,20 @@ impl Files for RealFiles {
     }
 }
 
+/// A rename, then the folder flushed so the rename is on disk.
+#[cfg(not(windows))]
+fn move_write_through(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
+    if !replace && fs::symlink_metadata(to).is_ok() {
+        return Err(io::Error::from(io::ErrorKind::AlreadyExists));
+    }
+    fs::rename(from, to)?;
+    if let Some(dir) = to.parent() {
+        File::open(dir)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn move_write_through(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Storage::FileSystem::{

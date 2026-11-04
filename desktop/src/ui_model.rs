@@ -599,6 +599,9 @@ pub enum UpdaterNotice {
     RelaunchFailed,
     /// Windows security removed or blocked an update file (spec S315).
     Blocked,
+    /// A Linux copy not started from an AppImage, which only the release
+    /// page updates (spec S424).
+    NotAppImage,
 }
 
 /// A version the updater stopped offering at launch (spec S316), saved in
@@ -645,7 +648,8 @@ impl UpdaterNotice {
             | UpdaterNotice::Blocked
             | UpdaterNotice::BadSignature
             | UpdaterNotice::BrokenDownload
-            | UpdaterNotice::Failed => &[OpenReleasePage],
+            | UpdaterNotice::Failed
+            | UpdaterNotice::NotAppImage => &[OpenReleasePage],
             UpdaterNotice::Unreachable
             | UpdaterNotice::DownloadFailed
             | UpdaterNotice::DiskFull

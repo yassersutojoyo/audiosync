@@ -1,8 +1,36 @@
+//! The Linux AppImage (spec S424): the file the update replaces, and the
+//! check that a download is an AppImage for this arch.
+
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+use super::appcast::Arch;
+
+/// The folder and file name of the AppImage in `appimage`, the `APPIMAGE`
+/// variable the AppImage runtime sets to its own absolute path; `None` when
+/// this copy wasn't started from one.
+pub fn appimage_path(appimage: Option<OsString>) -> Option<(PathBuf, String)> {
+    let path = PathBuf::from(appimage?);
+    if !path.to_string_lossy().starts_with('/') {
+        return None;
+    }
+    let name = path.file_name()?.to_str()?.to_owned();
+    Some((path.parent()?.to_path_buf(), name))
+}
+
+/// Whether `bytes` is a 64-bit little-endian ELF for `arch` that carries
+/// the AppImage type 2 mark (`AI` and 2 at offset 8).
+pub fn fits(bytes: &[u8], arch: Arch) -> bool {
+    bytes.len() >= 64
+        && bytes.starts_with(b"\x7fELF")
+        && bytes[4] == 2
+        && bytes[5] == 1
+        && bytes[8..11] == *b"AI\x02"
+        && u16::from_le_bytes([bytes[18], bytes[19]]) == arch.elf_machine()
+}
+
 #[cfg(test)]
 pub mod tests {
-    use std::ffi::OsString;
-    use std::path::PathBuf;
-
     use super::*;
 
     /// A 64-bit little-endian ELF header for `machine` with the AppImage

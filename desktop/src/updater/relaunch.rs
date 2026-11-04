@@ -4,17 +4,21 @@
 
 use std::ffi::OsString;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+#[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
     CreateEventW, EVENT_MODIFY_STATE, OpenEventW, OpenProcess, PROCESS_SYNCHRONIZE, ResetEvent,
     SetEvent, WaitForMultipleObjects, WaitForSingleObject,
 };
+#[cfg(windows)]
 use windows::core::PCWSTR;
 
 pub const MARKER: &str = "--relaunched-from";
@@ -116,6 +120,7 @@ pub fn marked_parent(args: impl IntoIterator<Item = OsString>) -> Option<u32> {
 
 /// Waits at most `timeout` for process `pid` to end; true once it has (or
 /// it can't be opened, which means it is gone).
+#[cfg(windows)]
 pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
     // SAFETY: a plain open of a process id; the handle is closed below.
     let Ok(process) = (unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) }) else {
@@ -129,13 +134,56 @@ pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
     ended
 }
 
+/// Waits at most `timeout` for process `pid` to end; true once it has, or
+/// only its zombie is left for its parent to reap.
+#[cfg(not(windows))]
+pub fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
+    let gone = || match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(_) => true,
+        Ok(stat) => stat
+            .rsplit_once(')')
+            .is_none_or(|(_, rest)| matches!(rest.trim_start().chars().next(), Some('Z' | 'X'))),
+    };
+    let deadline = Instant::now() + timeout;
+    while !gone() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
 /// The name of the start signal of a new instance whose old process is `old`.
+#[cfg(windows)]
 pub fn signal_name(old: u32) -> String {
     format!("Local\\AudioSync-update-started-{old}")
 }
 
+/// Linux: the start signal of a new instance whose old process is `old`, a
+/// file in `dir` (spec S424).
+#[cfg_attr(windows, allow(dead_code))]
+pub fn signal_file(dir: &Path, old: u32) -> PathBuf {
+    dir.join(format!("AudioSync-update-started-{old}"))
+}
+
+/// The user's runtime folder, which only the user can write to.
+#[cfg(not(windows))]
+fn signal_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from)
+}
+
+/// Makes the start signal the old process `old` waits for; false when that
+/// process is gone.
+#[cfg(not(windows))]
+pub fn signal_started(old: u32) -> bool {
+    !wait_for_exit(old, Duration::ZERO)
+        && std::fs::File::create(signal_file(&signal_dir(), old)).is_ok()
+}
+
 /// Sets the start signal the old process `old` waits on; false when there
 /// is none (that process is gone).
+#[cfg(windows)]
 pub fn signal_started(old: u32) -> bool {
     let name = wide(&signal_name(old));
     // SAFETY: a NUL-terminated name that outlives the call.
@@ -150,6 +198,7 @@ pub fn signal_started(old: u32) -> bool {
     set
 }
 
+#[cfg(windows)]
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
@@ -188,9 +237,51 @@ impl Launch for ProcessLaunch {
     }
 }
 
+/// Linux: [`start_and_watch`] for the signal file named after `own`.
+#[cfg(not(windows))]
+pub fn start_and_wait(command: &mut Command, own: u32, wait: Duration) -> Start {
+    start_and_watch(command, &signal_file(&signal_dir(), own), wait)
+}
+
+/// Runs `command` as a child process and waits up to `wait` for the file
+/// `signal` to appear, which it takes; a child that neither makes it nor
+/// ends in time is ended. A file left from an earlier try is removed first.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn start_and_watch(command: &mut Command, signal: &Path, wait: Duration) -> Start {
+    let _ = std::fs::remove_file(signal);
+    let mut child = match command.stdin(Stdio::null()).spawn() {
+        Ok(child) => child,
+        Err(error) => return Start::Failed(error),
+    };
+    let pid = child.id();
+    let deadline = Instant::now() + wait;
+    loop {
+        if std::fs::remove_file(signal).is_ok() {
+            return Start::Signalled { pid };
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            // A child that signals and then ends counts as started.
+            if std::fs::remove_file(signal).is_ok() {
+                return Start::Signalled { pid };
+            }
+            return Start::Exited {
+                pid,
+                code: status.code(),
+            };
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Start::TimedOut { pid };
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Runs `command` as a child process, never through the shell, and waits up
 /// to `wait` for the start signal named after `own`; a child that neither
 /// signals nor ends in time is ended.
+#[cfg(windows)]
 pub fn start_and_wait(command: &mut Command, own: u32, wait: Duration) -> Start {
     let name = wide(&signal_name(own));
     // SAFETY: a NUL-terminated name that outlives the call.
@@ -426,8 +517,20 @@ pub mod tests {
 
     /// A command that runs `script` through the platform's shell.
     fn shell(script: &str) -> Command {
-        let mut command = Command::new(if cfg!(windows) { "cmd.exe" } else { "sh" });
-        command.args([if cfg!(windows) { "/c" } else { "-c" }, script]);
+        #[cfg(windows)]
+        let command = {
+            use std::os::windows::process::CommandExt;
+            // cmd.exe reads its own quotes, not the escaped ones `arg` writes.
+            let mut command = Command::new("cmd.exe");
+            command.arg("/c").raw_arg(script);
+            command
+        };
+        #[cfg(not(windows))]
+        let command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", script]);
+            command
+        };
         command
     }
 
