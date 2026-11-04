@@ -2,3 +2,17 @@
 # so no test covers them yet. One per line: the clause ID, a space, the reason.
 # tests/spec_coverage.rs fails if a clause listed here gains a `// covers:`
 # test, so this list only shrinks. "Partly done" names what already exists.
+C119 Device authentication: the sender does not send the challenge yet.
+C120 Device authentication: the sender does not send the challenge yet.
+C121 Device authentication: the sender does not send the challenge yet.
+C122 Device authentication: the sender does not send the challenge yet.
+C123 Device authentication: the sender does not send the challenge yet.
+C124 Device authentication: the sender does not send the challenge yet.
+C125 Device authentication: the sender does not send the challenge yet.
+C126 Device authentication: the sender does not send the challenge yet.
+C127 Device authentication: the sender does not send the challenge yet.
+C128 Device authentication: the sender does not send the challenge yet.
+C129 Device authentication: the sender does not send the challenge yet.
+C130 Device authentication: the sender does not send the challenge yet.
+C131 Device authentication: the sender does not send the challenge yet.
+C132 Device authentication: the sender does not send the challenge yet.
