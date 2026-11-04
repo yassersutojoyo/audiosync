@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AudioSync: a free multiroom Airfoil alternative for Mac and Windows</title>
+<title>AudioSync: a free multiroom Airfoil alternative for Mac, Windows and Linux</title>
 <link rel="canonical" href="https://getaudiosync.vercel.app/">
-<meta name="description" content="Free, open-source multiroom audio for Mac and Windows, with Linux on the way. Play your computer's sound on AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync. An Airfoil alternative.">
+<meta name="description" content="Free, open-source multiroom audio for Mac, Windows and Linux. Play your computer's sound on AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync. An Airfoil alternative.">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#f1f7f6" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
@@ -21,16 +21,16 @@
 
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="AudioSync">
-<meta property="og:title" content="AudioSync: a free multiroom Airfoil alternative for Mac and Windows">
-<meta property="og:description" content="Multiroom audio for your Mac or Windows PC: AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync instead of echoing. Free and open source.">
+<meta property="og:title" content="AudioSync: a free multiroom Airfoil alternative for Mac, Windows and Linux">
+<meta property="og:description" content="Multiroom audio for your Mac, Windows PC or Linux machine: AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync instead of echoing. Free and open source.">
 <meta property="og:image" content="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/social-preview.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
 <meta property="og:image:alt" content="The AudioSync logo and tagline beside the app's main window">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="AudioSync: a free multiroom Airfoil alternative for Mac and Windows">
-<meta name="twitter:description" content="Multiroom audio for your Mac or Windows PC: AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync instead of echoing. Free and open source.">
+<meta name="twitter:title" content="AudioSync: a free multiroom Airfoil alternative for Mac, Windows and Linux">
+<meta name="twitter:description" content="Multiroom audio for your Mac, Windows PC or Linux machine: AirPlay and Bluetooth speakers plus a Google Cast speaker at once, in sync instead of echoing. Free and open source.">
 <meta name="twitter:image" content="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/social-preview.png">
 <meta name="twitter:image:alt" content="The AudioSync logo and tagline beside the app's main window">
 
@@ -39,8 +39,8 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "AudioSync",
-  "description": "A free, open-source multiroom audio app for Mac and Windows and an Airfoil alternative. It plays system, app or input audio on AirPlay, Google Cast, Bluetooth and other local outputs at the same time, in sync.",
-  "operatingSystem": "macOS, Windows",
+  "description": "A free, open-source multiroom audio app for Mac, Windows and Linux and an Airfoil alternative. It plays system, app or input audio on AirPlay, Google Cast, Bluetooth and other local outputs at the same time, in sync.",
+  "operatingSystem": "macOS, Windows, Linux",
   "applicationCategory": "MultimediaApplication",
   "offers": {
     "@type": "Offer",
@@ -276,7 +276,6 @@
     background: var(--code-bg); border: 1px solid var(--line); font-size: .9rem; line-height: 1.6;
   }
   pre code { font-size: inherit; }
-  .soon { margin-top: 20px; color: var(--text-2); text-align: center; }
   @media (max-width: 760px) { .get { grid-template-columns: minmax(0, 1fr); } }
 
   /* Footer */
@@ -324,7 +323,7 @@
 <main id="main">
   <div class="hero">
     <div class="wrap">
-      <p class="tag">Free and open source &middot; for macOS 15 and Windows 11</p>
+      <p class="tag">Free and open source &middot; for macOS 15, Windows 11 and Linux</p>
       <h1>Every speaker in the house, <span>on the same beat.</span></h1>
       <p class="lede">AudioSync plays your Mac's or Windows PC's audio on AirPlay speakers, Google Cast speakers and the computer's own outputs, Bluetooth included, all at once. It lines them up, so you hear one song instead of an echo. Think of it as a free Airfoil alternative that does less, on purpose.</p>
       <div class="actions">
@@ -529,6 +528,17 @@
 <pre><code>irm https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install.ps1 | iex</code></pre>
         </div>
         <div class="card reveal">
+          <img class="appicon" src="/icon-192.png" width="72" height="72" alt="">
+          <h3>Download for Linux</h3>
+          <p>For x86_64 or aarch64, with glibc 2.39 or newer and PipeWire. Get the AppImage for your machine, make it executable and run it. It updates itself. There's a .deb for amd64 and arm64 too.</p>
+          <a class="btn btn-main" href="https://github.com/yassersutojoyo/audiosync/releases/latest">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
+            Latest release
+          </a>
+          <p>Or, from a terminal. It checks the AppImage and puts it in ~/.local/bin with a menu entry, no sudo:</p>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/scripts/install-linux.sh | bash</code></pre>
+        </div>
+        <div class="card reveal">
           <h3>Build from source</h3>
           <p>You'll need:</p>
           <ul>
@@ -542,7 +552,6 @@ cd audiosync
           <p>The first run needs a network connection and takes a while. After that, <code>./build.sh</code> is all you need. <a href="https://github.com/yassersutojoyo/audiosync/blob/main/docs/DEVELOPMENT.md">The development notes</a> have the details.</p>
         </div>
       </div>
-      <p class="soon reveal">Linux: an x86_64 AppImage that captures and plays through PipeWire. Not released yet.</p>
     </div>
   </section>
 </main>
