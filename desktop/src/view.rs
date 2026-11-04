@@ -6822,6 +6822,8 @@ mod tests {
         draw_frames();
         fake.read(Some(track("Spotify.exe", title, "Band", true)));
         app.poll();
+        // The track read the host's animation setting, which CI runners have off.
+        app.main.global::<Motion>().set_on(true);
         draw_frames();
         let text = || {
             ElementHandle::find_by_accessible_label(&app.main, title)
@@ -8989,17 +8991,26 @@ mod tests {
     // covers: S221
     #[test]
     fn a_click_outside_every_control_applies_each_typed_delay_and_closes_every_sync_control() {
-        // Between the wordmark and the streaming switch, under the left
-        // column's cards, then on the blank part of a row in each speaker
-        // section, which the row's own TouchArea takes.
-        for (x, y) in [
-            (500.0, 60.0),
-            (100.0, 700.0),
-            (600.0, 162.0),
-            (600.0, 389.0),
+        use i_slint_backend_testing::ElementHandle;
+        // Between the wordmark and the streaming switch, in the gap under the
+        // left column's Equalizer card (None: found in the layout, since the
+        // fonts set how tall the cards are), then on the blank part of a row in each speaker section, which the
+        // row's own TouchArea takes.
+        for place in [
+            Some((500.0, 60.0)),
+            None,
+            Some((600.0, 162.0)),
+            Some((600.0, 389.0)),
         ] {
             let app = app_over(MockBackend::new());
             draw_frames();
+            let (x, y) = place.unwrap_or_else(|| {
+                let card =
+                    ElementHandle::find_by_element_id(&app.main, "MainWindow::equalizer-card")
+                        .next()
+                        .expect("the Equalizer card");
+                (100.0, card.absolute_position().y + card.size().height + 4.0)
+            });
             type_into_two_rows(&app, "abc");
             app.main.invoke_airplay_delay_edited("2100".into());
             click(app.main.window(), x, y);
