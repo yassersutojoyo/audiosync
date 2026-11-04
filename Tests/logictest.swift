@@ -16923,5 +16923,18 @@ do {
           "guide: auto-connect says when a launch streams, and Rename and Hide name the right-click menu, as on Windows")
 }
 
+// MARK: Equalizer band keyboard focus and accessibility role (VerticalSlider)
+do {
+    let equalizer = (try? String(contentsOfFile: "Sources/AudioSync/EqualizerWindow.swift", encoding: .utf8)) ?? ""
+    let bandSlider = equalizer.components(separatedBy: "struct VerticalSlider").dropFirst().first ?? ""
+    func inBandSlider(_ needle: String) -> Int { bandSlider.components(separatedBy: needle).count - 1 }
+    check(inBandSlider(".focused($focused)") == 1 && inBandSlider("click.clicked = true") == 1,
+          "equalizer band: a click gives the band keyboard focus, with keyboard navigation off too")
+    check(inBandSlider(".focusable(interactions: click.clicked ? .edit : .activate)") == 1,
+          "equalizer band: Tab reaches a band it was not clicked into only with keyboard navigation on")
+    check(inBandSlider(".accessibilityRepresentation {") == 1 && inBandSlider("Slider(value:") == 1,
+          "equalizer band: the accessibility API sees a slider, not an unknown element")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

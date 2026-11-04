@@ -86,6 +86,11 @@ private final class EqualizerPanel: NSWindow {
 
 private let accent = Brand.teal
 
+/// Set by a click on a band, which then takes keyboard focus as a text field does.
+private final class SliderClick: ObservableObject {
+    @Published var clicked = false
+}
+
 struct EqualizerView: View {
     @ObservedObject var model: EqualizerModel
     let askSave: () -> Void
@@ -191,12 +196,14 @@ struct EqualizerView: View {
 }
 
 /// A centered (−range…+range) vertical slider in 0.5 dB steps; double-click
-/// resets to 0. VoiceOver adjusts it like a slider, and once focused (Tab with
-/// keyboard navigation on) the arrow keys move it one step.
+/// resets to 0. VoiceOver adjusts it like a slider, and once focused (a click,
+/// or Tab with keyboard navigation on) the arrow keys move it one step.
 struct VerticalSlider: View {
     let value: Double
     let range: Double
     let onChange: (Double) -> Void
+    @StateObject private var click = SliderClick()
+    @FocusState private var focused: Bool
 
     static let step = 0.5
 
@@ -209,12 +216,20 @@ struct VerticalSlider: View {
 
     var body: some View {
         track
-            .focusable(interactions: .activate)   // keyboard navigation only, like a native slider
+            // Edit focus only after a click, so Tab reaches the bands only with keyboard navigation on.
+            .focusable(interactions: click.clicked ? .edit : .activate)
+            .focused($focused)
+            .onChange(of: click.clicked) { _, now in if now { focused = true } }
+            .onChange(of: focused) { _, now in if !now { click.clicked = false } }
             .onKeyPress(.upArrow) { nudge(1); return .handled }
             .onKeyPress(.downArrow) { nudge(-1); return .handled }
             .onKeyPress(.rightArrow) { nudge(1); return .handled }
             .onKeyPress(.leftArrow) { nudge(-1); return .handled }
-            .accessibilityElement(children: .ignore)
+            .accessibilityRepresentation {
+                Slider(value: Binding(get: { value }, set: { v in
+                    onChange((max(-range, min(range, v)) / Self.step).rounded() * Self.step)
+                }), in: -range...range, step: Self.step)
+            }
             .accessibilityAdjustableAction { direction in
                 switch direction {
                 case .increment: nudge(1)
@@ -253,6 +268,7 @@ struct VerticalSlider: View {
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { g in
+                if !click.clicked { click.clicked = true }
                 let v = Double((mid - g.location.y) / (h / 2 - 8)) * range
                 onChange((max(-range, min(range, v)) * 2).rounded() / 2)   // 0.5 dB steps
             })
