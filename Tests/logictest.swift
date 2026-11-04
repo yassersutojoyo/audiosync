@@ -7434,6 +7434,15 @@ do {
           "sources: an unplugged chosen input reads its remembered name, or Input Device, not connected")
     check(list(.app(bundleID: "com.spotify.client")).count == 4,
           "sources: a chosen app that is running is listed once")
+    // covers: S211
+    let unsortedInputs = [SourceList.Input(uid: "usb-2", name: "USB Mic", transport: kAudioDeviceTransportTypeUSB),
+                          SourceList.Input(uid: "mic-1", name: "MacBook Pro Microphone", transport: kAudioDeviceTransportTypeBuiltIn),
+                          SourceList.Input(uid: "usb-1", name: "usb mic", transport: kAudioDeviceTransportTypeUSB),
+                          SourceList.Input(uid: "line", name: "Audio Interface", transport: kAudioDeviceTransportTypeUSB)]
+    let sortedInputIDs = SourceList.entries(systemName: "All System Audio", apps: [], inputs: unsortedInputs,
+                                            chosen: .system, chosenAppName: { $0 }).map(\.id)
+    check(sortedInputIDs == ["", "input:line", "input:mic-1", "input:usb-1", "input:usb-2"],
+          "sources: inputs are listed by name, case-insensitively, the UID breaking ties", "\(sortedInputIDs)")
 
     // A Bluetooth headset's hands-free input switches it to call mode, so the
     // picker leaves it out; a Bluetooth LE, USB or built-in input stays.
@@ -7452,7 +7461,7 @@ do {
         SourceList.entries(systemName: "All System Audio", apps: [], inputs: headsetInputs, chosen: chosen,
                            chosenAppName: { $0 })
     }
-    check(headsetList(.system).map(\.id) == ["", "input:mic-1", "input:hearing:input", "input:usb-mic", "input:agg-wired"],
+    check(headsetList(.system).map(\.id) == ["", "input:hearing:input", "input:mic-1", "input:usb-mic", "input:agg-wired"],
           "sources: a Bluetooth hands-free input, or an aggregate with one, is left out; "
             + "Bluetooth LE, built-in, USB and other aggregate inputs stay",
           "\(headsetList(.system).map(\.id))")

@@ -555,7 +555,7 @@ enum SourceList {
     }
 
     /// The whole system first, then the apps by name, then the input devices
-    /// in Core Audio's order. The chosen app stays listed while it isn't
+    /// by name, the UID breaking ties. The chosen app stays listed while it isn't
     /// running (its name comes from `chosenAppName`), so the picker still
     /// says what will be captured; so does a chosen input device that is
     /// unplugged, listed last as `unpluggedInputName`, not connected.
@@ -585,6 +585,9 @@ enum SourceList {
         }
         var inputEntries = inputs.filter { leftOut($0) == nil }.map {
             Entry(id: AudioSource.input(uid: $0.uid).defaultsValue, name: $0.name, isInput: true)
+        }.sorted {
+            let order = $0.name.localizedCaseInsensitiveCompare($1.name)
+            return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
         }
         if case .input(let uid) = chosen {
             let plugged = inputs.first { $0.uid == uid }
