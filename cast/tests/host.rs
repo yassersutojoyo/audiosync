@@ -492,6 +492,10 @@ fn the_format_that_worked_is_tried_first_next_time() {
     wait_for(&host, Duration::from_secs(15), ended(A));
     plays_both.join();
 
+    // Each fake has a certificate of its own, which a host pins (C117).
+    let stored = host.memory().to_json();
+    assert!(host.shutdown());
+    let mut host = CastHost::new(DeviceMemory::from_json(&stored)).expect("worker");
     // FLAC refused now: the attempt ends, and the next one starts with WAV.
     let refuses_flac = FakeDevice::start(Behavior {
         on_load_of: Some(("audio/flac", OnLoad::Error("LOAD_FAILED", json!({})))),

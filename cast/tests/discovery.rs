@@ -758,6 +758,24 @@ fn a_record_from_another_instance_never_moves_a_listed_device() {
         );
     }
     assert_eq!(list.entries().len(), 1);
+
+    let moved = ServiceRecord {
+        addresses: vec![v4(11)],
+        ..record(
+            "a._googlecast._tcp.local.",
+            8009,
+            &[b"id=3f2a8c41d27e4b8f9a06c1d5e7f80b12"],
+        )
+    };
+    assert_eq!(
+        list.apply(BrowseEvent::Resolved(moved)),
+        ListEvent::Updated(key)
+    );
+    assert_eq!(
+        list.get(key).expect("listed").addresses,
+        [SocketAddr::new(v4(11), 8009)],
+        "its own instance moves it"
+    );
 }
 
 // covers: C116

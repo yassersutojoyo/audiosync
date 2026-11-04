@@ -6097,6 +6097,7 @@ fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
         CastProblem::TakenOver => P::TakenOver,
         CastProblem::ConnectionLost => P::ConnectionLost,
         CastProblem::SearchStopped => P::SearchStopped,
+        CastProblem::CertificateChanged => P::CertificateChanged,
     }
 }
 

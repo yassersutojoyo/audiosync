@@ -386,6 +386,8 @@ pub struct Responses {
     group_limit: Option<usize>,
     /// Frames the oldest response's queue dropped, over the session (C64).
     dropped: u64,
+    /// The address a single device's stream URL belongs to (C118).
+    owner: Option<IpAddr>,
 }
 
 impl Responses {
@@ -397,7 +399,18 @@ impl Responses {
             queue_frames,
             group_limit: None,
             dropped: 0,
+            owner: None,
         }
+    }
+
+    /// Whether a fetch of the stream from `from` may be served: for a
+    /// single device the first address to ask owns the URL (C118); a group
+    /// serves each of its addresses (C103).
+    pub fn claim(&mut self, from: IpAddr) -> bool {
+        if self.group_limit.is_some() {
+            return true;
+        }
+        *self.owner.get_or_insert(from) == from
     }
 
     /// Serves a group: one response per address, at most `limit` at once.
@@ -502,7 +515,7 @@ struct Shared {
     /// The pump's rate and block size, the same in every codec.
     pump_format: StreamFormat,
     route: Mutex<Route>,
-    allowed: Vec<IpAddr>,
+    allowed: Mutex<Vec<IpAddr>>,
     /// A group's records, read on every request so a handover or a new
     /// member is answered at once (C97, C103).
     group: Mutex<Option<GroupRecords>>,
@@ -536,7 +549,7 @@ impl Shared {
         // (C97), so a group's records alone decide.
         match lock(&self.group).clone() {
             Some(records) => records.allowed().contains(&from),
-            None => self.allowed.contains(&from),
+            None => lock(&self.allowed).contains(&from),
         }
     }
 }
@@ -546,7 +559,8 @@ impl Shared {
 pub struct StreamConfig {
     /// The local address of the channel to the device (C55).
     pub local_ip: IpAddr,
-    /// The device's known addresses; nobody else gets an answer (C58).
+    /// The address the channel to the device is connected to; nobody else
+    /// gets an answer (C58, C115).
     pub allowed: Vec<IpAddr>,
     pub format: StreamFormat,
 }
@@ -604,7 +618,7 @@ impl StreamServer {
                 format,
                 path: format!("/{token}.{}", format.extension()),
             }),
-            allowed: config.allowed,
+            allowed: Mutex::new(config.allowed),
             group: Mutex::new(None),
             artwork: Mutex::new(None),
             live: Mutex::new(Live {
@@ -691,10 +705,21 @@ impl StreamServer {
     }
 
     /// Answers whatever `records` hold at the time of each request, a
-    /// group's current addresses and its members' (C103) or a single
-    /// device's current addresses (C111), in place of the static list.
+    /// group's current addresses and its members' (C103), in place of the
+    /// static list.
     pub fn follow_group(&self, records: GroupRecords) {
         *lock(&self.shared.group) = Some(records);
+    }
+
+    /// Answers only `peer`, the address a new channel connected to, and
+    /// gives the URL to the next fetch from there when it moved (C115,
+    /// C118).
+    pub fn admit_only(&self, peer: IpAddr) {
+        let mut allowed = lock(&self.shared.allowed);
+        if *allowed != [peer] {
+            *allowed = vec![peer];
+            lock(&self.shared.live).responses.owner = None;
+        }
     }
 
     /// Serves a group: one response per source address, at most `limit`
@@ -999,6 +1024,10 @@ fn serve(mut stream: TcpStream, peer: SocketAddr, shared: Arc<Shared>) {
         (request.path == route.path).then_some(route.format)
     };
     if let Some(format) = stream_format {
+        if !lock(&shared.live).responses.claim(from) {
+            shared.report(ServerEvent::Refused { from, status: 403 });
+            return simple_response(&mut stream, "403 Forbidden", "");
+        }
         let token = request.path.trim_start_matches('/');
         let token = token.split('.').next().unwrap_or_default();
         shared.report(ServerEvent::Fetch {

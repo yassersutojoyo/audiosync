@@ -195,6 +195,9 @@ pub const CAST_ERROR_INTERNAL: i32 = 11;
 /// A connect failure with no address to try: a group waits for its records
 /// (C81), a single device counts toward the give-up (C80).
 pub const CAST_ERROR_NO_ADDRESS: i32 = 12;
+/// The device answered with another certificate than the one pinned for
+/// it, so the sender refused it (C117).
+pub const CAST_ERROR_CERTIFICATE: i32 = 13;
 
 /// A stream's format ([`AscCastEvent::format`]): live WAV.
 pub const CAST_FORMAT_WAV: i32 = 1;
@@ -673,6 +676,7 @@ fn session_code(error: &SessionError) -> i32 {
         SessionError::Media(error) => media_code(error),
         SessionError::Stream(error) => stream_code(error),
         SessionError::Internal => CAST_ERROR_INTERNAL,
+        SessionError::CertificateChanged { .. } => CAST_ERROR_CERTIFICATE,
     }
 }
 
@@ -2928,6 +2932,21 @@ mod tests {
         };
         assert_eq!(code(ConnectError::NoAddress), CAST_ERROR_NO_ADDRESS);
         assert_eq!(code(ConnectError::NoStatus), CAST_ERROR_CONNECT);
+    }
+
+    // CAST_SPEC: C117
+    #[test]
+    fn a_refused_certificate_ends_the_attempt_with_its_own_code() {
+        let (before, after) = (Fingerprint([1; 32]), Fingerprint([2; 32]));
+        let end = SessionEnd::Failed(SessionError::CertificateChanged { before, after });
+        let pending = ended_event(end);
+        assert_eq!(pending.reason, CAST_END_FAILED);
+        assert_eq!(pending.error, CAST_ERROR_CERTIFICATE);
+        assert!(
+            pending.detail.contains(&after.to_string()),
+            "{}",
+            pending.detail
+        );
     }
 
     #[test]

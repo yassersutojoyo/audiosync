@@ -421,6 +421,8 @@ pub enum CastProblem {
     TakenOver,
     ConnectionLost,
     SearchStopped,
+    /// It answered with another certificate than the one pinned for it.
+    CertificateChanged,
 }
 
 /// Why a speaker that is on can't play right now. Its row says so instead

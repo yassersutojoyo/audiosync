@@ -119,10 +119,13 @@ enum CastProblem: Equatable {
     case connectionLost
     /// It left the list when AudioSync's own search stopped, with no session to keep it.
     case searchStopped
+    /// It answered with another certificate than the one pinned for it (C117).
+    case certificateChanged
 }
 
 enum CastError: Equatable {
     case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, `internal`, noAddress
+    case certificate
     case other(Int32)
 
     init?(_ code: Int32) {
@@ -139,6 +142,7 @@ enum CastError: Equatable {
         case ASC_CAST_ERROR_ARTWORK: self = .artwork
         case ASC_CAST_ERROR_INTERNAL: self = .internal
         case ASC_CAST_ERROR_NO_ADDRESS: self = .noAddress
+        case ASC_CAST_ERROR_CERTIFICATE: self = .certificate
         default: self = .other(code)
         }
     }
@@ -164,6 +168,7 @@ enum CastEnd: Equatable {
         case .failed(.launch, _), .failed(.media, _): return .refused
         case .failed(.noFetch, _): return .blocked
         case .failed(.stream, _), .failed(.internal, _): return .connectionLost
+        case .failed(.certificate, _): return .certificateChanged
         case .failed: return .notResponding
         }
     }

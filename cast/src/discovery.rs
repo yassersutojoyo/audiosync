@@ -173,6 +173,8 @@ pub enum Skipped {
     NoAddress,
     /// The list is full of devices it keeps (C108).
     ListFull,
+    /// Another instance names a listed device's `id` (C116).
+    OtherInstance,
 }
 
 impl CastDevice {
@@ -284,6 +286,9 @@ pub struct Entry {
     pub addresses: Vec<SocketAddr>,
     pub online: bool,
     pub in_session: bool,
+    /// The address a device added by address was typed as; no record adds
+    /// another (C116).
+    typed: Option<SocketAddr>,
 }
 
 impl Entry {
@@ -412,6 +417,7 @@ impl DeviceList {
             addresses: vec![address],
             online: false,
             in_session: false,
+            typed: Some(address),
         });
         ListEvent::Added(key)
     }
@@ -501,6 +507,16 @@ impl DeviceList {
         let key = DeviceKey::Id(id);
         let fresh = device.socket_addresses();
         if let Some(entry) = self.get_mut(key) {
+            if (entry.device.as_ref())
+                .is_some_and(|known| !known.instance.eq_ignore_ascii_case(&device.instance))
+            {
+                return ListEvent::Skipped(Skipped::OtherInstance);
+            }
+            if entry.typed.is_some() {
+                entry.device = Some(device);
+                entry.online = true;
+                return ListEvent::Updated(key);
+            }
             if device.kind == DeviceKind::Group {
                 entry.addresses = fresh;
                 entry.device = Some(device);
@@ -531,9 +547,6 @@ impl DeviceList {
                 unreachable!("position matched a manual key");
             };
             entry.key = key;
-            entry.addresses = fresh;
-            entry.addresses.retain(|&a| a != from);
-            entry.addresses.insert(0, from);
             entry.device = Some(device);
             entry.online = true;
             return ListEvent::Identified { from, id };
@@ -556,6 +569,7 @@ impl DeviceList {
             addresses: fresh,
             online: true,
             in_session: false,
+            typed: None,
         });
         match dropped {
             Some(dropped) => ListEvent::Displaced {

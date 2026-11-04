@@ -394,6 +394,9 @@ pub enum CastProblem {
     ConnectionLost,
     /// It left the list after discovery stopped, with no session to keep it.
     SearchStopped,
+    /// It answered with another certificate than the one pinned for it
+    /// (spec C117).
+    CertificateChanged,
 }
 
 /// Whether Google Cast discovery runs.
