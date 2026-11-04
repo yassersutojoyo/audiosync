@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AirPlay and Chromecast speakers at the same time: AudioSync</title>
+<link rel="canonical" href="https://getaudiosync.vercel.app/airplay-and-chromecast">
+<meta name="description" content="Play your computer's sound on AirPlay speakers and a Google Cast speaker at once, on Mac, Windows or Linux. Free and open source.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f1f7f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AudioSync">
+<meta property="og:url" content="https://getaudiosync.vercel.app/airplay-and-chromecast">
+<meta property="og:title" content="AirPlay and Google Cast speakers at the same time">
+<meta property="og:description" content="Play your computer's sound on AirPlay speakers and a Google Cast speaker at once, on Mac, Windows or Linux. Free and open source.">
+<meta property="og:image" content="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/social-preview.png">
+<meta property="og:image:alt" content="The AudioSync logo and tagline beside the app's main window">
+<meta name="twitter:card" content="summary_large_image">
+
+<style>
+  /* Same colors as the landing page; scripts/brand/tokens.py only rewrites index.html. */
+  :root {
+    --page: #f1f7f6;
+    --text: #292929;
+    --text-2: #525c5a;
+    --accent: #147167;
+    --card: rgba(255, 255, 255, .84);
+    --edge: rgba(28, 159, 145, .18);
+    --line: #d9dedd;
+    --focus: #147167;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #1e1e1e;
+      --text: #f6f6f6;
+      --text-2: #b8c2c0;
+      --accent: #3ccbb9;
+      --card: rgba(43, 43, 43, .78);
+      --edge: rgba(99, 218, 194, .14);
+      --line: #3d3d3d;
+      --focus: #63dac2;
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 17px/1.6 var(--font); }
+  a { color: var(--accent); text-underline-offset: .18em; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+  .skip {
+    position: absolute; left: 16px; top: -60px; padding: 10px 16px;
+    background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .skip:focus { top: 12px; }
+  .wrap { width: min(720px, 100% - 32px); margin-inline: auto; }
+  header { padding: 20px 0; }
+  .brand { display: inline-flex; padding: 4px; margin: -4px; border-radius: 8px; }
+  .brand img { width: 148px; height: auto; display: block; }
+  h1, h2 { line-height: 1.2; letter-spacing: -0.015em; margin: 0 0 .5em; }
+  h1 { font-size: clamp(1.9rem, 5.5vw, 2.8rem); margin-top: 24px; }
+  h2 { font-size: clamp(1.3rem, 3.4vw, 1.6rem); margin-top: 2em; }
+  p, ul { margin: 0 0 1em; }
+  li { margin-bottom: .4em; }
+  .lede { font-size: 1.12rem; color: var(--text-2); }
+  .card { background: var(--card); border: 1px solid var(--edge); border-radius: 18px; padding: 20px 24px; }
+  .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+  footer { margin-top: 64px; padding: 32px 0 48px; border-top: 1px solid var(--line); color: var(--text-2); font-size: .92rem; }
+  footer p { margin: 0 0 .8em; }
+  .after { margin-top: 1em; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="AudioSync home">
+      <picture>
+        <source srcset="/wordmark-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/wordmark.svg" alt="AudioSync" width="148" height="30">
+      </picture>
+    </a>
+  </div>
+</header>
+
+<main id="main" class="wrap">
+  <h1>AirPlay and Google Cast speakers at the same time</h1>
+  <p class="lede">AudioSync is a free, open-source app for Mac, Windows and Linux that plays your computer's sound on AirPlay speakers and a Google Cast speaker at once, along with Bluetooth and the computer's own outputs. It's a beta, so expect rough edges.</p>
+
+  <h2>How they line up</h2>
+  <p>AirPlay and Cast keep time in different ways, so AudioSync treats them differently.</p>
+  <ul>
+    <li>AirPlay speakers share a clock with the sender. AudioSync tells them to play each bit of audio 1.75 seconds after it's sent, they buffer it until then, and the other speakers are delayed to match. AirPlay speakers share one delay you can add to.</li>
+    <li>Google Cast has no shared clock. A sender can't tell a Cast speaker when to play something, and Google doesn't publish how long a Cast speaker buffers; it's a few seconds and differs from device to device. So you set an offset by ear for each Cast speaker, and AudioSync remembers it for next time.</li>
+    <li>With both on, the side that's ahead waits for the other. AirPlay can wait up to 20 seconds. If a Cast speaker needs more than that, a notice tells you how far ahead AirPlay plays.</li>
+    <li>If a Cast speaker drifts, hit Resync under its volume. That restarts its stream with a short gap. AudioSync never does it on its own.</li>
+  </ul>
+  <p>Master Volume turns the Cast speaker down along with the rest, and the Cast speaker shows the track that was playing when the stream started.</p>
+
+  <h2>Limits</h2>
+  <div class="card">
+    <ul>
+      <li>One Google Cast speaker at a time. A speaker group made in the Google Home app counts as one, with one volume and one offset. A speaker in that group is busy while the group plays.</li>
+      <li>Cast is lined up by ear, not by a clock, so it's close rather than exact.</li>
+      <li>AirPlay speakers that need Apple's MFi or FairPlay authentication don't work. An Apple TV's 4-digit code and speaker passwords do.</li>
+      <li>Everything plays a couple of seconds late. Fine for music, not for video or games.</li>
+    </ul>
+  </div>
+  <p class="after">If a Cast speaker doesn't show up, Add by Address&hellip; takes its IP address or host name: under Connected Speakers on the Mac, in the Speakers menu on Windows.</p>
+
+  <h2>Getting it</h2>
+  <p>It's on the <a href="https://github.com/yassersutojoyo/audiosync/releases/latest">latest release on GitHub</a>: <code>AudioSync.dmg</code> for macOS 15 or later, a zip for Windows 11 (x64 or ARM64) and an AppImage for Linux. The <a href="https://github.com/yassersutojoyo/audiosync#install">README's install notes</a> cover the first launch on each.</p>
+  <p>Only on Windows? See <a href="/airplay-from-windows">AirPlay from a Windows PC</a>. Using Bluetooth speakers on a Mac? See <a href="/multiroom-bluetooth">multiroom with Bluetooth speakers</a>. More about the app on the <a href="/">AudioSync home page</a>.</p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>AudioSync is free and open-source software by Yasser Sutojoyo Kusumo, licensed under GPL-3.0-or-later, with no warranty.</p>
+    <p>Apple, Mac, macOS and AirPlay are trademarks of Apple Inc., Windows of Microsoft Corporation, Google Cast and Chromecast of Google LLC, and the Bluetooth&reg; word mark of Bluetooth SIG, Inc. AudioSync isn't affiliated with or endorsed by any of them.</p>
+  </div>
+</footer>
+</body>
+</html>

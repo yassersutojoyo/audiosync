@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AirPlay from a Windows PC: AudioSync</title>
+<link rel="canonical" href="https://getaudiosync.vercel.app/airplay-from-windows">
+<meta name="description" content="Send a Windows 11 PC's sound to AirPlay speakers, in step with the PC's own speakers, Bluetooth and a Google Cast speaker. Free and open source.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f1f7f6" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="AudioSync">
+<meta property="og:url" content="https://getaudiosync.vercel.app/airplay-from-windows">
+<meta property="og:title" content="Play a Windows PC's sound on AirPlay speakers">
+<meta property="og:description" content="Send a Windows 11 PC's sound to AirPlay speakers, in step with the PC's own speakers, Bluetooth and a Google Cast speaker. Free and open source.">
+<meta property="og:image" content="https://raw.githubusercontent.com/yassersutojoyo/audiosync/main/docs/images/social-preview.png">
+<meta property="og:image:alt" content="The AudioSync logo and tagline beside the app's main window">
+<meta name="twitter:card" content="summary_large_image">
+
+<style>
+  /* Same colors as the landing page; scripts/brand/tokens.py only rewrites index.html. */
+  :root {
+    --page: #f1f7f6;
+    --text: #292929;
+    --text-2: #525c5a;
+    --accent: #147167;
+    --card: rgba(255, 255, 255, .84);
+    --edge: rgba(28, 159, 145, .18);
+    --line: #d9dedd;
+    --focus: #147167;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #1e1e1e;
+      --text: #f6f6f6;
+      --text-2: #b8c2c0;
+      --accent: #3ccbb9;
+      --card: rgba(43, 43, 43, .78);
+      --edge: rgba(99, 218, 194, .14);
+      --line: #3d3d3d;
+      --focus: #63dac2;
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 17px/1.6 var(--font); }
+  a { color: var(--accent); text-underline-offset: .18em; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; border-radius: 6px; }
+  .skip {
+    position: absolute; left: 16px; top: -60px; padding: 10px 16px;
+    background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 12px;
+  }
+  .skip:focus { top: 12px; }
+  .wrap { width: min(720px, 100% - 32px); margin-inline: auto; }
+  header { padding: 20px 0; }
+  .brand { display: inline-flex; padding: 4px; margin: -4px; border-radius: 8px; }
+  .brand img { width: 148px; height: auto; display: block; }
+  h1, h2 { line-height: 1.2; letter-spacing: -0.015em; margin: 0 0 .5em; }
+  h1 { font-size: clamp(1.9rem, 5.5vw, 2.8rem); margin-top: 24px; }
+  h2 { font-size: clamp(1.3rem, 3.4vw, 1.6rem); margin-top: 2em; }
+  p, ul { margin: 0 0 1em; }
+  li { margin-bottom: .4em; }
+  .lede { font-size: 1.12rem; color: var(--text-2); }
+  .card { background: var(--card); border: 1px solid var(--edge); border-radius: 18px; padding: 20px 24px; }
+  .card p:last-child, .card ul:last-child { margin-bottom: 0; }
+  footer { margin-top: 64px; padding: 32px 0 48px; border-top: 1px solid var(--line); color: var(--text-2); font-size: .92rem; }
+  footer p { margin: 0 0 .8em; }
+  .after { margin-top: 1em; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="AudioSync home">
+      <picture>
+        <source srcset="/wordmark-dark.svg" media="(prefers-color-scheme: dark)">
+        <img src="/wordmark.svg" alt="AudioSync" width="148" height="30">
+      </picture>
+    </a>
+  </div>
+</header>
+
+<main id="main" class="wrap">
+  <h1>Play a Windows PC's sound on AirPlay speakers</h1>
+  <p class="lede">AudioSync is a free, open-source app that sends what your Windows 11 PC plays to AirPlay speakers, through its own AirPlay sender. The PC's own speakers, Bluetooth speakers and a Google Cast speaker can play along, in step with the AirPlay ones. It's a beta, so expect rough edges.</p>
+
+  <h2>How it works</h2>
+  <ul>
+    <li>Pick a source: everything the PC plays (except AudioSync itself), one app, several apps, every app except the ones you pick, or an input like a mic or line in.</li>
+    <li>AirPlay speakers on your network show up under Connected Speakers. Turn one on and it joins the stream. Speakers that only do AirPlay 2 work with nothing to set up, up to 16 at once, and a stereo pair shows up as one row with one volume.</li>
+    <li>An Apple TV that asks for a code pairs the first time you turn it on: type the 4-digit code it shows and AudioSync remembers it. A speaker with a password asks for it when you turn it on.</li>
+    <li>Each speaker gets its own volume, next to a master volume and a 10-band EQ.</li>
+  </ul>
+
+  <h2>Why everything plays 1.75 seconds late</h2>
+  <div class="card">
+    <p>AirPlay speakers don't play audio the moment it arrives. AudioSync's sender tells them to play each bit of audio 1.75 seconds after it's sent, and they hold it in a buffer until then. That's how several AirPlay speakers end up playing the same moment.</p>
+    <p>While an AirPlay speaker is on, the PC's own speakers wait those 1.75 seconds too, plus whatever you set under AirPlay Delay, and every other output waits by its own delay on top of that. So they all stay in step. A Bluetooth speaker runs behind the rest, so give it a small negative delay (around &minus;150 to &minus;300 ms), or let Calibrate with Microphone set it. Turn the last AirPlay speaker off and the local outputs only line up with each other again, with no AirPlay wait.</p>
+  </div>
+  <p class="after">That delay is fine for music, not for video or games. For video, a player with an audio delay setting, like mpv or VLC, can hold the picture back to match.</p>
+
+  <h2>What doesn't work</h2>
+  <ul>
+    <li>Speakers that need Apple's MFi or FairPlay authentication, or any pairing other than the Apple TV code. They're listed with a note saying so, and AudioSync never connects to them.</li>
+    <li>Audio only. No video, photos or screen mirroring.</li>
+    <li>Windows 10 and older. On anything before Windows 11 the app says so and exits.</li>
+    <li>A network set to Public. Windows Firewall will probably block the search for speakers, so none show up. Set the network to Private, or allow AudioSync on Public networks in Windows Security.</li>
+  </ul>
+
+  <h2>Getting it</h2>
+  <p>Download the zip for your PC, x64 or ARM64, from the <a href="https://github.com/yassersutojoyo/audiosync/releases/latest">latest release on GitHub</a>. It's one exe with no installer: unzip it into a folder of its own and run it. The exe isn't signed, so SmartScreen may stop the first launch; click More info, then Run anyway. The <a href="https://github.com/yassersutojoyo/audiosync#windows">README's Windows notes</a> also have a one-line PowerShell install. After that it updates itself.</p>
+  <p>Want Google Cast speakers in the mix too? See <a href="/airplay-and-chromecast">AirPlay and Google Cast at the same time</a>. On a Mac, there's <a href="/multiroom-bluetooth">multiroom with Bluetooth speakers</a>. More about the app on the <a href="/">AudioSync home page</a>.</p>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>AudioSync is free and open-source software by Yasser Sutojoyo Kusumo, licensed under GPL-3.0-or-later, with no warranty.</p>
+    <p>Apple and AirPlay are trademarks of Apple Inc., Windows of Microsoft Corporation, Google Cast of Google LLC, and the Bluetooth&reg; word mark of Bluetooth SIG, Inc. AudioSync isn't affiliated with or endorsed by any of them.</p>
+  </div>
+</footer>
+</body>
+</html>
