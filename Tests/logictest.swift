@@ -7203,9 +7203,17 @@ do {
           "main window: the left column stops at 280 pt and the speaker list stays at its full width",
           "\(columns(860)), \(columns(900))")
 
-    check(Marquee.overflow(text: 300, line: 200) == 100 && Marquee.overflow(text: 150, line: 200) == 0
-            && Marquee.overflow(text: 300, line: 0) == 0,
+    check(Marquee.overflow(text: 300, line: 200, reduceMotion: false) == 100
+            && Marquee.overflow(text: 150, line: 200, reduceMotion: false) == 0
+            && Marquee.overflow(text: 300, line: 0, reduceMotion: false) == 0,
           "now playing: a title scrolls by what runs past its line, never before the line is laid out")
+    check(Marquee.overflow(text: 300, line: 200, reduceMotion: true) == 0,
+          "names: with Reduce Motion a name too long for its line stays put, cut with an ellipsis")
+    check(NoticeMotion.of(reduceMotion: false) == .grow && NoticeMotion.of(reduceMotion: true) == .fade,
+          "notices: a notice opens its height and moves the columns, with Reduce Motion it only cross-fades")
+    check(NoticeMotion.fade.duration < NoticeMotion.grow.duration && NoticeMotion.grow.duration <= 0.3,
+          "notices: the open and close stay short, the Reduce Motion fade shorter still",
+          "\(NoticeMotion.grow.duration), \(NoticeMotion.fade.duration)")
     let marquee = [0, 1.9, 3, 4, 5.9, 7, 8, 9.9, 11].map { Marquee.offset(elapsed: $0, overflow: 60) }
     check(marquee == [0, 0, 30, 60, 60, 30, 0, 0, 30],
           "now playing: a long title rests 2 s, scrolls 30 pt a second to its end, rests 2 s and scrolls back",
