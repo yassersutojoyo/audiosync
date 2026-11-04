@@ -7483,13 +7483,28 @@ do {
     check(AudioDevices.transportCode(0) == "0",
           "sources: a transport that isn't four printable characters logs as a number")
     // A saved hands-free source doesn't start, and says why rather than "not connected".
-    let handsFreeStart = UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputHandsFree("buds:input"))
-    let handsFreeStop = UIStrings().sourceStopped(.inputHandsFree("buds:input"))
+    let handsFreeStart = UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputHandsFree("buds:input"),
+                                                           input: "Buds")
+    let handsFreeStop = UIStrings().sourceStopped(.inputHandsFree("buds:input"), input: "Buds")
     check(handsFreeStart.contains("hands-free microphone") && handsFreeStart.hasSuffix("Pick another source.")
             && !handsFreeStart.contains("not connected") && handsFreeStop == handsFreeStart
-            && handsFreeStart != UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputNotFound("buds:input"))
+            && handsFreeStart != UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputNotFound("buds:input"),
+                                                                   input: "Buds")
             && !handsFreeStart.contains("\u{2014}"),
           "capture: a saved source that is a hands-free input has its own reason", handsFreeStart)
+    // A start with the chosen input unplugged names it, as Windows does, and an unnamed one as an unknown device.
+    let goneStart = UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputNotFound("usb:input"),
+                                                      input: "USB Mic")
+    let goneUnnamed = UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.inputDisconnected, input: "")
+    check(goneStart == "USB Mic is not connected. Plug it in, or pick another source."
+            && goneUnnamed == "Unknown device is not connected. Plug it in, or pick another source.",
+          "capture: a start with the input unplugged names the device", "\(goneStart) | \(goneUnnamed)")
+    let goneStop = UIStrings().sourceStopped(.inputDisconnected, input: "USB Mic")
+    let goneStopUnnamed = UIStrings().sourceStopped(.inputNotFound("usb:input"), input: "")
+    check(goneStop == "USB Mic was disconnected, so streaming has stopped. Plug it in again, or pick another source."
+            && goneStopUnnamed == "Unknown device was disconnected, so streaming has stopped. "
+                + "Plug it in again, or pick another source.",
+          "capture: an input unplugged while streaming is named in the notice", "\(goneStop) | \(goneStopUnnamed)")
 
     let zoneText = UIStrings()
     func zoneCount(on: Int, waiting: Int = 0, present: Int, total: Int, inPair: Int = 0) -> String {
@@ -8858,9 +8873,9 @@ do {
     // covers: S215
     // A start that fails in the audio core says so, not that capture failed.
     let t = UIStrings()
-    let coreMessage = t.streamingStartMessage(for: StreamEngine.StartError.coreUnavailable)
+    let coreMessage = t.streamingStartMessage(for: StreamEngine.StartError.coreUnavailable, input: "")
     check(coreMessage == t.engineSetupFailed && coreMessage.contains("open it again")
-            && coreMessage != t.streamingStartMessage(for: SourceCapture.CaptureError.tapNotCreated(-1)),
+            && coreMessage != t.streamingStartMessage(for: SourceCapture.CaptureError.tapNotCreated(-1), input: ""),
           "start error: the audio core failing to set up asks to reopen the app", coreMessage)
 
     // covers: S181 (what the rows show and the fields take)

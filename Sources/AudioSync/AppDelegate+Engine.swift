@@ -96,7 +96,7 @@ extension AppDelegate {
             }
             guard outcome == .keptOld(.startFailed) else {
                 if let switching { finishSwitch(switching, outcome, fromRate: fromRate, origin: origin) }
-                failStart(text.streamingStartMessage(for: error), origin: origin,
+                failStart(text.streamingStartMessage(for: error, input: chosenInputName()), origin: origin,
                           shortName: text.streamingStartNoticeName(for: error, input: chosenInputName()))
                 return
             }

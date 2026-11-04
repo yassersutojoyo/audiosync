@@ -83,7 +83,7 @@ struct UIStrings {
         on ? "launch at login failed" : "launch at login still on"
     }
     let loginItemOffNoticeName = "login item turned off"
-    /// `streamingStartMessage(for:)`'s; `input` names the input device.
+    /// `streamingStartMessage(for:input:)`'s; `input` names the input device.
     /// Nil where Windows has no such notice.
     func streamingStartNoticeName(for error: Error, input: String) -> String? {
         guard let reason = error as? SourceCapture.CaptureError else {
@@ -96,7 +96,7 @@ struct UIStrings {
         default: return captureFailedNoticeName
         }
     }
-    /// `sourceStopped(_:)`'s, the same way.
+    /// `sourceStopped(_:input:)`'s, the same way.
     func sourceStoppedNoticeName(_ error: SourceCapture.CaptureError, input: String) -> String? {
         switch error {
         case .inputDisconnected, .inputNotFound: return "\(input) was disconnected, streaming stopped"
@@ -936,10 +936,10 @@ struct UIStrings {
     let pair = "Pair"
 
     /// Capture stopped on its own while streaming.
-    func sourceStopped(_ error: SourceCapture.CaptureError) -> String {
+    func sourceStopped(_ error: SourceCapture.CaptureError, input: String) -> String {
         switch error {
         case .inputDisconnected, .inputNotFound:
-            return "The input device was disconnected, so streaming has stopped. "
+            return "\(deviceName(input)) was disconnected, so streaming has stopped. "
                 + "Plug it in again, or pick another source."
         case .inputHandsFree:
             return inputHandsFree
@@ -1011,9 +1011,9 @@ struct UIStrings {
         String(format: "%g kHz", (hz / 100).rounded() / 10)
     }
 
-    func streamingStartMessage(for error: Error) -> String {
+    func streamingStartMessage(for error: Error, input: String) -> String {
         if let reason = error as? SourceCapture.CaptureError {
-            return captureFailureText(reason)
+            return captureFailureText(reason, input: input)
         }
         if let reason = error as? StreamEngine.StartError {
             switch reason {
@@ -1035,7 +1035,7 @@ struct UIStrings {
         + "Turn streaming off and on again, or pick another source. If it keeps happening, restart your Mac."
 
     /// Status codes stay out of these messages; the caller logs them.
-    private func captureFailureText(_ error: SourceCapture.CaptureError) -> String {
+    private func captureFailureText(_ error: SourceCapture.CaptureError, input: String) -> String {
         switch error {
         case .appNotRunning(let bundleID):
             return "\(SourceApps.name(for: bundleID)) is \(sourceNotRunningNote). Open it first, or pick another source."
@@ -1044,7 +1044,7 @@ struct UIStrings {
         case .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:
             return captureFailed
         case .inputNotFound, .inputDisconnected:
-            return "The selected input device is not connected. Plug it in, or pick another source."
+            return "\(deviceName(input)) is not connected. Plug it in, or pick another source."
         case .inputHandsFree:
             return inputHandsFree
         }

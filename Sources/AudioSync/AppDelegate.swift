@@ -487,7 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         engine.onInputBusy = { [weak self] busy in
             guard let self else { return }
             if let busy {
-                postNotice(text.streamingStartMessage(for: busy), subject: Notice.source,
+                postNotice(text.streamingStartMessage(for: busy, input: chosenInputName()), subject: Notice.source,
                            shortName: text.streamingStartNoticeName(for: busy, input: chosenInputName()))
             } else {
                 clearNotices([Notice.source])
@@ -525,7 +525,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 }
                 // A notice, never a modal alert: nobody clicked anything (S21).
                 stopEngine(.captureLost)
-                postNotice(text.sourceStopped(error), subject: Notice.source,
+                postNotice(text.sourceStopped(error, input: chosenInputName()), subject: Notice.source,
                            shortName: text.sourceStoppedNoticeName(error, input: chosenInputName()))
             }
         }
