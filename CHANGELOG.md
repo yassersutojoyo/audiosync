@@ -24,7 +24,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Notices that left you stuck now say what to do next. When AirPlay pairings, or on Windows your settings, couldn't be saved, the notice says to free up some space if the disk is full. A speaker without PTP timing says to close the app using port 319 or 320, a Google Cast speaker that stopped AudioSync's stream says to turn it on again, and a calibration that was interrupted or couldn't measure two speakers says how to try again. On Windows, a broken update download offers Open Release Page, and an update that doesn't fit on the disk says to free up space and try again.
 - On Windows, the tray icon's tooltip reads "AudioSync: Streaming on, 2 speakers on, 1 notice", with a colon after AudioSync instead of a dash.
 - On Windows, calibration records the microphone's raw signal when the device offers it, without the input's effects, and with them otherwise. Calibration results can differ from before on a microphone that applies them.
-- The Equalizer row shows its preset under its name. A speaker or zone name too long for its line scrolls like the Now Playing title, or is cut short with an ellipsis with Reduce Motion on the Mac or animation effects off on Windows. Notices in the main window ease in and out instead of appearing at once. On the Mac and on Windows. On the Mac, Calibrate All Speakers stays on one line without scrolling.
+- The Equalizer row shows its preset under its name. A speaker or zone name too long for its line scrolls like the Now Playing title, or is cut short with an ellipsis with Reduce Motion on the Mac or animation effects off on Windows. Notices in the main window ease in and out instead of appearing at once, on the Mac and on Windows. On the Mac, Calibrate All Speakers stays on one line without scrolling.
 - On the Mac, an Apple TV's PIN shows its digits as you type them. An AirPlay password stays hidden.
 - On the Mac, the source picker lists input devices by name, as on Windows.
 - On the Mac, the notices for an input that was unplugged, at start or while streaming, name the device, or call it "Unknown device" when it has no name, as on Windows.
@@ -36,7 +36,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Fixed
 
-- On Windows and in the Linux preview, a Google Cast speaker's offset set to 0 while the saved Cast speakers file couldn't be read yet at launch stays at 0 once the file reads, instead of going back to the saved offset.
+- On Windows, an AirPlay speaker's timing and control requests that arrive just as a wait for them times out, or after a connection reset, are kept instead of dropped.
+- On Windows and on Linux, a Google Cast speaker's offset set to 0 while the saved Cast speakers file couldn't be read yet at launch stays at 0 once the file reads, instead of going back to the saved offset.
 - On Windows, the notices for an input that isn't connected, was disconnected or is blocked by microphone access call an input with no name "Unknown device", as on the Mac. Before, the name was left blank.
 - On Windows, recalling a preset where no speaker can play now is titled "nothing changed" for Narrator, on the notice's Dismiss button and in the tray icon's tooltip, as on the Mac. Before, it was titled "some speakers stayed off".
 - On Windows, the main window and the tray flyout list the newest notice first, also when the window itself posted it or posted it again. Before, a notice from the window was listed after the others and could be left out.
