@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::audio::{AudioReader, Codec, FRAME_BYTES, StreamFormat};
 use crate::group::GroupRecords;
+use crate::worker;
 
 /// The queue in front of a reader that doesn't keep up (C64).
 pub const QUEUE_LIMIT: Duration = Duration::from_secs(2);
@@ -638,10 +639,18 @@ impl StreamServer {
         let accept = spawn_accept(listener, &shared, &accept_quit)?;
         let pump = {
             let shared = Arc::clone(&shared);
-            thread::Builder::new()
-                .name("cast-pump".to_owned())
-                .spawn(move || pump(reader, shared))
-                .map_err(StreamError::Bind)?
+            let failed = Arc::clone(&shared);
+            // Without the pump no audio comes again: the server stops, so
+            // the device sees its stream end instead of waiting on silence.
+            worker::spawn(
+                "cast-pump",
+                move || pump(reader, shared),
+                move || {
+                    failed.stopped.store(true, Ordering::SeqCst);
+                    failed.wake.notify_all();
+                },
+            )
+            .map_err(StreamError::Bind)?
         };
         Ok(StreamServer {
             shared,
@@ -834,11 +843,18 @@ fn spawn_accept(
     quit: &Arc<AtomicBool>,
 ) -> Result<JoinHandle<()>, StreamError> {
     let shared = Arc::clone(shared);
+    let failed = Arc::clone(&shared);
     let quit = Arc::clone(quit);
-    thread::Builder::new()
-        .name("cast-http".to_owned())
-        .spawn(move || accept_loop(listener, shared, quit))
-        .map_err(StreamError::Bind)
+    worker::spawn(
+        "cast-http",
+        move || accept_loop(listener, shared, quit),
+        move || {
+            failed.report(ServerEvent::AcceptFailed(
+                "the accept thread stopped".to_owned(),
+            ))
+        },
+    )
+    .map_err(StreamError::Bind)
 }
 
 fn accept_loop(listener: TcpListener, shared: Arc<Shared>, quit: Arc<AtomicBool>) {
@@ -875,9 +891,10 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>, quit: Arc<AtomicBool>
                     continue;
                 };
                 let connection = Arc::clone(&shared);
-                let spawned = thread::Builder::new()
-                    .name("cast-http-conn".to_owned())
-                    .spawn(move || {
+                let failed = stream.try_clone();
+                let spawned = worker::spawn(
+                    "cast-http-conn",
+                    move || {
                         let closer = stream.try_clone();
                         serve(stream, peer, connection);
                         // The clone kept for the teardown would hold the
@@ -885,7 +902,14 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>, quit: Arc<AtomicBool>
                         if let Ok(closer) = closer {
                             let _ = closer.shutdown(std::net::Shutdown::Both);
                         }
-                    });
+                    },
+                    // Closed, the device fetches again (C61).
+                    move || {
+                        if let Ok(failed) = failed {
+                            let _ = failed.shutdown(std::net::Shutdown::Both);
+                        }
+                    },
+                );
                 if let Ok(thread) = spawned {
                     let mut connections = lock(&shared.connections);
                     connections.retain(|(_, thread)| !thread.is_finished());

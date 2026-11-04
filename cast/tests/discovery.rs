@@ -636,6 +636,27 @@ fn a_manual_address_is_checked_at_once_and_again_on_the_interval() {
     assert!(!list.get(DeviceKey::Manual(on)).expect("listed").online);
 }
 
+// covers: C18
+// A check whose probe panics (a bug) counts as one that did not reach the
+// device, instead of leaving the address checked forever.
+#[test]
+fn a_check_that_panics_reports_the_device_unreached() {
+    fn panics(_: SocketAddr) -> bool {
+        panic!("a bug in a check (test)");
+    }
+    let mut list = DeviceList::new();
+    let address = SocketAddr::new(v4(13), 8009);
+    let key = DeviceKey::Manual(address);
+    list.add_manual(address);
+    list.set_reachable(address, true);
+    let mut reach = Reachability::new(panics);
+    assert_eq!(
+        poll_until_changed(&mut reach, &mut list),
+        [ListEvent::Updated(key)]
+    );
+    assert!(!list.get(key).expect("listed").online);
+}
+
 // A proxy or filter on the path may take the TCP connect with no device
 // behind it (a Mac reached 192.0.2.1 that way, 2026-10-28).
 // covers: C18

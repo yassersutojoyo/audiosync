@@ -16,6 +16,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On Windows, a bug that crashes the audio of one speaker no longer leaves it showing as on while it plays nothing: the speaker opens again, a failed capture stops with an error, and the debug log says where it happened.
+- A bug that crashes the connection to a Chromecast or AirPlay speaker no longer leaves that speaker hanging: an AirPlay speaker tries its connection again, and a Chromecast speaker either fetches the stream again or stops with an error you can see.
 
 ## [0.8.6] - 2026-11-04
 

@@ -407,6 +407,26 @@ impl SrpWork {
             outcome,
         }
     }
+
+    /// What hands the step back when the thread running it panicked (a
+    /// bug): it fails as if no answer came.
+    pub fn stopped(&self) -> SrpDone {
+        SrpDone {
+            salt: self.salt.clone(),
+            b_pub: self.b_pub.clone(),
+            outcome: Err(SrpFailure::Stopped),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> SrpWork {
+        SrpWork {
+            code: Secret::from(TRANSIENT_CODE),
+            salt: vec![1; 16],
+            b_pub: vec![2; 384],
+            draws: Vec::new(),
+        }
+    }
 }
 
 /// What [`SrpWork::run`] computed.
@@ -428,6 +448,7 @@ impl fmt::Debug for SrpDone {
 enum SrpFailure {
     UnusableServerValue,
     Exhausted,
+    Stopped,
 }
 
 /// The client's values for one a: `Ok(None)` when that a gives a short A
@@ -890,6 +911,12 @@ impl PairSetup {
                 return self.fail(PairingFailure::new(
                     ErrorKind::PairingFailed,
                     "no usable SRP secret was drawn",
+                ));
+            }
+            Err(SrpFailure::Stopped) => {
+                return self.fail(PairingFailure::new(
+                    ErrorKind::Timeout,
+                    "the SRP step stopped",
                 ));
             }
         };

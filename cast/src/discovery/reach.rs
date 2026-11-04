@@ -5,11 +5,11 @@
 
 use std::net::{SocketAddr, TcpStream};
 use std::sync::mpsc;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{DeviceKey, DeviceList, ListEvent};
 use crate::client::tls_connector;
+use crate::worker;
 
 /// How long a finished check waits for the next one.
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(15);
@@ -121,12 +121,17 @@ impl Reachability {
                 continue;
             }
             let sender = self.results.0.clone();
+            let failed = self.results.0.clone();
             let probe = self.probe;
-            let spawned = thread::Builder::new()
-                .name("cast-reach".to_owned())
-                .spawn(move || {
+            let spawned = worker::spawn(
+                "cast-reach",
+                move || {
                     let _ = sender.send((address, probe(address), session_changes));
-                });
+                },
+                move || {
+                    let _ = failed.send((address, false, session_changes));
+                },
+            );
             match spawned {
                 Ok(_) => check.running = true,
                 Err(_) => check.due = now + CHECK_INTERVAL,

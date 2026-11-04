@@ -744,11 +744,31 @@ impl Driver {
     /// Runs a pair-setup's SRP step off this thread: the key exchange
     /// takes long enough to hold back a playing speaker's packets (P223).
     fn compute(&mut self, session: SessionKey, work: SrpWork) {
+        self.offload(session, work, SrpWork::run);
+    }
+
+    /// Runs `run` on `work` off this thread; a panic in it hands back a
+    /// failed step at once instead of at the step's deadline.
+    fn offload(&mut self, session: SessionKey, work: SrpWork, run: fn(SrpWork) -> SrpDone) {
         let sink = self.io_sink.clone();
-        self.retired.push(thread::spawn(move || {
-            let done = Box::new(work.run());
-            let _ = sink.send(Input::Computed { session, done });
-        }));
+        let failed = self.io_sink.clone();
+        let stopped = Box::new(work.stopped());
+        let spawned = transport::spawn(
+            "airplay-srp",
+            move || {
+                let done = Box::new(run(work));
+                let _ = sink.send(Input::Computed { session, done });
+            },
+            move || {
+                let _ = failed.send(Input::Computed {
+                    session,
+                    done: stopped,
+                });
+            },
+        );
+        if let Ok(handle) = spawned {
+            self.retired.push(handle);
+        }
     }
 
     fn computed(&mut self, session: SessionKey, done: SrpDone, now: Instant) {
@@ -2794,6 +2814,30 @@ mod tests {
             driver.stream_event(event, later);
         }
         assert!(!driver.stream.waits_for_flush(id));
+    }
+
+    // A panic in the thread running a pairing's SRP step (a bug) hands the
+    // session a failed step at once instead of at the step's deadline.
+    // covers: P223
+    #[test]
+    fn a_panicking_srp_step_hands_back_a_failed_step_at_once() {
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, _events) = mpsc::channel();
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        driver.offload(SessionKey(7), SrpWork::for_tests(), |_| {
+            panic!("a bug in the SRP step (test)")
+        });
+        match driver.inputs.recv_timeout(Duration::from_secs(5)) {
+            Ok(Input::Computed { session, done }) => {
+                assert_eq!(session, SessionKey(7));
+                assert!(format!("{done:?}").contains("ok: false"), "{done:?}");
+            }
+            Ok(_) => panic!("expected the failed step"),
+            Err(error) => panic!("no step came back: {error:?}"),
+        }
     }
 
     // A thread that outlives its session's close, such as an RTSP writer

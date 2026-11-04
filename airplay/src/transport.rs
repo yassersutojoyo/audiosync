@@ -148,7 +148,7 @@ impl<T: Fn(IoEvent) -> bool + Send + Clone + 'static> Notify for T {}
 /// stopped there: the thread then runs `on_panic`, which tells the driver
 /// what a failure of the thread's own work would, and ends. The speaker is
 /// retried at once instead of after a session timeout.
-fn spawn(
+pub(crate) fn spawn(
     name: &str,
     body: impl FnOnce() + Send + 'static,
     on_panic: impl FnOnce() + Send + 'static,
