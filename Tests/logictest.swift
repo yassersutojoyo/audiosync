@@ -7708,6 +7708,12 @@ do {
             && PresetNotice.message(preset: "Evening", leftOff: [leftOff[0]], nothingChanged: true, text: presetText)
                 == nothingText,
           "presets: with no member present nothing changes and only the notice posts", "\(noneHere)")
+    let offlineCast = PresetRecall.plan([.init(kind: .cast, found: true, busy: true, offline: true)],
+                                        others: [], streaming: true)
+    let offlineCastText = PresetNotice.reason(PresetNotice.LeftOff(name: "Nest", reason: .offline), text: presetText)
+    check(offlineCast.steps == [.leftOff(.offline)] && offlineCastText == "Not on the network",
+          "presets: a Cast member off the network is left off as not on the network, not as in use",
+          "\(offlineCast.steps) \(offlineCastText)")
     check(PresetNotice.title(nothingChanged: true, text: presetText) == nil
             && PresetNotice.title(nothingChanged: false, text: presetText) == "Some speakers stayed off",
           "presets: a recall that changed nothing shows only the Nothing changed headline",

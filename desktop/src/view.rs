@@ -5999,6 +5999,7 @@ fn preset_left_off(strings: &Strings<'_>, reason: &PresetLeftOff) -> SharedStrin
             strings.invoke_zone_member_in_target(target.as_str().into())
         }
         PresetLeftOff::Busy => strings.get_preset_busy(),
+        PresetLeftOff::Offline => strings.get_preset_offline(),
         PresetLeftOff::CantPlay => strings.get_preset_cant_play(),
     }
 }
@@ -15288,6 +15289,10 @@ mod tests {
         assert_eq!(strings.get_delete_preset(), "Delete");
         assert_eq!(strings.invoke_numbered_preset(3), "Preset 3");
         assert_eq!(strings.get_preset_busy(), "In use by another app");
+        assert_eq!(
+            preset_left_off(&strings, &PresetLeftOff::Offline),
+            "Not on the network"
+        );
         assert_eq!(
             strings.get_presets_empty(),
             "No presets yet. Turn on the speakers you want, set the volumes and the curve, \

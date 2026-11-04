@@ -258,7 +258,7 @@ extension PresetCore {
 /// The core's plan of a recall (S252, `asc_preset_recall_plan`).
 enum PresetRecall {
     enum Action: Equatable { case nothing, apply, start }
-    enum LeftOff: Equatable { case notFound, hidden, needsAirPlay2, inTarget, busy }
+    enum LeftOff: Equatable { case notFound, hidden, needsAirPlay2, inTarget, busy, offline }
     enum Step: Equatable { case on, waiting, leftOff(LeftOff), ignored }
 
     /// A stored member as the host sees it at recall.
@@ -270,6 +270,8 @@ enum PresetRecall {
         var on = false
         /// A Cast speaker that can't start now.
         var busy = false
+        /// A Cast speaker not found on the network now.
+        var offline = false
         var needsAirPlay2 = false
         var inTarget = false
         var fixedVolume = false
@@ -292,7 +294,7 @@ enum PresetRecall {
         let raw = members.map { member in
             AscPresetMember(kind: code(member.kind), found: member.found, hidden: member.hidden, on: member.on,
                             busy: member.busy, needs_airplay2: member.needsAirPlay2, in_target: member.inTarget,
-                            fixed_volume: member.fixedVolume, has_volume: member.hasVolume)
+                            fixed_volume: member.fixedVolume, has_volume: member.hasVolume, offline: member.offline)
         }
         let outside = others.map { AscPresetOther(on: $0, reference: false) }
         var steps = [UInt32](repeating: 0, count: members.count)
@@ -352,6 +354,7 @@ enum PresetRecall {
         case UInt32(ASC_PRESET_STEP_NEEDS_AIRPLAY2): return .leftOff(.needsAirPlay2)
         case UInt32(ASC_PRESET_STEP_IN_TARGET): return .leftOff(.inTarget)
         case UInt32(ASC_PRESET_STEP_BUSY): return .leftOff(.busy)
+        case UInt32(ASC_PRESET_STEP_OFFLINE): return .leftOff(.offline)
         case UInt32(ASC_PRESET_STEP_IGNORED): return .ignored
         default: return .leftOff(.notFound)
         }
@@ -422,6 +425,7 @@ enum PresetNotice {
         case .needsAirPlay2: return text.needsAirPlay2
         case .inTarget: return text.zoneMemberInTarget(member.target ?? text.unknownDevice)
         case .busy: return text.presetBusy
+        case .offline: return text.notOnNetworkShort
         }
     }
 }

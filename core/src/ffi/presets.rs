@@ -41,6 +41,8 @@ pub const PRESET_STEP_IN_TARGET: u32 = 5;
 pub const PRESET_STEP_BUSY: u32 = 6;
 /// [`RecallStep::Ignored`].
 pub const PRESET_STEP_IGNORED: u32 = 7;
+/// [`LeftOff::Offline`].
+pub const PRESET_STEP_OFFLINE: u32 = 8;
 
 /// One stored member as the host sees it at recall ([`RecallMember`]).
 #[repr(C)]
@@ -55,6 +57,7 @@ pub struct AscPresetMember {
     pub in_target: bool,
     pub fixed_volume: bool,
     pub has_volume: bool,
+    pub offline: bool,
 }
 
 /// A speaker outside the preset at recall ([`RecallOther`]).
@@ -101,6 +104,7 @@ fn recall_member(member: &AscPresetMember) -> RecallMember {
         hidden: member.hidden,
         on: member.on,
         busy: member.busy,
+        offline: member.offline,
         needs_airplay2: member.needs_airplay2,
         in_target: member.in_target,
         fixed_volume: member.fixed_volume,
@@ -117,6 +121,7 @@ fn step_code(step: RecallStep) -> u32 {
         RecallStep::LeftOff(LeftOff::NeedsAirPlay2) => PRESET_STEP_NEEDS_AIRPLAY2,
         RecallStep::LeftOff(LeftOff::InTarget) => PRESET_STEP_IN_TARGET,
         RecallStep::LeftOff(LeftOff::Busy) => PRESET_STEP_BUSY,
+        RecallStep::LeftOff(LeftOff::Offline) => PRESET_STEP_OFFLINE,
         RecallStep::Ignored => PRESET_STEP_IGNORED,
     }
 }

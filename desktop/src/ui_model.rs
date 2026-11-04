@@ -837,6 +837,8 @@ pub enum PresetLeftOff {
     InTarget(String),
     /// A Google Cast speaker another app casts to.
     Busy,
+    /// A Google Cast speaker not found on the network now.
+    Offline,
     /// The recall switched it on, and it failed to start (spec S266).
     CantPlay,
 }

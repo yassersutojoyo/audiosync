@@ -1541,6 +1541,7 @@ mod tests {
             ),
             ("ASC_PRESET_STEP_BUSY", PRESET_STEP_BUSY.to_string()),
             ("ASC_PRESET_STEP_IGNORED", PRESET_STEP_IGNORED.to_string()),
+            ("ASC_PRESET_STEP_OFFLINE", PRESET_STEP_OFFLINE.to_string()),
             ("ASC_METER_POLL_MS", crate::meter::METER_POLL_MS.to_string()),
             ("ASC_CAST_RATE", CAST_RATE.to_string()),
             ("ASC_CAST_APPEARED", CAST_APPEARED.to_string()),

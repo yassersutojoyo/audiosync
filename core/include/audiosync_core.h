@@ -389,6 +389,7 @@ extern "C" {
 #define ASC_PRESET_STEP_IN_TARGET 5      /* left off: plays as part of a target */
 #define ASC_PRESET_STEP_BUSY 6           /* left off: a Cast speaker that can't start now */
 #define ASC_PRESET_STEP_IGNORED 7        /* a Cast key after the first: left alone, not in the notice */
+#define ASC_PRESET_STEP_OFFLINE 8        /* left off: a Cast speaker not found on the network now */
 
 /* The port the web remote listens on unless its configuration names another (unassigned at IANA). */
 #define ASC_REMOTE_DEFAULT_PORT 7655
@@ -1291,6 +1292,7 @@ typedef struct AscPresetMember {
     bool in_target;      /* plays as part of a stereo pair or home theater target now */
     bool fixed_volume;   /* a Cast speaker whose volume can't be changed from here */
     bool has_volume;     /* the preset stores an own volume for it */
+    bool offline;        /* a Cast speaker not found on the network now */
 } AscPresetMember;
 
 /* A speaker outside the preset at recall. */

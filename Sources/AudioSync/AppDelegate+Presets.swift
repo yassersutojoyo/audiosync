@@ -45,6 +45,8 @@ extension AppDelegate {
             // A member a target holds leaves the rows but is still there (S247).
             return PresetRecall.Member(kind: state.facts.kind, found: state.found || state.target != nil,
                                        hidden: isHidden(member.key), on: state.facts.on, busy: state.facts.busy,
+                                       offline: SpeakerKey.parseAny(member.key)
+                                           .map { $0.kind == .cast && castModel.devices[$0.id]?.offline == true } ?? false,
                                        needsAirPlay2: state.facts.needsAirPlay2, inTarget: state.facts.inTarget,
                                        fixedVolume: hasFixedVolume(state), hasVolume: member.volume != nil)
         }

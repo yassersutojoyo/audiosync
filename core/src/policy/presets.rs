@@ -343,6 +343,8 @@ pub struct RecallMember {
     /// A Cast speaker the host can't start now, such as one another app
     /// casts to.
     pub busy: bool,
+    /// A Cast speaker not found on the network now.
+    pub offline: bool,
     /// A stereo pair or home theater target while the AirPlay 2 switch is
     /// off (S246): not listed.
     pub needs_airplay2: bool,
@@ -377,6 +379,8 @@ pub enum LeftOff {
     InTarget,
     /// A Cast speaker the host can't start now.
     Busy,
+    /// "Not on the network": a Cast speaker not found on the network now.
+    Offline,
 }
 
 /// What a recall does with one stored member.
@@ -428,7 +432,8 @@ impl RecallPlan {
 
 /// The plan of a preset recall (S252), a full scene. Every stored member
 /// that is listed, not hidden, not a target that needs AirPlay 2, not
-/// playing as part of a target and, for a Cast speaker, not busy goes on;
+/// playing as part of a target and, for a Cast speaker, neither offline nor
+/// busy goes on;
 /// every other speaker that is on goes off, Cast included, but a `reference`
 /// one; streaming starts when it is off. Every AirPlay 2 member
 /// goes on, and all but the one P169 lets play (the one already playing,
@@ -457,6 +462,8 @@ pub fn recall_plan(
                 RecallStep::LeftOff(LeftOff::Hidden)
             } else if member.in_target {
                 RecallStep::LeftOff(LeftOff::InTarget)
+            } else if member.kind == MemberKind::Cast && member.offline {
+                RecallStep::LeftOff(LeftOff::Offline)
             } else if member.kind == MemberKind::Cast && member.busy {
                 RecallStep::LeftOff(LeftOff::Busy)
             } else {

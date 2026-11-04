@@ -2611,10 +2611,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     && !keep_off.contains(&member.key),
                 hidden: hidden.is_some(),
                 on: listed.is_some_and(|speaker| speaker.enabled),
-                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id))
-                    || listed
-                        .and_then(|speaker| speaker.cast.as_ref())
-                        .is_some_and(|cast| cast.offline),
+                busy: matches!(&key, SpeakerKey::Cast(id) if self.cast_taken_over(id)),
+                offline: listed
+                    .and_then(|speaker| speaker.cast.as_ref())
+                    .is_some_and(|cast| cast.offline),
                 needs_airplay2: listed.is_none() && hidden.is_none() && self.needs_airplay2(&key),
                 in_target,
                 fixed_volume: listed
@@ -2776,6 +2776,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             LeftOff::Hidden => PresetLeftOff::Hidden,
             LeftOff::NeedsAirPlay2 => PresetLeftOff::NeedsAirPlay2,
             LeftOff::Busy => PresetLeftOff::Busy,
+            LeftOff::Offline => PresetLeftOff::Offline,
             LeftOff::InTarget => {
                 let target = match key {
                     SpeakerKey::AirPlay(id) => self.audio.airplay_holding_target(id),
@@ -16957,7 +16958,7 @@ mod tests {
 
     // covers: S246, S252
     #[test]
-    fn a_recall_leaves_an_offline_cast_member_off_as_busy() {
+    fn a_recall_leaves_an_offline_cast_member_off_as_offline() {
         let (mut adapter, _fake) = cast_adapter();
         let id = cc_address("192.0.2.20");
         adapter.restore(Settings {
@@ -16974,7 +16975,7 @@ mod tests {
             preset_notices(&adapter),
             [left_off_notice(
                 "Evening",
-                &[("192.0.2.20", PresetLeftOff::Busy)]
+                &[("192.0.2.20", PresetLeftOff::Offline)]
             )]
         );
     }
