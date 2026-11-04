@@ -453,9 +453,18 @@ final class NativeAirPlay {
         applyPause(explicitPause.clear(), cause: "new capture")
     }
 
-    /// The core's Lf rule over reported latencies in microseconds (P200).
+    /// The Lf the user set in whole milliseconds under the hidden defaults key
+    /// AirPlayLatencyMs, clamped to 100...2000 ms, or nil when unset (P200).
+    static var latencyOverrideFrames: UInt32? {
+        let ms = UserDefaults.standard.integer(forKey: "AirPlayLatencyMs")
+        return ms > 0 ? UInt32(min(max(ms, 100), 2000) * 441 / 10) : nil
+    }
+
+    /// The core's Lf rule over reported latencies in microseconds, or the
+    /// user's override when set (P200).
     static func sessionLatencyFrames(_ reportedUs: [Int64]) -> UInt32 {
-        reportedUs.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
+        if let frames = latencyOverrideFrames { return frames }
+        return reportedUs.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
     }
 
     /// Sets the stream's Lf and E from the latencies the rows in the sender
@@ -463,6 +472,15 @@ final class NativeAirPlay {
     /// sounds (P201). Main queue.
     private func syncLatency(canChange: Bool) {
         let (rows, members) = model.latencyRows
+        if let frames = Self.latencyOverrideFrames {
+            for id in members.joined() where (model.receiverLatency.reportedUs[id] ?? 0) > 0
+                && Double(model.receiverLatency.reportedUs[id] ?? 0) * 0.0441 + 22_050 > Double(frames) {
+                guard latencyWarned.insert(id).inserted else { continue }
+                DebugTrace.log("[AudioSync] native AirPlay: \(model.names[id] ?? id) (\(id)) warning: reports "
+                    + String(format: "%.0f", model.receiverLatency.reportedMs(id))
+                    + " ms, more than the Lf of \(Int(frames) * 10 / 441) ms set by AirPlayLatencyMs leaves room for")
+            }
+        }
         for id in members.joined() where (model.receiverLatency.reportedUs[id] ?? 0) > 1_500_000 {
             guard latencyWarned.insert(id).inserted else { continue }
             DebugTrace.log("[AudioSync] native AirPlay: \(model.names[id] ?? id) (\(id)) warning: reports "

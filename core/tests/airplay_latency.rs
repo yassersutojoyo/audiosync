@@ -65,7 +65,7 @@ fn set_latency_clamps_and_ignores_a_null_handle() {
     assert!(!handle.is_null());
     assert!(latency_becomes(handle, 1750.0), "1.75 s by default");
     // With no speaker sounding the value applies at once (P201).
-    for (frames, ms) in [(5_000, 250.0), (200_000, 2000.0), (44_100, 1000.0)] {
+    for (frames, ms) in [(1_000, 100.0), (200_000, 2000.0), (44_100, 1000.0)] {
         // SAFETY: a live handle, used by this thread only.
         unsafe { asc_airplay_set_latency(handle, frames) };
         assert!(latency_becomes(handle, ms), "{frames} frames");

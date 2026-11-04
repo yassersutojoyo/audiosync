@@ -4,6 +4,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Added
+
+- Advanced users can cut the AirPlay delay from about 1.75 s to as little as 0.1 s with a hidden setting: the AUDIOSYNC_AIRPLAY_LATENCY_MS environment variable on Windows and Linux, or `defaults write` of the AirPlayLatencyMs key on the Mac, in milliseconds. It's at your own risk: on a busy Wi-Fi network a short delay can leave gaps in the sound.
+
 ### Security
 
 - Pairing an Apple TV over AirPlay 1 now fails when the Apple TV doesn't send the key that identifies it, so no other device on the network can pose as it later. An Apple TV paired by an older version without that key needs pairing again with its code the next time you turn it on.

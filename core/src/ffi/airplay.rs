@@ -3360,7 +3360,7 @@ pub unsafe extern "C" fn asc_airplay_set_speaker_offset(
     }
 }
 
-/// Sets the stream's base latency Lf, clamped to 11 025 to 88 200 frames
+/// Sets the stream's base latency Lf, clamped to 4410 to 88 200 frames
 /// (P98, P202). While no speaker sounds it applies at once and a timeline
 /// event reports the new L; later it is held ([`AIRPLAY_EVENT_LATENCY_HELD`])
 /// until the stream has no speaker or the timeline restarts (P201). A null

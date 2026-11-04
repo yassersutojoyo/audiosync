@@ -552,8 +552,8 @@ fn sync_latency_and_times() {
         assert!((heard - (rig.c(next) + rig.latency())).abs() < 0.001);
     }
 
-    // The host may set 11 025 to 88 200 frames (P98).
-    for (asked, got) in [(5_000, 11_025), (100_000, 88_200), (44_100, 44_100)] {
+    // The host may set 4410 to 88 200 frames (P98).
+    for (asked, got) in [(1_000, 4_410), (100_000, 88_200), (44_100, 44_100)] {
         let rig = Rig::new(StreamConfig {
             latency_frames: asked,
             input_frames: 88_200,

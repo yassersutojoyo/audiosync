@@ -96,7 +96,7 @@ pub use remote::DacpCounters;
 /// How a sender starts.
 #[derive(Debug, Clone, Copy)]
 pub struct SenderConfig {
-    /// The base latency Lf in frames, 11 025 to 88 200 (P98).
+    /// The base latency Lf in frames, 4410 to 88 200 (P98).
     pub latency_frames: u32,
     /// The input ring in frames, at least one second (P111).
     pub input_frames: usize,
@@ -1018,7 +1018,7 @@ impl Sender {
         Ok(())
     }
 
-    /// Sets Lf, 11 025 to 88 200 frames (P98). While no speaker has reached
+    /// Sets Lf, 4410 to 88 200 frames (P98). While no speaker has reached
     /// its first-sound time every speaker is flushed and the new L comes as
     /// a [`SenderEvent::Timeline`]; later the value is held
     /// ([`SenderEvent::LatencyHeld`]) until the stream has no speaker or the
