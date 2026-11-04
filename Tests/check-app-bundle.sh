@@ -125,11 +125,10 @@ while IFS= read -r -d '' f; do
   fi
 done < <(find "$app" -type f -print0)
 pass "checked $macho Mach-O files"
-case "$app_signer" in
-  "Developer ID Application"*)
-    runtime() { codesign -dv "$app" 2>&1 | grep 'flags=0x[0-9a-f]*(runtime)' >/dev/null; }
-    expect "Hardened Runtime (Developer ID)" runtime ;;
-esac
+runtime() { codesign -dv "$app" 2>&1 | grep 'flags=0x[0-9a-f]*(runtime)' >/dev/null; }
+expect "Hardened Runtime" runtime
+audio_input() { codesign -d --entitlements - "$app" 2>/dev/null | grep 'com.apple.security.device.audio-input' >/dev/null; }
+expect "the microphone entitlement the runtime needs" audio_input
 
 echo "▶ Nothing besides the app and the updater"
 # AirPlay goes through the sender inside the app binary (the Rust core), so a
