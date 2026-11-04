@@ -6,7 +6,7 @@ Please report vulnerabilities privately through GitHub: Security → Report a vu
 
 ## How AudioSync is put together
 
-AudioSync captures the audio source on your Mac or Windows PC and streams it to your AirPlay speakers with its own AirPlay sender, which runs inside the app. It runs no helper process of its own; on Windows, Restart Now after an update opens the new version.
+AudioSync captures the audio source on your Mac, Windows PC or Linux machine and streams it to your AirPlay speakers with its own AirPlay sender, which runs inside the app. It runs no helper process of its own; on Windows and Linux, Restart Now after an update opens the new version.
 
 ### The native sender
 
@@ -16,7 +16,7 @@ While a speaker plays, the sender also runs a small remote-control server so the
 
 ### Network
 
-AudioSync sends no telemetry. Its network traffic is AirPlay and Google Cast discovery (mDNS browsing), streaming to the speakers you turn on, the remote-control port your AirPlay speakers connect back to while they play, the web remote when you turn it on, album artwork for Spotify's Now Playing, fetched from the https URL Spotify provides, and, in release builds, the update check: both apps fetch `appcast.xml` from the latest GitHub release over https (the Mac app through Sparkle, the Windows app on its own, which you can turn off under File > Check for Updates Automatically), and the update itself when you install one. It sends nothing beyond those requests (no system profile). Builds you make yourself never check.
+AudioSync sends no telemetry. Its network traffic is AirPlay and Google Cast discovery (mDNS browsing), streaming to the speakers you turn on, the remote-control port your AirPlay speakers connect back to while they play, the web remote when you turn it on, album artwork for Spotify's Now Playing, fetched from the https URL Spotify provides, and, in release builds, the update check: every app fetches `appcast.xml` from the latest GitHub release over https (the Mac app through Sparkle, the Windows and Linux apps on their own; File > Check for Updates Automatically turns that off on Windows and Linux), and the update itself when you install one. It sends nothing beyond those requests (no system profile). Builds you make yourself never check.
 
 Google Cast speakers get the audio, and the cover art of what's playing, over plain HTTP on your local network. For each stream AudioSync opens a server on a port the system picks, under a random path, and only answers the addresses of the Cast speaker or group it's streaming to.
 
@@ -26,7 +26,7 @@ The web remote is off until you turn it on. Then it serves plain HTTP on port 76
 
 ### Pairing
 
-An Apple TV that asks for a PIN pairs once, when you turn it on. One set to ask for a code every time asks at every turn-on and keeps no pairing. The PIN goes only to the sender and is never logged. The resulting credentials are kept per receiver in `~/Library/Application Support/AudioSync/Pairings/airplay-pairings.dat`, readable and writable only by your user. That file isn't encrypted, so AudioSync keeps the `Pairings` folder (and only that folder) out of Time Machine backups. With AirPlay 2 on, the same folder also holds `airplay2-identity.dat` (AudioSync's AirPlay 2 device ID and key, and the pairings made over AirPlay 2) and `airplay2-timing.dat` (which timing each speaker took). Neither is encrypted. If part of `airplay-pairings.dat` can't be read, AudioSync copies it to `airplay-pairings.ignored-<seconds>.dat` in the same folder, readable only by your user, before it writes a new one; that copy holds the same keys, and Forget Pairing (shown while the Apple TV is paired or AudioSync keeps its credentials) deletes every copy that holds it, also a copy that holds it after the main file no longer does. A speaker password is kept in memory for the current run only and never written to disk or logged. The sender wipes its own copies of a password or PIN from memory once it no longer needs them. The text field you type it into and the strings the app passes it to the sender in aren't wiped.
+An Apple TV that asks for a PIN pairs once, when you turn it on. One set to ask for a code every time asks at every turn-on and keeps no pairing. The PIN goes only to the sender and is never logged. The resulting credentials are kept per receiver in `~/Library/Application Support/AudioSync/Pairings/airplay-pairings.dat`, readable and writable only by your user. That file isn't encrypted, so AudioSync keeps the `Pairings` folder (and only that folder) out of Time Machine backups. The same folder also holds `airplay2-identity.dat` (AudioSync's AirPlay 2 device ID and key, and the pairings made over AirPlay 2) and `airplay2-timing.dat` (which timing each speaker took). Neither is encrypted. If part of `airplay-pairings.dat` can't be read, AudioSync copies it to `airplay-pairings.ignored-<seconds>.dat` in the same folder, readable only by your user, before it writes a new one; that copy holds the same keys, and Forget Pairing (shown while the Apple TV is paired or AudioSync keeps its credentials) deletes every copy that holds it, also a copy that holds it after the main file no longer does. A speaker password is kept in memory for the current run only and never written to disk or logged. The sender wipes its own copies of a password or PIN from memory once it no longer needs them. The text field you type it into and the strings the app passes it to the sender in aren't wiped.
 
 Who can stream to a HomePod is decided by its Allow Speaker & TV Access setting (Home app → Home Settings → Speakers & TV). Use "Anyone on the Same Network" on a network you trust, and avoid "Everyone".
 
@@ -34,7 +34,7 @@ Versions up to 0.4.1 ran a bundled AirPlay engine that kept its files, including
 
 ### Audio
 
-On the Mac, capture uses a Core Audio process tap (behind the Screen & System Audio Recording permission) or an input device (behind the Microphone permission); on Windows, WASAPI process loopback or an input device. Either way the audio stays in memory and goes to the local outputs and the AirPlay sender in real time. It's never written to disk.
+On the Mac, capture uses a Core Audio process tap (behind the Screen & System Audio Recording permission) or an input device (behind the Microphone permission); on Windows, WASAPI process loopback or an input device; on Linux, PipeWire. Either way the audio stays in memory and goes to the local outputs and the AirPlay sender in real time. It's never written to disk.
 
 ### Supply chain
 
