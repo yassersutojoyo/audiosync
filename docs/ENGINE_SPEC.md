@@ -3256,6 +3256,7 @@ The checks for S172 to S179 in the Rust core, test functions with `// covers:` m
 | a_speaker_on_that_wasnt_listed_since_launch_doesnt_count_as_on (`desktop/src/adapter.rs`) | S162 |
 | offsets_of_an_absent_output_and_the_reference_survive_two_launches (`desktop/src/adapter.rs`) | S175 |
 | an_offset_set_on_an_output_unplugged_before_any_save_is_kept (`desktop/src/adapter.rs`) | S175 |
+| a_delay_that_isnt_a_finite_number_leaves_the_stored_one (`desktop/src/adapter.rs`) | S175 |
 | volumes_delays_and_the_master_reach_the_audio_backend (`desktop/src/adapter.rs`) | S71, S175, S176 |
 | delay_and_volume_changes_apply_live (`desktop/src/audio/controller.rs`) | S71, S175, S177 |
 | a_new_offset_resyncs_only_the_output_whose_hold_back_changed (`desktop/src/audio/controller.rs`) | S177 |
@@ -5507,6 +5508,7 @@ S231 has no Windows test: Windows reads no device latency.
 | with_d_s_at_0_airplay_plays_ahead_of_a_cast_speaker_only_at_a_negative_airplay_delay (`desktop/src/audio/controller.rs`) | S394, S401 |
 | a_delay_step_past_the_maximum_keeps_the_calibrations_line (`desktop/src/adapter.rs`) | S395 |
 | a_calibrations_line_goes_once_its_speaker_is_turned_off (`desktop/src/adapter.rs`) | S395 |
+| a_calibrations_line_stays_while_its_speaker_drops_out_of_the_list_for_a_poll (`desktop/src/adapter.rs`) | S395 |
 | a_measured_delay_changed_before_apply_keeps_the_results_and_apply_writes_nothing (`desktop/src/adapter.rs`) | S238, S395 |
 | an_airplay_delay_changed_while_no_sender_runs_keeps_the_results_and_apply_writes_nothing (`desktop/src/adapter.rs`) | S238, S395 |
 | an_airplay_adjustment_changed_under_the_20000_ms_clamp_refuses_apply (`desktop/src/adapter.rs`) | S238, S395 |
