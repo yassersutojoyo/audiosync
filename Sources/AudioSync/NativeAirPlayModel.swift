@@ -154,6 +154,20 @@ struct EveryTimeGuard: Equatable {
     }
 }
 
+/// What the native model learned that lasts for the run, not for one
+/// sender, so a sender Retry keeps it, as Windows keeps it across its
+/// sender's replacement (S223, S349).
+struct NativeRunMarks: Equatable {
+    /// The receivers given a password this run.
+    var passwords: Set<String> = []
+    /// The receivers off for a refused pairing until the user turns them on
+    /// (`NativeAirPlayModel.refusedOff`).
+    var refusedOff: Set<String> = []
+    /// The receivers whose stored credentials an answer turned down, as last
+    /// listed, kept while they are gone (P154).
+    var credentialsTurnedDown: Set<String> = []
+}
+
 /// What may end the stream for `EveryTimeGuard`.
 enum StreamEnd: Equatable {
     case stopped(SessionStop)
@@ -602,6 +616,9 @@ struct NativeAirPlayModel {
     /// The receivers last listed as reached over AirPlay 2, kept while they
     /// are gone, so a row off the network keeps its kind.
     private(set) var reachedOverAirPlay2Before: Set<String> = []
+    /// The receivers last listed with stored credentials an answer turned
+    /// down (P154), kept while they are gone, as for a Retry's new sender.
+    private(set) var credentialsTurnedDown: Set<String> = []
 
     mutating func apply(_ change: NativeReceiverChange) {
         switch change {
@@ -616,6 +633,11 @@ struct NativeAirPlayModel {
                     reachedOverAirPlay2Before.insert(receiver.id)
                 } else {
                     reachedOverAirPlay2Before.remove(receiver.id)
+                }
+                if receiver.credentialsTurnedDown {
+                    credentialsTurnedDown.insert(receiver.id)
+                } else {
+                    credentialsTurnedDown.remove(receiver.id)
                 }
             }
         case .gone(let id, _):
@@ -723,6 +745,15 @@ struct NativeAirPlayModel {
 
     /// Forget Password: the next attempt asks for the password again.
     mutating func forgetPassword(_ id: String) { passwords.remove(id) }
+
+    /// What a failed sender's model hands the one a Retry starts.
+    var runMarks: NativeRunMarks {
+        get { NativeRunMarks(passwords: passwords, refusedOff: refusedOff, credentialsTurnedDown: credentialsTurnedDown) }
+        set {
+            (passwords, refusedOff, credentialsTurnedDown)
+                = (newValue.passwords, newValue.refusedOff, newValue.credentialsTurnedDown)
+        }
+    }
 
     /// The speaker list's rows, as app IDs: every receiver it shows
     /// (`NativeReceiver.access`), and any in the sender whose announcement

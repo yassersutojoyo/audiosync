@@ -200,6 +200,9 @@ pub const AIRPLAY_FLAG_CODE_EVERY_TIME: u32 = 4096;
 /// Credentials are stored for it, also ones an answer turned down (P154),
 /// which [`asc_airplay_forget_pairing`] drops.
 pub const AIRPLAY_FLAG_CREDENTIALS_KEPT: u32 = 8192;
+/// An answer turned its stored credentials down this run (P154), which the
+/// host hands the next handle ([`asc_airplay_credentials_turned_down`]).
+pub const AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN: u32 = 16384;
 
 /// What a sender event reports ([`AscAirPlayEvent::kind`]): a speaker's
 /// state changed ([`AscAirPlayEvent::state`]).
@@ -1979,6 +1982,9 @@ impl AscAirPlay {
                 }
                 if self.store.contains(&id) || self.identity.get(&id).is_some() {
                     flags |= AIRPLAY_FLAG_CREDENTIALS_KEPT;
+                }
+                if self.credentials_turned_down.contains(&id) {
+                    flags |= AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN;
                 }
                 if self.airplay2
                     && let Some(id) = &info.target
@@ -4123,6 +4129,39 @@ pub unsafe extern "C" fn asc_airplay_set_password(
                     airplay.passwords.remove(id);
                 }
             }
+            true
+        })
+    }
+}
+
+/// Marks the stored credentials of the receiver `id` as turned down by an
+/// answer this run (P154), as a handle that stopped working had them: it
+/// is listed as needing a PIN until a new pairing replaces them or a
+/// session proves them. Returns whether credentials are stored for it;
+/// false when the handle or `id` is null, which marks nothing.
+///
+/// # Safety
+///
+/// `airplay` is null or a live handle, called under the threading
+/// contract; `id` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_credentials_turned_down(
+    airplay: *mut AscAirPlay,
+    id: *const c_char,
+) -> bool {
+    // SAFETY: by the caller's contract null or a NUL-terminated string.
+    let Some(id) = (unsafe { host_text(id) }) else {
+        return false;
+    };
+    // SAFETY: by the caller's contract null or a live handle that no other
+    // call uses now.
+    unsafe {
+        live(airplay, false, |airplay| {
+            if !airplay.store.contains(id) && airplay.identity.get(id).is_none() {
+                return false;
+            }
+            airplay.credentials_turned_down.insert(id.to_owned());
+            airplay.relist(id);
             true
         })
     }
@@ -9614,6 +9653,40 @@ mod tests {
             }),
         });
         assert_eq!(paired(handle), (AIRPLAY_NEEDS_PIN, false, true));
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    // covers: P154, S223
+    #[test]
+    fn credentials_a_failed_sender_saw_turned_down_stay_turned_down_on_the_next_handle() {
+        let mut handle = create_with(quiet);
+        inside(handle).airplay2 = true;
+        let mut record = airplay2_only();
+        record.txt.push(b"flags=0x4c".to_vec());
+        let device =
+            Device::from_records(record.device_key(), None, Some(&record)).expect("a device");
+        let id = receiver_id(&device.key);
+        let mut info = ReceiverInfo::new(device);
+        info.plan = Ok(());
+        inside(handle).listed.insert(id.clone(), info.clone());
+        let _ = inside(handle).identity.insert(&id, homekit_blob(7));
+        let c_id = CString::new(id.clone()).expect("no NUL");
+        let c_other = CString::new("not-listed").expect("no NUL");
+        // SAFETY: a live handle, used by this thread only; local C strings.
+        let (marked, unknown) = unsafe {
+            (
+                asc_airplay_credentials_turned_down(handle, c_id.as_ptr()),
+                asc_airplay_credentials_turned_down(handle, c_other.as_ptr()),
+            )
+        };
+        assert!(marked && !unknown, "only stored credentials are marked");
+        let report = inside(handle).report(ReceiverEvent::Changed(Box::new(info)));
+        assert_eq!(report.availability, AIRPLAY_NEEDS_PIN);
+        assert_eq!(report.flags & AIRPLAY_FLAG_PAIRED, 0);
+        assert_ne!(report.flags & AIRPLAY_FLAG_CODE_EVERY_TIME, 0);
+        assert_ne!(report.flags & AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN, 0);
+        assert_ne!(report.flags & AIRPLAY_FLAG_CREDENTIALS_KEPT, 0);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

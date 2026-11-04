@@ -375,6 +375,15 @@ final class NativeAirPlay {
         }
     }
 
+    /// Marks the stored credentials of `id` as turned down this run, as the
+    /// failed sender before this one had them (P154).
+    func markCredentialsTurnedDown(_ id: String) {
+        queue.async { [weak self] in
+            guard let handle = self?.handle else { return }
+            _ = asc_airplay_credentials_turned_down(handle, id)
+        }
+    }
+
     /// Forgets the stored pairing of `id`, AirPlay 2 credentials included;
     /// it needs a PIN again. `written` gets on the main queue whether its
     /// files were written, when it was paired.
@@ -778,6 +787,8 @@ final class NativeAirPlay {
                                       incomplete: raw.flags & UInt32(ASC_AIRPLAY_FLAG_INCOMPLETE) != 0,
                                       codeEveryTime: raw.flags & UInt32(ASC_AIRPLAY_FLAG_CODE_EVERY_TIME) != 0,
                                       credentialsKept: raw.flags & UInt32(ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT) != 0,
+                                      credentialsTurnedDown:
+                                          raw.flags & UInt32(ASC_AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN) != 0,
                                       control: text(raw.control),
                                       missing: text(raw.missing).split(separator: "\n").map(String.init))
         return raw.event == ASC_AIRPLAY_APPEARED ? .appeared(receiver) : .changed(receiver)
@@ -904,6 +915,7 @@ final class NativeAirPlay {
             (ASC_AIRPLAY_FLAG_INCOMPLETE, "incomplete"),
             (ASC_AIRPLAY_FLAG_CODE_EVERY_TIME, "code-every-time"),
             (ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT, "credentials-kept"),
+            (ASC_AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN, "credentials-turned-down"),
         ]
         return names.filter { flags & UInt32($0.0) != 0 }.map(\.1)
     }

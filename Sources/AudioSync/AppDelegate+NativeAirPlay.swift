@@ -56,6 +56,10 @@ extension AppDelegate {
                 + airPlay2Line)
             self?.nativeStartFinished(native, started: started)
         }
+        native.model.runMarks = nativeRunMarks
+        // Queued after `start`, whose block creates the sender they go to.
+        for id in nativeRunMarks.passwords { native.setPassword(id, nativePasswords[id]) }
+        for id in nativeRunMarks.credentialsTurnedDown { native.markCredentialsTurnedDown(id) }
     }
 
     /// A failed start left nothing running: the sender goes, the user hears
@@ -343,6 +347,7 @@ extension AppDelegate {
             }
         case .sendPassword(let pair):
             native.setPassword(receiver, code)
+            nativePasswords[receiver] = code
             if pair {
                 startNativePairing(receiver)
             } else {
@@ -371,6 +376,7 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] native AirPlay: the sender stopped after an internal error; Retry starts a new one")
         nativeAirPlay = nil
         nativeStarts.senderFailed()
+        nativeRunMarks = native.model.runMarks
         // Nothing starts or retries a speaker once its sender is gone.
         clearNotices(native.model.states.keys.filter { native.model.clearsNoticeOnRemoval($0) }
             .map { SpeakerKey.make(id: NativeAirPlayID.app($0), airplay: true) })
@@ -544,6 +550,7 @@ extension AppDelegate {
         nativeAirPlay?.forgetPairing(receiver) { [weak self] saved in self?.pairingsWritten(saved) }
         nativeAirPlay?.setPassword(receiver, nil)
         nativeAirPlay?.model.forgetPassword(receiver)
+        nativePasswords[receiver] = nil
         clearNotices(Notice.forgotten(airPlay: id))
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) pairing and password forgotten")
         if enabledAirPlay.remove(id) != nil {

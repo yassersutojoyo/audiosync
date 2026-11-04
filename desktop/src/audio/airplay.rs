@@ -6,8 +6,8 @@
 //! with that reason and never connected. A receiver that asks for a password
 //! gets one when the user switches it on: the UI prompts for it
 //! ([`AirPlaySpeakers::password_prompt`]), and the password stays in memory
-//! for its sessions until AudioSync quits, as the Mac app asks for it once
-//! per launch. Until a speaker the user switched on plays, a session that
+//! for its sessions until AudioSync quits, a sender Retry included, as on
+//! the Mac. Until a speaker the user switched on plays, a session that
 //! asks for a password, announced or not, or turns the one it got down,
 //! prompts again (the password is forgotten); later, or for a speaker
 //! auto-connect switched on, it goes off with a notice. An Apple TV that

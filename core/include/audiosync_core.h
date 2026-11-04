@@ -121,6 +121,7 @@ extern "C" {
 #define ASC_AIRPLAY_FLAG_INCOMPLETE 2048   /* a target with a member out of view, playing nothing, or reporting its partner unreachable */
 #define ASC_AIRPLAY_FLAG_CODE_EVERY_TIME 4096 /* reached over AirPlay 2, it asks for a code every time it connects; auto-connect leaves it off */
 #define ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT 8192 /* credentials are stored for it, turned down or not, which asc_airplay_forget_pairing drops */
+#define ASC_AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN 16384 /* an answer turned its stored credentials down this run; asc_airplay_credentials_turned_down hands that to a new handle */
 
 /* What a sender event reports (AscAirPlayEvent.kind). */
 #define ASC_AIRPLAY_EVENT_STATE 1    /* a speaker's state changed: .state */
@@ -2100,6 +2101,14 @@ void asc_airplay_cancel_pairing(AscAirPlay *airplay, const char *id);
  * not UTF-8, which keeps the stored one.
  */
 bool asc_airplay_set_password(AscAirPlay *airplay, const char *id, const char *password);
+
+/*
+ * Marks the stored credentials of `id` as turned down by an answer this run,
+ * as a handle that stopped working had them: it is listed as needing a PIN
+ * until a new pairing replaces them or a session proves them. Returns whether
+ * credentials are stored for it; false when the handle or id is NULL.
+ */
+bool asc_airplay_credentials_turned_down(AscAirPlay *airplay, const char *id);
 
 /*
  * Forgets the stored credentials of `id` and rewrites the pairings file; the

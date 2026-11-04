@@ -80,6 +80,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var ptpPortNotice = PtpPortNotice()
     /// Whether the pairings file's last write failed, across senders.
     var pairingsWrites = PairingsWriteNotice()
+    /// What the last failed sender learned this run, for the one a Retry starts.
+    var nativeRunMarks = NativeRunMarks()
+    /// The passwords typed this run, by receiver ID: a new sender knows none
+    /// of the old one's. Memory only, never logged.
+    var nativePasswords: [String: String] = [:]
 
     // MARK: - Google Cast speakers (`+Cast`)
 

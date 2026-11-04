@@ -1093,6 +1093,10 @@ mod tests {
                 "ASC_AIRPLAY_FLAG_CREDENTIALS_KEPT",
                 AIRPLAY_FLAG_CREDENTIALS_KEPT.to_string(),
             ),
+            (
+                "ASC_AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN",
+                AIRPLAY_FLAG_CREDENTIALS_TURNED_DOWN.to_string(),
+            ),
             ("ASC_AIRPLAY_FLAG_RAOP", AIRPLAY_FLAG_RAOP.to_string()),
             ("ASC_AIRPLAY_FLAG_AIRPLAY", AIRPLAY_FLAG_AIRPLAY.to_string()),
             (

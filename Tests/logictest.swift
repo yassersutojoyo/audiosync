@@ -5123,6 +5123,61 @@ do {
           "off \(sfOff), idle \(sfIdleOff), rejoin \(sfRejoin), relisted \(sfRelisted), reopened \(String(describing: sfReopened))")
 }
 
+// MARK: A sender Retry keeps what the run learned: passwords typed, refused speakers, turned-down credentials
+do {
+    func rkReceiver(_ id: String, _ availability: NativeReceiver.Availability) -> NativeReceiver {
+        NativeReceiver(id: id, name: id, model: "", availability: availability, reason: nil, hints: [])
+    }
+    var rkOld = NativeAirPlayModel()
+    rkOld.apply(.appeared(rkReceiver("P2", .needsPassword)))
+    _ = rkOld.turnedOnByUser("P2")
+    let rkPrompt = rkOld.nextPrompt()
+    let rkSent = rkPrompt.map { rkOld.answered($0, code: "secret") }
+    rkOld.added("P2")
+    _ = rkOld.apply(.state(id: "P2", .playing, retryMs: nil))
+    var rkNew = NativeAirPlayModel()
+    rkNew.runMarks = rkOld.runMarks
+    rkNew.apply(.appeared(rkReceiver("P2", .needsPassword)))
+    // covers: S223, S349
+    check(rkSent == .sendPassword(pair: false) && rkNew.holdsPassword("P2")
+            && rkNew.joinable(["native:P2"], after: [], stopped: false) == ["native:P2"]
+            && rkNew.plan(streaming: true, enabled: ["native:P2"]).add == ["P2"]
+            && rkNew.turnedOnByUser("P2") == nil,
+          "sender retry: a password typed this run reaches the new sender, which joins without asking again",
+          "\(String(describing: rkSent)), \(rkNew.runMarks)")
+
+    var rkRefusing = NativeAirPlayModel()
+    rkRefusing.apply(.appeared(rkReceiver("R2", .available)))
+    rkRefusing.added("R2")
+    let rkRefused = rkRefusing.apply(.error(id: "R2", .pairingRequired, retryMs: nil, detail: ""))
+    var rkAfter = NativeAirPlayModel()
+    rkAfter.runMarks = rkRefusing.runMarks
+    rkAfter.apply(.appeared(rkReceiver("R2", .available)))
+    // covers: S223
+    check(rkRefused == .turnOff("native:R2", .needsCode)
+            && rkAfter.joinable(["native:R2"], after: [], stopped: false).isEmpty
+            && rkAfter.plan(streaming: true, enabled: ["native:R2"]).turnOff == [.init(id: "R2", reason: .needsCode)],
+          "sender retry: a speaker off for a refused pairing stays off under the new sender until the user turns it on",
+          "\(String(describing: rkRefused)), \(rkAfter.runMarks)")
+
+    var rkDown = rkReceiver("R3", .needsPin)
+    rkDown.credentialsKept = true
+    rkDown.credentialsTurnedDown = true
+    var rkDenying = NativeAirPlayModel()
+    rkDenying.apply(.appeared(rkDown))
+    rkDenying.apply(.gone(id: "R3", name: nil))
+    var rkNext = NativeAirPlayModel()
+    rkNext.runMarks = rkDenying.runMarks
+    let rkCarried = rkNext.runMarks.credentialsTurnedDown
+    var rkRepaired = rkDown
+    rkRepaired.credentialsTurnedDown = false
+    rkNext.apply(.appeared(rkRepaired))
+    // covers: S223, P154
+    check(rkCarried == ["R3"] && rkNext.runMarks.credentialsTurnedDown.isEmpty,
+          "sender retry: credentials turned down this run stay turned down for the new sender, also for a receiver gone meanwhile, until a listing says otherwise",
+          "\(rkCarried), \(rkNext.runMarks)")
+}
+
 // MARK: A failed start: the helpers failStart goes through (AppDelegate itself can't run here)
 // covers: S121 (the helpers only: the origin's alert rule, the stop's plan and the stream's end)
 do {
