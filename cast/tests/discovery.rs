@@ -726,3 +726,80 @@ fn a_manual_address_of_a_listed_device_names_that_device() {
     );
     assert_eq!(list.entries().len(), 2);
 }
+
+// Attacks A and B of the 2026-11-04 security review: a record from another
+// instance names a listed device's `id` with an address of its own.
+// covers: C116
+#[test]
+fn a_record_from_another_instance_never_moves_a_listed_device() {
+    let mut list = DeviceList::new();
+    let key = DeviceKey::Id(DeviceId::parse(ID).expect("id"));
+    let own = record(
+        "A._googlecast._tcp.local.",
+        8009,
+        &[b"id=3f2a8c41d27e4b8f9a06c1d5e7f80b12"],
+    );
+    list.apply(BrowseEvent::Resolved(own));
+    for addresses in [vec![v4(66)], vec![v4(10), v4(66)]] {
+        let posing = ServiceRecord {
+            addresses,
+            ..record(
+                "Kitchen._googlecast._tcp.local.",
+                8009,
+                &[b"id=3f2a8c41d27e4b8f9a06c1d5e7f80b12"],
+            )
+        };
+        list.apply(BrowseEvent::Resolved(posing));
+        let entry = list.get(key).expect("listed");
+        assert_eq!(entry.addresses, [SocketAddr::new(v4(10), 8009)]);
+        assert_eq!(
+            entry.device.as_ref().map(|device| device.instance.as_str()),
+            Some("A._googlecast._tcp.local.")
+        );
+    }
+    assert_eq!(list.entries().len(), 1);
+
+    let moved = ServiceRecord {
+        addresses: vec![v4(11)],
+        ..record(
+            "a._googlecast._tcp.local.",
+            8009,
+            &[b"id=3f2a8c41d27e4b8f9a06c1d5e7f80b12"],
+        )
+    };
+    assert_eq!(
+        list.apply(BrowseEvent::Resolved(moved)),
+        ListEvent::Updated(key)
+    );
+    assert_eq!(
+        list.get(key).expect("listed").addresses,
+        [SocketAddr::new(v4(11), 8009)],
+        "its own instance moves it"
+    );
+}
+
+// covers: C116
+#[test]
+fn a_record_naming_a_manual_address_adds_none_of_its_other_addresses() {
+    let mut list = DeviceList::new();
+    let typed = SocketAddr::new(v4(10), 8009);
+    list.add_manual(typed);
+    let posing = ServiceRecord {
+        addresses: vec![v4(10), v4(66)],
+        ..record(
+            "A._googlecast._tcp.local.",
+            8009,
+            &[b"id=3f2a8c41d27e4b8f9a06c1d5e7f80b12"],
+        )
+    };
+    list.apply(BrowseEvent::Resolved(posing.clone()));
+    assert_eq!(list.entries().len(), 1);
+    assert_eq!(list.entries()[0].addresses, [typed]);
+    let moved = ServiceRecord {
+        addresses: vec![v4(66)],
+        ..posing
+    };
+    list.apply(BrowseEvent::Resolved(moved));
+    assert_eq!(list.entries().len(), 1);
+    assert_eq!(list.entries()[0].addresses, [typed], "nor a later record");
+}

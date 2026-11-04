@@ -1061,7 +1061,7 @@ fn a_certificate_seen_only_by_a_failed_start_is_not_recorded() {
     }
 }
 
-// covers: C21
+// covers: C21, C117
 #[test]
 fn a_device_back_with_a_new_certificate_is_logged_once_and_still_plays() {
     let device = FakeDevice::start(Behavior {
@@ -1100,7 +1100,7 @@ fn a_device_back_with_a_new_certificate_is_logged_once_and_still_plays() {
     device.join();
 }
 
-// covers: C21
+// covers: C21, C117
 #[test]
 fn a_certificate_changed_across_a_relaunch_is_logged() {
     let device = FakeDevice::start(Behavior {

@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
 use audiosync_cast::stream::{
-    BlockQueue, FetchHeaders, MAX_LOGGED_NAMES, MAX_LOGGED_TEXT, Pace, Pacer, ResponseEnd,
-    ServerEvent, StreamConfig, StreamServer, image_size,
+    BlockQueue, FetchHeaders, MAX_LOGGED_NAMES, MAX_LOGGED_TEXT, Pace, Pacer, Popped, ResponseEnd,
+    Responses, ServerEvent, StreamConfig, StreamServer, image_size,
 };
 use common::http;
 
@@ -128,6 +128,26 @@ fn a_request_from_an_address_that_is_not_the_device_gets_403() {
         status: 403
     }));
     server.stop();
+}
+
+// M4 of the 2026-11-04 security review: another admitted address used to
+// end the device's response with a fetch of its own.
+// covers: C118
+#[test]
+fn a_fetch_from_a_second_address_is_refused_and_leaves_the_stream_playing() {
+    let device = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7));
+    let other = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 66));
+    let mut responses = Responses::new(96_000);
+    assert!(responses.claim(device));
+    let (first, _) = responses.open(device);
+    assert!(!responses.claim(other), "the URL is the first fetcher's");
+    assert_eq!(responses.pop(first), Popped::Empty, "still playing");
+    assert!(responses.claim(device), "the device may fetch again");
+
+    let mut group = Responses::new(96_000);
+    group.set_group_limit(3);
+    assert!(group.claim(device));
+    assert!(group.claim(other), "a group's members each fetch (C103)");
 }
 
 // covers: C59, C60, C62

@@ -427,14 +427,7 @@ impl CastSession {
         };
         let allowed: Vec<IpAddr> = match &group {
             Some(_) => Vec::new(),
-            None => {
-                let mut allowed: Vec<IpAddr> =
-                    config.addresses.iter().map(SocketAddr::ip).collect();
-                allowed.push(client.address().ip());
-                allowed.sort();
-                allowed.dedup();
-                allowed
-            }
+            None => vec![client.address().ip()],
         };
         let stream_config = StreamConfig {
             local_ip: client.local_address().ip(),
@@ -448,10 +441,8 @@ impl CastSession {
                 return Err(error.into());
             }
         };
-        if let Some(records) = &records {
-            server.follow_group(records.clone());
-        }
-        if group.is_some() {
+        if let Some(group) = &group {
+            server.follow_group(group.clone());
             server.set_group_limit(1);
         }
         let mut addresses = vec![client.address()];
@@ -1005,6 +996,9 @@ impl CastSession {
                 .and_then(|fingerprints| fingerprints.record(&self.client))
             {
                 self.report(event);
+            }
+            if self.group.is_none() {
+                self.server.admit_only(self.client.address().ip());
             }
             // The stream URL names the local address of the channel (C55); one
             // on the old address may be out of reach, so the stream loads again.
