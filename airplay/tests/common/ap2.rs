@@ -13,7 +13,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use audiosync_airplay::ap2::{Ap2Config, Ap2Event, Ap2Output, Ap2Session};
 use audiosync_airplay::ids::{Entropy, EntropyUnavailable};
@@ -33,6 +33,10 @@ pub const RECEIVER_TIMING_PORT: u16 = 50_002;
 pub const DATA_PORT: u16 = 6_003;
 pub const RECEIVER_CONTROL_PORT: u16 = 6_004;
 pub const STREAM_ID: i64 = 77;
+/// The header that carries the method name of a request whose method the
+/// crate's parser does not know, such as `SETRATEANCHORTIME`; the fake
+/// reads it as a `POST` with this header.
+pub const OTHER_METHOD: &str = "X-Fake-Method";
 
 /// A deterministic random source for the session: xorshift from a seed.
 pub struct TestEntropy(pub u64);
@@ -155,6 +159,9 @@ impl FakeFraming {
 /// `SETUP session`, `SETUP stream`, `RECORD`, `SETPEERS`, `SET_PARAMETER`,
 /// `FLUSH`, `POST /feedback`, `TEARDOWN`, `POST /pair-setup`.
 pub fn request_key(request: &Request) -> String {
+    if let Some(name) = request.headers.get(OTHER_METHOD) {
+        return name.to_owned();
+    }
     match request.method {
         Method::Get | Method::Post => format!("{} {}", request.method, request.uri),
         Method::Setup => {
@@ -167,6 +174,17 @@ pub fn request_key(request: &Request) -> String {
         }
         method => method.as_str().to_owned(),
     }
+}
+
+/// The `type` of the first stream a stream SETUP asks for.
+pub fn stream_type(request: &Request) -> Option<i64> {
+    let body = read_dict(&request.body)?;
+    let streams = body.get("streams")?.as_array()?;
+    streams
+        .first()?
+        .as_dictionary()?
+        .get("type")?
+        .as_signed_integer()
 }
 
 pub fn read_dict(body: &[u8]) -> Option<Dictionary> {
@@ -203,6 +221,9 @@ pub struct Answered {
     pub status: u16,
     /// For a volume read or set, what a read answers right after it.
     pub level: Option<String>,
+    pub body: Vec<u8>,
+    /// When the request was taken up, by the system clock.
+    pub at: SystemTime,
 }
 
 pub struct FakeAp2 {
@@ -267,6 +288,9 @@ pub struct FakeAp2 {
     /// left unset is opened by [`Ap2Server`], or is the default without one.
     pub data_port: Option<u16>,
     pub control_port: Option<u16>,
+    /// The `dataPort` of a stream SETUP answer to a stream of `type` 103
+    /// (buffered audio over TCP, P168); `None` answers every stream as 96.
+    pub buffered_port: Option<u16>,
     /// Answers sent, for the frame counts.
     pub framing: Option<FakeFraming>,
     pub events: Option<FakeFraming>,
@@ -283,6 +307,10 @@ pub struct FakeAp2 {
     /// The pair-setup on this connection is transient (P63).
     transient: bool,
     parser: Parser,
+    /// Plaintext not yet passed to `parser`: a head still arriving.
+    unparsed: Vec<u8>,
+    /// Body bytes still to pass to `parser` unchanged.
+    body_left: usize,
 }
 
 impl FakeAp2 {
@@ -319,6 +347,7 @@ impl FakeAp2 {
             no_data_port: false,
             data_port: None,
             control_port: None,
+            buffered_port: None,
             framing: None,
             events: None,
             secret: None,
@@ -328,6 +357,8 @@ impl FakeAp2 {
             slowest_read: Duration::ZERO,
             transient: false,
             parser: Parser::new(),
+            unparsed: Vec::new(),
+            body_left: 0,
         }
     }
 
@@ -436,9 +467,9 @@ impl FakeAp2 {
             Some(framing) => {
                 let (plaintext, sizes) = framing.open(bytes);
                 self.frame_sizes.extend(sizes);
-                self.parser.push(&plaintext);
+                self.admit(&plaintext);
             }
-            None => self.parser.push(bytes),
+            None => self.admit(bytes),
         }
         let mut out = Vec::new();
         loop {
@@ -526,6 +557,8 @@ impl FakeAp2 {
                 *answered = Some(Answered {
                     status: response.code,
                     level,
+                    body: response.body.clone(),
+                    at: SystemTime::now(),
                 });
             }
             let cseq = request.headers.get("CSeq").unwrap_or("0").to_owned();
@@ -557,6 +590,49 @@ impl FakeAp2 {
             }
         }
         out
+    }
+
+    /// Passes `bytes` to the parser, a request line whose method it does not
+    /// know rewritten to `POST` with the name in [`OTHER_METHOD`], so a
+    /// third-party sender's request is answered instead of ending the fake.
+    fn admit(&mut self, bytes: &[u8]) {
+        self.unparsed.extend_from_slice(bytes);
+        loop {
+            if self.body_left > 0 {
+                let taken = self.body_left.min(self.unparsed.len());
+                self.parser.push(&self.unparsed[..taken]);
+                self.unparsed.drain(..taken);
+                self.body_left -= taken;
+                if self.body_left > 0 {
+                    return;
+                }
+            }
+            let Some(end) = self.unparsed.windows(4).position(|w| w == b"\r\n\r\n") else {
+                return;
+            };
+            let head = String::from_utf8_lossy(&self.unparsed[..end + 4]).into_owned();
+            self.unparsed.drain(..end + 4);
+            self.body_left = head
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.trim().eq_ignore_ascii_case("Content-Length"))
+                .and_then(|(_, value)| value.trim().parse().ok())
+                .unwrap_or(0);
+            let start = head.len() - head.trim_start_matches(['\r', '\n']).len();
+            let method = head[start..].split(' ').next().unwrap_or_default();
+            let line_end = head[start..].find("\r\n").map_or(head.len(), |i| start + i);
+            if Method::parse(method).is_some() || method.starts_with("RTSP/") {
+                self.parser.push(head.as_bytes());
+                continue;
+            }
+            let rewritten = format!(
+                "{}POST{}\r\n{OTHER_METHOD}: {method}{}",
+                &head[..start],
+                &head[start + method.len()..line_end],
+                &head[line_end..]
+            );
+            self.parser.push(rewritten.as_bytes());
+        }
     }
 
     fn answer(&mut self, request: &Request, key: &str) -> Response {
@@ -592,6 +668,16 @@ impl FakeAp2 {
                     entries.push(("timingPort", int(i64::from(RECEIVER_TIMING_PORT))));
                 }
                 plist(dict(&entries))
+            }
+            "SETUP stream" if self.buffered_port.is_some() && stream_type(request) == Some(103) => {
+                let port = self.buffered_port.unwrap_or_default();
+                let entries = [
+                    ("type", int(103)),
+                    ("dataPort", int(i64::from(port))),
+                    ("audioBufferSize", int(8 * 1024 * 1024)),
+                    ("streamID", int(STREAM_ID)),
+                ];
+                plist(dict(&[("streams", Value::Array(vec![dict(&entries)]))]))
             }
             "SETUP stream" => {
                 let control = self.control_port.unwrap_or(RECEIVER_CONTROL_PORT);

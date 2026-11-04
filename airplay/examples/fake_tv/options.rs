@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+use std::path::PathBuf;
+
 use crate::television::{self, DEVICE_ID, Pin};
 
 pub struct Options {
@@ -13,6 +15,8 @@ pub struct Options {
     pub on_network: bool,
     pub ptp_only: bool,
     pub summary: bool,
+    pub homepod: bool,
+    pub dump: Option<PathBuf>,
 }
 
 pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -27,6 +31,8 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> 
         on_network: false,
         ptp_only: false,
         summary: false,
+        homepod: false,
+        dump: None,
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
@@ -34,6 +40,8 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> 
             "--lan" => options.on_network = true,
             "--ptp-only" => options.ptp_only = true,
             "--summary" => options.summary = true,
+            "--homepod" => options.homepod = true,
+            "--dump" => options.dump = Some(PathBuf::from(value()?)),
             "--name" => name = Some(value()?),
             "--deviceid" => options.device_id = television::parse_device_id(&value()?)?,
             "--port" => options.port = value()?.parse().map_err(|_| "bad --port")?,
@@ -68,6 +76,12 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> 
     if pin_given && password_given {
         return Err("--password excludes --pin and --code".to_owned());
     }
-    options.name = name.unwrap_or_else(|| television::default_name(options.device_id));
+    options.name = name.unwrap_or_else(|| {
+        if options.homepod {
+            television::homepod_name(options.device_id)
+        } else {
+            television::default_name(options.device_id)
+        }
+    });
     Ok(options)
 }
