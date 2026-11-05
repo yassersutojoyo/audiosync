@@ -942,6 +942,12 @@ struct NativeAirPlayModel {
         return running
     }
 
+    /// The members of the target `id` whose pairing runs for its attempt
+    /// (P235), which the app cancels when the target goes off.
+    func membersPairing(for id: String) -> [String] {
+        promptTargets.filter { $0.value == id && stages[$0.key]?.pairingRuns == true }.map(\.key)
+    }
+
     private mutating func endAttempt(_ id: String) {
         stages[id] = nil
         attempts.remove(id)

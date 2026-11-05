@@ -5707,6 +5707,11 @@ do {
             && pwKept.apply(.error(id: right, .pairingRequired, retryMs: nil, detail: "")) == .startPairing(right)
             && pwKept.holdsPassword(right) && pwKept.promptTargets[right] == pair,
           "P235 native airplay: turned down again, the member pairs with the password it now holds")
+    var pairOff = pwKept
+    // covers: P235
+    check(pairOff.membersPairing(for: pair) == [right] && !pairOff.turnedOff(pair)
+            && pairOff.membersPairing(for: pair).isEmpty && pairOff.apply(.paired(id: right, storeNote: "")) == nil,
+          "P235 native airplay: switching the pair off cancels the pairing its member still runs")
     pwKept.removed(pair)
     // covers: P235
     check(pwKept.apply(.paired(id: right, storeNote: "")) == .paired(app(right))

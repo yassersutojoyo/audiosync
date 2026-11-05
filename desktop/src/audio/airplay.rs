@@ -2278,6 +2278,21 @@ impl AirPlaySpeakers {
             }
         }
         if !enabled {
+            // A member pairs again only for its target's attempt (P235); a
+            // pair already off leaves a pairing its member started on its own.
+            let members: Vec<String> = self
+                .targets
+                .get(id)
+                .filter(|_| self.settings(id).enabled)
+                .map_or_else(Vec::new, |target| {
+                    target.members.iter().map(|m| speaker_id(&m.key)).collect()
+                });
+            for member in members {
+                self.stop_pairing(
+                    &member,
+                    "its stereo pair or home theater group was switched off",
+                );
+            }
             self.stop_pairing(id, "the speaker was switched off");
             self.drop_password_ask(id, "the speaker was switched off");
             self.paired_in_attempt.remove(id);
@@ -11348,6 +11363,26 @@ pub mod tests {
         airplay.poll();
         assert!(airplay.enabled_ids().is_empty());
         assert!(fake.take_calls().is_empty(), "the pair doesn't join");
+    }
+
+    // covers: P235
+    #[test]
+    fn switching_a_pair_off_stops_its_members_pairing() {
+        use crate::audio::pairings::tests::homekit;
+
+        let fake = FakeAirPlay::new();
+        let (mut airplay, right) = reset_member_password_typed(&fake);
+        let id = id_of(&right);
+        airplay.set_enabled(PAIR, false).expect("off");
+        assert!(
+            fake.take_calls().contains(&Call::CancelPairing(id.clone())),
+            "Right's pairing stops with its pair"
+        );
+        assert!(airplay.waiting_for_user().is_empty());
+        fake.pairing(&right, PairingEvent::Stopped);
+        airplay.poll();
+        assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x33)));
+        assert!(airplay.enabled_ids().is_empty());
     }
 
     // covers: P176

@@ -275,7 +275,9 @@ extension AppDelegate {
     func endNativeAttempt(_ id: String) {
         everyTimeGuard.switchedOff(id)
         guard let receiver = NativeAirPlayID.receiver(id), let native = nativeAirPlay else { return }
+        let members = native.model.membersPairing(for: receiver)
         if native.model.turnedOff(receiver) { native.cancelPairing(receiver) }
+        members.forEach(native.cancelPairing)
         closeWithdrawnPrompt()
     }
 
