@@ -1,7 +1,7 @@
 //! Swapping the running exe by renames inside the install folder (spec
 //! S301), undone in reverse on a failure (S302).
 
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use super::archive::NOTICES_NAME;
@@ -180,21 +180,46 @@ fn swap_one(
             return Err(in_use(error));
         }
     }
+    let staged = holds(files, &pair.new, source);
+    logged(
+        log,
+        format!("4: check {name}.new against the download"),
+        staged,
+    )
+    .map_err(|error| step_4_error("verify", error))?;
     let into_place = files.rename(&pair.new, &pair.live);
-    logged(log, format!("4: rename {name}.new to {name}"), into_place).map_err(|error| {
-        if is_blocked(&error) {
-            SwapError::Blocked
-        } else if error.kind() == io::ErrorKind::NotFound {
-            SwapError::Vanished
-        } else {
-            SwapError::Failed {
-                step: "rename into place",
-                code: code(&error),
-            }
-        }
-    })?;
+    logged(log, format!("4: rename {name}.new to {name}"), into_place)
+        .map_err(|error| step_4_error("rename into place", error))?;
     progress.renamed_in = true;
     Ok(())
+}
+
+/// Whether `path` holds exactly `source`: another account that can write
+/// the folder may have replaced the `.new` since step 1 wrote it.
+fn holds(files: &dyn Files, path: &Path, source: &[u8]) -> io::Result<()> {
+    let mut staged = Vec::with_capacity(source.len());
+    files
+        .open(path)?
+        .take(source.len() as u64 + 1)
+        .read_to_end(&mut staged)?;
+    if staged == source {
+        Ok(())
+    } else {
+        Err(io::Error::from(io::ErrorKind::InvalidData))
+    }
+}
+
+fn step_4_error(step: &'static str, error: io::Error) -> SwapError {
+    if is_blocked(&error) {
+        SwapError::Blocked
+    } else if error.kind() == io::ErrorKind::NotFound {
+        SwapError::Vanished
+    } else {
+        SwapError::Failed {
+            step,
+            code: code(&error),
+        }
+    }
 }
 
 /// A refused step 1, 2 or 3: another copy holds the file, unless Windows
@@ -458,6 +483,36 @@ mod tests {
             Err(SwapError::Vanished)
         );
         assert_eq!(read(dir.join(EXE_NAME)), "old exe");
+    }
+
+    // covers: S301, S302
+    #[test]
+    fn a_new_rewritten_before_step_4_is_never_renamed_into_place() {
+        for (case, planted) in [
+            ("new-rewritten", &b"other exe"[..]),
+            ("new-longer", b"new exe and more"),
+            ("new-shorter", b"new"),
+        ] {
+            let (dir, exe, _) = install(case);
+            let new = dir.join("audiosync.exe.new");
+            // Another account with write access to the folder replaces the
+            // staged file between the write and the rename into place.
+            let files = failing(move |op, path| {
+                if op == "rename" && file_name(path) == "audiosync.exe.bak" {
+                    std::fs::remove_file(&new).unwrap();
+                    std::fs::write(&new, planted).unwrap();
+                }
+                None
+            });
+            let mut log = StepLog::new();
+            let result = swap(&dir, EXE_NAME, exe, None, &files, &mut log);
+            assert!(
+                matches!(result, Err(SwapError::Failed { step: "verify", .. })),
+                "{case}: {result:?}"
+            );
+            assert_eq!(read(dir.join(EXE_NAME)), "old exe", "{case}");
+            assert_eq!(names(&dir), [NOTICES_NAME, EXE_NAME], "{case}");
+        }
     }
 
     // covers: S302
