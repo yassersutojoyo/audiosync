@@ -48,11 +48,13 @@ fn sockets_on_5353() -> Vec<String> {
 fn mdns_shares_port_5353_with_avahi() {
     let before = sockets_on_5353();
     assert!(!before.is_empty(), "avahi-daemon has no socket on 5353");
-    // avahi announces this computer's own addresses, which P234 drops.
+    // avahi announces this computer's own addresses, which P234 and C135 drop.
     let mut airplay = MdnsBrowser::new()
         .expect("the AirPlay browser binds next to avahi")
         .with_local_nets(Vec::new());
-    let mut cast = CastBrowser::new().expect("the Cast browser binds next to avahi");
+    let mut cast = CastBrowser::new()
+        .expect("the Cast browser binds next to avahi")
+        .with_local_nets(Vec::new());
     let after = sockets_on_5353();
     assert!(
         after.len() > before.len(),

@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use audiosync_cast::discovery::mdns::{CONFIRM_WAIT, MdnsBrowser, browse_event};
+use audiosync_cast::discovery::mdns::{
+    CONFIRM_WAIT, LocalNet, MdnsBrowser, browse_event, on_local_link,
+};
 use audiosync_cast::discovery::reach::{CHECK_INTERVAL, Reachability, connects};
 use audiosync_cast::discovery::{
     Announcements, BrowseEvent, CastDevice, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind,
@@ -38,6 +40,14 @@ fn v4(last: u8) -> IpAddr {
     IpAddr::from([192, 0, 2, last])
 }
 
+/// The link [`v4`] addresses are on, as this computer's own (C135).
+fn test_net() -> Vec<LocalNet> {
+    vec![LocalNet {
+        address: v4(1),
+        prefix: 24,
+    }]
+}
+
 fn record(fullname: &str, port: u16, txt: &[&[u8]]) -> ServiceRecord {
     ServiceRecord {
         fullname: fullname.to_owned(),
@@ -52,7 +62,7 @@ fn record(fullname: &str, port: u16, txt: &[&[u8]]) -> ServiceRecord {
 fn a_resolved_instance_becomes_a_device_with_its_announced_address_and_port() {
     assert_eq!(SERVICE_TYPE, "_googlecast._tcp.local.");
     let (send, receive) = mpsc::channel();
-    let mut browser = MdnsBrowser::from_events(receive);
+    let mut browser = MdnsBrowser::from_events(receive).with_local_nets(test_net());
     send.send(ServiceEvent::SearchStarted(SERVICE_TYPE.to_owned()))
         .expect("send");
     send.send(resolved(
@@ -336,7 +346,7 @@ fn a_goodbye_during_a_session_keeps_the_device_listed_as_offline() {
 #[test]
 fn a_goodbye_is_not_reported_while_the_device_answers_again() {
     let (send, receive) = mpsc::channel();
-    let mut browser = MdnsBrowser::from_events(receive);
+    let mut browser = MdnsBrowser::from_events(receive).with_local_nets(test_net());
     let device = || resolved("Chromecast-3f2a", 8009, &[v4(10)], &[("id", ID)]);
     send.send(device()).expect("send");
     let Some(BrowseEvent::Resolved(record)) = browser.poll_event() else {
@@ -391,6 +401,80 @@ fn an_unanswered_goodbye_is_reported_after_the_wait_and_held_goodbyes_are_bounde
         reported += 1;
     }
     assert_eq!(reported, MAX_DEVICES);
+}
+
+// covers: C135
+#[test]
+fn a_record_at_loopback_multicast_or_an_off_link_public_address_lists_nothing() {
+    let (send, receive) = mpsc::channel();
+    let mut browser = MdnsBrowser::from_events(receive);
+    for address in [
+        IpAddr::from([127, 0, 0, 1]),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+        IpAddr::from([224, 0, 0, 251]),
+        IpAddr::from([203, 0, 113, 7]),
+    ] {
+        send.send(resolved("Chromecast-3f2a", 8009, &[address], &[("id", ID)]))
+            .expect("send");
+        assert_eq!(browser.poll_event(), None, "{address}");
+    }
+}
+
+// covers: C135
+#[test]
+fn only_addresses_on_our_links_or_private_routed_ones_are_kept() {
+    let v6 = |segments: [u16; 8]| IpAddr::V6(Ipv6Addr::from(segments));
+    let own = IpAddr::from([192, 168, 1, 20]);
+    let net = |address, prefix| LocalNet { address, prefix };
+    let nets = [
+        net(own, 24),
+        net(v6([0xfe80, 0, 0, 0, 0, 0, 0, 1]), 64),
+        net(v6([0x2001, 0xdb8, 0, 0, 0, 0, 0, 5]), 64),
+        net(v6([0x2001, 0, 0xabcd, 0, 0, 0, 0, 1]), 32),
+    ];
+    for address in [
+        IpAddr::from([192, 168, 1, 30]),
+        IpAddr::from([10, 9, 8, 7]),
+        v6([0xfd00, 0, 0, 0, 0, 0, 0, 5]),
+        v6([0x2001, 0xdb8, 0, 0, 0, 0, 0, 9]),
+        v6([0xfe80, 0, 0, 0, 0, 0, 0, 9]),
+    ] {
+        assert!(on_local_link(address, &nets), "{address} is kept");
+    }
+    for address in [
+        IpAddr::from([127, 0, 0, 1]),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+        IpAddr::from([0, 0, 0, 0]),
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        IpAddr::from([224, 0, 0, 251]),
+        v6([0xff02, 0, 0, 0, 0, 0, 0, 0xfb]),
+        IpAddr::from([255, 255, 255, 255]),
+        IpAddr::from([192, 168, 1, 255]),
+        own,
+        IpAddr::V6(Ipv4Addr::from([192, 168, 1, 20]).to_ipv6_mapped()),
+        IpAddr::from([203, 0, 113, 7]),
+        v6([0x2001, 0, 0xabcd, 0, 0, 0, 0, 9]),
+        v6([0x2002, 0xcb00, 0x7107, 0, 0, 0, 0, 1]),
+        IpAddr::from([169, 254, 3, 4]),
+    ] {
+        assert!(!on_local_link(address, &nets), "{address} is dropped");
+    }
+    let link_local_v4 = [net(IpAddr::from([169, 254, 1, 1]), 16)];
+    assert!(on_local_link(
+        IpAddr::from([169, 254, 3, 4]),
+        &link_local_v4
+    ));
+
+    let (send, receive) = mpsc::channel();
+    let mut browser = MdnsBrowser::from_events(receive).with_local_nets(nets.to_vec());
+    let kept = IpAddr::from([192, 168, 1, 30]);
+    let mixed = [IpAddr::from([127, 0, 0, 1]), kept];
+    send.send(resolved("Chromecast-3f2a", 8009, &mixed, &[("id", ID)]))
+        .expect("send");
+    let Some(BrowseEvent::Resolved(record)) = browser.poll_event() else {
+        panic!("a resolved record");
+    };
+    assert_eq!(record.addresses, [kept]);
 }
 
 // covers: C17, C81, C90

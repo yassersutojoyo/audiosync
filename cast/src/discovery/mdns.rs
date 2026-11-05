@@ -6,10 +6,11 @@
 //! [`MdnsBrowser::poll_event`] only drains its channel, so it never blocks.
 //! TXT values come from the daemon as raw bytes, so no DNS presentation
 //! escaping reaches the sender (C12). A removal waits for a fresh query
-//! to go unanswered before it is reported (C134).
+//! to go unanswered before it is reported (C134), and a resolved instance
+//! keeps only the addresses C135 admits.
 
 use std::fmt;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -57,6 +58,7 @@ pub struct MdnsBrowser {
     /// [`MAX_DEVICES`].
     leaving: Vec<(String, Instant)>,
     queried: Option<Instant>,
+    nets: Nets,
 }
 
 impl fmt::Debug for MdnsBrowser {
@@ -82,6 +84,7 @@ impl MdnsBrowser {
                 dead: false,
                 leaving: Vec::new(),
                 queried: None,
+                nets: Nets::Live(None),
             }),
             Err(error) => {
                 let _ = daemon.shutdown();
@@ -99,7 +102,15 @@ impl MdnsBrowser {
             dead: false,
             leaving: Vec::new(),
             queried: None,
+            nets: Nets::Live(None),
         }
+    }
+
+    /// Checks addresses against `nets` instead of this computer's
+    /// interfaces (C135), for tests.
+    pub fn with_local_nets(mut self, nets: Vec<LocalNet>) -> MdnsBrowser {
+        self.nets = Nets::Fixed(nets);
+        self
     }
 
     /// The next browse event, or `None` when nothing is waiting.
@@ -112,7 +123,7 @@ impl MdnsBrowser {
     /// resolving again (C134).
     pub fn poll_event_at(&mut self, now: Instant) -> Option<BrowseEvent> {
         while let Some(event) = self.next_event() {
-            match browse_event(event) {
+            match browse_event(event).and_then(|event| keep_on_link(event, &mut self.nets)) {
                 Some(BrowseEvent::Removed { fullname }) => self.leave(fullname, now),
                 Some(BrowseEvent::Resolved(record)) => {
                     self.leaving
@@ -192,6 +203,139 @@ impl Drop for MdnsBrowser {
             let _ = daemon.shutdown();
         }
     }
+}
+
+/// One address of this computer's interfaces, with its on-link prefix length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalNet {
+    pub address: IpAddr,
+    pub prefix: u8,
+}
+
+/// This computer's interface addresses now; none when the OS won't list them.
+pub fn local_nets() -> Vec<LocalNet> {
+    let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+    interfaces
+        .iter()
+        .map(|interface| LocalNet {
+            address: interface.ip(),
+            prefix: match &interface.addr {
+                if_addrs::IfAddr::V4(v4) => v4.prefixlen,
+                if_addrs::IfAddr::V6(v6) => v6.prefixlen,
+            },
+        })
+        .collect()
+}
+
+/// How long the browser reuses its list of this computer's interfaces.
+const NETS_REFRESH: Duration = Duration::from_secs(1);
+
+/// The interface addresses of C135: read from the OS at most once per
+/// [`NETS_REFRESH`], since listing them is slow on Windows and interfaces
+/// come and go, or fixed by a test.
+enum Nets {
+    Live(Option<(Instant, Vec<LocalNet>)>),
+    Fixed(Vec<LocalNet>),
+}
+
+impl Nets {
+    fn current(&mut self) -> &[LocalNet] {
+        match self {
+            Nets::Fixed(nets) => nets,
+            Nets::Live(cache) => {
+                if cache
+                    .as_ref()
+                    .is_some_and(|(read, _)| read.elapsed() >= NETS_REFRESH)
+                {
+                    *cache = None;
+                }
+                &cache
+                    .get_or_insert_with(|| (Instant::now(), local_nets()))
+                    .1
+            }
+        }
+    }
+}
+
+/// A resolved instance keeps only the addresses C135 admits and is dropped
+/// when none is left.
+fn keep_on_link(event: BrowseEvent, nets: &mut Nets) -> Option<BrowseEvent> {
+    let BrowseEvent::Resolved(mut record) = event else {
+        return Some(event);
+    };
+    let nets = nets.current();
+    record
+        .addresses
+        .retain(|&address| on_local_link(address, nets));
+    (!record.addresses.is_empty()).then_some(BrowseEvent::Resolved(record))
+}
+
+/// Whether discovery may use an address (C135). Never loopback,
+/// unspecified, multicast, broadcast or one of `nets` itself; a link-local
+/// address only when `nets` holds one of its kind; otherwise an address
+/// inside the subnet of one of `nets`, or a private or unique local one
+/// that an mDNS reflector passed on from a routed network.
+pub fn on_local_link(address: IpAddr, nets: &[LocalNet]) -> bool {
+    let address = address.to_canonical();
+    if address.is_loopback()
+        || address.is_unspecified()
+        || address.is_multicast()
+        || address == IpAddr::V4(Ipv4Addr::BROADCAST)
+        || nets.iter().any(|net| net.address.to_canonical() == address)
+    {
+        return false;
+    }
+    if link_local(address) {
+        return nets.iter().any(|net| {
+            link_local(net.address.to_canonical()) && net.address.is_ipv4() == address.is_ipv4()
+        });
+    }
+    let in_ours = |broadcast| {
+        nets.iter().any(|net| {
+            in_subnet(address, net.address.to_canonical(), net.prefix) == Some(broadcast)
+        })
+    };
+    if in_ours(true) {
+        return false;
+    }
+    in_ours(false)
+        || match address {
+            IpAddr::V4(v4) => v4.is_private(),
+            IpAddr::V6(v6) => v6.segments()[0] & 0xfe00 == 0xfc00,
+        }
+}
+
+fn link_local(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(v6) => v6.segments()[0] & 0xffc0 == 0xfe80,
+    }
+}
+
+/// Whether `address` is inside the subnet of `own`, and if so whether it is
+/// that IPv4 subnet's broadcast address. Teredo (2001::/32) and 6to4
+/// (2002::/16) prefixes are built from public IPv4 addresses, so they are
+/// no link; a prefix of 0 is an address the OS listed without a netmask,
+/// not a link to the whole internet.
+fn in_subnet(address: IpAddr, own: IpAddr, prefix: u8) -> Option<bool> {
+    let (address, own, width) = match (address, own) {
+        (IpAddr::V4(address), IpAddr::V4(own)) => {
+            (u128::from(address.to_bits()), u128::from(own.to_bits()), 32)
+        }
+        (IpAddr::V6(address), IpAddr::V6(own))
+            if own.segments()[..2] != [0x2001, 0] && own.segments()[0] != 0x2002 =>
+        {
+            (address.to_bits(), own.to_bits(), 128)
+        }
+        _ => return None,
+    };
+    if prefix == 0 || u32::from(prefix) > width {
+        return None;
+    }
+    let host_bits = width - u32::from(prefix);
+    let host_mask = (1u128 << host_bits) - 1;
+    ((address ^ own) & !host_mask == 0)
+        .then_some(width == 32 && host_bits >= 2 && address & host_mask == host_mask)
 }
 
 /// One `mdns-sd` event as a browse event: a resolved `_googlecast._tcp`
