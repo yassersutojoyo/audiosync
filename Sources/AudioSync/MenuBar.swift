@@ -374,7 +374,7 @@ final class AppModel: ObservableObject {
         for draft in drafts.values { draft.field.drop() }
     }
     /// Every way a panel opens or closes animates the same.
-    static let delayPanelAnimation = Animation.easeInOut(duration: 0.15)
+    static var delayPanelAnimation: Animation? { Motion.panel(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) }
     /// A click on a row's delay value or on its row: the other panels'
     /// typing applies first, and they stay open.
     func toggleDelayPanel(_ id: String) {
@@ -1900,6 +1900,7 @@ struct SpeakerBadge: View {
     let symbol: String
     let state: SpeakerState
     var size: CGFloat = 30
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -1918,6 +1919,7 @@ struct SpeakerBadge: View {
                 .foregroundStyle(iconColor)
         }
         .frame(width: size, height: size)
+        .animation(Motion.state(reduceMotion: reduceMotion), value: state)
         .accessibilityHidden(true)
     }
 
@@ -2180,6 +2182,7 @@ struct PresetPicker: View {
 struct InputLevelMeter: View {
     @ObservedObject var level: InputLevel
     let text: UIStrings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
@@ -2187,6 +2190,7 @@ struct InputLevelMeter: View {
                 Capsule().fill(Brand.meterTrack)
                 Capsule().fill(Brand.tealText)
                     .frame(width: geometry.size.width * CGFloat(min(max(level.level, 0), 1)))
+                    .animation(Motion.meter(reduceMotion: reduceMotion), value: level.level)
             }
         }
         .frame(height: 4)

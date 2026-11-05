@@ -468,6 +468,7 @@ struct MainView: View {
                             .padding(10)
                     }
                 }
+                .animation(Motion.rows(reduceMotion: reduceMotion), value: speakers.map(\.id) + zoned.map(\.id))
             }
         }
     }
@@ -777,9 +778,10 @@ final class ZoneDisclosure: ObservableObject {
 }
 
 /// Whether a speaker row's volume slider is held. An object rather than
-/// @State, for the same reason as ZoneDisclosure; nothing redraws on it.
+/// @State, for the same reason as ZoneDisclosure; the row's volume number
+/// redraws on it.
 final class VolumeDrag: ObservableObject {
-    var held = false
+    @Published var held = false
 }
 
 /// One zone: its header (disclosure, switch, volume, options), then its
@@ -1172,6 +1174,7 @@ struct SpeakerRow: View {
     @FocusState private var switchFocused: Bool
     /// The volume slider is held; a row closed mid-drag never sees the release.
     @StateObject private var volumeDrag = VolumeDrag()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let t = model.text
@@ -1262,9 +1265,11 @@ struct SpeakerRow: View {
                             .modifier(CastVolumeKeys(step: speaker.isCast
                                 ? { up in model.actions.stepCastVolume(speaker.id, up) } : nil))
                             .focused($volumeFocused)
+                        // While held, the number brightens and never trails the knob.
                         Text(t.volumeValue(speaker.volume))
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(Brand.secondaryText)
+                            .foregroundStyle(volumeDrag.held ? Color.primary : Brand.secondaryText)
+                            .transaction { $0.animation = nil }
                             .frame(width: 26, alignment: .trailing)
                             .accessibilityHidden(true)
                     }
@@ -1318,7 +1323,8 @@ struct SpeakerRow: View {
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
-            .fill(state == .playing && !grouped ? accent.opacity(0.08) : Color.clear))
+            .fill(state == .playing && !grouped ? accent.opacity(0.08) : Color.clear)
+            .animation(Motion.state(reduceMotion: reduceMotion), value: state))
         // A click on the row's box, between its dividers and its open
         // panel's blank space included, works like its delay value; a row
         // without one (AirPlay, the reference) is outside every panel. The
@@ -1507,7 +1513,7 @@ struct AirPlayDelayRow: View {
 
 /// A row's delay value, which opens and closes its panel. It reads the saved
 /// delay from the model by ID (`DelayBadge`), so a delay applied with the
-/// panel open shows at once; the new number rolls in (a crossfade under
+/// panel open shows at once; the new number rolls in (at once under
 /// Reduce Motion), and a brief teal highlight marks each apply from the
 /// row's own panel.
 private struct DelayValueButton: View {
@@ -1533,8 +1539,8 @@ private struct DelayValueButton: View {
                 if showsTimer { Image(systemName: "timer") }
                 Text(value)
                     .monospacedDigit()
-                    .contentTransition(reduceMotion ? .opacity : .numericText(value: ms ?? 0))
-                    .animation(.snappy(duration: 0.3), value: ms)
+                    .contentTransition(.numericText(value: ms ?? 0))
+                    .animation(Motion.value(reduceMotion: reduceMotion), value: ms)
             }
             .font(.callout)
             // Callout text: the readable teal (≥ 4.5:1), not the brand teal.
