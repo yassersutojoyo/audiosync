@@ -98,18 +98,6 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 - More in the AudioSync Guide, in the gear menu on the Mac and under Help > AudioSync Guide on Windows and Linux.
 - If something fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log. On the Mac: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`. On Windows the steps are under [Running the exe](desktop/README.md#running-the-exe).
 
-## What's new in 0.8.7
-
-Mostly security fixes:
-
-- The Web Remote no longer lists microphones or other inputs, and a paired phone only works from the network address it paired from. If your phone gets a new address on the Wi-Fi, the remote asks for the pairing code again.
-- An Apple TV paired over AirPlay 1 by an older version needs its code once more the next time you turn it on.
-- On the Mac, other apps can no longer use AudioSync's microphone permission by running their code inside it.
-- Another device on your network has a harder time posing as one of your Google Cast speakers.
-- A speaker whose connection crashes no longer hangs: an AirPlay speaker connects again, and a Cast speaker picks the stream up again or stops with an error you can see.
-
-Older versions are in [`CHANGELOG.md`](CHANGELOG.md).
-
 ## License and credits
 
 Copyright (c) 2026 Yasser Sutojoyo Kusumo. GPL-3.0-or-later, no warranty. See [`LICENSE`](LICENSE). Stuff it bundles from others, like the Poppins font, is listed with its license in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
