@@ -819,8 +819,9 @@ pub struct App {
     /// Which new notice Narrator is told about.
     notice_announcer: RefCell<NoticeAnnouncer>,
     /// The notices fading out of the main window after a dismiss. Kept here,
-    /// not in the rows, which a refresh may rebuild mid-fade.
-    closing_notices: RefCell<Vec<u64>>,
+    /// not in the rows, which a refresh may rebuild mid-fade. Each keeps the
+    /// text it fades with, so one raised again with new text leaves the fade.
+    closing_notices: RefCell<Vec<(u64, NoticeMessage)>>,
     /// The calibration ending Narrator was last told about.
     calibration_announced: RefCell<Option<(String, Phase)>>,
     /// The Calibrate All ending Narrator was last told about.
@@ -900,10 +901,12 @@ fn close_main_notices(weak: &Weak<App>, ids: Option<u64>) {
             .snapshot()
             .notices
             .into_iter()
-            .filter(|n| ids.is_none_or(|id| id == n.id) && !closing.contains(&n.id))
+            .filter(|n| {
+                ids.is_none_or(|id| id == n.id) && closing.iter().all(|(id, _)| *id != n.id)
+            })
             .map(|n| (n.id, n.message))
             .collect();
-        closing.extend(new.iter().map(|(id, _)| *id));
+        closing.extend(new.iter().cloned());
         new
     };
     if shown.is_empty() {
@@ -926,7 +929,7 @@ fn close_main_notices(weak: &Weak<App>, ids: Option<u64>) {
             // One raised again under its ID with new text stays, shown in full.
             app.closing_notices
                 .borrow_mut()
-                .retain(|id| shown.iter().all(|(faded, _)| faded != id));
+                .retain(|fading| !shown.contains(fading));
             app.dismiss_listed_notices(|n| {
                 shown.iter().any(|(id, m)| *id == n.id && *m == n.message)
             })
@@ -2127,8 +2130,13 @@ impl App {
         let known = self.notice_announcer.borrow().posted.clone();
         let closing = {
             let mut closing = self.closing_notices.borrow_mut();
-            closing.retain(|id| state.notices.iter().any(|n| n.id == *id));
-            closing.clone()
+            closing.retain(|(id, message)| {
+                state
+                    .notices
+                    .iter()
+                    .any(|n| n.id == *id && n.message == *message)
+            });
+            closing.iter().map(|(id, _)| *id).collect::<Vec<u64>>()
         };
         let mut notices: Vec<NoticeItem> = state
             .notices
@@ -7220,6 +7228,35 @@ mod tests {
             .map(|n| n.closing)
             .collect();
         assert_eq!(shown, [false]);
+    }
+
+    /// A notice raised again with new text during its old text's fade can
+    /// be dismissed at once, before the old fade ends.
+    #[test]
+    fn a_notice_raised_again_during_its_fade_dismisses_before_the_old_fade_ends() {
+        let app = two_notices_shown();
+        let dialog_title = |app: &App| {
+            app.main
+                .get_notices()
+                .iter()
+                .find(|n| u64::try_from(n.id) == Ok(DIALOG_NOTICE_ID))
+                .map(|n| n.title)
+        };
+        click_dismiss(&app, dialog_title(&app).expect("the dialog notice"));
+        advance_clock(Duration::from_millis(100));
+        let mut again = dialog_notice();
+        again.message = NoticeMessage::DialogMessage {
+            title: "Rename".to_owned(),
+            text: "Too long".to_owned(),
+        };
+        app.ui.borrow_mut().dialog_notice = Some(again);
+        app.refresh();
+        draw_frames();
+        advance_clock(Duration::from_millis(50));
+        click_dismiss(&app, dialog_title(&app).expect("the notice raised again"));
+        advance_clock(Duration::from_millis(600));
+        draw_frames();
+        assert_eq!(dialog_title(&app), None);
     }
 
     // covers: S421
