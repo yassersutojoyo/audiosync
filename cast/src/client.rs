@@ -387,6 +387,26 @@ pub struct DeviceAuth {
     /// A group is never pinned.
     pub group: bool,
     pub book: Arc<Mutex<DeviceKeyBook>>,
+    /// The roots the reply's chain must reach: the embedded ones (C126).
+    roots: Vec<Vec<u8>>,
+}
+
+impl DeviceAuth {
+    pub fn new(key: String, group: bool, book: Arc<Mutex<DeviceKeyBook>>) -> DeviceAuth {
+        DeviceAuth {
+            key,
+            group,
+            book,
+            roots: auth::ROOTS.iter().map(|root| root.to_vec()).collect(),
+        }
+    }
+
+    /// Trusts `roots` in place of the embedded ones, for a test's own chain.
+    #[doc(hidden)]
+    pub fn with_roots(mut self, roots: Vec<Vec<u8>>) -> DeviceAuth {
+        self.roots = roots;
+        self
+    }
 }
 
 /// Sends the challenge and waits for the reply, dropping anything else
@@ -419,7 +439,11 @@ fn authenticate(
                     let now = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .map_or(0, |since| since.as_secs() as i64);
-                    return Ok(auth::judge(&message, &nonce, peer, now, &auth::ROOTS));
+                    let roots: Vec<&[u8]> = match auth {
+                        Some(auth) => auth.roots.iter().map(Vec::as_slice).collect(),
+                        None => auth::ROOTS.to_vec(),
+                    };
+                    return Ok(auth::judge(&message, &nonce, peer, now, &roots));
                 }
                 Ok(Some(_)) => {}
                 Ok(None) => break,

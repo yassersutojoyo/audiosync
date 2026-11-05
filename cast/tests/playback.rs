@@ -1495,11 +1495,7 @@ fn a_close_from_the_app_on_a_silent_device_recovers_as_a_dead_channel() {
 fn a_start_that_fails_after_the_warning_warns_again_next_time() {
     let book = Arc::new(Mutex::new(DeviceKeyBook::new()));
     let authed = |device: &FakeDevice| SessionConfig {
-        auth: Some(DeviceAuth {
-            key: "dev".to_owned(),
-            group: false,
-            book: Arc::clone(&book),
-        }),
+        auth: Some(DeviceAuth::new("dev".to_owned(), false, Arc::clone(&book))),
         ..config(device)
     };
     let refusing = FakeDevice::start(Behavior {

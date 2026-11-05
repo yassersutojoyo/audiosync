@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use audiosync_cast::framing::{FrameReader, encode_frame};
 use audiosync_cast::message::{
@@ -80,8 +80,11 @@ pub enum OnMediaStatus {
 }
 
 /// How the fake device answers the device authentication challenge.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug)]
 pub enum OnAuth {
+    /// The payload `.0` makes from the challenge's payload and the
+    /// connection's certificate; that certificate then lasts two days (C124).
+    Answer(fn(&[u8], &[u8]) -> Vec<u8>),
     /// An `AuthError` with `INTERNAL_ERROR`.
     Decline,
     Ignore,
@@ -293,6 +296,12 @@ fn server_config(behavior: &Behavior) -> (Arc<ServerConfig>, Vec<u8>) {
     };
     let mut params = rcgen::CertificateParams::new(behavior.names.clone()).expect("names");
     params.serial_number = Some(SERIAL.fetch_add(1, Ordering::Relaxed).into());
+    if let OnAuth::Answer(_) = behavior.on_auth {
+        let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock");
+        let now = rcgen::date_time_ymd(1970, 1, 1) + since_epoch;
+        params.not_before = now - Duration::from_secs(86_400);
+        params.not_after = now + Duration::from_secs(86_400);
+    }
     let certificate = params
         .self_signed(&key_pair)
         .expect("certificate")
@@ -336,6 +345,7 @@ impl FakeDevice {
         let suites = Arc::new(Mutex::new(Vec::new()));
         let (commands, receiver) = mpsc::channel();
         let mut device = Device {
+            certificate: certificate.clone(),
             apps: behavior.apps.clone(),
             behavior,
             launches: 0,
@@ -540,6 +550,8 @@ pub fn json_message(
 }
 
 struct Device {
+    /// The certificate it serves, unless a new one is made per connection.
+    certificate: Vec<u8>,
     behavior: Behavior,
     apps: Vec<Value>,
     launches: u32,
@@ -579,6 +591,10 @@ impl Device {
                     // An AuthError (field 3) holding error_type 0.
                     OnAuth::Decline => vec![0x1a, 0x02, 0x08, 0x00],
                     OnAuth::Garbage => vec![0xff, 0xff, 0xff],
+                    OnAuth::Answer(answer) => answer(
+                        message.payload_binary.as_deref().unwrap_or_default(),
+                        &self.certificate,
+                    ),
                     OnAuth::Ignore | OnAuth::Close => return Vec::new(),
                 };
                 vec![CastMessage {
@@ -957,7 +973,7 @@ fn serve(
                     }
                     log.lock().expect("log").push(message.clone());
                     if message.namespace == NS_DEVICE_AUTH
-                        && device.behavior.on_auth == OnAuth::Close
+                        && matches!(device.behavior.on_auth, OnAuth::Close)
                     {
                         let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
                         return false;

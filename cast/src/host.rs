@@ -960,11 +960,11 @@ impl Worker {
                 id: device,
                 book: Arc::clone(&self.fingerprints),
             }),
-            auth: Some(DeviceAuth {
-                key: device.to_string(),
+            auth: Some(DeviceAuth::new(
+                device.to_string(),
                 group,
-                book: Arc::clone(&self.shared.device_keys),
-            }),
+                Arc::clone(&self.shared.device_keys),
+            )),
         };
         // Connect retries go out live, while the start still runs; one that
         // finds the outbox full, or held events still in the way, is dropped

@@ -558,11 +558,7 @@ fn the_challenge_goes_out_first_and_later_device_auth_messages_are_ignored() {
 
 fn auth_for(key: &str) -> (DeviceAuth, Arc<Mutex<DeviceKeyBook>>) {
     let book = Arc::new(Mutex::new(DeviceKeyBook::new()));
-    let auth = DeviceAuth {
-        key: key.to_owned(),
-        group: false,
-        book: Arc::clone(&book),
-    };
+    let auth = DeviceAuth::new(key.to_owned(), false, Arc::clone(&book));
     (auth, book)
 }
 

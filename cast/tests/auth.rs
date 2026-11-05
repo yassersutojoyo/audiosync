@@ -2,7 +2,10 @@
 //! embedded roots (C119 to C128), against chains made in each test under a
 //! test root.
 
-use std::sync::OnceLock;
+mod common;
+
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use audiosync_cast::auth::{
@@ -10,9 +13,13 @@ use audiosync_cast::auth::{
     Failure, HASH_SHA1, HASH_SHA256, KeyPin, Outcome, SIGNATURE_RSASSA_PKCS1V15,
     SIGNATURE_RSASSA_PSS, SIGNATURE_UNSPECIFIED, Verified,
 };
+use audiosync_cast::client::{CastClient, DeviceAuth};
+use audiosync_cast::device_keys::{DeviceKeyBook, Entry};
+use audiosync_cast::ids::RequestIds;
 use audiosync_cast::message::{
     CastMessage, NS_DEVICE_AUTH, PLATFORM, PayloadType, ProtocolVersion, SENDER,
 };
+use common::{Behavior, FakeDevice, OnAuth};
 use prost::Message;
 use rcgen::{
     BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa, Issuer,
@@ -696,4 +703,61 @@ fn each_outcome_reads_as_the_log_line_says() {
         "no answer in 1 s"
     );
     assert_eq!(key.short(), "abababababababab");
+}
+
+fn wire_chain() -> &'static Chain {
+    static CHAIN: OnceLock<Chain> = OnceLock::new();
+    CHAIN.get_or_init(chain)
+}
+
+/// What a genuine device with [`wire_chain`] answers to `challenge` over a
+/// connection served with `tls`.
+fn genuine_answer(challenge: &[u8], tls: &[u8]) -> Vec<u8> {
+    let nonce = (DeviceAuthMessage::decode(challenge).ok())
+        .and_then(|message| message.challenge?.sender_nonce)
+        .unwrap_or_default();
+    let mut signed = nonce.clone();
+    signed.extend_from_slice(tls);
+    let response = AuthResponse {
+        signature: Some(sign(&key().0, false, &signed)),
+        sender_nonce: Some(nonce),
+        ..response(wire_chain())
+    };
+    let message = DeviceAuthMessage {
+        challenge: None,
+        response: Some(response),
+        error: None,
+    };
+    message.encode_to_vec()
+}
+
+// covers: C119, C122, C129
+#[test]
+fn a_genuine_device_is_verified_and_pinned_over_the_wire() {
+    let device = FakeDevice::start(Behavior {
+        on_auth: OnAuth::Answer(genuine_answer),
+        ..Behavior::default()
+    });
+    let book = Arc::new(Mutex::new(DeviceKeyBook::new()));
+    let auth = DeviceAuth::new("dev".to_owned(), false, Arc::clone(&book))
+        .with_roots(vec![wire_chain().root.clone()]);
+    let mut client = CastClient::connect_authed(
+        &[device.address],
+        RequestIds::starting_at(10),
+        &AtomicBool::new(true),
+        None,
+        Some(&auth),
+    )
+    .expect("goes ahead");
+    let pin = device_pin(wire_chain());
+    assert_eq!(
+        client.take_auth().expect("judged").line,
+        format!("cast auth dev: pinned {}", pin.short())
+    );
+    assert_eq!(
+        book.lock().expect("book").entry("dev"),
+        Some(Entry::Pin(pin))
+    );
+    let _ = client.stop(Duration::from_secs(1));
+    device.join();
 }
