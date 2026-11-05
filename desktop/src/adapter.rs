@@ -2840,11 +2840,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         message: &NoticeMessage,
     ) -> bool {
         let name = match message {
-            NoticeMessage::CastCantPlay { problem, .. }
-                if *problem == ui_model::CastProblem::TakenOver =>
-            {
-                return false;
-            }
+            NoticeMessage::CastCantPlay {
+                problem: ui_model::CastProblem::TakenOver | ui_model::CastProblem::Unauthenticated,
+                ..
+            } => return false,
             NoticeMessage::AirPlayCantPlay {
                 problem:
                     ui_model::AirPlayProblem::NeedsPassword
@@ -4341,6 +4340,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.note_speakers();
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
+            BackendEvent::CastUnauthenticated { id } => {
+                let speaker = self.cast_name(&id);
+                let problem = ui_model::CastProblem::Unauthenticated;
+                let message = NoticeMessage::CastCantPlay { speaker, problem };
+                self.post(NoticeSubject::Cast(id), message);
+            }
             BackendEvent::CastMemoryChanged => {
                 self.save_cast_memory();
             }
@@ -6097,6 +6102,7 @@ fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
         CastProblem::TakenOver => P::TakenOver,
         CastProblem::ConnectionLost => P::ConnectionLost,
         CastProblem::SearchStopped => P::SearchStopped,
+        CastProblem::NotGenuine => P::NotGenuine,
     }
 }
 

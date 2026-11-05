@@ -559,8 +559,10 @@ dependencies = [
  "mdns-sd",
  "native-tls",
  "prost",
+ "ring",
  "serde_json",
  "sha2",
+ "x509-parser",
 ]
 
 [[package]]

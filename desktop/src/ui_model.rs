@@ -421,6 +421,10 @@ pub enum CastProblem {
     TakenOver,
     ConnectionLost,
     SearchStopped,
+    /// Its answer to device authentication failed the checks.
+    NotGenuine,
+    /// It didn't prove it's genuine and plays anyway; it stays on.
+    Unauthenticated,
 }
 
 /// Why a speaker that is on can't play right now. Its row says so instead

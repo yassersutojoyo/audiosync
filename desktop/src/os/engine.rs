@@ -67,6 +67,8 @@ const CAST_FILE_NAME: &str = "cast-speakers.json";
 /// The file that keeps each Google Cast speaker's last certificate
 /// fingerprint, so a change across a relaunch is logged (C21).
 const CAST_CERTIFICATES_FILE_NAME: &str = "cast-certificates.txt";
+/// The device key pins of Cast device authentication (spec C129).
+const CAST_DEVICE_KEYS_FILE_NAME: &str = "cast-device-keys.txt";
 
 /// Starts the Google Cast host with the speakers' offsets and formats from
 /// their file, and returns that file for the changes, `None` when the system
@@ -78,6 +80,7 @@ fn start_cast<D: Driver>(
     log: &DebugLog,
 ) -> (Option<std::path::PathBuf>, bool) {
     use audiosync_cast::client::FingerprintBook;
+    use audiosync_cast::device_keys::DeviceKeyBook;
     use audiosync_cast::host::DeviceMemory;
     let path = data_folder::folder().map(|folder| folder.join(CAST_FILE_NAME));
     let mut unread = false;
@@ -110,7 +113,24 @@ fn start_cast<D: Driver>(
         }
         None => FingerprintBook::new(),
     };
-    match audio::cast::HostLink::start(memory, fingerprints) {
+    let device_keys = match data_folder::folder() {
+        Some(folder) => {
+            let (book, error) = DeviceKeyBook::open(
+                folder.join(CAST_DEVICE_KEYS_FILE_NAME),
+                data_folder::read_at_launch,
+                data_folder::write_atomically,
+            );
+            if let Some(error) = error {
+                log.log(|| format!("Cast: the device keys file couldn't be read: {error}"));
+            }
+            let save_log = log.clone();
+            book.on_save_error(move |error| {
+                save_log.log(|| format!("Cast: the device keys file couldn't be written: {error}"));
+            })
+        }
+        None => DeviceKeyBook::new(),
+    };
+    match audio::cast::HostLink::start(memory, fingerprints, device_keys) {
         Ok((link, browse_error)) => {
             match browse_error {
                 Some(error) => log.log(|| format!("Cast: discovery couldn't start: {error}")),

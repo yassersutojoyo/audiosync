@@ -399,6 +399,11 @@ pub trait CastLink: Send {
     /// Tears down whatever runs within C88's budget; the one call that
     /// waits. Returns whether it finished in time.
     fn shutdown(&mut self) -> bool;
+    /// Clears `device`'s device authentication pin or mark (C133); the
+    /// line to log when there was one.
+    fn clear_device_key(&mut self, _device: DeviceId) -> Option<String> {
+        None
+    }
 }
 
 /// The real sender: [`CastHost`] and a live mDNS browser.
@@ -422,8 +427,9 @@ impl HostLink {
     pub fn start(
         memory: DeviceMemory,
         fingerprints: audiosync_cast::client::FingerprintBook,
+        device_keys: audiosync_cast::device_keys::DeviceKeyBook,
     ) -> io::Result<(HostLink, Option<String>)> {
-        let host = CastHost::with_fingerprints(memory, fingerprints)?;
+        let host = CastHost::with_books(memory, fingerprints, device_keys)?;
         let (browser, error) = match MdnsBrowser::new() {
             Ok(browser) => (Some(browser), None),
             Err(error) => (None, Some(error.to_string())),
@@ -497,6 +503,10 @@ impl CastLink for HostLink {
             Some(browser) if !browser.is_dead() => CastDiscovery::Browsing,
             _ => CastDiscovery::Failed,
         }
+    }
+
+    fn clear_device_key(&mut self, device: DeviceId) -> Option<String> {
+        self.host.clear_device_key(device)
     }
 
     fn shutdown(&mut self) -> bool {
@@ -747,6 +757,13 @@ impl CastSpeakers {
             self.sync();
         }
         let manual = self.manual.remove(index);
+        if let Some(link) = self.link.as_mut() {
+            for key in std::iter::once(manual.id).chain(manual.found) {
+                if let Some(line) = link.clear_device_key(key) {
+                    self.log.log(|| line);
+                }
+            }
+        }
         if let Some(socket) = manual.resolved
             && !self
                 .manual
@@ -1997,6 +2014,14 @@ impl CastSpeakers {
                     self.name(device)
                 )
             }),
+            SessionEvent::DeviceAuth { line, warn } => {
+                self.log.log(|| line);
+                if warn {
+                    self.pending.push(BackendEvent::CastUnauthenticated {
+                        id: device.to_string(),
+                    });
+                }
+            }
             SessionEvent::Members(members) => {
                 self.log.log(|| {
                     let names: Vec<String> = self
@@ -2065,6 +2090,9 @@ fn problem_of(end: &SessionEnd) -> Option<CastProblem> {
     match end {
         SessionEnd::Stopped | SessionEnd::Deselected => None,
         SessionEnd::TakenOver => Some(CastProblem::TakenOver),
+        SessionEnd::Failed(SessionError::Connect(ConnectError::Refused(_))) => {
+            Some(CastProblem::NotGenuine)
+        }
         SessionEnd::Failed(SessionError::Connect(_)) => Some(CastProblem::NotResponding),
         SessionEnd::Failed(SessionError::Media(MediaError::NoFetch)) => Some(CastProblem::Blocked),
         SessionEnd::Failed(SessionError::Launch(_) | SessionError::Media(_)) => {
@@ -2336,6 +2364,14 @@ pub mod tests {
         assert_eq!(problem_of(&blocked), Some(CastProblem::Blocked));
         let refused = SessionEnd::Failed(SessionError::Media(MediaError::LoadCancelled));
         assert_eq!(problem_of(&refused), Some(CastProblem::Refused));
+    }
+
+    // covers: C130
+    #[test]
+    fn a_device_that_fails_authentication_reads_as_not_genuine() {
+        let refused = ConnectError::Refused("cast auth dev: failed, chain, refused".into());
+        let end = SessionEnd::Failed(SessionError::Connect(refused));
+        assert_eq!(problem_of(&end), Some(CastProblem::NotGenuine));
     }
 
     // covers: C107
@@ -3043,6 +3079,42 @@ pub mod tests {
             &[&format!(
                 "Cast: Attic's certificate changed from {before} to {after}"
             )],
+        );
+    }
+
+    // covers: C131, C132
+    #[test]
+    fn an_unauthenticated_device_is_logged_and_warned_about_once() {
+        let dir = test_dir("cast-device-auth-log");
+        let log = DebugLog::new(Some(dir.join(FILE_NAME)));
+        let fake = FakeCast::default();
+        fake.announce(ATTIC, "Attic", 32_123);
+        let mut cast = CastSpeakers::new(fake.link(), log.clone());
+        cast.poll();
+        cast.set_streaming(true);
+        cast.set_enabled(ATTIC, true).unwrap();
+        for (line, warn) in [
+            ("unauthenticated, warned", true),
+            ("unauthenticated", false),
+        ] {
+            fake.report(HostEvent::Session {
+                attempt: AttemptId(1),
+                device: id(ATTIC),
+                event: SessionEvent::DeviceAuth {
+                    line: format!("cast auth {ATTIC}: {line}"),
+                    warn,
+                },
+            });
+            let warned = BackendEvent::CastUnauthenticated { id: ATTIC.into() };
+            assert_eq!(cast.poll().contains(&warned), warn);
+        }
+        assert!(log.flush(TEST_FLUSH));
+        assert_in_order(
+            &read_messages(&dir.join(FILE_NAME)),
+            &[
+                &format!("cast auth {ATTIC}: unauthenticated, warned"),
+                &format!("cast auth {ATTIC}: unauthenticated"),
+            ],
         );
     }
 

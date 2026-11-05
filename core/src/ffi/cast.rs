@@ -41,6 +41,7 @@ use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, Codec, MasterGain, audio_ring};
 use audiosync_cast::client::FingerprintBook;
+use audiosync_cast::device_keys::DeviceKeyBook;
 use audiosync_cast::discovery::mdns::MdnsBrowser;
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
@@ -153,8 +154,9 @@ pub const CAST_EVENT_VOLUME_UNANSWERED: i32 = 20;
 /// Someone paused the device itself; [`CAST_EVENT_PLAYING`] follows once
 /// its next `PLAYING` loaded the stream again (C113).
 pub const CAST_EVENT_PAUSED: i32 = 21;
-/// A line for the debug log, in `detail`: the certificates file couldn't
-/// be read or written (C21).
+/// A line for the debug log, in `detail`: the certificates or device keys
+/// file couldn't be read or written (C21, C129), or a device
+/// authentication line (C132).
 pub const CAST_EVENT_LOG: i32 = 22;
 
 /// How an attempt ended ([`AscCastEvent::reason`]): the sender's own
@@ -195,6 +197,9 @@ pub const CAST_ERROR_INTERNAL: i32 = 11;
 /// A connect failure with no address to try: a group waits for its records
 /// (C81), a single device counts toward the give-up (C80).
 pub const CAST_ERROR_NO_ADDRESS: i32 = 12;
+/// The device's answer to device authentication failed its checks; the
+/// target goes off and is not retried (C130).
+pub const CAST_ERROR_REFUSED: i32 = 13;
 
 /// A stream's format ([`AscCastEvent::format`]): live WAV.
 pub const CAST_FORMAT_WAV: i32 = 1;
@@ -662,6 +667,7 @@ fn stream_code(error: &StreamError) -> i32 {
 fn connect_code(error: &ConnectError) -> i32 {
     match error {
         ConnectError::NoAddress => CAST_ERROR_NO_ADDRESS,
+        ConnectError::Refused(_) => CAST_ERROR_REFUSED,
         _ => CAST_ERROR_CONNECT,
     }
 }
@@ -1177,6 +1183,11 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending.detail = format!("{before} to {after}");
             pending
         }
+        SessionEvent::DeviceAuth { line, .. } => {
+            let mut pending = Pending::new(CAST_EVENT_LOG);
+            pending.detail = line;
+            pending
+        }
         SessionEvent::Ended(end) => ended_event(end),
     }
 }
@@ -1312,6 +1323,24 @@ fn certificates_book(folder: Option<&Path>, shared: &Arc<Shared>) -> Fingerprint
     book
 }
 
+fn device_keys_book(folder: Option<&Path>, shared: &Arc<Shared>) -> DeviceKeyBook {
+    let Some(folder) = folder else {
+        return DeviceKeyBook::new();
+    };
+    let (book, error) = DeviceKeyBook::open(
+        folder.join("cast-device-keys.txt"),
+        |path| std::fs::read(path),
+        write_atomically,
+    );
+    if let Some(error) = error {
+        lock(&shared.log).push(format!("the device keys file couldn't be read: {error}"));
+    }
+    let save_shared = Arc::clone(shared);
+    book.on_save_error(move |error| {
+        lock(&save_shared.log).push(format!("the device keys file couldn't be written: {error}"));
+    })
+}
+
 fn create_with(
     memory_json: &str,
     folder: Option<&Path>,
@@ -1324,7 +1353,8 @@ fn create_with(
         let memory = DeviceMemory::from_json(memory_json);
         let shared = Arc::new(Shared::new());
         let book = certificates_book(folder, &shared);
-        let Ok(host) = CastHost::with_fingerprints(memory, book) else {
+        let keys = device_keys_book(folder, &shared);
+        let Ok(host) = CastHost::with_books(memory, book, keys) else {
             return ptr::null_mut();
         };
         Box::into_raw(Box::new(AscCast {
@@ -2928,6 +2958,13 @@ mod tests {
         };
         assert_eq!(code(ConnectError::NoAddress), CAST_ERROR_NO_ADDRESS);
         assert_eq!(code(ConnectError::NoStatus), CAST_ERROR_CONNECT);
+    }
+
+    // CAST_SPEC: C130
+    #[test]
+    fn a_device_that_fails_authentication_ends_with_its_own_code() {
+        let refused = SessionError::Connect(ConnectError::Refused("refused".into()));
+        assert_eq!(session_code(&refused), CAST_ERROR_REFUSED);
     }
 
     #[test]

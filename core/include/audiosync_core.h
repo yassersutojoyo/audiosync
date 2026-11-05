@@ -259,7 +259,7 @@ extern "C" {
 #define ASC_CAST_EVENT_CERTIFICATE_CHANGED 19 /* the device's certificate changed since its last connect: "<before> to <after>" in .detail, for the debug log */
 #define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level, .ask */
 #define ASC_CAST_EVENT_PAUSED 21           /* someone paused the device itself; PLAYING follows once its next play loaded the stream again */
-#define ASC_CAST_EVENT_LOG 22              /* a line for the debug log in .detail: the certificates file couldn't be read or written */
+#define ASC_CAST_EVENT_LOG 22              /* a line for the debug log in .detail: the certificates or device keys file couldn't be read or written, or a device authentication line */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
 #define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */
@@ -281,6 +281,7 @@ extern "C" {
 #define ASC_CAST_ERROR_GROUP 10       /* no longer reported: a Cast group plays like a device */
 #define ASC_CAST_ERROR_INTERNAL 11    /* a fault inside the sender; the next start runs (C107) */
 #define ASC_CAST_ERROR_NO_ADDRESS 12  /* no address to try: a group waits for its records (C81), a single device counts toward the give-up (C80) */
+#define ASC_CAST_ERROR_REFUSED 13     /* the device failed device authentication: turn it off, no retry (C130) */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1
