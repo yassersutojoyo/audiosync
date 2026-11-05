@@ -16,7 +16,7 @@ use serde_json::json;
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::auth::{
-    self, DeviceFile, Limits, LoadProblem, PairOutcome, Pairing, Snapshot, TokenStore,
+    self, DeviceFile, Limits, LoadProblem, MAX_DEVICES, PairOutcome, Pairing, Snapshot, TokenStore,
 };
 use crate::http::{self, Request, Response};
 use crate::net;
@@ -232,6 +232,8 @@ pub enum ServerEvent {
     Unpaired {
         from: IpAddr,
     },
+    /// A pairing beyond [`MAX_DEVICES`] forgot the device that paired first.
+    OldestForgotten,
     /// A request with a foreign `Host` or `Origin` (403).
     Refused {
         from: IpAddr,
@@ -283,6 +285,10 @@ impl fmt::Display for ServerEvent {
                 write!(f, "remote: pairing from {from} failed: {why}")
             }
             ServerEvent::Unpaired { from } => write!(f, "remote: the device at {from} unpaired"),
+            ServerEvent::OldestForgotten => write!(
+                f,
+                "remote: pairing more than {MAX_DEVICES} devices forgot the one that paired first"
+            ),
             ServerEvent::Refused { from, status } => {
                 write!(f, "remote: refused a request from {from} ({status})")
             }
@@ -1339,8 +1345,12 @@ fn pair(request: &Request, from: IpAddr, port: u16, shared: &Shared) -> Answer {
         return error(failure);
     }
     let snapshot = lock(&shared.devices).add(&token, from, SystemTime::now());
+    let forgot_oldest = snapshot.forgot_oldest();
     shared.save(snapshot);
     shared.report(ServerEvent::Paired { from });
+    if forgot_oldest {
+        shared.report(ServerEvent::OldestForgotten);
+    }
     if let Some(next_code) = next_code {
         shared.report(ServerEvent::PairingCode(next_code));
     }
