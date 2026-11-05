@@ -70,10 +70,23 @@ signer() { codesign -dvv "$1" 2>&1 | awk -F= '/^(Authority|Signature)=/ && !foun
 exe=$(plist CFBundleExecutable) || exe=AudioSync
 min=$(plist LSMinimumSystemVersion) || min=15.0
 bin="$contents/MacOS/$exe"
+# ./build.sh --release adds AudioSyncReleaseBuild and nothing else, so the bundle's copy
+# without that key must match the repository's, compared after plutil normalizes both.
+plist_unchanged() {
+  cmp -s Info.plist "$contents/Info.plist" && return 0
+  [ "$(plist AudioSyncReleaseBuild)" = true ] || return 1
+  local stripped status
+  stripped=$(mktemp) || return 1
+  cp "$contents/Info.plist" "$stripped" && plutil -remove AudioSyncReleaseBuild "$stripped" &&
+    [ "$(plutil -convert xml1 -o - Info.plist)" = "$(plutil -convert xml1 -o - "$stripped")" ]
+  status=$?
+  rm -f "$stripped"
+  return $status
+}
 
 echo "▶ Info.plist"
 expect "valid property list" plutil -lint "$contents/Info.plist"
-expect "the repository's Info.plist, unchanged" cmp -s Info.plist "$contents/Info.plist"
+expect "the repository's Info.plist, unchanged" plist_unchanged
 for key in CFBundleExecutable CFBundleIdentifier CFBundleShortVersionString CFBundleVersion \
   LSMinimumSystemVersion CFBundleIconFile ATSApplicationFontsPath \
   NSAudioCaptureUsageDescription NSMicrophoneUsageDescription NSLocalNetworkUsageDescription \
