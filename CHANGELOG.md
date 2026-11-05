@@ -2,6 +2,12 @@
 
 User-visible changes in each version. Loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/). Downloads are on the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page.
 
+## [Unreleased]
+
+### Security
+
+- Another device on your network can no longer keep the Web Remote's pairing locked for every phone by sending wrong codes from endless IPv6 addresses. Pairing locked that way stays open for a phone that opens the remote by the computer's IPv4 address.
+
 ## [0.8.7] - 2026-11-05
 
 ### Added

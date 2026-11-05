@@ -21,10 +21,13 @@ pub const WRONG_PER_WINDOW: usize = 5;
 /// Wrong codes one peer may send until the code is rotated; after that only
 /// that peer is refused.
 pub const WRONG_PER_PEER: u32 = 10;
-/// Wrong codes from all peers together after which pairing stays locked for
-/// everyone until the code is rotated. Above [`WRONG_PER_PEER`], so one peer
-/// alone never locks out the others. Only tries while a code works count,
-/// since a guess can't succeed while none does.
+/// Wrong codes from all peers of one kind together after which pairing stays
+/// locked for that kind until the code is rotated. The kinds are addresses a
+/// host can make up ([`net::made_up_address`]) and the rest, so a host with
+/// endless addresses never locks out a phone with an address the network
+/// handed out. Above [`WRONG_PER_PEER`], so one peer alone never locks out
+/// the others. Only tries while a code works count, since a guess can't
+/// succeed while none does.
 pub const WRONG_BEFORE_LOCK: u32 = 40;
 /// Devices remembered at once; pairing another drops the oldest.
 pub const MAX_DEVICES: usize = 8;
@@ -99,7 +102,7 @@ pub enum PairOutcome {
     Limited,
     /// This peer sent [`WRONG_PER_PEER`] wrong codes; rotating the code lets it try again.
     Blocked,
-    /// [`WRONG_BEFORE_LOCK`] wrong codes in total; rotating the code unlocks.
+    /// [`WRONG_BEFORE_LOCK`] wrong codes from this peer's kind; rotating the code unlocks.
     Locked,
 }
 
@@ -108,8 +111,9 @@ pub enum PairOutcome {
 pub struct Pairing {
     limits: Limits,
     code: Option<(String, Instant)>,
-    wrong_total: u32,
-    /// Holds a peer only after a wrong try, so it never holds more than [`WRONG_BEFORE_LOCK`] peers.
+    /// Indexed by [`net::made_up_address`].
+    wrong_total: [u32; 2],
+    /// Holds a peer only after a wrong try, so it never holds more than twice [`WRONG_BEFORE_LOCK`] peers.
     wrong_by_peer: HashMap<IpAddr, PeerTries>,
 }
 
@@ -124,7 +128,7 @@ impl Pairing {
         let mut pairing = Pairing {
             limits,
             code: None,
-            wrong_total: 0,
+            wrong_total: [0; 2],
             wrong_by_peer: HashMap::new(),
         };
         pairing.rotate(now)?;
@@ -134,7 +138,7 @@ impl Pairing {
     /// A new code, as when the user reopens the setting: the old one stops
     /// working, the lockout and the counts are cleared.
     pub fn rotate(&mut self, now: Instant) -> Result<String, RandomError> {
-        self.wrong_total = 0;
+        self.wrong_total = [0; 2];
         self.wrong_by_peer.clear();
         self.code = None;
         let code = random_code()?;
@@ -150,14 +154,18 @@ impl Pairing {
             .map(|(code, _)| code.as_str())
     }
 
+    /// Whether either kind of peer is locked out.
     pub fn locked(&self) -> bool {
-        self.wrong_total >= WRONG_BEFORE_LOCK
+        self.wrong_total
+            .iter()
+            .any(|&total| total >= WRONG_BEFORE_LOCK)
     }
 
     /// One try from `from`. A limited, blocked or locked try is refused
     /// before the code is looked at, so the right code doesn't get through either.
     pub fn attempt(&mut self, from: IpAddr, code: &str, now: Instant) -> PairOutcome {
-        if self.locked() {
+        let kind = usize::from(net::made_up_address(from));
+        if self.wrong_total[kind] >= WRONG_BEFORE_LOCK {
             return PairOutcome::Locked;
         }
         let peer = net::peer_group(from);
@@ -187,7 +195,7 @@ impl Pairing {
             None => PairOutcome::Expired,
         };
         if outcome == PairOutcome::Wrong {
-            self.wrong_total = self.wrong_total.saturating_add(1);
+            self.wrong_total[kind] = self.wrong_total[kind].saturating_add(1);
         } else if self.wrong_by_peer.len() >= WRONG_BEFORE_LOCK as usize
             && !self.wrong_by_peer.contains_key(&peer)
         {
@@ -889,6 +897,34 @@ mod tests {
         let fresh = pairing.rotate(later).unwrap();
         assert!(!pairing.locked());
         assert_eq!(pairing.attempt(peer(1), &fresh, later), PairOutcome::Paired);
+    }
+
+    // covers: S369
+    #[test]
+    fn addresses_a_host_can_make_up_never_lock_out_a_dhcp_address() {
+        let start = Instant::now();
+        let mut pairing = Pairing::new(short(), start).unwrap();
+        let code = pairing.current(start).unwrap().to_owned();
+        let wrong = wrong_for(&code);
+        for index in 0..WRONG_BEFORE_LOCK {
+            let group = (index as usize / WRONG_PER_WINDOW) as u8;
+            let from = if group.is_multiple_of(2) {
+                IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 1, 0, 0, 1, group.into()))
+            } else {
+                IpAddr::V4(Ipv4Addr::new(169, 254, 0, 1 + group))
+            };
+            assert_eq!(pairing.attempt(from, &wrong, start), PairOutcome::Wrong);
+        }
+        let ipv6_phone = IpAddr::V6(Ipv6Addr::new(0xfdab, 0, 0, 1, 0, 0, 0, 7));
+        assert_eq!(
+            pairing.attempt(ipv6_phone, &code, start),
+            PairOutcome::Locked
+        );
+        let ipv4_phone = IpAddr::V4(Ipv4Addr::new(192, 168, 1, 20));
+        assert_eq!(
+            pairing.attempt(ipv4_phone, &code, start),
+            PairOutcome::Paired
+        );
     }
 
     // covers: S369

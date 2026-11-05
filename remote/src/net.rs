@@ -39,6 +39,16 @@ pub fn peer_group(peer: IpAddr) -> IpAddr {
     peer.to_canonical()
 }
 
+/// Whether a host on the link can take as many addresses like `peer` as it
+/// likes: any IPv6 address (RFC 4862, RFC 8981) or an IPv4 link-local one
+/// (RFC 3927), unlike an IPv4 address the network hands out.
+pub fn made_up_address(peer: IpAddr) -> bool {
+    match peer.to_canonical() {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(_) => true,
+    }
+}
+
 /// The address a paired device's token is bound to: an IPv4 address whole,
 /// an IPv6 address by its /64, where a phone's temporary address changes
 /// at least daily (RFC 8981).
@@ -252,6 +262,18 @@ mod tests {
         );
         let mapped = IpAddr::V6(Ipv4Addr::new(192, 168, 1, 20).to_ipv6_mapped());
         assert_eq!(peer_group(mapped), v4(192, 168, 1, 20));
+    }
+
+    // covers: S369
+    #[test]
+    fn only_ipv6_and_ipv4_link_local_addresses_count_as_made_up() {
+        let mapped = IpAddr::V6(Ipv4Addr::new(192, 168, 1, 20).to_ipv6_mapped());
+        assert!(!made_up_address(mapped));
+        assert!(!made_up_address(v4(192, 168, 1, 20)));
+        assert!(!made_up_address(v4(127, 0, 0, 1)));
+        assert!(made_up_address(v4(169, 254, 3, 4)));
+        assert!(made_up_address(v6("::1")));
+        assert!(made_up_address(v6("fe80::1")));
     }
 
     // covers: S373
