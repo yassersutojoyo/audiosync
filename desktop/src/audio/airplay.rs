@@ -2305,6 +2305,8 @@ impl AirPlaySpeakers {
         };
         match self.listed_availability(id) {
             Some(AirPlayAvailability::NeedsPin) => {}
+            // Only a new pairing replaces credentials it turned down (P235).
+            Some(AirPlayAvailability::NeedsPassword) if self.store.homekit(id).is_some() => {}
             Some(availability) => return availability.problem().map_or(Ok(()), Err),
             None => return Err(AirPlayProblem::Unsupported),
         }
@@ -2339,7 +2341,9 @@ impl AirPlaySpeakers {
                 outlived_stream: false,
             },
         );
-        self.entry(id).enabled = true;
+        if !self.held_by_target(id) {
+            self.entry(id).enabled = true;
+        }
         Ok(())
     }
 
@@ -2561,7 +2565,8 @@ impl AirPlaySpeakers {
             let Some(member) = member else {
                 return Err(AirPlayProblem::Unsupported);
             };
-            self.queue_password_ask(&member, false, false, Some(id));
+            let pair = self.store.homekit(&member).is_some();
+            self.queue_password_ask(&member, false, pair, Some(id));
             self.entry(id).enabled = true;
             return Ok(());
         }
@@ -2574,7 +2579,8 @@ impl AirPlaySpeakers {
             });
             return Err(AirPlayProblem::Unsupported);
         }
-        self.queue_password_ask(id, false, false, None);
+        let pair = self.store.homekit(id).is_some();
+        self.queue_password_ask(id, false, pair, None);
         self.entry(id).enabled = true;
         Ok(())
     }
@@ -3414,6 +3420,12 @@ impl AirPlaySpeakers {
                     settings.enabled
                         && !self.added.contains_key(*id)
                         && !self.pairings.contains_key(*id)
+                        && !self.targets.get(*id).is_some_and(|target| {
+                            target
+                                .members
+                                .iter()
+                                .any(|member| self.pairings.contains_key(&speaker_id(&member.key)))
+                        })
                         && self.can_join(id)
                 })
                 .map(|(id, _)| id.clone())
@@ -3843,7 +3855,8 @@ impl AirPlaySpeakers {
                 };
                 let wrong = self.passwords.remove(id).is_some()
                     || matches!(error.kind, ErrorKind::WrongPassword);
-                self.queue_password_ask(id, wrong, true, None);
+                let target = self.holding_target(id).map(|target| target.id);
+                self.queue_password_ask(id, wrong, true, target.as_deref());
                 if run.outlived_stream {
                     self.mark_outlived_stream(id, true);
                 }
@@ -3853,7 +3866,10 @@ impl AirPlaySpeakers {
                 let Some(run) = self.pairings.remove(id) else {
                     return false;
                 };
-                self.off_after_pairing(id);
+                let owner = self
+                    .holding_target(id)
+                    .map_or_else(|| id.to_owned(), |target| target.id);
+                self.off_after_pairing(&owner);
                 let problem = match error.kind.user_reason() {
                     _ if run.outlived_stream => AirPlayProblem::NeedsPin,
                     reason @ (UserReason::Unsupported(_)
@@ -3862,10 +3878,7 @@ impl AirPlaySpeakers {
                     UserReason::Incompatible => AirPlayProblem::Unsupported,
                     _ => AirPlayProblem::PairingFailed,
                 };
-                events.push(BackendEvent::AirPlayFailed {
-                    id: id.to_owned(),
-                    problem,
-                });
+                events.push(BackendEvent::AirPlayFailed { id: owner, problem });
                 true
             }
             // A shutdown, already taken in. (The end of a pairing the user
@@ -3959,7 +3972,10 @@ impl AirPlaySpeakers {
     fn turn_on_paired(&mut self, id: &str, events: &mut Vec<BackendEvent>) {
         self.paired_by_user.insert(id.to_owned());
         self.paired_in_attempt.insert(id.to_owned());
-        self.entry(id).enabled = true;
+        // A member's target joins again with it (P235).
+        if !self.held_by_target(id) {
+            self.entry(id).enabled = true;
+        }
         self.reconcile();
         events.push(BackendEvent::AirPlayPaired { id: id.to_owned() });
     }
@@ -4376,7 +4392,8 @@ impl AirPlaySpeakers {
             added.remove(self.link.as_mut());
             self.forget_reported(target, &added);
             self.target_missing.remove(target);
-            self.queue_password_ask(member, turned_down, false, Some(target));
+            let pair = self.store.homekit(member).is_some();
+            self.queue_password_ask(member, turned_down, pair, Some(target));
             return true;
         }
         self.drop_password_ask(target, "its member asks for a password");
@@ -4538,7 +4555,8 @@ impl AirPlaySpeakers {
                     // meanwhile.
                     added.remove(self.link.as_mut());
                     self.forget_reported(id, &added);
-                    self.queue_password_ask(id, turned_down, false, None);
+                    let pair = self.store.homekit(id).is_some();
+                    self.queue_password_ask(id, turned_down, pair, None);
                     return true;
                 }
                 let Some(added) = self.added.get_mut(id) else {
@@ -8893,6 +8911,54 @@ pub mod tests {
         assert!(fake.take_calls().is_empty(), "no pairing runs any more");
     }
 
+    /// A reset speaker that asks for a password turns its stored AirPlay 2
+    /// credentials down; the password the user types then pairs it again
+    /// instead of reopening the prompt (P235).
+    // covers: P235
+    #[test]
+    fn a_reset_password_speaker_pairs_again_with_the_typed_password() {
+        use crate::audio::pairings::tests::homekit;
+
+        let fake = FakeAirPlay::new();
+        fake.set_airplay2(true);
+        let mut airplay = speakers(&fake);
+        airplay.set_streaming(true);
+        let study = airplay2_flagged(0x41, "Study", 0x80);
+        let id = id_of(&study);
+        airplay.store.open_airplay2();
+        airplay.store.insert_homekit(&id, homekit(0x33)).unwrap();
+        fake.appear(&study);
+        airplay.poll();
+        assert_eq!(airplay.set_enabled(&id, true), Ok(()));
+        airplay.begin_attempt(&id);
+        fake.fail(&study, ErrorKind::PairingRequired);
+        airplay.poll();
+        assert_eq!(
+            airplay.password_prompt().map(|prompt| prompt.wrong),
+            Some(false)
+        );
+        fake.take_calls();
+
+        assert!(airplay.submit_password(&id, "hunter2"));
+        assert_eq!(
+            fake.take_calls(),
+            [
+                Call::StartPairing(id.clone()),
+                Call::Password(id.clone(), "hunter2".to_owned())
+            ]
+        );
+        fake.pairing(&study, PairingEvent::HomeKitPaired(homekit(0x44)));
+        airplay.poll();
+        assert_eq!(airplay.store.homekit(&id), Some(&homekit(0x44)));
+        assert_eq!(airplay.password_prompt(), None);
+        assert!(airplay.speakers()[0].paired);
+        let calls = fake.take_calls();
+        assert!(
+            calls.iter().any(|call| matches!(call, Call::Add { .. })),
+            "it joins with the new credentials: {calls:?}"
+        );
+    }
+
     fn member_of(device: &Device) -> Member {
         Member {
             key: device.key.clone(),
@@ -11183,6 +11249,102 @@ pub mod tests {
         }));
         assert!(airplay.enabled_ids().is_empty());
         assert_eq!(airplay.password_prompt(), None);
+    }
+
+    /// The stereo pair while streaming, whose Right asks for a password and
+    /// keeps stored AirPlay 2 credentials.
+    fn reset_member_pair(fake: &FakeAirPlay) -> (AirPlaySpeakers, Device) {
+        use crate::audio::pairings::tests::homekit;
+
+        let (mut pair, left, _) = stereo_pair();
+        let right = airplay2_flagged(22, "Right", 0x80);
+        pair.members[1] = member_of(&right);
+        let mut airplay = with_target(fake, &pair, &[&left, &right]);
+        airplay.store.open_airplay2();
+        airplay
+            .store
+            .insert_homekit(&id_of(&right), homekit(0x33))
+            .unwrap();
+        airplay.set_streaming(true);
+        (airplay, right)
+    }
+
+    /// The stereo pair, switched on by the user, whose Right turned its
+    /// stored credentials down; the user typed Right's password.
+    fn reset_member_password_typed(fake: &FakeAirPlay) -> (AirPlaySpeakers, Device) {
+        let (mut airplay, right) = reset_member_pair(fake);
+        let id = id_of(&right);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        airplay.begin_attempt(PAIR);
+        fake.take_calls();
+        fake.fail(&right, ErrorKind::PairingRequired);
+        airplay.poll();
+        assert_eq!(fake.take_calls(), [Call::RemoveTarget(PAIR.to_owned())]);
+        assert!(airplay.submit_password(&id, "hunter2"));
+        assert_eq!(
+            fake.take_calls(),
+            [
+                Call::StartPairing(id.clone()),
+                Call::Password(id, "hunter2".to_owned())
+            ],
+            "the pair waits while Right pairs"
+        );
+        (airplay, right)
+    }
+
+    // covers: P235
+    #[test]
+    fn a_reset_password_member_pairs_again_and_its_pair_joins() {
+        use crate::audio::pairings::tests::homekit;
+
+        let fake = FakeAirPlay::new();
+        let (mut airplay, right) = reset_member_password_typed(&fake);
+        fake.pairing(&right, PairingEvent::HomeKitPaired(homekit(0x44)));
+        airplay.poll();
+        assert_eq!(airplay.store.homekit(&id_of(&right)), Some(&homekit(0x44)));
+        assert!(matches!(&fake.take_calls()[..], [Call::AddTarget { id, .. }, ..] if id == PAIR));
+        assert_eq!(airplay.enabled_ids(), [PAIR]);
+    }
+
+    // covers: P235
+    #[test]
+    fn a_reset_password_member_asked_for_on_the_pairs_switch_on_pairs_again() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, right) = reset_member_pair(&fake);
+        let id = id_of(&right);
+        airplay.set_enabled(PAIR, true).expect("the pair can play");
+        fake.fail(&right, ErrorKind::PairingRequired);
+        airplay.poll();
+        assert!(
+            airplay.enabled_ids().is_empty(),
+            "no attempt: the pair goes off"
+        );
+        assert_eq!(
+            airplay.set_enabled(PAIR, true),
+            Err(AirPlayProblem::NeedsPassword)
+        );
+        airplay.ask_password(PAIR).expect("the prompt opens");
+        fake.take_calls();
+        assert!(airplay.submit_password(&id, "hunter2"));
+        assert_eq!(
+            fake.take_calls(),
+            [
+                Call::StartPairing(id.clone()),
+                Call::Password(id, "hunter2".to_owned())
+            ],
+            "the first password pairs Right instead of joining the pair"
+        );
+    }
+
+    // covers: P235
+    #[test]
+    fn a_reset_password_member_that_fails_to_pair_turns_its_pair_off() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, right) = reset_member_password_typed(&fake);
+        fake.pairing(&right, pairing_failed(ErrorKind::PairingFailed, false));
+        airplay.poll();
+        assert!(airplay.enabled_ids().is_empty());
+        assert!(fake.take_calls().is_empty(), "the pair doesn't join");
     }
 
     // covers: P176

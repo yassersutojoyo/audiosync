@@ -152,7 +152,7 @@ fn tlv8_encoding() {
     assert_eq!(verify.get(tlv8::ENCRYPTED_DATA).map(<[u8]>::len), Some(120));
 }
 
-// covers: P61, P154, P219
+// covers: P61, P154, P219, P235
 #[test]
 fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     use homekit::{Stored, check_mode, choose_mode, status_flags};
@@ -174,9 +174,10 @@ fn the_pairing_is_chosen_from_credentials_then_status_flags() {
     assert_eq!(choose_mode((1 << 3) | (1 << 7), Stored::None), Mode::Pin);
     assert_eq!(choose_mode(1 << 7, Stored::None), Mode::Password);
     assert_eq!(choose_mode(0x4 | (1 << 17), Stored::None), Mode::Transient);
-    // Turned-down credentials verify again, unless the password can pair
-    // anew; they never fall back to a transient pairing (P154).
-    assert_eq!(choose_mode(0x80, Stored::TurnedDown), Mode::Password);
+    // Turned-down credentials verify again; they never fall back to a
+    // transient or, on their own, to a password pairing (P154).
+    assert_eq!(choose_mode(0x80, Stored::TurnedDown), Mode::Verify);
+    assert_eq!(choose_mode(0x80 | 0x200, Stored::TurnedDown), Mode::Verify);
     assert_eq!(choose_mode(0x244, Stored::TurnedDown), Mode::Verify);
     assert_eq!(choose_mode(0x4, Stored::TurnedDown), Mode::Verify);
     assert_eq!(choose_mode(0x4c, Stored::TurnedDown), Mode::Pin);

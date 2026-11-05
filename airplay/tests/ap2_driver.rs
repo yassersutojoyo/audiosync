@@ -583,9 +583,9 @@ fn homekit_credentials_and_the_device_id_persist_through_the_host() {
     sender.shutdown();
 }
 
-// covers: P154
+// covers: P154, P235
 #[test]
-fn rejected_homekit_credentials_stay_and_the_next_start_pairs_with_the_password() {
+fn rejected_homekit_credentials_stay_and_the_next_start_never_sends_the_password() {
     let _serial = serial();
     let mut fake = FakeAp2::new();
     fake.info_body = common::ap2::plist(common::ap2::dict(&[(
@@ -640,19 +640,25 @@ fn rejected_homekit_credentials_stay_and_the_next_start_pairs_with_the_password(
             .is_some()
     );
 
-    // The next start pairs again with the password instead of verifying.
+    // The next start verifies again: a turn-down proves nothing, so the
+    // password never goes to whoever answers (P235).
     server.fake().requests.clear();
     sender.add_speaker(device, with_password());
     assert!(
         events
-            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Playing)
+            .wait_state(&sender, &key, 2, LONG, |s| *s == SpeakerState::Failed)
             .is_some(),
         "{:?} {:?}",
         events.of(&key),
         server.fake().keys()
     );
+    assert_eq!(
+        errors(&events, &key),
+        vec![ErrorKind::PairingRequired, ErrorKind::PairingRequired]
+    );
     let keys = server.fake().keys();
-    assert!(keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
+    assert!(keys.contains(&"POST /pair-verify".to_owned()), "{keys:?}");
+    assert!(!keys.contains(&"POST /pair-setup".to_owned()), "{keys:?}");
     sender.shutdown();
 }
 

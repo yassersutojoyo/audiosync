@@ -1040,7 +1040,7 @@ struct NativeAirPlayModel {
     /// The sender couldn't start the pairing for `id` (no longer listed).
     mutating func pairingNotStarted(_ id: String) -> NativeAirPlayOutcome? {
         guard case .pairing? = stages[id] else { return nil }
-        return .turnOff(NativeAirPlayID.app(id), .unreachable)
+        return .turnOff(NativeAirPlayID.app(promptTargets.removeValue(forKey: id) ?? id), .unreachable)
     }
 
     /// A speaker's session asked for a password or a pairing (`problem`):
@@ -1081,6 +1081,12 @@ struct NativeAirPlayModel {
     private mutating func memberError(_ id: String, _ problem: NativeSpeakerEvent.Problem) -> NativeAirPlayOutcome? {
         guard problem == .passwordRequired || problem == .wrongPassword || problem == .pairingRequired && asksPasswordOnly(id),
               let target = memberOf[id], states[target] != nil else { return nil }
+        // Its stored pairing turned down, it pairs again with the password it holds, as a speaker does (P235).
+        if problem == .pairingRequired && keepsCredentials(id) && attempts.contains(target) && !pairedInAttempt.contains(id) {
+            promptTargets[id] = target
+            stages[id] = .pairing(afterWrongPin: false)
+            return .startPairing(id)
+        }
         let typed = passwords.remove(id) != nil
         guard attempts.contains(target) else {
             return .turnOff(NativeAirPlayID.app(target), .memberNeedsPassword(id))
@@ -1124,11 +1130,12 @@ struct NativeAirPlayModel {
             case .airPlay2Only: reason = .needsAirPlay2
             default: reason = .pairingFailed
             }
-            return .turnOff(NativeAirPlayID.app(id), reason)
+            return .turnOff(NativeAirPlayID.app(promptTargets.removeValue(forKey: id) ?? id), reason)
         case .paired(let id, _, _):
             // Turned off meanwhile: the credentials stay stored, the speaker off.
             guard stages[id]?.pairingRuns == true else { return nil }
             stages[id] = nil
+            promptTargets[id] = nil   // a member's target joins again
             pairedInAttempt.insert(id)
             return .paired(NativeAirPlayID.app(id))
         default:

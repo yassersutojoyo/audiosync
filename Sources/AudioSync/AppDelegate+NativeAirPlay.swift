@@ -285,6 +285,7 @@ extension AppDelegate {
     private func startNativePairing(_ receiver: String) {
         guard let native = nativeAirPlay else { return }
         if native.model.states[receiver] != nil { native.remove(receiver) }
+        if let target = native.model.promptTargets[receiver], native.model.states[target] != nil { native.remove(target) }
         DebugTrace.log("[AudioSync] native AirPlay: pairing with \(nativeLabel(receiver))")
         native.startPairing(receiver) { [weak self, weak native] started in
             guard !started, let self, let native, self.nativeAirPlay === native,

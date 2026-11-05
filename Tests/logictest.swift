@@ -5684,6 +5684,34 @@ do {
     while let prompt = pwAsked.nextPrompt() { _ = pwAsked.answered(prompt, code: "secret") }
     pwAsked.added(pair)
     var pwTyped = pwAsked
+    var pwKept = pwAsked
+    var keptRight = passwordOnly(right, "Right")
+    keptRight.credentialsKept = true
+    pwKept.apply(.changed(keptRight))
+    // covers: P235
+    check(pwKept.apply(.error(id: pair, .pairingRequired, retryMs: nil, detail: "")) == nil
+            && pwKept.apply(.error(id: right, .pairingRequired, retryMs: nil, detail: "")) == .startPairing(right)
+            && pwKept.promptTargets[right] == pair,
+          "P235 native airplay: a member that turned its stored pairing down starts a pairing instead of asking for its password")
+    pwKept.removed(pair)   // startNativePairing takes the pair out while Right pairs
+    let keptAsked = pwKept.apply(.passwordNeeded(id: right, wrong: false))
+    let keptPrompt = pwKept.nextPrompt()
+    // covers: P235
+    check(keptAsked == .prompt && keptPrompt == NativePrompt(id: right, password: true, wrong: false)
+            && pwKept.answered(keptPrompt!, code: "secret") == .sendPassword(pair: false)
+            && pwKept.promptTargets[right] == nil && pwKept.holdsPassword(right),
+          "P235 native airplay: the member's pairing asks for its password, and the answer restarts the pair with it")
+    pwKept.added(pair)
+    // covers: P235
+    check(pwKept.apply(.error(id: pair, .pairingRequired, retryMs: nil, detail: "")) == nil
+            && pwKept.apply(.error(id: right, .pairingRequired, retryMs: nil, detail: "")) == .startPairing(right)
+            && pwKept.holdsPassword(right) && pwKept.promptTargets[right] == pair,
+          "P235 native airplay: turned down again, the member pairs with the password it now holds")
+    pwKept.removed(pair)
+    // covers: P235
+    check(pwKept.apply(.paired(id: right, storeNote: "")) == .paired(app(right))
+            && pwKept.promptTargets[right] == nil,
+          "P235 native airplay: once the member paired, nothing holds its pair back from joining")
     // covers: P176
     check(pwAuto.apply(.error(id: pair, .pairingRequired, retryMs: nil, detail: "")) == nil
             && pwAuto.apply(.error(id: right, .pairingRequired, retryMs: nil, detail: ""))
