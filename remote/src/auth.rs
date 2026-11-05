@@ -290,6 +290,7 @@ impl Device {
 #[derive(Debug)]
 pub struct TokenStore {
     path: Option<PathBuf>,
+    install: String,
     devices: Vec<Device>,
     generation: u64,
     next_id: u64,
@@ -322,6 +323,7 @@ type SavedDevice = (TokenHash, u64, Option<IpAddr>, Option<TokenHash>, u64);
 #[must_use = "a change reaches the file only once its snapshot is saved"]
 pub struct Snapshot {
     path: Option<PathBuf>,
+    install: String,
     devices: Vec<SavedDevice>,
     generation: u64,
     /// The damaged file as read, to keep aside before writing over it.
@@ -390,6 +392,7 @@ impl DeviceFile {
         // These sit beside "devices" so a reader of the older layout still counts them.
         let text = json!({
             "version": FILE_VERSION,
+            "install": snapshot.install,
             "devices": hashes,
             "seen": seen,
             "peers": peers,
@@ -414,8 +417,11 @@ impl TokenStore {
     /// ahead of the clock counts as now, and a file from before last-seen or
     /// pairing times were kept counts every device as seen or paired now.
     pub fn open_at(path: Option<PathBuf>, now: SystemTime) -> (TokenStore, Option<LoadProblem>) {
+        // Without randomness no token is made either, so an empty ID names no cookie in use.
+        let fresh = random_bytes::<8>().map_or_else(|_| String::new(), |bytes| hex(&bytes));
         let mut store = TokenStore {
             path,
+            install: fresh,
             devices: Vec::new(),
             generation: 0,
             next_id: 0,
@@ -429,6 +435,11 @@ impl TokenStore {
         let problem = match fs::read(&path) {
             Ok(bytes) => match parse_file(&bytes, now) {
                 Some((mut devices, upgraded, skipped)) => {
+                    let saved = saved_install(&bytes);
+                    let upgraded = upgraded || saved.is_none();
+                    if let Some(saved) = saved {
+                        store.install = saved;
+                    }
                     let read = devices.len();
                     devices.retain(|device| !device.expired(now));
                     for device in &mut devices {
@@ -461,6 +472,11 @@ impl TokenStore {
     /// Without it, a file no device uses would never lose its idle devices.
     pub fn take_rewrite(&mut self) -> Option<Snapshot> {
         std::mem::take(&mut self.rewrite).then(|| self.snapshot())
+    }
+
+    /// This install's random ID, 16 hex digits, kept in the file so it outlives a restart.
+    pub fn install(&self) -> &str {
+        &self.install
     }
 
     /// The devices held, idle or not; [`TokenStore::count_at`] leaves the idle out.
@@ -662,6 +678,7 @@ impl TokenStore {
         }
         Snapshot {
             path: self.path.clone(),
+            install: self.install.clone(),
             devices: self
                 .devices
                 .iter()
@@ -762,6 +779,14 @@ fn parse_file(bytes: &[u8], now: u64) -> Option<(Vec<Device>, bool, usize)> {
         devices.drain(..devices.len() - MAX_DEVICES);
     }
     Some((devices, rewrite, skipped))
+}
+
+/// The install ID in the file, when it is 16 hex digits.
+fn saved_install(bytes: &[u8]) -> Option<String> {
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    let install = value.get("install")?.as_str()?;
+    (install.len() == 16 && install.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| install.to_owned())
 }
 
 /// Keeps `bytes`, the file at `path` as read, in a new file beside it,
@@ -1644,6 +1669,32 @@ mod tests {
             .unwrap();
         let (mut reopened, _) = TokenStore::open_at(Some(path), start);
         assert!(reopened.check(&token, peer(10), start).0.is_none());
+    }
+
+    // covers: S426
+    #[test]
+    fn a_file_without_an_install_id_gets_one_written_at_open_that_the_next_open_keeps() {
+        let path = scratch("auth-install");
+        let start = day_zero();
+        let hash = hex(&token_hash(&random_token().unwrap()));
+        let now = unix_seconds(start);
+        let text = json!({ "version": 1, "devices": [hash], "seen": [now], "paired": [now] });
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, text.to_string()).unwrap();
+        let (mut store, _) = TokenStore::open_at(Some(path.clone()), start);
+        let install = store.install().to_owned();
+        assert!(
+            install.len() == 16 && install.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{install}"
+        );
+        DeviceFile::default()
+            .save(store.take_rewrite().expect("the ID is written at open"))
+            .unwrap();
+        let file: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(file["install"], json!(install));
+        let (mut reopened, _) = TokenStore::open_at(Some(path), start);
+        assert_eq!(reopened.install(), install);
+        assert!(reopened.take_rewrite().is_none());
     }
 
     // covers: S372

@@ -29,8 +29,9 @@ use crate::text::{self, ApiError};
 /// The port the remote listens on unless the user picks another. Unassigned
 /// in the IANA service name and port number registry (range 7649-7662).
 pub const DEFAULT_PORT: u16 = 7655;
-/// The device token cookie's name before it took the port; still read, so a
-/// device paired then moves to the port-named cookie without pairing again.
+/// The device token cookie's name before it took the port and the install ID;
+/// still read, with `_<port>` too, so a device paired then moves to the
+/// current name without pairing again.
 pub const TOKEN_COOKIE: &str = "as_token";
 // 400 days, the longest a browser keeps a cookie; the server forgets the device sooner if asked.
 const COOKIE_MAX_AGE: u64 = 400 * 24 * 60 * 60;
@@ -372,6 +373,8 @@ struct Shared {
     request_timeout: Duration,
     capacity: Capacity,
     log_pairing_codes: bool,
+    /// [`TokenStore::install`], read once at start.
+    install: String,
     pairing: Mutex<Pairing>,
     devices: Mutex<TokenStore>,
     device_file: DeviceFile,
@@ -538,14 +541,25 @@ impl Shared {
             .is_some_and(|state| state.calibrating)
     }
 
-    /// The paired device's token and ID, and whether the token came under
-    /// [`TOKEN_COOKIE`]; none when it is unknown or sent from another address
+    /// The paired device's token and ID, and the older cookie name it came
+    /// under, if any; none when it is unknown or sent from another address
     /// than its device paired from.
-    fn paired(&self, request: &Request, from: IpAddr, port: u16) -> Option<(String, u64, bool)> {
-        let (token, old_name) = match request.cookie(&token_cookie_name(port)) {
-            Some(token) => (token, false),
-            None => (request.cookie(TOKEN_COOKIE)?, true),
-        };
+    fn paired(
+        &self,
+        request: &Request,
+        from: IpAddr,
+        port: u16,
+    ) -> Option<(String, u64, Option<String>)> {
+        let names = [
+            token_cookie_name(port, &self.install),
+            format!("{TOKEN_COOKIE}_{port}"),
+            TOKEN_COOKIE.to_owned(),
+        ];
+        let (index, token) = names
+            .iter()
+            .enumerate()
+            .find_map(|(index, name)| Some((index, request.cookie(name)?)))?;
+        let old_name = (index > 0).then(|| names[index].clone());
         let (device, snapshot) = lock(&self.devices).check(token, from, SystemTime::now());
         if device.is_none() && snapshot.is_some() {
             self.wake_streams();
@@ -667,6 +681,7 @@ impl RemoteServer {
             .then(|| pairing.current(now).map(str::to_owned))
             .flatten();
         let (devices, problem) = TokenStore::open(config.devices_path.clone());
+        let install = devices.install().to_owned();
         let (listeners, port) = bind_all(&config)?;
         let shared = Arc::new(Shared {
             stopped: AtomicBool::new(false),
@@ -676,6 +691,7 @@ impl RemoteServer {
             request_timeout: config.timing.request,
             capacity: config.capacity,
             log_pairing_codes: config.log_pairing_codes,
+            install,
             pairing: Mutex::new(pairing),
             devices: Mutex::new(devices),
             device_file: DeviceFile::default(),
@@ -733,6 +749,11 @@ impl RemoteServer {
     /// The port it listens on.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// The name of the cookie that carries a device token.
+    pub fn token_cookie(&self) -> String {
+        token_cookie_name(self.port, &self.shared.install)
     }
 
     /// Makes `state` the current snapshot and streams it to the open pages;
@@ -1226,14 +1247,14 @@ fn route(
     if api.writes() && shared.calibrating() {
         return error(text::calibrating());
     }
-    let name = token_cookie_name(local.port());
+    let name = token_cookie_name(local.port(), &shared.install);
     let mut cookies = Vec::new();
-    if old_name {
-        cookies.push(token_cookie(TOKEN_COOKIE, "", 0));
+    if let Some(old_name) = &old_name {
+        cookies.push(token_cookie(old_name, "", 0));
     }
     if !matches!(api, ApiRoute::Unpair) {
         let renewed = shared.rotate(&token);
-        if old_name || renewed.is_some() {
+        if old_name.is_some() || renewed.is_some() {
             let value = renewed.as_deref().unwrap_or(&token);
             cookies.push(token_cookie(&name, value, COOKIE_MAX_AGE));
         }
@@ -1306,9 +1327,11 @@ pub(crate) fn percent_decode(segment: &str) -> Option<String> {
 }
 
 /// The cookie that carries the device token. Browsers send a cookie to every
-/// port of its host (RFC 6265 §8.5), so the name carries the remote's port.
-fn token_cookie_name(port: u16) -> String {
-    format!("{TOKEN_COOKIE}_{port}")
+/// port of its host (RFC 6265 §8.5), and a phone on another network may meet
+/// another AudioSync at the same address, so the name carries both the port
+/// and this install's ID.
+fn token_cookie_name(port: u16, install: &str) -> String {
+    format!("{TOKEN_COOKIE}_{port}_{install}")
 }
 
 fn token_cookie(name: &str, value: &str, max_age: u64) -> String {
@@ -1357,7 +1380,11 @@ fn pair(request: &Request, from: IpAddr, port: u16, shared: &Shared) -> Answer {
     Response::json(200, json!({ "paired": true }).to_string())
         .with(
             "Set-Cookie",
-            token_cookie(&token_cookie_name(port), &token, COOKIE_MAX_AGE),
+            token_cookie(
+                &token_cookie_name(port, &shared.install),
+                &token,
+                COOKIE_MAX_AGE,
+            ),
         )
         .into()
 }
@@ -2015,7 +2042,7 @@ mod tests {
         });
         let raw = format!(
             "GET /api/state HTTP/1.1\r\nHost: evil.example:{port}\r\nCookie: {}={token}\r\n\r\n",
-            token_cookie_name(port)
+            token_cookie_name(port, &shared.install)
         );
         client.write_all(raw.as_bytes()).unwrap();
         let closer = stream.try_clone().unwrap();
@@ -2032,10 +2059,10 @@ mod tests {
         server.stop();
     }
 
-    fn state_request(host: &str, port: u16, token: &str) -> Request {
+    fn state_request(host: &str, port: u16, install: &str, token: &str) -> Request {
         let head = format!(
             "GET /api/state HTTP/1.1\r\nHost: {host}\r\nCookie: {}={token}",
-            token_cookie_name(port)
+            token_cookie_name(port, install)
         );
         http::parse_head(head.as_bytes()).unwrap()
     }
@@ -2079,7 +2106,7 @@ mod tests {
             &server.shared,
         );
         let token = set_token(&answer).expect("a token");
-        let request = state_request(&host, local.port(), &token);
+        let request = state_request(&host, local.port(), &server.shared.install, &token);
         assert_ne!(
             status(route(&request, &host, phone, local, &server.shared)),
             401
@@ -2107,11 +2134,11 @@ mod tests {
         let paired_at = SystemTime::now() - Duration::from_secs(60 * 60);
         let _ = lock(&server.shared.devices).add(&old, phone, paired_at);
 
-        let request = state_request(&host, local.port(), &old);
+        let request = state_request(&host, local.port(), &server.shared.install, &old);
         let answer = route(&request, &host, phone, local, &server.shared);
         let new = set_token(&answer).expect("a new token");
         assert_ne!(new, old);
-        let renewed = state_request(&host, local.port(), &new);
+        let renewed = state_request(&host, local.port(), &server.shared.install, &new);
         let answer = route(&renewed, &host, phone, local, &server.shared);
         assert_ne!(status(answer), 401);
         assert_ne!(

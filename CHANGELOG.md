@@ -21,6 +21,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AudioSync no longer connects to an AirPlay speaker announced at your computer's own address, at its loopback address or at a host on the internet. Before, a device on your network could announce a speaker there and AudioSync would connect to it. Speakers on your own networks, and those on another private network that a router passes on, still show up.
 - Another device on your network can no longer push your Google Cast speakers out of the list by announcing lots of made-up ones, or take one off the list by announcing that it left. A speaker that says goodbye now leaves the list about 10 seconds later, once it no longer answers.
 - AudioSync now connects to a Google Cast speaker it finds only at an address on your own network, never at this computer's own address or a host on the internet that a fake announcement names. A speaker you add by its address is still used as you typed it.
+- A phone paired with the Web Remote now keeps its pairing apart from any other AudioSync it meets at the same address, such as on another Wi-Fi network: pairing with that one or unpairing from it no longer replaces or clears the pairing with your own computer. Phones already paired move over on their own, without pairing again.
 
 ## [0.8.7] - 2026-11-05
 
