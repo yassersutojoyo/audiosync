@@ -19,6 +19,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AudioSync now asks a Google Cast speaker to prove it's a genuine Cast device before it plays to it. A speaker whose answer doesn't check out is turned off. One that doesn't answer still plays, and AudioSync tells you once; after a speaker has proved itself, it has to keep doing so.
 - A phone or computer paired with the Web Remote now has to pair again a year after it paired, even if you use it every day, so a copied pairing can't be kept working forever. Devices paired before this version get their year from the update on. When a ninth device pairs and the oldest one is forgotten, the debug log now says so.
 - AudioSync no longer connects to an AirPlay speaker announced at your computer's own address, at its loopback address or at a host on the internet. Before, a device on your network could announce a speaker there and AudioSync would connect to it. Speakers on your own networks, and those on another private network that a router passes on, still show up.
+- Another device on your network can no longer push your Google Cast speakers out of the list by announcing lots of made-up ones, or take one off the list by announcing that it left. A speaker that says goodbye now leaves the list about 10 seconds later, once it no longer answers.
 
 ## [0.8.7] - 2026-11-05
 

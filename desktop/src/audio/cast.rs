@@ -1745,16 +1745,6 @@ impl CastSpeakers {
 
     /// Handles what discovery and the sender reported since the last poll.
     pub fn poll(&mut self) -> Vec<BackendEvent> {
-        let selected = self.enabled.map(|id| self.key_of(id));
-        let members = self
-            .attempt
-            .as_ref()
-            .and_then(|attempt| self.members.get(&attempt.device))
-            .into_iter()
-            .flatten()
-            .filter_map(|member| member.id.map(DeviceKey::Id));
-        let kept: Vec<DeviceKey> = selected.into_iter().chain(members).collect();
-        self.list.set_kept(kept);
         for _ in 0..MAX_BROWSE_PER_POLL {
             let Some(event) = self.link.as_mut().and_then(|link| link.poll_browse()) else {
                 break;
@@ -1770,12 +1760,8 @@ impl CastSpeakers {
                             link.announced(id);
                         }
                     }
-                    if let ListEvent::Added(DeviceKey::Id(id))
-                    | ListEvent::Displaced {
-                        added: DeviceKey::Id(id),
-                        ..
-                    }
-                    | ListEvent::Identified { id, .. } = change
+                    if let ListEvent::Added(DeviceKey::Id(id)) | ListEvent::Identified { id, .. } =
+                        change
                     {
                         self.log_group(id);
                     }
@@ -2885,8 +2871,8 @@ pub mod tests {
         assert_eq!(listed.len(), MAX_DEVICES);
         assert!(listed.iter().any(|id| id == KITCHEN));
         assert!(
-            !listed.iter().any(|id| id == LIVING),
-            "the oldest other one went"
+            listed.iter().any(|id| id == LIVING),
+            "a listed speaker outside the session stays"
         );
     }
 

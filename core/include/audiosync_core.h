@@ -2322,8 +2322,8 @@ bool asc_cast_remove_device(AscCast *cast, const char *id);
 bool asc_cast_clear_device_key(AscCast *cast, const char *id);
 
 /*
- * Names the device the user selected, by its ID, or none with a NULL or empty
- * id, whether or not it plays: the list's cap of 128 devices never drops it
+ * Checks the ID of the device the user selected, or none with a NULL or empty
+ * id. Nothing holds it: the list's cap of 128 devices drops no listed device
  * (C108). Returns false for a NULL or dead handle, or an ID that doesn't read.
  */
 bool asc_cast_set_selected(AscCast *cast, const char *id);

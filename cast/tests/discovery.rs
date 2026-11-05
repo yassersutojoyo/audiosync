@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use audiosync_cast::discovery::mdns::{MdnsBrowser, browse_event};
+use audiosync_cast::discovery::mdns::{CONFIRM_WAIT, MdnsBrowser, browse_event};
 use audiosync_cast::discovery::reach::{CHECK_INTERVAL, Reachability, connects};
 use audiosync_cast::discovery::{
     Announcements, BrowseEvent, CastDevice, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind,
@@ -332,6 +332,67 @@ fn a_goodbye_during_a_session_keeps_the_device_listed_as_offline() {
     assert!(list.entries().is_empty());
 }
 
+// covers: C134
+#[test]
+fn a_goodbye_is_not_reported_while_the_device_answers_again() {
+    let (send, receive) = mpsc::channel();
+    let mut browser = MdnsBrowser::from_events(receive);
+    let device = || resolved("Chromecast-3f2a", 8009, &[v4(10)], &[("id", ID)]);
+    send.send(device()).expect("send");
+    let Some(BrowseEvent::Resolved(record)) = browser.poll_event() else {
+        panic!("a resolved record");
+    };
+    send.send(ServiceEvent::ServiceRemoved(
+        SERVICE_TYPE.to_owned(),
+        record.fullname.clone(),
+    ))
+    .expect("send");
+    assert_eq!(
+        browser.poll_event(),
+        None,
+        "a goodbye alone removes nothing"
+    );
+    send.send(device()).expect("send");
+    assert!(matches!(
+        browser.poll_event(),
+        Some(BrowseEvent::Resolved(_))
+    ));
+    assert_eq!(browser.poll_event(), None);
+}
+
+// covers: C134
+#[test]
+fn an_unanswered_goodbye_is_reported_after_the_wait_and_held_goodbyes_are_bounded() {
+    let (send, receive) = mpsc::channel();
+    let mut browser = MdnsBrowser::from_events(receive);
+    let goodbye =
+        |name: &str| ServiceEvent::ServiceRemoved(SERVICE_TYPE.to_owned(), name.to_owned());
+    let start = Instant::now();
+    let fullname = format!("Chromecast-3f2a.{SERVICE_TYPE}");
+    send.send(goodbye(&fullname)).expect("send");
+    send.send(goodbye(&fullname)).expect("send");
+    assert_eq!(browser.poll_event_at(start), None);
+    let almost = start + CONFIRM_WAIT - Duration::from_millis(1);
+    assert_eq!(browser.poll_event_at(almost), None);
+    let due = start + CONFIRM_WAIT;
+    assert_eq!(
+        browser.poll_event_at(due),
+        Some(BrowseEvent::Removed { fullname })
+    );
+    assert_eq!(browser.poll_event_at(due), None, "reported once");
+
+    for n in 0..MAX_DEVICES + 50 {
+        send.send(goodbye(&format!("D{n}.{SERVICE_TYPE}")))
+            .expect("send");
+    }
+    assert_eq!(browser.poll_event_at(due), None);
+    let mut reported = 0;
+    while browser.poll_event_at(due + CONFIRM_WAIT).is_some() {
+        reported += 1;
+    }
+    assert_eq!(reported, MAX_DEVICES);
+}
+
 // covers: C17, C81, C90
 #[test]
 fn only_a_device_found_back_or_at_other_addresses_is_announced() {
@@ -391,49 +452,37 @@ fn numbered(n: u32) -> (DeviceKey, BrowseEvent) {
 
 // covers: C108
 #[test]
-fn a_flood_of_devices_keeps_the_list_at_its_cap() {
+fn a_flood_of_devices_never_displaces_a_listed_device() {
     let mut list = DeviceList::new();
     let manual = SocketAddr::from(([192, 0, 2, 200], DEVICE_PORT));
     list.add_manual(manual);
     let (playing, event) = numbered(1);
     list.apply(event);
     list.set_in_session(playing, true);
-    let (selected, event) = numbered(2);
-    list.apply(event);
-    let (member, event) = numbered(3);
-    list.apply(event);
-    list.set_kept([selected, member]);
-    let (oldest, event) = numbered(4);
-    list.apply(event);
     let last = 10_002;
-    let mut dropped = Vec::new();
-    for n in 5..=last {
-        match list.apply(numbered(n).1) {
-            ListEvent::Displaced {
-                dropped: key,
-                added,
-            } => {
-                assert_eq!(added, numbered(n).0);
-                dropped.push(key);
-            }
-            ListEvent::Added(_) => assert!(dropped.is_empty(), "added after the list was full"),
-            other => panic!("{other:?}"),
+    for n in 2..=last {
+        let (key, event) = numbered(n);
+        let change = list.apply(event);
+        if (n as usize) < MAX_DEVICES {
+            assert_eq!(change, ListEvent::Added(key));
+        } else {
+            assert_eq!(change, ListEvent::Skipped(Skipped::ListFull), "device {n}");
         }
     }
     assert_eq!(list.entries().len(), MAX_DEVICES);
-    assert_eq!(dropped.len(), 1 + last as usize - MAX_DEVICES);
-    assert_eq!(dropped[0], oldest);
-    for key in [
-        playing,
-        selected,
-        member,
-        DeviceKey::Manual(manual),
-        numbered(last).0,
-    ] {
+    for key in [playing, DeviceKey::Manual(manual), numbered(2).0] {
         assert!(list.get(key).is_some(), "{key:?} stays listed");
     }
-    assert!(list.get(oldest).is_none(), "the oldest other device went");
-    assert!(list.get(numbered(last - 1).0).is_some());
+    assert!(list.get(numbered(last).0).is_none(), "a new one is ignored");
+    let (listed, mut again) = numbered(2);
+    if let BrowseEvent::Resolved(record) = &mut again {
+        record.addresses = vec![v4(11)];
+    }
+    assert_eq!(
+        list.apply(again),
+        ListEvent::Updated(listed),
+        "a listed device still updates"
+    );
 }
 
 // covers: C18

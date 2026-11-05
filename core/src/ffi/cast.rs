@@ -564,8 +564,6 @@ pub struct AscCast {
     failure_reported: bool,
     /// The playing group's members, as its session last reported them.
     members: Vec<GroupMember>,
-    /// The device the host selected, which the list's cap keeps (C108).
-    selected: Option<DeviceKey>,
     /// The strings of the last member handed out: ID, name.
     member_strings: [CString; 2],
     /// Whether each device added by address answers (C18).
@@ -820,11 +818,6 @@ impl AscCast {
             }
             ListEvent::Updated(key) | ListEvent::Offline(key) => self.change(CAST_CHANGED, key),
             ListEvent::Removed(key) => self.change(CAST_GONE, key),
-            ListEvent::Displaced { dropped, added } => {
-                self.change(CAST_GONE, dropped);
-                self.change(CAST_APPEARED, added);
-                self.log_group(added);
-            }
             ListEvent::Identified { from, id } => {
                 for attempt in &mut self.attempts {
                     if attempt.key == DeviceKey::Manual(from) {
@@ -879,12 +872,6 @@ impl AscCast {
             found.push(event);
         }
         let dead = browser.is_dead();
-        let members = self
-            .members
-            .iter()
-            .filter_map(|member| member.id.map(DeviceKey::Id));
-        let kept: Vec<DeviceKey> = self.selected.into_iter().chain(members).collect();
-        self.list.set_kept(kept);
         for event in found {
             let event = self.list.apply(event);
             self.listed(event);
@@ -1391,7 +1378,6 @@ fn create_with(
             panics_before,
             failure_reported: false,
             members: Vec::new(),
-            selected: None,
             member_strings: Default::default(),
             #[cfg(not(test))]
             reach: Reachability::default(),
@@ -1646,9 +1632,10 @@ fn failure(cast: &mut AscCast) -> Option<AscCastEvent> {
     Some(cast.describe_event(pending))
 }
 
-/// Names the device the user selected, or none with a null or empty `id`,
-/// whether or not it plays: the list's cap never drops it (C108). False for
-/// a null or dead handle, or an ID that doesn't read.
+/// Checks the ID of the device the user selected, or none with a null or
+/// empty `id`. Nothing holds it: the list's cap drops no listed device
+/// (C108), but the Mac app still names its selection. False for a null or
+/// dead handle, or an ID that doesn't read.
 ///
 /// # Safety
 ///
@@ -1656,27 +1643,17 @@ fn failure(cast: &mut AscCast) -> Option<AscCastEvent> {
 /// `id` is null or a NUL-terminated string, unchanged during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_cast_set_selected(cast: *mut AscCast, id: *const c_char) -> bool {
-    let selected = if id.is_null() {
-        None
-    } else {
+    if !id.is_null() {
         // SAFETY: non-null, and by the caller's contract NUL-terminated and
         // unchanged during the call.
         match unsafe { CStr::from_ptr(id) }.to_str() {
             Err(_) => return false,
-            Ok("") => None,
-            Ok(text) => match device_key(text) {
-                Some(key) => Some(key),
-                None => return false,
-            },
+            Ok(text) if !text.is_empty() && device_key(text).is_none() => return false,
+            Ok(_) => {}
         }
-    };
-    // SAFETY: as the caller's.
-    unsafe {
-        live(cast, false, |cast| {
-            cast.selected = selected;
-            true
-        })
     }
+    // SAFETY: as the caller's.
+    unsafe { live(cast, false, |_| true) }
 }
 
 /// Starts a session on the listed device `id` in the background and
@@ -3237,7 +3214,7 @@ mod tests {
 
     // CAST_SPEC: C108
     #[test]
-    fn every_device_the_list_cap_drops_is_reported_gone() {
+    fn a_full_list_reports_no_device_gone_and_ignores_new_ones() {
         let handle = create();
         let extra = 5;
         let ids: Vec<String> = (1..=MAX_DEVICES + extra)
@@ -3263,18 +3240,14 @@ mod tests {
             assert!(asc_cast_set_selected(handle, selected.as_ptr()));
         }
         let changes = devices(handle);
-        let gone: Vec<&str> = changes
-            .iter()
-            .filter(|change| change.event == CAST_GONE)
-            .map(|change| change.id.as_str())
-            .collect();
-        let expected: Vec<&str> = ids[1..=extra].iter().map(String::as_str).collect();
-        assert_eq!(gone, expected);
-        let appeared = changes
+        assert!(changes.iter().all(|change| change.event != CAST_GONE));
+        let appeared: Vec<&str> = changes
             .iter()
             .filter(|change| change.event == CAST_APPEARED)
-            .count();
-        assert_eq!(appeared - gone.len(), MAX_DEVICES);
+            .map(|change| change.id.as_str())
+            .collect();
+        let expected: Vec<&str> = ids[..MAX_DEVICES].iter().map(String::as_str).collect();
+        assert_eq!(appeared, expected);
         destroy(handle);
     }
 

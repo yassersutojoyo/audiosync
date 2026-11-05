@@ -5,15 +5,17 @@
 //! report into a [`BrowseEvent`]. The daemon runs on its own thread, and
 //! [`MdnsBrowser::poll_event`] only drains its channel, so it never blocks.
 //! TXT values come from the daemon as raw bytes, so no DNS presentation
-//! escaping reaches the sender (C12).
+//! escaping reaches the sender (C12). A removal waits for a fresh query
+//! to go unanswered before it is reported (C134).
 
 use std::fmt;
 use std::net::IpAddr;
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use mdns_sd::{ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent};
 
-use super::{BrowseEvent, SERVICE_TYPE, ServiceRecord};
+use super::{BrowseEvent, MAX_DEVICES, SERVICE_TYPE, ServiceRecord};
 
 /// The live browser could not start.
 #[derive(Debug)]
@@ -27,8 +29,22 @@ impl fmt::Display for DiscoveryError {
 
 impl std::error::Error for DiscoveryError {}
 
+/// How long a removed instance has to answer a fresh query before its
+/// removal is reported (C134): RFC 6762 §10.4 flushes a record that ten
+/// seconds of queries leave unanswered.
+pub const CONFIRM_WAIT: Duration = Duration::from_secs(10);
+
+/// The shortest time between two fresh queries. The daemon repeats each
+/// query after one and three seconds, inside every wait it covers.
+const QUERY_GAP: Duration = Duration::from_secs(1);
+
 enum Source {
-    Daemon(mdns_sd::Receiver<ServiceEvent>),
+    /// The current browse, and the one a fresh query replaced, drained until
+    /// the next query.
+    Daemon {
+        current: mdns_sd::Receiver<ServiceEvent>,
+        previous: Option<mdns_sd::Receiver<ServiceEvent>>,
+    },
     Channel(mpsc::Receiver<ServiceEvent>),
 }
 
@@ -37,6 +53,10 @@ pub struct MdnsBrowser {
     source: Source,
     daemon: Option<ServiceDaemon>,
     dead: bool,
+    /// Removed instances and when their removal is due, at most
+    /// [`MAX_DEVICES`].
+    leaving: Vec<(String, Instant)>,
+    queried: Option<Instant>,
 }
 
 impl fmt::Debug for MdnsBrowser {
@@ -54,9 +74,14 @@ impl MdnsBrowser {
         let daemon = ServiceDaemon::new().map_err(DiscoveryError)?;
         match daemon.browse(SERVICE_TYPE) {
             Ok(receiver) => Ok(MdnsBrowser {
-                source: Source::Daemon(receiver),
+                source: Source::Daemon {
+                    current: receiver,
+                    previous: None,
+                },
                 daemon: Some(daemon),
                 dead: false,
+                leaving: Vec::new(),
+                queried: None,
             }),
             Err(error) => {
                 let _ = daemon.shutdown();
@@ -72,33 +97,86 @@ impl MdnsBrowser {
             source: Source::Channel(events),
             daemon: None,
             dead: false,
+            leaving: Vec::new(),
+            queried: None,
         }
     }
 
     /// The next browse event, or `None` when nothing is waiting.
     pub fn poll_event(&mut self) -> Option<BrowseEvent> {
-        loop {
-            let event = match &self.source {
-                Source::Daemon(receiver) => match receiver.try_recv() {
-                    Ok(event) => event,
-                    Err(mdns_sd::TryRecvError::Empty) => return None,
+        self.poll_event_at(Instant::now())
+    }
+
+    /// [`MdnsBrowser::poll_event`] at `now`. A removal starts a fresh query
+    /// and is reported once [`CONFIRM_WAIT`] passed without the instance
+    /// resolving again (C134).
+    pub fn poll_event_at(&mut self, now: Instant) -> Option<BrowseEvent> {
+        while let Some(event) = self.next_event() {
+            match browse_event(event) {
+                Some(BrowseEvent::Removed { fullname }) => self.leave(fullname, now),
+                Some(BrowseEvent::Resolved(record)) => {
+                    self.leaving
+                        .retain(|(name, _)| !name.eq_ignore_ascii_case(&record.fullname));
+                    return Some(BrowseEvent::Resolved(record));
+                }
+                None => {}
+            }
+        }
+        let due = self.leaving.iter().position(|&(_, at)| at <= now)?;
+        let (fullname, _) = self.leaving.remove(due);
+        Some(BrowseEvent::Removed { fullname })
+    }
+
+    fn next_event(&mut self) -> Option<ServiceEvent> {
+        match &mut self.source {
+            Source::Daemon { current, previous } => {
+                if let Some(receiver) = previous {
+                    match receiver.try_recv() {
+                        Ok(event) => return Some(event),
+                        Err(mdns_sd::TryRecvError::Empty) => {}
+                        Err(mdns_sd::TryRecvError::Disconnected) => *previous = None,
+                    }
+                }
+                match current.try_recv() {
+                    Ok(event) => Some(event),
+                    Err(mdns_sd::TryRecvError::Empty) => None,
                     Err(mdns_sd::TryRecvError::Disconnected) => {
                         self.dead = true;
-                        return None;
+                        None
                     }
-                },
-                Source::Channel(receiver) => match receiver.try_recv() {
-                    Ok(event) => event,
-                    Err(mpsc::TryRecvError::Empty) => return None,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        self.dead = true;
-                        return None;
-                    }
-                },
-            };
-            if let Some(event) = browse_event(event) {
-                return Some(event);
+                }
             }
+            Source::Channel(receiver) => match receiver.try_recv() {
+                Ok(event) => Some(event),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.dead = true;
+                    None
+                }
+            },
+        }
+    }
+
+    /// Holds a removal back and asks the network for the instance again.
+    /// One already held, or one past [`MAX_DEVICES`] held, is dropped.
+    fn leave(&mut self, fullname: String, now: Instant) {
+        if self.leaving.len() >= MAX_DEVICES
+            || (self.leaving.iter()).any(|(name, _)| name.eq_ignore_ascii_case(&fullname))
+        {
+            return;
+        }
+        self.leaving.push((fullname, now + CONFIRM_WAIT));
+        if self.queried.is_some_and(|at| now < at + QUERY_GAP) {
+            return;
+        }
+        self.queried = Some(now);
+        // Browsing again sends a new query; the daemon hands the browse's
+        // events to the new receiver from then on.
+        if let (Some(daemon), Source::Daemon { current, previous }) =
+            (&self.daemon, &mut self.source)
+            && let Ok(receiver) = daemon.browse(SERVICE_TYPE)
+        {
+            *previous = Some(std::mem::replace(current, receiver));
         }
     }
 
