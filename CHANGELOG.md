@@ -4,15 +4,17 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
-### Security
-
-- Another device on your network can no longer keep the Web Remote's pairing locked for every phone by sending wrong codes from endless IPv6 addresses. Pairing locked that way stays open for a phone that opens the remote by the computer's IPv4 address.
-
-## [0.8.7] - 2026-11-05
-
 ### Added
 
 - Advanced users can cut the AirPlay delay from about 1.75 s to as little as 0.1 s with a hidden setting: the AUDIOSYNC_AIRPLAY_LATENCY_MS environment variable on Windows and Linux, or `defaults write` of the AirPlayLatencyMs key on the Mac, in milliseconds. It's at your own risk: on a busy Wi-Fi network a short delay can leave gaps in the sound.
+
+### Security
+
+- AudioSync no longer sends an AirPlay speaker's password in the older, weaker form to a speaker that supports AirPlay 2, where another device on your network could catch it and guess the password at leisure. Speakers that only support the original AirPlay keep working with their password as before.
+- Another device on your network can no longer keep the Web Remote's pairing locked for every phone by sending wrong codes from endless IPv6 addresses. Pairing locked that way stays open for a phone that opens the remote by the computer's IPv4 address.
+- The Web Remote now only answers devices on the same network as your computer, and Tailscale devices that reach it at its Tailscale address. Before, any device with a private address could reach it, such as one on another part of a hotel or office network. On the Mac and on Windows.
+
+## [0.8.7] - 2026-11-05
 
 ### Security
 
@@ -21,7 +23,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A phone paired with the Web Remote now only works from the network address it paired from, and its sign-in cookie is swapped for a new one every 10 minutes while you use it. If your phone gets a new address on the Wi-Fi, the remote asks for the pairing code again.
 - Other apps on your Mac can no longer run their own code inside AudioSync to use its microphone and audio recording permission.
 - Another device on your network has a harder time posing as one of your Google Cast speakers to receive your audio. AudioSync streams only to the address it connected to and ignores announcements that try to move a known speaker somewhere else.
-- AudioSync no longer sends an AirPlay speaker's password in the older, weaker form to a speaker that supports AirPlay 2, where another device on your network could catch it and guess the password at leisure. Speakers that only support the original AirPlay keep working with their password as before.
 - Each release now includes the Mac, Windows and Linux install scripts, so they can be fetched from the release instead of the main branch, and each script downloads the app and its checksums only from that one release.
 
 ### Fixed

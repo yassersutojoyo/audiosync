@@ -11,6 +11,8 @@ publish = false
 [dependencies]
 # Pairing codes and device tokens.
 getrandom = "0.4.3"
+# The addresses and prefixes of this computer's interfaces, for who counts as home.
+if-addrs = "0.15.0"
 # The snapshot, the commands and the paired-device file, read and built as values.
 serde_json = { version = "1.0.140", default-features = false, features = ["std"] }
 # Device token hashes and the page's Content-Security-Policy hashes.

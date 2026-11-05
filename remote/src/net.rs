@@ -3,7 +3,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 /// Whether `peer` is private (RFC 1918, RFC 4193), link-local or loopback.
-/// [`admits_peer`] adds the peers let in beside these.
 pub fn is_private_peer(peer: IpAddr) -> bool {
     match peer.to_canonical() {
         IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_loopback(),
@@ -14,21 +13,75 @@ pub fn is_private_peer(peer: IpAddr) -> bool {
     }
 }
 
+/// One address of this computer's interfaces, with its on-link prefix length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalNet {
+    pub address: IpAddr,
+    pub prefix: u8,
+    pub point_to_point: bool,
+}
+
+/// This computer's interface addresses now; none when the OS won't list them.
+pub fn local_nets() -> Vec<LocalNet> {
+    let interfaces = if_addrs::get_if_addrs().unwrap_or_default();
+    interfaces
+        .iter()
+        .map(|interface| LocalNet {
+            address: interface.ip(),
+            prefix: match &interface.addr {
+                if_addrs::IfAddr::V4(v4) => v4.prefixlen,
+                if_addrs::IfAddr::V6(v6) => v6.prefixlen,
+            },
+            point_to_point: interface.is_p2p(),
+        })
+        .collect()
+}
+
 /// Whether a connection from `peer` to this machine's `local` address is
-/// let in: a private peer, a carrier-grade NAT peer (RFC 6598, the range
-/// Tailscale gives its devices), or an IPv6 peer in the same /64 as a native
-/// global `local`, which on a home network is the phone next to it.
-pub fn admits_peer(peer: IpAddr, local: IpAddr) -> bool {
-    if is_private_peer(peer) {
-        return true;
+/// let in: a loopback peer, a peer on the subnet of one of `nets`, or a
+/// tailnet peer (100.64/10 or fc00::/7) that reached a tailnet address of
+/// `nets` held alone or on a point-to-point link, as Tailscale holds its
+/// addresses on the Mac and on Windows.
+pub fn admits_peer(peer: IpAddr, local: IpAddr, nets: &[LocalNet]) -> bool {
+    let (peer, local) = (peer.to_canonical(), local.to_canonical());
+    peer.is_loopback()
+        || nets.iter().any(|net| {
+            let own = net.address.to_canonical();
+            let alone = net.prefix == if own.is_ipv4() { 32 } else { 128 };
+            on_link(peer, own, net.prefix)
+                || (own == local && (alone || net.point_to_point) && tailnet(peer) && tailnet(own))
+        })
+}
+
+fn tailnet(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(v4) => v4.octets()[0] == 100 && v4.octets()[1] & 0xc0 == 64,
+        IpAddr::V6(v6) => v6.segments()[0] & 0xfe00 == 0xfc00,
     }
-    match (peer.to_canonical(), local.to_canonical()) {
-        (IpAddr::V4(peer), _) => peer.octets()[0] == 100 && peer.octets()[1] & 0xc0 == 64,
-        (IpAddr::V6(peer), IpAddr::V6(local)) => {
-            native_global(local) && peer.segments()[..4] == local.segments()[..4]
+}
+
+/// Whether `peer` shares the first `prefix` bits of `own`. Teredo
+/// (2001::/32) and 6to4 (2002::/16) prefixes are built from a public IPv4
+/// address that strangers on the internet share, so they are no link. A
+/// prefix of 0 is an address the OS listed without a netmask, not a link
+/// to the whole internet.
+fn on_link(peer: IpAddr, own: IpAddr, prefix: u8) -> bool {
+    if prefix == 0 {
+        return false;
+    }
+    let (peer, own, width) = match (peer, own) {
+        (IpAddr::V4(peer), IpAddr::V4(own)) => (peer.to_bits().into(), own.to_bits().into(), 32),
+        (IpAddr::V6(peer), IpAddr::V6(own)) => {
+            let segments = own.segments();
+            if segments[..2] == [0x2001, 0] || segments[0] == 0x2002 {
+                return false;
+            }
+            (peer.to_bits(), own.to_bits(), 128)
         }
-        _ => false,
-    }
+        _ => return false,
+    };
+    let host_bits = width - u32::from(prefix).min(width);
+    (peer ^ own).checked_shr(host_bits).unwrap_or(0) == 0
 }
 
 /// The peer that per-peer limits count against: the full address. Not an
@@ -59,14 +112,6 @@ pub fn pairing_address(peer: IpAddr) -> IpAddr {
         }
         v4 => v4,
     }
-}
-
-/// Global unicast (2000::/3) whose /64 is a real link. Teredo (2001::/32)
-/// and 6to4 (2002::/16) prefixes are built from a public IPv4 address that
-/// strangers on the internet share.
-fn native_global(address: Ipv6Addr) -> bool {
-    let segments = address.segments();
-    segments[0] & 0xe000 == 0x2000 && segments[..2] != [0x2001, 0] && segments[0] != 0x2002
 }
 
 /// Splits `host[:port]` (RFC 9110 §7.2) into the host, without brackets
@@ -155,6 +200,45 @@ mod tests {
         text.parse().unwrap()
     }
 
+    fn ula(subnet: u16, host: u16) -> IpAddr {
+        IpAddr::V6(Ipv6Addr::new(0xfd00, subnet, 0, 0, 0, 0, 0, host))
+    }
+
+    // covers: S338 (a private peer outside every local subnet)
+    #[test]
+    fn a_private_peer_outside_every_local_subnet_is_refused() {
+        let wifi = LocalNet {
+            address: v4(192, 168, 1, 10),
+            prefix: 24,
+            point_to_point: false,
+        };
+        let local = wifi.address;
+        assert!(admits_peer(v4(192, 168, 1, 20), local, &[wifi]));
+        assert!(admits_peer(v4(127, 0, 0, 1), local, &[wifi]));
+        assert!(admits_peer(v6("::1"), local, &[wifi]));
+        for refused in [
+            v4(192, 168, 2, 20),
+            v4(10, 1, 2, 3),
+            v4(172, 16, 0, 1),
+            v4(169, 254, 10, 1),
+            v4(100, 100, 1, 1),
+            ula(0, 5),
+            v6("fe80::1"),
+        ] {
+            assert!(!admits_peer(refused, local, &[wifi]), "{refused}");
+        }
+    }
+
+    // covers: S338 (an interface address listed without a netmask)
+    #[test]
+    fn an_address_without_a_netmask_is_no_subnet() {
+        let bare = net(v4(192, 168, 1, 10), 0);
+        assert!(!admits_peer(v4(8, 8, 8, 8), bare.address, &[bare]));
+        assert!(!admits_peer(v4(192, 168, 1, 20), bare.address, &[bare]));
+        let bare6 = net(v6("2001:db8:1:2::10"), 0);
+        assert!(!admits_peer(v6("2001:db9::5"), bare6.address, &[bare6]));
+    }
+
     // covers: S338 (private, link-local, loopback and IPv4-mapped peers)
     #[test]
     fn only_private_link_local_and_loopback_peers_connect() {
@@ -192,54 +276,103 @@ mod tests {
         }
     }
 
-    // covers: S338 (an IPv6 peer in the computer's own /64)
+    fn net(address: IpAddr, prefix: u8) -> LocalNet {
+        LocalNet {
+            address,
+            prefix,
+            point_to_point: false,
+        }
+    }
+
+    // covers: S338 (an IPv6 peer on the computer's own subnet)
     #[test]
     fn a_global_ipv6_peer_on_the_same_link_is_let_in() {
         // A phone that resolved the .local name to a global AAAA connects
         // from its own global address in the same /64.
         let local = v6("2001:db8:1:2::10");
-        assert!(admits_peer(v6("2001:db8:1:2:aaaa:bbbb:cccc:dddd"), local));
-        assert!(admits_peer(v6("2001:db8:1:2::10"), local));
-        assert!(!admits_peer(v6("2001:db8:1:3::5"), local), "another prefix");
-        assert!(!admits_peer(v6("2001:db9:1:2::5"), local), "another prefix");
-        assert!(!admits_peer(v6("2001:db8:1:2::5"), v4(127, 0, 0, 1)));
-        assert!(!admits_peer(v4(8, 8, 8, 8), v6("::ffff:8.8.8.1")));
-        assert!(!admits_peer(v6("::5"), v6("::")), "no link to share");
+        let nets = [net(local, 64), net(v6("fe80::10"), 64)];
+        assert!(admits_peer(
+            v6("2001:db8:1:2:aaaa:bbbb:cccc:dddd"),
+            local,
+            &nets
+        ));
+        assert!(admits_peer(v6("2001:db8:1:2::10"), local, &nets));
+        assert!(
+            !admits_peer(v6("2001:db8:1:3::5"), local, &nets),
+            "another prefix"
+        );
+        assert!(
+            !admits_peer(v6("2001:db9:1:2::5"), local, &nets),
+            "another prefix"
+        );
+        assert!(admits_peer(v6("fe80::1"), local, &nets));
+        assert!(!admits_peer(v6("::5"), v6("::"), &[]), "no link to share");
         let teredo = v6("2001:0:4136:e378:8000:63bf:3fff:fdd2");
         assert!(
-            !admits_peer(v6("2001:0:4136:e378::1"), teredo),
+            !admits_peer(v6("2001:0:4136:e378::1"), teredo, &[net(teredo, 64)]),
             "a Teredo /64 is the relay's, not a link"
         );
         let six_to_four = v6("2002:cb00:7101::10");
         assert!(
-            !admits_peer(v6("2002:cb00:7101::20"), six_to_four),
+            !admits_peer(
+                v6("2002:cb00:7101::20"),
+                six_to_four,
+                &[net(six_to_four, 64)]
+            ),
             "a 6to4 /64 is a public IPv4 address's"
         );
-        assert!(!admits_peer(v6("ff02::1:2"), v6("ff02::1")), "multicast");
+        let native = v6("2001:db9::10");
         assert!(
-            admits_peer(v6("2001:db9::5"), v6("2001:db9::10")),
+            admits_peer(v6("2001:db9::5"), native, &[net(native, 64)]),
             "2001::/16 outside Teredo stays native"
         );
-        assert!(admits_peer(v4(192, 168, 1, 20), local), "private stays in");
-        assert!(admits_peer(v6("fe80::1"), local));
+        let wide = net(v4(192, 168, 1, 10), 22);
+        assert!(
+            admits_peer(v4(192, 168, 3, 20), local, &[wide]),
+            "the interface's own prefix"
+        );
+        assert!(!admits_peer(v4(192, 168, 4, 20), local, &[wide]));
     }
 
-    // covers: S338
+    // covers: S338 (a tailnet peer)
     #[test]
-    fn a_carrier_nat_peer_is_let_in() {
-        let loopback = v4(127, 0, 0, 1);
-        for allowed in [
-            v4(100, 64, 0, 1),
-            v4(100, 100, 1, 1),
-            v4(100, 127, 255, 255),
-        ] {
-            assert!(admits_peer(allowed, loopback), "{allowed}");
-        }
+    fn a_tailnet_peer_is_let_in() {
+        // Tailscale on the Mac holds its address alone on a point-to-point link.
+        let tunnel = LocalNet {
+            address: v4(100, 101, 102, 103),
+            prefix: 32,
+            point_to_point: true,
+        };
+        let wifi = net(v4(192, 168, 1, 10), 24);
+        let nets = [wifi, tunnel];
         let mapped = IpAddr::V6(Ipv4Addr::new(100, 100, 1, 1).to_ipv6_mapped());
-        assert!(admits_peer(mapped, loopback));
-        for refused in [v4(100, 63, 255, 255), v4(100, 128, 0, 1)] {
-            assert!(!admits_peer(refused, loopback), "{refused}");
+        for allowed in [v4(100, 64, 0, 1), v4(100, 127, 255, 255), mapped] {
+            assert!(admits_peer(allowed, tunnel.address, &nets), "{allowed}");
         }
+        for refused in [
+            v4(100, 63, 255, 255),
+            v4(100, 128, 0, 1),
+            v4(192, 168, 2, 1),
+        ] {
+            assert!(!admits_peer(refused, tunnel.address, &nets), "{refused}");
+        }
+        assert!(
+            !admits_peer(v4(100, 100, 1, 1), wifi.address, &nets),
+            "only through the tailnet address"
+        );
+        let wide = net(v4(100, 101, 102, 103), 10);
+        assert!(admits_peer(v4(100, 100, 1, 1), wide.address, &[wide]));
+        // A network that hands out carrier-grade NAT addresses lets in its own subnet only.
+        let hotel = net(v4(100, 70, 4, 9), 22);
+        assert!(admits_peer(v4(100, 70, 5, 1), hotel.address, &[hotel]));
+        assert!(!admits_peer(v4(100, 100, 1, 1), hotel.address, &[hotel]));
+        let tunnel6 = LocalNet {
+            address: ula(0xa, 1),
+            prefix: 128,
+            point_to_point: true,
+        };
+        assert!(admits_peer(ula(0xa, 2), tunnel6.address, &[tunnel6]));
+        assert!(!admits_peer(v6("2001:db8::2"), tunnel6.address, &[tunnel6]));
         // The address shown for the phone to open stays a home network's.
         assert!(!is_private_peer(v4(100, 100, 1, 1)));
     }

@@ -630,6 +630,7 @@ name = "audiosync-remote"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
+ "if-addrs",
  "serde_json",
  "sha2",
  "socket2",

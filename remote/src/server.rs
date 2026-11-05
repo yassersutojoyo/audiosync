@@ -237,9 +237,8 @@ pub enum ServerEvent {
         from: IpAddr,
         status: u16,
     },
-    /// A peer outside the private, link-local, loopback and carrier-grade NAT
-    /// (100.64/10) ranges and not on
-    /// this machine's IPv6 /64, closed at accept.
+    /// A peer that is not loopback, on a subnet of this machine's interfaces
+    /// or a tailnet peer (see [`net::admits_peer`]), closed at accept.
     NotPrivate {
         from: IpAddr,
     },
@@ -853,9 +852,13 @@ impl Drop for RemoteServer {
     }
 }
 
+/// How long the accept loop reuses its list of this machine's interfaces.
+const NETS_REFRESH: Duration = Duration::from_secs(1);
+
 fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
     let mut refused = VecDeque::new();
     let mut reported = HashMap::new();
+    let mut nets = (Instant::now(), net::local_nets());
     while !shared.stopped.load(Ordering::SeqCst) {
         drain_refused(&mut refused);
         let mut idle = true;
@@ -863,7 +866,11 @@ fn accept_loop(listeners: &[TcpListener], shared: &Arc<Shared>) {
             match listener.accept() {
                 Ok((stream, peer)) => {
                     idle = false;
-                    if let Some(stream) = admit(stream, peer, shared, &mut reported) {
+                    // Listing the interfaces is slow on Windows; a flood must not stall accept.
+                    if nets.0.elapsed() >= NETS_REFRESH {
+                        nets = (Instant::now(), net::local_nets());
+                    }
+                    if let Some(stream) = admit(stream, peer, shared, &mut reported, &nets.1) {
                         if refused.len() >= MAX_REFUSED {
                             refused.pop_front();
                         }
@@ -923,11 +930,12 @@ fn admit(
     peer: SocketAddr,
     shared: &Arc<Shared>,
     reported: &mut HashMap<IpAddr, Instant>,
+    nets: &[net::LocalNet],
 ) -> Option<TcpStream> {
     let from = peer.ip().to_canonical();
     let admitted = stream
         .local_addr()
-        .is_ok_and(|local| net::admits_peer(from, local.ip()));
+        .is_ok_and(|local| net::admits_peer(from, local.ip(), nets));
     if !admitted {
         if note_refusal(reported, from, Instant::now()) {
             shared.report(ServerEvent::NotPrivate { from });
@@ -1653,7 +1661,19 @@ mod tests {
                 stream,
                 SocketAddr::new(peer, 50000),
                 &server.shared,
-                reported
+                reported,
+                &[
+                    net::LocalNet {
+                        address: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10)),
+                        prefix: 24,
+                        point_to_point: false,
+                    },
+                    net::LocalNet {
+                        address: address("fe80::10"),
+                        prefix: 64,
+                        point_to_point: false,
+                    },
+                ]
             )
             .is_none()
         );
