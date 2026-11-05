@@ -83,6 +83,7 @@ def build(notices, targets):
         own, ", ".join("{} {}".format(p["name"], p["version"]) for p in sorted(local, key=lambda p: p["name"]))),
         core.get("repository") or "")
     out.text("LICENSE", notices.read_text(os.path.join(REPO, "LICENSE")), "AudioSync")
+    notices.cast_roots_notice(out)
 
     out.heading("2. Rust crates ({})".format(len(crates)))
     notices.write_crates(out, policy, crates, expressions, supplements)

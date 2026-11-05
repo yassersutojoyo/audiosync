@@ -6,6 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Security
 
+- AudioSync now asks a Google Cast speaker to prove it's a genuine Cast device before it plays to it. A speaker whose answer doesn't check out is turned off. One that doesn't answer still plays, and the Windows app tells you once; after a speaker has proved itself, it has to keep doing so.
 - Pairing an Apple TV over AirPlay 1 now fails when the Apple TV doesn't send the key that identifies it, so no other device on the network can pose as it later. An Apple TV paired by an older version without that key needs pairing again with its code the next time you turn it on.
 - The Web Remote no longer lists microphones and other input devices, and it refuses a switch to one, so a paired phone can't turn a microphone on from afar. You can still pick an input on the computer.
 - A phone paired with the Web Remote now only works from the network address it paired from, and its sign-in cookie is swapped for a new one every 10 minutes while you use it. If your phone gets a new address on the Wi-Fi, the remote asks for the pairing code again.
