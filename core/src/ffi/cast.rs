@@ -831,6 +831,10 @@ impl AscCast {
                         attempt.key = DeviceKey::Id(id);
                     }
                 }
+                let manual = memory_id(DeviceKey::Manual(from));
+                if let Some(line) = self.host.move_device_key(manual, id) {
+                    lock(&self.shared.log).push(line);
+                }
                 // Before CAST_APPEARED, which the host answers by reading the ID's offset.
                 // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
                 let memory = self.host.memory();

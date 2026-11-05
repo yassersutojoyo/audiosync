@@ -204,6 +204,19 @@ impl DeviceKeyBook {
         })
     }
 
+    /// Moves the entry of a device added by address, `from`, to the `id` a
+    /// browse found for it (C18), unless the `id` has one (C129); the line
+    /// to log when it moved.
+    pub fn move_entry(&mut self, from: &str, to: &str) -> Option<String> {
+        if self.entries.contains_key(to) {
+            return None;
+        }
+        let entry = self.entries.remove(from)?;
+        self.entries.insert(to.to_owned(), entry);
+        self.save();
+        Some(format!("cast auth {to}: entry moved from {from}"))
+    }
+
     fn save(&mut self) {
         let Some((path, write)) = &mut self.file else {
             return;

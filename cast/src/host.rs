@@ -637,6 +637,12 @@ impl CastHost {
         lock(&self.shared.device_keys).clear(&device.to_string())
     }
 
+    /// Moves the pin or mark of a device added by address to the `id` a
+    /// browse found for it (C129); the line to log when it moved.
+    pub fn move_device_key(&self, from: DeviceId, to: DeviceId) -> Option<String> {
+        lock(&self.shared.device_keys).move_entry(&from.to_string(), &to.to_string())
+    }
+
     /// What the host should store per device (C77, C84).
     pub fn memory(&self) -> DeviceMemory {
         lock(&self.shared.memory).clone()

@@ -404,6 +404,11 @@ pub trait CastLink: Send {
     fn clear_device_key(&mut self, _device: DeviceId) -> Option<String> {
         None
     }
+    /// Moves the pin or mark of a device added by address to its `id` (C129);
+    /// the line to log when it moved.
+    fn move_device_key(&mut self, _from: DeviceId, _to: DeviceId) -> Option<String> {
+        None
+    }
 }
 
 /// The real sender: [`CastHost`] and a live mDNS browser.
@@ -507,6 +512,10 @@ impl CastLink for HostLink {
 
     fn clear_device_key(&mut self, device: DeviceId) -> Option<String> {
         self.host.clear_device_key(device)
+    }
+
+    fn move_device_key(&mut self, from: DeviceId, to: DeviceId) -> Option<String> {
+        self.host.move_device_key(from, to)
     }
 
     fn shutdown(&mut self) -> bool {
@@ -890,6 +899,11 @@ impl CastSpeakers {
                 from: manual.to_string(),
                 to: id.to_string(),
             });
+            if let Some(line) =
+                (self.link.as_mut()).and_then(|link| link.move_device_key(manual, id))
+            {
+                self.log.log(|| line);
+            }
             // 0 ms counts as none: the sender can't forget an offset, so Undo leaves 0.
             let memory = self.memory();
             let stored = |device| memory.offset(device).filter(|offset| !offset.is_zero());
