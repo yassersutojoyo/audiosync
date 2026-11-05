@@ -238,8 +238,12 @@ fn the_embedded_roots_are_the_recorded_cast_and_eureka_roots() {
 // covers: C120, C121
 #[test]
 fn the_challenge_asks_for_sha256_with_a_fresh_16_byte_nonce() {
-    let nonce = auth::new_nonce();
-    assert_ne!(nonce, auth::new_nonce(), "a fresh nonce per challenge");
+    let nonce = auth::new_nonce().expect("random");
+    assert_ne!(
+        nonce,
+        auth::new_nonce().expect("random"),
+        "a fresh nonce per challenge"
+    );
     let message = auth::challenge(&nonce);
     assert_eq!(message.source_id, SENDER);
     assert_eq!(message.destination_id, PLATFORM);

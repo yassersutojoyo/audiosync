@@ -403,7 +403,8 @@ fn authenticate(
         book.entry(&auth.key)
     });
     let wait = auth_wait(entry);
-    let nonce = auth::new_nonce();
+    let nonce = auth::new_nonce()
+        .map_err(|error| ConnectError::Ended(EndReason::Io(format!("no random nonce: {error}"))))?;
     let frame = encode_frame(&auth::challenge(&nonce))
         .map_err(|fault| ConnectError::Ended(EndReason::Fault(fault)))?;
     let io_error = |error: io::Error| ConnectError::Ended(EndReason::Io(error.to_string()));

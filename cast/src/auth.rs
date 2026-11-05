@@ -95,13 +95,12 @@ pub struct AuthError {
     pub error_type: Option<i32>,
 }
 
-/// A fresh nonce from the operating system's secure source (C121).
-pub fn new_nonce() -> [u8; 16] {
+/// A fresh nonce from the operating system's secure source (C121); its
+/// error when the source fails, which fails the connect.
+pub fn new_nonce() -> Result<[u8; 16], getrandom::Error> {
     let mut nonce = [0u8; 16];
-    // A source that fails leaves zeros: the reply then fails or declines,
-    // never verifies against a guessable nonce it could not have signed.
-    let _ = getrandom::fill(&mut nonce);
-    nonce
+    getrandom::fill(&mut nonce)?;
+    Ok(nonce)
 }
 
 /// The challenge of C120 with `nonce`.
