@@ -593,3 +593,25 @@ fn the_sender_reports_a_pair_as_one_target_after_its_members() {
     });
     assert_eq!(gone, Some(pair.id.clone()));
 }
+
+// covers: P236
+#[test]
+fn a_group_public_name_shows_without_controls_or_hidden_characters() {
+    let member = |n: u8, flags: &str, gid: &str| {
+        device(
+            n,
+            &format!("HomePod {n}"),
+            &[
+                &format!("flags={flags}"),
+                &format!("gid={gid}"),
+                &format!("tsid={TSID}"),
+                "gpn=Kit\nchen\u{202E}\u{FEFF}",
+            ],
+        )
+    };
+    let left = member(2, "0x2004", TSID);
+    let right = member(1, "0x4", TSID);
+    let targets = find_targets([&left, &right]);
+    assert_eq!(targets.len(), 1, "{targets:?}");
+    assert_eq!(targets[0].name, "Kit chen");
+}

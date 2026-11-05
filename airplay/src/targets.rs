@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::discovery::txt::group_key;
-use crate::discovery::{Device, DeviceKey, StatusFlags};
+use crate::discovery::{Device, DeviceKey, StatusFlags, shown_text};
 
 /// What kind of target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -169,11 +169,13 @@ fn leader(members: &[&Device]) -> Option<DeviceKey> {
     .or_else(|| members.iter().map(|device| device.key.clone()).min())
 }
 
-/// The name of the first member, in identifier order, that has a `gpn`.
+/// The name of the first member, in identifier order, that has a `gpn`, as
+/// the user sees it (P236).
 fn public_name(members: &[&Device]) -> Option<String> {
     members
         .iter()
         .find_map(|device| device.group_keys().group_public_name.clone())
+        .map(|name| shown_text(&name))
 }
 
 fn member(device: &Device) -> Member {

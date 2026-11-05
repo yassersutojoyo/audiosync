@@ -100,6 +100,38 @@ pub fn parse_raop_instance(instance: &str) -> Option<(DeviceId, &str)> {
     Some((DeviceId::from_hex12(id)?, name))
 }
 
+/// The most characters of a name or model the user is shown (P236).
+pub const MAX_SHOWN_CHARS: usize = 64;
+
+/// A name or model from the network as the user sees it (P236): whitespace
+/// runs, line breaks included, as one space, other controls and bidi or
+/// invisible format characters dropped, trimmed, and cut to
+/// [`MAX_SHOWN_CHARS`] characters with no joiner or space left last.
+pub fn shown_text(text: &str) -> String {
+    let kept: String = text
+        .chars()
+        .filter(|&c| c.is_whitespace() || !(c.is_control() || invisible(c)))
+        .collect();
+    let cut: String = kept
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(MAX_SHOWN_CHARS)
+        .collect();
+    cut.trim_end_matches(|c: char| c.is_whitespace() || c == '\u{200C}' || c == '\u{200D}')
+        .to_owned()
+}
+
+/// Bidi controls and invisible format characters, except the joiners that
+/// emoji sequences and several scripts need.
+fn invisible(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}' | '\u{200E}' | '\u{200F}'
+        | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}'
+        | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
+}
+
 /// The features bitmask of AirPlay `features` and RAOP `ft` (P14).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Features(pub u64);
@@ -358,7 +390,7 @@ pub enum ProtocolPath {
 pub struct Device {
     pub key: DeviceKey,
     /// The `_airplay._tcp` instance name when that service exists, otherwise
-    /// the part of the RAOP name after `@` (P10).
+    /// the part of the RAOP name after `@` (P10), as the user sees it (P236).
     pub name: String,
     pub raop: Option<Endpoint>,
     pub airplay: Option<Endpoint>,
@@ -374,14 +406,23 @@ impl Device {
         raop: Option<&ServiceRecord>,
         airplay: Option<&ServiceRecord>,
     ) -> Option<Device> {
-        let name = match (airplay, raop) {
-            (Some(record), _) => record.instance.clone(),
-            (None, Some(record)) => match parse_raop_instance(&record.instance) {
-                Some((_, name)) => name.to_owned(),
-                None => record.instance.clone(),
-            },
-            (None, None) => return None,
-        };
+        if airplay.is_none() && raop.is_none() {
+            return None;
+        }
+        let raop_name = raop.map(|record| {
+            parse_raop_instance(&record.instance).map_or(record.instance.as_str(), |(_, name)| name)
+        });
+        // A name with nothing visible left gives way to the next one (P236).
+        let name = [
+            airplay.map(|record| record.instance.as_str()),
+            raop_name,
+            raop.map(|record| record.instance.as_str()),
+        ]
+        .into_iter()
+        .flatten()
+        .map(shown_text)
+        .find(|name| !name.is_empty())
+        .unwrap_or_default();
         let raop_txt = raop.map(|record| RaopTxt::read(&Txt::parse(&record.txt)));
         let airplay_txt = airplay.map(|record| AirPlayTxt::read(&Txt::parse(&record.txt)));
         let mut device = Device {

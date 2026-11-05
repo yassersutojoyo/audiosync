@@ -26,6 +26,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, an update now checks the new AudioSync file once more right before it takes the old one's place, and stops if the file changed since it was written, so a file another account changed after the download was checked is refused instead of installed. The running version stays and the update notice says it failed.
 - When an AirPlay speaker you paired turns AudioSync's pairing down, AudioSync no longer sends it your speaker password on its own. A device on your network posing as that speaker could otherwise collect a try at the password on every connection. The speaker now shows that it needs pairing again. Switch it on and type its password, and it pairs again with that password.
 - A device on your network can no longer garble or disguise the name of a Google Cast speaker, or add fake lines to the debug log, with hidden characters or line breaks in the names and messages it sends. Names and messages from a speaker show at most 64 characters.
+- A device on your network can no longer garble or disguise the name or model of an AirPlay speaker or speaker group, or add fake lines to the debug log, with hidden characters or line breaks in what it announces. Speaker names and models now show at most 64 characters.
 
 ## [0.8.7] - 2026-11-05
 

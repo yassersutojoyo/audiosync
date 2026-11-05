@@ -1260,3 +1260,52 @@ fn auth_setup_and_metadata_follow_the_txt_record() {
         MetadataSupport::default()
     );
 }
+
+/// A name with line breaks, bidi and invisible characters, as an instance
+/// decoded from `\010` and friends would carry.
+// covers: P236
+#[test]
+fn a_device_name_shows_without_controls_bidi_or_invisible_characters() {
+    let instance = " Living\nRoom\u{202E}\u{200B}\t\u{7}Den\u{2066} ";
+    let device = Device::from_records(DeviceKey::Id(ID), None, Some(&airplay(instance, &[])))
+        .expect("device");
+    assert_eq!(device.name, "Living Room Den");
+    let endpoint = device.airplay.as_ref().expect("endpoint");
+    assert_eq!(
+        endpoint.instance, instance,
+        "the raw instance stays for matching"
+    );
+
+    let raop_only = raop_device_named("00005E005301@Hall\r\n\u{200F}Way");
+    assert_eq!(raop_only.name, "Hall Way");
+    assert_eq!(raop_only.key, DeviceKey::Id(ID));
+
+    // Joiners stay inside a name, but none is left last by the cut.
+    let family = "\u{1F468}\u{200D}\u{1F469}";
+    assert_eq!(
+        raop_device_named(&format!("00005E005301@{family}")).name,
+        family
+    );
+    let long = format!("00005E005301@{}\u{200D}\u{1F469}tail", "a".repeat(63));
+    assert_eq!(raop_device_named(&long).name, "a".repeat(63));
+    let spaced = format!("00005E005301@{} b", "c".repeat(63));
+    assert_eq!(raop_device_named(&spaced).name, "c".repeat(63));
+
+    // A name with nothing left falls back to the next instance name.
+    let hidden = "\u{202E}\u{200B}";
+    assert_eq!(
+        raop_device_named(&format!("00005E005301@{hidden}")).name,
+        "00005E005301@"
+    );
+    let both = Device::from_records(
+        DeviceKey::Id(ID),
+        Some(&raop(RAOP_NAME, &[])),
+        Some(&airplay(hidden, &[])),
+    )
+    .expect("device");
+    assert_eq!(both.name, "Living Room");
+}
+
+fn raop_device_named(instance: &str) -> Device {
+    Device::from_records(DeviceKey::Id(ID), Some(&raop(instance, &[])), None).expect("device")
+}

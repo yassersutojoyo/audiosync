@@ -63,6 +63,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use audiosync_airplay::discovery::shown_text;
 use audiosync_core::channels::InputPair;
 use audiosync_core::clock;
 use audiosync_core::eq::{EqSettings, UserCurve, sanitized_curves};
@@ -2585,7 +2586,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     SpeakerKey::AirPlay(id) if in_target => {
                         let system = self.audio.airplay_listed_name(id);
                         self.custom_names
-                            .shown(&member.key, system.as_deref().unwrap_or(id))
+                            .shown(&member.key, &system.unwrap_or_else(|| shown_text(id)))
                     }
                     // As absent_members names it; empty reads "Unknown device".
                     _ => {
@@ -4439,7 +4440,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     target: self.airplay_name(&id),
                     member: self.custom_names.shown(
                         &airplay_key(&member_id),
-                        system.as_deref().unwrap_or(&member_id),
+                        &system.unwrap_or_else(|| shown_text(&member_id)),
                     ),
                 };
                 self.airplay_off(&id, AirPlayProblem::NeedsPassword, message);
@@ -18850,6 +18851,21 @@ mod tests {
         let notices = messages(&adapter);
         assert!(
             matches!(&notices[..], [NoticeMessage::AirPlayMemberNeedsPassword { member, .. }] if member == "Bedroom"),
+            "{notices:?}"
+        );
+    }
+
+    // covers: P236
+    #[test]
+    fn an_unlisted_members_id_shows_without_hidden_characters() {
+        let mut adapter = adapter();
+        adapter.handle(BackendEvent::AirPlayMemberNeedsPassword {
+            id: "pair:5f0c".into(),
+            member_id: "raop:Den\n\u{202E}Fake".into(),
+        });
+        let notices = messages(&adapter);
+        assert!(
+            matches!(&notices[..], [NoticeMessage::AirPlayMemberNeedsPassword { member, .. }] if member == "raop:Den Fake"),
             "{notices:?}"
         );
     }

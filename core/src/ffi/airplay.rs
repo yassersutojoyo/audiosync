@@ -75,7 +75,9 @@ use std::time::{Duration, Instant};
 use audiosync_airplay::audio::SAMPLE_RATE;
 use audiosync_airplay::dacp::{DacpAdvertiser, RemoteCommand};
 use audiosync_airplay::discovery::mdns::{MdnsAdvertiser, MdnsBrowser};
-use audiosync_airplay::discovery::{Browser, Device, DeviceKey, ProtocolPath, ServiceKind};
+use audiosync_airplay::discovery::{
+    Browser, Device, DeviceKey, ProtocolPath, ServiceKind, shown_text,
+};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::input::InputWriter;
@@ -949,7 +951,8 @@ fn flags(info: &ReceiverInfo) -> u32 {
     .fold(0, |bits, (_, bit)| bits | bit)
 }
 
-/// The receiver's model: AirPlay `model` when present, otherwise RAOP `am`.
+/// The receiver's model: AirPlay `model` when present, otherwise RAOP `am`,
+/// as the user sees it (P236).
 fn model(info: &ReceiverInfo) -> String {
     let device = &info.device;
     device
@@ -957,6 +960,7 @@ fn model(info: &ReceiverInfo) -> String {
         .as_ref()
         .and_then(|txt| txt.model.clone())
         .or_else(|| device.raop_txt.as_ref().and_then(|txt| txt.model.clone()))
+        .map(|model| shown_text(&model))
         .unwrap_or_default()
 }
 
@@ -6329,6 +6333,28 @@ mod tests {
             .iter()
             .any(|body| body.contains("Track Three"))));
         assert_eq!(progress_bodies().len(), 2, "the same track's, then none");
+        // SAFETY: destroyed once, by this thread.
+        unsafe { asc_airplay_destroy(&mut handle) };
+    }
+
+    #[test]
+    fn a_receivers_name_and_model_reach_the_host_without_hidden_characters() {
+        let mut handle = asc_airplay_create();
+        let txt = ["txtvers=1", "et=0", "am=Speaker\u{202E}1,1\n\u{200B}"];
+        start_with(
+            handle,
+            vec![BrowseEvent::Resolved(raop(
+                "02005E005342",
+                "Hall\nWay\u{2067}",
+                &txt,
+            ))],
+        );
+        let seen = next(handle, 1);
+        let shown: Vec<(&str, &str, &str)> = seen
+            .iter()
+            .map(|s| (s.id.as_str(), s.name.as_str(), s.model.as_str()))
+            .collect();
+        assert_eq!(shown, [("02005E005342", "Hall Way", "Speaker1,1")]);
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

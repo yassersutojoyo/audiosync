@@ -5456,9 +5456,12 @@ pub mod tests {
     fn long_names_that_differ_only_at_the_end_sort_whole_and_stay_unchanged() {
         let fake = FakeAirPlay::new();
         let mut airplay = speakers(&fake);
-        let long = "Living Room Speaker With A Very Long Name ".repeat(6) + "End";
+        let long = "Living Room Speaker With A Very Long Name ".repeat(2)[..61].to_owned() + "s";
         let (a, b) = (format!("{long} A"), format!("{long} B"));
-        assert_eq!(a.chars().count(), 257);
+        assert_eq!(
+            a.chars().count(),
+            audiosync_airplay::discovery::MAX_SHOWN_CHARS
+        );
         fake.appear(&device(1, &b, OPEN_TXT));
         fake.appear(&device(2, &a, OPEN_TXT));
         fake.appear(&device(3, "Den", OPEN_TXT));
