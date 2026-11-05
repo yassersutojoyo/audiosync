@@ -891,22 +891,26 @@ fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
 }
 
 /// Fades the main window's notices `ids` out (all listed ones for None),
-/// then dismisses those still listed.
+/// then dismisses those still listed with the text they faded with.
 fn close_main_notices(weak: &Weak<App>, ids: Option<u64>) {
     let Some(app) = weak.upgrade() else { return };
-    let ids: Vec<u64> = {
+    let shown: Vec<(u64, NoticeMessage)> = {
         let mut closing = app.closing_notices.borrow_mut();
-        let new: Vec<u64> = match ids {
-            Some(id) => vec![id],
-            None => app.snapshot().notices.iter().map(|n| n.id).collect(),
-        }
-        .into_iter()
-        .filter(|id| !closing.contains(id))
-        .collect();
-        closing.extend(&new);
+        let new: Vec<(u64, NoticeMessage)> = app
+            .snapshot()
+            .notices
+            .into_iter()
+            .filter(|n| ids.is_none_or(|id| id == n.id) && !closing.contains(&n.id))
+            .map(|n| (n.id, n.message))
+            .collect();
+        closing.extend(new.iter().map(|(id, _)| *id));
         new
     };
-    if ids.is_empty() {
+    if shown.is_empty() {
+        // A window still showing a notice the backend already dropped catches up.
+        if ids.is_some() {
+            app.refresh();
+        }
         return;
     }
     app.refresh();
@@ -919,7 +923,13 @@ fn close_main_notices(weak: &Weak<App>, ids: Option<u64>) {
     let weak = weak.clone();
     Timer::single_shot(Duration::from_millis(fade), move || {
         with_app(&weak, |app| {
-            app.dismiss_listed_notices(|id| ids.contains(&id))
+            // One raised again under its ID with new text stays, shown in full.
+            app.closing_notices
+                .borrow_mut()
+                .retain(|id| shown.iter().all(|(faded, _)| faded != id));
+            app.dismiss_listed_notices(|n| {
+                shown.iter().any(|(id, m)| *id == n.id && *m == n.message)
+            })
         });
     });
 }
@@ -1294,9 +1304,9 @@ impl App {
         self.dismiss_listed_notices(|_| true);
     }
 
-    fn dismiss_listed_notices(&self, chosen: impl Fn(u64) -> bool) {
+    fn dismiss_listed_notices(&self, chosen: impl Fn(&ui_model::Notice) -> bool) {
         for notice in self.snapshot().notices {
-            if chosen(notice.id) && !self.dismiss_own_notice(notice.id) {
+            if chosen(&notice) && !self.dismiss_own_notice(notice.id) {
                 self.backend.borrow_mut().dismiss_notice(notice.id);
             }
         }
@@ -7177,6 +7187,41 @@ mod tests {
         assert_eq!(main_notice_titles(&app), Vec::<SharedString>::new());
     }
 
+    /// A notice raised again under its ID with new text while its old text
+    /// fades out stays, shown in full.
+    #[test]
+    fn a_notice_raised_again_with_new_text_during_its_fade_stays() {
+        let app = two_notices_shown();
+        let dialog_title = || {
+            app.main
+                .get_notices()
+                .iter()
+                .find(|n| u64::try_from(n.id) == Ok(DIALOG_NOTICE_ID))
+                .map(|n| n.title)
+                .expect("the dialog notice")
+        };
+        click_dismiss(&app, dialog_title());
+        advance_clock(Duration::from_millis(100));
+        let mut again = dialog_notice();
+        again.message = NoticeMessage::DialogMessage {
+            title: "Rename".to_owned(),
+            text: "Too long".to_owned(),
+        };
+        app.ui.borrow_mut().dialog_notice = Some(again);
+        app.refresh();
+        draw_frames();
+        advance_clock(Duration::from_millis(600));
+        draw_frames();
+        let shown: Vec<bool> = app
+            .main
+            .get_notices()
+            .iter()
+            .filter(|n| u64::try_from(n.id) == Ok(DIALOG_NOTICE_ID))
+            .map(|n| n.closing)
+            .collect();
+        assert_eq!(shown, [false]);
+    }
+
     // covers: S421
     #[test]
     fn a_reading_the_sessions_report_shows_in_the_window_before_the_poll_and_is_logged() {
@@ -7342,9 +7387,13 @@ mod tests {
         let log = DebugLog::new(Some(path.clone()));
         let app = app_logging(MockBackend::new(), log.clone());
         app.apply_frame(app.main.window(), "main window", Frame::Titled);
+        app.apply_frame(app.flyout.window(), "flyout", Frame::Flyout);
         assert!(log.flush(debug_log::TEST_FLUSH));
         let written = std::fs::read_to_string(&path).unwrap_or_default();
-        assert!(cfg!(windows) || !written.contains("Mica"), "{written}");
+        assert!(
+            cfg!(windows) || !written.contains("Mica") && !written.contains("rounded corners"),
+            "{written}"
+        );
     }
 
     // covers: S212
