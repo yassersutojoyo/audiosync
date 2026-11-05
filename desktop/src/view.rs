@@ -926,12 +926,20 @@ fn close_main_notices(weak: &Weak<App>, ids: Option<u64>) {
     let weak = weak.clone();
     Timer::single_shot(Duration::from_millis(fade), move || {
         with_app(&weak, |app| {
-            // One raised again under its ID with new text stays, shown in full.
-            app.closing_notices
-                .borrow_mut()
-                .retain(|fading| !shown.contains(fading));
+            // One raised again with new text left the fade on that refresh, so
+            // it stays even if its text has since changed back.
+            let still: Vec<(u64, NoticeMessage)> = {
+                let mut closing = app.closing_notices.borrow_mut();
+                let still = shown
+                    .iter()
+                    .filter(|fading| closing.contains(fading))
+                    .cloned()
+                    .collect();
+                closing.retain(|fading| !shown.contains(fading));
+                still
+            };
             app.dismiss_listed_notices(|n| {
-                shown.iter().any(|(id, m)| *id == n.id && *m == n.message)
+                still.iter().any(|(id, m)| *id == n.id && *m == n.message)
             })
         });
     });
@@ -7228,6 +7236,36 @@ mod tests {
             .map(|n| n.closing)
             .collect();
         assert_eq!(shown, [false]);
+    }
+
+    /// A notice whose text changes and changes back during its fade was
+    /// raised again, so the old fade leaves it shown.
+    #[test]
+    fn a_notice_whose_text_changes_back_during_its_fade_stays() {
+        let app = two_notices_shown();
+        let dialog = |app: &App| {
+            app.main
+                .get_notices()
+                .iter()
+                .find(|n| u64::try_from(n.id) == Ok(DIALOG_NOTICE_ID))
+                .map(|n| (n.title, n.closing))
+        };
+        let (title, _) = dialog(&app).expect("the dialog notice");
+        click_dismiss(&app, title);
+        let mut changed = dialog_notice();
+        changed.message = NoticeMessage::DialogMessage {
+            title: "Rename".to_owned(),
+            text: "Too long".to_owned(),
+        };
+        for notice in [changed, dialog_notice()] {
+            advance_clock(Duration::from_millis(50));
+            app.ui.borrow_mut().dialog_notice = Some(notice);
+            app.refresh();
+            draw_frames();
+        }
+        advance_clock(Duration::from_millis(600));
+        draw_frames();
+        assert_eq!(dialog(&app).map(|(_, closing)| closing), Some(false));
     }
 
     /// A notice raised again with new text during its old text's fade can
