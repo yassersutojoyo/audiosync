@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use serde_json::{Map, Value};
 
 use crate::discovery::DeviceId;
+use crate::media::device_text;
 
 /// One member of a group as the multizone namespace names it (C94).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,7 +25,7 @@ impl GroupMember {
         let device_id = value.get("deviceId")?.as_str()?.to_owned();
         Some(GroupMember {
             id: DeviceId::parse(&device_id),
-            name: value.get("name").and_then(Value::as_str).map(str::to_owned),
+            name: value.get("name").and_then(Value::as_str).map(device_text),
             device_id,
         })
     }
@@ -55,7 +56,7 @@ pub enum MultizoneMessage {
 
 impl MultizoneMessage {
     pub fn from_payload(kind: &str, payload: &Map<String, Value>) -> MultizoneMessage {
-        let other = || MultizoneMessage::Other(kind.to_owned());
+        let other = || MultizoneMessage::Other(device_text(kind));
         match kind {
             "MULTIZONE_STATUS" => payload
                 .get("status")

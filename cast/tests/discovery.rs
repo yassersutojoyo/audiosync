@@ -17,8 +17,12 @@ use audiosync_cast::discovery::{
     Announcements, BrowseEvent, CastDevice, DEVICE_PORT, DeviceId, DeviceKey, DeviceKind,
     DeviceList, ListEvent, MAX_DEVICES, SERVICE_TYPE, ServiceRecord, Skipped, Txt,
 };
+use audiosync_cast::group::{MemberList, MultizoneMessage};
+use audiosync_cast::media::{IdleReason, MediaStatus};
+use audiosync_cast::status::ReceiverStatus;
 use common::{Behavior, FakeDevice};
 use mdns_sd::{ServiceEvent, ServiceInfo, TxtProperty};
+use serde_json::json;
 
 const ID: &str = "3f2a8c41d27e4b8f9a06c1d5e7f80b12";
 
@@ -374,14 +378,28 @@ fn a_goodbye_is_not_reported_while_the_device_answers_again() {
 #[test]
 fn an_unanswered_goodbye_is_reported_after_the_wait_and_held_goodbyes_are_bounded() {
     let (send, receive) = mpsc::channel();
-    let mut browser = MdnsBrowser::from_events(receive);
+    let mut browser = MdnsBrowser::from_events(receive).with_local_nets(test_net());
     let goodbye =
         |name: &str| ServiceEvent::ServiceRemoved(SERVICE_TYPE.to_owned(), name.to_owned());
     let start = Instant::now();
     let fullname = format!("Chromecast-3f2a.{SERVICE_TYPE}");
+    send.send(resolved("Chromecast-3f2a", 8009, &[v4(10)], &[("id", ID)]))
+        .expect("send");
+    assert!(matches!(
+        browser.poll_event_at(start),
+        Some(BrowseEvent::Resolved(_))
+    ));
+    for n in 0..MAX_DEVICES {
+        send.send(goodbye(&format!("D{n}.{SERVICE_TYPE}")))
+            .expect("send");
+    }
     send.send(goodbye(&fullname)).expect("send");
     send.send(goodbye(&fullname)).expect("send");
-    assert_eq!(browser.poll_event_at(start), None);
+    assert_eq!(
+        browser.poll_event_at(start),
+        None,
+        "goodbyes for instances never resolved don't push the speaker's past the query"
+    );
     let almost = start + CONFIRM_WAIT - Duration::from_millis(1);
     assert_eq!(browser.poll_event_at(almost), None);
     let due = start + CONFIRM_WAIT;
@@ -390,17 +408,108 @@ fn an_unanswered_goodbye_is_reported_after_the_wait_and_held_goodbyes_are_bounde
         Some(BrowseEvent::Removed { fullname })
     );
     assert_eq!(browser.poll_event_at(due), None, "reported once");
+    assert_eq!(
+        browser.poll_event_at(due + CONFIRM_WAIT),
+        None,
+        "goodbyes for instances never resolved are dropped"
+    );
+}
 
-    for n in 0..MAX_DEVICES + 50 {
-        send.send(goodbye(&format!("D{n}.{SERVICE_TYPE}")))
-            .expect("send");
+// covers: C134
+#[test]
+fn instances_sharing_one_id_leave_room_to_hold_a_real_speakers_goodbye() {
+    let (send, receive) = mpsc::channel();
+    let mut browser = MdnsBrowser::from_events(receive).with_local_nets(test_net());
+    let start = Instant::now();
+    for n in 0..MAX_DEVICES {
+        send.send(resolved(
+            &format!("Fake-{n}"),
+            8009,
+            &[v4(20)],
+            &[("id", ID)],
+        ))
+        .expect("send");
     }
-    assert_eq!(browser.poll_event_at(due), None);
-    let mut reported = 0;
-    while browser.poll_event_at(due + CONFIRM_WAIT).is_some() {
-        reported += 1;
+    let real = "4f2a8c41d27e4b8f9a06c1d5e7f80b12";
+    send.send(resolved("Kitchen", 8009, &[v4(11)], &[("id", real)]))
+        .expect("send");
+    while browser.poll_event_at(start).is_some() {}
+    let fullname = format!("Kitchen.{SERVICE_TYPE}");
+    send.send(ServiceEvent::ServiceRemoved(
+        SERVICE_TYPE.to_owned(),
+        fullname.clone(),
+    ))
+    .expect("send");
+    assert_eq!(browser.poll_event_at(start), None);
+    assert_eq!(
+        browser.poll_event_at(start + CONFIRM_WAIT),
+        Some(BrowseEvent::Removed { fullname })
+    );
+}
+
+// covers: C134
+#[test]
+fn a_held_goodbye_is_reported_after_thirty_seconds_even_while_a_flood_holds_the_query() {
+    let (send, receive) = mpsc::channel();
+    let mut browser = MdnsBrowser::from_events(receive).with_local_nets(test_net());
+    let start = Instant::now();
+    let fullname = format!("Chromecast-3f2a.{SERVICE_TYPE}");
+    let other = "4f2a8c41d27e4b8f9a06c1d5e7f80b12";
+    let flood = || resolved("Kitchen", 8009, &[v4(11)], &[("id", other)]);
+    send.send(resolved("Chromecast-3f2a", 8009, &[v4(10)], &[("id", ID)]))
+        .expect("send");
+    assert!(browser.poll_event_at(start).is_some());
+    send.send(ServiceEvent::ServiceRemoved(
+        SERVICE_TYPE.to_owned(),
+        fullname.clone(),
+    ))
+    .expect("send");
+    send.send(flood()).expect("send");
+    let limit = start + Duration::from_secs(30);
+    for at in [start, limit - Duration::from_millis(1)] {
+        send.send(flood()).expect("send");
+        assert!(matches!(
+            browser.poll_event_at(at),
+            Some(BrowseEvent::Resolved(_))
+        ));
     }
-    assert_eq!(reported, MAX_DEVICES);
+    send.send(flood()).expect("send");
+    assert_eq!(
+        browser.poll_event_at(limit),
+        Some(BrowseEvent::Removed { fullname })
+    );
+}
+
+// covers: C134
+#[test]
+fn a_goodbye_waits_ten_seconds_from_the_query_that_went_out_for_it() {
+    let (send, receive) = mpsc::channel();
+    let mut browser = MdnsBrowser::from_events(receive).with_local_nets(test_net());
+    let start = Instant::now();
+    let fullname = format!("Chromecast-3f2a.{SERVICE_TYPE}");
+    send.send(resolved("Chromecast-3f2a", 8009, &[v4(10)], &[("id", ID)]))
+        .expect("send");
+    assert!(browser.poll_event_at(start).is_some());
+    send.send(ServiceEvent::ServiceRemoved(
+        SERVICE_TYPE.to_owned(),
+        fullname.clone(),
+    ))
+    .expect("send");
+    let other = "4f2a8c41d27e4b8f9a06c1d5e7f80b12";
+    send.send(resolved("Kitchen", 8009, &[v4(11)], &[("id", other)]))
+        .expect("send");
+    assert!(
+        matches!(browser.poll_event_at(start), Some(BrowseEvent::Resolved(_))),
+        "the query waits while events are queued"
+    );
+    let late = start + CONFIRM_WAIT + Duration::from_secs(5);
+    assert_eq!(browser.poll_event_at(late), None, "the query goes out now");
+    let sent = late + CONFIRM_WAIT;
+    assert_eq!(browser.poll_event_at(sent - Duration::from_millis(1)), None);
+    assert_eq!(
+        browser.poll_event_at(sent),
+        Some(BrowseEvent::Removed { fullname })
+    );
 }
 
 // covers: C135
@@ -956,4 +1065,75 @@ fn a_record_naming_a_manual_address_adds_none_of_its_other_addresses() {
     list.apply(BrowseEvent::Resolved(moved));
     assert_eq!(list.entries().len(), 1);
     assert_eq!(list.entries()[0].addresses, [typed], "nor a later record");
+}
+
+// covers: C136
+#[test]
+fn device_text_arrives_without_line_breaks_bidi_or_invisible_characters_and_capped() {
+    let spoof = " \u{202E}Kitchen\u{200B}\r\n\u{2028}Speaker\u{2066}\u{0007}\u{009B}\u{FEFF} ";
+    let long = "A".repeat(100);
+    let capped = "A".repeat(64);
+    let (name, model) = (format!("fn={spoof}"), format!("md={long}"));
+    let device = CastDevice::from_record(&record(
+        "Chromecast-3f2a._googlecast._tcp.local.",
+        DEVICE_PORT,
+        &[
+            format!("id={ID}").as_bytes(),
+            name.as_bytes(),
+            model.as_bytes(),
+        ],
+    ))
+    .expect("a device");
+    assert_eq!(device.name.as_deref(), Some("Kitchen Speaker"));
+    assert_eq!(device.model.as_deref(), Some(capped.as_str()));
+
+    let mut members = MemberList::new();
+    let cut = format!("{}\u{200D}B", "A".repeat(63));
+    let chef = "Chef \u{1F469}\u{200D}\u{1F373}";
+    members.apply(&MultizoneMessage::from_payload(
+        "MULTIZONE_STATUS",
+        json!({"status": {"devices": [
+            {"deviceId": ID, "name": spoof},
+            {"deviceId": "4f2a8c41d27e4b8f9a06c1d5e7f80b12", "name": chef},
+            {"deviceId": "5f2a8c41d27e4b8f9a06c1d5e7f80b12", "name": cut},
+        ]}})
+        .as_object()
+        .expect("an object"),
+    ));
+    let names: Vec<_> = members
+        .members()
+        .expect("listed")
+        .iter()
+        .map(|m| m.name.clone())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            Some("Kitchen Speaker".to_owned()),
+            Some(chef.to_owned()),
+            Some("A".repeat(63)),
+        ],
+        "a joiner inside an emoji stays, one the cut leaves at the end goes"
+    );
+
+    let status = ReceiverStatus::from_payload(
+        json!({"status": {"applications": [
+            {"appId": "CC1AD845", "displayName": spoof, "statusText": long},
+        ]}})
+        .as_object()
+        .expect("an object"),
+    );
+    let app = &status.applications[0];
+    assert_eq!(app.display_name.as_deref(), Some("Kitchen Speaker"));
+    assert_eq!(app.status_text.as_deref(), Some(capped.as_str()));
+
+    let media = MediaStatus::list_from_payload(
+        json!({"status": [{"playerState": "IDLE", "idleReason": spoof}]})
+            .as_object()
+            .expect("an object"),
+    );
+    assert_eq!(
+        media[0].idle_reason,
+        Some(IdleReason::Other("Kitchen Speaker".to_owned()))
+    );
 }

@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use mdns_sd::{ResolvedService, ScopedIp, ServiceDaemon, ServiceEvent};
 
-use super::{BrowseEvent, MAX_DEVICES, SERVICE_TYPE, ServiceRecord};
+use super::{BrowseEvent, CastDevice, DeviceId, MAX_DEVICES, SERVICE_TYPE, ServiceRecord};
 
 /// The live browser could not start.
 #[derive(Debug)]
@@ -39,6 +39,11 @@ pub const CONFIRM_WAIT: Duration = Duration::from_secs(10);
 /// query after one and three seconds, inside every wait it covers.
 const QUERY_GAP: Duration = Duration::from_secs(1);
 
+/// The longest a removal is held, whether its query went out or not: a
+/// steady flood of events would otherwise hold the query, and the removal,
+/// forever (C134).
+const HOLD_LIMIT: Duration = Duration::from_secs(30);
+
 enum Source {
     /// The current browse, and the one a fresh query replaced, drained until
     /// the next query.
@@ -54,10 +59,18 @@ pub struct MdnsBrowser {
     source: Source,
     daemon: Option<ServiceDaemon>,
     dead: bool,
-    /// Removed instances and when their removal is due, at most
-    /// [`MAX_DEVICES`].
-    leaving: Vec<(String, Instant)>,
+    /// Instances resolved as Cast devices, at most [`MAX_DEVICES`] and one
+    /// per `id`, the first as in C116; only their removals are held, so
+    /// made-up instances can't crowd out a real one's (C134).
+    resolved: Vec<(String, DeviceId)>,
+    /// Removed instances, the [`HOLD_LIMIT`] of each and when its removal is
+    /// due: `None` until the fresh query for it goes out.
+    leaving: Vec<(String, Instant, Option<Instant>)>,
     queried: Option<Instant>,
+    /// A fresh query is wanted; it goes out once both receivers are drained,
+    /// since a new browse drops the receiver it replaces with any event still
+    /// queued there.
+    query_due: bool,
     nets: Nets,
 }
 
@@ -82,8 +95,10 @@ impl MdnsBrowser {
                 },
                 daemon: Some(daemon),
                 dead: false,
+                resolved: Vec::new(),
                 leaving: Vec::new(),
                 queried: None,
+                query_due: false,
                 nets: Nets::Live(None),
             }),
             Err(error) => {
@@ -100,8 +115,10 @@ impl MdnsBrowser {
             source: Source::Channel(events),
             daemon: None,
             dead: false,
+            resolved: Vec::new(),
             leaving: Vec::new(),
             queried: None,
+            query_due: false,
             nets: Nets::Live(None),
         }
     }
@@ -122,20 +139,51 @@ impl MdnsBrowser {
     /// and is reported once [`CONFIRM_WAIT`] passed without the instance
     /// resolving again (C134).
     pub fn poll_event_at(&mut self, now: Instant) -> Option<BrowseEvent> {
+        if let Some(over) = (self.leaving.iter()).position(|&(_, limit, _)| limit <= now) {
+            return Some(self.report(over));
+        }
         while let Some(event) = self.next_event() {
             match browse_event(event).and_then(|event| keep_on_link(event, &mut self.nets)) {
                 Some(BrowseEvent::Removed { fullname }) => self.leave(fullname, now),
                 Some(BrowseEvent::Resolved(record)) => {
                     self.leaving
-                        .retain(|(name, _)| !name.eq_ignore_ascii_case(&record.fullname));
+                        .retain(|(name, ..)| !name.eq_ignore_ascii_case(&record.fullname));
+                    if let Ok(device) = CastDevice::from_record(&record)
+                        && self.resolved.len() < MAX_DEVICES
+                        && !(self.resolved.iter()).any(|(name, id)| {
+                            *id == device.id || name.eq_ignore_ascii_case(&record.fullname)
+                        })
+                    {
+                        self.resolved.push((record.fullname.clone(), device.id));
+                    }
                     return Some(BrowseEvent::Resolved(record));
                 }
                 None => {}
             }
         }
-        let due = self.leaving.iter().position(|&(_, at)| at <= now)?;
-        let (fullname, _) = self.leaving.remove(due);
-        Some(BrowseEvent::Removed { fullname })
+        if std::mem::take(&mut self.query_due) {
+            self.queried = Some(now);
+            for (_, _, at) in &mut self.leaving {
+                at.get_or_insert(now + CONFIRM_WAIT);
+            }
+            // Browsing again sends a new query; the daemon hands the browse's
+            // events to the new receiver from then on.
+            if let (Some(daemon), Source::Daemon { current, previous }) =
+                (&self.daemon, &mut self.source)
+                && let Ok(receiver) = daemon.browse(SERVICE_TYPE)
+            {
+                *previous = Some(std::mem::replace(current, receiver));
+            }
+        }
+        let due = (self.leaving.iter()).position(|(.., at)| at.is_some_and(|at| at <= now))?;
+        Some(self.report(due))
+    }
+
+    fn report(&mut self, index: usize) -> BrowseEvent {
+        let (fullname, ..) = self.leaving.remove(index);
+        self.resolved
+            .retain(|(name, _)| !name.eq_ignore_ascii_case(&fullname));
+        BrowseEvent::Removed { fullname }
     }
 
     fn next_event(&mut self) -> Option<ServiceEvent> {
@@ -169,26 +217,22 @@ impl MdnsBrowser {
     }
 
     /// Holds a removal back and asks the network for the instance again.
-    /// One already held, or one past [`MAX_DEVICES`] held, is dropped.
+    /// One for an instance not resolved, or already held, is dropped. Within
+    /// [`QUERY_GAP`] of a query the daemon's repeats of it cover the wait.
     fn leave(&mut self, fullname: String, now: Instant) {
-        if self.leaving.len() >= MAX_DEVICES
-            || (self.leaving.iter()).any(|(name, _)| name.eq_ignore_ascii_case(&fullname))
+        if !self.is_resolved(&fullname)
+            || (self.leaving.iter()).any(|(name, ..)| name.eq_ignore_ascii_case(&fullname))
         {
             return;
         }
-        self.leaving.push((fullname, now + CONFIRM_WAIT));
-        if self.queried.is_some_and(|at| now < at + QUERY_GAP) {
-            return;
-        }
-        self.queried = Some(now);
-        // Browsing again sends a new query; the daemon hands the browse's
-        // events to the new receiver from then on.
-        if let (Some(daemon), Source::Daemon { current, previous }) =
-            (&self.daemon, &mut self.source)
-            && let Ok(receiver) = daemon.browse(SERVICE_TYPE)
-        {
-            *previous = Some(std::mem::replace(current, receiver));
-        }
+        let queried = self.queried.is_some_and(|at| now < at + QUERY_GAP);
+        let due = queried.then_some(now + CONFIRM_WAIT);
+        self.leaving.push((fullname, now + HOLD_LIMIT, due));
+        self.query_due |= !queried;
+    }
+
+    fn is_resolved(&self, fullname: &str) -> bool {
+        (self.resolved.iter()).any(|(name, _)| name.eq_ignore_ascii_case(fullname))
     }
 
     /// The event source is gone; nothing will ever arrive again.

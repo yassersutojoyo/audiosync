@@ -10,16 +10,36 @@ use crate::error::EndReason;
 /// The longest `contentId` the device takes, in bytes (C47).
 pub const MAX_CONTENT_ID: usize = 1024;
 
-/// The most characters kept of a reason text the device sends.
+/// The most characters kept of a text the device sends (C136).
 pub const MAX_DEVICE_TEXT_CHARS: usize = 64;
 
-/// `text` from the device as it may reach the user and the log: its first
-/// [`MAX_DEVICE_TEXT_CHARS`] characters, each control character as `?`.
-pub(crate) fn device_text(text: &str) -> String {
-    text.chars()
+/// `text` from the device as it may reach the user and the log (C136): each
+/// run of whitespace, line breaks included, as one space, every other
+/// control, bidi or invisible format character dropped, trimmed, and its
+/// first [`MAX_DEVICE_TEXT_CHARS`] characters, with no joiner left last.
+pub fn device_text(text: &str) -> String {
+    let visible: String = text
+        .chars()
+        .filter(|&c| c.is_whitespace() || !(c.is_control() || is_hidden(c)))
+        .collect();
+    let words: Vec<&str> = visible.split_whitespace().collect();
+    let capped: String = words
+        .join(" ")
+        .chars()
         .take(MAX_DEVICE_TEXT_CHARS)
-        .map(|c| if c.is_control() { '?' } else { c })
-        .collect()
+        .collect();
+    // The cut may split a joined sequence and leave its joiner last.
+    let joiner = |c: char| c.is_whitespace() || c == '\u{200C}' || c == '\u{200D}';
+    capped.trim_end_matches(joiner).to_owned()
+}
+
+/// Bidi controls and invisible format characters. The zero-width joiner and
+/// non-joiner stay: emoji sequences and several scripts need them.
+fn is_hidden(c: char) -> bool {
+    matches!(c,
+        '\u{00AD}' | '\u{061C}' | '\u{180E}' | '\u{200B}' | '\u{200E}' | '\u{200F}'
+        | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{206F}'
+        | '\u{FEFF}' | '\u{FFF9}'..='\u{FFFB}')
 }
 
 /// Track metadata for the `LOAD` (C53). Unknown fields stay `None`; none
@@ -108,7 +128,7 @@ impl PlayerState {
             "PLAYING" => PlayerState::Playing,
             "BUFFERING" => PlayerState::Buffering,
             "PAUSED" => PlayerState::Paused,
-            other => PlayerState::Other(other.to_owned()),
+            other => PlayerState::Other(device_text(other)),
         }
     }
 }

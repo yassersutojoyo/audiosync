@@ -13,6 +13,7 @@ use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::group::GroupMember;
+use crate::media::device_text;
 
 /// The service the sender browses for (C10).
 pub const SERVICE_TYPE: &str = "_googlecast._tcp.local.";
@@ -73,10 +74,11 @@ impl Txt {
             .map(|(_, value)| value.as_slice())
     }
 
-    /// A value as text; bytes that aren't UTF-8 become U+FFFD.
+    /// A value as text; bytes that aren't UTF-8 become U+FFFD, and the
+    /// text is filtered as all device text is (C136).
     pub fn text(&self, key: &str) -> Option<String> {
         self.get(key)
-            .map(|value| String::from_utf8_lossy(value).into_owned())
+            .map(|value| device_text(&String::from_utf8_lossy(value)))
     }
 
     pub fn keys(&self) -> impl Iterator<Item = &str> {

@@ -54,7 +54,7 @@ use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, CommandError, DeviceMemory, HostEvent, StartRefused,
 };
-use audiosync_cast::media::{MediaError, Metadata};
+use audiosync_cast::media::{MediaError, Metadata, device_text};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use audiosync_cast::status::{
     ControlType, DeviceVolume, NO_ZONE_LEVEL, answers_volume, device_level, own_level,
@@ -1059,7 +1059,7 @@ impl CastSpeakers {
                 let name = device
                     .name
                     .clone()
-                    .unwrap_or_else(|| device.instance.clone());
+                    .unwrap_or_else(|| device_text(&device.instance));
                 let group = entry.is_group().then(|| CastGroup {
                     members: self.group_members(id),
                 });
@@ -2030,7 +2030,7 @@ impl CastSpeakers {
                         .zip(&members)
                         .map(|(named, member)| {
                             named.map(|named| named.name).unwrap_or_else(|| {
-                                format!("unnamed, deviceId {}", member.device_id)
+                                format!("unnamed, deviceId {}", device_text(&member.device_id))
                             })
                         })
                         .collect();

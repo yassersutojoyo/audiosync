@@ -52,7 +52,7 @@ use audiosync_cast::group::{GroupMember, GroupRecords};
 use audiosync_cast::host::{
     AttemptId, CastHost, CastTarget, CommandError, DeviceMemory, HostEvent, StartRefused,
 };
-use audiosync_cast::media::{MediaError, Metadata, VolumeError};
+use audiosync_cast::media::{MediaError, Metadata, VolumeError, device_text};
 use audiosync_cast::session::{SessionEnd, SessionError, SessionEvent};
 use audiosync_cast::status::{self, ControlType};
 use audiosync_cast::stream::StreamError;
@@ -751,7 +751,7 @@ impl AscCast {
                 change.name = device
                     .name
                     .clone()
-                    .unwrap_or_else(|| device.instance.clone());
+                    .unwrap_or_else(|| device_text(&device.instance));
                 change.model = device.model.clone().unwrap_or_default();
                 if device.kind == DeviceKind::Group {
                     change.flags |= CAST_FLAG_GROUP;

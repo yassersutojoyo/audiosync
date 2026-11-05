@@ -325,7 +325,7 @@ fn idle_before_playing_fails_the_load() {
 fn device_reasons_are_cut_short_and_printable() {
     let start = Instant::now();
     let long = format!("BAD\n\u{1b}[2J{}", "\u{e9}".repeat(70_000));
-    let expected = format!("BAD??[2J{}", "\u{e9}".repeat(MAX_DEVICE_TEXT_CHARS - 8));
+    let expected = format!("BAD [2J{}", "\u{e9}".repeat(MAX_DEVICE_TEXT_CHARS - 7));
 
     let mut channel = running(start, volume());
     channel

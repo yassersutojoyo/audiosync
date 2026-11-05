@@ -2,6 +2,7 @@
 
 use serde_json::{Map, Value};
 
+use crate::media::device_text;
 use crate::message::DEFAULT_MEDIA_RECEIVER;
 
 /// The Backdrop app, a device's idle screen (C81).
@@ -175,7 +176,7 @@ impl ReceiverStatus {
                     "attenuation" => ControlType::Attenuation,
                     "fixed" => ControlType::Fixed,
                     "master" => ControlType::Master,
-                    other => ControlType::Other(other.to_owned()),
+                    other => ControlType::Other(device_text(other)),
                 };
             }
             volume.step_interval = object.get("stepInterval").and_then(Value::as_f64);
@@ -224,7 +225,7 @@ fn application(value: &Value) -> Option<Application> {
     let text = |key: &str| object.get(key).and_then(Value::as_str).map(str::to_owned);
     Some(Application {
         app_id: text("appId")?,
-        display_name: text("displayName"),
+        display_name: text("displayName").as_deref().map(device_text),
         session_id: text("sessionId"),
         transport_id: text("transportId"),
         namespaces: object
@@ -237,7 +238,7 @@ fn application(value: &Value) -> Option<Application> {
                     .collect()
             })
             .unwrap_or_default(),
-        status_text: text("statusText"),
+        status_text: text("statusText").as_deref().map(device_text),
         is_idle_screen: object
             .get("isIdleScreen")
             .and_then(Value::as_bool)

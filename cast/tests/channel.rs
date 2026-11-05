@@ -225,7 +225,7 @@ fn cancelled_retries_once_and_other_reasons_fail_at_once() {
 fn launch_refusal_reasons_are_cut_short_and_printable() {
     let start = Instant::now();
     let long = format!("BAD\n\u{1b}[2J{}", "\u{e9}".repeat(70_000));
-    let expected = format!("BAD??[2J{}", "\u{e9}".repeat(MAX_DEVICE_TEXT_CHARS - 8));
+    let expected = format!("BAD [2J{}", "\u{e9}".repeat(MAX_DEVICE_TEXT_CHARS - 7));
     for kind in ["LAUNCH_ERROR", "INVALID_REQUEST"] {
         let mut channel = ready(start, Vec::new());
         channel.launch(start).expect("ready");
