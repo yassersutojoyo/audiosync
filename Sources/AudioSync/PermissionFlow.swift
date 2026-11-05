@@ -226,7 +226,7 @@ struct SetupCheckInputs: Equatable {
 }
 
 enum SetupChecklist {
-    /// True once the user dismissed the checklist with every row ok.
+    /// True once the user hid the checklist.
     static let dismissedKey = "setupChecklistDismissed"
 
     /// Shown by itself on a first install only; Setup Checklist in the app menu shows it again.

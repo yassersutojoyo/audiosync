@@ -187,7 +187,7 @@ final class AppModel: ObservableObject {
         /// Continue or Not Now on the permission explanation the window offers.
         var permissionContinue: (Permission) -> Void = { _ in }
         var permissionNotNow: (Permission) -> Void = { _ in }
-        /// Dismiss on the setup checklist once every row is ok.
+        /// Hide Checklist on the setup checklist card.
         var dismissSetupChecklist: () -> Void = {}
         var toggleZone: (String) -> Void = { _ in }
         var deleteZone: (String) -> Void = { _ in }

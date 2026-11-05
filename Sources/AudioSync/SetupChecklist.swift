@@ -18,11 +18,8 @@ struct SetupChecklistCard: View {
                     .font(.headline)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 8)
-                if allOK {
-                    Button(t.setupChecklistDismiss) { model.actions.dismissSetupChecklist() }
-                        .controlSize(.small)
-                        .transition(.opacity)
-                }
+                Button(t.setupChecklistDismiss) { model.actions.dismissSetupChecklist() }
+                    .controlSize(.small)
             }
             ForEach(Array(SetupCheck.allCases.enumerated()), id: \.element) { index, check in
                 if index > 0 { Divider() }
@@ -56,7 +53,9 @@ struct SetupChecklistCard: View {
                 Text(t.setupCheckState(check, state, inputs))
                     .font(.callout)
                     .foregroundStyle(state == .problem ? Brand.warn : Brand.secondaryText)
-                if let line = t.setupCheckLine(check, state, inputs) {
+                // The Waiting for audio notice above already says to play something.
+                if let line = t.setupCheckLine(check, state, inputs),
+                   !(check == .capture && state == .checking && waitingNoticeShown) {
                     Text(line)
                         .font(.callout)
                         .foregroundStyle(Brand.secondaryText)
@@ -73,6 +72,10 @@ struct SetupChecklistCard: View {
                     .help(t.openSettingsHint)
             }
         }
+    }
+
+    private var waitingNoticeShown: Bool {
+        model.notices.items.contains { $0.subject == Notice.capture }
     }
 
     private static func symbol(_ state: SetupCheckState) -> String {
