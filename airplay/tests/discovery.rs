@@ -940,6 +940,74 @@ fn the_newer_instance_going_falls_back_to_an_older_one_still_cached() {
     assert_eq!(directory.device(&key).expect("device").name, "Dapur");
 }
 
+// covers: P233
+#[test]
+fn a_flood_of_services_never_displaces_a_listed_device() {
+    let key = DeviceKey::Id(ID);
+    let late = DeviceKey::Id(DeviceId([0x00, 0x00, 0x5E, 0x00, 0x53, 0x02]));
+    let fake = |n: usize| format!("{:012X}@Fake {n}", 0xAA00_0000_0000_usize + n);
+    let mut directory = Directory::new();
+    directory.apply(BrowseEvent::Resolved(raop(RAOP_NAME, &[])));
+    for n in 0..1000 {
+        directory.apply(BrowseEvent::Resolved(raop(&fake(n), &[])));
+    }
+    assert!(directory.devices().count() <= 256);
+    assert!(directory.device(&key).is_some());
+
+    let changes = directory.apply(BrowseEvent::Resolved(raop(RAOP_NAME, &["sf=0x4"])));
+    assert_eq!(
+        updated(&changes).len(),
+        1,
+        "a listed instance still updates"
+    );
+
+    let changes = directory.apply(BrowseEvent::Resolved(raop("00005E005302@Kamar", &[])));
+    assert_eq!(changes, []);
+    assert!(directory.device(&late).is_none());
+    assert!(!directory.seen(&late));
+
+    for n in 0..1000 {
+        directory.apply(BrowseEvent::Removed {
+            kind: ServiceKind::Raop,
+            instance: fake(n),
+        });
+    }
+    directory.apply(BrowseEvent::Resolved(raop("00005E005302@Kamar", &[])));
+    assert!(directory.device(&late).is_some());
+    assert_eq!(directory.devices().count(), 2);
+}
+
+// covers: P233
+#[test]
+fn floods_that_come_and_go_keep_what_was_seen_bounded() {
+    let key = DeviceKey::Id(ID);
+    let fake = |n: usize| format!("{:012X}@Fake {n}", 0xAB00_0000_0000_usize + n);
+    let fake_key = |n: usize| DeviceKey::Id(parse_raop_instance(&fake(n)).expect("id").0);
+    let mut directory = Directory::new();
+    directory.apply(BrowseEvent::Resolved(raop(RAOP_NAME, &[])));
+    for round in 0..20 {
+        let names = round * 256..(round + 1) * 256;
+        for n in names.clone() {
+            directory.apply(BrowseEvent::Resolved(raop(&fake(n), &[])));
+        }
+        for n in names {
+            directory.apply(BrowseEvent::Removed {
+                kind: ServiceKind::Raop,
+                instance: fake(n),
+            });
+        }
+    }
+    let seen = (0..20 * 256)
+        .filter(|&n| directory.seen(&fake_key(n)))
+        .count();
+    let raop_seen = (0..20 * 256)
+        .filter(|&n| directory.raop_seen(&fake_key(n)))
+        .count();
+    assert!(seen <= 1024, "{seen} keys seen");
+    assert!(raop_seen <= 1024, "{raop_seen} keys with RAOP seen");
+    assert!(directory.seen(&key) && directory.raop_seen(&key));
+}
+
 // covers: P1, P2, P45
 #[test]
 fn scope_and_protocol_choice() {

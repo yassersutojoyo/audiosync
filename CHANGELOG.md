@@ -14,6 +14,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Another device on your network can no longer keep the Web Remote's pairing locked for every phone by sending wrong codes from endless IPv6 addresses. Pairing locked that way stays open for a phone that opens the remote by the computer's IPv4 address.
 - The Web Remote now only answers devices on the same network as your computer, and Tailscale devices that reach it at its Tailscale address. Before, any device with a private address could reach it, such as one on another part of a hotel or office network. On the Mac and on Windows.
 - An AirPlay speaker reached over IPv6 now takes resend, timing and clock messages only from its own address, not from any device that shares its network prefix, so another device on your network can't keep a speaker's stream alive or set off a false clock warning.
+- A device on your network that announces thousands of fake AirPlay speakers can no longer make AudioSync's speaker list grow without limit. Speakers already in the list stay there; new ones show up again once the fake announcements stop.
 
 ## [0.8.7] - 2026-11-05
 

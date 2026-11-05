@@ -753,6 +753,13 @@ pub enum DirectoryEvent {
     Removed(DeviceKey),
 }
 
+/// Records the directory holds at most, so a flood of fake services cannot
+/// grow it without bound; a record beyond it is ignored (P233).
+const MAX_SERVICES: usize = 256;
+/// Devices the directory remembers as seen, so floods that come and go
+/// cannot grow that record without bound either (P233).
+const MAX_SEEN: usize = 1024;
+
 /// The devices on the network, merged from browse events (P10).
 #[derive(Debug, Default)]
 pub struct Directory {
@@ -779,12 +786,17 @@ impl Directory {
     pub fn apply(&mut self, event: BrowseEvent) -> Vec<DirectoryEvent> {
         match event {
             BrowseEvent::Resolved(record) => {
+                let id = (record.kind, record.instance.clone());
+                if self.services.len() >= MAX_SERVICES && !self.services.contains_key(&id) {
+                    return Vec::new();
+                }
                 let key = record.device_key();
-                if record.kind == ServiceKind::Raop {
+                if record.kind == ServiceKind::Raop && self.raop_seen.len() < MAX_SEEN {
                     self.raop_seen.insert(key.clone());
                 }
-                self.seen.insert(key.clone());
-                let id = (record.kind, record.instance.clone());
+                if self.seen.len() < MAX_SEEN {
+                    self.seen.insert(key.clone());
+                }
                 let mut affected = vec![key.clone()];
                 if let Some((old_key, ..)) = self.services.remove(&id)
                     && old_key != key
