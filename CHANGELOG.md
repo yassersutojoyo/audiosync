@@ -4,29 +4,28 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
-### Added
-
-- Advanced users can cut the AirPlay delay from about 1.75 s to as little as 0.1 s with a hidden setting: the AUDIOSYNC_AIRPLAY_LATENCY_MS environment variable on Windows and Linux, or `defaults write` of the AirPlayLatencyMs key on the Mac, in milliseconds. It's at your own risk: on a busy Wi-Fi network a short delay can leave gaps in the sound.
-
 ### Security
 
-- AudioSync no longer sends an AirPlay speaker's password in the older, weaker form to a speaker that supports AirPlay 2, where another device on your network could catch it and guess the password at leisure. Speakers that only support the original AirPlay keep working with their password as before.
-- Another device on your network can no longer keep the Web Remote's pairing locked for every phone by sending wrong codes from endless IPv6 addresses. Pairing locked that way stays open for a phone that opens the remote by the computer's IPv4 address.
-- The Web Remote now only answers devices on the same network as your computer, and Tailscale devices that reach it at its Tailscale address. Before, any device with a private address could reach it, such as one on another part of a hotel or office network. On the Mac and on Windows.
-- An AirPlay speaker reached over IPv6 now takes resend, timing and clock messages only from its own address, not from any device that shares its network prefix, so another device on your network can't keep a speaker's stream alive or set off a false clock warning.
-- A device on your network that announces thousands of fake AirPlay speakers can no longer make AudioSync's speaker list grow without limit. Speakers already in the list stay there; new ones show up again once the fake announcements stop.
-- On Linux, another account on the same computer can no longer make every update of the AppImage roll back when the session has no runtime folder: the new version now tells the old one it started from a folder only you can write to. Updating from 0.8.7 or older still works as before.
-- AudioSync now asks a Google Cast speaker to prove it's a genuine Cast device before it plays to it. A speaker whose answer doesn't check out is turned off. One that doesn't answer still plays, and AudioSync tells you once; after a speaker has proved itself, it has to keep doing so.
-- A phone or computer paired with the Web Remote now has to pair again a year after it paired, even if you use it every day, so a copied pairing can't be kept working forever. Devices paired before this version get their year from the update on. When a ninth device pairs and the oldest one is forgotten, the debug log now says so.
-- AudioSync no longer connects to an AirPlay speaker announced at your computer's own address, at its loopback address or at a host on the internet. Before, a device on your network could announce a speaker there and AudioSync would connect to it. Speakers on your own networks, and those on another private network that a router passes on, still show up.
-- Another device on your network can no longer push your Google Cast speakers out of the list by announcing lots of made-up ones, or take one off the list by announcing that it left. A speaker that says goodbye now leaves the list about 10 seconds later, once it no longer answers.
-- AudioSync now connects to a Google Cast speaker it finds only at an address on your own network, never at this computer's own address or a host on the internet that a fake announcement names. A speaker you add by its address is still used as you typed it.
-- A phone paired with the Web Remote now keeps its pairing apart from any other AudioSync it meets at the same address, such as on another Wi-Fi network: pairing with that one or unpairing from it no longer replaces or clears the pairing with your own computer. Phones already paired move over on their own, without pairing again.
-- If someone copies your phone's Web Remote sign-in and uses it before your phone does, the remote now notices when your phone comes back with its older sign-in and unpairs that pairing, so the copy stops working and your phone asks for the pairing code again. Before, your phone was signed out while the copy kept working.
-- On Windows, an update now checks the new AudioSync file once more right before it takes the old one's place, and stops if the file changed since it was written, so a file another account changed after the download was checked is refused instead of installed. The running version stays and the update notice says it failed.
-- When an AirPlay speaker you paired turns AudioSync's pairing down, AudioSync no longer sends it your speaker password on its own. A device on your network posing as that speaker could otherwise collect a try at the password on every connection. The speaker now shows that it needs pairing again. Switch it on and type its password, and it pairs again with that password.
-- A device on your network can no longer garble or disguise the name of a Google Cast speaker, or add fake lines to the debug log, with hidden characters or line breaks in the names and messages it sends. Names and messages from a speaker show at most 64 characters.
-- A device on your network can no longer garble or disguise the name or model of an AirPlay speaker or speaker group, or add fake lines to the debug log, with hidden characters or line breaks in what it announces. Speaker names and models now show at most 64 characters.
+- The Web Remote now answers only devices on your computer's own networks and Tailscale devices that reach it at its Tailscale address. Before, any device with a private address could reach it, such as one elsewhere on a hotel or office network.
+- Another device on your network can no longer lock the Web Remote's pairing for every phone by sending wrong codes from endless IPv6 addresses. A phone that opens the remote at the computer's IPv4 address can still pair.
+- A Web Remote pairing now ends a year after the phone or computer paired, however often you use it, so a copied pairing can't keep working forever. Devices paired before this version count their year from the update. When a ninth device pairs and the oldest one is forgotten, the debug log now says so.
+- If someone copies your phone's Web Remote sign-in and uses it first, the remote unpairs it once your phone comes back with its older sign-in, so the copy stops working and your phone asks for the code again. Before, your phone was signed out and the copy kept working.
+- A phone's Web Remote pairing with your computer is now kept apart from any other AudioSync it meets at the same address, such as on another Wi-Fi network, so pairing or unpairing there no longer touches it. Phones already paired move over without pairing again.
+- AudioSync now asks a Google Cast speaker to prove it's a genuine Cast device before playing to it, and turns off one whose answer doesn't check out. One that doesn't answer still plays and AudioSync tells you once; after a speaker has proved itself, it has to keep doing so.
+- AudioSync now connects to an AirPlay or Google Cast speaker it finds only at an address on your own networks, or on another private network a router passes on. A fake announcement can no longer point it at this computer's own address, its loopback address or a host on the internet. A Cast speaker you add by its address is still used as you typed it.
+- A device on your network that announces lots of made-up speakers can no longer grow the AirPlay or Google Cast list without limit or push your real speakers out of it, and it can't take a Cast speaker off the list by announcing that it left. A Cast speaker that really says goodbye leaves the list about 10 seconds later, once it stops answering.
+- A device on your network can no longer garble or disguise the name of an AirPlay speaker or speaker group, or a Google Cast speaker, or add fake lines to the debug log, with hidden characters or line breaks. Speaker names, models and messages show at most 64 characters.
+- AudioSync no longer sends your AirPlay speaker password to a speaker that supports AirPlay 2 in the older, weaker form that another device on your network could catch and crack. And when a paired AirPlay speaker turns down AudioSync's pairing, AudioSync no longer falls back to sending the password on its own: the speaker shows that it needs pairing again, and when you switch it on and type its password, it pairs again. Speakers that only support the original AirPlay keep working with their password.
+- An AirPlay speaker reached over IPv6 now takes resend, timing and clock messages only from its own address, so another device on your network can't keep its stream alive or set off a false clock warning.
+- Updates are harder for another account on the same computer to tamper with. On Windows, the update checks the new file once more right before it replaces the old one, and refuses it if it changed since the download was checked; the running version stays and the update notice says it failed. On Linux, another account can no longer make every AppImage update roll back when the session has no runtime folder.
+
+### Added
+
+- Advanced users can cut the AirPlay delay from about 1.75 s down to 0.1 s with a hidden setting, in milliseconds: the AUDIOSYNC_AIRPLAY_LATENCY_MS environment variable on Windows and Linux, or `defaults write` of the AirPlayLatencyMs key on the Mac. It's at your own risk: on a busy Wi-Fi network a short delay can leave gaps in the sound.
+
+### Fixed
+
+- A phone that missed the Web Remote's new sign-in cookie, for example because AudioSync restarted right then, now gets it again instead of being asked for the pairing code.
 
 ## [0.8.7] - 2026-11-05
 
