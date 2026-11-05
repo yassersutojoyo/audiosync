@@ -16,3 +16,4 @@ C129 Device authentication: the sender does not send the challenge yet.
 C130 Device authentication: the sender does not send the challenge yet.
 C131 Device authentication: the sender does not send the challenge yet.
 C132 Device authentication: the sender does not send the challenge yet.
+C133 Device authentication: the sender does not send the challenge yet.
