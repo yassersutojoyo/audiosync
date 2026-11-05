@@ -59,11 +59,13 @@ dependencies = [
  "prost",
  "rand_core",
  "rcgen",
+ "ring",
  "rsa",
  "rustls",
  "serde_json",
  "sha2",
  "windows-sys 0.61.2",
+ "x509-parser",
 ]
 
 [[package]]

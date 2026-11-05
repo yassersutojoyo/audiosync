@@ -119,6 +119,7 @@ fn start_group_with(
         group: Some(records.clone()),
         records: None,
         fingerprints,
+        auth: None,
     };
     let (writer, reader) = audio_ring(48_000);
     let feed = feed(writer);
@@ -492,6 +493,7 @@ fn a_group_without_addresses_keeps_retrying_until_its_records_list_one() {
         group: Some(records.clone()),
         records: None,
         fingerprints: None,
+        auth: None,
     };
     let (writer, reader) = audio_ring(48_000);
     let _feed = feed(writer);

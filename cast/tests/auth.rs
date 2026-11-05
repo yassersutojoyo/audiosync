@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use audiosync_cast::auth::{
-    self, AuthChallenge, AuthError, AuthResponse, CAST_ROOT_CA, DeviceAuthMessage,
-    EUREKA_ROOT_CA, Failure, HASH_SHA1, HASH_SHA256, KeyPin, Outcome, SIGNATURE_RSASSA_PKCS1V15,
+    self, AuthChallenge, AuthError, AuthResponse, CAST_ROOT_CA, DeviceAuthMessage, EUREKA_ROOT_CA,
+    Failure, HASH_SHA1, HASH_SHA256, KeyPin, Outcome, SIGNATURE_RSASSA_PKCS1V15,
     SIGNATURE_RSASSA_PSS, SIGNATURE_UNSPECIFIED, Verified,
 };
 use audiosync_cast::message::{
@@ -15,9 +15,10 @@ use audiosync_cast::message::{
 };
 use prost::Message;
 use rcgen::{
-    BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa,
-    Issuer, KeyPair, KeyUsagePurpose, PKCS_RSA_SHA256,
+    BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa, Issuer,
+    KeyPair, KeyUsagePurpose, PKCS_RSA_SHA256,
 };
+use rsa::pkcs1::EncodeRsaPublicKey;
 use rsa::pkcs8::EncodePrivateKey;
 use rsa::{Pkcs1v15Sign, RsaPrivateKey};
 use rustls::pki_types::PrivatePkcs8KeyDer;
@@ -52,8 +53,11 @@ fn key() -> &'static (RsaPrivateKey, Vec<u8>) {
 }
 
 fn signing_key(pkcs8: &[u8]) -> KeyPair {
-    KeyPair::from_pkcs8_der_and_sign_algo(&PrivatePkcs8KeyDer::from(pkcs8.to_vec()), &PKCS_RSA_SHA256)
-        .expect("RSA signing key")
+    KeyPair::from_pkcs8_der_and_sign_algo(
+        &PrivatePkcs8KeyDer::from(pkcs8.to_vec()),
+        &PKCS_RSA_SHA256,
+    )
+    .expect("RSA signing key")
 }
 
 fn named(name: &str) -> CertificateParams {
@@ -66,7 +70,10 @@ fn named(name: &str) -> CertificateParams {
 
 fn ca(name: &str, limit: Option<u8>) -> CertificateParams {
     let mut params = named(name);
-    params.is_ca = IsCa::Ca(limit.map_or(BasicConstraints::Unconstrained, BasicConstraints::Constrained));
+    params.is_ca = IsCa::Ca(limit.map_or(
+        BasicConstraints::Unconstrained,
+        BasicConstraints::Constrained,
+    ));
     params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
     params
 }
@@ -87,9 +94,13 @@ struct Chain {
 }
 
 fn sign_der(params: &CertificateParams, issuer: &CertificateParams) -> Vec<u8> {
-    let key = signing_key(&key().1);
+    let subject_key = signing_key(&key().1);
     let issuer = Issuer::from_params(issuer, signing_key(&key().1));
-    params.signed_by(&key, &issuer).expect("signed").der().to_vec()
+    params
+        .signed_by(&subject_key, &issuer)
+        .expect("signed")
+        .der()
+        .to_vec()
 }
 
 fn tls_certificate(from: (i32, u8, u8), until: (i32, u8, u8)) -> Vec<u8> {
@@ -235,8 +246,8 @@ fn the_challenge_asks_for_sha256_with_a_fresh_16_byte_nonce() {
     assert_eq!(message.namespace, NS_DEVICE_AUTH);
     assert_eq!(message.payload_type, PayloadType::Binary as i32);
     assert_eq!(message.payload_utf8, None);
-    let decoded =
-        DeviceAuthMessage::decode(message.payload_binary.as_deref().expect("binary")).expect("decodes");
+    let decoded = DeviceAuthMessage::decode(message.payload_binary.as_deref().expect("binary"))
+        .expect("decodes");
     assert_eq!(
         decoded,
         DeviceAuthMessage {
@@ -360,14 +371,21 @@ fn an_empty_or_wrong_signature_and_a_missing_peer_certificate_fail() {
         };
         assert_eq!(judge(&chain, reply), Outcome::Failed(Failure::Signature));
     }
-    let outcome = auth::judge(
-        &reply(response(&chain)),
-        &NONCE,
-        None,
-        NOW,
-        &[&chain.root],
-    );
+    let outcome = auth::judge(&reply(response(&chain)), &NONCE, None, NOW, &[&chain.root]);
     assert_eq!(outcome, Outcome::Failed(Failure::NoPeerCertificate));
+}
+
+/// An RSA public key that ring would not load as a signing key.
+struct SmallRsa(Vec<u8>);
+
+impl rcgen::PublicKeyData for SmallRsa {
+    fn der_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
+        &PKCS_RSA_SHA256
+    }
 }
 
 // covers: C123
@@ -377,15 +395,22 @@ fn a_device_key_that_is_not_rsa_of_2048_bits_fails() {
     let intermediate = ca("Test Intermediate", None);
     let issuer = Issuer::from_params(&intermediate, signing_key(&key().1));
     let ec = KeyPair::generate().expect("EC key");
-    let (_, small) = rsa_key(1024);
-    let small = signing_key(&small);
-    for device_key in [&ec, &small] {
+    let (small, _) = rsa_key(1024);
+    let small = SmallRsa(
+        small
+            .to_public_key()
+            .to_pkcs1_der()
+            .expect("PKCS#1")
+            .as_bytes()
+            .to_vec(),
+    );
+    let devices = [
+        device_params().signed_by(&ec, &issuer),
+        device_params().signed_by(&small, &issuer),
+    ];
+    for device in devices {
         let mut chain = chain_with(root.clone(), intermediate.clone(), device_params());
-        chain.device = device_params()
-            .signed_by(device_key, &issuer)
-            .expect("device")
-            .der()
-            .to_vec();
+        chain.device = device.expect("device").der().to_vec();
         assert_eq!(
             judge(&chain, response(&chain)),
             Outcome::Failed(Failure::DeviceKey)
@@ -408,7 +433,10 @@ fn the_tls_certificate_must_be_valid_now_and_for_at_most_96_hours() {
         chain.tls = tls_certificate(from, until);
         let outcome = judge(&chain, response(&chain));
         if valid {
-            assert!(matches!(outcome, Outcome::Verified(_)), "{from:?} to {until:?}");
+            assert!(
+                matches!(outcome, Outcome::Verified(_)),
+                "{from:?} to {until:?}"
+            );
         } else {
             assert_eq!(
                 outcome,
@@ -462,7 +490,9 @@ fn unused_intermediates_are_ignored_and_more_than_eight_fail() {
 fn a_certificate_that_does_not_parse_fails() {
     let chain = chain();
     let mut garbage = response(&chain);
-    garbage.intermediate_certificate.push(vec![0x30, 0x03, 1, 2, 3]);
+    garbage
+        .intermediate_certificate
+        .push(vec![0x30, 0x03, 1, 2, 3]);
     assert_eq!(
         judge(&chain, garbage),
         Outcome::Failed(Failure::CertificateParse)
@@ -483,17 +513,37 @@ fn issuers_must_be_cas_within_their_path_length() {
     let mut not_ca = named("Test Intermediate");
     not_ca.key_usages = vec![KeyUsagePurpose::KeyCertSign];
     let chain = chain_with(ca("Test Root", None), not_ca, device_params());
-    assert_eq!(judge(&chain, response(&chain)), Outcome::Failed(Failure::Chain));
+    assert_eq!(
+        judge(&chain, response(&chain)),
+        Outcome::Failed(Failure::Chain)
+    );
 
-    let chain = chain_with(ca("Test Root", Some(0)), ca("Test Intermediate", None), device_params());
-    assert_eq!(judge(&chain, response(&chain)), Outcome::Failed(Failure::Chain));
-    let chain = chain_with(ca("Test Root", Some(1)), ca("Test Intermediate", Some(0)), device_params());
-    assert!(matches!(judge(&chain, response(&chain)), Outcome::Verified(_)));
+    let chain = chain_with(
+        ca("Test Root", Some(0)),
+        ca("Test Intermediate", None),
+        device_params(),
+    );
+    assert_eq!(
+        judge(&chain, response(&chain)),
+        Outcome::Failed(Failure::Chain)
+    );
+    let chain = chain_with(
+        ca("Test Root", Some(1)),
+        ca("Test Intermediate", Some(0)),
+        device_params(),
+    );
+    assert!(matches!(
+        judge(&chain, response(&chain)),
+        Outcome::Verified(_)
+    ));
 
     let mut no_sign = ca("Test Intermediate", None);
     no_sign.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let chain = chain_with(ca("Test Root", None), no_sign, device_params());
-    assert_eq!(judge(&chain, response(&chain)), Outcome::Failed(Failure::Chain));
+    assert_eq!(
+        judge(&chain, response(&chain)),
+        Outcome::Failed(Failure::Chain)
+    );
 }
 
 // covers: C125
@@ -503,7 +553,10 @@ fn the_device_certificate_needs_the_digital_signature_usage() {
         let mut device = device_params();
         device.key_usages = usages;
         let chain = chain_with(ca("Test Root", None), ca("Test Intermediate", None), device);
-        assert_eq!(judge(&chain, response(&chain)), Outcome::Failed(Failure::Chain));
+        assert_eq!(
+            judge(&chain, response(&chain)),
+            Outcome::Failed(Failure::Chain)
+        );
     }
 }
 
@@ -514,17 +567,26 @@ fn the_device_and_intermediates_must_be_valid_now_but_the_root_need_not() {
     old_root.not_before = rcgen::date_time_ymd(2000, 1, 1);
     old_root.not_after = rcgen::date_time_ymd(2001, 1, 1);
     let chain = chain_with(old_root, ca("Test Intermediate", None), device_params());
-    assert!(matches!(judge(&chain, response(&chain)), Outcome::Verified(_)));
+    assert!(matches!(
+        judge(&chain, response(&chain)),
+        Outcome::Verified(_)
+    ));
 
     let mut expired = ca("Test Intermediate", None);
     expired.not_after = rcgen::date_time_ymd(2029, 1, 1);
     let chain = chain_with(ca("Test Root", None), expired, device_params());
-    assert_eq!(judge(&chain, response(&chain)), Outcome::Failed(Failure::Chain));
+    assert_eq!(
+        judge(&chain, response(&chain)),
+        Outcome::Failed(Failure::Chain)
+    );
 
     let mut early = device_params();
     early.not_before = rcgen::date_time_ymd(2031, 1, 1);
     let chain = chain_with(ca("Test Root", None), ca("Test Intermediate", None), early);
-    assert_eq!(judge(&chain, response(&chain)), Outcome::Failed(Failure::Chain));
+    assert_eq!(
+        judge(&chain, response(&chain)),
+        Outcome::Failed(Failure::Chain)
+    );
 }
 
 // covers: C125

@@ -174,6 +174,7 @@ fn start_as(device: &FakeDevice, group: Option<GroupRecords>, held: bool) -> (Ca
         group,
         records: None,
         fingerprints: None,
+        auth: None,
     };
     let selected = Arc::new(AtomicBool::new(true));
     let session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");

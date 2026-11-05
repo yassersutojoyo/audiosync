@@ -75,6 +75,7 @@ fn config(device: &FakeDevice) -> SessionConfig {
         group: None,
         records: None,
         fingerprints: None,
+        auth: None,
     }
 }
 
@@ -678,7 +679,7 @@ fn connect_retries_wait_1_s_then_double_while_the_device_stays_selected() {
     let mut waits = Vec::new();
     let started = Instant::now();
     let mut attempts_at = Vec::new();
-    let result = connect_retrying(&[closed], &selected, |error, wait| {
+    let result = connect_retrying(&[closed], &selected, None, |error, wait| {
         assert!(matches!(error, ConnectError::Tcp { .. }), "{error}");
         assert!(
             error.to_string().contains(&closed.to_string()),
@@ -690,7 +691,7 @@ fn connect_retries_wait_1_s_then_double_while_the_device_stays_selected() {
             selected.store(false, Ordering::SeqCst);
         }
     });
-    assert!(result.is_none(), "deselected ends the retries");
+    assert!(result.is_err(), "deselected ends the retries");
     assert_eq!(
         waits,
         [

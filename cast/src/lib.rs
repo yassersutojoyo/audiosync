@@ -18,6 +18,8 @@
 //!   ([`ids`]) and the platform status ([`status`]).
 //! - [`client`]: TLS to the device, accepting any certificate and
 //!   recording its fingerprint.
+//! - [`auth`], [`device_keys`]: device authentication, its checks against
+//!   the embedded Cast roots, and the per-device key pin.
 //! - [`error`]: the typed errors and the connect backoff.
 //! - [`media`]: the `LOAD` payload, `MEDIA_STATUS` and the media and
 //!   volume errors.
@@ -32,8 +34,10 @@
 //!   events, so its UI thread never waits on the network.
 
 pub mod audio;
+pub mod auth;
 pub mod channel;
 pub mod client;
+pub mod device_keys;
 pub mod discovery;
 pub mod error;
 pub mod framing;

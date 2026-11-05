@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use audiosync_cast::auth::{KeyPin, Outcome, Verified};
 use audiosync_cast::channel::Event;
 use audiosync_cast::client::{
-    CastClient, DeviceAuth, Fingerprint, FingerprintBook, FingerprintChange, MAX_EVENTS, QUIT_BUDGET,
+    CastClient, DeviceAuth, Fingerprint, FingerprintBook, FingerprintChange, MAX_EVENTS,
+    QUIT_BUDGET,
 };
 use audiosync_cast::device_keys::{DeviceKeyBook, Entry};
 use audiosync_cast::discovery::DeviceId;
@@ -204,12 +205,16 @@ fn every_message_on_the_wire_is_one_length_prefixed_cast_message() {
     let device = FakeDevice::start(Behavior::default());
     let client = connect(&device);
     let received = device.received();
-    assert_eq!(received[0].0, PLATFORM);
-    assert_eq!(received[0].1, NS_CONNECTION);
-    assert_eq!(received[0].2, json!({"type": "CONNECT"}));
-    assert_eq!(received[1].1, NS_RECEIVER);
     assert_eq!(
-        received[1].2,
+        received[0].1, NS_DEVICE_AUTH,
+        "the challenge comes first (C119)"
+    );
+    assert_eq!(received[1].0, PLATFORM);
+    assert_eq!(received[1].1, NS_CONNECTION);
+    assert_eq!(received[1].2, json!({"type": "CONNECT"}));
+    assert_eq!(received[2].1, NS_RECEIVER);
+    assert_eq!(
+        received[2].2,
         json!({"type": "GET_STATUS", "requestId": 10})
     );
     let _ = client.stop(Duration::from_secs(1));
@@ -530,7 +535,10 @@ fn the_challenge_goes_out_first_and_later_device_auth_messages_are_ignored() {
         assert_eq!(log[0].namespace, NS_DEVICE_AUTH);
         assert_eq!(log[0].destination_id, PLATFORM);
         assert_eq!(log[0].payload_type, PayloadType::Binary as i32);
-        assert_eq!(log[1].namespace, NS_CONNECTION, "CONNECT only after the reply");
+        assert_eq!(
+            log[1].namespace, NS_CONNECTION,
+            "CONNECT only after the reply"
+        );
     }
     device.send(Command::Send(json_message(
         PLATFORM,
@@ -580,7 +588,10 @@ fn a_device_that_declines_plays_unauthenticated_and_warns_once() {
         decision.line,
         "cast auth dev: declined, INTERNAL_ERROR, unauthenticated, warned"
     );
-    assert_eq!(book.lock().expect("book").entry("dev"), Some(Entry::Unauthenticated));
+    assert_eq!(
+        book.lock().expect("book").entry("dev"),
+        Some(Entry::Unauthenticated)
+    );
     let _ = client.stop(Duration::from_secs(1));
     let mut again = connect_authed(&device, &auth).expect("goes ahead");
     assert!(!again.take_auth().expect("judged").warn);
@@ -628,7 +639,10 @@ fn a_pinned_device_that_declines_fails_the_connect() {
     let Err(ConnectError::Unauthenticated(line)) = connect_authed(&device, &auth) else {
         panic!("the connect fails");
     };
-    assert_eq!(line, "cast auth dev: declined, INTERNAL_ERROR, connect failed");
+    assert_eq!(
+        line,
+        "cast auth dev: declined, INTERNAL_ERROR, connect failed"
+    );
     device.join();
 }
 
@@ -645,9 +659,14 @@ fn a_reply_that_fails_its_checks_is_refused_before_connect_and_not_retried() {
     };
     assert_eq!(line, "cast auth dev: failed, malformed, refused");
     let mut failures = 0;
-    let result = connect_retrying(&[device.address], &AtomicBool::new(true), Some(&auth), |_, _| {
-        failures += 1;
-    });
+    let result = connect_retrying(
+        &[device.address],
+        &AtomicBool::new(true),
+        Some(&auth),
+        |_, _| {
+            failures += 1;
+        },
+    );
     assert!(matches!(result, Err(ConnectError::Refused(_))));
     assert_eq!(failures, 0, "a refusal is not a connect failure");
     thread::sleep(Duration::from_millis(200));

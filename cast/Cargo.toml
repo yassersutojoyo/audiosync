@@ -24,10 +24,15 @@ native-tls = { version = "0.2.14", default-features = false }
 # The CastMessage protocol buffer (C24), declared with the derive macro, so
 # no protoc and no build script.
 prost = { version = "0.14.1", default-features = false, features = ["derive", "std"] }
+# RSASSA-PKCS1-v1_5 checks of the device authentication reply and its
+# certificate chain (C123, C125, C128), with SHA-1 still accepted.
+ring = { version = "0.17.14", default-features = false, features = ["alloc"] }
 # The JSON payloads of the four namespaces (C28), read and built as values.
 serde_json = { version = "1.0.140", default-features = false, features = ["std"] }
 # The device certificate's SHA-256 fingerprint (C21).
 sha2 = { version = "0.11.0", default-features = false }
+# Reads the X.509 certificates of device authentication (C125, C128).
+x509-parser = { version = "0.18.1", default-features = false }
 
 [dev-dependencies]
 # Decodes the FLAC stream in the tests to check it against the input.

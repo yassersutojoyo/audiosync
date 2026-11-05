@@ -444,9 +444,12 @@ impl FakeDevice {
             .collect()
     }
 
+    /// The `type` of each JSON message received; the binary device
+    /// authentication challenge has none and is left out.
     pub fn types(&self) -> Vec<String> {
         self.received()
             .into_iter()
+            .filter(|(_, namespace, _)| namespace != NS_DEVICE_AUTH)
             .map(|(_, _, payload)| payload["type"].as_str().unwrap_or("").to_owned())
             .collect()
     }

@@ -55,8 +55,7 @@ fn a_verified_answer_pins_keeps_or_re_pins_the_key() {
 fn a_failed_answer_is_refused_whatever_the_entry() {
     for entry in [None, Some(Entry::Unauthenticated), Some(Entry::Pin(OLD))] {
         for group in [false, true] {
-            let (decision, after) =
-                decide("dev", entry, &Outcome::Failed(Failure::Chain), group);
+            let (decision, after) = decide("dev", entry, &Outcome::Failed(Failure::Chain), group);
             assert_eq!(decision.verdict, Verdict::Refused);
             assert_eq!(decision.line, "cast auth dev: failed, chain, refused");
             assert_eq!(after, None);
@@ -70,12 +69,18 @@ fn no_answer_or_a_decline_depends_on_the_entry() {
     for outcome in [NO_ANSWER, Outcome::Declined(0)] {
         let (decision, after) = decide("dev", Some(Entry::Pin(OLD)), &outcome, false);
         assert_eq!(decision.verdict, Verdict::ConnectFailed);
-        assert_eq!(decision.line, format!("cast auth dev: {outcome}, connect failed"));
+        assert_eq!(
+            decision.line,
+            format!("cast auth dev: {outcome}, connect failed")
+        );
         assert_eq!(after, None);
 
         let (decision, after) = decide("dev", None, &outcome, false);
         assert_eq!(decision.verdict, Verdict::Proceed);
-        assert!(decision.warn, "the notice shows once, when the mark is written");
+        assert!(
+            decision.warn,
+            "the notice shows once, when the mark is written"
+        );
         assert_eq!(
             decision.line,
             format!("cast auth dev: {outcome}, unauthenticated, warned")
@@ -85,7 +90,10 @@ fn no_answer_or_a_decline_depends_on_the_entry() {
         let (decision, after) = decide("dev", Some(Entry::Unauthenticated), &outcome, false);
         assert_eq!(decision.verdict, Verdict::Proceed);
         assert!(!decision.warn);
-        assert_eq!(decision.line, format!("cast auth dev: {outcome}, unauthenticated"));
+        assert_eq!(
+            decision.line,
+            format!("cast auth dev: {outcome}, unauthenticated")
+        );
         assert_eq!(after, None);
     }
 }
@@ -107,7 +115,10 @@ fn a_group_is_never_pinned() {
 fn a_marked_device_is_waited_on_for_one_second() {
     assert_eq!(auth_wait(None), Duration::from_secs(5));
     assert_eq!(auth_wait(Some(Entry::Pin(OLD))), Duration::from_secs(5));
-    assert_eq!(auth_wait(Some(Entry::Unauthenticated)), Duration::from_secs(1));
+    assert_eq!(
+        auth_wait(Some(Entry::Unauthenticated)),
+        Duration::from_secs(1)
+    );
 }
 
 fn file_book(text: &str) -> (DeviceKeyBook, Arc<Mutex<Vec<String>>>, Option<io::Error>) {
@@ -136,7 +147,10 @@ fn the_book_keeps_pins_and_marks_across_launches_and_writes_only_changes() {
     assert_eq!(book.entry("a"), Some(Entry::Pin(OLD)));
     assert_eq!(book.entry("b"), Some(Entry::Unauthenticated));
     let decision = book.judge("b", &NO_ANSWER, false);
-    assert!(!decision.warn, "the notice does not come back while the mark stays");
+    assert!(
+        !decision.warn,
+        "the notice does not come back while the mark stays"
+    );
     assert!(written.lock().expect("written").is_empty());
     book.judge("c", &NO_ANSWER, false);
     book.judge("b", &verified(NEW), false);
@@ -151,7 +165,10 @@ fn the_book_keeps_pins_and_marks_across_launches_and_writes_only_changes() {
         )
     );
     let (_, _, error) = file_book("a not-a-pin\n");
-    assert_eq!(error.map(|error| error.kind()), Some(io::ErrorKind::InvalidData));
+    assert_eq!(
+        error.map(|error| error.kind()),
+        Some(io::ErrorKind::InvalidData)
+    );
 }
 
 // covers: C133
@@ -161,7 +178,10 @@ fn removing_a_device_clears_its_pin_or_mark() {
     book.judge("a", &verified(OLD), false);
     book.judge("b", &NO_ANSWER, false);
     assert_eq!(book.clear("a").as_deref(), Some("cast auth a: pin cleared"));
-    assert_eq!(book.clear("b").as_deref(), Some("cast auth b: mark cleared"));
+    assert_eq!(
+        book.clear("b").as_deref(),
+        Some("cast auth b: mark cleared")
+    );
     assert_eq!(book.clear("b"), None);
     let decision = book.judge("a", &NO_ANSWER, false);
     assert!(decision.warn, "judged as a device with no entry");
