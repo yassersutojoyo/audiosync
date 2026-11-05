@@ -45,13 +45,21 @@ pub fn claim_after<T>(
     args: impl IntoIterator<Item = OsString>,
     claim: impl FnMut() -> Option<T>,
 ) -> Claimed<T> {
-    claim_after_with(
-        args,
-        signal_started,
-        wait_for_exit,
-        claim,
-        std::thread::sleep,
-    )
+    let legacy_note = std::cell::Cell::<Option<String>>::new(None);
+    let signal = |old| {
+        let made = signal_started(old);
+        #[cfg(not(windows))]
+        legacy_note.set(signal_legacy(old));
+        made
+    };
+    let mut claimed = claim_after_with(args, signal, wait_for_exit, claim, std::thread::sleep);
+    if let Some(line) = legacy_note.take() {
+        claimed.note = Some(match claimed.note {
+            Some(note) => format!("{note}; {line}"),
+            None => line,
+        });
+    }
+    claimed
 }
 
 fn claim_after_with<T>(
@@ -167,22 +175,64 @@ pub fn signal_file(dir: &Path, old: u32) -> PathBuf {
     dir.join(format!("AudioSync-update-started-{old}"))
 }
 
-/// The user's runtime folder, which only the user can write to.
+/// Linux: the start signal's folder, `runtime` (the user's private runtime
+/// folder) when there is one, else the instance lock's `audiosync-<user>` in
+/// the temp folder, never the shared temp folder itself (spec S424).
+#[cfg_attr(windows, allow(dead_code))]
+pub fn signal_dir_in(runtime: Option<PathBuf>, temp: &Path, user: u32) -> PathBuf {
+    runtime.unwrap_or_else(|| temp.join(format!("audiosync-{user}")))
+}
+
+/// Linux: the folder 0.8.7 and older wait for the start signal in
+/// (`$XDG_RUNTIME_DIR` as set, else `temp`), when it is not `private`.
+#[cfg_attr(windows, allow(dead_code))]
+pub fn legacy_signal_dir(
+    private: Option<&Path>,
+    runtime_var: Option<OsString>,
+    temp: &Path,
+) -> Option<PathBuf> {
+    let legacy = runtime_var.map_or_else(|| temp.to_path_buf(), PathBuf::from);
+    (private != Some(legacy.as_path())).then_some(legacy)
+}
+
+/// [`signal_dir_in`], created 0700 and refused when another account owns it.
 #[cfg(not(windows))]
-fn signal_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from)
+fn signal_dir() -> io::Result<PathBuf> {
+    use crate::os::xdg;
+    let user = xdg::user_id().ok_or_else(|| io::Error::other("this process's user is unknown"))?;
+    let runtime = xdg::runtime_base(std::env::var_os("XDG_RUNTIME_DIR"), user);
+    let dir = signal_dir_in(runtime, &std::env::temp_dir(), user);
+    xdg::owned_private_dir(&dir, user)?;
+    Ok(dir)
 }
 
 /// Makes the start signal the old process `old` waits for; false when that
 /// process is gone.
 #[cfg(not(windows))]
 pub fn signal_started(old: u32) -> bool {
-    !wait_for_exit(old, Duration::ZERO) && make_signal(&signal_file(&signal_dir(), old))
+    !wait_for_exit(old, Duration::ZERO)
+        && signal_dir().is_ok_and(|dir| make_signal(&signal_file(&dir, old)))
+}
+
+/// Also makes the start signal where 0.8.7 and older wait for it, best
+/// effort; a line for the debug log when that fails (spec S424).
+// Remove once no supported version waits outside the private folder.
+#[cfg(not(windows))]
+fn signal_legacy(old: u32) -> Option<String> {
+    let private = signal_dir().ok();
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR");
+    let dir = legacy_signal_dir(private.as_deref(), runtime, &std::env::temp_dir())?;
+    let signal = signal_file(&dir, old);
+    (!make_signal(&signal)).then(|| {
+        format!(
+            "updater: no start signal for older versions at {}",
+            signal.display()
+        )
+    })
 }
 
 /// Creates `signal` as a new file only the user can read; never through a
-/// link or over a file already there, since the folder may be the shared
-/// temp folder.
+/// link or over a file already there.
 #[cfg(not(windows))]
 fn make_signal(signal: &Path) -> bool {
     use std::os::unix::fs::OpenOptionsExt;
@@ -253,7 +303,10 @@ impl Launch for ProcessLaunch {
 /// Linux: [`start_and_watch`] for the signal file named after `own`.
 #[cfg(not(windows))]
 pub fn start_and_wait(command: &mut Command, own: u32, wait: Duration) -> Start {
-    start_and_watch(command, &signal_file(&signal_dir(), own), wait)
+    match signal_dir() {
+        Ok(dir) => start_and_watch(command, &signal_file(&dir, own), wait),
+        Err(error) => Start::Failed(error),
+    }
 }
 
 /// Runs `command` as a child process and waits up to `wait` for the file
@@ -582,6 +635,42 @@ pub mod tests {
         let start = start_and_watch(&mut shell(quiet), &signal, Duration::from_millis(300));
         assert!(matches!(start, Start::TimedOut { .. }), "{start:?}");
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    // covers: S424
+    #[test]
+    fn without_a_private_runtime_folder_the_signal_goes_in_the_users_own_folder() {
+        let temp = Path::new("/tmp");
+        let runtime = PathBuf::from("/run/user/1000");
+        assert_eq!(signal_dir_in(Some(runtime.clone()), temp, 1000), runtime);
+        // Another account can make files in the shared temp folder and so
+        // block the start signal, which rolls every update back.
+        assert_eq!(signal_dir_in(None, temp, 1000), temp.join("audiosync-1000"));
+    }
+
+    // covers: S424
+    #[test]
+    fn the_new_instance_also_signals_where_older_versions_wait() {
+        let temp = Path::new("/tmp");
+        let private = signal_dir_in(None, temp, 1000);
+        assert_eq!(
+            legacy_signal_dir(Some(&private), None, temp).as_deref(),
+            Some(temp)
+        );
+        let shared = OsString::from("/run/shared");
+        assert_eq!(
+            legacy_signal_dir(Some(&private), Some(shared), temp).as_deref(),
+            Some(Path::new("/run/shared"))
+        );
+        // A private runtime folder is where both versions wait: one signal.
+        let runtime = PathBuf::from("/run/user/1000");
+        let private = signal_dir_in(Some(runtime.clone()), temp, 1000);
+        assert_eq!(private, runtime);
+        assert_eq!(
+            legacy_signal_dir(Some(&private), Some(runtime.into()), temp),
+            None
+        );
+        assert_eq!(legacy_signal_dir(None, None, temp).as_deref(), Some(temp));
     }
 }
 

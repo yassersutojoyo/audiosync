@@ -15,6 +15,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The Web Remote now only answers devices on the same network as your computer, and Tailscale devices that reach it at its Tailscale address. Before, any device with a private address could reach it, such as one on another part of a hotel or office network. On the Mac and on Windows.
 - An AirPlay speaker reached over IPv6 now takes resend, timing and clock messages only from its own address, not from any device that shares its network prefix, so another device on your network can't keep a speaker's stream alive or set off a false clock warning.
 - A device on your network that announces thousands of fake AirPlay speakers can no longer make AudioSync's speaker list grow without limit. Speakers already in the list stay there; new ones show up again once the fake announcements stop.
+- On Linux, another account on the same computer can no longer make every update of the AppImage roll back when the session has no runtime folder: the new version now tells the old one it started from a folder only you can write to. Updating from 0.8.7 or older still works as before.
 
 ## [0.8.7] - 2026-11-05
 
