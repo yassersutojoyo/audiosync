@@ -88,12 +88,12 @@ jobs:
       run:
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Rust toolchain (stable)
+      - name: Rust toolchain (1.99.1)
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
           rustc --version
 
       # Build: Slint's fonts and windows, the Cast sender's OpenSSL, the PipeWire
@@ -137,6 +137,8 @@ jobs:
             "../dist/AudioSync-$version-$ARCH.AppImage"
           ../scripts/build_deb.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt "$version" \
             "../dist/AudioSync-$version-$(dpkg --print-architecture).deb"
+          # RELEASE.md checks this against the commit it tags.
+          echo "$GITHUB_SHA" > ../dist/SOURCE-COMMIT.txt
 
       - name: Check the .deb (fields, files, install and remove)
         working-directory: dist
@@ -198,7 +200,7 @@ jobs:
           file "$appimage"
 
       - name: Upload the AppImage, the .deb and the notices (workflow artifact, not a release)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: audiosync-linux-${{ matrix.arch }}
           path: |
@@ -207,6 +209,7 @@ jobs:
             dist/AudioSync-*.deb
             dist/AudioSync-*.deb.sha256
             desktop/target/release/THIRD-PARTY-NOTICES.txt
+            dist/SOURCE-COMMIT.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -226,7 +229,7 @@ jobs:
 
       - name: Upload the runtime sources (workflow artifact)
         if: matrix.arch == 'x86_64'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: appimage-runtime-sources
           path: dist/runtime-sources

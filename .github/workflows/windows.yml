@@ -64,12 +64,12 @@ jobs:
         shell: bash
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Rust toolchain (stable, with rustfmt and clippy)
+      - name: Rust toolchain (1.99.1, with rustfmt and clippy)
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.99.1
           rustc --version
 
       - name: Format
@@ -93,12 +93,12 @@ jobs:
       run:
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Rust toolchain (stable, with rustfmt and clippy)
+      - name: Rust toolchain (1.99.1, with rustfmt and clippy)
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.99.1
           rustc --version
 
       # Slint's fonts and windows, the Cast sender's native-tls (OpenSSL), and
@@ -248,12 +248,12 @@ jobs:
         shell: bash
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Rust toolchain (stable, with the ${{ matrix.target }} target)
+      - name: Rust toolchain (1.99.1, with the ${{ matrix.target }} target)
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
           rustup target add ${{ matrix.target }}
           rustc --version
 
@@ -283,13 +283,18 @@ jobs:
       - name: Third-party notices (THIRD-PARTY-NOTICES.txt)
         run: python -I ../scripts/windows_notices.py ${{ matrix.target }}
 
+      # RELEASE.md checks this against the commit it tags.
+      - name: Source commit (SOURCE-COMMIT.txt)
+        run: echo "$GITHUB_SHA" > target/${{ matrix.target }}/release/SOURCE-COMMIT.txt
+
       - name: Upload audiosync.exe and its notices (workflow artifact, not a release)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: audiosync-windows-${{ matrix.arch }}
           path: |
             desktop/target/${{ matrix.target }}/release/audiosync.exe
             desktop/target/${{ matrix.target }}/release/THIRD-PARTY-NOTICES.txt
+            desktop/target/${{ matrix.target }}/release/SOURCE-COMMIT.txt
           if-no-files-found: error
           # Test builds only: every push makes new ones, so a week is plenty.
           retention-days: 7
@@ -303,7 +308,7 @@ jobs:
       run:
         working-directory: desktop
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install the pinned cargo-deny
         run: cargo install --locked cargo-deny --version 0.20.2

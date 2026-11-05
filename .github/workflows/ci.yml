@@ -51,7 +51,7 @@ jobs:
     outputs:
       swift: ${{ steps.diff.outputs.swift }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
       - name: Does this push touch Sources/, Tests/, Package.swift or build.sh?
@@ -76,15 +76,15 @@ jobs:
     if: ${{ needs.proven.outputs.skip != 'true' && (!cancelled() && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/') || startsWith(github.ref, 'refs/heads/release/') || needs.swift-changes.outputs.swift == 'true')) }}
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Toolchain versions (Swift)
         run: swift --version
 
-      - name: Rust toolchain (stable, with the Apple silicon and Intel targets)
+      - name: Rust toolchain (1.99.1, with the Apple silicon and Intel targets)
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
           rustc --version
 
@@ -235,12 +235,12 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Rust toolchain (stable, with the Apple silicon and Intel targets)
+      - name: Rust toolchain (1.99.1, with the Apple silicon and Intel targets)
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
           rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Build the app (./build.sh --no-install, with the local identity make-local-cert.sh creates)
@@ -280,7 +280,7 @@ jobs:
     if: needs.proven.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Install the pinned shellcheck
         run: |
           scripts/shellcheck.sh --install "$RUNNER_TEMP/shellcheck"
@@ -292,7 +292,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0 # the commit-message check reads the pushed range
       # The forbidden-name rule keeps only salted hashes in

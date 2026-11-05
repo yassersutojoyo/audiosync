@@ -28,7 +28,7 @@ jobs:
       run:
         working-directory: ${{ matrix.crate }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install the pinned cargo-deny
         run: cargo install --locked cargo-deny --version 0.20.2

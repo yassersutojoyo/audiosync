@@ -64,12 +64,12 @@ jobs:
         shell: bash
         working-directory: airplay
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Rust toolchain (stable, with rustfmt and clippy)
+      - name: Rust toolchain (1.99.1, with rustfmt and clippy)
         run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.99.1
           rustc --version
 
       - name: Format
@@ -93,12 +93,12 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Rust toolchain (stable)
+      - name: Rust toolchain (1.99.1)
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
 
       - name: Cells
         run: bash scripts/fake_tv_cells.sh --pause-minutes 1
@@ -112,7 +112,7 @@ jobs:
       run:
         working-directory: airplay
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install the pinned cargo-deny
         run: cargo install --locked cargo-deny --version 0.20.2

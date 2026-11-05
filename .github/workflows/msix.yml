@@ -25,12 +25,12 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Rust toolchain (stable, with the x86_64-pc-windows-msvc target)
+      - name: Rust toolchain (1.99.1, with the x86_64-pc-windows-msvc target)
         run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
           rustup target add x86_64-pc-windows-msvc
           rustc --version
 
@@ -65,7 +65,7 @@ jobs:
             desktop/target/x86_64-pc-windows-msvc/release/THIRD-PARTY-NOTICES.txt
 
       - name: Upload the unsigned MSIX (workflow artifact, not a release)
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: audiosync-msix-x64
           path: dist/msix/*.msix
