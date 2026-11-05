@@ -453,7 +453,7 @@ fn malformed_json_drops_one_message_and_keeps_the_channel() {
 
 // covers: C30, C31, C6
 #[test]
-fn device_auth_is_never_sent_and_inbound_device_auth_is_ignored() {
+fn the_channel_never_sends_device_auth_and_ignores_it_inbound() {
     let start = Instant::now();
     let mut channel = Channel::open(start, RequestIds::starting_at(1));
     let mut out = sent(&mut channel);
