@@ -27,6 +27,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 - A phone that missed the Web Remote's new sign-in cookie, for example because AudioSync restarted right then, now gets it again instead of being asked for the pairing code.
 - When AudioSync's own stream to a Google Cast speaker stops on an internal error, the speaker now goes off at once and says the connection was lost, instead of staying on in silence or saying the speaker refused the stream.
+- On Windows and Linux, a message in the main window that came back with new text right after you dismissed it, such as a Launch at Sign-In failure, now stays instead of fading out with the old one.
 
 ## [0.8.7] - 2026-11-05
 
