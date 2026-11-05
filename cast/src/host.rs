@@ -39,7 +39,8 @@ use serde_json::{Map, Value, json};
 
 use crate::audio::{AudioReader, Codec, StreamFormat};
 use crate::channel::new_volume_ask;
-use crate::client::{FingerprintBook, QUIT_BUDGET};
+use crate::client::{DeviceAuth, FingerprintBook, QUIT_BUDGET};
+use crate::device_keys::DeviceKeyBook;
 use crate::discovery::DeviceId;
 use crate::group::GroupRecords;
 use crate::media::{IdleReason, MediaError, Metadata};
@@ -344,6 +345,8 @@ struct Shared {
     /// Set before the quit command is sent: teardowns from then on keep to
     /// C88's budget.
     quitting: Arc<AtomicBool>,
+    /// The device key pins every connect judges against (C129).
+    device_keys: Arc<Mutex<DeviceKeyBook>>,
     /// How many of the next starts make the worker panic.
     #[cfg(test)]
     panic_in_start: std::sync::atomic::AtomicU32,
@@ -427,12 +430,23 @@ impl CastHost {
         memory: DeviceMemory,
         fingerprints: FingerprintBook,
     ) -> std::io::Result<CastHost> {
+        CastHost::with_books(memory, fingerprints, DeviceKeyBook::new())
+    }
+
+    /// As [`CastHost::with_fingerprints`], with the device key pins kept
+    /// so far (C129).
+    pub fn with_books(
+        memory: DeviceMemory,
+        fingerprints: FingerprintBook,
+        device_keys: DeviceKeyBook,
+    ) -> std::io::Result<CastHost> {
         let (commands, inbox) = mpsc::channel();
         let (outbox, events) = mpsc::sync_channel(MAX_HOST_EVENTS);
         let shared = Arc::new(Shared {
             active: Mutex::new(None),
             memory: Mutex::new(memory),
             quitting: Arc::new(AtomicBool::new(false)),
+            device_keys: Arc::new(Mutex::new(device_keys)),
             #[cfg(test)]
             panic_in_start: std::sync::atomic::AtomicU32::new(0),
         });
@@ -615,6 +629,18 @@ impl CastHost {
     /// The user's Resync (C79).
     pub fn resync(&self) {
         let _ = self.commands.send(Command::Resync);
+    }
+
+    /// Clears `device`'s pin or mark when the user removes it (C133); the
+    /// line to log when there was one.
+    pub fn clear_device_key(&self, device: DeviceId) -> Option<String> {
+        lock(&self.shared.device_keys).clear(&device.to_string())
+    }
+
+    /// Moves the pin or mark of a device added by address to the `id` a
+    /// browse found for it (C129); the line to log when it moved.
+    pub fn move_device_key(&self, from: DeviceId, to: DeviceId) -> Option<String> {
+        lock(&self.shared.device_keys).move_entry(&from.to_string(), &to.to_string())
     }
 
     /// What the host should store per device (C77, C84).
@@ -928,6 +954,7 @@ impl Worker {
         if !selected.load(Ordering::SeqCst) {
             return self.ended(attempt, device, SessionEnd::Deselected);
         }
+        let group = target.group.is_some();
         let config = SessionConfig {
             addresses: target.addresses,
             format,
@@ -939,6 +966,11 @@ impl Worker {
                 id: device,
                 book: Arc::clone(&self.fingerprints),
             }),
+            auth: Some(DeviceAuth::new(
+                device.to_string(),
+                group,
+                Arc::clone(&self.shared.device_keys),
+            )),
         };
         // Connect retries go out live, while the start still runs; one that
         // finds the outbox full, or held events still in the way, is dropped
@@ -1133,6 +1165,7 @@ mod tests {
             active: Mutex::new(None),
             memory: Mutex::new(DeviceMemory::default()),
             quitting: Arc::new(AtomicBool::new(false)),
+            device_keys: Arc::new(Mutex::new(DeviceKeyBook::new())),
             panic_in_start: std::sync::atomic::AtomicU32::new(0),
         });
         let mut worker = Worker::new(inbox, outbox, shared, FingerprintBook::new());

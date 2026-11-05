@@ -27,6 +27,12 @@ pub enum ConnectError {
     NoStatus,
     /// The channel ended before it was ready.
     Ended(EndReason),
+    /// A device with a pinned key declined or did not answer the challenge
+    /// (C129); retried as any connect failure. Holds the C132 line.
+    Unauthenticated(String),
+    /// The device's answer failed its checks (C130); never retried. Holds
+    /// the C132 line.
+    Refused(String),
 }
 
 impl fmt::Display for ConnectError {
@@ -41,6 +47,7 @@ impl fmt::Display for ConnectError {
             }
             ConnectError::NoStatus => f.write_str("the device did not report its status"),
             ConnectError::Ended(reason) => write!(f, "the connection ended: {reason}"),
+            ConnectError::Unauthenticated(line) | ConnectError::Refused(line) => f.write_str(line),
         }
     }
 }

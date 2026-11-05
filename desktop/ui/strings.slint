@@ -926,6 +926,12 @@ export global Strings {
         if problem == CastProblem.search-stopped {
             return @tr("AudioSync stopped looking for Google Cast speakers, so {} is off. To try again, exit AudioSync and open it again.", speaker);
         }
+        if problem == CastProblem.not-genuine {
+            return @tr("{} couldn't prove it's a genuine Google Cast speaker, so it's off. If you trust it, remove it from AudioSync and add it again.", speaker);
+        }
+        if problem == CastProblem.unauthenticated {
+            return @tr("{} didn't prove it's a genuine Google Cast speaker. AudioSync plays to it anyway. If you don't recognize it, turn it off.", speaker);
+        }
         return @tr("{} lost its connection, so it's off. Turn it on again to reconnect.", speaker);
     }
 

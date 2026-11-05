@@ -797,6 +797,16 @@ def chromium_notice(package, paths):
              "to as LICENSE.chromium:\n\n" + BSD_3_CLAUSE.format(holders="The Chromium Authors"))]
 
 
+def cast_roots_notice(out):
+    """The two root certificates the Cast sender embeds (cast/certs/)."""
+    out.add("", "", "AudioSync's Google Cast sender embeds two public root certificates,",
+            "Cast Root CA and Eureka Root CA, from the Open Screen library,",
+            "(c) The Chromium Authors, under the BSD 3-Clause License.",
+            "https://chromium.googlesource.com/openscreen")
+    out.text("Open Screen's license (BSD-3-Clause)", BSD_3_CLAUSE.format(holders="The Chromium Authors"),
+             "the Cast root certificates")
+
+
 def ijg_notice(package, paths):
     """Code translated from the Independent JPEG Group's libjpeg: its terms,
     copied from the comment that opens each such source file, and the statement
@@ -1068,6 +1078,7 @@ def build(target):
         own, ", ".join("{} {}".format(p["name"], p["version"]) for p in sorted(local, key=lambda p: p["name"]))),
         app.get("repository") or "")
     out.text("LICENSE", read_text(os.path.join(REPO, "LICENSE")), "AudioSync")
+    cast_roots_notice(out)
 
     out.heading("2. The Rust standard library")
     out.add("", "The parts of the Rust standard library the app uses, compiled into the",

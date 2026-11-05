@@ -16,6 +16,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - An AirPlay speaker reached over IPv6 now takes resend, timing and clock messages only from its own address, not from any device that shares its network prefix, so another device on your network can't keep a speaker's stream alive or set off a false clock warning.
 - A device on your network that announces thousands of fake AirPlay speakers can no longer make AudioSync's speaker list grow without limit. Speakers already in the list stay there; new ones show up again once the fake announcements stop.
 - On Linux, another account on the same computer can no longer make every update of the AppImage roll back when the session has no runtime folder: the new version now tells the old one it started from a folder only you can write to. Updating from 0.8.7 or older still works as before.
+- AudioSync now asks a Google Cast speaker to prove it's a genuine Cast device before it plays to it. A speaker whose answer doesn't check out is turned off. One that doesn't answer still plays, and AudioSync tells you once; after a speaker has proved itself, it has to keep doing so.
 
 ## [0.8.7] - 2026-11-05
 

@@ -2840,11 +2840,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         message: &NoticeMessage,
     ) -> bool {
         let name = match message {
-            NoticeMessage::CastCantPlay { problem, .. }
-                if *problem == ui_model::CastProblem::TakenOver =>
-            {
-                return false;
-            }
+            NoticeMessage::CastCantPlay {
+                problem: ui_model::CastProblem::TakenOver | ui_model::CastProblem::Unauthenticated,
+                ..
+            } => return false,
             NoticeMessage::AirPlayCantPlay {
                 problem:
                     ui_model::AirPlayProblem::NeedsPassword
@@ -4337,10 +4336,25 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::CastIdentified { from, to } => self.cast_identified(&from, &to),
             BackendEvent::CastPlaying { id } => {
-                self.notices.clear(&[NoticeSubject::Cast(id)]);
+                // The warning of C131 comes just before playing and shows once.
+                self.clear_if(NoticeSubject::Cast(id), |message| {
+                    !matches!(
+                        message,
+                        NoticeMessage::CastCantPlay {
+                            problem: ui_model::CastProblem::Unauthenticated,
+                            ..
+                        }
+                    )
+                });
                 self.note_speakers();
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
+            BackendEvent::CastUnauthenticated { id } => {
+                let speaker = self.cast_name(&id);
+                let problem = ui_model::CastProblem::Unauthenticated;
+                let message = NoticeMessage::CastCantPlay { speaker, problem };
+                self.post(NoticeSubject::Cast(id), message);
+            }
             BackendEvent::CastMemoryChanged => {
                 self.save_cast_memory();
             }
@@ -6097,6 +6111,7 @@ fn ui_cast_problem(problem: CastProblem) -> ui_model::CastProblem {
         CastProblem::TakenOver => P::TakenOver,
         CastProblem::ConnectionLost => P::ConnectionLost,
         CastProblem::SearchStopped => P::SearchStopped,
+        CastProblem::NotGenuine => P::NotGenuine,
     }
 }
 
@@ -19293,6 +19308,24 @@ mod tests {
         adapter.poll();
         assert!(
             messages(&adapter).contains(&cast_cant_play("Kitchen", UiCastProblem::NotResponding))
+        );
+    }
+
+    // covers: C131
+    #[test]
+    fn the_unauthenticated_warning_stays_once_the_speaker_plays() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.poll();
+        adapter.handle(BackendEvent::CastUnauthenticated {
+            id: CAST_KITCHEN.to_owned(),
+        });
+        adapter.handle(BackendEvent::CastPlaying {
+            id: CAST_KITCHEN.to_owned(),
+        });
+        assert!(
+            messages(&adapter).contains(&cast_cant_play("Kitchen", UiCastProblem::Unauthenticated)),
+            "{:?}",
+            messages(&adapter)
         );
     }
 

@@ -13014,6 +13014,9 @@ do {
     // covers: C107
     check(CastEnd.failed(CastError(ASC_CAST_ERROR_INTERNAL)).problem == .connectionLost,
           "cast: a fault inside the sender reads as a lost connection, as on Windows (C107)")
+    // covers: C130
+    check(CastEnd.failed(CastError(ASC_CAST_ERROR_REFUSED)).problem == .notGenuine,
+          "cast: a device that fails authentication reads as not genuine, as on Windows (C130)")
 
     // covers: C112
     final class SavedCast { var values: [String: Any] = [:] }
@@ -13258,7 +13261,8 @@ do {
     check(t.castList(.noneFound, localNetworkRefused: true)?.contains("Local Network") == true
             && t.castList(.noneFound)?.contains("Local Network") == false,
           "cast: none found points to Local Network access only once it was refused")
-    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .searchStopped]
+    let problems: [CastProblem] = [.busy, .notResponding, .refused, .blocked, .takenOver, .connectionLost, .searchStopped,
+                                   .notGenuine, .unauthenticated]
     check(problems.allSatisfy { let text = t.castProblem($0, name: "Den"); return text.contains("Den") && !text.contains("\u{2014}") },
           "cast: every notice names the speaker, with no em dash")
     // covers: C43, C114

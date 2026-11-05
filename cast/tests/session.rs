@@ -5,23 +5,27 @@ mod common;
 
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use audiosync_cast::auth::{KeyPin, Outcome, Verified};
 use audiosync_cast::channel::Event;
 use audiosync_cast::client::{
-    CastClient, Fingerprint, FingerprintBook, FingerprintChange, MAX_EVENTS, QUIT_BUDGET,
+    CastClient, DeviceAuth, Fingerprint, FingerprintBook, FingerprintChange, MAX_EVENTS,
+    QUIT_BUDGET,
 };
+use audiosync_cast::device_keys::{DeviceKeyBook, Entry};
 use audiosync_cast::discovery::DeviceId;
 use audiosync_cast::error::{Backoff, ConnectError, EndReason, LaunchError, ReconnectPacer};
 use audiosync_cast::host::SHUTDOWN_MARGIN;
 use audiosync_cast::ids::RequestIds;
 use audiosync_cast::message::{
     DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_DEVICE_AUTH, NS_HEARTBEAT, NS_RECEIVER, PLATFORM,
-    SENDER,
+    PayloadType, SENDER,
 };
-use common::{Behavior, Command, FakeDevice, OnLaunch, ServerKey, app, json_message};
+use audiosync_cast::session::connect_retrying;
+use common::{Behavior, Command, FakeDevice, OnAuth, OnLaunch, ServerKey, app, json_message};
 use serde_json::json;
 
 fn connect(device: &FakeDevice) -> CastClient {
@@ -201,12 +205,16 @@ fn every_message_on_the_wire_is_one_length_prefixed_cast_message() {
     let device = FakeDevice::start(Behavior::default());
     let client = connect(&device);
     let received = device.received();
-    assert_eq!(received[0].0, PLATFORM);
-    assert_eq!(received[0].1, NS_CONNECTION);
-    assert_eq!(received[0].2, json!({"type": "CONNECT"}));
-    assert_eq!(received[1].1, NS_RECEIVER);
     assert_eq!(
-        received[1].2,
+        received[0].1, NS_DEVICE_AUTH,
+        "the challenge comes first (C119)"
+    );
+    assert_eq!(received[1].0, PLATFORM);
+    assert_eq!(received[1].1, NS_CONNECTION);
+    assert_eq!(received[1].2, json!({"type": "CONNECT"}));
+    assert_eq!(received[2].1, NS_RECEIVER);
+    assert_eq!(
+        received[2].2,
         json!({"type": "GET_STATUS", "requestId": 10})
     );
     let _ = client.stop(Duration::from_secs(1));
@@ -517,11 +525,21 @@ fn the_sender_answers_device_pings_over_the_wire() {
     device.join();
 }
 
-// covers: C31
+// covers: C31, C119, C120
 #[test]
-fn a_device_auth_message_from_the_device_is_ignored_over_the_wire() {
+fn the_challenge_goes_out_first_and_later_device_auth_messages_are_ignored() {
     let device = FakeDevice::start(Behavior::default());
     let mut client = connect(&device);
+    {
+        let log = device.log.lock().expect("log");
+        assert_eq!(log[0].namespace, NS_DEVICE_AUTH);
+        assert_eq!(log[0].destination_id, PLATFORM);
+        assert_eq!(log[0].payload_type, PayloadType::Binary as i32);
+        assert_eq!(
+            log[1].namespace, NS_CONNECTION,
+            "CONNECT only after the reply"
+        );
+    }
     device.send(Command::Send(json_message(
         PLATFORM,
         SENDER,
@@ -530,13 +548,142 @@ fn a_device_auth_message_from_the_device_is_ignored_over_the_wire() {
     )));
     client.run_for(Duration::from_millis(300));
     assert!(!client.is_ended());
-    assert!(
-        device
-            .received()
-            .iter()
-            .all(|(_, namespace, _)| namespace != NS_DEVICE_AUTH)
+    let challenges = (device.received().iter())
+        .filter(|(_, namespace, _)| namespace == NS_DEVICE_AUTH)
+        .count();
+    assert_eq!(challenges, 1, "one challenge per connect");
+    let _ = client.stop(Duration::from_secs(1));
+    device.join();
+}
+
+fn auth_for(key: &str) -> (DeviceAuth, Arc<Mutex<DeviceKeyBook>>) {
+    let book = Arc::new(Mutex::new(DeviceKeyBook::new()));
+    let auth = DeviceAuth::new(key.to_owned(), false, Arc::clone(&book));
+    (auth, book)
+}
+
+fn connect_authed(device: &FakeDevice, auth: &DeviceAuth) -> Result<CastClient, ConnectError> {
+    CastClient::connect_authed(
+        &[device.address],
+        RequestIds::starting_at(10),
+        &AtomicBool::new(true),
+        None,
+        Some(auth),
+    )
+}
+
+// covers: C119, C129, C131
+#[test]
+fn a_device_that_declines_plays_unauthenticated_and_warns_once() {
+    let device = FakeDevice::start(Behavior::default());
+    let (auth, book) = auth_for("dev");
+    let mut client = connect_authed(&device, &auth).expect("goes ahead");
+    let decision = client.take_auth().expect("judged");
+    assert!(decision.warn);
+    assert_eq!(
+        decision.line,
+        "cast auth dev: declined, INTERNAL_ERROR, unauthenticated, warned"
+    );
+    assert_eq!(
+        book.lock().expect("book").entry("dev"),
+        Some(Entry::Unauthenticated)
     );
     let _ = client.stop(Duration::from_secs(1));
+    let mut again = connect_authed(&device, &auth).expect("goes ahead");
+    assert!(!again.take_auth().expect("judged").warn);
+    let _ = again.stop(Duration::from_secs(1));
+    device.join();
+}
+
+// covers: C119
+#[test]
+fn a_marked_device_that_never_answers_costs_a_connect_one_second() {
+    let device = FakeDevice::start(Behavior {
+        on_auth: OnAuth::Ignore,
+        ..Behavior::default()
+    });
+    let (auth, book) = auth_for("dev");
+    book.lock()
+        .expect("book")
+        .judge("dev", &Outcome::Declined(0), false);
+    let started = Instant::now();
+    let mut client = connect_authed(&device, &auth).expect("goes ahead");
+    let waited = started.elapsed();
+    assert!(waited >= Duration::from_secs(1), "{waited:?}");
+    assert!(waited < Duration::from_secs(4), "{waited:?}");
+    assert_eq!(
+        client.take_auth().expect("judged").line,
+        "cast auth dev: no answer in 1 s, unauthenticated"
+    );
+    let _ = client.stop(Duration::from_secs(1));
+    device.join();
+}
+
+// covers: C129
+#[test]
+fn a_pinned_device_that_declines_fails_the_connect() {
+    let device = FakeDevice::start(Behavior::default());
+    let (auth, book) = auth_for("dev");
+    let pinned = Outcome::Verified(Verified {
+        key: KeyPin([3; 32]),
+        sha1: false,
+        nonce_echoed: true,
+        audio_only: false,
+        crl: None,
+    });
+    book.lock().expect("book").judge("dev", &pinned, false);
+    let Err(ConnectError::Unauthenticated(line)) = connect_authed(&device, &auth) else {
+        panic!("the connect fails");
+    };
+    assert_eq!(
+        line,
+        "cast auth dev: declined, INTERNAL_ERROR, connect failed"
+    );
+    device.join();
+}
+
+// covers: C130
+#[test]
+fn a_reply_that_fails_its_checks_is_refused_before_connect_and_not_retried() {
+    let device = FakeDevice::start(Behavior {
+        on_auth: OnAuth::Garbage,
+        ..Behavior::default()
+    });
+    let (auth, _) = auth_for("dev");
+    let Err(ConnectError::Refused(line)) = connect_authed(&device, &auth) else {
+        panic!("refused");
+    };
+    assert_eq!(line, "cast auth dev: failed, malformed, refused");
+    let mut failures = 0;
+    let result = connect_retrying(
+        &[device.address],
+        &AtomicBool::new(true),
+        Some(&auth),
+        |_, _| {
+            failures += 1;
+        },
+    );
+    assert!(matches!(result, Err(ConnectError::Refused(_))));
+    assert_eq!(failures, 0, "a refusal is not a connect failure");
+    thread::sleep(Duration::from_millis(200));
+    assert!(
+        (device.received().iter()).all(|(_, namespace, _)| namespace == NS_DEVICE_AUTH),
+        "nothing but the challenge"
+    );
+    device.join();
+}
+
+// covers: C119
+#[test]
+fn a_device_that_closes_before_replying_fails_the_connect() {
+    let device = FakeDevice::start(Behavior {
+        on_auth: OnAuth::Close,
+        ..Behavior::default()
+    });
+    let (auth, book) = auth_for("dev");
+    let error = connect_authed(&device, &auth).expect_err("fails");
+    assert!(matches!(error, ConnectError::Ended(_)), "{error}");
+    assert_eq!(book.lock().expect("book").entry("dev"), None);
     device.join();
 }
 

@@ -310,6 +310,14 @@ final class CastSender {
         }
     }
 
+    /// Clears the device authentication pins or marks of `ids` after Remove (C133).
+    func clearDeviceKeys(_ ids: [String]) {
+        queue.async { [weak self] in
+            guard let self, let handle = self.handle else { return }
+            for id in ids { _ = asc_cast_clear_device_key(handle, id) }
+        }
+    }
+
     static let probeTimeout: TimeInterval = 3
 
     /// Whether something at `ip:port` takes a TCP connection within

@@ -372,15 +372,22 @@ FLAC stream some devices need instead of WAV, with `crc`, `crc-catalog`,
 `serde_json` (MIT OR Apache-2.0) for the
 messages' JSON, with `serde_core`, `itoa` (MIT OR Apache-2.0), `zmij` (MIT)
 and `memchr`, in the macOS app as well as the Windows one; and on `mdns-sd`,
-`getrandom` and `sha2` with the crates they build on, listed above. The others are under MIT OR Apache-2.0. Its
+`getrandom` and `sha2` with the crates they build on, listed above. To check
+that a device is a genuine Cast device it uses `ring` (Apache-2.0 AND ISC) with
+`untrusted` (ISC), and `x509-parser` with `asn1-rs`, `der-parser`,
+`oid-registry`, `rusticata-macros`, `nom`, `minimal-lexical`, `data-encoding`
+(MIT), `time`, `time-core`, `deranged`, `powerfmt`, `num-conv`, `num-bigint`,
+`num-integer`, `thiserror`, `lazy_static` and, at build time,
+`asn1-rs-derive`, `asn1-rs-impl`, `thiserror-impl`, `displaydoc` and
+`synstructure` (MIT); it embeds two public root certificates, Cast Root CA
+and Eureka Root CA (`cast/certs/`), taken from the Open Screen library
+(BSD-3-Clause, © The Chromium Authors), whose license text the notices
+generated for each app carry. The others are under MIT OR Apache-2.0. Its
 tests also use `claxon` (Apache-2.0) to decode that FLAC stream, and `rcgen`,
 `rustls` (Apache-2.0 OR ISC OR
-MIT), `ring` (Apache-2.0 AND ISC), `rustls-webpki` and `untrusted` (ISC) for a
-fake device's TLS server, with `rustls-pki-types`, `yasna`, `x509-parser`,
-`asn1-rs`, `der-parser`, `oid-registry`, `nom` (MIT), `data-encoding` (MIT),
-`time`, `time-core`, `deranged`, `powerfmt`, `num-conv`, `subtle`
-(BSD-3-Clause), `zeroize`, `asn1-rs-derive`, `asn1-rs-impl`, `num-bigint`,
-`num-integer` and `rusticata-macros` (MIT OR Apache-2.0), and `rsa` and
+MIT) and `rustls-webpki` (ISC) for a fake device's TLS server and its test
+certificates, with `rustls-pki-types`, `yasna`, `subtle` (BSD-3-Clause) and
+`zeroize` (MIT OR Apache-2.0), and `rsa` and
 `rand_core` to make that server an RSA key, with `num-bigint-dig`,
 `num-iter`, `pkcs1`, `pkcs8`, `spki`, `der`, `const-oid`, `base64ct`,
 `signature`, `smallvec`, `rand`, `rand_chacha`, `ppv-lite86` (MIT OR

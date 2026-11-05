@@ -1236,6 +1236,7 @@ fn a_slow_certificates_write_holds_up_no_other_session() {
                 id,
                 book: Arc::clone(&book),
             }),
+            auth: None,
         };
         thread::spawn(move || {
             let (feed, reader) = ring();

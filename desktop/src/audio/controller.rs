@@ -5727,6 +5727,9 @@ fn describe_event(event: &BackendEvent, names: &BTreeMap<String, String>) -> Str
         BackendEvent::CastFailed { id, problem } => {
             format!("Google Cast speaker ({id}) can't play ({problem:?}); it is turned off")
         }
+        BackendEvent::CastUnauthenticated { id } => {
+            format!("Google Cast speaker ({id}) didn't prove it's genuine; it plays anyway")
+        }
         BackendEvent::CastMemoryChanged => "the Google Cast settings changed".to_owned(),
         BackendEvent::PairingStore { saved: true } => {
             "the AirPlay pairings' file can be written again".to_owned()

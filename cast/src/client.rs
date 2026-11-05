@@ -13,12 +13,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use native_tls::{HandshakeError, Protocol, TlsConnector, TlsStream};
 use sha2::{Digest, Sha256};
 
+use crate::auth::{self, Outcome};
 use crate::channel::{Channel, Event, STOP_STEP_TIMEOUT};
+use crate::device_keys::{Decision, DeviceKeyBook, Verdict, auth_wait, decide};
 use crate::discovery::{CastDevice, DeviceId, DeviceKind};
 use crate::error::{ConnectError, EndReason, LaunchError};
 use crate::framing::{FrameReader, encode_frame};
@@ -377,6 +379,101 @@ impl Write for PeekedTcp {
     }
 }
 
+/// Where a connect judges the device's answer to the challenge (C129).
+#[derive(Clone, Debug)]
+pub struct DeviceAuth {
+    /// The device's entry in the book.
+    pub key: String,
+    /// A group is never pinned.
+    pub group: bool,
+    pub book: Arc<Mutex<DeviceKeyBook>>,
+    /// The roots the reply's chain must reach: the embedded ones (C126).
+    roots: Vec<Vec<u8>>,
+}
+
+impl DeviceAuth {
+    pub fn new(key: String, group: bool, book: Arc<Mutex<DeviceKeyBook>>) -> DeviceAuth {
+        DeviceAuth {
+            key,
+            group,
+            book,
+            roots: auth::ROOTS.iter().map(|root| root.to_vec()).collect(),
+        }
+    }
+
+    /// Trusts `roots` in place of the embedded ones, for a test's own chain.
+    #[doc(hidden)]
+    pub fn with_roots(mut self, roots: Vec<Vec<u8>>) -> DeviceAuth {
+        self.roots = roots;
+        self
+    }
+}
+
+/// Sends the challenge and waits for the reply, dropping anything else
+/// that arrives meanwhile (C119); the outcome of C122.
+fn authenticate(
+    stream: &mut TlsStream<PeekedTcp>,
+    reader: &mut FrameReader,
+    peer: Option<&[u8]>,
+    auth: Option<&DeviceAuth>,
+    selected: &AtomicBool,
+) -> Result<Outcome, ConnectError> {
+    let entry = auth.and_then(|auth| {
+        let book = auth.book.lock().unwrap_or_else(PoisonError::into_inner);
+        book.entry(&auth.key)
+    });
+    let wait = auth_wait(entry);
+    let nonce = auth::new_nonce()
+        .map_err(|error| ConnectError::Ended(EndReason::Io(format!("no random nonce: {error}"))))?;
+    let frame = encode_frame(&auth::challenge(&nonce))
+        .map_err(|fault| ConnectError::Ended(EndReason::Fault(fault)))?;
+    let io_error = |error: io::Error| ConnectError::Ended(EndReason::Io(error.to_string()));
+    stream.write_all(&frame).map_err(io_error)?;
+    stream.flush().map_err(io_error)?;
+    let deadline = Instant::now() + wait;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        loop {
+            match reader.next_message() {
+                Ok(Some(message)) if auth::is_reply(&message) => {
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map_or(0, |since| since.as_secs() as i64);
+                    let roots: Vec<&[u8]> = match auth {
+                        Some(auth) => auth.roots.iter().map(Vec::as_slice).collect(),
+                        None => auth::ROOTS.to_vec(),
+                    };
+                    return Ok(auth::judge(&message, &nonce, peer, now, &roots));
+                }
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(fault) => return Err(ConnectError::Ended(EndReason::Fault(fault))),
+            }
+        }
+        if !selected.load(Ordering::SeqCst) {
+            return Err(ConnectError::Ended(EndReason::Stopped));
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(Outcome::NoAnswer(wait));
+        }
+        let slice = READ_SLICE.min(deadline - now).max(Duration::from_millis(1));
+        let _ = stream.get_ref().tcp.set_read_timeout(Some(slice));
+        match stream.read(&mut buffer) {
+            Ok(0) => return Err(ConnectError::Ended(EndReason::ClosedByDevice)),
+            Ok(count) => reader.push(&buffer[..count]),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) => {}
+            Err(error) => return Err(io_error(error)),
+        }
+    }
+}
+
 /// An open channel to one device.
 pub struct CastClient {
     stream: TlsStream<PeekedTcp>,
@@ -389,6 +486,8 @@ pub struct CastClient {
     address: SocketAddr,
     local_address: SocketAddr,
     fingerprint: Option<Fingerprint>,
+    /// The judged challenge of this connect, until the session takes it.
+    auth: Option<Decision>,
     buffer: Vec<u8>,
     /// Kept apart from the queue, which the host may have drained.
     ended: Option<EndReason>,
@@ -443,6 +542,19 @@ impl CastClient {
         selected: &AtomicBool,
         known: Option<&DeviceVolume>,
     ) -> Result<CastClient, ConnectError> {
+        CastClient::connect_authed(addresses, ids, selected, known, None)
+    }
+
+    /// [`CastClient::connect_while`] that judges the challenge against
+    /// `auth`'s entry (C129); without one, as a device with no entry, and
+    /// nothing is kept.
+    pub fn connect_authed(
+        addresses: &[SocketAddr],
+        ids: RequestIds,
+        selected: &AtomicBool,
+        known: Option<&DeviceVolume>,
+        auth: Option<&DeviceAuth>,
+    ) -> Result<CastClient, ConnectError> {
         let mut ordered: Vec<SocketAddr> = Vec::new();
         for &address in addresses {
             if !ordered.contains(&address) {
@@ -459,8 +571,9 @@ impl CastClient {
             if !selected.load(Ordering::SeqCst) {
                 return Err(ConnectError::Ended(EndReason::Stopped));
             }
-            match CastClient::connect_one(address, ids.clone(), selected, known) {
+            match CastClient::connect_one(address, ids.clone(), selected, known, auth) {
                 Ok(client) => return Ok(client),
+                Err(error @ ConnectError::Refused(_)) => return Err(error),
                 Err(error) => {
                     first.get_or_insert(error);
                 }
@@ -474,6 +587,7 @@ impl CastClient {
         ids: RequestIds,
         selected: &AtomicBool,
         known: Option<&DeviceVolume>,
+        auth: Option<&DeviceAuth>,
     ) -> Result<CastClient, ConnectError> {
         let tcp = tcp_connect(address, selected)?;
         if !selected.load(Ordering::SeqCst) {
@@ -511,26 +625,45 @@ impl CastClient {
         tcp.set_nonblocking(false).map_err(tcp_error)?;
         tcp.set_write_timeout(Some(WRITE_TIMEOUT))
             .map_err(tcp_error)?;
-        let fingerprint = stream
+        let peer = stream
             .peer_certificate()
             .ok()
             .flatten()
-            .and_then(|certificate| certificate.to_der().ok())
-            .map(|der| Fingerprint::of(&der));
+            .and_then(|certificate| certificate.to_der().ok());
+        let fingerprint = peer.as_deref().map(Fingerprint::of);
         stream
             .get_ref()
             .tcp
             .set_read_timeout(Some(READ_SLICE))
             .map_err(tcp_error)?;
+        let mut stream = stream;
+        let mut reader = FrameReader::new();
+        let outcome = authenticate(&mut stream, &mut reader, peer.as_deref(), auth, selected)?;
+        let decision = match auth {
+            Some(auth) => {
+                let mut book = auth.book.lock().unwrap_or_else(PoisonError::into_inner);
+                book.judge(&auth.key, &outcome, auth.group)
+            }
+            None => decide(&address.to_string(), None, &outcome, false).0,
+        };
+        match decision.verdict {
+            Verdict::Proceed => {}
+            Verdict::ConnectFailed => return Err(ConnectError::Unauthenticated(decision.line)),
+            Verdict::Refused => {
+                let _ = stream.shutdown();
+                return Err(ConnectError::Refused(decision.line));
+            }
+        }
         let mut client = CastClient {
             stream,
-            reader: FrameReader::new(),
+            reader,
             channel: Channel::open(Instant::now(), ids),
             events: VecDeque::new(),
             next_event: 0,
             address,
             local_address,
             fingerprint,
+            auth: Some(decision),
             buffer: vec![0; 16 * 1024],
             ended: None,
             selected: None,
@@ -563,6 +696,11 @@ impl CastClient {
     /// stage uses (C55).
     pub fn local_address(&self) -> SocketAddr {
         self.local_address
+    }
+
+    /// The judged challenge of this connect (C132), once.
+    pub fn take_auth(&mut self) -> Option<Decision> {
+        self.auth.take()
     }
 
     /// The device certificate's fingerprint, when the TLS stack gave it.

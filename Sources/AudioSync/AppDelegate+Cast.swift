@@ -117,10 +117,12 @@ extension AppDelegate {
     /// `syncNetworkHoldBacks`, which posts it again under the new ID.
     private func moveCastNotices(from old: String, to new: String) {
         var list = appModel.notices
-        guard let notice = list.items.first(where: { $0.subject == Notice.cast(old) }) else { return }
-        list.clear([Notice.cast(old)])
-        list.post(notice.text, subject: Notice.cast(new), at: notice.date, title: notice.title,
-                  shortName: notice.shortName, settings: notice.settings)
+        for subject in [Notice.cast, Notice.castUnauthenticated] {
+            guard let notice = list.items.first(where: { $0.subject == subject(old) }) else { continue }
+            list.clear([subject(old)])
+            list.post(notice.text, subject: subject(new), at: notice.date, title: notice.title,
+                      shortName: notice.shortName, settings: notice.settings)
+        }
         appModel.notices = list
     }
 
@@ -163,6 +165,9 @@ extension AppDelegate {
                 postNotice(text.castProblem(problem, name: named(id)), subject: Notice.cast(id),
                            shortName: text.cantPlayNoticeName(named(id)))
             }
+        case .warned(let id, let problem):
+            postNotice(text.castProblem(problem, name: named(id)), subject: Notice.castUnauthenticated(id),
+                       shortName: text.cantPlayNoticeName(named(id)))
         case .senderFailed(let wasOn):
             DebugTrace.log("[AudioSync] Cast: the sender stopped after an internal error")
             let name = wasOn.map(named)
@@ -344,6 +349,7 @@ extension AppDelegate {
         let unfound = castModel.devices[id]?.manual == true
         let manualIDs = castModel.manualSenderIDs(of: id)
         guard let address = castModel.removeManual(id) else { return }
+        castSender?.clearDeviceKeys([id] + manualIDs)
         for manualID in manualIDs { castSender?.removeDevice(manualID) }
         zones = ZoneEdit.removingCast(id, offList: unfound, from: zones)
         DebugTrace.log("[AudioSync] Cast: \(address.text) removed")
@@ -352,7 +358,7 @@ extension AppDelegate {
         let stranded = castModel.forgetAddresses(of: id)
         for other in list.addresses where stranded.contains(other.text) { list.remove(other) }
         store.save(list)
-        clearNotices([Notice.cast(id)])
+        clearNotices([Notice.cast(id), Notice.castUnauthenticated(id)])
         castFollow()
     }
 
@@ -448,6 +454,7 @@ extension AppDelegate {
                     .joined(separator: ", "))
         case .groupLog(let line): return "group: " + line
         case .log(let line): return line
+        case .unauthenticated(_, let line): return line
         case .memoryChanged: return nil
         case .discoveryStopped: return "discovery's mDNS daemon ended"
         case .failed(let detail): return "the sender stopped working" + (detail.isEmpty ? "" : " (\(detail))")

@@ -259,7 +259,8 @@ extern "C" {
 #define ASC_CAST_EVENT_CERTIFICATE_CHANGED 19 /* the device's certificate changed since its last connect: "<before> to <after>" in .detail, for the debug log */
 #define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level, .ask */
 #define ASC_CAST_EVENT_PAUSED 21           /* someone paused the device itself; PLAYING follows once its next play loaded the stream again */
-#define ASC_CAST_EVENT_LOG 22              /* a line for the debug log in .detail: the certificates file couldn't be read or written */
+#define ASC_CAST_EVENT_LOG 22              /* a line for the debug log in .detail: the certificates or device keys file couldn't be read or written, or a device authentication line */
+#define ASC_CAST_EVENT_UNAUTHENTICATED 23  /* the device didn't prove it's a genuine Cast device and plays anyway: warn once; .detail is the debug log line */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
 #define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */
@@ -281,6 +282,7 @@ extern "C" {
 #define ASC_CAST_ERROR_GROUP 10       /* no longer reported: a Cast group plays like a device */
 #define ASC_CAST_ERROR_INTERNAL 11    /* a fault inside the sender; the next start runs (C107) */
 #define ASC_CAST_ERROR_NO_ADDRESS 12  /* no address to try: a group waits for its records (C81), a single device counts toward the give-up (C80) */
+#define ASC_CAST_ERROR_REFUSED 13     /* the device failed device authentication: turn it off, no retry (C130) */
 
 /* A Cast stream's format (AscCastEvent.format). */
 #define ASC_CAST_FORMAT_WAV 1
@@ -2310,6 +2312,14 @@ bool asc_cast_add_device(AscCast *cast, const char *address);
  * browse found stays listed under its id.
  */
 bool asc_cast_remove_device(AscCast *cast, const char *id);
+
+/*
+ * Clears the device authentication pin or mark of the device listed as `id`
+ * when the user removes it, with a line for the debug log. Returns false for
+ * a NULL or dead handle, an ID that doesn't read, or a device with nothing
+ * to clear.
+ */
+bool asc_cast_clear_device_key(AscCast *cast, const char *id);
 
 /*
  * Names the device the user selected, by its ID, or none with a NULL or empty

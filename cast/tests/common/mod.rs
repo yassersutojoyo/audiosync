@@ -16,12 +16,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use audiosync_cast::framing::{FrameReader, encode_frame};
 use audiosync_cast::message::{
-    CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_HEARTBEAT, NS_MEDIA, NS_MULTIZONE,
-    NS_RECEIVER, PLATFORM, PayloadType, ProtocolVersion, SENDER,
+    CastMessage, DEFAULT_MEDIA_RECEIVER, NS_CONNECTION, NS_DEVICE_AUTH, NS_HEARTBEAT, NS_MEDIA,
+    NS_MULTIZONE, NS_RECEIVER, PLATFORM, PayloadType, ProtocolVersion, SENDER,
 };
 use rsa::pkcs8::EncodePrivateKey;
 use rustls::crypto::CryptoProvider;
@@ -79,6 +79,21 @@ pub enum OnMediaStatus {
     Ignore,
 }
 
+/// How the fake device answers the device authentication challenge.
+#[derive(Clone, Copy, Debug)]
+pub enum OnAuth {
+    /// The payload `.0` makes from the challenge's payload and the
+    /// connection's certificate; that certificate then lasts two days (C124).
+    Answer(fn(&[u8], &[u8]) -> Vec<u8>),
+    /// An `AuthError` with `INTERNAL_ERROR`.
+    Decline,
+    Ignore,
+    /// A binary payload that is no `DeviceAuthMessage`.
+    Garbage,
+    /// The connection drops instead of a reply.
+    Close,
+}
+
 /// The key type of the fake device's certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServerKey {
@@ -130,6 +145,7 @@ pub struct Behavior {
     /// stream's byte rate, as a device whose output clock runs slow (C75);
     /// `None` reads as fast as the audio arrives.
     pub read_pace: Option<f64>,
+    pub on_auth: OnAuth,
 }
 
 impl Default for Behavior {
@@ -155,6 +171,7 @@ impl Default for Behavior {
             device_ping: None,
             new_certificate_each_connection: false,
             read_pace: None,
+            on_auth: OnAuth::Decline,
         }
     }
 }
@@ -279,6 +296,12 @@ fn server_config(behavior: &Behavior) -> (Arc<ServerConfig>, Vec<u8>) {
     };
     let mut params = rcgen::CertificateParams::new(behavior.names.clone()).expect("names");
     params.serial_number = Some(SERIAL.fetch_add(1, Ordering::Relaxed).into());
+    if let OnAuth::Answer(_) = behavior.on_auth {
+        let since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).expect("clock");
+        let now = rcgen::date_time_ymd(1970, 1, 1) + since_epoch;
+        params.not_before = now - Duration::from_secs(86_400);
+        params.not_after = now + Duration::from_secs(86_400);
+    }
     let certificate = params
         .self_signed(&key_pair)
         .expect("certificate")
@@ -322,6 +345,7 @@ impl FakeDevice {
         let suites = Arc::new(Mutex::new(Vec::new()));
         let (commands, receiver) = mpsc::channel();
         let mut device = Device {
+            certificate: certificate.clone(),
             apps: behavior.apps.clone(),
             behavior,
             launches: 0,
@@ -430,9 +454,12 @@ impl FakeDevice {
             .collect()
     }
 
+    /// The `type` of each JSON message received; the binary device
+    /// authentication challenge has none and is left out.
     pub fn types(&self) -> Vec<String> {
         self.received()
             .into_iter()
+            .filter(|(_, namespace, _)| namespace != NS_DEVICE_AUTH)
             .map(|(_, _, payload)| payload["type"].as_str().unwrap_or("").to_owned())
             .collect()
     }
@@ -523,6 +550,8 @@ pub fn json_message(
 }
 
 struct Device {
+    /// The certificate it serves, unless a new one is made per connection.
+    certificate: Vec<u8>,
     behavior: Behavior,
     apps: Vec<Value>,
     launches: u32,
@@ -557,6 +586,27 @@ impl Device {
         let kind = payload["type"].as_str().unwrap_or("");
         let id = payload["requestId"].as_u64().unwrap_or(0);
         match (message.namespace.as_str(), kind) {
+            (NS_DEVICE_AUTH, _) => {
+                let payload = match self.behavior.on_auth {
+                    // An AuthError (field 3) holding error_type 0.
+                    OnAuth::Decline => vec![0x1a, 0x02, 0x08, 0x00],
+                    OnAuth::Garbage => vec![0xff, 0xff, 0xff],
+                    OnAuth::Answer(answer) => answer(
+                        message.payload_binary.as_deref().unwrap_or_default(),
+                        &self.certificate,
+                    ),
+                    OnAuth::Ignore | OnAuth::Close => return Vec::new(),
+                };
+                vec![CastMessage {
+                    protocol_version: ProtocolVersion::Castv210 as i32,
+                    source_id: PLATFORM.to_owned(),
+                    destination_id: message.source_id.clone(),
+                    namespace: NS_DEVICE_AUTH.to_owned(),
+                    payload_type: PayloadType::Binary as i32,
+                    payload_utf8: None,
+                    payload_binary: Some(payload),
+                }]
+            }
             (NS_HEARTBEAT, "PING") if self.behavior.answer_ping => vec![json_message(
                 PLATFORM,
                 &message.source_id,
@@ -922,6 +972,12 @@ fn serve(
                         unanswered = None;
                     }
                     log.lock().expect("log").push(message.clone());
+                    if message.namespace == NS_DEVICE_AUTH
+                        && matches!(device.behavior.on_auth, OnAuth::Close)
+                    {
+                        let _ = stream.sock.0.shutdown(std::net::Shutdown::Both);
+                        return false;
+                    }
                     for reply in device.answer(&message) {
                         write(&mut stream, &reply);
                     }

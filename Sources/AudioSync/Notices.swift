@@ -49,11 +49,16 @@ struct Notice: Identifiable, Equatable {
     /// The AirPlay speakers play ahead of this Google Cast speaker; apart
     /// from `cast(_:)`, so it never replaces or clears a problem with it.
     static func airPlayAhead(_ device: String) -> String { "airplay-ahead:" + device }
+    /// This Google Cast speaker didn't prove it's genuine (C131); apart from
+    /// `cast(_:)`, so its playing never clears the warning that came first.
+    static func castUnauthenticated(_ device: String) -> String { "cast-unauthenticated:" + device }
     /// What Forget Pairing or Forget Password on an AirPlay speaker drops (S223).
     static func forgotten(airPlay id: String) -> [String] { [SpeakerKey.make(id: id, airplay: true)] }
     /// The subjects in `list` about a Google Cast speaker.
     static func castSubjects(in list: NoticeList) -> [String] {
-        list.items.map(\.subject).filter { $0.hasPrefix(CastID.prefix) }
+        list.items.map(\.subject).filter {
+            $0.hasPrefix(CastID.prefix) || $0.hasPrefix(Notice.castUnauthenticated(""))
+        }
     }
     /// Now Playing may not control this player.
     static func automation(_ bundleID: String) -> String { "automation:" + bundleID }

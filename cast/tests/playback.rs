@@ -11,6 +11,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioWriter, StreamFormat, audio_ring};
+use audiosync_cast::client::DeviceAuth;
+use audiosync_cast::device_keys::DeviceKeyBook;
 use audiosync_cast::error::{ConnectError, EndReason, ReconnectPacer};
 use audiosync_cast::group::GroupRecords;
 use audiosync_cast::media::{IdleReason, MediaError, Metadata, VolumeError};
@@ -20,7 +22,8 @@ use audiosync_cast::session::{
     connect_retrying,
 };
 use common::{
-    Behavior, Command, FakeDevice, OnLoad, OnMediaStatus, http, json_message, media_status,
+    Behavior, Command, FakeDevice, OnLaunch, OnLoad, OnMediaStatus, http, json_message,
+    media_status,
 };
 use serde_json::{Value, json};
 
@@ -75,6 +78,7 @@ fn config(device: &FakeDevice) -> SessionConfig {
         group: None,
         records: None,
         fingerprints: None,
+        auth: None,
     }
 }
 
@@ -678,7 +682,7 @@ fn connect_retries_wait_1_s_then_double_while_the_device_stays_selected() {
     let mut waits = Vec::new();
     let started = Instant::now();
     let mut attempts_at = Vec::new();
-    let result = connect_retrying(&[closed], &selected, |error, wait| {
+    let result = connect_retrying(&[closed], &selected, None, |error, wait| {
         assert!(matches!(error, ConnectError::Tcp { .. }), "{error}");
         assert!(
             error.to_string().contains(&closed.to_string()),
@@ -690,7 +694,7 @@ fn connect_retries_wait_1_s_then_double_while_the_device_stays_selected() {
             selected.store(false, Ordering::SeqCst);
         }
     });
-    assert!(result.is_none(), "deselected ends the retries");
+    assert!(result.is_err(), "deselected ends the retries");
     assert_eq!(
         waits,
         [
@@ -1482,6 +1486,40 @@ fn a_close_from_the_app_on_a_silent_device_recovers_as_a_dead_channel() {
     assert_eq!(device.connection_count(), 2);
     assert_eq!(count(&device, NS_RECEIVER, "LAUNCH"), 2);
     assert_eq!(count(&device, NS_MEDIA, "LOAD"), 2);
+    session.stop();
+    device.join();
+}
+
+// covers: C131
+#[test]
+fn a_start_that_fails_after_the_warning_warns_again_next_time() {
+    let book = Arc::new(Mutex::new(DeviceKeyBook::new()));
+    let authed = |device: &FakeDevice| SessionConfig {
+        auth: Some(DeviceAuth::new("dev".to_owned(), false, Arc::clone(&book))),
+        ..config(device)
+    };
+    let refusing = FakeDevice::start(Behavior {
+        on_launch: OnLaunch::Refuse("NOT_ALLOWED"),
+        ..Behavior::default()
+    });
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let selected = Arc::new(AtomicBool::new(true));
+    let failed = CastSession::start(authed(&refusing), reader, selected, |_, _| {});
+    assert!(failed.is_err());
+    assert_eq!(book.lock().expect("book").entry("dev"), None);
+    refusing.join();
+
+    let device = FakeDevice::start(Behavior::default());
+    let (writer, reader) = audio_ring(48_000);
+    let _feed = feed(writer, 9);
+    let selected = Arc::new(AtomicBool::new(true));
+    let mut session =
+        CastSession::start(authed(&device), reader, selected, |_, _| {}).expect("plays");
+    assert!(matches!(
+        session.poll_event(),
+        Some(SessionEvent::DeviceAuth { warn: true, .. })
+    ));
     session.stop();
     device.join();
 }

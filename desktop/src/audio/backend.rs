@@ -394,6 +394,8 @@ pub enum CastProblem {
     ConnectionLost,
     /// It left the list after discovery stopped, with no session to keep it.
     SearchStopped,
+    /// Its answer to device authentication failed the checks (spec C130).
+    NotGenuine,
 }
 
 /// Whether Google Cast discovery runs.
@@ -698,6 +700,12 @@ pub enum BackendEvent {
         id: String,
         /// Why.
         problem: CastProblem,
+    },
+    /// A Google Cast speaker didn't prove it's genuine and plays anyway;
+    /// posted once, when it is first marked (spec C131).
+    CastUnauthenticated {
+        /// The speaker's ID.
+        id: String,
     },
     /// What AudioSync keeps per Cast device (offsets, formats) changed:
     /// save it.

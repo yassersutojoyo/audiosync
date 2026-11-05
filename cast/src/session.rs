@@ -7,13 +7,16 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::audio::{AudioReader, Codec, StreamFormat};
 use crate::channel::{Event, PlaybackEnd, new_volume_ask};
-use crate::client::{CastClient, Fingerprint, FingerprintBook, FingerprintChange, QUIT_BUDGET};
+use crate::client::{
+    CastClient, DeviceAuth, Fingerprint, FingerprintBook, FingerprintChange, QUIT_BUDGET,
+};
+use crate::device_keys::DeviceKeyBook;
 use crate::discovery::DeviceId;
 use crate::error::{Backoff, ConnectError, EndReason, LaunchError, ReconnectPacer};
 use crate::group::{GroupMember, GroupRecords, MemberList, MultizoneMessage};
@@ -192,6 +195,12 @@ pub enum SessionEvent {
         before: Fingerprint,
         after: Fingerprint,
     },
+    /// A connect's challenge was judged and the session goes ahead: the
+    /// debug line of C132, and whether the host shows the notice of C131.
+    DeviceAuth {
+        line: String,
+        warn: bool,
+    },
     Ended(SessionEnd),
 }
 
@@ -217,6 +226,9 @@ pub struct SessionConfig {
     /// Where every connect records the device's certificate fingerprint
     /// (C21) once the start succeeded; `None`, or a group, records nothing.
     pub fingerprints: Option<Fingerprints>,
+    /// Where every connect judges the device's answer to the challenge
+    /// (C129); `None` judges each as a device with no entry.
+    pub auth: Option<DeviceAuth>,
 }
 
 /// The fingerprint book a session records its device in, kept by the host
@@ -258,9 +270,10 @@ pub fn falls_back_to_flac(codec: Codec, error: &MediaError) -> bool {
 pub fn connect_retrying(
     addresses: &[SocketAddr],
     selected: &AtomicBool,
+    auth: Option<&DeviceAuth>,
     on_failure: impl FnMut(ConnectError, Duration),
-) -> Option<CastClient> {
-    connect_retrying_with(|| addresses.to_vec(), selected, on_failure)
+) -> Result<CastClient, ConnectError> {
+    connect_retrying_with(|| addresses.to_vec(), selected, auth, on_failure)
 }
 
 /// [`connect_retrying`] with the addresses read again before every
@@ -268,23 +281,29 @@ pub fn connect_retrying(
 pub fn connect_retrying_with(
     mut addresses: impl FnMut() -> Vec<SocketAddr>,
     selected: &AtomicBool,
+    auth: Option<&DeviceAuth>,
     mut on_failure: impl FnMut(ConnectError, Duration),
-) -> Option<CastClient> {
+) -> Result<CastClient, ConnectError> {
     let mut backoff = Backoff::new();
+    // A deselect ends the attempt as before: with no address to report.
+    let deselected = || Err(ConnectError::NoAddress);
     loop {
         if !selected.load(Ordering::SeqCst) {
-            return None;
+            return deselected();
         }
-        match CastClient::connect_while(&addresses(), RequestIds::random(), selected, None) {
-            Ok(client) => return Some(client),
-            Err(_) if !selected.load(Ordering::SeqCst) => return None,
+        let ids = RequestIds::random();
+        match CastClient::connect_authed(&addresses(), ids, selected, None, auth) {
+            Ok(client) => return Ok(client),
+            Err(_) if !selected.load(Ordering::SeqCst) => return deselected(),
+            // A refusal is not a connect failure (C130).
+            Err(error @ ConnectError::Refused(_)) => return Err(error),
             Err(error) => {
                 let wait = backoff.next_wait();
                 on_failure(error, wait);
                 let until = Instant::now() + wait;
                 while Instant::now() < until {
                     if !selected.load(Ordering::SeqCst) {
-                        return None;
+                        return deselected();
                     }
                     thread::sleep(SLICE.min(until.saturating_duration_since(Instant::now())));
                 }
@@ -339,6 +358,7 @@ pub struct CastSession {
     members: MemberList,
     group_types_logged: LoggedTypes,
     fingerprints: Option<Fingerprints>,
+    auth: Option<DeviceAuth>,
     pacer: ReconnectPacer,
     /// Set by the host when the device announces itself (C81).
     announced: Arc<AtomicBool>,
@@ -407,13 +427,20 @@ impl CastSession {
     ) -> Result<CastSession, SessionError> {
         let group = config.group.clone();
         let records = group.clone().or_else(|| config.records.clone());
-        let connected = match &records {
-            Some(records) => connect_retrying_with(|| records.get().group, &selected, on_failure),
-            None => connect_retrying(&config.addresses, &selected, on_failure),
+        let auth = config.auth.as_ref();
+        let mut client = match &records {
+            Some(records) => {
+                connect_retrying_with(|| records.get().group, &selected, auth, on_failure)?
+            }
+            None => connect_retrying(&config.addresses, &selected, auth, on_failure)?,
         };
-        let Some(mut client) = connected else {
-            return Err(SessionError::Connect(ConnectError::NoAddress));
-        };
+        let decision = client.take_auth();
+        // A failed start drops its events, so it takes back the mark whose
+        // warning (C131) would go with them, and the next start warns again.
+        let mut unsent = UnsentWarning(
+            auth.filter(|_| decision.as_ref().is_some_and(|decision| decision.warn))
+                .map(|auth| (Arc::clone(&auth.book), auth.key.clone())),
+        );
         if group.is_some() {
             client.request_members();
         }
@@ -493,6 +520,7 @@ impl CastSession {
             members: MemberList::new(),
             group_types_logged: LoggedTypes::default(),
             fingerprints: None,
+            auth: config.auth,
             pacer: ReconnectPacer::default(),
             announced: Arc::new(AtomicBool::new(false)),
         };
@@ -510,6 +538,13 @@ impl CastSession {
         {
             session.events.push_front(event);
         }
+        if let Some(decision) = decision {
+            session.events.push_front(SessionEvent::DeviceAuth {
+                line: decision.line,
+                warn: decision.warn,
+            });
+        }
+        unsent.0 = None;
         Ok(session)
     }
 
@@ -981,14 +1016,20 @@ impl CastSession {
             self.client.disconnect();
             while self.client.poll_event().is_some() {}
             self.client = match self.reconnect() {
-                Some(mut client) => {
+                Ok(mut client) => {
                     client.set_selected(Arc::clone(&self.selected));
                     if self.group.is_some() {
                         client.request_members();
                     }
+                    if let Some(decision) = client.take_auth() {
+                        self.report(SessionEvent::DeviceAuth {
+                            line: decision.line,
+                            warn: decision.warn,
+                        });
+                    }
                     client
                 }
-                None => return self.end(SessionEnd::Deselected),
+                Err(end) => return self.end(end),
             };
             if let Some(event) = self
                 .fingerprints
@@ -1081,24 +1122,31 @@ impl CastSession {
     /// selected (C81). The device is resolved afresh before every attempt: a
     /// group's leader may have handed over (C90, C97), a single device may
     /// have moved (C111).
-    fn reconnect(&mut self) -> Option<CastClient> {
+    fn reconnect(&mut self) -> Result<CastClient, SessionEnd> {
         if self.announced.swap(false, Ordering::SeqCst) {
             self.pacer.announced();
         }
         let mut wait = self.pacer.next_wait(Instant::now());
         loop {
             if !self.pause(wait) {
-                return None;
+                return Err(SessionEnd::Deselected);
             }
             let addresses = match &self.records {
                 Some(records) => records.get().group,
                 None => self.addresses.clone(),
             };
             let known = self.last_volume.as_ref();
-            match CastClient::connect_while(&addresses, RequestIds::random(), &self.selected, known)
-            {
-                Ok(client) => return Some(client),
-                Err(_) if !self.selected.load(Ordering::SeqCst) => return None,
+            let ids = RequestIds::random();
+            let auth = self.auth.as_ref();
+            match CastClient::connect_authed(&addresses, ids, &self.selected, known, auth) {
+                Ok(client) => return Ok(client),
+                Err(_) if !self.selected.load(Ordering::SeqCst) => {
+                    return Err(SessionEnd::Deselected);
+                }
+                // A refusal ends the session (C130).
+                Err(error @ ConnectError::Refused(_)) => {
+                    return Err(SessionEnd::Failed(error.into()));
+                }
                 Err(error) => {
                     wait = self.pacer.next_wait(Instant::now());
                     self.report(SessionEvent::ConnectFailed {
@@ -1165,6 +1213,19 @@ fn make_room(events: &mut VecDeque<SessionEvent>) {
     });
     if let Some(index) = oldest {
         events.remove(index);
+    }
+}
+
+/// A device key book entry to clear when dropped, unless taken first.
+struct UnsentWarning(Option<(Arc<Mutex<DeviceKeyBook>>, String)>);
+
+impl Drop for UnsentWarning {
+    fn drop(&mut self) {
+        if let Some((book, key)) = self.0.take() {
+            book.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear(&key);
+        }
     }
 }
 

@@ -1592,6 +1592,12 @@ struct UIStrings {
             return "\(name) lost its connection, so it's off. Turn it on again to reconnect."
         case .searchStopped:
             return "AudioSync stopped looking for Google Cast speakers, so \(name) is off. Restart AudioSync to try again."
+        case .notGenuine:
+            return "\(name) couldn't prove it's a genuine Google Cast speaker, so it's off. "
+                + "If you trust it, remove it from AudioSync and add it again."
+        case .unauthenticated:
+            return "\(name) didn't prove it's a genuine Google Cast speaker. AudioSync plays to it anyway. "
+                + "If you don't recognize it, turn it off."
         }
     }
 

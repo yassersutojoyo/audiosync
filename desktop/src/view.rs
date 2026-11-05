@@ -5084,6 +5084,8 @@ fn cast_problem(problem: ui_model::CastProblem) -> CastProblem {
         P::TakenOver => CastProblem::TakenOver,
         P::ConnectionLost => CastProblem::ConnectionLost,
         P::SearchStopped => CastProblem::SearchStopped,
+        P::NotGenuine => CastProblem::NotGenuine,
+        P::Unauthenticated => CastProblem::Unauthenticated,
     }
 }
 

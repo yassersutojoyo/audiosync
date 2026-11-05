@@ -1616,6 +1616,10 @@ mod tests {
             ),
             ("ASC_CAST_EVENT_PAUSED", CAST_EVENT_PAUSED.to_string()),
             ("ASC_CAST_EVENT_LOG", CAST_EVENT_LOG.to_string()),
+            (
+                "ASC_CAST_EVENT_UNAUTHENTICATED",
+                CAST_EVENT_UNAUTHENTICATED.to_string(),
+            ),
             ("ASC_CAST_END_STOPPED", CAST_END_STOPPED.to_string()),
             ("ASC_CAST_END_TAKEN_OVER", CAST_END_TAKEN_OVER.to_string()),
             ("ASC_CAST_END_DESELECTED", CAST_END_DESELECTED.to_string()),
@@ -1642,6 +1646,7 @@ mod tests {
                 "ASC_CAST_ERROR_NO_ADDRESS",
                 CAST_ERROR_NO_ADDRESS.to_string(),
             ),
+            ("ASC_CAST_ERROR_REFUSED", CAST_ERROR_REFUSED.to_string()),
             ("ASC_CAST_FORMAT_WAV", CAST_FORMAT_WAV.to_string()),
             ("ASC_CAST_FORMAT_FLAC", CAST_FORMAT_FLAC.to_string()),
             ("ASC_REMOTE_DEFAULT_PORT", REMOTE_DEFAULT_PORT.to_string()),

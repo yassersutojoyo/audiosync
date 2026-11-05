@@ -37,6 +37,8 @@ audiosync-debug.log
 *.pfx
 *.cer
 *.der
+# The public Cast root certificates the sender trusts (CAST_SPEC C126).
+!cast/certs/*.der
 *_priv*
 .env
 .env.*

@@ -202,6 +202,7 @@ fn config(device: &FakeDevice, format: StreamFormat) -> SessionConfig {
         group: None,
         records: None,
         fingerprints: None,
+        auth: None,
     }
 }
 
