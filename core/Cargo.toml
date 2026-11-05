@@ -69,9 +69,10 @@ manual_is_multiple_of = "allow"
 #   it never unwinds into the host (rust-version is above that);
 # - a panic on a thread the core spawns ends only that thread. The AirPlay
 #   transport's threads catch it and report a lost connection
-#   (airplay/src/transport.rs, spawn), and a new thread should do the same;
-#   the others (Cast streaming and discovery, AirPlay pairing) don't yet, so
-#   such a thread ends silently (the Windows app's panic hook logs where).
+#   (airplay/src/transport.rs, spawn); Cast streaming and discovery and
+#   AirPlay pairing catch it too and report that worker's own failure
+#   (cast/src/worker.rs, airplay/src/homekit.rs), and a new thread should
+#   do the same.
 [profile.release]
 panic = "unwind"
 
