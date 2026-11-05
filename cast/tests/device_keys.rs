@@ -164,10 +164,16 @@ fn the_book_keeps_pins_and_marks_across_launches_and_writes_only_changes() {
             .as_str()
         )
     );
-    let (_, _, error) = file_book("a not-a-pin\n");
+    let (book, _, error) = file_book("a not-a-pin\nb unauthenticated\n");
     assert_eq!(
         error.map(|error| error.kind()),
         Some(io::ErrorKind::InvalidData)
+    );
+    assert_eq!(book.entry("a"), None);
+    assert_eq!(
+        book.entry("b"),
+        Some(Entry::Unauthenticated),
+        "a bad line costs only itself"
     );
 }
 
