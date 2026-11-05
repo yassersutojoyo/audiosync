@@ -59,6 +59,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom",
  "hkdf",
+ "if-addrs",
  "md-5",
  "mdns-sd",
  "plist",
