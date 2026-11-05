@@ -19,9 +19,8 @@
 //!   speaker (P3, P141).
 //!
 //! Both UDP threads take datagrams only from the receiver: the address the
-//! connection reached (a global IPv6 one by its /64 prefix), from any port
-//! ([`from_receiver`]). Others are dropped unread and counted
-//! (P86, P91, P144). That screens out stray datagrams (a stale session,
+//! connection reached, from any port ([`from_receiver`]). Others are
+//! dropped unread and counted (P86, P91, P144). That screens out stray datagrams (a stale session,
 //! another device) from timing replies, resends and the liveness check
 //! (P131); it is no security boundary against a forged source address.
 //!
@@ -815,17 +814,9 @@ fn ptp_loop(
 
 /// Whether a datagram from `source` came from the session's receiver,
 /// whose address (in canonical form) is `receiver`, from any port, since
-/// receivers pick their own (P86, P91). An IPv4 or IPv6 link-local address
-/// must match exactly. Any other IPv6 address only needs the same /64
-/// prefix: a receiver may send from one of its temporary addresses
-/// (RFC 8981), which keeps the prefix and changes the rest.
+/// receivers pick their own (P86, P91).
 pub(crate) fn from_receiver(source: SocketAddr, receiver: IpAddr) -> bool {
-    match (source.ip().to_canonical(), receiver) {
-        (IpAddr::V6(source), IpAddr::V6(receiver)) if !receiver.is_unicast_link_local() => {
-            source.octets()[..8] == receiver.octets()[..8]
-        }
-        (source, receiver) => source == receiver,
-    }
+    source.ip().to_canonical() == receiver
 }
 
 /// Answers timing requests from `receiver` (P90, P91, P92): the receive
@@ -1438,9 +1429,9 @@ mod tests {
         drop(io);
     }
 
-    // Which source addresses count as the receiver: any port; IPv4 and
-    // IPv6 link-local exactly, IPv4-mapped IPv6 as IPv4; other IPv6 within
-    // the same /64, so a temporary address of the receiver's passes.
+    // Which source addresses count as the receiver: its own address from
+    // any port, IPv4-mapped IPv6 as IPv4. Another host in the receiver's
+    // IPv6 /64 is not the receiver.
     // covers: P86, P91
     #[test]
     fn the_receiver_is_its_address_from_any_port() {
@@ -1457,7 +1448,7 @@ mod tests {
         assert!(from("[fe80::1%3]:6002", "fe80::1"));
         assert!(!from("[fe80::2%3]:6002", "fe80::1"));
         assert!(from("[2001:db8:1:2::10]:6002", "2001:db8:1:2::10"));
-        assert!(from(
+        assert!(!from(
             "[2001:db8:1:2:a1b2:c3d4:e5f6:789]:6002",
             "2001:db8:1:2::10"
         ));
