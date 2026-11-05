@@ -19302,6 +19302,24 @@ mod tests {
         );
     }
 
+    // covers: C131
+    #[test]
+    fn the_unauthenticated_warning_stays_once_the_speaker_plays() {
+        let (mut adapter, _fake) = cast_adapter();
+        adapter.poll();
+        adapter.handle(BackendEvent::CastUnauthenticated {
+            id: CAST_KITCHEN.to_owned(),
+        });
+        adapter.handle(BackendEvent::CastPlaying {
+            id: CAST_KITCHEN.to_owned(),
+        });
+        assert!(
+            messages(&adapter).contains(&cast_cant_play("Kitchen", UiCastProblem::Unauthenticated)),
+            "{:?}",
+            messages(&adapter)
+        );
+    }
+
     // covers: S246, S252, S266, C43
     #[test]
     fn a_takeover_after_a_recall_keeps_its_notice_so_the_next_recall_sees_it_busy() {
