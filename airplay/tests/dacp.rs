@@ -1472,6 +1472,8 @@ fn dacp_a_repeated_request_is_logged_once_per_session() {
         assert_eq!(polled.status, 400);
         let polled = client.request("/ctrl-int/1/beginff", Some(&remote));
         assert_eq!(polled.status, 204);
+        let polled = client.request("/unknown", Some(&remote));
+        assert_eq!(polled.status, 404);
     }
     let last = client.request("/ctrl-int/1/getspeakers", Some(&remote));
     assert_eq!(last.status, 400);
@@ -1483,6 +1485,7 @@ fn dacp_a_repeated_request_is_logged_once_per_session() {
     let lines = log_lines(&events);
     assert_eq!(count(&lines, "/ctrl-int/1/getproperty"), 1, "{lines:?}");
     assert_eq!(count(&lines, "/ctrl-int/1/beginff"), 1, "{lines:?}");
+    assert_eq!(count(&lines, "/unknown"), 1, "{lines:?}");
     sender.shutdown();
 }
 

@@ -395,7 +395,11 @@ pub fn answer(head: &RequestHead, session: impl FnOnce(u32) -> SessionCheck) -> 
         None => (head.target.as_str(), None),
     };
     let Some(name) = command_name(path) else {
-        return refused(404);
+        return Answer {
+            status: 404,
+            command: None,
+            remote: Some(remote),
+        };
     };
     match command(name, query) {
         Some(command) => Answer {

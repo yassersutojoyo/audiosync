@@ -530,6 +530,9 @@ struct Shared {
     underrun_frames: AtomicU64,
     events: Mutex<VecDeque<ServerEvent>>,
     connections: Mutex<Vec<(TcpStream, JoinHandle<()>)>>,
+    /// The thread, by name, a test makes panic as a bug in its work would.
+    #[cfg(test)]
+    panic_in: Mutex<Option<&'static str>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -537,6 +540,13 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Shared {
+    #[cfg(test)]
+    fn test_panic(&self, thread: &str) {
+        if *lock(&self.panic_in) == Some(thread) {
+            panic!("a test panic in {thread}");
+        }
+    }
+
     fn report(&self, event: ServerEvent) {
         let mut events = lock(&self.events);
         if events.len() >= MAX_SERVER_EVENTS {
@@ -634,6 +644,8 @@ impl StreamServer {
             underrun_frames: AtomicU64::new(0),
             events: Mutex::new(VecDeque::new()),
             connections: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            panic_in: Mutex::new(None),
         });
         let accept_quit = Arc::new(AtomicBool::new(false));
         let accept = spawn_accept(listener, &shared, &accept_quit)?;
@@ -786,6 +798,18 @@ impl StreamServer {
         }
     }
 
+    /// The pump ended on a fault (a bug) while the server ran: no audio
+    /// comes again (C107).
+    pub(crate) fn failed(&self) -> bool {
+        self.pump.is_some() && self.shared.stopped.load(Ordering::SeqCst)
+    }
+
+    /// Makes the thread named `thread` panic at its next check.
+    #[cfg(test)]
+    pub(crate) fn panic_in(&self, thread: &'static str) {
+        *lock(&self.shared.panic_in) = Some(thread);
+    }
+
     pub fn poll_event(&self) -> Option<ServerEvent> {
         lock(&self.shared.events).pop_front()
     }
@@ -860,6 +884,8 @@ fn spawn_accept(
 fn accept_loop(listener: TcpListener, shared: Arc<Shared>, quit: Arc<AtomicBool>) {
     let mut refused: VecDeque<(TcpStream, Instant)> = VecDeque::new();
     while !shared.stopped.load(Ordering::SeqCst) && !quit.load(Ordering::SeqCst) {
+        #[cfg(test)]
+        shared.test_panic("cast-http");
         drain_refused(&mut refused);
         match listener.accept() {
             Ok((stream, peer)) => {
@@ -895,6 +921,8 @@ fn accept_loop(listener: TcpListener, shared: Arc<Shared>, quit: Arc<AtomicBool>
                 let spawned = worker::spawn(
                     "cast-http-conn",
                     move || {
+                        #[cfg(test)]
+                        connection.test_panic("cast-http-conn");
                         let closer = stream.try_clone();
                         serve(stream, peer, connection);
                         // The clone kept for the teardown would hold the
@@ -1241,6 +1269,8 @@ fn pump(mut reader: AudioReader, shared: Arc<Shared>) {
     let mut pacer = Pacer::default();
     let mut overflow = reader.overflow();
     while !shared.stopped.load(Ordering::SeqCst) {
+        #[cfg(test)]
+        shared.test_panic("cast-pump");
         // Frames the full ring refused never reach a block: dropped too (C79).
         let refused = reader.overflow();
         shared
@@ -1370,6 +1400,60 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
+        }
+    }
+
+    fn loopback_server() -> StreamServer {
+        let (_writer, reader) = crate::audio::audio_ring(48_000);
+        let loopback = IpAddr::from([127, 0, 0, 1]);
+        let config = StreamConfig {
+            local_ip: loopback,
+            allowed: vec![loopback],
+            format: StreamFormat::wav(48_000).expect("rate"),
+        };
+        StreamServer::start(config, reader).expect("server")
+    }
+
+    // A panic in the accept thread (a bug) is reported as the listener
+    // failing, so the session hears of it.
+    // covers: C107
+    #[test]
+    fn a_panic_in_the_accept_thread_reports_the_listener_failed() {
+        let server = loopback_server();
+        server.panic_in("cast-http");
+        let until = Instant::now() + Duration::from_secs(5);
+        let mut event = server.poll_event();
+        while event.is_none() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(10));
+            event = server.poll_event();
+        }
+        assert!(
+            matches!(event, Some(ServerEvent::AcceptFailed(_))),
+            "{event:?}"
+        );
+    }
+
+    // A panic in a connection's thread (a bug) closes that connection at
+    // once, so the device fetches again instead of waiting on it (C61).
+    // covers: C107
+    #[test]
+    fn a_panic_in_a_connection_thread_closes_the_connection() {
+        let server = loopback_server();
+        server.panic_in("cast-http-conn");
+        let mut client = TcpStream::connect(server.address()).expect("connect");
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("timeout");
+        let mut answer = Vec::new();
+        match client.read_to_end(&mut answer) {
+            Ok(_) => assert!(answer.is_empty(), "{answer:?}"),
+            Err(error) => assert!(
+                !matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ),
+                "still open: {error:?}"
+            ),
         }
     }
 

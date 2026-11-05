@@ -53,3 +53,11 @@ mod worker;
 
 #[cfg(test)]
 mod never_panics;
+
+// The integration tests' fake device, for unit tests that need a whole
+// session; its `audiosync_cast::` paths name this crate.
+#[cfg(test)]
+extern crate self as audiosync_cast;
+#[cfg(test)]
+#[path = "../tests/common/mod.rs"]
+mod fake_device;

@@ -85,3 +85,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn user_agent() -> String {
     format!("AudioSync/{VERSION}")
 }
+
+#[cfg(test)]
+mod test_hooks {
+    thread_local! {
+        /// Makes `transport::spawn` on this thread fail, as when the system
+        /// has no thread to give.
+        pub(crate) static SPAWN_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+}

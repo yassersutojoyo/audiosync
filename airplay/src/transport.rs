@@ -152,6 +152,10 @@ pub(crate) fn spawn(
     body: impl FnOnce() + Send + 'static,
     on_panic: impl FnOnce() + Send + 'static,
 ) -> io::Result<JoinHandle<()>> {
+    #[cfg(test)]
+    if crate::test_hooks::SPAWN_FAILS.with(std::cell::Cell::get) {
+        return Err(io::Error::other("no thread (test)"));
+    }
     thread::Builder::new().name(name.to_owned()).spawn(move || {
         if panic::catch_unwind(AssertUnwindSafe(body)).is_err() {
             on_panic();

@@ -525,8 +525,13 @@ impl CastSession {
             announced: Arc::new(AtomicBool::new(false)),
         };
         if let Err(error) = session.load_with_fallback() {
+            let error = if session.server.failed() {
+                SessionError::Internal
+            } else {
+                error.into()
+            };
             session.teardown(teardown_budget(&session.quitting));
-            return Err(error.into());
+            return Err(error);
         }
         // Recorded only once the start succeeded, as a failed one drops its
         // events; a group's leader may hand over to another device (C97).
@@ -737,6 +742,9 @@ impl CastSession {
                 }
             }
             self.collect_server_events();
+            if self.server.failed() {
+                return self.end(SessionEnd::Failed(SessionError::Internal));
+            }
             if self.playing && Instant::now() >= self.next_diagnostics {
                 let diagnostics = self.diagnostics();
                 self.report(SessionEvent::Diagnostics(diagnostics));
@@ -800,6 +808,14 @@ impl CastSession {
         if self.ended {
             return;
         }
+        // A load after the pump's fault fails at the device, which would
+        // read as the device refusing the stream.
+        let end = match end {
+            SessionEnd::Failed(_) if self.server.failed() => {
+                SessionEnd::Failed(SessionError::Internal)
+            }
+            end => end,
+        };
         self.teardown(teardown_budget(&self.quitting));
         self.report(SessionEvent::Ended(end));
     }
@@ -1232,6 +1248,8 @@ impl Drop for UnsentWarning {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audio::{AudioWriter, audio_ring};
+    use crate::fake_device::{Behavior, Command, FakeDevice, OnLoad, media_status};
 
     fn failure() -> SessionEvent {
         SessionEvent::ConnectFailed {
@@ -1321,6 +1339,85 @@ mod tests {
             matches!(events.make_contiguous(), [SessionEvent::Volume(_, true)]),
             "{events:?}"
         );
+    }
+
+    /// A session playing to `device`, with the writer that feeds it.
+    fn playing(device: &FakeDevice) -> (AudioWriter, CastSession) {
+        let (writer, reader) = audio_ring(48_000);
+        let config = SessionConfig {
+            addresses: vec![device.address],
+            format: StreamFormat::wav(48_000).expect("rate"),
+            metadata: Metadata::default(),
+            artwork: None,
+            group: None,
+            records: None,
+            fingerprints: None,
+            auth: None,
+        };
+        let selected = Arc::new(AtomicBool::new(true));
+        let session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
+        (writer, session)
+    }
+
+    /// Runs `session` until it ends, up to 5 s; returns every event seen.
+    fn run_to_end(session: &mut CastSession) -> Vec<SessionEvent> {
+        let until = Instant::now() + Duration::from_secs(5);
+        let mut seen = Vec::new();
+        while !session.ended && Instant::now() < until {
+            session.run_for(Duration::from_millis(50));
+            seen.extend(std::iter::from_fn(|| session.poll_event()));
+        }
+        seen
+    }
+
+    fn ended_internal(event: &SessionEvent) -> bool {
+        matches!(
+            event,
+            SessionEvent::Ended(SessionEnd::Failed(SessionError::Internal))
+        )
+    }
+
+    // covers: C107
+    #[test]
+    fn a_panic_in_the_stream_pump_ends_the_session_as_a_fault_of_the_sender() {
+        let device = FakeDevice::start(Behavior::default());
+        let (_writer, mut session) = playing(&device);
+        session.server.panic_in("cast-pump");
+        let seen = run_to_end(&mut session);
+        assert!(seen.iter().any(ended_internal), "{seen:?}");
+    }
+
+    // A reload after the pump's fault fails at the device, as a fetch of a
+    // stopped stream does; that end is still the sender's fault.
+    // covers: C107
+    #[test]
+    fn a_reload_that_fails_after_the_pump_panicked_ends_as_a_fault_of_the_sender() {
+        let device = FakeDevice::start(Behavior {
+            load_script: vec![
+                OnLoad::Play,
+                OnLoad::Error("LOAD_FAILED", serde_json::json!({})),
+            ],
+            ..Behavior::default()
+        });
+        let (_writer, mut session) = playing(&device);
+        session.server.panic_in("cast-pump");
+        let until = Instant::now() + Duration::from_secs(5);
+        while !session.server.failed() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let media_session_id = session.media_session_id().expect("playing");
+        device.send(Command::Send(media_status(
+            "transport-1",
+            0,
+            media_session_id,
+            "IDLE",
+            Some("FINISHED"),
+        )));
+        // Waiting on the device first lets the reload come before the
+        // session's own check of the pump.
+        thread::sleep(Duration::from_millis(200));
+        let seen = run_to_end(&mut session);
+        assert!(seen.iter().any(ended_internal), "{seen:?}");
     }
 
     #[test]
