@@ -2029,8 +2029,8 @@ impl AscAirPlay {
                     .filter(|member| {
                         !member.in_view() || silent.contains(&receiver_id(&member.key))
                     })
-                    // The host splits the list at newlines.
-                    .map(|member| member.name.replace('\n', " "))
+                    // The host splits the list at newlines; names carry none (P236).
+                    .map(|member| member.name.clone())
                     .collect::<Vec<_>>()
                     .join("\n");
                 let airplay2 = found.members.iter().any(|member| {

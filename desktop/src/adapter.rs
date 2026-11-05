@@ -1878,8 +1878,12 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// The name an AirPlay speaker shows: the user's, else the one last
     /// listed.
     fn airplay_name(&self, id: &str) -> String {
-        let system = self.airplay_names.get(id).map_or(id, String::as_str);
-        self.custom_names.shown(&airplay_key(id), system)
+        let system = self
+            .airplay_names
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| shown_text(id));
+        self.custom_names.shown(&airplay_key(id), &system)
     }
 
     fn is_enabled(&self, endpoint_id: &str) -> bool {
@@ -18866,6 +18870,21 @@ mod tests {
         let notices = messages(&adapter);
         assert!(
             matches!(&notices[..], [NoticeMessage::AirPlayMemberNeedsPassword { member, .. }] if member == "raop:Den Fake"),
+            "{notices:?}"
+        );
+    }
+
+    // covers: P236
+    #[test]
+    fn an_unlisted_speakers_id_shows_without_hidden_characters() {
+        let mut adapter = adapter();
+        adapter.handle(BackendEvent::AirPlayTrouble {
+            id: "raop:Den\n\u{202E}Fake".into(),
+            problem: AirPlayProblem::TooManyAirPlay2Speakers,
+        });
+        let notices = messages(&adapter);
+        assert!(
+            matches!(&notices[..], [NoticeMessage::AirPlayRetrying { speaker, .. }] if speaker == "raop:Den Fake"),
             "{notices:?}"
         );
     }
