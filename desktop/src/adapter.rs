@@ -4336,7 +4336,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
             BackendEvent::CastIdentified { from, to } => self.cast_identified(&from, &to),
             BackendEvent::CastPlaying { id } => {
-                self.notices.clear(&[NoticeSubject::Cast(id)]);
+                // The warning of C131 comes just before playing and shows once.
+                self.clear_if(NoticeSubject::Cast(id), |message| {
+                    !matches!(
+                        message,
+                        NoticeMessage::CastCantPlay {
+                            problem: ui_model::CastProblem::Unauthenticated,
+                            ..
+                        }
+                    )
+                });
                 self.note_speakers();
             }
             BackendEvent::CastFailed { id, problem } => self.cast_cant_play(&id, problem),
