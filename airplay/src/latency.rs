@@ -122,7 +122,7 @@ pub fn latency_needed_frames(micros: u64) -> u32 {
 }
 
 /// The stream's Lf from every speaker's R_s in microseconds:
-/// `clamp(max(77 175, R_max + 22 050), 11 025, 88 200)` frames, 77 175 for
+/// `clamp(max(77 175, R_max + 22 050), 4410, 88 200)` frames, 77 175 for
 /// an empty list (P200).
 pub fn session_latency_frames<I>(reported_us: I) -> u32
 where
@@ -132,6 +132,29 @@ where
         .into_iter()
         .max()
         .map_or(DEFAULT_LATENCY_FRAMES, latency_needed_frames)
+}
+
+/// The environment variable that overrides Lf in whole milliseconds on the
+/// Windows and Linux hosts (P200).
+pub const AIRPLAY_LATENCY_ENV: &str = "AUDIOSYNC_AIRPLAY_LATENCY_MS";
+
+/// The Lf of a user's override of `ms` milliseconds, clamped to the range of
+/// P98 (P200).
+pub fn override_latency_frames(ms: u64) -> u32 {
+    let frames = ms.saturating_mul(FRAMES_PER_SECOND) / 1000;
+    frames.clamp(u64::from(MIN_LATENCY_FRAMES), u64::from(MAX_LATENCY_FRAMES)) as u32
+}
+
+/// The override [`AIRPLAY_LATENCY_ENV`] holds, `None` when it is unset or 0,
+/// or why the value is ignored when it isn't whole milliseconds (P200).
+pub fn latency_override(value: Option<&str>) -> Result<Option<u32>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    value
+        .parse::<u64>()
+        .map(|ms| (ms > 0).then(|| override_latency_frames(ms)))
+        .map_err(|_| format!("{AIRPLAY_LATENCY_ENV}={value:?} is not whole milliseconds; ignored"))
 }
 
 /// True when Lf would have to exceed 88 200 frames for R_s `micros` (the

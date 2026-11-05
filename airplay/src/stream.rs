@@ -44,8 +44,8 @@ use crate::volume::Volume;
 
 /// The base latency Lf by default: 77 175 frames, 1.75 s (P98).
 pub const DEFAULT_LATENCY_FRAMES: u32 = 77_175;
-/// The smallest Lf the host may set: 0.25 s (P98).
-pub const MIN_LATENCY_FRAMES: u32 = 11_025;
+/// The smallest Lf the host may set: 0.1 s (P98).
+pub const MIN_LATENCY_FRAMES: u32 = 4_410;
 /// The largest Lf the host may set: 2.0 s (P98).
 pub const MAX_LATENCY_FRAMES: u32 = 88_200;
 /// The largest per-speaker delay (P99): the host's own 20 s delay range, so
@@ -68,7 +68,7 @@ const DUE_TOLERANCE: f64 = 1e-6;
 /// How a stream starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamConfig {
-    /// Lf, clamped to 11 025 to 88 200 frames (P98).
+    /// Lf, clamped to 4410 to 88 200 frames (P98).
     pub latency_frames: u32,
     /// The input ring's size in frames, at least 1 s (P111).
     pub input_frames: usize,
@@ -1322,7 +1322,7 @@ impl Stream {
         }
     }
 
-    /// Sets Lf, clamped to 11 025 to 88 200 frames (P98). While no speaker
+    /// Sets Lf, clamped to 4410 to 88 200 frames (P98). While no speaker
     /// has reached its first-sound time a change flushes every speaker:
     /// each goes on with its next packet, flagged as the first, and states
     /// the new latency from then on. Once one sounds the value is held

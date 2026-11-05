@@ -1905,7 +1905,7 @@ void asc_airplay_pause(AscAirPlay *airplay);
 void asc_airplay_resume(AscAirPlay *airplay);
 
 /*
- * Sets the stream's base latency Lf in frames, clamped to 11025 to 88200.
+ * Sets the stream's base latency Lf in frames, clamped to 4410 to 88200.
  * While no speaker sounds it applies at once and a timeline event reports
  * the new L; later it is held (ASC_AIRPLAY_EVENT_LATENCY_HELD) until the
  * stream has no speaker or the timeline restarts. NULL does nothing.
@@ -1921,7 +1921,7 @@ bool asc_airplay_sounding(const AscAirPlay *airplay);
 /*
  * The stream's Lf in frames from every speaker's reported latency, count
  * values in microseconds (a negative one counts as 0):
- * clamp(max(77175, R_max + 22050), 11025, 88200). NULL or a count of 0
+ * clamp(max(77175, R_max + 22050), 4410, 88200). NULL or a count of 0
  * gives 77175.
  */
 uint32_t asc_airplay_session_latency_frames(const int64_t *reported_us, size_t count);

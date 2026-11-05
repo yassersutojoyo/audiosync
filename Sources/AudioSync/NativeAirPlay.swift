@@ -453,9 +453,18 @@ final class NativeAirPlay {
         applyPause(explicitPause.clear(), cause: "new capture")
     }
 
-    /// The core's Lf rule over reported latencies in microseconds (P200).
+    /// The Lf the user set in whole milliseconds under the hidden defaults key
+    /// AirPlayLatencyMs, clamped to 100...2000 ms, or nil when unset (P200).
+    static var latencyOverrideFrames: UInt32? {
+        let ms = UserDefaults.standard.integer(forKey: "AirPlayLatencyMs")
+        return ms > 0 ? UInt32(min(max(ms, 100), 2000) * 441 / 10) : nil
+    }
+
+    /// The core's Lf rule over reported latencies in microseconds, or the
+    /// user's override when set (P200).
     static func sessionLatencyFrames(_ reportedUs: [Int64]) -> UInt32 {
-        reportedUs.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
+        if let frames = latencyOverrideFrames { return frames }
+        return reportedUs.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
     }
 
     /// Sets the stream's Lf and E from the latencies the rows in the sender

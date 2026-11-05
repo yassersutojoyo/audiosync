@@ -74,7 +74,8 @@ use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::input::InputWriter;
 use audiosync_airplay::latency::{
-    LatencySources, exceeds_largest_latency, frames_to_micros, session_latency_frames,
+    AIRPLAY_LATENCY_ENV, LatencySources, exceeds_largest_latency, frames_to_micros,
+    latency_override, session_latency_frames,
 };
 use audiosync_airplay::metadata::MetadataError;
 use audiosync_airplay::pairing::{Credentials, PairingEvent, PinError};
@@ -1235,6 +1236,9 @@ pub struct AirPlaySpeakers {
     /// The speakers warned this session that their R_s needs more than the
     /// largest Lf (P200).
     latency_warned: BTreeSet<String>,
+    /// The Lf the user set through [`AIRPLAY_LATENCY_ENV`], used instead of
+    /// the rule of P200.
+    latency_override: Option<u32>,
     /// Added to every speaker's d_s while a Google Cast speaker plays later
     /// than L (C77), in ms.
     hold_back_ms: f64,
@@ -1290,6 +1294,14 @@ impl AirPlaySpeakers {
         store: PairingStore,
     ) -> AirPlaySpeakers {
         let latency = link.latency();
+        let latency_override =
+            match latency_override(std::env::var(AIRPLAY_LATENCY_ENV).ok().as_deref()) {
+                Ok(frames) => frames,
+                Err(why) => {
+                    log.log(|| format!("AirPlay: {why}"));
+                    None
+                }
+            };
         let mut speakers = AirPlaySpeakers {
             link,
             listed: BTreeMap::new(),
@@ -1332,6 +1344,7 @@ impl AirPlaySpeakers {
             row_estimates: BTreeMap::new(),
             latency_held: false,
             latency_warned: BTreeSet::new(),
+            latency_override,
             hold_back_ms: 0.0,
             calibration_solo: None,
             volume_read_at: Instant::now(),
@@ -1675,11 +1688,13 @@ impl AirPlaySpeakers {
     /// reported (S280, P200), then sets E (S283).
     fn sync_latency(&mut self, rows: &[String]) {
         let members: Vec<String> = rows.iter().flat_map(|row| self.members_of(row)).collect();
-        let frames = session_latency_frames(
-            members
-                .iter()
-                .map(|id| self.reported_us.get(id).copied().unwrap_or(0)),
-        );
+        let frames = self.latency_override.unwrap_or_else(|| {
+            session_latency_frames(
+                members
+                    .iter()
+                    .map(|id| self.reported_us.get(id).copied().unwrap_or(0)),
+            )
+        });
         for id in &members {
             let reported = self.reported_us.get(id).copied().unwrap_or(0);
             if exceeds_largest_latency(reported) && self.latency_warned.insert(id.clone()) {
@@ -12037,6 +12052,22 @@ pub mod tests {
         assert_eq!(latencies(&fake.take_calls()), [79_380]);
         airplay.set_enabled(&id_of(&den), false).unwrap();
         assert_eq!(latencies(&fake.take_calls()), [77_175], "Den left");
+    }
+
+    // covers: P200
+    #[test]
+    fn airplay_latency_override_replaces_the_rule_whatever_the_speakers_report() {
+        let fake = FakeAirPlay::new();
+        let (mut airplay, kitchen, den) = kitchen_and_den(&fake, 0.0);
+        airplay.latency_override = Some(4_410);
+        fake.report_latency(&kitchen, 200_000, LatencySources::AUDIO_LATENCY);
+        airplay.poll();
+        assert_eq!(latencies(&fake.take_calls()), [4_410]);
+        fake.report_latency(&den, 1_300_000, LatencySources::ARRIVAL_TO_RENDER);
+        airplay.poll();
+        assert!(latencies(&fake.take_calls()).is_empty());
+        airplay.set_enabled(&id_of(&den), false).unwrap();
+        assert!(latencies(&fake.take_calls()).is_empty(), "Den left");
     }
 
     // covers: S280

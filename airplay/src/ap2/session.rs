@@ -28,6 +28,7 @@ use crate::secret::Secret;
 use crate::session::{
     CONNECT_TIMEOUT, Connection, RESPONSE_TIMEOUT, TEARDOWN_TIMEOUT, TIMING_SILENCE, UdpSendResult,
 };
+use crate::stream::DEFAULT_LATENCY_FRAMES;
 use crate::volume::Volume;
 
 use super::audio::StreamKey;
@@ -108,6 +109,9 @@ pub struct Ap2Config {
     /// How often `POST /feedback` goes out, [`FEEDBACK_INTERVAL`] (P132); a
     /// test picks a shorter one.
     pub feedback_interval: Duration,
+    /// The stream's Lf as the session starts, for the stream SETUP's
+    /// `latencyMin` (P44).
+    pub latency_frames: u32,
 }
 
 impl Ap2Config {
@@ -129,6 +133,7 @@ impl Ap2Config {
             read_volume: false,
             offload_srp: false,
             feedback_interval: FEEDBACK_INTERVAL,
+            latency_frames: DEFAULT_LATENCY_FRAMES,
         }
     }
 }
@@ -1581,8 +1586,12 @@ impl Ap2Session {
             }
             Kind::StreamSetup => {
                 request.headers.push("Content-Type", PLIST_CONTENT_TYPE);
-                request.body =
-                    bodies::stream_setup(&self.stream_key, local_control, self.ids.session_id);
+                request.body = bodies::stream_setup(
+                    &self.stream_key,
+                    local_control,
+                    self.ids.session_id,
+                    self.config.latency_frames,
+                );
             }
             Kind::Flush => {
                 request.headers.push(
