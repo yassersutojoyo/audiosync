@@ -148,19 +148,19 @@ impl DeviceKeyBook {
 
     /// The book kept at `path`, read through `read` and rewritten whole
     /// through `write` at each change. A file that is there but can't be
-    /// read starts an empty book, with the error for the host's log.
+    /// read starts an empty book, and a line that doesn't read is left out;
+    /// either comes with the error for the host's log.
     pub fn open(
         path: PathBuf,
         read: impl FnOnce(&Path) -> io::Result<Vec<u8>>,
         write: impl FnMut(&Path, &[u8]) -> io::Result<()> + Send + 'static,
     ) -> (DeviceKeyBook, Option<io::Error>) {
-        let parsed = read(&path).and_then(|bytes| {
+        let text = read(&path).and_then(|bytes| {
             String::from_utf8(bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
-                .and_then(|text| parse_book(&text))
         });
-        let (entries, error) = match parsed {
-            Ok(entries) => (entries, None),
+        let (entries, error) = match text {
+            Ok(text) => parse_book(&text),
             Err(error) if error.kind() == io::ErrorKind::NotFound => (HashMap::new(), None),
             Err(error) => (HashMap::new(), Some(error)),
         };
@@ -225,11 +225,13 @@ impl DeviceKeyBook {
     }
 }
 
-fn parse_book(text: &str) -> io::Result<HashMap<String, Entry>> {
+/// The entries of `text`, and the error of its first line that doesn't read.
+fn parse_book(text: &str) -> (HashMap<String, Entry>, Option<io::Error>) {
+    let mut error = None;
     // `lines` also takes CRLF endings, as an editor on Windows may save.
-    text.lines()
+    let entries = (text.lines())
         .filter(|line| !line.trim().is_empty())
-        .map(|line| {
+        .filter_map(|line| {
             let (key, value) = line.split_once(' ').unwrap_or((line, ""));
             let entry = match value {
                 "unauthenticated" => Some(Entry::Unauthenticated),
@@ -245,8 +247,11 @@ fn parse_book(text: &str) -> io::Result<HashMap<String, Entry>> {
                     ),
                 )),
             }
+            .map_err(|bad| error = error.take().or(Some(bad)))
+            .ok()
         })
-        .collect()
+        .collect();
+    (entries, error)
 }
 
 fn pin_from_hex(hex: &str) -> Option<KeyPin> {
