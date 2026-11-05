@@ -192,3 +192,20 @@ fn removing_a_device_clears_its_pin_or_mark() {
     let decision = book.judge("a", &NO_ANSWER, false);
     assert!(decision.warn, "judged as a device with no entry");
 }
+
+// covers: C129
+#[test]
+fn a_device_added_by_address_takes_its_entry_to_its_id() {
+    let mut book = DeviceKeyBook::new();
+    book.judge("manual", &verified(OLD), false);
+    assert_eq!(
+        book.move_entry("manual", "id").as_deref(),
+        Some("cast auth id: entry moved from manual")
+    );
+    assert_eq!(book.entry("manual"), None);
+    assert_eq!(book.entry("id"), Some(Entry::Pin(OLD)));
+    book.judge("other", &NO_ANSWER, false);
+    assert_eq!(book.move_entry("other", "id"), None, "the id keeps its own");
+    assert_eq!(book.entry("id"), Some(Entry::Pin(OLD)));
+    assert_eq!(book.move_entry("none", "fresh"), None);
+}
