@@ -22,6 +22,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - Another device on your network can no longer push your Google Cast speakers out of the list by announcing lots of made-up ones, or take one off the list by announcing that it left. A speaker that says goodbye now leaves the list about 10 seconds later, once it no longer answers.
 - AudioSync now connects to a Google Cast speaker it finds only at an address on your own network, never at this computer's own address or a host on the internet that a fake announcement names. A speaker you add by its address is still used as you typed it.
 - A phone paired with the Web Remote now keeps its pairing apart from any other AudioSync it meets at the same address, such as on another Wi-Fi network: pairing with that one or unpairing from it no longer replaces or clears the pairing with your own computer. Phones already paired move over on their own, without pairing again.
+- If someone copies your phone's Web Remote sign-in and uses it before your phone does, the remote now notices when your phone comes back with its older sign-in and unpairs that pairing, so the copy stops working and your phone asks for the pairing code again. Before, your phone was signed out while the copy kept working.
 
 ## [0.8.7] - 2026-11-05
 

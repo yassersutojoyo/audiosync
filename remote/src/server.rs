@@ -235,6 +235,10 @@ pub enum ServerEvent {
     },
     /// A pairing beyond [`MAX_DEVICES`] forgot the device that paired first.
     OldestForgotten,
+    /// A token its device had replaced came back after the grace, so the device was unpaired.
+    TokenReused {
+        from: IpAddr,
+    },
     /// A request with a foreign `Host` or `Origin` (403).
     Refused {
         from: IpAddr,
@@ -289,6 +293,10 @@ impl fmt::Display for ServerEvent {
             ServerEvent::OldestForgotten => write!(
                 f,
                 "remote: pairing more than {MAX_DEVICES} devices forgot the one that paired first"
+            ),
+            ServerEvent::TokenReused { from } => write!(
+                f,
+                "remote: a replaced token came back from {from}; its device is unpaired"
             ),
             ServerEvent::Refused { from, status } => {
                 write!(f, "remote: refused a request from {from} ({status})")
@@ -563,6 +571,9 @@ impl Shared {
         let (device, snapshot) = lock(&self.devices).check(token, from, SystemTime::now());
         if device.is_none() && snapshot.is_some() {
             self.wake_streams();
+        }
+        if snapshot.as_ref().is_some_and(Snapshot::token_reused) {
+            self.report(ServerEvent::TokenReused { from });
         }
         if let Some(snapshot) = snapshot {
             self.save(snapshot);
@@ -2151,6 +2162,42 @@ mod tests {
         assert!(devices.contains(&new, later));
         assert!(!devices.contains(&old, later));
         drop(devices);
+        server.stop();
+    }
+
+    // covers: S427
+    #[test]
+    fn a_replaced_token_after_the_grace_unpairs_the_device_and_is_logged() {
+        let (server, local, host) = local_server();
+        let phone = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let old = auth::random_token().unwrap();
+        let paired_at = SystemTime::now() - Duration::from_secs(60 * 60);
+        let mut devices = lock(&server.shared.devices);
+        let _ = devices.add(&old, phone, paired_at);
+        let due = paired_at + auth::ROTATE_AFTER;
+        let (new, _) = devices.rotate(&old, due).unwrap().expect("a new token");
+        assert!(devices.check(&new, phone, due).0.is_some());
+        drop(devices);
+        while server.poll_event().is_some() {}
+
+        let request = state_request(&host, local.port(), &server.shared.install, &old);
+        assert_eq!(
+            status(route(&request, &host, phone, local, &server.shared)),
+            401
+        );
+        let renewed = state_request(&host, local.port(), &server.shared.install, &new);
+        assert_eq!(
+            status(route(&renewed, &host, phone, local, &server.shared)),
+            401
+        );
+        assert_eq!(server.device_count(), 0);
+        let lines: Vec<String> = std::iter::from_fn(|| server.poll_event())
+            .map(|event| event.to_string())
+            .collect();
+        assert_eq!(
+            lines,
+            ["remote: a replaced token came back from 127.0.0.1; its device is unpaired"]
+        );
         server.stop();
     }
 
