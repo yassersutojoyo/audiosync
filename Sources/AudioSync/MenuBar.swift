@@ -374,7 +374,9 @@ final class AppModel: ObservableObject {
         for draft in drafts.values { draft.field.drop() }
     }
     /// Every way a panel opens or closes animates the same.
-    static var delayPanelAnimation: Animation? { Motion.panel(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) }
+    static var delayPanelAnimation: Animation? {
+        Motion.panel(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
     /// A click on a row's delay value or on its row: the other panels'
     /// typing applies first, and they stay open.
     func toggleDelayPanel(_ id: String) {
@@ -2183,14 +2185,20 @@ struct InputLevelMeter: View {
     @ObservedObject var level: InputLevel
     let text: UIStrings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var drawn: Float = 0
 
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
                 Capsule().fill(Brand.meterTrack)
                 Capsule().fill(Brand.tealText)
-                    .frame(width: geometry.size.width * CGFloat(min(max(level.level, 0), 1)))
-                    .animation(Motion.meter(reduceMotion: reduceMotion), value: level.level)
+                    .frame(width: geometry.size.width * CGFloat(min(max(drawn, 0), 1)))
+            }
+        }
+        // A peak shows at once; only the fall glides, so no reading is late.
+        .onChange(of: level.level, initial: true) { old, new in
+            withAnimation(new < old ? Motion.meter(reduceMotion: reduceMotion) : nil) {
+                drawn = new
             }
         }
         .frame(height: 4)

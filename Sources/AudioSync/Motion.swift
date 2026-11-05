@@ -16,8 +16,8 @@ enum Motion {
         .easeInOut(duration: reduceMotion ? 0.1 : 0.2)
     }
 
-    /// The input meter glides over one poll to the next reading, so its ten
-    /// readings a second don't show as steps.
+    /// The input meter's fall glides over one poll to the next reading, so its
+    /// ten readings a second don't show as steps; a rise shows at once.
     static func meter(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .linear(duration: Double(ASC_METER_POLL_MS) / 1000)
     }
