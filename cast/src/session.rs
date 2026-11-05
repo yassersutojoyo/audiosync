@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,7 @@ use crate::channel::{Event, PlaybackEnd, new_volume_ask};
 use crate::client::{
     CastClient, DeviceAuth, Fingerprint, FingerprintBook, FingerprintChange, QUIT_BUDGET,
 };
+use crate::device_keys::DeviceKeyBook;
 use crate::discovery::DeviceId;
 use crate::error::{Backoff, ConnectError, EndReason, LaunchError, ReconnectPacer};
 use crate::group::{GroupMember, GroupRecords, MemberList, MultizoneMessage};
@@ -434,6 +435,12 @@ impl CastSession {
             None => connect_retrying(&config.addresses, &selected, auth, on_failure)?,
         };
         let decision = client.take_auth();
+        // A failed start drops its events, so it takes back the mark whose
+        // warning (C131) would go with them, and the next start warns again.
+        let mut unsent = UnsentWarning(
+            auth.filter(|_| decision.as_ref().is_some_and(|decision| decision.warn))
+                .map(|auth| (Arc::clone(&auth.book), auth.key.clone())),
+        );
         if group.is_some() {
             client.request_members();
         }
@@ -537,6 +544,7 @@ impl CastSession {
                 warn: decision.warn,
             });
         }
+        unsent.0 = None;
         Ok(session)
     }
 
@@ -1205,6 +1213,19 @@ fn make_room(events: &mut VecDeque<SessionEvent>) {
     });
     if let Some(index) = oldest {
         events.remove(index);
+    }
+}
+
+/// A device key book entry to clear when dropped, unless taken first.
+struct UnsentWarning(Option<(Arc<Mutex<DeviceKeyBook>>, String)>);
+
+impl Drop for UnsentWarning {
+    fn drop(&mut self) {
+        if let Some((book, key)) = self.0.take() {
+            book.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clear(&key);
+        }
     }
 }
 
