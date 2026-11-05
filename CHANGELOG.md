@@ -11,6 +11,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - A phone paired with the Web Remote now only works from the network address it paired from, and its sign-in cookie is swapped for a new one every 10 minutes while you use it. If your phone gets a new address on the Wi-Fi, the remote asks for the pairing code again.
 - Other apps on your Mac can no longer run their own code inside AudioSync to use its microphone and audio recording permission.
 - Another device on your network has a harder time posing as one of your Google Cast speakers to receive your audio. AudioSync streams only to the address it connected to and ignores announcements that try to move a known speaker somewhere else.
+- AudioSync no longer sends an AirPlay speaker's password in the older, weaker form to a speaker that supports AirPlay 2, where another device on your network could catch it and guess the password at leisure. Speakers that only support the original AirPlay keep working with their password as before.
 - Each release now includes the Mac, Windows and Linux install scripts, so they can be fetched from the release instead of the main branch, and each script downloads the app and its checksums only from that one release.
 
 ### Fixed

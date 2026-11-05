@@ -2024,6 +2024,15 @@ impl Ap2Session {
                 Some("digest challenge offers only unsupported qop options"),
             );
         }
+        // Every device on this path is AirPlay 2 capable (P232).
+        if !challenge.qop_auth {
+            return self.fail(
+                ErrorKind::ProtocolError,
+                Some(method),
+                Some(401),
+                Some(digest::NO_QOP_REFUSED),
+            );
+        }
         if self.config.password.is_none() {
             return self.fail(ErrorKind::PasswordRequired, Some(method), Some(401), None);
         }

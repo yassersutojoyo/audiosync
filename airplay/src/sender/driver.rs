@@ -1211,7 +1211,8 @@ impl Driver {
                     u64::from_be_bytes(client),
                     now,
                 )
-                .with_password(password),
+                .with_password(password)
+                .for_airplay2_capable(device.verdict.airplay2),
             ))
         };
         self.pairing_sessions.insert(session_key, key.clone());
@@ -2351,6 +2352,7 @@ impl Driver {
         config.needs_pairing = needs_pairing;
         config.verifier = verifier.map(|verifier| Box::new(verifier) as _);
         config.password = options.password.clone();
+        config.airplay2_capable = device.verdict.airplay2;
         config.software_volume = software_volume;
         config.software_mute = software_mute;
         config.metadata = device.metadata_support();

@@ -1207,3 +1207,34 @@ fn auth_setup_sends_a_fresh_x25519_public_key_and_any_answer_goes_on() {
         assert_eq!(warned, status != 200);
     }
 }
+
+// covers: P232
+#[test]
+fn an_airplay2_capable_apple_tv_sends_no_password_to_a_digest_without_qop() {
+    for qop in [false, true] {
+        let atv = FakeAppleTv::new(PIN);
+        let mut receiver = apple_tv_receiver(&atv);
+        let mut gate = PasswordGate::new("secret");
+        gate.qop = qop;
+        receiver.gate = Some(gate);
+        let link = PairLink::with_password(receiver, Some("secret"));
+        let mut link = PairLink {
+            pairing: link.pairing.for_airplay2_capable(true),
+            ..link
+        };
+        link.connect();
+        let requests = &link.receiver.requests;
+        let authorized = requests
+            .iter()
+            .any(|request| request.headers.get("Authorization").is_some());
+        if qop {
+            assert_eq!(link.events, [PairingEvent::PinRequested]);
+            assert!(authorized);
+        } else {
+            let (error, _) = link.failure().expect("failed");
+            assert_eq!(error.kind, ErrorKind::ProtocolError);
+            assert!(error.detail.expect("detail").contains("qop=auth"));
+            assert!(!authorized, "the password stays home");
+        }
+    }
+}

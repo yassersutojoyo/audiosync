@@ -12,6 +12,11 @@ use crate::rtsp::{Headers, Method};
 /// The user name for the audio service (P36).
 pub const USERNAME: &str = "iTunes";
 
+/// Why an AirPlay 2 capable speaker's digest challenge without `qop=auth`
+/// gets no answer (P232).
+pub const NO_QOP_REFUSED: &str =
+    "digest challenge without qop=auth from an AirPlay 2 capable speaker; password not sent";
+
 /// A `WWW-Authenticate: Digest ...` challenge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Challenge {

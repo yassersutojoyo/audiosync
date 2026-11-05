@@ -472,6 +472,8 @@ pub struct Pairing {
     /// The speaker's password, if the host has one (P39, P46). Never
     /// logged: `Debug` leaves it out. Wiped from memory when dropped.
     password: Option<Secret>,
+    /// A digest challenge without `qop=auth` is refused (P232).
+    airplay2_capable: bool,
     auth: Option<Auth>,
     state: PairingState,
     parser: Parser,
@@ -505,6 +507,7 @@ impl Pairing {
             ids,
             client_id: client_id(client),
             password: None,
+            airplay2_capable: false,
             auth: None,
             state: PairingState::Connecting,
             parser: Parser::new(),
@@ -533,6 +536,14 @@ impl Pairing {
     /// [`Pairing::new`], before the connect completes.
     pub fn with_password(mut self, password: Option<Secret>) -> Pairing {
         self.password = password;
+        self
+    }
+
+    /// The same pairing for an AirPlay 2 capable device (P16): a digest
+    /// challenge without `qop=auth` then ends it as a protocol error, and
+    /// the password is never sent (P232).
+    pub fn for_airplay2_capable(mut self, capable: bool) -> Pairing {
+        self.airplay2_capable = capable;
         self
     }
 
@@ -939,6 +950,16 @@ impl Pairing {
                 method,
                 401,
                 Some("digest challenge offers only qop=auth-int or other unsupported options"),
+                false,
+            );
+            return;
+        }
+        if self.airplay2_capable && !challenge.qop_auth {
+            self.fail_status(
+                ErrorKind::ProtocolError,
+                method,
+                401,
+                Some(digest::NO_QOP_REFUSED),
                 false,
             );
             return;

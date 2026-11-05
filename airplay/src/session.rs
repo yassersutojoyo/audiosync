@@ -117,6 +117,9 @@ pub struct SessionConfig {
     /// The speaker's password, if the host has one (P39). Never logged: the
     /// `Debug` output hides it. Wiped from memory when dropped.
     pub password: Option<Secret>,
+    /// The device is AirPlay 2 capable (P16): a digest challenge without
+    /// `qop=auth` is refused and the password stays unsent (P232).
+    pub airplay2_capable: bool,
     /// The public key for `POST /auth-setup`, when the receiver needs it
     /// (P60, [`Device::needs_auth_setup`](crate::discovery::Device::needs_auth_setup)):
     /// a fresh one per connection from
@@ -146,6 +149,7 @@ impl SessionConfig {
             apple_tv_without_credentials: false,
             needs_pairing: false,
             password: None,
+            airplay2_capable: false,
             auth_setup_key: None,
             verifier: None,
             initial_volume,
@@ -168,6 +172,7 @@ impl fmt::Debug for SessionConfig {
             )
             .field("needs_pairing", &self.needs_pairing)
             .field("password", &self.password.as_ref().map(|_| "<hidden>"))
+            .field("airplay2_capable", &self.airplay2_capable)
             .field("auth_setup_key", &self.auth_setup_key.is_some())
             .field("verifier", &self.verifier.is_some())
             .field("initial_volume", &self.initial_volume)
@@ -1395,6 +1400,15 @@ impl Session {
                 Some(method),
                 Some(401),
                 Some("digest challenge offers only qop=auth-int or other unsupported options"),
+            );
+            return;
+        }
+        if self.config.airplay2_capable && !challenge.qop_auth {
+            self.fail(
+                ErrorKind::ProtocolError,
+                Some(method),
+                Some(401),
+                Some(digest::NO_QOP_REFUSED),
             );
             return;
         }

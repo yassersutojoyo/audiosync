@@ -14,6 +14,8 @@ use audiosync_airplay::discovery::{
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason};
 use audiosync_airplay::homekit::HomeKitCredentials;
 use audiosync_airplay::pairing::{Credentials, SECRET_BYTES};
+use audiosync_airplay::rtsp::Request;
+use audiosync_airplay::secret::Secret;
 use audiosync_airplay::sender::{
     AIRPLAY2_AUTO, AIRPLAY2_AUTO_ENV, Sender, SenderConfig, SenderEvent, SpeakerEvent,
     SpeakerOptions, SpeakerState, airplay2_auto,
@@ -21,8 +23,8 @@ use audiosync_airplay::sender::{
 use audiosync_airplay::volume::Volume;
 
 use common::ap2::{Ap2Server, FakeAp2, dict, int, plist};
-use common::key;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
+use common::{PasswordGate, key};
 
 const LONG: Duration = Duration::from_secs(15);
 
@@ -466,4 +468,82 @@ fn a_homekit_paired_dual_device_never_falls_back_to_airplay1() {
     );
     sender.shutdown();
     assert!(airplay1_keys(&airplay1).is_empty());
+}
+
+/// An AirPlay 1 receiver that challenges every request with a digest,
+/// offering `qop=auth` or not.
+fn gated(qop: bool) -> NetReceiver {
+    let mut gate = PasswordGate::new("hunter2");
+    gate.qop = qop;
+    NetReceiver::start(Behavior {
+        gate: Some(gate),
+        ..Behavior::default()
+    })
+}
+
+fn with_password() -> SpeakerOptions {
+    let mut options = options();
+    options.password = Some(Secret::from("hunter2"));
+    options
+}
+
+fn authorized(receiver: &NetReceiver) -> usize {
+    let log = receiver.log();
+    let carried = |(_, request): &&(_, Request)| request.headers.contains("Authorization");
+    log.requests.iter().filter(carried).count()
+}
+
+// covers: P232, P231
+#[test]
+fn a_dual_device_sends_no_password_to_an_airplay1_digest_without_qop() {
+    let _serial = serial();
+    let airplay1 = gated(false);
+    let mut refusing = FakeAp2::new();
+    refusing.status.insert("RECORD".to_owned(), 403);
+    let server = Ap2Server::start(refusing);
+    let (sender, _host) = start(untouched());
+    let device = dual(&airplay1, &server, 80);
+    let key = device.key.clone();
+    sender.add_speaker(device, with_password());
+    let mut events = Events::default();
+    assert_eq!(
+        first_error(&mut events, &sender, &key),
+        Some(ErrorKind::ProtocolError)
+    );
+    sender.shutdown();
+    assert!(airplay1_keys(&airplay1).contains(&"OPTIONS".to_owned()));
+    assert_eq!(authorized(&airplay1), 0, "the password stays home");
+}
+
+// covers: P232, P36
+#[test]
+fn a_digest_with_qop_or_an_airplay1_only_device_still_takes_the_password() {
+    let _serial = serial();
+    let mut refusing = FakeAp2::new();
+    refusing.status.insert("RECORD".to_owned(), 403);
+    let server = Ap2Server::start(refusing);
+    let with_qop = gated(true);
+    let airplay1_only = gated(false);
+    let raop = airplay1_only.record(82, PCM_TXT);
+    let only =
+        Device::from_records(DeviceKey::Id(device_id(82)), Some(&raop), None).expect("device");
+    assert!(!only.verdict.airplay2);
+    let (sender, _host) = start(untouched());
+    for (receiver, device) in [
+        (&with_qop, dual(&with_qop, &server, 81)),
+        (&airplay1_only, only),
+    ] {
+        let key = device.key.clone();
+        sender.add_speaker(device, with_password());
+        let mut events = Events::default();
+        assert!(
+            events
+                .wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing)
+                .is_some(),
+            "{:?}",
+            events.of(&key)
+        );
+        assert!(authorized(receiver) > 0);
+    }
+    sender.shutdown();
 }
