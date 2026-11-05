@@ -37,49 +37,7 @@ AudioSync fixes that. It grabs your computer's audio once, sends it to your AirP
 
 - On a Mac with Apple silicon (macOS 15 or later) it plays system audio, one app or a mic on AirPlay speakers, Google Cast speakers, Bluetooth and every other output the Mac knows.
 - On Windows 11 it's multiroom audio for your PC: it plays the PC's audio on AirPlay speakers, sends desktop audio to a Google Cast speaker, and keeps Bluetooth and the other Windows outputs in sync with them.
-- On Linux it's an AirPlay sender that also plays to Google Cast and keeps Bluetooth and AirPlay speakers in sync, through PipeWire. It's out since 0.8.5.
-
-## New in 0.8.5
-
-- It runs on Linux too: an AppImage for x86_64 and aarch64 that updates itself, plus a .deb.
-- One-line installs for Windows (PowerShell) and Linux (terminal), next to the Mac's Terminal one. Each checks the download before it installs anything.
-- Notices about something that failed now say what to do next, like freeing up disk space or closing the app that holds port 319 or 320.
-- The Mac and Windows apps work more alike, down to the menus, prompts and notices.
-- Still worth knowing from 0.8: AirPlay 2-only speakers, stereo pairs and home theater groups play out of the box, up to 16 at once, and the Windows version updates itself (Help > Check for Updates…).
-
-## New in 0.7
-
-The Windows parts are in the Windows version, out since 0.7.1.
-
-- Web Remote: turn it on and a phone on your home network can switch speakers on and off and set volumes and delays. It's plain HTTP, so keep it at home. I'd leave it off whenever the computer is on a network you share with strangers, like cafe, hotel or office guest Wi-Fi.
-- Calibrate All Speakers measures the speakers that are on, one after the other, and lets you apply or undo the new delays in one go. It leaves out headphones and virtual outputs, since the microphone can't hear them.
-- Zones instead of groups: a zone has its own volume, one click turns its speakers on or off, and Calibrate Zone measures just that zone. Your groups turn into zones by themselves.
-- Presets: save which speakers are on with their volumes and EQ curve, and recall it all in one click or with a shortcut.
-- Several apps as one source, or every app except the ones you check.
-- Audio interfaces with more than two inputs: pick which channel pair plays, under Input Channels.
-- A mic or line in works as a source, and a level meter under the source shows it's coming in. With only local speakers on, the delay stays low. Turn on an AirPlay or Cast speaker and every speaker plays in step, about 2 seconds after the input.
-- Save your own EQ curves next to the presets.
-- The Web Remote can switch the source, zones and presets too.
-- On the Mac, a Bluetooth headset's call microphone isn't offered as a source anymore, since using it drops the headset to call quality.
-- Calibrate with Microphone works on Windows too.
-- Master Volume turns Google Cast speakers and groups down too.
-- A Cast speaker that doesn't show up can be added by its IP address or host name, with Add by Address… under Connected Speakers on the Mac or in the Speakers menu on Windows.
-- Cast speakers show the track that was playing when the stream started, with the title, artist, album and cover.
-- On Windows you can rename a speaker too, with a double-click on its name.
-- Hide Speaker takes a speaker you never use out of the list, and Hidden Speakers brings it back.
-
-## New in 0.6
-
-- Google Cast speakers, on the Mac and on Windows, one at a time. You set each one's offset by ear, and Resync restarts it if it drifts.
-- Cast and AirPlay speakers together: the side that's ahead waits for the other, AirPlay up to 3 s back then (20 s now).
-- On the Mac, Calibrate with Microphone sets a local speaker's delay for you.
-- On the Mac, rename a speaker with a double-click on its name.
-- If the app you capture quits, AudioSync can switch to all system audio instead of stopping.
-- Local speakers with a clock that runs a bit fast or slow stay in time with smaller corrections.
-- Diagrams in the Guide.
-- AirPlay 2 is in there, still experimental then.
-
-The rest is in [`CHANGELOG.md`](CHANGELOG.md).
+- On Linux it's an AirPlay sender that also plays to Google Cast and keeps Bluetooth and AirPlay speakers in sync, through PipeWire.
 
 ## What it does
 
@@ -136,8 +94,21 @@ Google Cast speakers work in every version, one at a time. Cast has no shared cl
 - Your computer plays before the HomePod? Raise the AirPlay delay. After? Lower it.
 - Speakers that want a code or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
 - Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
+- The Web Remote lets a phone on your home network switch speakers and set volumes and delays. It's plain HTTP, so I'd leave it off whenever the computer is on a network you share with strangers, like cafe, hotel or office guest Wi-Fi.
 - More in the AudioSync Guide, in the gear menu on the Mac and under Help > AudioSync Guide on Windows and Linux.
 - If something fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log. On the Mac: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`. On Windows the steps are under [Running the exe](desktop/README.md#running-the-exe).
+
+## What's new in 0.8.7
+
+Mostly security fixes:
+
+- The Web Remote no longer lists microphones or other inputs, and a paired phone only works from the network address it paired from. If your phone gets a new address on the Wi-Fi, the remote asks for the pairing code again.
+- An Apple TV paired over AirPlay 1 by an older version needs its code once more the next time you turn it on.
+- On the Mac, other apps can no longer use AudioSync's microphone permission by running their code inside it.
+- Another device on your network has a harder time posing as one of your Google Cast speakers.
+- A speaker whose connection crashes no longer hangs: an AirPlay speaker connects again, and a Cast speaker picks the stream up again or stops with an error you can see.
+
+Older versions are in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License and credits
 
