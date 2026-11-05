@@ -163,6 +163,9 @@ extension AppDelegate {
                 postNotice(text.castProblem(problem, name: named(id)), subject: Notice.cast(id),
                            shortName: text.cantPlayNoticeName(named(id)))
             }
+        case .warned(let id, let problem):
+            postNotice(text.castProblem(problem, name: named(id)), subject: Notice.castUnauthenticated(id),
+                       shortName: text.cantPlayNoticeName(named(id)))
         case .senderFailed(let wasOn):
             DebugTrace.log("[AudioSync] Cast: the sender stopped after an internal error")
             let name = wasOn.map(named)
@@ -344,6 +347,7 @@ extension AppDelegate {
         let unfound = castModel.devices[id]?.manual == true
         let manualIDs = castModel.manualSenderIDs(of: id)
         guard let address = castModel.removeManual(id) else { return }
+        castSender?.clearDeviceKeys([id] + manualIDs)
         for manualID in manualIDs { castSender?.removeDevice(manualID) }
         zones = ZoneEdit.removingCast(id, offList: unfound, from: zones)
         DebugTrace.log("[AudioSync] Cast: \(address.text) removed")
@@ -448,6 +452,7 @@ extension AppDelegate {
                     .joined(separator: ", "))
         case .groupLog(let line): return "group: " + line
         case .log(let line): return line
+        case .unauthenticated(_, let line): return line
         case .memoryChanged: return nil
         case .discoveryStopped: return "discovery's mDNS daemon ended"
         case .failed(let detail): return "the sender stopped working" + (detail.isEmpty ? "" : " (\(detail))")

@@ -119,10 +119,15 @@ enum CastProblem: Equatable {
     case connectionLost
     /// It left the list when AudioSync's own search stopped, with no session to keep it.
     case searchStopped
+    /// Its answer to device authentication failed the checks: off, not retried (C130).
+    case notGenuine
+    /// It didn't prove it's genuine and plays anyway; it stays on (C131).
+    case unauthenticated
 }
 
 enum CastError: Equatable {
     case connect, launch, media, noFetch, stream, noSession, volumeFixed, volume, artwork, `internal`, noAddress
+    case notGenuine
     case other(Int32)
 
     init?(_ code: Int32) {
@@ -139,6 +144,7 @@ enum CastError: Equatable {
         case ASC_CAST_ERROR_ARTWORK: self = .artwork
         case ASC_CAST_ERROR_INTERNAL: self = .internal
         case ASC_CAST_ERROR_NO_ADDRESS: self = .noAddress
+        case ASC_CAST_ERROR_REFUSED: self = .notGenuine
         default: self = .other(code)
         }
     }
@@ -164,6 +170,7 @@ enum CastEnd: Equatable {
         case .failed(.launch, _), .failed(.media, _): return .refused
         case .failed(.noFetch, _): return .blocked
         case .failed(.stream, _), .failed(.internal, _): return .connectionLost
+        case .failed(.notGenuine, _): return .notGenuine
         case .failed: return .notResponding
         }
     }
@@ -215,6 +222,8 @@ enum CastEvent: Equatable {
     case groupLog(String)
     /// A line for the debug log: the certificates file couldn't be read or written.
     case log(String)
+    /// The device didn't prove it's genuine and plays anyway; `detail` is the debug log line (C131, C132).
+    case unauthenticated(attempt: UInt64, detail: String)
     case memoryChanged
     case discoveryStopped
     /// The sender stopped working; `detail` names where it panicked, or "".
@@ -224,7 +233,8 @@ enum CastEvent: Equatable {
         switch self {
         case .started(let a, _), .formatFallback(let a, _, _), .playing(let a), .paused(let a), .connectFailed(let a, _, _, _),
              .recovering(let a, _), .recovered(let a), .reloaded(let a), .volume(let a, _, _), .commandFailed(let a, _),
-             .volumeUnanswered(let a, _, _), .ended(let a, _), .note(let a, _), .members(let a, _):
+             .volumeUnanswered(let a, _, _), .ended(let a, _), .note(let a, _), .members(let a, _),
+             .unauthenticated(let a, _):
             return a
         case .groupLog, .log, .memoryChanged, .discoveryStopped, .failed:
             return nil
@@ -282,6 +292,7 @@ enum CastEvent: Equatable {
         case ASC_CAST_EVENT_MEMBERS: self = .members(attempt: a, members())
         case ASC_CAST_EVENT_GROUP_LOG: self = .groupLog(detail)
         case ASC_CAST_EVENT_LOG: self = .log(detail)
+        case ASC_CAST_EVENT_UNAUTHENTICATED: self = .unauthenticated(attempt: a, detail: detail)
         case ASC_CAST_EVENT_CERTIFICATE_CHANGED:
             self = .note(attempt: a, "the device's certificate changed from " + detail)
         case ASC_CAST_EVENT_MEMORY_CHANGED: self = .memoryChanged
@@ -406,6 +417,8 @@ enum CastOutcome: Equatable {
     case playing(String)
     /// The device went off on its own; a notice says why when `problem` is set.
     case turnedOff(String, problem: CastProblem?)
+    /// The device stays on, with a notice about `problem`.
+    case warned(String, problem: CastProblem)
     /// Send this level, 0 to 1, to the device: its session starts at zone
     /// × own level (C105). The row changed too.
     case setVolume(Double)
@@ -957,6 +970,8 @@ struct CastModel {
         case .volumeUnanswered(_, _, let ask):
             volumeUnanswered(id, ask)
             return nil
+        case .unauthenticated:
+            return .warned(id, problem: .unauthenticated)
         case .members(_, let list):
             guard devices[id]?.group == true, members != list else { return nil }
             members = list

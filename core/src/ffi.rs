@@ -1616,6 +1616,10 @@ mod tests {
             ),
             ("ASC_CAST_EVENT_PAUSED", CAST_EVENT_PAUSED.to_string()),
             ("ASC_CAST_EVENT_LOG", CAST_EVENT_LOG.to_string()),
+            (
+                "ASC_CAST_EVENT_UNAUTHENTICATED",
+                CAST_EVENT_UNAUTHENTICATED.to_string(),
+            ),
             ("ASC_CAST_END_STOPPED", CAST_END_STOPPED.to_string()),
             ("ASC_CAST_END_TAKEN_OVER", CAST_END_TAKEN_OVER.to_string()),
             ("ASC_CAST_END_DESELECTED", CAST_END_DESELECTED.to_string()),

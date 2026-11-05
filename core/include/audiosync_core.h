@@ -260,6 +260,7 @@ extern "C" {
 #define ASC_CAST_EVENT_VOLUME_UNANSWERED 20 /* a level asked for that no status will answer, once per ask: .level, .ask */
 #define ASC_CAST_EVENT_PAUSED 21           /* someone paused the device itself; PLAYING follows once its next play loaded the stream again */
 #define ASC_CAST_EVENT_LOG 22              /* a line for the debug log in .detail: the certificates or device keys file couldn't be read or written, or a device authentication line */
+#define ASC_CAST_EVENT_UNAUTHENTICATED 23  /* the device didn't prove it's a genuine Cast device and plays anyway: warn once; .detail is the debug log line */
 
 /* How a Cast attempt ended (AscCastEvent.reason). */
 #define ASC_CAST_END_STOPPED 1     /* the sender's own teardown */
@@ -2311,6 +2312,14 @@ bool asc_cast_add_device(AscCast *cast, const char *address);
  * browse found stays listed under its id.
  */
 bool asc_cast_remove_device(AscCast *cast, const char *id);
+
+/*
+ * Clears the device authentication pin or mark of the device listed as `id`
+ * when the user removes it, with a line for the debug log. Returns false for
+ * a NULL or dead handle, an ID that doesn't read, or a device with nothing
+ * to clear.
+ */
+bool asc_cast_clear_device_key(AscCast *cast, const char *id);
 
 /*
  * Names the device the user selected, by its ID, or none with a NULL or empty

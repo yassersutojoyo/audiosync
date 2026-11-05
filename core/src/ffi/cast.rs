@@ -158,6 +158,10 @@ pub const CAST_EVENT_PAUSED: i32 = 21;
 /// file couldn't be read or written (C21, C129), or a device
 /// authentication line (C132).
 pub const CAST_EVENT_LOG: i32 = 22;
+/// The device didn't prove it's a genuine Cast device and plays anyway: the
+/// notice of C131, once, when it is first marked; `detail` is the debug
+/// log line (C132).
+pub const CAST_EVENT_UNAUTHENTICATED: i32 = 23;
 
 /// How an attempt ended ([`AscCastEvent::reason`]): the sender's own
 /// teardown (C87).
@@ -1183,8 +1187,12 @@ fn session_event(event: SessionEvent, on_members: impl FnOnce(Vec<GroupMember>))
             pending.detail = format!("{before} to {after}");
             pending
         }
-        SessionEvent::DeviceAuth { line, .. } => {
-            let mut pending = Pending::new(CAST_EVENT_LOG);
+        SessionEvent::DeviceAuth { line, warn } => {
+            let mut pending = Pending::new(if warn {
+                CAST_EVENT_UNAUTHENTICATED
+            } else {
+                CAST_EVENT_LOG
+            });
             pending.detail = line;
             pending
         }
@@ -1513,6 +1521,33 @@ pub unsafe extern "C" fn asc_cast_remove_device(cast: *mut AscCast, id: *const c
                 return false;
             };
             cast.listed(event);
+            true
+        })
+    }
+}
+
+/// Clears the device authentication pin or mark of the device listed as
+/// `id` when the user removes it (C133), with a line for the debug log.
+/// False for a null or dead handle, an ID that doesn't read, or a device
+/// with nothing to clear.
+///
+/// # Safety
+///
+/// `cast` is null or a live handle, called under the threading contract;
+/// `id` is null or a NUL-terminated string, unchanged during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_cast_clear_device_key(cast: *mut AscCast, id: *const c_char) -> bool {
+    // SAFETY: as the caller's.
+    let Some(key) = unsafe { host_text(id) }.and_then(device_key) else {
+        return false;
+    };
+    // SAFETY: as the caller's.
+    unsafe {
+        live(cast, false, |cast| {
+            let Some(line) = cast.host.clear_device_key(memory_id(key)) else {
+                return false;
+            };
+            lock(&cast.shared.log).push(line);
             true
         })
     }
@@ -2958,6 +2993,48 @@ mod tests {
         };
         assert_eq!(code(ConnectError::NoAddress), CAST_ERROR_NO_ADDRESS);
         assert_eq!(code(ConnectError::NoStatus), CAST_ERROR_CONNECT);
+    }
+
+    // CAST_SPEC: C131, C132
+    #[test]
+    fn only_the_first_unauthenticated_line_carries_the_warning() {
+        let event = |warn| {
+            let line = "cast auth dev: declined, INTERNAL_ERROR, unauthenticated".to_owned();
+            session_event(SessionEvent::DeviceAuth { line, warn }, |_| {})
+        };
+        assert_eq!(event(true).kind, CAST_EVENT_UNAUTHENTICATED);
+        assert_eq!(event(false).kind, CAST_EVENT_LOG);
+        assert!(event(true).detail.starts_with("cast auth dev: "));
+    }
+
+    // CAST_SPEC: C133
+    #[test]
+    fn removing_a_device_clears_its_device_key_entry() {
+        let folder = crate::test_scratch().join("cast-device-keys-cleared");
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).expect("folder");
+        let file = folder.join("cast-device-keys.txt");
+        std::fs::write(&file, format!("{KITCHEN} unauthenticated\n")).expect("written");
+        let c_folder = CString::new(folder.to_str().expect("UTF-8")).expect("no NUL");
+        // SAFETY: a null memory text and a NUL-terminated folder.
+        let mut handle = unsafe { asc_cast_create_in(ptr::null(), c_folder.as_ptr()) };
+        assert!(!handle.is_null());
+        let kitchen = CString::new(KITCHEN).expect("no NUL");
+        // SAFETY: a live handle, used by this thread only.
+        unsafe {
+            assert!(asc_cast_clear_device_key(handle, kitchen.as_ptr()));
+            assert!(!asc_cast_clear_device_key(handle, kitchen.as_ptr()));
+            assert!(!asc_cast_clear_device_key(handle, ptr::null()));
+        }
+        assert!(
+            waiting(handle)
+                .iter()
+                .any(|pending| pending.detail == format!("cast auth {KITCHEN}: mark cleared"))
+        );
+        assert_eq!(std::fs::read_to_string(&file).expect("kept"), "");
+        // SAFETY: a live handle, destroyed once.
+        unsafe { asc_cast_destroy(&mut handle) };
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     // CAST_SPEC: C130
