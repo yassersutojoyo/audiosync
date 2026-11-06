@@ -4417,6 +4417,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.log
                 .log(|| format!("equalizer: {}", describe_equalizer(&settings)));
         }
+        if settings.enabled != self.equalizer.enabled {
+            let now = Instant::now();
+            for id in self.playing_ids() {
+                self.volume_moves.insert(VolumeMove::Output(id), now);
+            }
+        }
         self.equalizer = settings;
         if let Some(session) = self.session.as_mut() {
             session.equalizer.set_settings(settings);
@@ -10866,6 +10872,34 @@ mod tests {
             .filter(|m| m.starts_with("output ") && m.contains(" volume: "))
             .collect();
         assert_eq!(gains, expected.iter().collect::<Vec<_>>(), "{messages:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn switching_the_equalizer_on_or_off_logs_each_playing_outputs_gain_once() {
+        let (mut backend, log, dir) = logged_backend("controller-eq-switch-gain");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let gain_lines = || {
+            logged(&log, &dir)
+                .iter()
+                .filter(|m| m.starts_with("output ") && m.contains("EQ headroom returned"))
+                .count()
+        };
+        let mut step = EqSettings::default();
+        step.gains_db[0] = 6.0;
+        backend.set_equalizer(step);
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
+        assert_eq!(gain_lines(), 0, "a band step logs no gain");
+        backend.set_equalizer(EqSettings {
+            enabled: true,
+            ..step
+        });
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
+        backend.log_rested_volumes(Instant::now() + 2 * VOLUME_LOG_PAUSE);
+        assert_eq!(gain_lines(), 2, "one line per playing output");
+        backend.set_equalizer(step);
+        backend.log_rested_volumes(Instant::now() + VOLUME_LOG_PAUSE);
+        assert_eq!(gain_lines(), 4, "switching it off logs them again");
         let _ = std::fs::remove_dir_all(dir);
     }
 

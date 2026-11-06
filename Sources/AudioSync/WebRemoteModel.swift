@@ -515,6 +515,18 @@ enum RemoteWindowShow {
     static func opens(visible: Bool?) -> Bool { visible != true }
 }
 
+/// The Web Remote window's sections below its switch (S288): the port field, and a failed
+/// start, while the setting is on; the address and pairing code while the remote listens.
+struct RemoteWindowRows: Equatable {
+    let address: Bool
+    let port: Bool
+
+    init(enabled: Bool, listening: Bool) {
+        address = listening
+        port = enabled
+    }
+}
+
 /// The paired devices' file the core keeps (`{"version": 1, "devices": [SHA-256 hex…], "seen": [Unix seconds…]}`),
 /// read and cleared here while the remote is off, so a lost phone can be
 /// unpaired before the remote is turned on again.

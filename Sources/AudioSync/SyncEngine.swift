@@ -81,7 +81,7 @@ final class StreamEngine {
     /// them go; a stop ends them all.
     private var heldLeads: [String: (lead: CoreHeldLead, since: Double)] = [:]
     /// The latest equalizer settings, for the running session and the next ones.
-    private var equalizerSettings = Equalizer.Settings()
+    private(set) var equalizerSettings = Equalizer.Settings()
     /// Outputs fading out before they stop, and the stop that waits for them.
     private let retirement = OutputRetirement()
     /// Asks AudioSync's own AirPlay and Cast inputs to fade out at a stop (S186, S189).

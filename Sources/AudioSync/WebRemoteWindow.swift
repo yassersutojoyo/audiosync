@@ -94,19 +94,18 @@ struct WebRemoteView: View {
             Text(t.webRemoteSummary)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            if settings.enabled {
-                switch settings.status {
-                case .running(let port):
-                    Divider()
-                    addressSection(port: port, t)
-                    Divider()
-                    codeSection(t)
-                case .failed(let error, let port):
+            let rows = RemoteWindowRows(enabled: settings.enabled, listening: isRunning)
+            if rows.address, case .running(let port) = settings.status {
+                Divider()
+                addressSection(port: port, t)
+                Divider()
+                codeSection(t)
+            }
+            if rows.port {
+                if case .failed(let error, let port) = settings.status {
                     Label(failure(error, port: port, t), systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(Brand.errorText)
                         .fixedSize(horizontal: false, vertical: true)
-                case .off:
-                    EmptyView()
                 }
                 Divider()
                 portSection(t)

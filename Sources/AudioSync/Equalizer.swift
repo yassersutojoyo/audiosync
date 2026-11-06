@@ -21,6 +21,10 @@ enum Equalizer {
             gains = [Double](repeating: 0, count: Equalizer.frequencies.count)
             preamp = 0
         }
+
+        /// Whether `new` switches the equalizer on or off, which the debug log
+        /// answers with each output's returned headroom; a band step doesn't.
+        func switches(to new: Settings) -> Bool { enabled != new.enabled }
     }
 
     /// A preset's stable identity; its display name lives in `UIStrings`.

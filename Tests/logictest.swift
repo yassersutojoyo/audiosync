@@ -1276,6 +1276,18 @@ check(Equalizer.presets.map(\.id) == Equalizer.PresetID.allCases, "eq: one prese
 // covers: S33
 check(Equalizer.presets.count == asc_eq_preset_count(), "eq: the app names every preset the core has")
 do {
+    let eqEngine = StreamEngine()
+    var eqOn = Equalizer.Settings()
+    eqOn.enabled = true
+    var eqBandStep = eqOn
+    eqBandStep.gains[0] = 6
+    let eqSwitchedOn = eqEngine.equalizerSettings.switches(to: eqOn)
+    eqEngine.updateEqualizer(eqOn)
+    check(eqSwitchedOn && !eqEngine.equalizerSettings.switches(to: eqBandStep)
+            && eqEngine.equalizerSettings.switches(to: Equalizer.Settings()),
+          "eq log: switching the equalizer on or off logs each output's returned headroom, a band step doesn't")
+}
+do {
     var reset = Equalizer.Settings(enabled: true, preamp: -4, gains: Equalizer.presets[1].gains)
     reset.reset()
     // covers: S33
@@ -15155,6 +15167,11 @@ do {
             && RemoteDebugSwitch.port(environment: switchOn, debugLog: false, savedPort: 8080) == nil
             && RemoteDebugSwitch.port(environment: ["AUDIOSYNC_WEB_REMOTE": "true"], debugLog: true, savedPort: 8080) == nil,
           "web remote: the debug switch starts it for one run on the saved or given port, only with the debug log")
+    // covers: S288 (the Mac window shows the address and code whenever the remote listens)
+    check([RemoteWindowRows(enabled: false, listening: true), RemoteWindowRows(enabled: true, listening: true),
+           RemoteWindowRows(enabled: true, listening: false), RemoteWindowRows(enabled: false, listening: false)]
+            .map { [$0.address, $0.port] } == [[true, false], [true, true], [false, true], [false, false]],
+          "web remote: the window shows the address and code whenever the remote listens, the debug switch's run with the setting off included")
     let fresh = AppSettings.load { _ in nil }
     let stored: [String: Any] = ["webRemoteEnabled": true, "webRemotePort": 8080]
     let kept = AppSettings.load { stored[$0] }

@@ -44,6 +44,10 @@ extension AppDelegate {
         LocalOutputSync.reapplyGains(on: engine, gain: { effectiveGain($0) })
     }
 
+    func logLocalGains() {
+        for uid in engine.activeOutputUIDs { engine.logGain(uid: uid, g: effectiveGain(uid)) }
+    }
+
     func setLocalEnabled(_ uid: String, _ on: Bool, origin: StartOrigin = .user) {
         if on { clearNotices([SpeakerKey.make(id: uid, airplay: false)]) }   // a new attempt
         if on { enabledLocal.insert(uid) } else { enabledLocal.remove(uid) }
@@ -110,7 +114,7 @@ extension AppDelegate {
 
     @objc private func logMasterGains() {
         DebugTrace.log("[AudioSync] master volume set to \(String(format: "%.2f", masterVolume))")
-        for uid in engine.activeOutputUIDs { engine.logGain(uid: uid, g: effectiveGain(uid)) }
+        logLocalGains()
     }
 
     // MARK: - Local delays (the local delay model, LocalDelay.swift, S172 to S181)
