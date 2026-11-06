@@ -10337,16 +10337,22 @@ do {
             renderer.setDelay(ms: 50)
             var takenLags: [Int64] = []
             var takenStates: [CoreRenderer.FadeState] = []
+            var takenResyncs: [Int64] = []
             for _ in 0..<6 {
                 delayCallback()
                 takenLags.append(renderer.lagFrames)
                 takenStates.append(renderer.fadeState)
+                takenResyncs.append(renderer.counters.resyncs - resyncsAtRequest)
             }
+            // The callback that applies the delay is counted exactly; its lag may carry up to one
+            // capture block of the core's real-clock estimate (S322), which a busy Mac's stalls move.
+            func nearLag(_ lag: Int64, _ expected: Int64) -> Bool { abs(lag - expected) <= 512 }
             check(wasOpen && renderer.fadeFrames == 960 && takenStates.first == .fadingOut
-                    && takenLags[0] == lagAtRequest && takenLags[1] == lagAtRequest
-                    && takenLags[2...].allSatisfy { $0 == lagAtRequest - 2_400 }
-                    && renderer.counters.resyncs - resyncsAtRequest == 1, name,
-                  "open \(wasOpen), lag \(lagAtRequest) then \(takenLags), states \(takenStates)")
+                    && takenResyncs == [0, 0, 1, 1, 1, 1]
+                    && nearLag(takenLags[0], lagAtRequest) && nearLag(takenLags[1], lagAtRequest)
+                    && takenLags[2...].allSatisfy { nearLag($0, lagAtRequest - 2_400) }, name,
+                  "open \(wasOpen), lag \(lagAtRequest) then \(takenLags), resyncs \(takenResyncs), "
+                    + "states \(takenStates)")
         } else {
             check(false, name, "the core's renderer could not be made")
         }
