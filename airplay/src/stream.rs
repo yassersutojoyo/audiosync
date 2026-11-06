@@ -23,7 +23,7 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::alac;
@@ -65,6 +65,9 @@ const STEP_CAP_FRAMES: u32 = DEFAULT_LATENCY_FRAMES;
 const STEP_INTERVAL: f64 = 10.0;
 /// Three resend requests within this many seconds are a burst (P200).
 const BURST_SECONDS: f64 = 2.0;
+/// Packets a speaker sends within this many seconds of its first sound
+/// never count as late for a step (P200).
+const START_GRACE: f64 = 1.0;
 /// Silent packets after a step's fade-out, about 32 ms: the sync stating
 /// the step reaches each receiver within them, wherever its network or
 /// timer puts it (P200).
@@ -393,6 +396,18 @@ pub struct StreamCounters {
     packets_encoded: AtomicU64,
     silent_frames: AtomicU64,
     input_frames_dropped: AtomicU64,
+    last_step: AtomicU8,
+}
+
+/// What made Lf step up (P200).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepCause {
+    /// The third resend request within 2 s.
+    Resends = 1,
+    /// A packet sent more than 5 ms after its time.
+    LateSend = 2,
+    /// A stall that restarted the timeline.
+    Stall = 3,
 }
 
 impl StreamCounters {
@@ -417,6 +432,16 @@ impl StreamCounters {
     /// restart (P112).
     pub fn input_frames_dropped(&self) -> u64 {
         self.input_frames_dropped.load(Ordering::Relaxed)
+    }
+
+    /// What made Lf step up last, if it ever did (P200, P202).
+    pub fn last_step(&self) -> Option<StepCause> {
+        match self.last_step.load(Ordering::Relaxed) {
+            1 => Some(StepCause::Resends),
+            2 => Some(StepCause::LateSend),
+            3 => Some(StepCause::Stall),
+            _ => None,
+        }
     }
 }
 
@@ -856,9 +881,9 @@ pub struct Stream {
     latency_frames: u32,
     /// An Lf the host set while a speaker sounds (P201).
     pending_latency: Option<u32>,
-    /// A burst of resend requests, a late packet or a stall came since the
-    /// last timeout (P200).
-    lost_or_late: bool,
+    /// What came since the last timeout: a burst of resend requests, a late
+    /// packet or a stall (P200).
+    lost_or_late: Option<StepCause>,
     /// When the last two resend requests came (P200).
     resends_at: [f64; 2],
     /// When Lf last stepped up (P200).
@@ -918,7 +943,7 @@ impl Stream {
                 .latency_frames
                 .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES),
             pending_latency: None,
-            lost_or_late: false,
+            lost_or_late: None,
             resends_at: [f64::NEG_INFINITY; 2],
             last_step: None,
             step_floor: 0,
@@ -1136,7 +1161,7 @@ impl Stream {
         self.model.ensure(last_frame(self.next_cut));
         let overdue = t - (self.model.time(last_frame(self.next_cut)) + self.margin.value());
         if overdue > f64::from(self.latency_frames) / NOMINAL_RATE {
-            self.lost_or_late = true;
+            self.lost_or_late = Some(StepCause::Stall);
             self.step_latency(t, true);
             self.restart_timeline(t);
         }
@@ -1174,16 +1199,22 @@ impl Stream {
             {
                 speaker.delay_due = true;
             }
+            // A speaker's start brings its session setup and the host's other
+            // start-up work at once, which can wake this thread late; that
+            // says nothing about the network.
+            let counted = t - speaker.first_sound > START_GRACE;
             while speaker.next_packet < context.next_cut {
                 let due = context.cut_due(speaker.next_packet) + speaker.delay;
                 if due > t + DUE_TOLERANCE {
                     break;
                 }
-                late |= t - due > seconds(LATE_SEND);
+                late |= counted && t - due > seconds(LATE_SEND);
                 send(speaker, &context, silence, t - due, &mut self.transmits);
             }
         }
-        self.lost_or_late |= late;
+        if late {
+            self.lost_or_late = Some(StepCause::LateSend);
+        }
         self.step_latency(t, false);
         self.publish();
     }
@@ -1195,8 +1226,10 @@ impl Stream {
     /// faded packet's end sounds, so the pause of the step falls there. A
     /// stall applies it `now`, as its restart silences every speaker.
     fn step_latency(&mut self, t: f64, now: bool) {
-        if !std::mem::take(&mut self.lost_or_late)
-            || self.step_due.is_some()
+        let Some(cause) = self.lost_or_late.take() else {
+            return;
+        };
+        if self.step_due.is_some()
             || self.latency_frames >= STEP_CAP_FRAMES
             || self.last_step.is_some_and(|at| t - at < STEP_INTERVAL)
             || !self.sounding(t)
@@ -1204,6 +1237,9 @@ impl Stream {
             return;
         }
         self.last_step = Some(t);
+        self.counters
+            .last_step
+            .store(cause as u8, Ordering::Relaxed);
         let doubled = self.latency_frames * 2;
         let frames = if doubled * 2 > STEP_CAP_FRAMES {
             STEP_CAP_FRAMES
@@ -1679,7 +1715,9 @@ impl Stream {
         };
         let counters = speaker.counters.clone();
         counters.resend_requests.fetch_add(1, Ordering::Relaxed);
-        self.lost_or_late |= t - self.resends_at[0] <= BURST_SECONDS;
+        if t - self.resends_at[0] <= BURST_SECONDS {
+            self.lost_or_late = Some(StepCause::Resends);
+        }
         self.resends_at = [self.resends_at[1], t];
         for offset in 0..request.count.min(MAX_RESEND_REQUEST) {
             let seq = request.first.wrapping_add(offset);

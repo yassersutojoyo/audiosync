@@ -11,7 +11,7 @@ use audiosync_airplay::audio::FRAMES_PER_PACKET;
 use audiosync_airplay::rtp::{HEADER_BYTES, RESEND_PREFIX_BYTES, ResendRequest, SyncPacket};
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::sender::{Sender, SenderConfig, SenderEvent, SpeakerOptions, SpeakerState};
-use audiosync_airplay::stream::{PacketKind, SpeakerId, StreamConfig, StreamEvent};
+use audiosync_airplay::stream::{PacketKind, SpeakerId, StepCause, StreamConfig, StreamEvent};
 use audiosync_airplay::volume::Volume;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 use common::rig::{Host, Rig, decode, host_frame, speaker};
@@ -152,6 +152,7 @@ fn a_stray_resend_request_steps_nothing_and_three_within_2_s_do() {
     burst(&mut rig, id);
     rig.run_for(Duration::from_secs(1));
     assert_eq!(rig.stream.latency_frames(), 8_820);
+    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::Resends));
 }
 
 // covers: P200, P143
@@ -169,6 +170,7 @@ fn a_stall_longer_than_lf_restarts_the_timeline_and_steps_lf() {
         steps.push(rig.stream.latency_frames());
     }
     assert_eq!(steps, [8_820, 8_820, 17_640], "at most once per 10 s");
+    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::Stall));
     assert!(
         timelines(&rig).contains(&(200, true)),
         "{:?}",
@@ -301,6 +303,30 @@ fn a_packet_sent_late_steps_lf_as_a_resend_request_does() {
     rig.run_for(Duration::from_millis(100));
     assert_eq!(rig.stream.latency_frames(), 8_820);
     assert_eq!(timelines(&rig), [(200, false)]);
+}
+
+// covers: P200
+#[test]
+fn late_sends_in_a_speakers_first_second_step_nothing_and_a_late_send_after_it_does() {
+    let mut rig = low_rig();
+    rig.run_for(Duration::from_secs(1));
+    rig.add(speaker(1, Codec::Alac));
+    // A loaded host wakes the sender late as a speaker starts, as a CI
+    // runner does: the first turn ends past the speaker's first sound,
+    // short of a stall, and a wake 0.2 s on is late again.
+    let slow = rig.now + Duration::from_millis(90);
+    rig.jump_to(slow);
+    rig.run_for(Duration::from_millis(200));
+    let again = rig.now + Duration::from_millis(30);
+    rig.jump_to(again);
+    rig.run_for(Duration::from_secs(2));
+    assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
+    assert_eq!(rig.stream.counters().last_step(), None);
+    let late = rig.now + Duration::from_millis(50);
+    rig.jump_to(late);
+    rig.run_for(Duration::from_millis(100));
+    assert_eq!(rig.stream.latency_frames(), 8_820);
+    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::LateSend));
 }
 
 // covers: P98

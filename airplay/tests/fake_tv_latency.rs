@@ -265,6 +265,7 @@ fn fake_tv_a_burst_of_resend_requests_raises_lf_by_a_pause_the_size_of_the_step(
         .map(|sync| sync.next_rtp.wrapping_sub(sync.rtp_heard))
         .collect();
     let flushed_after = flushes();
+    let cause = sender.stream_counters().last_step();
     sender.shutdown();
     assert!(stepped.is_some(), "Lf steps to 200 ms on the burst");
     assert_eq!(flushed_after, flushed, "no FLUSH for the step");
@@ -283,7 +284,7 @@ fn fake_tv_a_burst_of_resend_requests_raises_lf_by_a_pause_the_size_of_the_step(
         longest = longest.max(pair[1].0 - pair[0].0);
     }
     eprintln!(
-        "fake_tv step: {} packets, longest arrival gap {} ms, syncs state {stated:?}",
+        "fake_tv step: {} packets, longest arrival gap {} ms, syncs state {stated:?}, last step on {cause:?}",
         audio.len(),
         longest.as_millis()
     );
