@@ -30,6 +30,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, a message in the main window that came back with new text right after you dismissed it, such as a Launch at Sign-In failure, now stays instead of fading out with the old one.
 - On the Mac, with Several Apps set to All Apps Except the Checked Ones, the Now Playing card no longer shows a checked app's track, and its buttons no longer control that app. Set to Only the Checked Apps, the card shows only a player among them.
 - On Windows, a Google Cast speaker you add by address while the speaker list already shows it now comes back under its own name, delay, zone and presets after a restart, even when your network hides it from the search.
+- On Windows, removing a Google Cast speaker you added by address now also clears its message in the main window.
 
 ## [0.8.7] - 2026-11-05
 

@@ -5332,6 +5332,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.cast_found_ids.remove(&address.text());
         self.audio.remove_cast_address(&address);
         self.take_events();
+        if let Some(cast_id) = cast_id(id) {
+            self.notices
+                .clear(&[NoticeSubject::Cast(cast_id.to_owned())]);
+        }
         // Hidden rows are left out of the snapshot, so ask the sender.
         let listed = self
             .audio
@@ -16617,6 +16621,36 @@ mod tests {
             Some("Study")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: C18
+    #[test]
+    fn removing_a_cast_address_clears_the_notice_of_its_speaker() {
+        let (mut adapter, fake) = cast_adapter();
+        adapter.restore(Settings {
+            cast_addresses: vec!["192.0.2.20".to_owned()],
+            cast_found_ids: BTreeMap::from([("192.0.2.20".to_owned(), CAST_KITCHEN.to_owned())]),
+            ..Settings::default()
+        });
+        adapter.poll();
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), true);
+        fake.report(cast_ended(1, SessionEnd::TakenOver));
+        adapter.poll();
+        let kitchen = NoticeSubject::Cast(CAST_KITCHEN.to_owned());
+        assert!(
+            adapter
+                .notices
+                .iter()
+                .any(|(subject, _)| *subject == kitchen)
+        );
+
+        adapter.remove_cast_address(&cc(CAST_KITCHEN));
+        assert!(
+            !adapter
+                .notices
+                .iter()
+                .any(|(subject, _)| *subject == kitchen)
+        );
     }
 
     // covers: C18
