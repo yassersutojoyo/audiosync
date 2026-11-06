@@ -10,7 +10,18 @@
 //! cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--name <text>]
 //!     [--deviceid <XX:XX:XX:XX:XX:XX>] [--port <n>] [--pin every|once]
 //!     [--code <digits>] [--password <text>] [--ptp-only] [--summary]
+//!     [--homepod] [--dump <dir>]
 //! ```
+//!
+//! `--homepod` advertises and answers `/info` as a HomePod mini (model
+//! `AudioAccessory5,1`, AirPlay 2 with HomeKit and transient pairing,
+//! buffered audio and PTP in its features) and takes a buffered stream
+//! (type 103) on a TCP port of its own. `--dump <dir>` writes every request
+//! it answers, decrypted, to a numbered file in `<dir>` with the answer, and
+//! logs each stream SETUP's latency keys, the timing peers, any
+//! SETRATEANCHORTIME anchor and the first packet on each audio port with the
+//! system clock at arrival. To measure a sender on a Mac, on that Mac:
+//! `cargo run -p audiosync-airplay --example fake_tv -- --lan --homepod --dump <dir>`.
 //!
 //! `FAKE_TV_LATENCY_US` set to whole microseconds adds that output latency
 //! to its `/info` answer; unset or empty, it reports none.
@@ -37,6 +48,10 @@
 
 #[path = "../tests/common/mod.rs"]
 mod common;
+#[path = "fake_tv/dump.rs"]
+mod dump;
+#[path = "fake_tv/media.rs"]
+mod media;
 #[path = "fake_tv/options.rs"]
 mod options;
 #[path = "fake_tv/stdin.rs"]
@@ -47,7 +62,7 @@ mod summary;
 mod television;
 
 use std::io::BufRead;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, UdpSocket};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -55,7 +70,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::rtsp::Request;
-use common::ap2::{Ap2Server, FakeAp2, request_key};
+use common::ap2::{Ap2Server, FakeAp2, OTHER_METHOD, request_key};
+use dump::Dump;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo, UnregisterStatus};
 use options::{Options, parse};
 use stdin::Line;
@@ -65,7 +81,11 @@ use television::{Pin, television};
 const SERVICE_TYPE: &str = "_airplay._tcp.local.";
 
 fn advertise(options: &Options, port: u16) -> Result<(ServiceDaemon, ServiceInfo), String> {
-    let mut entries = television::txt(options.pin, options.device_id);
+    let mut entries = if options.homepod {
+        television::homepod_txt(options.pin, options.device_id)
+    } else {
+        television::txt(options.pin, options.device_id)
+    };
     if options.ptp_only {
         entries = television::ptp_only_txt(entries);
     }
@@ -131,7 +151,12 @@ fn stamp(start: Instant) -> String {
 /// a text body's first line (`volume: -20.000000`), `RTP-Info`, or the
 /// content type of a binary body.
 fn describe(request: &Request) -> String {
-    let mut line = format!("{} {}", request.method, request.uri);
+    let method = request.headers.get(OTHER_METHOD);
+    let mut line = format!(
+        "{} {}",
+        method.unwrap_or(request.method.as_str()),
+        request.uri
+    );
     let key = request_key(request);
     if let Some(kind) = key.strip_prefix("SETUP ") {
         line.push_str(&format!(" ({kind})"));
@@ -158,6 +183,7 @@ fn log_requests(
     start: Instant,
     stop: &AtomicBool,
     summary: Option<&Mutex<Summary>>,
+    mut dump: Option<Dump>,
 ) {
     let (mut logged, mut connections) = (0, 0);
     while !stop.load(Ordering::SeqCst) {
@@ -174,6 +200,14 @@ fn log_requests(
             while let (Some((request, framed)), Some(Some(answered))) =
                 (fake.requests.get(logged), fake.answered.get(logged))
             {
+                if let Some(dump) = dump.as_mut() {
+                    match dump.record(request, answered) {
+                        Ok(lines) => lines
+                            .iter()
+                            .for_each(|line| println!("{} {line}", stamp(start))),
+                        Err(error) => eprintln!("fake_tv: --dump: {error}"),
+                    }
+                }
                 if let Some(summary) = summary {
                     let level = answered.level.as_deref();
                     let line =
@@ -246,18 +280,72 @@ fn main() -> ExitCode {
     } else {
         Ipv4Addr::LOCALHOST
     };
-    let mut fake = television(
-        &options.name,
-        options.pin,
-        &options.code,
-        0,
-        options.device_id,
-    );
+    let buffered = if options.homepod {
+        match TcpListener::bind((ip, 0)) {
+            Ok(listener) => Some(listener),
+            Err(error) => {
+                eprintln!("fake_tv: buffered audio port: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+    let mut fake = match &buffered {
+        Some(listener) => television::homepod(
+            &options.name,
+            options.pin,
+            &options.code,
+            options.device_id,
+            listener.local_addr().map_or(0, |address| address.port()),
+        ),
+        None => television(
+            &options.name,
+            options.pin,
+            &options.code,
+            0,
+            options.device_id,
+        ),
+    };
     if let Some(micros) = latency_us {
         television::report_latency(&mut fake, micros);
     }
     if options.ptp_only {
         television::ptp_only(&mut fake);
+    }
+    if options.homepod {
+        fake.second_info_body = Some(fake.info_body.clone());
+    }
+    let dump = match &options.dump {
+        Some(dir) => match Dump::create(dir) {
+            Ok(dump) => Some(dump),
+            Err(error) => {
+                eprintln!("fake_tv: --dump {}: {error}", dir.display());
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
+    if dump.is_some() {
+        for control in [false, true] {
+            let socket = match UdpSocket::bind((ip, 0)) {
+                Ok(socket) => socket,
+                Err(error) => {
+                    eprintln!("fake_tv: audio port: {error}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let port = socket.local_addr().map(|address| address.port()).ok();
+            if control {
+                fake.control_port = port;
+            } else {
+                fake.data_port = port;
+            }
+            media::watch_udp(socket, control, start);
+        }
+    }
+    if let Some(listener) = buffered {
+        media::watch_tcp(listener, start);
     }
     let server = Ap2Server::start_at(SocketAddr::new(IpAddr::V4(ip), options.port), fake);
     let port = server.address.port();
@@ -311,6 +399,21 @@ fn main() -> ExitCode {
             stamp(start)
         );
     }
+    if options.homepod {
+        println!(
+            "{} profile: HomePod, model {}, features {:#x}, buffered audio on a TCP port",
+            stamp(start),
+            television::HOMEPOD_MODEL,
+            television::HOMEPOD_FEATURES
+        );
+    }
+    if let Some(dir) = &options.dump {
+        println!(
+            "{} dump: every request to {}, one numbered file each",
+            stamp(start),
+            dir.display()
+        );
+    }
     if let Some(micros) = latency_us {
         println!(
             "{} latency: /info reports outputLatencyMicros {micros} ({})",
@@ -333,7 +436,7 @@ fn main() -> ExitCode {
         .then(|| Arc::new(Mutex::new(Summary::new(options.pin == Pin::Password))));
     let logger = {
         let (server, stop, summary) = (server.clone(), stop.clone(), summary.clone());
-        thread::spawn(move || log_requests(&server, start, &stop, summary.as_deref()))
+        thread::spawn(move || log_requests(&server, start, &stop, summary.as_deref(), dump))
     };
     let (lines, input) = mpsc::channel();
     let interrupt = lines.clone();
