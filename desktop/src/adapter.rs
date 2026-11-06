@@ -5558,7 +5558,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         }
         let ids = self.presets.iter().map(|preset| preset.id.as_str());
         let n = ui_model::next_id("preset:", ids, self.last_preset_id);
-        let preset = self.capture_preset(&format!("preset:{n}"), name)?;
+        let name = settings::cut(name.to_owned());
+        let preset = self.capture_preset(&format!("preset:{n}"), &name)?;
         self.last_preset_id = n;
         self.log.log(|| {
             format!(
@@ -5575,7 +5576,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let Some(preset) = self.presets.iter_mut().find(|preset| preset.id == id) else {
             return;
         };
-        preset.name = presets::renamed_preset(&preset.name, name);
+        preset.name = settings::cut(presets::renamed_preset(&preset.name, name));
         let name = preset.name.clone();
         // The notice names the preset, so it follows the new name in place.
         if self
@@ -18496,6 +18497,19 @@ mod tests {
         assert_eq!(adapter.presets[0].name, "Evening");
         assert_eq!(adapter.presets[0].members.len(), 2);
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
+    // covers: S251
+    #[test]
+    fn a_preset_name_is_cut_to_the_stored_limit_at_save_and_rename() {
+        let mut adapter = preset_adapter(Vec::new());
+        turn_on(&mut adapter, HEADPHONES);
+        Backend::save_preset(&mut adapter, &"é".repeat(settings::MAX_TEXT)).expect("saved");
+        let saved = adapter.presets[0].name.clone();
+        assert!(saved.len() <= settings::MAX_TEXT && saved.chars().all(|c| c == 'é'));
+        Backend::rename_preset(&mut adapter, "preset:1", &"ü".repeat(settings::MAX_TEXT));
+        let renamed = adapter.presets[0].name.clone();
+        assert!(renamed.len() <= settings::MAX_TEXT && renamed.starts_with('ü'));
     }
 
     /// Built-in, Speakers and Headphones with Built-in and Speakers on, read

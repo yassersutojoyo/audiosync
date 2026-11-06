@@ -1087,7 +1087,7 @@ fn clamp_hidden(hidden: Vec<SavedHidden>) -> Vec<SavedHidden> {
 }
 
 /// `text` cut to at most [`MAX_TEXT`] bytes, at a character boundary.
-fn cut(mut text: String) -> String {
+pub fn cut(mut text: String) -> String {
     if text.len() > MAX_TEXT {
         let mut end = MAX_TEXT;
         while !text.is_char_boundary(end) {
