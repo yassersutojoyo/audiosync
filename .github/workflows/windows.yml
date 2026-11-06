@@ -278,6 +278,10 @@ jobs:
           if ($info.ProductName -ne 'AudioSync') { throw "unexpected product name '$($info.ProductName)'" }
           "audiosync.exe $($info.ProductVersion) for ${{ matrix.arch }}: manifest and version information present"
 
+      # A fresh Windows has no Visual C++ runtime; the exe must not need it.
+      - name: The executable links the C runtime statically
+        run: python -I ../scripts/check_crt_imports.py target/${{ matrix.target }}/release/audiosync.exe
+
       # The license notices for everything compiled into audiosync.exe, from
       # Cargo.lock; fails if a crate's license isn't on desktop/deny.toml's list.
       - name: Third-party notices (THIRD-PARTY-NOTICES.txt)

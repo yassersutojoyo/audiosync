@@ -40,6 +40,11 @@ jobs:
         working-directory: desktop
         run: cargo build --locked --release --target x86_64-pc-windows-msvc
 
+      # A fresh Windows has no Visual C++ runtime; the exe must not need it.
+      - name: The executable links the C runtime statically
+        working-directory: desktop
+        run: python -I ../scripts/check_crt_imports.py target/x86_64-pc-windows-msvc/release/audiosync.exe
+
       - name: The executable carries the manifest and the version information
         shell: pwsh
         working-directory: desktop
