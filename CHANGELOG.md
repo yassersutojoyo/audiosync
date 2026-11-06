@@ -30,6 +30,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, a message in the main window that came back with new text right after you dismissed it, such as a Launch at Sign-In failure, now stays instead of fading out with the old one.
 - On the Mac, with Several Apps set to All Apps Except the Checked Ones, the Now Playing card no longer shows a checked app's track, and its buttons no longer control that app. Set to Only the Checked Apps, the card shows only a player among them.
 - On Windows and Linux, the Now Playing card and the track a TV shows now follow the same rule: with Several Apps set to All Apps Except the Checked Ones, a checked app's track no longer shows and the card's buttons no longer control it, and set to Only the Checked Apps, only a player among them shows.
+- On Windows, a Several Apps mix now recognizes Firefox, which Windows lists under a code rather than its name: checked under All Apps Except the Checked Ones, its track no longer shows on the Now Playing card or a TV, and checked under Only the Checked Apps, it shows.
 - On Windows, a Google Cast speaker you add by address while the speaker list already shows it now comes back under its own name, delay, zone and presets after a restart, even when your network hides it from the search.
 - On Windows, removing a Google Cast speaker you added by address now also clears its message in the main window.
 - On Windows, spaces typed before a speaker's new name no longer count toward its 60-character limit, so the whole name is kept.

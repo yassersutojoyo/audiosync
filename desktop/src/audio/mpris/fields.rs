@@ -87,6 +87,7 @@ pub fn player(bus_name: &str, properties: &HashMap<String, Field>) -> Option<Pla
     Some(Player {
         session: MediaSession {
             app_id: bus_name.to_owned(),
+            executable: None,
             title: owned("xesam:title"),
             artist,
             album: owned("xesam:album"),
@@ -200,6 +201,7 @@ mod tests {
             read.session,
             MediaSession {
                 app_id: NAME.to_owned(),
+                executable: None,
                 title: "Song".to_owned(),
                 artist: "A, B".to_owned(),
                 album: "Album".to_owned(),

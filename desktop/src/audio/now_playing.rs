@@ -168,6 +168,8 @@ impl SharedLabels {
 pub struct MediaSession {
     /// The app's user model ID on Windows, the player's bus name on Linux.
     pub app_id: String,
+    /// The executable behind `app_id`, where the system tells it.
+    pub executable: Option<String>,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -198,11 +200,16 @@ pub enum Follow {
 }
 
 impl Follow {
-    pub fn admits(&self, app_id: &str) -> bool {
+    pub fn admits(&self, session: &MediaSession) -> bool {
         match self {
             Follow::AnyApp => true,
-            Follow::App { executable, .. } => app_matches(app_id, executable),
-            Follow::Mix { .. } => self.mix_admits(|executable| app_matches(app_id, executable)),
+            Follow::App { executable, .. } => app_matches(&session.app_id, executable),
+            Follow::Mix { .. } => self.mix_admits(|executable| {
+                app_matches(&session.app_id, executable)
+                    || session.executable.as_deref().is_some_and(|path| {
+                        app_matches(path, executable) || beside(path, executable)
+                    })
+            }),
         }
     }
 
@@ -217,6 +224,15 @@ impl Follow {
             _ => true,
         }
     }
+}
+
+/// Whether `executable` sits in the folder of the file at `path`: a launcher
+/// such as Firefox's `private_browsing.exe` starts the app beside it.
+fn beside(path: &str, executable: &str) -> bool {
+    !executable.is_empty()
+        && std::path::Path::new(path)
+            .parent()
+            .is_some_and(|folder| folder.join(executable).is_file())
 }
 
 /// Whether the session app ID `app_id` is the app that runs `executable`.
@@ -249,7 +265,7 @@ fn executable_stem(name: &str) -> String {
 pub fn pick(sessions: &[MediaSession], follow: &Follow) -> Option<usize> {
     let mut paused = None;
     for (index, session) in sessions.iter().enumerate() {
-        if session.title.trim().is_empty() || !follow.admits(&session.app_id) {
+        if session.title.trim().is_empty() || !follow.admits(session) {
             continue;
         }
         if session.playing {
@@ -974,6 +990,7 @@ pub mod fake {
     pub fn session(app_id: &str, title: &str, playing: bool) -> MediaSession {
         MediaSession {
             app_id: app_id.to_owned(),
+            executable: None,
             title: title.to_owned(),
             artist: format!("{title} artist"),
             album: format!("{title} album"),
@@ -1141,6 +1158,59 @@ mod tests {
             pid: None,
         };
         assert_eq!(pick(&sessions, &vlc), None);
+    }
+
+    // covers: S218
+    #[test]
+    fn a_mix_matches_a_session_by_the_executable_behind_its_app_id() {
+        let firefox = MediaSession {
+            executable: Some(r"C:\Program Files\Mozilla Firefox\firefox.exe".to_owned()),
+            ..session("308046B0AF4A39CB", "Video", true)
+        };
+        let mix = |except: bool| Follow::Mix {
+            executables: vec!["firefox.exe".to_owned()],
+            except,
+        };
+        assert_eq!(
+            pick(std::slice::from_ref(&firefox), &mix(true)),
+            None,
+            "an All Apps Except mix read the app it leaves out"
+        );
+        assert_eq!(
+            pick(&[firefox], &mix(false)),
+            Some(0),
+            "an Only the Checked Apps mix left out an app it captures"
+        );
+    }
+
+    // covers: S218
+    #[test]
+    fn a_mix_matches_a_launcher_by_the_app_beside_it() {
+        let dir = std::env::temp_dir().join(format!("audiosync-beside-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["launcher.exe", "app.exe"] {
+            std::fs::write(dir.join(name), b"").unwrap();
+        }
+        let launched = MediaSession {
+            executable: Some(dir.join("launcher.exe").to_string_lossy().into_owned()),
+            ..session("0123456789ABCDEF;Private", "Video", true)
+        };
+        let mix = |except: bool| Follow::Mix {
+            executables: vec!["app.exe".to_owned()],
+            except,
+        };
+        let only = pick(std::slice::from_ref(&launched), &mix(false));
+        let except = pick(&[launched], &mix(true));
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(
+            only,
+            Some(0),
+            "an Only the Checked Apps mix left out the app's launcher"
+        );
+        assert_eq!(
+            except, None,
+            "an All Apps Except mix read the app's launcher"
+        );
     }
 
     #[test]

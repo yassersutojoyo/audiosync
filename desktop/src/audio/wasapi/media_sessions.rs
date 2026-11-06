@@ -3,6 +3,7 @@
 //! thread ([`crate::audio::media_sessions`]). Every wait on an app is a WinRT
 //! operation, waited for at most until its deadline and then cancelled.
 
+use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::pin::pin;
 use std::sync::Arc;
@@ -47,6 +48,8 @@ struct WindowsSessions {
     sessions_changed: Option<i64>,
     /// The sessions `changed` hears from, with their handlers' tokens.
     watched: Vec<(Session, [i64; 3])>,
+    /// The executable behind each app ID seen, looked up until found.
+    executables: HashMap<String, String>,
     /// Declared last, so the session objects are released before COM.
     _apartment: Apartment,
 }
@@ -60,6 +63,7 @@ impl WindowsSessions {
             changed: None,
             sessions_changed: None,
             watched: Vec::new(),
+            executables: HashMap::new(),
             _apartment: apartment,
         })
     }
@@ -81,14 +85,24 @@ impl WindowsSessions {
             .filter_map(|index| list.GetAt(index).ok())
             .collect();
         self.watch_each(&sessions);
-        Ok(describe_each(
+        let mut listed = describe_each(
             sessions,
             |session| session.TryGetMediaPropertiesAsync(),
             |session, properties| {
                 let described = media::describe(&session, &properties)?;
                 Ok((described, (session, properties)))
             },
-        ))
+        );
+        for (described, _) in &mut listed {
+            let app_id = &described.app_id;
+            described.executable = match self.executables.get(app_id) {
+                Some(path) => Some(path.clone()),
+                None => media::executable_behind(app_id).inspect(|path| {
+                    self.executables.insert(app_id.clone(), path.clone());
+                }),
+            };
+        }
+        Ok(listed)
     }
 
     /// Hears from the sessions listed now, and no longer from those gone.

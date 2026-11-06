@@ -23,7 +23,14 @@ use windows::Storage::Streams::{
     Buffer, DataReader, DataWriter, IRandomAccessStream, InMemoryRandomAccessStream,
     InputStreamOptions,
 };
-use windows::core::{HSTRING, Interface};
+use windows::Win32::Foundation::PROPERTYKEY;
+use windows::Win32::UI::Shell::PropertiesSystem::PSGetPropertyKeyFromName;
+use windows::Win32::UI::Shell::{
+    FOLDERID_AppsFolder, IShellItem2, KF_FLAG_DEFAULT, SHCreateItemInKnownFolder,
+};
+use windows::core::{HSTRING, Interface, w};
+
+use super::com::take_com_string;
 
 use crate::audio::now_playing::{FittedArtwork, MediaSession, fit_artwork};
 use crate::debug_log::DebugLog;
@@ -43,12 +50,33 @@ pub(super) fn describe(
     let status = session.GetPlaybackInfo()?.PlaybackStatus()?;
     Ok(MediaSession {
         app_id: session.SourceAppUserModelId()?.to_string(),
+        executable: None,
         title: properties.Title()?.to_string(),
         artist: properties.Artist()?.to_string(),
         album: properties.AlbumTitle()?.to_string(),
         playing: status == PlaybackStatus::Playing,
         paused: status == PlaybackStatus::Paused,
     })
+}
+
+/// The executable a desktop app's ID stands for, from the shortcut that
+/// lists the app in the Start menu (Firefox's ID is a hash, for one);
+/// `None` for an ID without one, such as a packaged app's.
+pub(super) fn executable_behind(app_id: &str) -> Option<String> {
+    let mut key = PROPERTYKEY::default();
+    // SAFETY: `key` is a valid PROPERTYKEY to write to.
+    unsafe { PSGetPropertyKeyFromName(w!("System.Link.TargetParsingPath"), &mut key) }.ok()?;
+    // SAFETY: the folder ID is a valid GUID and the ID a NUL-terminated string.
+    let item: IShellItem2 = unsafe {
+        SHCreateItemInKnownFolder(
+            &FOLDERID_AppsFolder,
+            KF_FLAG_DEFAULT,
+            &HSTRING::from(app_id),
+        )
+    }
+    .ok()?;
+    // SAFETY: GetString hands back a CoTaskMemAlloc string, used only here.
+    unsafe { take_com_string(item.GetString(&key).ok()?) }.filter(|path| !path.is_empty())
 }
 
 /// AudioSync's icon fitted as receiver artwork; `None`, logged, when it

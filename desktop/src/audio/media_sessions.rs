@@ -525,7 +525,7 @@ impl<L: SessionList> Reader<L> {
             return listed.iter().position(|(session, _)| {
                 session.app_id == app_id
                     && !session.title.trim().is_empty()
-                    && follow.admits(&session.app_id)
+                    && follow.admits(session)
             });
         }
         index
@@ -887,6 +887,7 @@ mod tests {
     fn playing() -> MediaSession {
         MediaSession {
             app_id: "Spotify.exe".to_owned(),
+            executable: None,
             title: "Song".to_owned(),
             artist: "Artist".to_owned(),
             album: "Album".to_owned(),
