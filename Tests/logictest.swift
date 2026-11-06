@@ -4615,6 +4615,14 @@ do {
                 && NativeReceiverLatency.reportText(us: 220_400, sources: 5) == "reports 220 ms (Audio-Latency, arrivalToRender)",
               "airplay latency: a receiver reporting nothing starts at zero without a warning")
 
+        // One frame at 44 100 Hz is about 22.7 us, so these pin the warning to the rule's cap within a frame.
+        let fittingUs = NativeAirPlay.largestFittingLatencyUs
+        let atCap = NativeAirPlay.sessionLatencyFrames([fittingUs])
+        let frameBelowCap = NativeAirPlay.sessionLatencyFrames([fittingUs - 23])
+        check(atCap == 88_200 && frameBelowCap < 88_200,
+              "airplay latency: the over-2000-ms warning starts where the Lf rule reaches its cap",
+              "\(fittingUs) us: \(atCap), \(frameBelowCap)")
+
         var waits = NativeReceiverLatency()
         waits.report("A1", us: 220_000)
         _ = waits.updateEstimate(rows: [["A1"]], canChange: true)

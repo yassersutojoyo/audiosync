@@ -458,12 +458,16 @@ final class NativeAirPlay {
         reportedUs.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
     }
 
+    /// The largest R_s whose Lf under the rule (R_s + 4410 frames, P200)
+    /// still fits in 88 200 frames: 1.9 s. The core exports no constant for it.
+    static let largestFittingLatencyUs: Int64 = 1_900_000
+
     /// Sets the stream's Lf and E from the latencies the rows in the sender
     /// reported (S280, S283); E changes only when `canChange` or no speaker
     /// sounds (P201). Main queue.
     private func syncLatency(canChange: Bool) {
         let (rows, members) = model.latencyRows
-        for id in members.joined() where (model.receiverLatency.reportedUs[id] ?? 0) > 1_500_000 {
+        for id in members.joined() where (model.receiverLatency.reportedUs[id] ?? 0) > Self.largestFittingLatencyUs {
             guard latencyWarned.insert(id).inserted else { continue }
             DebugTrace.log("[AudioSync] native AirPlay: \(model.names[id] ?? id) (\(id)) warning: reports "
                 + String(format: "%.0f", model.receiverLatency.reportedMs(id))
