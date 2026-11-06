@@ -825,7 +825,7 @@ fn a_delay_flush_holds_the_speaker_until_its_answer() {
     assert!(rig.of(moved).iter().all(|sent| sent.at < applied));
     assert!(rig.stream.waits_for_flush(moved));
 
-    rig.stream.flush_answered(moved);
+    rig.stream.flush_answered(moved, rig.now);
     let answered = rig.t();
     rig.run_for(Duration::from_millis(500));
     let audio = rig.audio(moved);

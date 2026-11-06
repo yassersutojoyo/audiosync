@@ -286,7 +286,7 @@ impl Rig {
             })
             .collect();
         for speaker in flushed {
-            self.stream.flush_answered(speaker);
+            self.stream.flush_answered(speaker, self.now);
         }
     }
 
@@ -302,7 +302,7 @@ impl Rig {
         if !self.busy {
             for id in self.stream.delays_due() {
                 self.stream.apply_delay(id, self.now);
-                self.stream.flush_answered(id);
+                self.stream.flush_answered(id, self.now);
             }
         }
         self.drain();

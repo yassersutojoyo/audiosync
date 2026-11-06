@@ -352,7 +352,7 @@ fn a_join_mid_stream_excuses_every_speakers_late_sends_for_a_second() {
 
 // covers: P200
 #[test]
-fn a_long_delay_edit_excuses_late_sends_for_a_second_only() {
+fn a_long_delay_edit_counts_late_sends_once_its_second_is_over() {
     let mut rig = low_rig();
     let edited = rig.add(speaker(1, Codec::Alac));
     rig.add(speaker(2, Codec::Alac));
@@ -368,6 +368,20 @@ fn a_long_delay_edit_excuses_late_sends_for_a_second_only() {
     rig.run_for(Duration::from_millis(100));
     assert_eq!(rig.stream.latency_frames(), 8_820, "{:?}", timelines(&rig));
     assert_eq!(rig.stream.counters().last_step(), Some(StepCause::LateSend));
+}
+
+// covers: P200
+#[test]
+fn a_restart_flush_answered_late_excuses_its_catch_up_sends() {
+    let mut rig = low_rig();
+    rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+    rig.stream.restart(rig.now);
+    rig.run_for(Duration::from_millis(1_500));
+    rig.answer_flushes();
+    rig.run_for(Duration::from_secs(2));
+    assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
+    assert_eq!(rig.stream.counters().last_step(), None);
 }
 
 // covers: P98

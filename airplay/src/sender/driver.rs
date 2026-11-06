@@ -1306,7 +1306,7 @@ impl Driver {
     /// A session's FLUSH got its answer, success or not. A resume from a
     /// pause waits until no FLUSH of that session is queued or in flight,
     /// so the answer to an earlier delay FLUSH doesn't release it (P213).
-    fn flush_answered(&mut self, key: &DeviceKey) {
+    fn flush_answered(&mut self, key: &DeviceKey, now: Instant) {
         let id = match self.active(key) {
             Some(active) => (!active.session.flushing()).then_some(active.stream_id),
             None => self
@@ -1314,7 +1314,7 @@ impl Driver {
                 .and_then(|active| (!active.session.flushing()).then_some(active.stream_id)),
         };
         if let Some(Some(id)) = id {
-            self.stream.flush_answered(id);
+            self.stream.flush_answered(id, now);
         }
     }
 
@@ -1372,7 +1372,7 @@ impl Driver {
             SessionEvent::Warning(warning) => {
                 self.emit_speaker(key, SpeakerEvent::Warning(warning))
             }
-            SessionEvent::Flushed { .. } => self.flush_answered(key),
+            SessionEvent::Flushed { .. } => self.flush_answered(key, now),
             SessionEvent::Recording {
                 first_seq,
                 first_rtptime,
@@ -1685,7 +1685,7 @@ impl Driver {
                     None => self.ap2_flush(&key, seq, rtptime, now),
                 };
                 if !sent {
-                    self.stream.flush_answered(speaker);
+                    self.stream.flush_answered(speaker, now);
                 }
             }
             StreamEvent::FirstSound {

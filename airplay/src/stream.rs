@@ -1686,10 +1686,12 @@ impl Stream {
     }
 
     /// The speaker's session answered a FLUSH, or will send none: a resume
-    /// no longer waits for it (P213).
-    pub fn flush_answered(&mut self, id: SpeakerId) {
+    /// no longer waits for it (P213), and late sends to every speaker in the
+    /// stream are excused for a second (P200).
+    pub fn flush_answered(&mut self, id: SpeakerId, now: Instant) {
         if let Some(speaker) = self.speakers.iter_mut().find(|s| s.id == id) {
             speaker.awaiting_flush = false;
+            self.grace_until = self.clock.seconds(now) + START_GRACE;
         }
     }
 

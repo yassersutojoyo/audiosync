@@ -1048,7 +1048,7 @@ impl Driver {
                 self.send_now_playing(key, now);
             }
             Ap2Event::Warning(warning) => self.emit_speaker(key, SpeakerEvent::Warning(warning)),
-            Ap2Event::Flushed => self.flush_answered(key),
+            Ap2Event::Flushed => self.flush_answered(key, now),
             Ap2Event::Trace(line) => self.emit_speaker(key, SpeakerEvent::Trace(line)),
             Ap2Event::VolumeReported(db) => {
                 self.emit_speaker(key, SpeakerEvent::VolumeReported(db))

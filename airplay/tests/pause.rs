@@ -106,7 +106,7 @@ fn pause_flushes_and_resumes() {
     );
 
     for id in [near, late] {
-        rig.stream.flush_answered(id);
+        rig.stream.flush_answered(id, rig.now);
     }
     let resumed_at = rig.t();
     let first_frame = rig.writer.position() as i64 - rig.stream.origin();
@@ -169,7 +169,7 @@ fn resume_waits_for_the_flush_answer() {
     rig.run_for(Duration::from_secs(1));
     assert_eq!(media_between(&rig, id, resumed_at, rig.t() + 1.0), 0);
 
-    rig.stream.flush_answered(id);
+    rig.stream.flush_answered(id, rig.now);
     rig.run_for(Duration::from_secs(1));
     let (seq, rtptime) = flushes(&rig, id)[0];
     let audio = rig.audio(id);
