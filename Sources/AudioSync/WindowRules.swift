@@ -46,6 +46,68 @@ enum MainColumns {
     /// The gap between the Now Playing buttons, `modes` while Shuffle or
     /// Repeat shows.
     static func transportSpacing(modes: Bool) -> CGFloat { modes ? 12 : 28 }
+
+    /// The space inside the hero, around the source and the Now Playing buttons.
+    static let heroPadding: CGFloat = 14
+    /// The space between the left column's edge and a row's icon, which its hover fill covers.
+    static let rowInset: CGFloat = 8
+}
+
+/// The main window's motion: one ease-out for rows that move or open, a
+/// fully damped spring for controls that show on hover, and a plain fade
+/// instead of either under Reduce Motion.
+enum MainMotion {
+    static let rowMove: TimeInterval = 0.35
+    static let control: TimeInterval = 0.44
+    static let reducedFade: TimeInterval = 0.15
+    /// The window's spring when the zoom button widens or narrows it.
+    static let zoom: TimeInterval = 0.56
+}
+
+/// Where the zoom button takes the main window: from any narrower width
+/// out to the widest, `MainColumns`' 860 pt, and from there back to the slim
+/// 696 pt. The top edge and the height stay; a wider window moves left as
+/// far as it must to stay on `visible`.
+enum MainZoom {
+    static let slim: CGFloat = 696
+    static let wide: CGFloat = 860
+
+    static func target(_ frame: CGRect, visible: CGRect) -> CGRect {
+        var out = frame
+        out.size.width = frame.width < wide - 0.5 ? wide : slim
+        if out.maxX > visible.maxX { out.origin.x = visible.maxX - out.width }
+        out.origin.x = max(out.origin.x, visible.minX)
+        return out
+    }
+}
+
+/// How much the Now Playing art moves, `env`, 0 when still. It follows the
+/// meter level's rises above its own recent average, never the loudness, so
+/// a long flat note calms it and silence stills it about 12 s later.
+struct Tide: Equatable {
+    static let onset: TimeInterval = 0.35
+    static let rise: TimeInterval = 0.45
+    static let fall: TimeInterval = 1.6
+    static let tail: TimeInterval = 3
+    static let average: TimeInterval = 1.4
+    static let stopAt = 0.02
+    /// Drive per second of a level 1.0 above its average.
+    static let gain = 40.0
+
+    private(set) var env = 0.0
+    private var drive = 0.0
+    private var mean = 0.0
+
+    /// `level` is the meter's 0-to-1 reading, nil when nothing is captured.
+    mutating func step(level: Double?, dt: TimeInterval) {
+        let now = level ?? 0
+        drive = min(1.2, drive * exp(-dt / Self.onset) + max(0, now - mean) * Self.gain * dt)
+        mean += (now - mean) * (1 - exp(-dt / Self.average))
+        let playing = now > Self.stopAt
+        let tau = drive > env ? Self.rise : (playing ? Self.fall : Self.tail)
+        env += (drive - env) * (1 - exp(-dt / tau))
+        if env < (playing ? 0.004 : Self.stopAt) { env = 0 }
+    }
 }
 
 /// A title or name too long for its line scrolls: it rests at its start,

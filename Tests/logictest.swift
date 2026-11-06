@@ -7418,7 +7418,7 @@ do {
         .components(separatedBy: "struct CalibrateAllButton").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
     // The mic is 20 pt wide; the chevron is estimated at 7 pt; "Calibrate All Speakers" measured 132.7 pt on the Mac.
-    let calibrateRoom = MainColumns.narrow - 2 * BrandTokens.Spacing.cardPadding - 20 - 7 - 2 * 8
+    let calibrateRoom = MainColumns.narrow - 2 * MainColumns.rowInset - 20 - 7 - 2 * 8
     check(calibrateRoom >= 133 && calibrateRowSource.contains("HStack(spacing: 8)")
             && calibrateRowSource.contains(".frame(width: 20)") && calibrateRowSource.contains("Text(t.calibrateAll)")
             && !calibrateRowSource.contains("Spacer(") && !calibrateRowSource.contains("ScrollingTitle"),
@@ -7432,10 +7432,78 @@ do {
 
     // Each symbol is estimated at 26 pt (MainColumns.transportButton), not measured.
     let row = 5 * MainColumns.transportButton + 4 * MainColumns.transportSpacing(modes: true)
-    check(row <= MainColumns.narrow - 2 * BrandTokens.Spacing.cardPadding,
-          "now playing: with Shuffle and Repeat, all five buttons fit the narrow left column's card", "\(row) pt")
+    check(row <= MainColumns.narrow - 2 * MainColumns.heroPadding,
+          "now playing: with Shuffle and Repeat, all five buttons fit the narrow left column's hero", "\(row) pt")
     check(MainColumns.transportSpacing(modes: false) == 28,
           "now playing: without Shuffle or Repeat the three buttons keep their spacing")
+}
+
+// MARK: Main window v3.1: zoom, motion, and what waits one step away (WindowRules.swift, MainWindow.swift)
+do {
+    let visible = CGRect(x: 0, y: 0, width: 1440, height: 875)
+    let slim = CGRect(x: 300, y: 100, width: 696, height: 600)
+    let wide = MainZoom.target(slim, visible: visible)
+    check(wide == CGRect(x: 300, y: 100, width: 860, height: 600),
+          "main window zoom: the slim window widens to 860 pt, its left and top edges and height kept", "\(wide)")
+    check(MainZoom.target(wide, visible: visible) == slim,
+          "main window zoom: the widest window goes back to the slim 696 pt", "\(MainZoom.target(wide, visible: visible))")
+    check(MainZoom.target(CGRect(x: 300, y: 100, width: 780, height: 600), visible: visible).width == 860,
+          "main window zoom: a window dragged between the two widths widens all the way")
+    let edge = MainZoom.target(CGRect(x: 1400 - 696, y: 100, width: 696, height: 600), visible: visible)
+    check(edge.maxX == visible.maxX && edge.width == 860,
+          "main window zoom: near the screen's right edge the window widens leftward and stays on screen", "\(edge)")
+
+    check(MainMotion.rowMove >= 0.3 && MainMotion.rowMove <= 0.4 && MainMotion.reducedFade == 0.15,
+          "main window motion: rows move on one 300-400 ms ease-out, Reduce Motion fades in 150 ms",
+          "\(MainMotion.rowMove), \(MainMotion.reducedFade)")
+
+    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    func part(after marker: String) -> String {
+        window.components(separatedBy: marker).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
+    }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    let presets = part(after: "private struct PresetsRow")
+    check(count(presets, "model.actions.recallPreset(row.id)") == 1 && count(presets, "model.actions.savePreset()") == 1
+            && count(presets, "model.actions.renamePreset(row.id)") == 1 && count(presets, "model.actions.updatePreset(row.id)") == 1
+            && count(presets, "model.actions.deletePreset(row.id)") == 1 && count(presets, "PresetEdit.canUpdate(row)") == 1,
+          "main window presets: one row whose menu still recalls, saves, renames, updates and deletes every preset")
+    let speakerRow = part(after: "struct SpeakerRow: View")
+    check(count(speakerRow, ".modifier(Reveal(shown: oneStepShown || optionsFocused))") == 1
+            && count(speakerRow, "(model.savedDelay(of: speaker.id) ?? 0) != 0") == 1
+            && count(speakerRow, "private var oneStepShown: Bool { hover.isHovered || voiceOver }") == 1
+            && count(speakerRow, "accent.opacity(") == 0,
+          "speaker row: options and a delay of 0 show on hover, focus or VoiceOver; a set delay always shows; no teal row fill")
+    let mainView = part(after: "struct MainView: View")
+    check(count(mainView, "Card {") == 0 && count(mainView, ".tint(.primary)") == 1
+            && count(mainView, "private var modesShown: Bool { heroHover.isHovered || modeFocus != nil || voiceOver }") == 1,
+          "main window: no cards in the columns, controls in ink, Shuffle and Repeat one step away on the hero")
+    let zoneCard = part(after: "private struct ZoneCard: View")
+    check(count(zoneCard, ".modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))") == 1
+            && count(zoneCard, "Card(") == 0 && count(zoneCard, ".tint(Brand.teal") == 0
+            && count(zoneCard, "teal.opacity(") == 0,
+          "zones: a zone is a row like a speaker's, its options one step away, no card, teal only for its playing count")
+
+    func tideRun(_ seconds: Double, _ tide: inout Tide, level: (Double) -> Double?) -> [Double] {
+        (0..<Int(seconds * 10)).map { tick in
+            tide.step(level: level(Double(tick) / 10), dt: 0.1)
+            return tide.env
+        }
+    }
+    var silent = Tide()
+    check(tideRun(5, &silent) { _ in 0 }.allSatisfy { $0 == 0 } && tideRun(5, &silent) { _ in nil }.allSatisfy { $0 == 0 },
+          "music art: silence and nothing captured leave it still")
+    var flat = Tide()
+    let flatRun = tideRun(20, &flat) { _ in 0.6 }
+    check(flatRun.prefix(10).contains { $0 > 0.3 } && flatRun.last == 0,
+          "music art: a note starting moves it, the same note held flat calms it to still, loud or not",
+          "\(flatRun.prefix(10).max() ?? 0), \(flatRun.last ?? -1)")
+    var song = Tide()
+    let songRun = tideRun(10, &song) { t in Int(t * 2) % 2 == 0 ? 0.35 : 0.6 }
+    let stopRun = tideRun(15, &song) { _ in nil }
+    check(songRun.suffix(20).max() ?? 0 > 0.3 && stopRun[30] > 0 && stopRun[140] == 0
+            && zip(stopRun, stopRun.dropFirst()).allSatisfy { $1 <= $0 },
+          "music art: changing sound keeps it moving; once it stops it settles for seconds and is still by 14 s",
+          "\(songRun.suffix(20).max() ?? 0), \(stopRun[30]), \(stopRun[140])")
 }
 
 // MARK: Now Playing shuffle and repeat (NowPlaying.swift)
@@ -8010,8 +8078,6 @@ do {
         (presetText.presetsEmpty, "No presets yet. Turn on the speakers you want, set the volumes and the curve, "
             + "then save them as a preset."),
         (presetText.choosePreset, "Choose a Preset"),
-        (presetText.presetCurrent, "Current"),
-        (presetText.presetRecallHint, "Recalls this preset"),
         (presetText.presetSaved("Evening"), "Evening saved"),
         (presetText.presetUpdated("Evening"), "Evening updated"),
         (presetText.presetDeleted("Evening"), "Evening deleted"),
@@ -16790,13 +16856,13 @@ do {
           String(format: "chip %.2f, secondary %.2f", worstChip, worstSecondary))
 }
 
-// MARK: The Presets card's colors in light and dark (MainWindow.swift PresetsCard)
+// MARK: The Presets row's colors in light and dark (MainWindow.swift PresetsRow)
 do {
     // covers: S268 (the Mac host)
     let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
-    let card = window.components(separatedBy: "private struct PresetsCard").dropFirst().first?
+    let card = window.components(separatedBy: "private struct PresetsRow").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
-    check(card.contains("Brand.tealText") && card.contains("Brand.secondaryText")
+    check(card.contains("Brand.secondaryText")
             && !card.contains("Color(") && !card.contains("NSColor("),
           "presets: the card's colors are brand tokens, never a literal color")
 

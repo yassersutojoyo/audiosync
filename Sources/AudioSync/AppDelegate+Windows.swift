@@ -372,6 +372,12 @@ extension AppDelegate {
             self.nowPlayingOnScreen = visible   // Now Playing polls only while someone sees it
             self.syncTrackInfo()
             self.appModel.inputLevel.setVisible(visible)
+            // An input device's peaks belong to the input meter; the art rests then.
+            SoundTide.shared.follow(visible ? { [weak self] in
+                guard let self, self.engine.isRunning else { return nil }
+                if case .input = self.audioSource { return nil }
+                return self.engine.takePeak()
+            } : nil)
         }
         a.dismissNotice = { [weak self] subject in self?.clearNotices([subject]) }
         a.permissionContinue = { [weak self] permission in self?.resumeAfterPermission(permission) }

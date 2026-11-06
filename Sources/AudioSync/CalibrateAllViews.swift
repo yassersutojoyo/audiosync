@@ -16,7 +16,7 @@ struct CalibrateAllButton: View {
                 HStack(spacing: 8) {
                     Image(systemName: "mic")
                         .font(.system(size: 15))
-                        .foregroundStyle(off == nil ? Brand.teal : Color.secondary)
+                        .foregroundStyle(off == nil ? Color.primary : Color.secondary)
                         .frame(width: 20)
                         .accessibilityHidden(true)
                     Text(t.calibrateAll)

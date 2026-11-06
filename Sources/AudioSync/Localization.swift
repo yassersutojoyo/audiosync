@@ -1258,9 +1258,6 @@ struct UIStrings {
     let presetsEmpty = "No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset."
     /// The panel's preset row while no preset is current.
     let choosePreset = "Choose a Preset"
-    /// The VoiceOver value of the current preset's row.
-    let presetCurrent = "Current"
-    let presetRecallHint = "Recalls this preset"
     /// What VoiceOver says after Save, Update and Delete.
     func presetSaved(_ name: String) -> String { "\(name) saved" }
     func presetUpdated(_ name: String) -> String { "\(name) updated" }
