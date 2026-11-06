@@ -6,7 +6,8 @@
 # Also runs shellcheck on the scripts in scripts/shellcheck-files.txt (it fails
 # if shellcheck isn't installed: brew install shellcheck), the private-reference
 # check, scripts/privacy_check.py, the host spec-marker check,
-# scripts/spec_markers.py, and the appcast checker's self-test. The logic and core suites, the soak harness
+# scripts/spec_markers.py, the SwiftUI macro check, scripts/swift_macros.py,
+# and the appcast checker's self-test. The logic and core suites, the soak harness
 # and the engine test link the Rust core, so this builds it first with
 # scripts/build_core.sh (which needs a Rust toolchain).
 # Off macOS (the Windows PC's Git Bash) the Swift suites can't build, so it runs
@@ -113,6 +114,14 @@ else
   { "$python" -I scripts/spec_markers.py --self-test && "$python" -I scripts/spec_markers.py; } || status=1
 fi
 
+echo "▶ no SwiftUI macros the Command Line Tools can't build (scripts/swift_macros.py)"
+if [ -z "$python" ]; then
+  echo "$no_python"
+  status=1
+else
+  { "$python" -I scripts/swift_macros.py --self-test && "$python" -I scripts/swift_macros.py; } || status=1
+fi
+
 echo "▶ release appcast checker (scripts/check_appcast.py --self-test)"
 if [ -z "$python" ]; then
   echo "$no_python"
@@ -131,18 +140,6 @@ echo "▶ side effects in debug logging"
 # call inside its message never happens in a normal run.
 if grep -nE 'DebugTrace\.log\(.*\b(perform|send|write|open|close)\(' "$SRC"/*.swift; then
   echo "FAIL: a call inside DebugTrace.log(...) only runs when debugging is on"
-  status=1
-else
-  echo "PASSED"
-fi
-
-echo "▶ no SwiftUI macros the Command Line Tools can't expand"
-# The Command Line Tools toolchain ships without SwiftUI's macro plugins, so a
-# plain @State (a macro in the macOS 27 SDK) builds in CI's Xcode but not with
-# ./build.sh on a Mac that has only the Command Line Tools. Keep such state in
-# an ObservableObject held by @StateObject or @ObservedObject instead.
-if grep -HnE '@State([^[:alnum:]_]|$)' "$SRC"/*.swift | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//'; then
-  echo "FAIL: plain @State needs SwiftUI's macro plugin, which the Command Line Tools lack"
   status=1
 else
   echo "PASSED"
