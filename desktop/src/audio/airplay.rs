@@ -67,7 +67,6 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use audiosync_airplay::dacp::RemoteCommand;
-#[cfg(os_backend)]
 use audiosync_airplay::discovery::mdns::DiscoveryError;
 use audiosync_airplay::discovery::{Device, DeviceKey, ProtocolPath, ServiceKind};
 use audiosync_airplay::error::{ErrorKind, UnsupportedReason, UserReason, Warning};
@@ -220,6 +219,10 @@ pub trait AirPlayLink {
     /// driver thread ended): it lists, plays and reports nothing anymore,
     /// and only a new sender brings AirPlay back.
     fn is_running(&self) -> bool;
+
+    /// Browses afresh, keeping the receivers listed; without a fresh
+    /// browser the running one stays (S352).
+    fn browse_again(&mut self) -> Result<(), DiscoveryError>;
 
     /// Whether the hidden AirPlay 2 switch is on for this sender.
     fn airplay2(&self) -> bool {
@@ -447,6 +450,10 @@ impl AirPlayLink for SenderLink {
 
     fn is_running(&self) -> bool {
         self.sender.is_running()
+    }
+
+    fn browse_again(&mut self) -> Result<(), DiscoveryError> {
+        self.sender.start_discovery()
     }
 
     fn airplay2(&self) -> bool {
@@ -1418,6 +1425,13 @@ impl AirPlaySpeakers {
     /// then does a Retry replace it.
     pub fn is_stopped(&self) -> bool {
         self.stopped
+    }
+
+    pub fn browse_again(&mut self) {
+        if let Err(error) = self.link.browse_again() {
+            self.log
+                .log(|| format!("AirPlay: discovery couldn't start again: {error}"));
+        }
     }
 
     /// Replaces the sender with `link`, a new one: what the old one listed,
@@ -5009,6 +5023,7 @@ pub mod tests {
         SubmitPin(String, String),
         CancelPairing(String),
         ForgetHomeKit(String),
+        BrowseAgain,
     }
 
     #[derive(Default)]
@@ -5407,6 +5422,11 @@ pub mod tests {
 
         fn is_running(&self) -> bool {
             !self.0.borrow().stopped
+        }
+
+        fn browse_again(&mut self) -> Result<(), DiscoveryError> {
+            self.0.borrow_mut().calls.push(Call::BrowseAgain);
+            Ok(())
         }
 
         fn airplay2(&self) -> bool {

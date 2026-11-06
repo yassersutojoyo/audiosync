@@ -959,6 +959,10 @@ pub trait AudioBackend {
     /// couldn't start (reported as [`BackendEvent::AirPlayStopped`]).
     fn airplay_browsing(&self) -> bool;
 
+    /// Browses afresh with a running AirPlay sender and Cast browser,
+    /// keeping the speakers listed (S352).
+    fn browse_again(&mut self);
+
     /// The IDs of the AirPlay speakers turned on, listed or not, sorted.
     fn enabled_airplay(&self) -> Vec<String>;
 

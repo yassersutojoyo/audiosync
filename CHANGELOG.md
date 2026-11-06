@@ -34,6 +34,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a Google Cast speaker you add by address while the speaker list already shows it now comes back under its own name, delay, zone and presets after a restart, even when your network hides it from the search.
 - On Windows, removing a Google Cast speaker you added by address now also clears its message in the main window.
 - On Windows, spaces typed before a speaker's new name no longer count toward its 60-character limit, so the whole name is kept.
+- On Windows, Refresh Devices (F5) now searches the network again for AirPlay and Google Cast speakers, as it does on the Mac, so after you switch Wi-Fi networks it finds the speakers on the new one.
 
 ## [0.8.7] - 2026-11-05
 

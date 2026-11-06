@@ -44,7 +44,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use audiosync_cast::audio::{AudioReader, AudioWriter, Codec, MasterGain, audio_ring};
-use audiosync_cast::discovery::mdns::MdnsBrowser;
+use audiosync_cast::discovery::mdns::{DiscoveryError, MdnsBrowser};
 use audiosync_cast::discovery::reach::Reachability;
 use audiosync_cast::discovery::{
     Announcements, BrowseEvent, DeviceId, DeviceKey, DeviceList, Entry, ListEvent,
@@ -396,6 +396,8 @@ pub trait CastLink: Send {
     /// The device announced itself: a reconnect to it goes at once (C81).
     fn announced(&mut self, device: DeviceId);
     fn discovery(&self) -> CastDiscovery;
+    /// Browses afresh, keeping the devices listed (S352).
+    fn browse_again(&mut self);
     /// Tears down whatever runs within C88's budget; the one call that
     /// waits. Returns whether it finished in time.
     fn shutdown(&mut self) -> bool;
@@ -510,6 +512,10 @@ impl CastLink for HostLink {
         }
     }
 
+    fn browse_again(&mut self) {
+        browse_again(&mut self.browser, MdnsBrowser::new);
+    }
+
     fn clear_device_key(&mut self, device: DeviceId) -> Option<String> {
         self.host.clear_device_key(device)
     }
@@ -521,6 +527,22 @@ impl CastLink for HostLink {
     fn shutdown(&mut self) -> bool {
         self.browser = None;
         self.host.shutdown()
+    }
+}
+
+/// Browses afresh with a running browser, or opens a new one in place of
+/// one that failed (S352).
+fn browse_again(
+    browser: &mut Option<MdnsBrowser>,
+    open: impl FnOnce() -> Result<MdnsBrowser, DiscoveryError>,
+) {
+    match browser {
+        Some(running) if !running.is_dead() => running.browse_again(),
+        _ => {
+            if let Ok(fresh) = open() {
+                *browser = Some(fresh);
+            }
+        }
     }
 }
 
@@ -1001,6 +1023,12 @@ impl CastSpeakers {
         self.link
             .as_ref()
             .map_or(CastDiscovery::Off, |link| link.discovery())
+    }
+
+    pub fn browse_again(&mut self) {
+        if let Some(link) = self.link.as_mut() {
+            link.browse_again();
+        }
     }
 
     fn memory(&self) -> DeviceMemory {
@@ -2158,6 +2186,7 @@ pub mod tests {
         pub browse: VecDeque<BrowseEvent>,
         /// The mDNS browser ended: discovery reads as failed.
         pub discovery_stopped: bool,
+        pub browses_again: usize,
         next: u64,
     }
 
@@ -2285,6 +2314,10 @@ pub mod tests {
             }
         }
 
+        fn browse_again(&mut self) {
+            self.state().browses_again += 1;
+        }
+
         fn shutdown(&mut self) -> bool {
             self.state().shutdowns += 1;
             true
@@ -2293,6 +2326,36 @@ pub mod tests {
 
     pub fn id(text: &str) -> DeviceId {
         DeviceId::parse(text).expect("a test ID")
+    }
+
+    /// A Cast search that failed starts over on Refresh Devices, as on the
+    /// Mac; a running one browses afresh in place.
+    // covers: S352
+    #[test]
+    fn browsing_again_reopens_a_failed_cast_browser_and_keeps_a_running_one() {
+        let (_live, events) = std::sync::mpsc::channel();
+        let fresh = || Ok(MdnsBrowser::from_events(events));
+        let mut browser = None;
+        browse_again(&mut browser, fresh);
+        assert!(browser.as_ref().is_some_and(|b| !b.is_dead()), "none ran");
+
+        let (ended, events) = std::sync::mpsc::channel();
+        drop(ended);
+        let mut dead = MdnsBrowser::from_events(events);
+        assert_eq!(dead.poll_event(), None);
+        assert!(dead.is_dead());
+        let mut browser = Some(dead);
+        let (_live, events) = std::sync::mpsc::channel();
+        browse_again(&mut browser, || Ok(MdnsBrowser::from_events(events)));
+        assert!(
+            browser.as_ref().is_some_and(|b| !b.is_dead()),
+            "it had ended"
+        );
+
+        let (_running, events) = std::sync::mpsc::channel();
+        let mut browser = Some(MdnsBrowser::from_events(events));
+        browse_again(&mut browser, || panic!("a running browser stays"));
+        assert!(browser.is_some());
     }
 
     /// Kitchen and Living Room as single devices, Attic as a group, all

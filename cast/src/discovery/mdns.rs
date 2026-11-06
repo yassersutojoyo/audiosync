@@ -235,6 +235,12 @@ impl MdnsBrowser {
         (self.resolved.iter()).any(|(name, _)| name.eq_ignore_ascii_case(fullname))
     }
 
+    /// Browses afresh at the next poll, once what the running browse holds
+    /// is taken in; the devices found so far stay known (S352).
+    pub fn browse_again(&mut self) {
+        self.query_due = true;
+    }
+
     /// The event source is gone; nothing will ever arrive again.
     pub fn is_dead(&self) -> bool {
         self.dead

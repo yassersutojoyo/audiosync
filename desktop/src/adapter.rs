@@ -5654,6 +5654,9 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.log
             .log(|| "the user asked to list the devices again".to_owned());
         self.list_devices();
+        // After a Wi-Fi switch only a fresh browse finds the speakers there (S352).
+        self.audio.browse_again();
+        self.airplay_quiet_polls = 0;
         // A sender that stopped by itself starts again only through its
         // notice's Retry, which may have been dismissed.
         if !self.audio.airplay_browsing() {
@@ -12777,6 +12780,29 @@ mod tests {
         }));
         adapter.refresh_devices();
         assert_eq!(starts.get(), 0);
+    }
+
+    /// After a Wi-Fi switch only a fresh browse finds the speakers there.
+    // covers: S352
+    #[test]
+    fn refresh_devices_browses_afresh_and_counts_the_none_found_20_s_again() {
+        let mut audio = MockBackend::empty();
+        let airplay = FakeAirPlay::new();
+        audio.set_airplay(airplay.link(), None);
+        let cast = FakeCast::default();
+        audio.set_cast(cast.link());
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        poll_times(&mut adapter, POLLS_IN_20_S);
+        assert!(none_found_hint(&adapter));
+        airplay.take_calls();
+        adapter.refresh_devices();
+        assert_eq!(airplay.take_calls(), [Call::BrowseAgain]);
+        assert_eq!(cast.state().browses_again, 1);
+        assert!(!none_found_hint(&adapter));
+        poll_times(&mut adapter, POLLS_IN_20_S - 1);
+        assert!(!none_found_hint(&adapter), "not before 20 seconds");
+        adapter.poll();
+        assert!(none_found_hint(&adapter));
     }
 
     // covers: S396, S222

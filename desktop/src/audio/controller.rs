@@ -4445,6 +4445,19 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .is_some_and(|airplay| !airplay.is_stopped())
     }
 
+    fn browse_again(&mut self) {
+        if let Some(airplay) = self
+            .airplay
+            .as_mut()
+            .filter(|airplay| !airplay.is_stopped())
+        {
+            airplay.browse_again();
+        }
+        if let Some(cast) = self.cast.as_mut() {
+            cast.browse_again();
+        }
+    }
+
     fn enabled_airplay(&self) -> Vec<String> {
         self.airplay
             .as_ref()
