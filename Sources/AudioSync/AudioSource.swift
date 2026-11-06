@@ -132,7 +132,8 @@ extension AudioSource {
 
     /// Reads the stored string back. Nothing stored, or an empty string, means
     /// the whole system; a tagged value is an input device; any other value is
-    /// an app's bundle ID.
+    /// an app's bundle ID. An input tag with no UID, or any other value holding
+    /// a colon, is damaged and reads as the whole system.
     init(defaultsValue stored: String?) {
         guard let stored, !stored.isEmpty else {
             self = .system
@@ -142,9 +143,12 @@ extension AudioSource {
             self = .mixed(mode, bundleIDs: stored.dropFirst(tag.count).split(separator: ",").map(String.init))
             return
         }
-        self = stored.hasPrefix(Self.inputTag)
-            ? .input(uid: String(stored.dropFirst(Self.inputTag.count)))
-            : .app(bundleID: stored)
+        let uid = stored.dropFirst(Self.inputTag.count)
+        if stored.hasPrefix(Self.inputTag), !uid.isEmpty {
+            self = .input(uid: String(uid))
+        } else {
+            self = stored.contains(":") ? .system : .app(bundleID: stored)
+        }
     }
 }
 

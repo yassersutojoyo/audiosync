@@ -294,6 +294,9 @@ check(AudioSource.app(bundleID: "com.spotify.client").defaultsValue == "com.spot
       "source: an app is stored as its plain bundle ID, as earlier versions stored it")
 // covers: S12
 check(AudioSource.system.bundleID == nil, "source: the whole system has no bundle ID")
+// covers: S12
+check(AudioSource(defaultsValue: "input:") == .system && AudioSource(defaultsValue: "speaker:living-room") == .system,
+      "source: an input: tag with no UID, or a value under an unknown tag, reads as the whole system")
 
 // MARK: Several apps as one source
 // covers: S10, S242 (the Mac's mix and all-except sources, AudioSync never in them)
