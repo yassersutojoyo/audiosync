@@ -6,19 +6,20 @@ mod common;
 #[path = "../examples/fake_tv/television.rs"]
 mod television;
 
-use std::net::{IpAddr, Ipv4Addr};
-use std::time::Duration;
+use std::net::{IpAddr, Ipv4Addr, UdpSocket};
+use std::time::{Duration, Instant};
 
 use audiosync_airplay::discovery::{
     Device, DeviceId, DeviceKey, ScopedAddr, ServiceKind, ServiceRecord,
 };
 use audiosync_airplay::latency::LatencySources;
+use audiosync_airplay::rtp::{ResendRequest, RtpHeader, SyncPacket};
 use audiosync_airplay::sender::{
     Sender, SenderConfig, SenderEvent, SpeakerEvent, SpeakerOptions, SpeakerState,
 };
 use audiosync_airplay::volume::Volume;
 
-use common::ap2::{Ap2Server, read_dict};
+use common::ap2::{Ap2Server, read_dict, request_key};
 use common::net::{Events, HostAudio, serial};
 use television::{LATENCY_VAR, Pin, latency_from, report_latency, television};
 
@@ -148,4 +149,148 @@ fn fake_tv_stream_setup_asks_the_lf_in_use_when_it_is_below_the_capture_minimum(
             "Lf {lf:?}"
         );
     }
+}
+
+/// Every datagram reaching `socket` for `span`, with its arrival time.
+fn read_for(socket: &UdpSocket, span: Duration) -> Vec<(Instant, Vec<u8>)> {
+    socket
+        .set_read_timeout(Some(Duration::from_millis(50)))
+        .expect("a read timeout");
+    let end = Instant::now() + span;
+    let mut read = Vec::new();
+    let mut buffer = [0u8; 2048];
+    while Instant::now() < end {
+        if let Ok(length) = socket.recv(&mut buffer) {
+            read.push((Instant::now(), buffer[..length].to_vec()));
+        }
+    }
+    read
+}
+
+// covers: P200
+#[test]
+fn fake_tv_a_burst_of_resend_requests_raises_lf_by_a_pause_the_size_of_the_step() {
+    let _serial = serial();
+    let server = Ap2Server::start(plain_tv());
+    let [data, control] = <[UdpSocket; 2]>::try_from(server.udp()).expect("two sockets");
+    let (sender, writer) = Sender::start(SenderConfig {
+        airplay2: true,
+        airplay2_device_id: Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]),
+        ..SenderConfig::default()
+    })
+    .expect("the sender starts");
+    let _host = HostAudio::start(writer);
+    let mut events = Events::default();
+    sender.set_latency(4_410);
+    let started = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Timeline { latency, .. }
+            if *latency == Duration::from_millis(100))
+    });
+    assert!(started.is_some(), "Lf 4410 applies before any speaker");
+    let device = device(&server);
+    let key = device.key.clone();
+    sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
+    let playing = events.wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing);
+    assert!(playing.is_some(), "{:?}", events.of(&key));
+
+    let watcher = control.try_clone().expect("a control reader");
+    let control_reads =
+        std::thread::spawn(move || read_for(&watcher, Duration::from_millis(5_500)));
+    let before = read_for(&data, Duration::from_secs(2));
+    let flushes = || {
+        server
+            .fake()
+            .requests
+            .iter()
+            .filter(|(request, _)| request_key(request) == "FLUSH")
+            .count()
+    };
+    let flushed = flushes();
+    let last = RtpHeader::parse(&before.last().expect("audio").1).expect("RTP");
+    let setup = server
+        .fake()
+        .last("SETUP stream")
+        .cloned()
+        .expect("a stream SETUP");
+    let port = read_dict(&setup.body)
+        .and_then(|body| {
+            body.get("streams")?
+                .as_array()?
+                .first()?
+                .as_dictionary()?
+                .get("controlPort")?
+                .as_unsigned_integer()
+        })
+        .expect("the sender's control port");
+    let burst = Instant::now();
+    for seq in 1..=3u16 {
+        let request = ResendRequest {
+            seq,
+            first: last.seq.wrapping_sub(3 - seq),
+            count: 1,
+        };
+        control
+            .send_to(&request.encode(), (Ipv4Addr::LOCALHOST, port as u16))
+            .expect("the request goes out");
+    }
+    let stepped = events.wait_for(&sender, LONG, |event| {
+        matches!(event, SenderEvent::Timeline { latency, restarted: false, .. }
+            if *latency == Duration::from_millis(200))
+    });
+    let after = read_for(&data, Duration::from_secs(2));
+    let control_reads = control_reads.join().expect("the control reader");
+    let syncs: Vec<SyncPacket> = control_reads
+        .iter()
+        .filter(|(at, _)| *at > burst)
+        .filter_map(|(_, bytes)| SyncPacket::parse(bytes))
+        .collect();
+    let flushed_after = flushes();
+    sender.shutdown();
+    assert!(stepped.is_some(), "Lf steps to 200 ms on the burst");
+    assert_eq!(flushed_after, flushed, "no FLUSH for the step");
+    let audio: Vec<(Instant, RtpHeader)> = before
+        .iter()
+        .chain(&after)
+        .filter_map(|(at, bytes)| Some((*at, RtpHeader::parse(bytes)?)))
+        .collect();
+    let mut longest = Duration::ZERO;
+    for pair in audio.windows(2) {
+        assert_eq!(
+            pair[1].1.seq,
+            pair[0].1.seq.wrapping_add(1),
+            "numbering runs on"
+        );
+        longest = longest.max(pair[1].0 - pair[0].0);
+    }
+    eprintln!(
+        "fake_tv step: {} packets, longest arrival gap {} ms, {} syncs after",
+        audio.len(),
+        longest.as_millis(),
+        syncs.len()
+    );
+    assert!(
+        longest < Duration::from_millis(150),
+        "sending pauses only for the 100 ms step: {longest:?}"
+    );
+    let sync = syncs.last().expect("a sync after the step");
+    assert_eq!(sync.next_rtp.wrapping_sub(sync.rtp_heard), 8_820);
+    let earlier = control_reads
+        .iter()
+        .filter(|(at, _)| *at < burst)
+        .filter_map(|(_, bytes)| SyncPacket::parse(bytes))
+        .next_back()
+        .expect("a sync before the step");
+    assert_eq!(earlier.next_rtp.wrapping_sub(earlier.rtp_heard), 4_410);
+    let silence = heard_by(sync, sync.next_rtp) - heard_by(&earlier, sync.next_rtp);
+    eprintln!("fake_tv step: silence {:.1} ms", silence * 1_000.0);
+    assert!(
+        (silence - 0.1).abs() < 0.002,
+        "the pause is the step: {silence}"
+    );
+}
+
+/// When a sync says RTP time `rtp` sounds.
+fn heard_by(sync: &SyncPacket, rtp: u32) -> f64 {
+    let at = (sync.time.0 >> 32) as f64 + (sync.time.0 & 0xffff_ffff) as f64 / 4_294_967_296.0;
+    at + f64::from(rtp.wrapping_sub(sync.rtp_heard) as i32) / 44_100.0
 }

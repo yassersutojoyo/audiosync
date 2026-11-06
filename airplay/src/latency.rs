@@ -11,14 +11,15 @@
 
 use plist::{Dictionary, Value};
 
-use crate::stream::{DEFAULT_LATENCY_FRAMES, MAX_LATENCY_FRAMES, MIN_LATENCY_FRAMES};
+use crate::stream::{MAX_LATENCY_FRAMES, MIN_LATENCY_FRAMES};
 
 /// The stream's sample rate, which `Audio-Latency` counts in (P196).
 const FRAMES_PER_SECOND: u64 = 44_100;
 const MICROS_PER_SECOND: u64 = 1_000_000;
 
-/// The room P200 leaves on top of the largest R_s: 22 050 frames, 0.5 s.
-pub const LATENCY_MARGIN_FRAMES: u32 = 22_050;
+/// The room P200 leaves on top of the largest R_s for the send margin M
+/// (P84): 4410 frames, 0.1 s.
+pub const LATENCY_MARGIN_FRAMES: u32 = 4_410;
 
 /// Which of the three reports gave a value, as the C interface numbers
 /// them (P202).
@@ -117,13 +118,12 @@ pub fn micros_to_frames(micros: u64) -> u64 {
 /// The Lf one speaker with R_s `micros` would need alone (P200).
 pub fn latency_needed_frames(micros: u64) -> u32 {
     let wanted = micros_to_frames(micros).saturating_add(u64::from(LATENCY_MARGIN_FRAMES));
-    let floored = wanted.max(u64::from(DEFAULT_LATENCY_FRAMES));
-    floored.clamp(u64::from(MIN_LATENCY_FRAMES), u64::from(MAX_LATENCY_FRAMES)) as u32
+    wanted.clamp(u64::from(MIN_LATENCY_FRAMES), u64::from(MAX_LATENCY_FRAMES)) as u32
 }
 
-/// The stream's Lf from every speaker's R_s in microseconds:
-/// `clamp(max(77 175, R_max + 22 050), 4410, 88 200)` frames, 77 175 for
-/// an empty list (P200).
+/// The stream's starting Lf from every speaker's R_s in microseconds:
+/// `clamp(R_max + 4410, 4410, 88 200)` frames, 4410 for an empty list
+/// (P200).
 pub fn session_latency_frames<I>(reported_us: I) -> u32
 where
     I: IntoIterator<Item = u64>,
@@ -131,30 +131,7 @@ where
     reported_us
         .into_iter()
         .max()
-        .map_or(DEFAULT_LATENCY_FRAMES, latency_needed_frames)
-}
-
-/// The environment variable that overrides Lf in whole milliseconds on the
-/// Windows and Linux hosts (P200).
-pub const AIRPLAY_LATENCY_ENV: &str = "AUDIOSYNC_AIRPLAY_LATENCY_MS";
-
-/// The Lf of a user's override of `ms` milliseconds, clamped to the range of
-/// P98 (P200).
-pub fn override_latency_frames(ms: u64) -> u32 {
-    let frames = ms.saturating_mul(FRAMES_PER_SECOND) / 1000;
-    frames.clamp(u64::from(MIN_LATENCY_FRAMES), u64::from(MAX_LATENCY_FRAMES)) as u32
-}
-
-/// The override [`AIRPLAY_LATENCY_ENV`] holds, `None` when it is unset or 0,
-/// or why the value is ignored when it isn't whole milliseconds (P200).
-pub fn latency_override(value: Option<&str>) -> Result<Option<u32>, String> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    value
-        .parse::<u64>()
-        .map(|ms| (ms > 0).then(|| override_latency_frames(ms)))
-        .map_err(|_| format!("{AIRPLAY_LATENCY_ENV}={value:?} is not whole milliseconds; ignored"))
+        .map_or(MIN_LATENCY_FRAMES, latency_needed_frames)
 }
 
 /// True when Lf would have to exceed 88 200 frames for R_s `micros` (the

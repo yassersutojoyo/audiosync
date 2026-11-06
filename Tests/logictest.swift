@@ -4495,7 +4495,7 @@ do {
         known.report("D2", us: 1_300_000)
         let leaving = known.newFrames(over: [], rule: rule)
         let joining = known.newFrames(over: ["A1", "D2"], rule: rule)
-        check(leaving == nil && joining == 79_380 && known.newFrames(over: ["A1", "D2"], rule: rule) == nil,
+        check(leaving == 4_410 && joining == 61_740 && known.newFrames(over: ["A1", "D2"], rule: rule) == nil,
               "airplay latency: is set from known reports before speakers are added",
               "\(String(describing: leaving)) \(String(describing: joining))")
 
@@ -4506,7 +4506,7 @@ do {
         let large = follows.newFrames(over: ["A1", "D2"], rule: rule)
         let left = follows.newFrames(over: ["A1"], rule: rule)
         // covers: S280
-        check(small == nil && large == 79_380 && left == 77_175,
+        check(small == 13_230 && large == 61_740 && left == 13_230,
               "airplay latency: follows a report and a speaker leaving",
               "\(String(describing: small)) \(String(describing: large)) \(String(describing: left))")
 
@@ -4647,7 +4647,7 @@ do {
         let latency = group.receiverLatency
         let pair = group.sessions(of: "pair:5f0c")
         let oneRowPerTarget = rowIDs == ["B2", "pair:5f0c"] && rows == [["B2"], ["L1", "R1"]]
-        let shared = lf == 83_790 && estimate == .applied && latency.estimateMs == 1400
+        let shared = lf == 66_150 && estimate == .applied && latency.estimateMs == 1400
         let perRow = latency.estimateMs(of: pair) == 220 && latency.offsetMs(of: pair) == 1180
             && latency.offsetMs(of: ["B2"]) == 0
         // covers: S284

@@ -270,12 +270,13 @@ fn receiver_latency_largest_per_session() {
 // covers: P200, P202
 #[test]
 fn session_latency_rule() {
-    assert_eq!(session_latency_frames([]), 77_175);
-    assert_eq!(session_latency_frames([0, 0]), 77_175);
-    assert_eq!(session_latency_frames([250_000, 400_000]), 77_175);
-    assert_eq!(session_latency_frames([1_300_000]), 79_380);
-    assert_eq!(session_latency_frames([200_000, 1_300_000]), 79_380);
-    assert_eq!(session_latency_frames([1_600_000]), 88_200);
+    assert_eq!(session_latency_frames([]), 4_410);
+    assert_eq!(session_latency_frames([0, 0]), 4_410);
+    assert_eq!(session_latency_frames([250_000, 400_000]), 22_050);
+    assert_eq!(session_latency_frames([1_300_000]), 61_740);
+    assert_eq!(session_latency_frames([200_000, 1_300_000]), 61_740);
+    assert_eq!(session_latency_frames([1_600_000]), 74_970);
+    assert_eq!(session_latency_frames([1_950_000]), 88_200);
     assert_eq!(session_latency_frames([u64::MAX]), 88_200);
 }
 

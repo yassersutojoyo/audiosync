@@ -23,10 +23,10 @@ fn the_c_session_latency_matches_the_crate() {
     // SAFETY: a null array is allowed.
     assert_eq!(
         unsafe { asc_airplay_session_latency_frames(ptr::null(), 3) },
-        77_175
+        4_410
     );
-    assert_eq!(c_rule(&[]), 77_175);
-    assert_eq!(c_rule(&[-1, -400_000]), 77_175);
+    assert_eq!(c_rule(&[]), 4_410);
+    assert_eq!(c_rule(&[-1, -400_000]), 4_410);
     let cases: [&[i64]; 5] = [
         &[250_000, 400_000],
         &[1_300_000],
@@ -39,8 +39,8 @@ fn the_c_session_latency_matches_the_crate() {
             session_latency_frames(reported.iter().map(|&us| u64::try_from(us).unwrap_or(0)));
         assert_eq!(c_rule(reported), crate_value, "{reported:?}");
     }
-    assert_eq!(c_rule(&[1_300_000]), 79_380);
-    assert_eq!(c_rule(&[1_600_000]), 88_200);
+    assert_eq!(c_rule(&[1_300_000]), 61_740);
+    assert_eq!(c_rule(&[1_600_000]), 74_970);
 }
 
 /// Waits up to 5 s for the sender's L to read `ms`.
