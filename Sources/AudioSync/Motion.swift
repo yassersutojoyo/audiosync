@@ -39,9 +39,9 @@ enum Motion {
         reduceMotion ? nil : .easeInOut(duration: 0.15)
     }
 
-    /// A note or row showing or going in the menu bar panel: it fades while
-    /// the rows below slide, on the panel's own resize curve, so they keep
-    /// pace with its edge.
+    /// A note or row showing or going in the menu bar panel (`PanelNotes`):
+    /// it fades while the rows below slide, on the panel's own resize curve,
+    /// so they keep pace with its edge.
     static func section(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .easeOut(duration: PanelResize.duration)
     }

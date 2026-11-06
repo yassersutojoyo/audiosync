@@ -1492,11 +1492,40 @@ final class MenuBarPopover: NSPopover {
 
 private let accent = Brand.teal
 
+/// The menu bar panel's occasional notes and rows as drawn. They follow the
+/// model one step later, in a transaction of their own, so a change that came
+/// with them (a speaker switching on) doesn't move on their animation.
+final class PanelNotes: ObservableObject {
+    struct Shown: Equatable {
+        var liveInput: String?
+        var presets = false
+        var noSpeakerOn = false
+        var airPlayProblem: String?
+        var localNetwork: LocalNetworkHint = .none
+
+        var present: [Bool] {
+            [liveInput != nil, presets, noSpeakerOn, airPlayProblem != nil, localNetwork != .none]
+        }
+    }
+
+    @Published var shown = Shown()
+
+    func follow(_ new: Shown, animation: Animation?) {
+        let pairs = zip(new.present, shown.present)
+        let opens = pairs.contains { $0 && !$1 }
+        let closes = pairs.contains { !$0 && $1 }
+        guard opens || closes, let animation else { shown = new; return }
+        // The panel shrinks only after its gather; a note going waits for that, so the rows move with its edge.
+        withAnimation(opens ? animation : animation.delay(PanelResize.gather)) { shown = new }
+    }
+}
+
 /// The compact controls behind the menu bar icon: power, source, volume and
 /// on/off for each speaker. Everything else lives in the main window.
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
     @StateObject private var zoneDisclosure = ZoneDisclosure()
+    @StateObject private var notes = PanelNotes()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let rowHeight: CGFloat = 28
     /// Everything but the speaker list (header, source, volume, footer,
@@ -1509,10 +1538,10 @@ struct MenuBarView: View {
                            liveInputHint: model.liveInputAirPlayHint != nil, noSpeakerOn: showsNoSpeakerOn)
     }
 
-    /// The notes and rows the panel shows only now and then; notices and zones animate on their own.
-    private var shownSections: [Bool] {
-        [model.liveInputAirPlayHint != nil, PresetPanel.showsRow(model.presets), showsNoSpeakerOn,
-         model.airPlayProblem != nil, model.localNetworkHint != .none]
+    private var liveNotes: PanelNotes.Shown {
+        PanelNotes.Shown(liveInput: model.liveInputAirPlayHint, presets: PresetPanel.showsRow(model.presets),
+                         noSpeakerOn: showsNoSpeakerOn, airPlayProblem: model.airPlayProblem,
+                         localNetwork: model.localNetworkHint)
     }
 
     private var showsNoSpeakerOn: Bool {
@@ -1537,10 +1566,10 @@ struct MenuBarView: View {
             header(t)
             NoticeStack(model: model, compact: true)
             SourcePicker(model: model)
-            if let hint = model.liveInputAirPlayHint {
+            if let hint = notes.shown.liveInput {
                 LiveInputAirPlayNote(message: hint, font: .caption).padding(.top, -4)
             }
-            if PresetPanel.showsRow(model.presets) { PresetPicker(model: model) }
+            if notes.shown.presets { PresetPicker(model: model) }
             // The Mac's own speakers belong with the volume, above the one
             // divider, drawn tight together as one block.
             VStack(alignment: .leading, spacing: 2) {
@@ -1548,7 +1577,7 @@ struct MenuBarView: View {
                 thisMacRows(t)
             }
             Divider().padding(.vertical, -4)   // 6 pt on both sides
-            if showsNoSpeakerOn { noSpeakerOnLine(t) }
+            if notes.shown.noSpeakerOn { noSpeakerOnLine(t) }
             speakerList(t)
                 .id(model.panelSession)
             if castAddRow != .none {
@@ -1570,12 +1599,12 @@ struct MenuBarView: View {
             }
             // AirPlay comes last in the list, so what's wrong with AirPlay goes
             // right after it.
-            if let problem = model.airPlayProblem {
+            if let problem = notes.shown.airPlayProblem {
                 AirPlayProblemView(message: problem, canRetry: true,
                                    text: t, compact: true) { model.actions.retryAirPlay() }
-            } else if let hint = t.localNetworkHint(model.localNetworkHint, short: true) {
+            } else if let hint = t.localNetworkHint(notes.shown.localNetwork, short: true) {
                 localNetworkHint(t, caption: hint,
-                                 detail: t.localNetworkHint(model.localNetworkHint, short: false) ?? hint)
+                                 detail: t.localNetworkHint(notes.shown.localNetwork, short: false) ?? hint)
             }
             Divider()
             HStack(spacing: 0) {
@@ -1587,7 +1616,10 @@ struct MenuBarView: View {
             .padding(.horizontal, -6)
             .id(model.panelSession)
         }
-        .animation(Motion.section(reduceMotion: reduceMotion), value: shownSections)
+        // On the first draw old equals new, and the notes show at once.
+        .onChange(of: liveNotes, initial: true) { old, new in
+            notes.follow(new, animation: old == new ? nil : Motion.section(reduceMotion: reduceMotion))
+        }
         .padding(BrandTokens.Spacing.panelPadding)
         .frame(width: 280)
         .pinnedToTop()
