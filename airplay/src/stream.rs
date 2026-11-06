@@ -65,8 +65,8 @@ const STEP_CAP_FRAMES: u32 = DEFAULT_LATENCY_FRAMES;
 const STEP_INTERVAL: f64 = 10.0;
 /// Three resend requests within this many seconds are a burst (P200).
 const BURST_SECONDS: f64 = 2.0;
-/// Packets a speaker sends within this many seconds of its first sound
-/// never count as late for a step (P200).
+/// No packet counts as late for a step within this many seconds of a
+/// start, join, flush or resume (P200).
 const START_GRACE: f64 = 1.0;
 /// Silent packets after a step's fade-out, about 32 ms: the sync stating
 /// the step reaches each receiver within them, wherever its network or
@@ -884,6 +884,9 @@ pub struct Stream {
     /// What came since the last timeout: a burst of resend requests, a late
     /// packet or a stall (P200).
     lost_or_late: Option<StepCause>,
+    /// Until then no send counts as late: start-up work can wake the sender
+    /// late for every speaker (P200).
+    grace_until: f64,
     /// When the last two resend requests came (P200).
     resends_at: [f64; 2],
     /// When Lf last stepped up (P200).
@@ -944,6 +947,7 @@ impl Stream {
                 .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES),
             pending_latency: None,
             lost_or_late: None,
+            grace_until: f64::NEG_INFINITY,
             resends_at: [f64::NEG_INFINITY; 2],
             last_step: None,
             step_floor: 0,
@@ -1181,6 +1185,7 @@ impl Stream {
         let context = context!(self);
         let silence = (&*self.silence_pcm, &*self.silence_alac);
         let paused = self.paused;
+        let counted = t > self.grace_until;
         let mut late = false;
         for speaker in &mut self.speakers {
             if let Some((_, at)) = speaker.step_sync
@@ -1199,10 +1204,6 @@ impl Stream {
             {
                 speaker.delay_due = true;
             }
-            // A speaker's start brings its session setup and the host's other
-            // start-up work at once, which can wake this thread late; that
-            // says nothing about the network.
-            let counted = t - speaker.first_sound > START_GRACE;
             while speaker.next_packet < context.next_cut {
                 let due = context.cut_due(speaker.next_packet) + speaker.delay;
                 if due > t + DUE_TOLERANCE {
@@ -1305,6 +1306,7 @@ impl Stream {
     ) -> SpeakerId {
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
+        self.grace_until = t + START_GRACE;
         let id = SpeakerId(self.next_speaker);
         self.next_speaker += 1;
         let codec = config.codec;
@@ -1465,6 +1467,7 @@ impl Stream {
             speaker.delay = delay;
             speaker.awaiting_flush = true;
             flush(speaker, &context, t, &mut self.events);
+            self.grace_until = t + START_GRACE;
         }
     }
 
@@ -1573,6 +1576,7 @@ impl Stream {
         self.next_cut = 0;
         self.model.reset(t);
         self.margin.clear();
+        self.grace_until = t + START_GRACE;
         self.model.ensure(last_frame(0));
         let latency = self.latency();
         let context = context!(self);
@@ -1641,6 +1645,7 @@ impl Stream {
         }
         self.handle_timeout(now);
         self.paused = false;
+        self.grace_until = self.clock.seconds(now) + START_GRACE;
         let mut latency_changed = false;
         if let Some(frames) = self.pending_latency.take()
             && frames != self.latency_frames
