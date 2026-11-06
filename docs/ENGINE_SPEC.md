@@ -4524,7 +4524,7 @@ The crate's checks are in AirPlay spec section 12. The rule and the C interface 
 
 | Test | Clauses |
 |---|---|
-| the_c_session_latency_matches_the_crate (a null array and a count of 0 give 77 175; negative entries are unknown) | P200, P202 |
+| the_c_session_latency_matches_the_crate (a null array and a count of 0 give 4410; negative entries are unknown) | P200, P202 |
 | latency_event_carries_receiver_latency_us_and_sources | P202 |
 | set_latency_clamps_and_ignores_a_null_handle | P202 |
 
