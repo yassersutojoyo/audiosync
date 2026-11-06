@@ -311,6 +311,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var session = 0
     /// The main window is on screen, so Now Playing polls for it.
     var nowPlayingOnScreen = false
+    /// The menu bar panel is open, so Now Playing polls for its hero.
+    var panelOnScreen = false
     /// The App Nap opt-out held while streaming (`syncStreamingActivity`).
     var streamingActivity: NSObjectProtocol?
     /// Mirrors the login item's state (System Settings can change it too).

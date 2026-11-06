@@ -179,6 +179,8 @@ final class AppModel: ObservableObject {
         var refreshModel: () -> Void = {}
         /// The main window came on screen or left it (closed, minimized, covered).
         var mainWindowVisible: (Bool) -> Void = { _ in }
+        /// The menu bar panel opened or began to close; its hero shows the song.
+        var panelVisible: (Bool) -> Void = { _ in }
         var openEqualizer: () -> Void = {}
         var openWebRemote: () -> Void = {}
         var openSettings: () -> Void = {}
@@ -694,6 +696,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var noticeWatch: AnyCancellable?
     private var speakerWatch: AnyCancellable?
     let model: AppModel
+    private let intro: PanelIntro
 
     /// What the popover's arrow and its gap under the menu bar take from the
     /// room below it.
@@ -701,7 +704,9 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
 
     init(model: AppModel) {
         self.model = model
-        host = PanelHost(rootView: MenuBarView(model: model))
+        let intro = PanelIntro()
+        self.intro = intro
+        host = PanelHost(rootView: MenuBarView(model: model, intro: intro))
         super.init()
         // The popover follows the content's size only once the open is over (`PanelHost`).
         host.sizingOptions = []
@@ -816,6 +821,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         model.panelRoom = item.frame.minY - Self.arrowRoom - screen.minY
         let start = Self.uptime
         model.actions.refreshModel()
+        model.actions.panelVisible(true)
         let refreshed = Self.uptime
         // The app's appearance, not the menu bar's, which follows the wallpaper.
         popover.appearance = NSApp.effectiveAppearance
@@ -823,6 +829,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // when the panel last closed (`prepareNextOpen`), so this pass only
         // applies what changed since; the look outside AudioSync waits for
         // `popoverDidShow`.
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { intro.replay() }
         host.view.needsLayout = true
         host.view.layoutSubtreeIfNeeded()
         let size = host.sizeThatFits(in: PanelTopLayout.measuring)
@@ -1363,6 +1370,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func finishClose(lasting: TimeInterval) {
         guard presented else { return }
         presented = false
+        model.actions.panelVisible(false)
         let now = Self.uptime
         quietQueue.quiet.began(.close, at: now)
         closeEndsAt = now + lasting
@@ -1495,8 +1503,25 @@ private let accent = Brand.teal
 /// on/off for each speaker. Everything else lives in the main window.
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
+    var intro = PanelIntro()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
-    private let rowHeight: CGFloat = 28
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let rowHeight: CGFloat = 36
+
+    /// What gives the panel's rows their places: when it changes, they move to
+    /// the new ones on one ease-out (`PanelRowMotion`).
+    private var rowPlaces: [String] {
+        let layout = model.zonelessLayout
+        var places: [String] = layout.thisMac.map(\.id)
+        places += model.zones.map(\.id)
+        places += layout.connected.map(\.id)
+        places.append(model.nowPlaying == nil ? "" : "song")
+        places.append("\(model.notices.items.count) \(showsNoSpeakerOn) \(PresetPanel.showsRow(model.presets))")
+        places.append(model.airPlayProblem ?? "")
+        places.append(model.liveInputAirPlayHint ?? "")
+        return places
+    }
+
     /// Everything but the speaker list (header, source, volume, footer,
     /// margins), plus room for what may show around it: the list grows until
     /// the panel would pass the bottom of the screen, and only then scrolls.
@@ -1526,23 +1551,25 @@ struct MenuBarView: View {
     var body: some View {
         let t = model.text
         VStack(alignment: .leading, spacing: 10) {
-            header(t)
-            NoticeStack(model: model, compact: true)
-            SourcePicker(model: model)
+            header(t).modifier(IntroPart(intro: intro, index: 0))
+            NoticeStack(model: model, compact: true).modifier(IntroPart(intro: intro, index: 1))
+            SourcePicker(model: model, hero: true).modifier(IntroPart(intro: intro, index: 2))
             if let hint = model.liveInputAirPlayHint {
-                LiveInputAirPlayNote(message: hint, font: .caption).padding(.top, -4)
+                LiveInputAirPlayNote(message: hint, font: .subheadline).padding(.top, -4)
             }
-            if PresetPanel.showsRow(model.presets) { PresetPicker(model: model) }
+            if PresetPanel.showsRow(model.presets) { PresetPicker(model: model).modifier(IntroPart(intro: intro, index: 3)) }
             // The Mac's own speakers belong with the volume, above the one
             // divider, drawn tight together as one block.
             VStack(alignment: .leading, spacing: 2) {
                 masterRow(t)
                 thisMacRows(t)
             }
+            .modifier(IntroPart(intro: intro, index: 4))
             Divider().padding(.vertical, -4)   // 6 pt on both sides
             if showsNoSpeakerOn { noSpeakerOnLine(t) }
             speakerList(t)
                 .id(model.panelSession)
+                .modifier(IntroPart(intro: intro, index: 5))
             if castAddRow != .none {
                 let shown = castAddRow == .shown
                 // The sheet belongs to the main window, which has room for it.
@@ -1565,22 +1592,27 @@ struct MenuBarView: View {
             if let problem = model.airPlayProblem {
                 AirPlayProblemView(message: problem, canRetry: true,
                                    text: t, compact: true) { model.actions.retryAirPlay() }
+                    // After the rows above it have begun to leave.
+                    .transition(rowTransition(3, after: 0.06))
             } else if let hint = t.localNetworkHint(model.localNetworkHint, short: true) {
                 localNetworkHint(t, caption: hint,
                                  detail: t.localNetworkHint(model.localNetworkHint, short: false) ?? hint)
             }
-            Divider()
+            Divider().padding(.top, -2)
+            // The logo and status in the header open the main window.
             HStack(spacing: 0) {
-                PanelButton(title: t.openApp) { model.actions.openMainWindow() }
                 Spacer(minLength: 8)
                 PanelButton(title: t.quitShort) { model.actions.quit() }
                     .accessibilityLabel(t.quitApp)
             }
             .padding(.horizontal, -6)
+            .padding(.top, -8)
             .id(model.panelSession)
+            .modifier(IntroPart(intro: intro, index: 6))
         }
-        .padding(BrandTokens.Spacing.panelPadding)
-        .frame(width: 280)
+        .animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: rowPlaces)
+        .padding(EdgeInsets(top: 14, leading: 14, bottom: 8, trailing: 14))
+        .frame(width: 300)
         .pinnedToTop()
         // Over the popover's material; the popover rounds it and draws the edge.
         .background(Brand.panelBacking.ignoresSafeArea())
@@ -1597,16 +1629,19 @@ struct MenuBarView: View {
                         .frame(width: 22, height: 22)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 1) {
-                        Wordmark(size: 15)
+                        Wordmark(size: 15, dim: !model.running)
                         Text(model.statusText)
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(Brand.secondaryText)
                             .lineLimit(1)
+                            // The new status shows at once, never cross-faded with the old one.
+                            .transaction { $0.animation = nil }
                     }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .animation(reduceMotion ? .linear(duration: 0.15) : .easeOut(duration: 0.4), value: model.running)
             .help(t.openApp)
             .accessibilityHint(t.openApp)
             Spacer(minLength: 8)
@@ -1620,6 +1655,7 @@ struct MenuBarView: View {
             MasterMuteButton(model: model, text: t)
             Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }), in: 0...100)
                 .controlSize(.small)
+                .tint(.primary)   // teal marks state only; a level is not one
                 .accessibilityLabel(t.masterVolume)
                 .accessibilityValue(t.volumeValue(model.master))
                 .help(t.masterVolume)
@@ -1638,7 +1674,7 @@ struct MenuBarView: View {
             Text(layout.thisMac.isEmpty
                  ? (model.hidden.inThisMac || model.hidden.inConnected ? t.panelAllHidden : t.noSpeakers)
                  : model.hidden.inConnected ? t.panelConnectedHidden : model.networkEmptyText)
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.vertical, 2)
@@ -1653,7 +1689,7 @@ struct MenuBarView: View {
 
     private func noSpeakerOnLine(_ t: UIStrings) -> some View {
         Text(t.noSpeakerOn)
-            .font(.caption)
+            .font(.subheadline)
             .foregroundStyle(Brand.secondaryText)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -1663,7 +1699,7 @@ struct MenuBarView: View {
     private func localNetworkHint(_ t: UIStrings, caption: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(caption)
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(Brand.secondaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.9)
@@ -1722,22 +1758,33 @@ struct MenuBarView: View {
                 }
                 .clipShape(FoldClip(moving: zoneDisclosure.moving))
             }
-            ForEach(layout.connected) { speaker in speakerRow(speaker, note: nil) }
+            ForEach(Array(layout.connected.enumerated()), id: \.element.id) { index, speaker in
+                speakerRow(speaker, note: nil).transition(rowTransition(index))
+            }
         }
     }
 
     static let zoneSymbol = "square.stack.3d.up.fill"
 
     /// `note`: what the speaker's zone says about it, when its own note is empty.
+    /// Rows that come or go together do so one after another, 35 ms apart.
+    private func rowTransition(_ index: Int, after extra: TimeInterval = 0) -> AnyTransition {
+        guard !reduceMotion else { return .identity }
+        return AnyTransition.opacity.combined(with: .offset(y: -6))
+            .animation(.easeOut(duration: PanelRowMotion.duration).delay(Double(index) * PanelRowMotion.stagger + extra))
+    }
+
     private func speakerRow(_ speaker: AppModel.Speaker, note: String?) -> some View {
         let t = model.text
         let hint = t.rowNote(cast: speaker.cast, waitingForAirPlay2: speaker.waitingForAirPlay2,
                              waitingForPtp: speaker.waitingForPtp, reconnecting: speaker.reconnecting,
                              codeWait: speaker.codeWait, name: speaker.name,
                              unannounced: speaker.unannounced, target: speaker.airPlayTarget) ?? note
+        let castWaits = speaker.cast?.status == .connecting || speaker.cast?.status == .reconnecting
+        let connecting = model.state(of: speaker) != .off && (castWaits || speaker.cast == nil && speaker.reconnecting)
         return CompactRow(name: speaker.name, symbol: speaker.symbol, state: model.state(of: speaker),
                           text: t, height: rowHeight, hint: hint,
-                          shownNote: t.panelRowNote(hint),
+                          shownNote: t.panelRowNote(hint), connecting: connecting,
                           renamedFrom: speaker.renamedFrom,
                           value: t.rowValue(model.state(of: speaker), offline: speaker.unannounced),
                           kind: speaker.tag, airPlay2: speaker.airPlay2,
@@ -1768,6 +1815,8 @@ private struct CompactRow: View {
     var hint: String? = nil
     /// The part of `hint` shown in the row, before its availability note.
     var shownNote: String? = nil
+    /// Draws the amber connecting arc and colours the note amber.
+    var connecting = false
     /// A renamed speaker's system name, read by VoiceOver after its name.
     var renamedFrom: String? = nil
     /// VoiceOver's label and value in place of the speaker's: a zone's, read
@@ -1788,23 +1837,25 @@ private struct CompactRow: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 9) {
-                SpeakerBadge(symbol: symbol, state: state, size: 24)
+                SpeakerBadge(symbol: symbol, state: state, size: 26, ring: true, connecting: connecting)
                 // The name goes before the availability note when both don't fit.
                 ScrollingTitle(text: name)
-                    .font(.callout.weight(state == .playing ? .semibold : .regular))
+                    .font(.body)
                     .layoutPriority(2)
                     .help(text.panelNameHelp(name: name, renamedFrom: renamedFrom))
                     // The button's own label reads the name; the tooltip would repeat it.
                     .accessibilityHidden(true)
                 if let kind {
-                    SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2)
+                    SpeakerTypeIcon(kind: kind, state: state, text: text, font: .caption, airPlay2: airPlay2, muted: true)
                 }
                 Spacer(minLength: 4)
                 if let shownNote {
                     Text(shownNote)
                         .lineLimit(1)
-                        .font(.caption)
-                        .foregroundStyle(Brand.secondaryText)
+                        .font(.subheadline)
+                        // A new note shows at once, never cross-faded with the old one.
+                        .transaction { $0.animation = nil }
+                        .foregroundStyle(connecting ? Brand.warn : Brand.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                         .help(hint ?? shownNote)
                         // Read in the row's hint, or its value when off the network.
@@ -1818,8 +1869,8 @@ private struct CompactRow: View {
             .padding(.horizontal, 6)
             .frame(height: height)
             .contentShape(Rectangle())
-            .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.control)
-                .fill(hover.isHovered && isEnabled ? Color.primary.opacity(0.07) : Color.clear))
+            .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
+                .fill(hover.isHovered && isEnabled ? Color.primary.opacity(0.05) : Color.clear))
             .opacity(isEnabled ? 1 : 0.45)
         }
         .buttonStyle(.plain)
@@ -1869,17 +1920,24 @@ struct AirPlayProblemView: View {
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-                .font(compact ? .caption : .callout)
+                .foregroundStyle(compact ? Brand.errorText : .orange)
+                .font(compact ? .subheadline : .callout)
                 .accessibilityHidden(true)
             Text(message)
-                .font(compact ? .caption : .callout)
-                .foregroundStyle(Brand.secondaryText)
+                .font(compact ? .subheadline : .callout)
+                .foregroundStyle(compact ? Brand.errorText : Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
-            if canRetry {
+            if canRetry && compact {
+                // The panel's Retry is a text link, as its other actions are.
+                Button(action: retry) { Text(text.retry).font(.subheadline).underline() }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(text.retry)
+                    .accessibilityHint(text.retryAirPlayHelp)
+                    .help(text.retryAirPlayHelp)
+            } else if canRetry {
                 Button(text.retry, action: retry)
-                    .controlSize(compact ? .small : .regular)
+                    .controlSize(.regular)
                     .accessibilityLabel(text.retry)
                     .accessibilityHint(text.retryAirPlayHelp)
                     .help(text.retryAirPlayHelp)
@@ -1901,16 +1959,29 @@ struct SpeakerBadge: View {
     let symbol: String
     let state: SpeakerState
     var size: CGFloat = 30
+    /// The panel's look: off is a hairline ring and waiting a thick teal
+    /// ring, both unfilled.
+    var ring = false
+    /// Panel only: a hairline ring with a spinning amber arc while the
+    /// speaker connects; teal stays for a speaker that is on.
+    var connecting = false
 
     var body: some View {
         ZStack {
             switch state {
+            case _ where ring && connecting:
+                Circle().strokeBorder(Color.secondary, lineWidth: 1.5)
+                ConnectingArc(size: size)
             case .playing:
                 Circle().fill(accent)
+            case .willPlay where ring:
+                Circle().strokeBorder(Brand.tealText, lineWidth: 2.5)
             case .willPlay:
                 Circle().fill(accent.opacity(0.14))
                 // tealText, not accent: the outline must reach 3:1 on the window.
                 Circle().strokeBorder(Brand.tealText, lineWidth: max(1.5, size / 18))
+            case .off where ring:
+                Circle().strokeBorder(Color.secondary, lineWidth: 1.5)
             case .off:
                 Circle().fill(Color.secondary.opacity(0.18))
             }
@@ -1923,11 +1994,55 @@ struct SpeakerBadge: View {
     }
 
     private var iconColor: Color {
+        if ring && connecting { return .secondary }
         switch state {
         case .playing: return .white
         case .willPlay: return Brand.tealText
         case .off: return .secondary
         }
+    }
+}
+
+/// A quarter of amber ring turning once every 0.9 s; it stands still under
+/// Reduce Motion.
+private struct ConnectingArc: View {
+    let size: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: nil, paused: reduceMotion)) { context in
+            let turn = reduceMotion
+                ? 0 : context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 0.9) / 0.9
+            Circle()
+                .trim(from: 0, to: 0.22)
+                .stroke(Brand.warn, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(turn * 360 - 90))
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+/// The panel's parts fade in and rise into place one after another each
+/// time it opens. The controller skips it under Reduce Motion.
+final class PanelIntro: ObservableObject {
+    @Published private(set) var hidden = false
+
+    func replay() {
+        hidden = true
+        DispatchQueue.main.async { self.hidden = false }
+    }
+}
+
+private struct IntroPart: ViewModifier {
+    @ObservedObject var intro: PanelIntro
+    let index: Int
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(intro.hidden ? 0 : 1)
+            .offset(y: intro.hidden ? 6 : 0)
+            .animation(intro.hidden ? nil : .timingCurve(0.22, 0.61, 0.36, 1, duration: 0.44)
+                .delay(0.09 + Double(min(index, 14)) * PanelRowMotion.stagger), value: intro.hidden)
     }
 }
 
@@ -1950,10 +2065,12 @@ struct SpeakerTypeIcon: View {
     let text: UIStrings
     var font: Font = .caption
     var airPlay2 = false
+    /// Grey whatever the state, as in the panel, where color marks state only.
+    var muted = false
 
     var body: some View {
         glyph
-            .foregroundStyle(color)
+            .foregroundStyle(muted ? Color.secondary : color)
             .fixedSize()
             .layoutPriority(1)   // a long name truncates first; the icon stays whole
             .help(text.speakerTag(kind, airPlay2: airPlay2))
@@ -2015,6 +2132,9 @@ struct AvailabilityNote: View {
 struct SourcePicker: View {
     @ObservedObject var model: AppModel
     var large = false
+    /// The panel's hero: the source's icon, or the song's cover, beside the
+    /// menu, with the song under it while one plays.
+    var hero = false
 
     /// Whether the chosen source is a mix, which checks the Several Apps menu.
     private var isMix: Bool {
@@ -2024,9 +2144,51 @@ struct SourcePicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            sourceMenu
+            if hero { heroRow } else { sourceMenu }
+            if hero, let track = model.nowPlaying {
+                AmbientArt(tide: SoundTide.shared, colors: CoverColors.of(track.artwork), height: 16, density: 0.7)
+                    .transition(.opacity)
+            }
             if let pairs = model.currentSource?.pairs, !pairs.isEmpty {
                 pairPicker(pairs)
+            }
+        }
+        .padding(hero ? 10 : 0)
+        .background {
+            RoundedRectangle(cornerRadius: BrandTokens.Radius.card)
+                .fill(hero ? Color.primary.opacity(0.05) : Color.clear)
+            if hero, let track = model.nowPlaying {
+                AmbientTint(tide: SoundTide.shared, color: CoverColors.of(track.artwork)[0],
+                            cornerRadius: BrandTokens.Radius.card)
+            }
+        }
+    }
+
+    private var heroRow: some View {
+        HStack(spacing: 11) {
+            Group {
+                if let art = model.nowPlaying?.artwork {
+                    Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
+                } else {
+                    sourceIcon(model.currentSource)
+                }
+            }
+            .frame(width: 48, height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.primary.opacity(0.1)))
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                sourceMenu
+                if let track = model.nowPlaying {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ScrollingTitle(text: track.title).font(.system(size: 15, weight: .semibold))
+                        ScrollingTitle(text: track.artist.isEmpty ? track.appName : track.artist)
+                            .font(.body)
+                            .foregroundStyle(Brand.secondaryText)
+                    }
+                    .accessibilityElement(children: .combine)
+                    .transition(.opacity)
+                }
             }
         }
     }
@@ -2087,11 +2249,13 @@ struct SourcePicker: View {
             }
         } label: {
             HStack(spacing: 8) {
-                sourceIcon(model.currentSource)
-                    .accessibilityHidden(true)
+                if !hero {
+                    sourceIcon(model.currentSource)
+                        .accessibilityHidden(true)
+                }
                 Text(model.currentSource?.name ?? t.sourceSystem)
                     .lineLimit(1)
-                Spacer()
+                if !hero { Spacer() }
             }
             // The menu takes its title from this content, which read the
             // chosen app's name instead of the fixed label.
@@ -2102,28 +2266,30 @@ struct SourcePicker: View {
         .menuStyle(.borderlessButton)
         // A borderless menu draws its label and chevron in the tint; the brand
         // teal fell near 2:1 on the panel's material over a dark window.
-        .tint(.primary)
+        .tint(hero ? Brand.secondaryText : .primary)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, large ? 8 : 6)
-        .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(0.6)))
+        .padding(.horizontal, hero ? 0 : 10)
+        .padding(.vertical, hero ? 0 : large ? 8 : 6)
+        .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(hero ? 0 : 0.6)))
         .accessibilityLabel(t.sourceLabel)
         .accessibilityValue(model.currentSource?.name ?? t.sourceSystem)
     }
 
     @ViewBuilder
     private func sourceIcon(_ source: AppModel.Source?) -> some View {
-        let edge: CGFloat = large ? 20 : 18
+        let edge: CGFloat = hero ? 22 : large ? 20 : 18
+        // In the hero the icon stands for the source, not a state, so it is grey.
+        let tint = hero ? Brand.secondaryText : Brand.tealText
         if let source, source.isInput {
             Self.unnamedSymbol("mic.fill")
                 .frame(width: edge, height: edge)
-                .foregroundStyle(Brand.tealText)
+                .foregroundStyle(tint)
         } else if let icon = source?.icon {
             Image(nsImage: icon).resizable().frame(width: edge, height: edge)
         } else {
             Self.unnamedSymbol("speaker.wave.3.fill")
                 .frame(width: edge, height: edge)
-                .foregroundStyle(Brand.tealText)
+                .foregroundStyle(tint)
         }
     }
 
@@ -2149,10 +2315,10 @@ struct PresetPicker: View {
                                                   set: { _ in model.actions.recallPreset(preset.id) }))
             }
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 9) {
                 SourcePicker.unnamedSymbol("square.stack.3d.up.fill")
                     .frame(width: 18, height: 18)
-                    .foregroundStyle(Brand.tealText)
+                    .foregroundStyle(Brand.secondaryText)
                     .accessibilityHidden(true)
                 Text(current ?? t.choosePreset)
                     .foregroundStyle(current == nil ? Brand.secondaryText : .primary)
@@ -2165,10 +2331,7 @@ struct PresetPicker: View {
         }
         .menuStyle(.borderlessButton)
         .tint(.primary)   // as the source picker: the teal falls under 4.5:1 on the panel
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(0.6)))
+        .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
         .help(current ?? t.choosePreset)
         .accessibilityLabel(t.presets)
         .accessibilityValue(current ?? t.choosePreset)
@@ -2314,7 +2477,7 @@ struct NoticeBanner<Footer: View>: View {
         let warnCard = card && !notice.info
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: notice.info ? "info.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(notice.info ? Brand.tealText : warnCard ? Brand.warn : .orange)
+                .foregroundStyle(notice.info ? Brand.tealText : Brand.warn)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -2356,9 +2519,10 @@ struct NoticeBanner<Footer: View>: View {
             .accessibilityLabel(notice.dismissLabel(text))
             .help(text.dismissNotice)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: card ? BrandTokens.Radius.card : 10)
-            .fill(warnCard ? Brand.warnBackground : (notice.info ? Brand.teal : Color.orange).opacity(0.12)))
+        // The panel's notice is text on the panel, without a box.
+        .padding(card ? 10 : 0)
+        .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.card)
+            .fill(warnCard ? Brand.warnBackground : card ? Brand.teal.opacity(0.12) : Color.clear))
         .overlay {
             if warnCard {
                 RoundedRectangle(cornerRadius: BrandTokens.Radius.card).strokeBorder(Brand.warn.opacity(0.28))

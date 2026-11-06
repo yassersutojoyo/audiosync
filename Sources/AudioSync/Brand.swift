@@ -75,6 +75,8 @@ enum Brand {
 /// text teal on light appearances and the logo mint on dark ones.
 struct Wordmark: View {
     var size: CGFloat
+    /// "sync" in grey, as the panel shows it while streaming is off.
+    var dim = false
 
     var body: some View {
         Text(text)
@@ -93,7 +95,7 @@ struct Wordmark: View {
         var audio = AttributedString("audio")
         audio.foregroundColor = .primary
         var sync = AttributedString("sync")
-        sync.foregroundColor = Brand.wordmarkSync
+        sync.foregroundColor = dim ? Color.secondary : Brand.wordmarkSync
         return audio + sync
     }
 }

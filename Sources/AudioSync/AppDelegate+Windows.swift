@@ -69,6 +69,16 @@ extension AppDelegate {
         pushModel()
     }
 
+    /// The Now Playing art moves while the main window or the panel shows it.
+    private func followSoundTide() {
+        // An input device's peaks belong to the input meter; the art rests then.
+        SoundTide.shared.follow(nowPlayingOnScreen || panelOnScreen ? { [weak self] in
+            guard let self, self.engine.isRunning else { return nil }
+            if case .input = self.audioSource { return nil }
+            return self.engine.takePeak()
+        } : nil)
+    }
+
     private func equalizerChanged(_ settings: Equalizer.Settings) {
         engine.updateEqualizer(settings)
         reapplyLocalGains()   // the headroom cut given back changes with the curve (S26)
@@ -372,12 +382,13 @@ extension AppDelegate {
             self.nowPlayingOnScreen = visible   // Now Playing polls only while someone sees it
             self.syncTrackInfo()
             self.appModel.inputLevel.setVisible(visible)
-            // An input device's peaks belong to the input meter; the art rests then.
-            SoundTide.shared.follow(visible ? { [weak self] in
-                guard let self, self.engine.isRunning else { return nil }
-                if case .input = self.audioSource { return nil }
-                return self.engine.takePeak()
-            } : nil)
+            self.followSoundTide()
+        }
+        a.panelVisible = { [weak self] visible in
+            guard let self, visible != self.panelOnScreen else { return }
+            self.panelOnScreen = visible
+            self.syncTrackInfo()
+            self.followSoundTide()
         }
         a.dismissNotice = { [weak self] subject in self?.clearNotices([subject]) }
         a.permissionContinue = { [weak self] permission in self?.resumeAfterPermission(permission) }

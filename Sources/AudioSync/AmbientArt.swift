@@ -4,7 +4,7 @@ import Combine
 import SwiftUI
 
 /// What the Now Playing art follows (`Tide`), polled every
-/// `ASC_METER_POLL_MS` while the main window is on screen. Its own object,
+/// `ASC_METER_POLL_MS` while the main window or the panel is on screen. Its own object,
 /// like `InputLevel`, so the polls redraw the art alone.
 final class SoundTide: ObservableObject {
     static let shared = SoundTide()

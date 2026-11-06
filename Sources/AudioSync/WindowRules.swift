@@ -260,7 +260,7 @@ enum PanelChrome {
     static func height(notices: Int, permissionCard: Bool = false, airPlayNote: Bool = false,
                        castAddRow: Bool = false, presets: Bool = false, liveInputHint: Bool = false,
                        noSpeakerOn: Bool = false) -> CGFloat {
-        var height: CGFloat = 220
+        var height: CGFloat = 280   // the hero, with a song and its art, and the 36 pt This Mac row
         // The compact panel shows the newest notice, with a footer line when others wait.
         if notices > 0 { height += 90 }
         if notices > 1 { height += 30 }
@@ -340,13 +340,23 @@ struct PanelMotion: Equatable {
     }
 }
 
-/// When the open panel takes a new size from its content. Changes that come
-/// within `gather` of the first go in one animated step, which waits for the
-/// panel to finish growing in; content that grew starts it at once. The
+/// How the panel's rows move when one comes, goes or changes height: one
+/// ease-out, without a bounce. With Reduce Motion they take their places at once.
+enum PanelRowMotion {
+    static let duration: TimeInterval = 0.35
+    /// The gap between rows that come or go together, and between the
+    /// panel's parts as it opens.
+    static let stagger: TimeInterval = 0.035
+}
+
+/// When the open panel takes a new size from its content, on the rows' own
+/// curve. A grow starts at once, so the panel opens room as a row comes in; a
+/// shrink waits until the rows have settled, gathering the changes that come
+/// meanwhile into one step. Both wait for the panel to finish growing in. The
 /// latest size wins.
 struct PanelResize: Equatable {
-    static let gather: TimeInterval = 0.1
-    static let duration: TimeInterval = 0.2
+    static let gather = PanelRowMotion.duration
+    static let duration = PanelRowMotion.duration
 
     private(set) var pending: CGSize?
     private(set) var due: TimeInterval?

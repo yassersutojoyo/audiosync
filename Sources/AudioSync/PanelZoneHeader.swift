@@ -43,7 +43,7 @@ struct PanelZoneHeader: View {
             .help(foldTitle)
 
             Button { hit(.zoneIcon) } label: {
-                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: shownState, size: 24)
+                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: shownState, size: 26, ring: true)
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
@@ -61,14 +61,14 @@ struct PanelZoneHeader: View {
             Button { hit(.name) } label: {
                 HStack(spacing: 0) {
                     ScrollingTitle(text: zone.name)
-                        .font(.callout.weight(shownState == .playing ? .semibold : .regular))
+                        .font(.body)
                         .opacity(nonePresent ? 0.45 : 1)
                         .layoutPriority(1)
                     Spacer(minLength: 4)
                     // Placed and styled as a panel row's note; VoiceOver reads it in the icon's hint.
                     if let waitNote {
                         Text(waitNote)
-                            .font(.caption)
+                            .font(.subheadline)
                             .foregroundStyle(Brand.secondaryText)
                             .lineLimit(1)
                             .help(waitNote)

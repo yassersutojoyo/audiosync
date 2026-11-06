@@ -8368,15 +8368,20 @@ do {
 
     var resize = PanelResize()
     let tall = CGSize(width: 306, height: 455), taller = CGSize(width: 306, height: 478)
+    let rowSettle = PanelResize.gather
     // covers: S403
-    check(near(resize.changed(to: CGSize(width: 306, height: 420), at: 50, settled: 40), 50.1)
-            && near(resize.changed(to: tall, at: 50.05, settled: 40), 50.1) && resize.take(at: 50.08) == nil,
-          "menu bar panel: size changes within a tenth of a second wait for one step")
+    check(rowSettle == PanelRowMotion.duration && PanelResize.duration == PanelRowMotion.duration
+            && PanelRowMotion.duration >= 0.3 && PanelRowMotion.duration <= 0.4,
+          "menu bar panel: the rows move and the panel resizes on one 0.3-0.4 s ease-out, and a shrink waits for the rows to settle")
     // covers: S403
-    check(resize.take(at: 50.1) == tall && resize.take(at: 50.2) == nil,
+    check(near(resize.changed(to: CGSize(width: 306, height: 420), at: 50, settled: 40), 50 + rowSettle)
+            && near(resize.changed(to: tall, at: 50.05, settled: 40), 50 + rowSettle) && resize.take(at: 50.08) == nil,
+          "menu bar panel: size changes that come before the rows settle wait for one step")
+    // covers: S403
+    check(resize.take(at: 50 + rowSettle) == tall && resize.take(at: 51) == nil,
           "menu bar panel: the step goes to the latest size, once")
     // covers: S403
-    check(near(resize.changed(to: taller, at: 60, settled: 60.28), 60.28),
+    check(near(resize.changed(to: taller, at: 60, settled: 60.5), 60.5),
           "menu bar panel: a size change while the panel grows in waits until it has settled")
     var growing = PanelResize()
     let short = CGSize(width: 306, height: 420)
@@ -8384,9 +8389,9 @@ do {
     check(near(growing.changed(to: tall, at: 80, settled: 60, from: short), 80) && growing.take(at: 80) == tall,
           "menu bar panel: content that grew starts its step at once, so its bottom is never cut off while a step gathers")
     // covers: S403
-    check(near(growing.changed(to: short, at: 90, settled: 60, from: tall), 90.1)
+    check(near(growing.changed(to: short, at: 90, settled: 60, from: tall), 90 + rowSettle)
             && near(growing.changed(to: taller, at: 90.02, settled: 60, from: tall), 90.02) && growing.take(at: 90.02) == taller,
-          "menu bar panel: a shrink waits for the gather, but content that grows meanwhile brings the step forward")
+          "menu bar panel: a shrink waits for the rows to settle, but content that grows meanwhile brings the step forward")
 
     func sizing(_ events: [PanelSizing.Event]) -> PanelSizing {
         events.reduce(PanelSizing.closed) { $0.after($1) }
@@ -17007,6 +17012,48 @@ do {
     let card = PanelChrome.height(notices: 0, permissionCard: true) - bare
     // covers: S406
     check(card >= 120, "panel chrome: the permission card's room is kept", "\(card)")
+}
+
+// MARK: The panel's v3.1 look: song in the hero, no Open AudioSync, one row motion (MenuBar.swift)
+do {
+    func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    let panelSource = read("Sources/AudioSync/MenuBar.swift")
+    let panelView = panelSource.components(separatedBy: "struct MenuBarView: View {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(!panelView.isEmpty && !panelView.contains("PanelButton(title: t.openApp)")
+            && panelView.contains(".help(t.openApp)") && panelView.contains("SourcePicker(model: model, hero: true)"),
+          "menu bar panel source: Open AudioSync is gone; the header still opens the main window; the source sits in the hero")
+    check(panelView.contains(".animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: rowPlaces)")
+            && panelView.contains("Text(model.statusText)") && panelView.contains(".transaction { $0.animation = nil }"),
+          "menu bar panel source: rows move on one ease-out, at once with Reduce Motion; the status text changes at once")
+    let polling = read("Sources/AudioSync/AppDelegate+AirPlay.swift")
+    let showBody = panelSource.components(separatedBy: "    func show(pressedAt press: TimeInterval? = nil) {").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let closeBody = panelSource.components(separatedBy: "    private func finishClose(lasting: TimeInterval) {").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(polling.contains("nowPlayingOnScreen || panelOnScreen ||") && showBody.contains("model.actions.panelVisible(true)")
+            && closeBody.contains("model.actions.panelVisible(false)"),
+          "menu bar panel source: Now Playing is read while the panel is open, so its hero can show the song")
+    let arcSource = panelSource.components(separatedBy: "private struct ConnectingArc: View {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(arcSource.contains("paused: reduceMotion") && arcSource.contains(".stroke(Brand.warn")
+            && panelSource.contains(".foregroundStyle(connecting ? Brand.warn : Brand.secondaryText)"),
+          "menu bar panel source: a connecting speaker spins an amber arc, still with Reduce Motion, and its note is amber")
+    check(PanelRowMotion.stagger == 0.035
+            && showBody.contains("if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { intro.replay() }")
+            && panelView.contains("speakerRow(speaker, note: nil).transition(rowTransition(index))")
+            && panelView.contains(".transition(rowTransition(3, after: 0.06))"),
+          "menu bar panel source: the panel's parts come in one after another as it opens, and rows that come or go together follow 35 ms apart, with the AirPlay error after them")
+    let windows = read("Sources/AudioSync/AppDelegate+Windows.swift")
+    let panelShown = windows.components(separatedBy: "a.panelVisible = { [weak self] visible in").dropFirst().first?
+        .components(separatedBy: "\n        }\n").first ?? ""
+    let mainShown = windows.components(separatedBy: "a.mainWindowVisible = { [weak self] visible in").dropFirst().first?
+        .components(separatedBy: "\n        }\n").first ?? ""
+    check(windows.contains("SoundTide.shared.follow(nowPlayingOnScreen || panelOnScreen ?")
+            && panelShown.contains("self.followSoundTide()") && mainShown.contains("self.followSoundTide()")
+            && panelSource.contains("AmbientArt(tide: SoundTide.shared, colors: CoverColors.of(track.artwork), height: 16, density: 0.7)")
+            && panelSource.components(separatedBy: "AmbientTint(tide: SoundTide.shared").count == 2,
+          "menu bar panel source: the hero shows the song's art and tint, fed while the main window or the panel is open")
 }
 
 // MARK: Pairings the sender can't save get a notice (NativeAirPlay.pairingsNotSaved)
