@@ -1553,7 +1553,7 @@ struct CastManualList: Equatable {
     /// From the stored strings; one that no longer reads, or repeats, is
     /// dropped, and only the first `maxAddresses` are kept.
     init(stored: Any?) {
-        for text in stored as? [String] ?? [] {
+        for text in (stored as? [Any] ?? []).compactMap({ $0 as? String }) {
             if let address = CastManualAddress(text) { add(address) }
         }
     }
@@ -1579,7 +1579,9 @@ struct CastManualList: Equatable {
 extension SettingsStore {
     var castManualList: CastManualList { CastManualList(stored: read(Keys.castManualAddresses)) }
 
-    var castFoundIDs: [String: String] { read(Keys.castFoundIDs) as? [String: String] ?? [:] }
+    var castFoundIDs: [String: String] {
+        (read(Keys.castFoundIDs) as? [String: Any])?.compactMapValues { $0 as? String } ?? [:]
+    }
 
     func save(_ list: CastManualList) {
         write(list.addresses.isEmpty ? nil : list.stored, Keys.castManualAddresses)

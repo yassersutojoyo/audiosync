@@ -15153,6 +15153,13 @@ do {
     stored.values[key] = ["speaker.local", "not valid!", "speaker.local:8009"]
     // covers: C18
     check(store.castManualList.addresses == [kitchen], "cast address list: a damaged or repeated stored entry is dropped")
+    let mixedStored = Stored()
+    let mixedStore = SettingsStore(read: { mixedStored.values[$0] }, write: { value, key in mixedStored.values[key] = value })
+    mixedStored.values[key] = ["speaker.local", 7, "192.0.2.7:8010"] as [Any]
+    mixedStored.values[AppSettings.Keys.castFoundIDs] = ["speaker.local": "cast-1", "192.0.2.7:8010": 3] as [String: Any]
+    // covers: C18
+    check(mixedStore.castManualList.addresses == [kitchen, den] && mixedStore.castFoundIDs == ["speaker.local": "cast-1"],
+          "cast address list: a stored entry that is no text drops only that entry from the list and the found-ID map")
     var shrinking = reread
     let removed = shrinking.remove(kitchen), removedAgain = shrinking.remove(kitchen)
     store.save(shrinking)
