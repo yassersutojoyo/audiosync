@@ -12,7 +12,8 @@ final class InputLevel: ObservableObject {
     @Published private(set) var shown = false
     private var timer: Timer?
     private var peak: (() -> Float?)?
-    private var visible = false
+    /// Whether the main window is on screen; the brand mark there breathes only then.
+    @Published private(set) var visible = false
 
     var isPolling: Bool { timer?.isValid == true }
 

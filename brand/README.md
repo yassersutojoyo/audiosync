@@ -21,6 +21,7 @@ raster export of that design. The vector mark, `audiosync-mark.svg`, was traced
 from it with potrace through `scripts/brand/trace-mark.sh` (the steps are
 described below), and every other file here is generated from the mark and the
 Poppins font.
+The animated mark in the app's main window (`Sources/AudioSync/BrandMarkView.swift`) is drawn from `audiosync-mark.svg`, own work.
 
 | File | Use |
 |---|---|

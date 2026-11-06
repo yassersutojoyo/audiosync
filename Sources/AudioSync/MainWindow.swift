@@ -209,11 +209,8 @@ struct MainView: View {
 
     private func header(_ t: UIStrings) -> some View {
         HStack(spacing: 12) {
-            BrandMark()
-                .fill(model.running ? Brand.logo : Color.secondary)
+            BrandMarkView(mood: model.markMood, fill: model.markFill, level: model.inputLevel)
                 .frame(width: 32, height: 32)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 2) {
                 Wordmark(size: BrandTokens.Typography.wordmarkSize)
                 Text(model.statusText)
@@ -433,6 +430,12 @@ struct MainView: View {
                             .padding(10)
                         if !listsNone { Divider() }
                     } else if listsNone {
+                        if connected {
+                            BrandMarkView(mood: model.markMood, fill: model.markFill, level: model.inputLevel)
+                                .frame(width: 44, height: 44)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding([.horizontal, .top], 10)
+                        }
                         emptyNote(empty, hint: hint, under: [])
                     } else if hasAirPlay && localNetworkHint == .denied, let hint {
                         LocalNetworkHintView(message: hint, text: model.text).padding(10)
