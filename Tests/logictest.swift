@@ -4517,6 +4517,17 @@ do {
         check(loadedSteps == ["A1": 8_820, "B2": 77_175] && startAt == 8_820 && cappedAt == 77_175 && forgottenAt == 4_410,
               "airplay latency: a relaunch starts a speaker at its saved step, up to 1.75 s, and at 0.1 s once forgotten",
               "\(loadedSteps) \(String(describing: startAt)) \(String(describing: cappedAt)) \(String(describing: forgottenAt))")
+
+        // The sender stays at a step until the app sets another Lf, so the emptied stream needs the set.
+        var emptied = NativeReceiverLatency()
+        _ = emptied.newFrames(over: ["A1"], rule: lfRule)
+        emptied.timeline(ms: 200, members: ["A1"])
+        let emptyAt = emptied.newFrames(over: [], rule: lfRule)
+        let joinAt = emptied.newFrames(over: ["B2"], rule: lfRule)
+        emptied.timeline(ms: 100, members: ["B2"])
+        check(emptyAt == 4_410 && joinAt == nil && emptied.stepped == ["A1": 8_820],
+              "airplay latency: a speaker joining after a stepped one left starts at 0.1 s and keeps no step",
+              "\(String(describing: emptyAt)) \(String(describing: joinAt)) \(emptied.stepped)")
     }
 
     // covers: S280, S282, S283 (the Mac host; the Windows tests carry the same names)
