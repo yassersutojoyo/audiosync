@@ -1,21 +1,22 @@
 import SwiftUI
 
 /// What the brand mark in the main window shows: it breathes while no
-/// network speaker has turned up, rests once one has, and moves with the
-/// input level while AudioSync plays to a speaker.
+/// network speaker has turned up, rests once one has or when the search
+/// can't run, and moves with the input level while AudioSync plays to a speaker.
 enum BrandMarkMood: Equatable {
     case searching, settled, playing
 
-    static func of(running: Bool, noSpeakerOn: Bool, speakersFound: Bool) -> BrandMarkMood {
+    static func of(running: Bool, noSpeakerOn: Bool, speakersFound: Bool, canSearch: Bool) -> BrandMarkMood {
         if running && !noSpeakerOn { return .playing }
-        return speakersFound ? .settled : .searching
+        return speakersFound || !canSearch ? .settled : .searching
     }
 }
 
 extension AppModel {
     var markMood: BrandMarkMood {
         .of(running: running, noSpeakerOn: noSpeakerOn,
-            speakersFound: !layout.connected.isEmpty || hidden.inConnected)
+            speakersFound: !layout.connected.isEmpty || hidden.inConnected,
+            canSearch: localNetworkHint != .denied)
     }
 
     var markFill: Color { running ? Brand.logo : Color.secondary }
