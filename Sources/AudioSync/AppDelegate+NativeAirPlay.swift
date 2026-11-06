@@ -57,6 +57,7 @@ extension AppDelegate {
             self?.nativeStartFinished(native, started: started)
         }
         native.model.runMarks = nativeRunMarks
+        native.model.receiverLatency.stepped = airplayLatencyFrames
         // Queued after `start`, whose block creates the sender they go to.
         for id in nativeRunMarks.passwords { native.setPassword(id, nativePasswords[id]) }
         for id in nativeRunMarks.credentialsTurnedDown { native.markCredentialsTurnedDown(id) }
@@ -138,6 +139,7 @@ extension AppDelegate {
         DebugTrace.log(event.logLine { names[$0] })
         if let saved = event.pairingsSaved { pairingsWritten(saved) }
         if let outcome { nativeOutcome(outcome) }
+        if let stepped = nativeAirPlay?.model.receiverLatency.stepped { airplayLatencyFrames = stepped }
         closeWithdrawnPrompt()   // its pairing may have ended underneath
     }
 
@@ -554,6 +556,8 @@ extension AppDelegate {
         nativeAirPlay?.setPassword(receiver, nil)
         nativeAirPlay?.model.forgetPassword(receiver)
         nativePasswords[receiver] = nil
+        nativeAirPlay?.model.receiverLatency.stepped[receiver] = nil
+        airplayLatencyFrames[receiver] = nil
         clearNotices(Notice.forgotten(airPlay: id))
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) pairing and password forgotten")
         if enabledAirPlay.remove(id) != nil {
