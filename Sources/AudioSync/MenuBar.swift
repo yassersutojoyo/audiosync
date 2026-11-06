@@ -181,6 +181,7 @@ final class AppModel: ObservableObject {
         var mainWindowVisible: (Bool) -> Void = { _ in }
         var openEqualizer: () -> Void = {}
         var openWebRemote: () -> Void = {}
+        var openSettings: () -> Void = {}
         /// Dismiss the notice with this subject.
         var dismissNotice: (String) -> Void = { _ in }
         var dismissAllNotices: () -> Void = {}
@@ -471,7 +472,7 @@ final class AppModel: ObservableObject {
         AccessibilityNotification.Announcement(text.speakerHidden(speaker.name)).post()
     }
 
-    /// A Hidden Speakers entry, from the gear menu or the Speakers menu.
+    /// A Hidden Speakers entry, from Settings or the Speakers menu.
     func unhide(_ entry: HiddenSpeakers.MenuItem) {
         actions.unhideSpeaker(entry.key)
         AccessibilityNotification.Announcement(text.speakerShown(entry.name)).post()

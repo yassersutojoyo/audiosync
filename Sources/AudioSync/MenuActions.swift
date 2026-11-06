@@ -8,13 +8,12 @@ final class MenuAction: NSObject {
     // Not named perform(_:): in a static method that name resolves to NSObject's performSelector:.
     @objc func choose(_ sender: Any?) { run() }
 
-    /// A menu item that runs `run`, checked when `on` is given and true.
-    static func item(_ title: String, on: Bool? = nil, _ run: @escaping () -> Void) -> NSMenuItem {
+    /// A menu item that runs `run`.
+    static func item(_ title: String, _ run: @escaping () -> Void) -> NSMenuItem {
         let action = MenuAction(run)
         let item = NSMenuItem(title: title, action: #selector(choose(_:)), keyEquivalent: "")
         item.target = action
         item.representedObject = action   // the target is weak
-        if let on { item.state = on ? .on : .off }
         return item
     }
 }

@@ -13,20 +13,9 @@ enum MainMenu {
         app.addItem(AboutPanel.menuItem(text: t))
         if let update = AppUpdater.menuItem(text: t) {
             app.addItem(update)
-            app.addItem(item(t.menuCheckUpdatesAutomatically, #selector(AppDelegate.toggleAutomaticUpdateChecks(_:))))
         }
         app.addItem(.separator())
-        let appearance = NSMenu(title: t.appearance)
-        for choice in AppAppearance.allCases {
-            let entry = item(t.appearanceName(choice), #selector(AppDelegate.chooseAppearance(_:)))
-            entry.representedObject = choice.rawValue
-            appearance.addItem(entry)
-        }
-        app.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
-        app.addItem(item(t.launchAtLogin, #selector(AppDelegate.toggleLaunchAtLogin(_:))))
-        app.addItem(item(t.switchToSystemWhenSourceQuits, #selector(AppDelegate.toggleSwitchWhenSourceQuits(_:))))
-        app.addItem(.separator())
-        app.addItem(item(t.setupMenu, #selector(AppDelegate.showPermissionSetup(_:))))
+        app.addItem(item(t.settingsMenu, #selector(AppDelegate.showSettings(_:)), ","))
         app.addItem(.separator())
         let services = NSMenu(title: t.menuServices)
         app.addItem(withTitle: t.menuServices, action: nil, keyEquivalent: "").submenu = services
@@ -39,10 +28,6 @@ enum MainMenu {
         app.addItem(.separator())
         app.addItem(item(t.quitApp, #selector(NSApplication.terminate(_:)), "q"))
 
-        let file = submenu(of: main, title: t.menuFile)
-        file.addItem(item(t.menuApplyDelay, #selector(AppDelegate.applyTypedDelay(_:)), "s"))
-        file.addItem(item(t.menuCloseWindow, #selector(NSWindow.performClose(_:)), "w"))
-
         // Text fields (the sync delay) need the standard editing commands.
         let edit = submenu(of: main, title: t.menuEdit)
         edit.addItem(item(t.menuUndo, Selector(("undo:")), "z"))
@@ -54,17 +39,21 @@ enum MainMenu {
         edit.addItem(item(t.menuSelectAll, #selector(NSText.selectAll(_:)), "a"))
 
         let speakers = submenu(of: main, title: t.menuSpeakers)
+        speakers.addItem(.sectionHeader(title: t.streamingSwitch))
         speakers.addItem(item(t.menuTurnStreamingOn, #selector(AppDelegate.toggleStreaming(_:))))
-        speakers.addItem(.separator())
-        speakers.addItem(item(t.newZone, #selector(AppDelegate.newZone(_:)), "n"))
+        speakers.addItem(.sectionHeader(title: t.menuGroupFind))
         speakers.addItem(item(t.refreshDevices, #selector(AppDelegate.refreshDevices(_:)), "r"))
+        speakers.addItem(item(t.castAddByAddress, #selector(AppDelegate.addCastByAddress(_:))))
+        speakers.addItem(.sectionHeader(title: t.menuGroupArrange))
+        speakers.addItem(item(t.newZone, #selector(AppDelegate.newZone(_:)), "n"))
         let hidden = NSMenu(title: t.hiddenSpeakers)
         hidden.delegate = HiddenSpeakersMenu.shared   // filled each time it opens
         speakers.addItem(withTitle: t.hiddenSpeakers, action: nil, keyEquivalent: "").submenu = hidden
-        speakers.addItem(item(t.showVirtualDevices, #selector(AppDelegate.toggleShowVirtualDevices(_:))))
-        speakers.addItem(item(t.castAddByAddress, #selector(AppDelegate.addCastByAddress(_:))))
+        speakers.addItem(.sectionHeader(title: t.menuGroupDelay))
+        speakers.addItem(item(t.menuApplyDelay, #selector(AppDelegate.applyTypedDelay(_:)), "s"))
 
         let window = submenu(of: main, title: t.menuWindow)
+        window.addItem(item(t.menuCloseWindow, #selector(NSWindow.performClose(_:)), "w"))
         window.addItem(item(t.menuMinimize, #selector(NSWindow.performMiniaturize(_:)), "m"))
         window.addItem(item(t.menuZoom, #selector(NSWindow.performZoom(_:))))
         window.addItem(.separator())

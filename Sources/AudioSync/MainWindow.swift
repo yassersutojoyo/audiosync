@@ -1767,40 +1767,12 @@ private enum GearMenu {
     static func make(model: AppModel, text t: UIStrings) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        menu.addItem(.sectionHeader(title: t.menuSpeakers))
         menu.addItem(MenuAction.item(t.newZone) { model.actions.newZone() })
         menu.addItem(MenuAction.item(t.refreshDevices) { model.actions.refreshDevices() })
-        let hidden = NSMenu(title: t.hiddenSpeakers)
-        hidden.autoenablesItems = false
-        if model.hidden.menu.isEmpty {
-            let none = NSMenuItem(title: t.noHiddenSpeakers, action: nil, keyEquivalent: "")
-            none.isEnabled = false
-            hidden.addItem(none)
-        } else {
-            for entry in model.hidden.menu {
-                hidden.addItem(MenuAction.item(entry.title) { model.unhide(entry) })
-            }
-        }
-        menu.addItem(withTitle: t.hiddenSpeakers, action: nil, keyEquivalent: "").submenu = hidden
-        menu.addItem(MenuAction.item(t.showVirtualDevices, on: model.showVirtualDevices) {
-            model.actions.setShowVirtualDevices(!model.showVirtualDevices)
-        })
-        menu.addItem(.separator())
-        let appearance = NSMenu(title: t.appearance)
-        appearance.autoenablesItems = false
-        for choice in AppAppearance.allCases {
-            appearance.addItem(MenuAction.item(t.appearanceName(choice), on: model.appearance == choice) {
-                model.actions.setAppearance(choice)
-            })
-        }
-        menu.addItem(withTitle: t.appearance, action: nil, keyEquivalent: "").submenu = appearance
-        menu.addItem(MenuAction.item(t.launchAtLogin, on: model.launchAtLogin) {
-            model.actions.setLaunchAtLogin(!model.launchAtLogin)
-        })
-        menu.addItem(MenuAction.item(t.switchToSystemWhenSourceQuits, on: model.switchWhenSourceQuits) {
-            model.actions.setSwitchWhenSourceQuits(!model.switchWhenSourceQuits)
-        })
+        menu.addItem(.sectionHeader(title: t.menuGroupWindows))
         menu.addItem(MenuAction.item(t.webRemoteMenu) { model.actions.openWebRemote() })
-        menu.addItem(.separator())
+        menu.addItem(MenuAction.item(t.settingsMenu) { model.actions.openSettings() })
         menu.addItem(MenuAction.item(t.guideTitle) { model.actions.openGuide() })
         return menu
     }

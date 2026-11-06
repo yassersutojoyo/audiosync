@@ -59,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var helpWindow: NSWindow?
     var webRemote: WebRemote?
     var webRemoteWindow: WebRemoteWindowController?
+    var settingsWindow: SettingsWindowController?
     /// The permission setup window, made the first time it opens and kept.
     var setupWindow: SetupWindowController?
     /// The setup's Allow asked for Local Network and waits for the answer.

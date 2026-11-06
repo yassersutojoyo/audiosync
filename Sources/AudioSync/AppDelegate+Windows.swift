@@ -61,6 +61,7 @@ extension AppDelegate {
         }
         webRemote = remote
         webRemoteWindow = WebRemoteWindowController(remote: remote, text: text)
+        settingsWindow = SettingsWindowController(model: appModel) { [weak self] in self?.openPermissionSetup() }
         menuBar = MenuBarController(model: appModel)
         pushSources()
         pushModel()
@@ -360,6 +361,7 @@ extension AppDelegate {
         a.openGuide = { [weak self] in self?.openGuideWindow() }
         a.openEqualizer = { [weak self] in self?.openEqualizerWindow() }
         a.openWebRemote = { [weak self] in self?.openWebRemoteWindow() }
+        a.openSettings = { [weak self] in self?.openSettingsWindow() }
         a.refreshDevices = { [weak self] in self?.rescanDevices() }
         a.refreshExternalState = { [weak self] in self?.rereadExternalState() }
         a.refreshModel = { [weak self] in self?.pushModel() }
@@ -743,6 +745,11 @@ extension AppDelegate {
         webRemoteWindow?.show()
     }
 
+    private func openSettingsWindow() {
+        menuBar?.close()
+        settingsWindow?.show()
+    }
+
     /// The Guide: the help text in a window of its own, made once and kept
     /// while AudioSync runs, so it opens where the user left it.
     private func openGuideWindow() {
@@ -851,15 +858,13 @@ extension AppDelegate {
 
     @objc func showWebRemote(_ sender: Any?) { openWebRemoteWindow() }
 
-    @objc func showPermissionSetup(_ sender: Any?) { openPermissionSetup() }
+    @objc func showSettings(_ sender: Any?) { openSettingsWindow() }
 
     @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning, fromMenu: true) }
 
     @objc func newZone(_ sender: Any?) { promptNewZone() }
 
     @objc func refreshDevices(_ sender: Any?) { rescanDevices() }
-
-    @objc func toggleShowVirtualDevices(_ sender: Any?) { setShowVirtualDevices(!showVirtualDevices) }
 
     /// The sheet belongs to the main window, as from the panel's row.
     @objc func addCastByAddress(_ sender: Any?) {
@@ -870,53 +875,21 @@ extension AppDelegate {
         }
     }
 
-    @objc func toggleAutomaticUpdateChecks(_ sender: Any?) {
-        MainActor.assumeIsolated { AppUpdater.checksAutomatically.toggle() }
-    }
-
     /// Command-S: the delays typed in the open delay panels apply, and the
     /// panels stay open.
     @objc func applyTypedDelay(_ sender: Any?) { appModel.applyDelayTyping() }
 
-    /// Reads the login item afresh: it can be changed in System Settings too.
-    @objc func toggleLaunchAtLogin(_ sender: Any?) {
-        setLaunchAtLogin(SMAppService.mainApp.status != .enabled)
-    }
-
-    /// Takes effect at the next quit of the source app, never undoing a switch made (S227 d).
-    @objc func toggleSwitchWhenSourceQuits(_ sender: Any?) {
-        whenSourceQuits = whenSourceQuits == .system ? .stop : .system
-        pushModel()
-    }
-
-    /// One of the Appearance submenu's items; each carries its choice's raw value.
-    @objc func chooseAppearance(_ sender: Any?) {
-        guard let raw = (sender as? NSMenuItem)?.representedObject as? String,
-              let choice = AppAppearance(rawValue: raw) else { return }
-        setAppearance(choice)
-    }
-
-    /// Keeps the menus current each time one opens: check marks for the
-    /// choices that are on, the streaming item's wording, Apply Typed Delay
-    /// only while there is typing to apply.
+    /// Keeps the menus current each time one opens: the check mark on the
+    /// current preset, the streaming item's wording, Apply Typed Delay only
+    /// while there is typing to apply.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(applyTypedDelay(_:)):
             return appModel.hasDelayTyping
         case #selector(toggleStreaming(_:)):
             menuItem.title = engine.isRunning ? text.menuTurnStreamingOff : text.menuTurnStreamingOn
-        case #selector(chooseAppearance(_:)):
-            menuItem.state = (menuItem.representedObject as? String) == appearance.rawValue ? .on : .off
-        case #selector(toggleLaunchAtLogin(_:)):
-            menuItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        case #selector(toggleSwitchWhenSourceQuits(_:)):
-            menuItem.state = whenSourceQuits == .system ? .on : .off
-        case #selector(toggleShowVirtualDevices(_:)):
-            menuItem.state = showVirtualDevices ? .on : .off
         case #selector(addCastByAddress(_:)):
             return appModel.castCanAdd
-        case #selector(toggleAutomaticUpdateChecks(_:)):
-            menuItem.state = MainActor.assumeIsolated { AppUpdater.checksAutomatically } ? .on : .off
         case #selector(recallPresetFromMenu(_:)):
             let id = menuItem.representedObject as? String
             menuItem.state = appModel.presets.contains { $0.id == id && $0.current } ? .on : .off
