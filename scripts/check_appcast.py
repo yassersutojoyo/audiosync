@@ -36,7 +36,9 @@ on Windows-looking zips in a folder that aren't named as the script expects.
 and AppImage among them needs an appcast item whose sparkle:os matches it,
 and every item's file must be among them. The names come as arguments (paths
 count by file name) or, with --assets-file, from a file holding the output of
-`gh release view TAG --json assets` or one name per line. It also wants a
+`gh release view TAG --json assets` or one name per line. It refuses a
+sparkle:version not above the CFBundleVersion in Info.plist at the highest
+earlier vX.Y.Z tag, since Sparkle compares that number. It also wants a
 Mac item and, without --mac-only, an item for each Windows and Linux
 architecture. With the gh output, each item's length must also be its file's
 attached size. An appcast with Windows or Linux items also needs the S310
@@ -60,8 +62,10 @@ import datetime
 import io
 import json
 import os
+import plistlib
 import re
 import struct
+import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -100,6 +104,32 @@ def s310_mac_check():
         if date <= datetime.date.today():
             return date
     return None
+
+
+def version_key(text):
+    return tuple(int(part) for part in text.split("."))
+
+
+def previous_build(version):
+    """CFBundleVersion of the highest vX.Y.Z git tag below version; None without one, after a
+    line saying the build check is skipped and why."""
+    def git(*args):
+        return subprocess.run(["git", *args], capture_output=True, check=True,
+                              cwd=os.path.dirname(os.path.abspath(__file__))).stdout
+    try:
+        earlier = [tag for tag in git("tag", "--list", "v*").decode().split()
+                   if re.fullmatch(r"v\d+\.\d+\.\d+", tag) and version_key(tag[1:]) < version_key(version)]
+        if not earlier:
+            print(f"build check skipped: no release tag below v{version} (a shallow clone has none)")
+            return None
+        tag = max(earlier, key=lambda tag: version_key(tag[1:]))
+        build = plistlib.loads(git("show", f"{tag}:Info.plist")).get("CFBundleVersion")
+        if build is None:
+            print(f"build check skipped: Info.plist at {tag} has no CFBundleVersion")
+        return build
+    except (OSError, ValueError, subprocess.CalledProcessError, plistlib.InvalidFileException) as error:
+        print(f"build check skipped: the release before can't be found ({error})")
+        return None
 
 
 def sparkle(name):
@@ -389,6 +419,13 @@ def asset_problems(appcast, version, assets, mac_only=False):
         if name.endswith((".zip", ".AppImage")) and name not in item_zips:
             problems.append(f"{name} is attached but has no appcast item, so "
                             f"{users(zip_os(name))} users never see this release")
+    previous = previous_build(version)
+    builds = {item_value(item, item.find("enclosure"), "version") for item in root.iter("item")}
+    if previous:
+        for build in sorted(builds - {None}):
+            if not (build.isdigit() and previous.isdigit() and int(build) > int(previous)):
+                problems.append(f"sparkle:version {build!r} is not above {previous!r}, the build of "
+                                f"the release before, so Sparkle never offers this release to Mac users")
     if "macos" not in item_oses:
         problems.append("no Mac item in the appcast, so Mac users never see this release")
     if not mac_only:
@@ -514,7 +551,8 @@ def fake_appimage(machine, version="0.8.0"):
 
 def self_test():
     # covers: S311, S310, S424
-    global S310_MAC_CHECK_PASSED
+    global S310_MAC_CHECK_PASSED, previous_build
+    previous_build = lambda version: None
     failures = []
     cases = 0
     with tempfile.TemporaryDirectory() as folder:
@@ -778,6 +816,12 @@ def self_test():
                            {"assets": [{"name": n, "size": 1} for n in listed]}))
         against_assets("assets one name per line", good(), names + other_assets, None,
                        use_file=lambda listed: "\n".join(listed) + "\n")
+        previous_build = lambda version: "80"
+        against_assets("a build not above the release before", good(), names + other_assets,
+                       "sparkle:version '80' is not above '80'")
+        previous_build = lambda version: "79"
+        against_assets("a build above the release before", good(), names + other_assets, None)
+        previous_build = lambda version: None
         sizes = {os.path.basename(path): os.path.getsize(path) for path in everything}
         against_assets("attached sizes match the lengths", good(), names + other_assets, None,
                        use_file=lambda listed: json.dumps(
