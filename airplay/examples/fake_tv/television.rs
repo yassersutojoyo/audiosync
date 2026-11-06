@@ -8,6 +8,7 @@ use audiosync_airplay::discovery::DeviceId;
 use plist::Value;
 
 use crate::common::ap2::{FakeAp2, dict, int, plist, read_dict};
+use crate::common::hap::FakeHomeKit;
 
 /// Bits 38 (CoreUtils pairing) and 48 (transient pairing): AirPlay 2 capable.
 pub const FEATURES_HIGH: u64 = 0x1_0040;
@@ -28,6 +29,17 @@ pub const DEVICE_ID: [u8; 6] = [0x02, 0x00, 0x5E, 0x00, 0x53, 0x55];
 /// The environment variable that sets the output latency it reports, in
 /// microseconds.
 pub const LATENCY_VAR: &str = "FAKE_TV_LATENCY_US";
+/// The `--homepod` profile's features (P14): 9 audio, 18 to 21 audio
+/// formats, 38 CoreUtils pairing, 40 buffered audio, 41 PTP, 46 HomeKit
+/// pairing and 48 transient pairing.
+pub const HOMEPOD_FEATURES: u64 =
+    (1 << 9) | (0xF << 18) | (1 << 38) | (1 << 40) | (1 << 41) | (1 << 46) | (1 << 48);
+/// HomePod mini, as public device identifier lists name it.
+pub const HOMEPOD_MODEL: &str = "AudioAccessory5,1";
+pub const HOMEPOD_NAME: &str = "AudioSync Test HomePod";
+/// Placeholder: no HomePod value is on record; any AirPlay 2 era version
+/// lets a sender take the AirPlay 2 path.
+pub const HOMEPOD_SOURCE_VERSION: &str = "377.25.06";
 /// Status flags as the television sends them without a PIN (bit 2).
 const FLAGS_PLAIN: u64 = 0x4;
 /// Bit 3: a PIN on every connection, and every pair-verify turned down.
@@ -84,6 +96,11 @@ pub fn default_name(id: [u8; 6]) -> String {
     with_id(NAME, id)
 }
 
+/// The name `--homepod` serves and advertises when `--name` gives none.
+pub fn homepod_name(id: [u8; 6]) -> String {
+    with_id(HOMEPOD_NAME, id)
+}
+
 /// Reads `--deviceid`: six colon-separated hex bytes, the form the
 /// `deviceid` TXT entry carries.
 pub fn parse_device_id(text: &str) -> Result<[u8; 6], String> {
@@ -111,6 +128,56 @@ pub fn txt(pin: Pin, id: [u8; 6]) -> Vec<(&'static str, String)> {
         ("model", MODEL.to_owned()),
         ("deviceid", device_id_text(id)),
     ]
+}
+
+/// The `_airplay._tcp` TXT entries of the `--homepod` profile, with its
+/// AirPlay version and pairing public key (P13).
+pub fn homepod_txt(pin: Pin, id: [u8; 6]) -> Vec<(&'static str, String)> {
+    let key: String = FakeHomeKit::new("")
+        .public_key()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    vec![
+        (
+            "features",
+            format!(
+                "{:#x},{:#x}",
+                HOMEPOD_FEATURES & 0xFFFF_FFFF,
+                HOMEPOD_FEATURES >> 32
+            ),
+        ),
+        ("flags", format!("{:#x}", status_flags(pin))),
+        ("model", HOMEPOD_MODEL.to_owned()),
+        ("deviceid", device_id_text(id)),
+        ("srcvers", HOMEPOD_SOURCE_VERSION.to_owned()),
+        ("pk", key),
+    ]
+}
+
+/// A receiver that answers `/info` as a HomePod, every `/info` alike, and
+/// a stream SETUP for buffered audio on `buffered_port`.
+pub fn homepod(name: &str, pin: Pin, code: &str, id: [u8; 6], buffered_port: u16) -> FakeAp2 {
+    let mut fake = FakeAp2::new();
+    if pin != Pin::None {
+        fake.hap.code = code.to_owned();
+        fake.hap.pairing_per_connection = pin == Pin::EveryTime;
+    }
+    fake.info_body = plist(dict(&[
+        ("features", int(HOMEPOD_FEATURES as i64)),
+        ("statusFlags", int(status_flags(pin) as i64)),
+        ("name", Value::String(name.to_owned())),
+        ("model", Value::String(HOMEPOD_MODEL.to_owned())),
+        ("deviceID", Value::String(device_id_text(id))),
+        (
+            "sourceVersion",
+            Value::String(HOMEPOD_SOURCE_VERSION.to_owned()),
+        ),
+        ("pk", Value::Data(fake.hap.public_key().to_vec())),
+    ]));
+    fake.second_info_body = Some(fake.info_body.clone());
+    fake.buffered_port = Some(buffered_port);
+    fake
 }
 
 pub fn television(name: &str, pin: Pin, code: &str, features_low: u64, id: [u8; 6]) -> FakeAp2 {
