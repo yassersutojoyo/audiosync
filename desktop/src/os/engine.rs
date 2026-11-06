@@ -37,7 +37,10 @@ pub fn backend<D: Driver + 'static>(
         log.clone(),
         read,
         settings_file,
-        debug_log::env_skips_auto_connect(),
+        crate::auto_connect_skipped_by(
+            debug_log::env_skips_auto_connect(),
+            crate::preview_play_env(log).as_deref(),
+        ),
     );
     adapter.set_cast_file(cast_file, cast_unread);
     Box::new(adapter)

@@ -121,6 +121,14 @@ const PREVIEW_ZONES_VAR: &str = "AUDIOSYNC_PREVIEW_ZONES";
 #[cfg(feature = "mock-backend")]
 const PREVIEW_PRESETS_VAR: &str = "AUDIOSYNC_PREVIEW_PRESETS";
 
+/// With the debug log on, part of a local output's name here switches the
+/// first output whose name holds it on at launch, as a click on its switch
+/// does, so a release check streams without a click. The launch is one
+/// without auto-connect (`debug_log::NO_AUTO_CONNECT_VAR`), so nothing of it
+/// is saved. Meant for a virtual output such as Steam Streaming Speakers,
+/// never a real one.
+const PREVIEW_PLAY_VAR: &str = "AUDIOSYNC_PREVIEW_PLAY";
+
 fn main() -> ExitCode {
     // After Restart Now the quitting copy still holds the single instance;
     // claiming it first would hand this launch over to that copy.
@@ -343,10 +351,57 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
         log.log(|| format!("PIN dialog: opened for a made-up Apple TV ({PREVIEW_PIN_VAR})"));
         app.preview_pin(wrong);
     }
+    if let Some(wanted) = preview_play_env(log) {
+        let state = app.snapshot();
+        match preview_play_output(&state.speakers, &wanted) {
+            Some(output) => {
+                log.log(|| format!("{} switched on at launch ({PREVIEW_PLAY_VAR})", output.name));
+                app.update(|backend| backend.set_speaker_enabled(&output.id, true));
+            }
+            None => log.log(|| {
+                format!("no local output's name holds {wanted:?}; nothing switched on ({PREVIEW_PLAY_VAR})")
+            }),
+        }
+    }
     slint::run_event_loop_until_quit()?;
     log.log(|| "the event loop ended".to_owned());
     app.at_quit();
     Ok(())
+}
+
+/// The value of `AUDIOSYNC_PREVIEW_PLAY`, only while the debug log is on; an
+/// empty one would match every output.
+fn preview_play_wanted(debug: bool, value: Option<String>) -> Option<String> {
+    value.filter(|wanted| debug && !wanted.is_empty())
+}
+
+/// The value of `AUDIOSYNC_PREVIEW_PLAY` this launch acts on.
+fn preview_play_env(log: &DebugLog) -> Option<String> {
+    preview_play_wanted(log.enabled(), std::env::var(PREVIEW_PLAY_VAR).ok())
+}
+
+/// The variable that makes this launch one without auto-connect, if one
+/// does: the preview switch's output stays on for this run only.
+fn auto_connect_skipped_by(
+    no_auto_connect: bool,
+    preview_play: Option<&str>,
+) -> Option<&'static str> {
+    if no_auto_connect {
+        Some(debug_log::NO_AUTO_CONNECT_VAR)
+    } else {
+        preview_play.map(|_| PREVIEW_PLAY_VAR)
+    }
+}
+
+/// The first local output whose name holds `wanted`.
+fn preview_play_output<'a>(
+    speakers: &'a [ui_model::Speaker],
+    wanted: &str,
+) -> Option<&'a ui_model::Speaker> {
+    use ui_model::SpeakerKind::{AirPlay, AirPlay2, Cast};
+    speakers.iter().find(|speaker| {
+        !matches!(speaker.kind, AirPlay | AirPlay2 | Cast) && speaker.name.contains(wanted)
+    })
 }
 
 #[cfg(windows)]
@@ -383,6 +438,48 @@ fn session_ending(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_preview_play_switch_works_only_with_the_debug_log_on() {
+        let steam = || Some("Steam".to_owned());
+        assert_eq!(super::preview_play_wanted(false, steam()), None);
+        assert_eq!(super::preview_play_wanted(true, steam()), steam());
+        assert_eq!(super::preview_play_wanted(true, Some(String::new())), None);
+        assert_eq!(super::preview_play_wanted(true, None), None);
+    }
+
+    #[test]
+    fn the_preview_play_switch_makes_a_launch_that_saves_nothing() {
+        use super::{PREVIEW_PLAY_VAR, auto_connect_skipped_by, debug_log::NO_AUTO_CONNECT_VAR};
+        assert_eq!(
+            auto_connect_skipped_by(false, Some("Steam")),
+            Some(PREVIEW_PLAY_VAR)
+        );
+        assert_eq!(
+            auto_connect_skipped_by(true, Some("Steam")),
+            Some(NO_AUTO_CONNECT_VAR)
+        );
+        assert_eq!(
+            auto_connect_skipped_by(true, None),
+            Some(NO_AUTO_CONNECT_VAR)
+        );
+        assert_eq!(auto_connect_skipped_by(false, None), None);
+    }
+
+    #[test]
+    fn the_preview_play_switch_picks_the_first_local_output_holding_the_name() {
+        use crate::ui_model::{Backend, MockBackend};
+        let speakers = MockBackend::new().snapshot().speakers;
+        let picked = |wanted| super::preview_play_output(&speakers, wanted).map(|s| s.id.as_str());
+        assert_eq!(picked("Speaker"), Some("local:speakers"));
+        assert_eq!(picked("Desk"), Some("local:desk"));
+        assert_eq!(
+            picked("Kitchen"),
+            None,
+            "an AirPlay speaker is not a local output"
+        );
+        assert_eq!(picked("Steam"), None);
+    }
+
     /// Run on purpose with `cargo test deliberate_crash -- --ignored`: the
     /// process dies of an access violation and leaves a dump in
     /// target/crash-dumps.

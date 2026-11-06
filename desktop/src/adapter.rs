@@ -706,28 +706,22 @@ impl<A: AudioBackend> AudioAdapter<A> {
         log: DebugLog,
         settings_file: SettingsFile,
     ) -> AudioAdapter<A> {
-        AudioAdapter::launched(
-            audio,
-            clock,
-            log,
-            settings_file.load(),
-            settings_file,
-            false,
-        )
+        AudioAdapter::launched(audio, clock, log, settings_file.load(), settings_file, None)
     }
 
     /// The adapter over `audio` with the settings `read` from
     /// `settings_file`, stopped unless an auto-connect speaker is there, with
     /// the sources and outputs listed now. `clock` gives the time a notice
-    /// shows; what happens goes to `log`. With `skip_auto_connect`, no
-    /// speaker is switched on by itself in this run and nothing is saved.
+    /// shows; what happens goes to `log`. With `skip_auto_connect`, the
+    /// variable that asked for it, no speaker is switched on by itself in
+    /// this run and nothing is saved.
     pub fn launched(
         audio: A,
         clock: fn() -> String,
         log: DebugLog,
         read: (Settings, settings::Loaded),
         settings_file: SettingsFile,
-        skip_auto_connect: bool,
+        skip_auto_connect: Option<&'static str>,
     ) -> AudioAdapter<A> {
         let (saved, loaded) = read;
         let settings_file_has_path = settings_file.path().is_some();
@@ -782,7 +776,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             cast_found_ids: BTreeMap::new(),
             cast_probe: cast_address::answers,
             auto_connect: BTreeSet::new(),
-            auto_connect_skipped: skip_auto_connect,
+            auto_connect_skipped: skip_auto_connect.is_some(),
             hidden: Vec::new(),
             input_pairs: BTreeMap::new(),
             switched_from: None,
@@ -838,19 +832,18 @@ impl<A: AudioBackend> AudioAdapter<A> {
             had_speaker: false,
             first_install: loaded == settings::Loaded::NoFile
                 && settings_file_has_path
-                && !skip_auto_connect,
+                && skip_auto_connect.is_none(),
         };
         let had_groups = matches!(
             loaded,
             settings::Loaded::Read { version, .. } if version < settings::ZONES_VERSION
         );
         adapter.restore(saved);
-        if skip_auto_connect {
+        if let Some(var) = skip_auto_connect {
             adapter.log.log(|| {
                 format!(
-                    "auto-connect: skipped in this run ({}=1 with {}=1); speakers saved as on \
+                    "auto-connect: skipped in this run ({var} with {}=1); speakers saved as on \
                      stay off, and nothing is saved until the next launch",
-                    crate::debug_log::NO_AUTO_CONNECT_VAR,
                     crate::debug_log::ENV_VAR
                 )
             });
@@ -15337,7 +15330,7 @@ mod tests {
             DebugLog::default(),
             file.load(),
             file,
-            true,
+            Some(crate::debug_log::NO_AUTO_CONNECT_VAR),
         );
         adapter.poll();
         adapter.poll();
@@ -15399,7 +15392,7 @@ mod tests {
             DebugLog::default(),
             file.load(),
             file,
-            true,
+            Some(crate::debug_log::NO_AUTO_CONNECT_VAR),
         );
         adapter.poll();
         adapter.poll();
@@ -15430,6 +15423,42 @@ mod tests {
         assert!(state.speaker(&key(SPEAKERS)).unwrap().enabled);
         assert!(state.speaker(&ap(&kitchen)).unwrap().enabled);
         assert!(state.speaker(&key(HEADPHONES)).unwrap().auto_connect);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_preview_play_switch_turns_its_output_on_for_the_run_only() {
+        let dir = test_dir("adapter-settings-preview-play");
+        let path = dir.join(settings::FILE_NAME);
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        adapter.set_speaker_volume(&key(SPEAKERS), 30.0);
+        adapter.save_settings();
+        drop(adapter);
+        let before = std::fs::read(&path).expect("saved");
+
+        // As `os::engine::backend` launches it for AUDIOSYNC_PREVIEW_PLAY,
+        // and as `main::run` then switches the output on.
+        let file = SettingsFile::at(path.clone());
+        let mut adapter = AudioAdapter::launched(
+            launch_audio(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+            file.load(),
+            file,
+            Some(crate::PREVIEW_PLAY_VAR),
+        );
+        adapter.poll();
+        adapter.set_speaker_enabled(&key(SPEAKERS), true);
+        assert_eq!(playing(&adapter), [SPEAKERS]);
+        adapter.poll();
+        adapter.save_settings();
+        drop(adapter);
+        assert_eq!(std::fs::read(&path).expect("still there"), before);
+
+        let mut adapter = launch(launch_audio(), &path);
+        adapter.poll();
+        assert!(!adapter.snapshot().speaker(&key(SPEAKERS)).unwrap().enabled);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -15880,7 +15909,7 @@ mod tests {
             DebugLog::default(),
             file.load(),
             file,
-            true,
+            Some(crate::debug_log::NO_AUTO_CONNECT_VAR),
         );
         adapter.set_master_volume(64.0);
         adapter.poll();
@@ -16471,7 +16500,7 @@ mod tests {
             DebugLog::default(),
             file.load(),
             file,
-            skip_auto_connect,
+            skip_auto_connect.then_some(crate::debug_log::NO_AUTO_CONNECT_VAR),
         );
         adapter.poll();
         (adapter, fake)
