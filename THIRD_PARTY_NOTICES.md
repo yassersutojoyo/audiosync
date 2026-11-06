@@ -267,8 +267,11 @@ there, these reach the Windows executable on top of the ones above:
 (Apache-2.0) for the FLAC stream, with `crc`, `crc-catalog`, `heapless`,
 `hash32`, `md-5` 0.10, `digest` 0.10, `block-buffer` 0.10 and
 `crypto-common` 0.1 (MIT OR Apache-2.0), `generic-array` (MIT) and
-`byteorder` (Unlicense OR MIT). The macOS and Linux TLS crates and the
-build-time ones aren't compiled into it.
+`byteorder` (Unlicense OR MIT). So do the crates it uses to check that a
+device is a genuine Cast device, `ring`, `untrusted` and `x509-parser` with
+the ones they build on, and its two embedded root certificates, all listed
+there. The macOS and Linux TLS crates and the build-time ones aren't compiled
+into it.
 
 The Windows app also contains AudioSync's own web remote (`remote/`,
 GPL-3.0-or-later), whose `getrandom`, `serde_json`, `sha2` and `socket2` the app
