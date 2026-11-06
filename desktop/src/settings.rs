@@ -1411,11 +1411,13 @@ impl Settings {
         let version = header.version;
         let read = Settings { version, ..read };
         let clamped = read.clone().clamped();
-        let adjusted = clamped
-            != Settings {
-                version: VERSION,
-                ..read
-            };
+        let dropped = dropped_entries(text);
+        let adjusted = !dropped.is_empty()
+            || clamped
+                != Settings {
+                    version: VERSION,
+                    ..read
+                };
         Ok((
             clamped
                 .with_zones_migrated()
@@ -1425,6 +1427,7 @@ impl Settings {
                 version,
                 adjusted,
                 unreadable: unreadable_fields(text),
+                dropped,
             },
         ))
     }
@@ -1432,8 +1435,8 @@ impl Settings {
 
 /// The fields of `text` whose value the lenient reader replaced with the
 /// default, in [`Settings`] order, then the equalizer values that did not
-/// read. Entries skipped inside a list or map that reads count toward
-/// `adjusted` instead.
+/// read. Entries skipped inside a list or map that reads are named by
+/// [`dropped_entries`] instead.
 fn unreadable_fields(text: &str) -> Vec<String> {
     use serde_json::Value;
     fn reads<T: serde::de::DeserializeOwned>(value: &Value) -> bool {
@@ -1509,18 +1512,57 @@ fn unreadable_fields(text: &str) -> Vec<String> {
     unreadable
 }
 
+/// The zones, presets, groups, speakers, hidden speakers and Cast addresses
+/// in `text` the lenient reader skipped, by settings key and position, never
+/// by value.
+fn dropped_entries(text: &str) -> Vec<String> {
+    use serde_json::Value;
+    fn reads<T: serde::de::DeserializeOwned>(value: &Value) -> bool {
+        T::deserialize(value).is_ok()
+    }
+    type Reads = fn(&Value) -> bool;
+    const ENTRIES: &[(&str, Reads)] = &[
+        ("outputs", reads::<SavedSpeaker>),
+        ("airplay", reads::<SavedSpeaker>),
+        ("hidden_speakers", reads::<SavedHidden>),
+        ("groups", reads::<SavedGroup>),
+        ("speaker_zones", reads::<SavedZone>),
+        ("speaker_presets", reads::<SavedPreset>),
+        ("cast_addresses", Value::is_string),
+    ];
+    let Ok(Value::Object(stored)) = serde_json::from_str::<Value>(text) else {
+        return Vec::new();
+    };
+    let mut dropped = Vec::new();
+    for (name, reads) in ENTRIES {
+        let entries: Vec<&Value> = match (stored.get(*name), *name) {
+            (Some(Value::Object(speakers)), "outputs" | "airplay") => speakers.values().collect(),
+            (Some(Value::Array(entries)), _) => entries.iter().collect(),
+            _ => continue,
+        };
+        for (position, entry) in entries.into_iter().enumerate() {
+            if !reads(entry) {
+                dropped.push(format!("{name}[{position}]"));
+            }
+        }
+    }
+    dropped
+}
+
 /// What reading the file found, for the debug log.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Loaded {
     /// There is no file yet.
     NoFile,
     /// The file was read, written in format `version`; `adjusted` when
-    /// values out of range were clamped or unusable entries dropped, and
-    /// `unreadable` names the fields that fell back to their defaults.
+    /// values out of range were clamped or unusable entries dropped,
+    /// `unreadable` names the fields that fell back to their defaults and
+    /// `dropped` the entries skipped.
     Read {
         version: u32,
         adjusted: bool,
         unreadable: Vec<String>,
+        dropped: Vec<String>,
     },
     /// The file was ignored, and why.
     Ignored(String),
@@ -2061,6 +2103,7 @@ mod tests {
                 version: 2,
                 adjusted: false,
                 unreadable: Vec::new(),
+                dropped: Vec::new(),
             }
         );
         assert_eq!(read.version, VERSION);
@@ -2449,6 +2492,7 @@ mod tests {
                 version: VERSION,
                 adjusted: false,
                 unreadable: Vec::new(),
+                dropped: Vec::new(),
             }
         );
     }
@@ -2702,6 +2746,7 @@ mod tests {
                 version: 0,
                 adjusted: false,
                 unreadable: Vec::new(),
+                dropped: Vec::new(),
             }
         );
         assert!(found.to_string().contains("older than"), "{found}");
@@ -2820,6 +2865,7 @@ mod tests {
                 version: 2,
                 adjusted: true,
                 unreadable: Vec::new(),
+                dropped: Vec::new(),
             }
         );
         assert!(!Settings::default().to_json().contains("input_device"));
@@ -2860,6 +2906,7 @@ mod tests {
                 version: 2,
                 adjusted: true,
                 unreadable: Vec::new(),
+                dropped: Vec::new(),
             }
         );
         let (read, _) = Settings::from_json(r#"{"version": 2, "input_pairs": [1]}"#).expect("read");
@@ -2900,6 +2947,7 @@ mod tests {
                 version: 1,
                 adjusted: true,
                 unreadable: Vec::new(),
+                dropped: Vec::new(),
             }
         );
         assert_eq!(settings.source, SavedSource::System);
@@ -3008,6 +3056,7 @@ mod tests {
                 version: 2,
                 adjusted: true,
                 unreadable: Vec::new(),
+                dropped: Vec::new(),
             }
         );
         assert_eq!(settings.outputs["late"].delay_ms, -250.0);

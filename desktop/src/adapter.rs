@@ -733,9 +733,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let settings_file_has_path = settings_file.path().is_some();
         if settings_file_has_path {
             log.log(|| format!("settings: {loaded}"));
-            if let settings::Loaded::Read { unreadable, .. } = &loaded {
+            if let settings::Loaded::Read {
+                unreadable,
+                dropped,
+                ..
+            } = &loaded
+            {
                 for field in unreadable {
                     log.log(|| format!("settings: field {field} unreadable, using default"));
+                }
+                for entry in dropped {
+                    log.log(|| format!("settings: entry {entry} unreadable, dropped"));
                 }
             }
         } else {
@@ -15081,6 +15089,7 @@ mod tests {
                 version: settings::VERSION,
                 adjusted: false,
                 unreadable: Vec::new(),
+                dropped: Vec::new(),
             }
         );
         assert_eq!(settings::VERSION, 3);
@@ -15595,6 +15604,24 @@ mod tests {
             ],
         );
         assert!(!messages.iter().any(|m| m.contains("loud-9731")));
+
+        let dropped = launch_with(
+            "adapter-settings-dropped",
+            r#"{"version": 3, "speaker_zones": [{"id": "zone-1", "name": "Den-9731"}, 7],
+                "outputs": {"out-1": {"volume": 50}, "out-2": "x"},
+                "cast_addresses": ["speaker.local", 5]}"#,
+        );
+        assert_in_order(
+            &dropped,
+            &[
+                "settings: read (format version 3; values out of range clamped, unusable \
+                 entries dropped)",
+                "settings: entry outputs[1] unreadable, dropped",
+                "settings: entry speaker_zones[1] unreadable, dropped",
+                "settings: entry cast_addresses[1] unreadable, dropped",
+            ],
+        );
+        assert!(!dropped.iter().any(|m| m.contains("9731")));
 
         let clean = launch_with(
             "adapter-settings-clean",
