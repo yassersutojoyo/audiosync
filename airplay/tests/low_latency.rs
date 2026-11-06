@@ -329,6 +329,47 @@ fn late_sends_in_a_speakers_first_second_step_nothing_and_a_late_send_after_it_d
     assert_eq!(rig.stream.counters().last_step(), Some(StepCause::LateSend));
 }
 
+// covers: P200
+#[test]
+fn a_join_mid_stream_excuses_every_speakers_late_sends_for_a_second() {
+    let mut rig = low_rig();
+    rig.add(speaker(1, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+    rig.add(speaker(2, Codec::Alac));
+    // The join's start-up work wakes the sender late, so the first
+    // speaker's packets, long past its own first second, leave late too.
+    let slow = rig.now + Duration::from_millis(50);
+    rig.jump_to(slow);
+    rig.run_for(Duration::from_secs(2));
+    assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
+    assert_eq!(rig.stream.counters().last_step(), None);
+    let late = rig.now + Duration::from_millis(50);
+    rig.jump_to(late);
+    rig.run_for(Duration::from_millis(100));
+    assert_eq!(rig.stream.latency_frames(), 8_820);
+    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::LateSend));
+}
+
+// covers: P200
+#[test]
+fn a_long_delay_edit_excuses_late_sends_for_a_second_only() {
+    let mut rig = low_rig();
+    let edited = rig.add(speaker(1, Codec::Alac));
+    rig.add(speaker(2, Codec::Alac));
+    rig.run_for(Duration::from_secs(3));
+    // The edit's first sound comes over 5 s on; the grace must not wait for it.
+    assert!(
+        rig.stream
+            .set_delay(edited, Duration::from_secs(5), rig.now)
+    );
+    rig.run_for(Duration::from_secs(2));
+    let late = rig.now + Duration::from_millis(50);
+    rig.jump_to(late);
+    rig.run_for(Duration::from_millis(100));
+    assert_eq!(rig.stream.latency_frames(), 8_820, "{:?}", timelines(&rig));
+    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::LateSend));
+}
+
 // covers: P98
 #[test]
 fn at_a_tenth_of_a_second_every_packet_leaves_before_its_play_time() {
