@@ -116,6 +116,7 @@ struct MainView: View {
     @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var windowWidth = WindowWidth()
     @StateObject private var noticeCount = NoticeCount()
+    @StateObject private var masterDrag = VolumeDrag()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -347,13 +348,15 @@ struct MainView: View {
                 HStack(spacing: 8) {
                     MasterMuteButton(model: model, text: t)
                     Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }),
-                           in: 0...100)
+                           in: 0...100, onEditingChanged: { masterDrag.held = $0 })
                         .controlSize(.small)
                         .accessibilityLabel(t.masterVolume)
                         .accessibilityValue(t.volumeValue(model.master))
+                    // As on a speaker row: brighter while held, and never trailing the knob.
                     Text(t.volumeValue(model.master))
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(Brand.secondaryText)
+                        .foregroundStyle(masterDrag.held ? Color.primary : Brand.secondaryText)
+                        .transaction { $0.animation = nil }
                         .frame(width: 26, alignment: .trailing)
                         .accessibilityHidden(true)
                 }
@@ -777,9 +780,9 @@ final class ZoneDisclosure: ObservableObject {
     }
 }
 
-/// Whether a speaker row's volume slider is held. An object rather than
-/// @State, for the same reason as ZoneDisclosure; the row's volume number
-/// redraws on it.
+/// Whether a volume slider (a speaker row's, the master) is held. An object
+/// rather than @State, for the same reason as ZoneDisclosure; the slider's
+/// volume number redraws on it.
 final class VolumeDrag: ObservableObject {
     @Published var held = false
 }

@@ -1497,6 +1497,7 @@ private let accent = Brand.teal
 struct MenuBarView: View {
     @ObservedObject var model: AppModel
     @StateObject private var zoneDisclosure = ZoneDisclosure()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let rowHeight: CGFloat = 28
     /// Everything but the speaker list (header, source, volume, footer,
     /// margins), plus room for what may show around it: the list grows until
@@ -1506,6 +1507,12 @@ struct MenuBarView: View {
                            airPlayNote: model.airPlayProblem != nil || model.localNetworkHint != .none,
                            castAddRow: castAddRow != .none, presets: PresetPanel.showsRow(model.presets),
                            liveInputHint: model.liveInputAirPlayHint != nil, noSpeakerOn: showsNoSpeakerOn)
+    }
+
+    /// The notes and rows the panel shows only now and then; notices and zones animate on their own.
+    private var shownSections: [Bool] {
+        [model.liveInputAirPlayHint != nil, PresetPanel.showsRow(model.presets), showsNoSpeakerOn,
+         model.airPlayProblem != nil, model.localNetworkHint != .none]
     }
 
     private var showsNoSpeakerOn: Bool {
@@ -1580,6 +1587,7 @@ struct MenuBarView: View {
             .padding(.horizontal, -6)
             .id(model.panelSession)
         }
+        .animation(Motion.section(reduceMotion: reduceMotion), value: shownSections)
         .padding(BrandTokens.Spacing.panelPadding)
         .frame(width: 280)
         .pinnedToTop()
@@ -1909,6 +1917,7 @@ struct SpeakerBadge: View {
             switch state {
             case .playing:
                 Circle().fill(accent)
+                    .transition(Motion.arrival(reduceMotion: reduceMotion))
             case .willPlay:
                 Circle().fill(accent.opacity(0.14))
                 // tealText, not accent: the outline must reach 3:1 on the window.

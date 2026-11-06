@@ -16,6 +16,13 @@ enum Motion {
         .easeInOut(duration: reduceMotion ? 0.1 : 0.2)
     }
 
+    /// A speaker that starts playing: the filled badge grows out of the
+    /// waiting ring, so the change reads as arriving; leaving only fades.
+    static func arrival(reduceMotion: Bool) -> AnyTransition {
+        reduceMotion ? .opacity
+            : .asymmetric(insertion: .scale(scale: 0.6).combined(with: .opacity), removal: .opacity)
+    }
+
     /// The input meter's fall glides over one poll to the next reading, so its
     /// ten readings a second don't show as steps; a rise shows at once.
     static func meter(reduceMotion: Bool) -> Animation? {
@@ -30,5 +37,12 @@ enum Motion {
     /// A delay panel or a zone opening or closing in the main window.
     static func panel(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .easeInOut(duration: 0.15)
+    }
+
+    /// A note or row showing or going in the menu bar panel: it fades while
+    /// the rows below slide, on the panel's own resize curve, so they keep
+    /// pace with its edge.
+    static func section(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeOut(duration: PanelResize.duration)
     }
 }
