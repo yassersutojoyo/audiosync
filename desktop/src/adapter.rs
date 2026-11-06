@@ -5304,8 +5304,14 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             return Err(CastAddressError::NotFound);
         }
         cast_address::add(&mut self.cast_addresses, &address);
-        self.audio.add_cast_address(address);
+        self.audio.add_cast_address(address.clone());
         self.take_events();
+        let from = address.device_id().to_string();
+        if let Some(listed) = self.audio.cast_speakers().into_iter().find(|speaker| {
+            speaker.address.as_deref() == Some(address.text().as_str()) && speaker.id != from
+        }) {
+            self.cast_identified(&from, &listed.id);
+        }
         Ok(())
     }
 
@@ -16582,6 +16588,34 @@ mod tests {
         assert!(adapter.save_settings());
         let saved = std::fs::read_to_string(&path).expect("saved");
         assert!(!saved.contains("192.0.2.31"), "{saved}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: C18
+    #[test]
+    fn an_address_added_for_a_listed_speaker_keeps_its_id_across_a_relaunch_with_no_browse() {
+        let dir = test_dir("adapter-cast-listed-address");
+        let path = dir.join(settings::FILE_NAME);
+        let (mut adapter, fake) = cast_launch(&path, &[], false);
+        fake.announce_at(
+            DEN,
+            "Den",
+            DEVICE_PORT,
+            std::net::Ipv4Addr::new(192, 0, 2, 31),
+        );
+        adapter.poll();
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        adapter.rename_speaker(&cc(DEN), "Study");
+        assert!(adapter.save_settings());
+
+        let (adapter, _fake) = cast_launch(&path, &[], false);
+        let state = adapter.snapshot();
+        assert!(state.speaker(&cc_address("192.0.2.31")).is_none());
+        assert_eq!(
+            state.speaker(&cc(DEN)).map(|row| row.name.as_str()),
+            Some("Study")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
