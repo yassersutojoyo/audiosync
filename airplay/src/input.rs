@@ -36,7 +36,7 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 use std::time::Instant;
 
 use crate::audio::{Frame, PacketFrames, SAMPLE_RATE, sample_from_f32};
@@ -68,6 +68,14 @@ pub(crate) struct Arrival {
     pub late: bool,
 }
 
+/// A move of the speakers' timeline (P200): from ring position `position`
+/// on, frames sound `frames` frames later than before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimelineMove {
+    pub position: u64,
+    pub frames: i64,
+}
+
 struct Shared {
     /// Arrival times are nanoseconds from this instant (the sender clock's
     /// origin).
@@ -86,6 +94,11 @@ struct Shared {
     arrival_at: Box<[AtomicU64]>,
     arrivals_written: AtomicU64,
     arrivals_read: AtomicU64,
+    /// The newest [`TimelineMove`] under a sequence lock: odd while the
+    /// stream stores it, 0 before the first.
+    move_sequence: AtomicU64,
+    move_position: AtomicU64,
+    move_frames: AtomicI64,
 }
 
 /// Creates a ring of `frames` frames (at least [`MIN_INPUT_FRAMES`]), with
@@ -104,12 +117,16 @@ pub(crate) fn ring(frames: usize, origin: Instant) -> (InputWriter, InputReader)
         arrival_at: atomics(ARRIVAL_RECORDS),
         arrivals_written: AtomicU64::new(0),
         arrivals_read: AtomicU64::new(0),
+        move_sequence: AtomicU64::new(0),
+        move_position: AtomicU64::new(0),
+        move_frames: AtomicI64::new(0),
     });
     (
         InputWriter {
             shared: shared.clone(),
             late: None,
             fresh: true,
+            moves_taken: 0,
         },
         InputReader {
             shared,
@@ -135,6 +152,8 @@ pub struct InputWriter {
     late: Option<(Instant, u64)>,
     /// No frame of the current capture was handed over yet.
     fresh: bool,
+    /// The sequence of the last [`TimelineMove`] taken.
+    moves_taken: u64,
 }
 
 impl InputWriter {
@@ -166,6 +185,30 @@ impl InputWriter {
     pub fn new_capture(&mut self) {
         self.fresh = true;
         self.late = None;
+        // A move announced before this capture was followed by the host's
+        // poll, not by this capture's frames.
+        self.moves_taken = self.shared.move_sequence.load(Ordering::Acquire);
+    }
+
+    /// The speakers' newest timeline move (P200), once: announced when the
+    /// step is decided, about L before the speakers make it. Never
+    /// allocates, locks or blocks (P6).
+    pub fn take_move(&mut self) -> Option<TimelineMove> {
+        let shared = &*self.shared;
+        let before = shared.move_sequence.load(Ordering::Acquire);
+        if before == self.moves_taken || before % 2 == 1 {
+            return None;
+        }
+        let moved = TimelineMove {
+            position: shared.move_position.load(Ordering::Relaxed),
+            frames: shared.move_frames.load(Ordering::Relaxed),
+        };
+        fence(Ordering::Acquire);
+        if shared.move_sequence.load(Ordering::Relaxed) != before {
+            return None;
+        }
+        self.moves_taken = before;
+        Some(moved)
     }
 
     /// The ring position the next frame handed over will take. With the
@@ -308,6 +351,18 @@ impl InputReader {
             shared.floor.store(end, Ordering::Release);
         }
         silent
+    }
+
+    /// Announces a timeline move to the host (P200).
+    pub(crate) fn announce_move(&self, moved: TimelineMove) {
+        let shared = &*self.shared;
+        shared.move_sequence.fetch_add(1, Ordering::Relaxed);
+        fence(Ordering::Release);
+        shared
+            .move_position
+            .store(moved.position, Ordering::Relaxed);
+        shared.move_frames.store(moved.frames, Ordering::Relaxed);
+        shared.move_sequence.fetch_add(1, Ordering::Release);
     }
 
     /// The ring position the host's next frame will take.

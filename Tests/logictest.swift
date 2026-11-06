@@ -8902,6 +8902,18 @@ do {
                 && holds([r, usb, bt], airPlay: true, l: beside ?? 0) == [r: 3000, usb: 3150, bt: 2750],
               "airplay latency: beside a Cast speaker the local outputs wait for the longer of L and its wait",
               "\(String(describing: beside)), \(String(describing: below))")
+        // The step's move put a renderer at 2500 ms on the speakers' frame; the poll's re-time leaves it be.
+        check(!LocalDelay.retimeMoves(toMs: l, captureRate: 48_000, delayFrames: 120_000)
+                && LocalDelay.retimeMoves(toMs: l, captureRate: 48_000, delayFrames: 96_000),
+              "airplay latency: an output the step already moved gets no second fade at the poll", "L \(l)")
+        // A step of 15 493 Lf frames is 16 863.13 frames at 48 kHz: the move rounds it, the re-time floors its ms.
+        let oddHoldBack = 2000 + 0.9 / 48
+        let oddMoved = Int64((oddHoldBack * 48).rounded(.down)) + Int64((15_493.0 * 48_000 / 44_100).rounded())
+        let oddTarget = oddHoldBack + 15_493.0 * 1000 / 44_100
+        check(!LocalDelay.retimeMoves(toMs: oddTarget, captureRate: 48_000, delayFrames: oddMoved)
+                && LocalDelay.retimeMoves(toMs: oddTarget + 1, captureRate: 48_000, delayFrames: oddMoved),
+              "airplay latency: a step that is no whole number of frames still gets no second fade at the poll",
+              "moved \(oddMoved), target \(oddTarget) ms")
     }
 
     // S177: the running renderers whose hold-back changed get it, the others no call.

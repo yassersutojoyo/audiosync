@@ -227,8 +227,10 @@ extension AppDelegate {
         let calls = LocalDelay.retimes(applied: localHoldBacks, holdBacks: targets)
         guard !calls.isEmpty else { return }
         for (uid, holdBack) in calls.sorted(by: { $0.key < $1.key }) {
-            engine.setDelay(uid: uid, ms: holdBack)
             localHoldBacks[uid] = holdBack
+            if let frames = engine.delayFrames(uid: uid),
+               !LocalDelay.retimeMoves(toMs: holdBack, captureRate: engine.captureRate, delayFrames: frames) { continue }
+            engine.setDelay(uid: uid, ms: holdBack)
         }
         DebugTrace.log("[AudioSync] local delays re-timed: "
             + calls.sorted(by: { $0.key < $1.key }).map { "\($0.key) \(Int($0.value.rounded())) ms" }

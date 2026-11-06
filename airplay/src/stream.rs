@@ -30,7 +30,7 @@ use crate::alac;
 use crate::ap2::audio::{PacketSealer, SEALED_OVERHEAD, StreamKey};
 use crate::audio::{self, FRAMES_PER_PACKET, PACKET_FRAMES, PCM_PAYLOAD_BYTES, PacketFrames};
 use crate::clock::SenderClock;
-use crate::input::{self, InputReader, InputWriter};
+use crate::input::{self, InputReader, InputWriter, TimelineMove};
 use crate::latency::{self, LatencySources, ReportedLatency};
 use crate::rate::{MAX_MARGIN, Margin, NOMINAL_RATE, RateModel};
 
@@ -1256,6 +1256,10 @@ impl Stream {
         self.model.ensure(last_frame(fade));
         let at = self.model.time(last_frame(fade)) + f64::from(self.latency_frames) / NOMINAL_RATE;
         self.step_due = Some((at, frames));
+        self.input.announce_move(TimelineMove {
+            position: ((fade * PACKET_FRAMES) as i64 + self.origin).max(0) as u64,
+            frames: i64::from(frames) - i64::from(self.latency_frames),
+        });
     }
 
     /// Sets the stepped Lf, which the local outputs follow with the timeline

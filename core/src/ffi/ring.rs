@@ -47,7 +47,7 @@ pub struct AscRing {
 
 /// The ring's single writer behind an opaque C pointer (S35).
 pub struct AscRingWriter {
-    writer: RingWriter,
+    pub(crate) writer: RingWriter,
 }
 
 /// A delay reader behind an opaque C pointer (S41): the output thread's

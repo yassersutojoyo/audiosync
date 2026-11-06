@@ -97,6 +97,7 @@ use audiosync_airplay::stream::{
 use audiosync_airplay::targets::{Target, TargetChange, TargetId};
 use audiosync_airplay::volume::Volume;
 
+use super::ring::AscRingWriter;
 use super::{host_slice, stereo_samples};
 use crate::airplay_pairings::{Access, Loaded, PairingStore};
 use crate::airplay2_identity::IdentityStore;
@@ -107,7 +108,7 @@ use crate::policy::remote::{
     Action, App, Command, Control, Event as RemoteEvent, MUTED_DB, OwnVolume, Playback, Remote,
 };
 use crate::resample::Resampler;
-use crate::ring::is_supported_rate;
+use crate::ring::{RingMove, is_supported_rate};
 use crate::volume::{
     NO_ZONE_POSITION, ReadBack, RowMove, device_level, device_level_for_db, device_volume,
     gain_for_position, is_echo_of, level_on_speaker, level_set_on_speaker, row_move, sanitize_own,
@@ -4348,6 +4349,46 @@ pub unsafe extern "C" fn asc_airplay_input_write(
         death.panicked();
         0
     })
+}
+
+/// Capture thread, after a block went to both `writer`'s ring and this
+/// input: announces on the ring, once, the speakers' newest timeline move
+/// (P200), at the ring frame and in ring frames at the capture rate, so the
+/// local outputs start it on the speakers' frame (S281). Returns whether it
+/// announced one. Never allocates, locks, blocks or logs. Real-time safe.
+///
+/// # Safety
+///
+/// `input` is null or a live input handle and `writer` null or a live
+/// writer handle, both used by this thread only during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_airplay_input_forward_move(
+    input: *mut AscAirPlayInput,
+    writer: *mut AscRingWriter,
+) -> bool {
+    // SAFETY: by the caller's contract `writer` is null or live and used
+    // only by this thread now.
+    let Some(writer) = (unsafe { writer.as_mut() }) else {
+        return false;
+    };
+    if input.is_null() {
+        return false;
+    }
+    // SAFETY: the handle is live; like writes, this borrows only `death` and
+    // the `feed` field, on the one thread that writes.
+    let (death, feed) = unsafe { (&(*input).death, &mut (*input).feed) };
+    if !feed.ready || death.dead.load(Ordering::Acquire) {
+        return false;
+    }
+    let Some(moved) = feed.writer.take_move() else {
+        return false;
+    };
+    let ahead = moved.position as i64 - feed.writer.position() as i64;
+    let end = writer.writer.ring().frames_written();
+    let rate = feed.applied as u32;
+    let mapped = RingMove::after(end, ahead, moved.frames, SAMPLE_RATE, rate);
+    writer.writer.announce_move(mapped);
+    true
 }
 
 /// Any thread, at a session stop: asks the input to fade out over the next

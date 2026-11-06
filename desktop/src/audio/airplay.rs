@@ -97,6 +97,7 @@ use audiosync_core::policy::remote::{
     Action, App, Command, Control, Event as RemoteEvent, OwnVolume, Playback, Remote,
 };
 use audiosync_core::resample::Resampler;
+use audiosync_core::ring::RingMove;
 use audiosync_core::volume::{
     DEFAULT_LOCAL_POSITION, NO_ZONE_POSITION, ReadBack, device_level, device_level_for_db,
     device_volume, gain_for_position, is_echo_of, level_on_speaker, level_set_on_speaker,
@@ -639,6 +640,22 @@ impl FeedLease {
     #[cfg(test)]
     pub fn position(&self) -> u64 {
         self.feed.as_ref().map_or(0, AirPlayFeed::position)
+    }
+
+    /// The speakers' newest timeline move (P200) on the session ring, for
+    /// a capture whose last pushed frame went to ring frame `end - 1`
+    /// (S281). Never allocates, locks or blocks.
+    pub fn take_move(&mut self, end: u64) -> Option<RingMove> {
+        let input = &mut self.feed.as_mut()?.input;
+        let moved = input.take_move()?;
+        let ahead = moved.position as i64 - input.position() as i64;
+        Some(RingMove::after(
+            end,
+            ahead,
+            moved.frames,
+            AIRPLAY_RATE,
+            SESSION_RATE,
+        ))
     }
 }
 

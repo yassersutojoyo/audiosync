@@ -16,7 +16,7 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
 use crate::lead::SessionLeads;
 
@@ -47,6 +47,27 @@ pub struct Stamp {
     pub written: u64,
     /// When the writer closed the block, in nanoseconds.
     pub time_ns: u64,
+}
+
+/// A move of the network speakers' timeline the outputs follow (S281):
+/// from ring frame `frame` on, they play `frames` frames later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RingMove {
+    pub frame: u64,
+    pub frames: i64,
+}
+
+impl RingMove {
+    /// A move of `frames` frames at `rate` Hz whose first frame comes
+    /// `ahead` frames at that rate after ring frame `end`, on a ring at
+    /// `ring_rate` Hz.
+    pub fn after(end: u64, ahead: i64, frames: i64, rate: u32, ring_rate: u32) -> RingMove {
+        let scale = |n: i64| (n as f64 * f64::from(ring_rate) / f64::from(rate)).round() as i64;
+        RingMove {
+            frame: (end as i64).saturating_add(scale(ahead)).max(0) as u64,
+            frames: scale(frames),
+        }
+    }
 }
 
 /// Why a ring could not be created or used at a rate.
@@ -117,6 +138,11 @@ pub struct Ring {
     writer_taken: AtomicBool,
     /// The start leads and hold-backs of the renderers reading it (S208).
     leads: SessionLeads,
+    /// The newest [`RingMove`] under a sequence lock: odd while the writer
+    /// stores it, 0 before the first.
+    move_sequence: AtomicU64,
+    move_frame: AtomicU64,
+    move_frames: AtomicI64,
 }
 
 impl fmt::Debug for Ring {
@@ -157,6 +183,9 @@ impl Ring {
             heard: AtomicBool::new(false),
             writer_taken: AtomicBool::new(false),
             leads: SessionLeads::new(),
+            move_sequence: AtomicU64::new(0),
+            move_frame: AtomicU64::new(0),
+            move_frames: AtomicI64::new(0),
         }))
     }
 
@@ -239,6 +268,25 @@ impl Ring {
             return None;
         }
         Some(Stamp { written, time_ns })
+    }
+
+    /// The newest move announced (S281) and its sequence number, which
+    /// changes with each announcement; `None` before the first and while
+    /// the writer stores one. Never waits.
+    pub fn latest_move(&self) -> Option<(u64, RingMove)> {
+        let before = self.move_sequence.load(Ordering::Acquire);
+        let moved = RingMove {
+            frame: self.move_frame.load(Ordering::Relaxed),
+            frames: self.move_frames.load(Ordering::Relaxed),
+        };
+        fence(Ordering::Acquire);
+        let after = self.move_sequence.load(Ordering::Relaxed);
+        (before != 0 && before % 2 == 0 && before == after).then_some((before, moved))
+    }
+
+    /// The sequence number of the newest move, 0 before the first.
+    pub fn move_sequence(&self) -> u64 {
+        self.move_sequence.load(Ordering::Acquire)
     }
 
     /// The readable index range `[max(0, W - C + M), W)` for the current W
@@ -408,6 +456,20 @@ impl RingWriter {
         ring.stamp_written.store(written, Ordering::Relaxed);
         ring.stamp_time.store(time_ns, Ordering::Relaxed);
         ring.stamp_sequence
+            .store(sequence.wrapping_add(2), Ordering::Release);
+    }
+
+    /// Announces a move to the renderers (S281). Never waits, allocates or
+    /// locks.
+    pub fn announce_move(&mut self, moved: RingMove) {
+        let ring = &*self.ring;
+        let sequence = ring.move_sequence.load(Ordering::Relaxed);
+        ring.move_sequence
+            .store(sequence.wrapping_add(1), Ordering::Relaxed);
+        fence(Ordering::Release);
+        ring.move_frame.store(moved.frame, Ordering::Relaxed);
+        ring.move_frames.store(moved.frames, Ordering::Relaxed);
+        ring.move_sequence
             .store(sequence.wrapping_add(2), Ordering::Release);
     }
 

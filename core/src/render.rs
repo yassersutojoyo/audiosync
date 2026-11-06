@@ -102,7 +102,7 @@ use crate::lead::{HeldLead, SessionLeads};
 use crate::meter::OutputLevel;
 use crate::reader::{Correction, NextRead, ReadReport, Reader, ReaderControl, ReaderCounters};
 use crate::resample::Resampler;
-use crate::ring::Ring;
+use crate::ring::{Ring, RingMove};
 use crate::volume::{GainStage, SharedGain};
 
 /// Device frames rendered per read; bounds the renderer's buffers.
@@ -946,6 +946,10 @@ pub struct Renderer {
     delay_pending: bool,
     /// The hold-back the renderer took from its control.
     hold_back: i64,
+    /// The sequence of the last ring move taken (S281).
+    moves_seen: u64,
+    /// A ring move the reader hasn't reached yet (S281).
+    move_due: Option<RingMove>,
     /// The delay its reader was given last: the hold-back plus the session
     /// lead, less the converter's latency (S208).
     reader_delay: i64,
@@ -1119,6 +1123,7 @@ impl Renderer {
         let followed = (bound as f64 * RATE_FOLLOW_MAX).ceil() as usize;
         let read_frames = bound + bound / TRIM_SHARE + followed + 2;
         let latency = resampler.latency_frames() as i64;
+        let moves_seen = reader.ring().move_sequence();
         Ok(Renderer {
             reader,
             reader_control: control.reader.clone(),
@@ -1141,6 +1146,8 @@ impl Renderer {
             stop: Stop::None,
             delay_pending: false,
             hold_back: control.shared.delay.load(Ordering::Relaxed),
+            moves_seen,
+            move_due: None,
             reader_delay: control.reader.delay_frames(),
             latency,
             open_delay: (latency as u64 * u64::from(device_rate)).div_ceil(u64::from(capture_rate))
@@ -1405,6 +1412,7 @@ impl Renderer {
             self.start_lead_fixed = true;
         }
         self.take_requests();
+        self.take_move();
         self.follow_session_lead();
         // Before the trim, so a shortage shows as the slack it was.
         self.observe(frames, time, drop_ns);
@@ -1419,7 +1427,22 @@ impl Renderer {
         let mut done = 0;
         let mut starved = false;
         while done < frames {
-            let n = (frames - done).min(RENDER_CHUNK);
+            let mut n = (frames - done).min(RENDER_CHUNK);
+            if let Some(moved) = self.move_due {
+                // A read's frames leave the converter its latency later.
+                let ahead = (moved.frame as i64)
+                    .saturating_add(self.latency)
+                    .saturating_sub(self.next_frame);
+                if ahead <= 0 {
+                    self.make_move(moved.frames);
+                } else {
+                    // The piece ends where the move starts, so its fade-out
+                    // starts on that frame.
+                    let until = (ahead as u64 * u64::from(self.device_rate))
+                        .div_ceil(u64::from(self.capture_rate));
+                    n = n.min(usize::try_from(until).unwrap_or(usize::MAX));
+                }
+            }
             let need = self.resampler.input_frames_for(n).min(read_capacity);
             // With no read, the fade carries on over the piece.
             let mut layout = Layout {
@@ -2221,8 +2244,41 @@ impl Renderer {
         }
         if take(&self.shared.delay_flag) {
             self.hold_back = self.shared.delay.load(Ordering::Relaxed);
+            // The host's delay already counts any move it knew of.
+            self.move_due = None;
             self.ask_reader_delay();
         }
+    }
+
+    /// Takes a move newly announced on the ring (S281).
+    fn take_move(&mut self) {
+        if let Some((sequence, moved)) = self.reader.ring().latest_move()
+            && sequence != self.moves_seen
+        {
+            self.moves_seen = sequence;
+            self.move_due = Some(moved);
+        }
+    }
+
+    /// Moves the hold-back by `frames` as a delay change does (S187, S281),
+    /// unless the host asked for a delay since it was taken.
+    fn make_move(&mut self, frames: i64) {
+        self.move_due = None;
+        let moved = self.hold_back.saturating_add(frames).max(0);
+        let shared = &*self.shared;
+        if self.stop != Stop::None
+            || shared
+                .delay
+                .compare_exchange(self.hold_back, moved, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+        {
+            return;
+        }
+        if let Some(slot) = shared.slot {
+            shared.leads().set_hold_back(slot, moved);
+        }
+        self.hold_back = moved;
+        self.ask_reader_delay();
     }
 
     /// Publishes the start lead for a steady callback of `callback` device

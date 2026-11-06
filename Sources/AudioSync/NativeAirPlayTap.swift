@@ -66,6 +66,17 @@ enum NativeAirPlayTap {
         _ = users.wrappingSubtract(1, ordering: .sequentiallyConsistent)
     }
 
+    /// Capture thread, after `write` and the ring's write of the same block:
+    /// the local outputs start the speakers' next timeline move on its frame.
+    @inline(__always)
+    static func forwardMove(to ring: CoreDelayRing) {
+        _ = users.wrappingAdd(1, ordering: .sequentiallyConsistent)
+        if let raw = slot.load(ordering: .sequentiallyConsistent) {
+            ring.forwardAirPlayMove(from: OpaquePointer(raw))
+        }
+        _ = users.wrappingSubtract(1, ordering: .sequentiallyConsistent)
+    }
+
     /// Control thread, at each capture build before its first block: the
     /// capture rate. The input starts its resampler afresh at the next write.
     static func prepare(captureRate: Double) {

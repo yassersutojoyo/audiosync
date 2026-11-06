@@ -197,6 +197,10 @@ final class OutputRenderer: FadingOutput {
     /// The newest delay asked for, in capture-rate frames.
     var newestDelayFrames: Int64 { delayFrames.load(ordering: .relaxed) }
 
+    /// The running renderer's delay now, which a step's move (S281) may have
+    /// changed since `setDelay`; nil before a start.
+    var currentDelayFrames: Int64? { target?.renderer.delayFrames }
+
     /// The reader's diagnostic counters (S158).
     var counters: CoreDelayReader.Counters { target?.renderer.counters ?? CoreDelayReader.Counters() }
 

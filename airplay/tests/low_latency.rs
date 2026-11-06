@@ -293,6 +293,46 @@ fn a_step_pauses_each_speaker_inside_silence_whatever_its_delay() {
 
 // covers: P200
 #[test]
+fn a_step_tells_the_host_where_the_speakers_move_before_they_do() {
+    let mut rig = low_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    rig.run_for(Duration::from_secs(2));
+    assert_eq!(rig.writer.take_move(), None, "no step, no move");
+    for _ in 0..3 {
+        lose_one(&mut rig, id);
+        rig.run_for(Duration::from_millis(10));
+    }
+    let moved = rig.writer.take_move().expect("the step is announced");
+    assert_eq!(rig.stream.latency_frames(), LOW, "before the speakers move");
+    assert_eq!(moved.frames, 4_410, "by the step");
+    rig.run_for(Duration::from_secs(1));
+    assert_eq!(rig.stream.latency_frames(), 8_820);
+    assert_eq!(rig.writer.take_move(), None, "once");
+
+    // From the first frame of the packet that fades out.
+    let faded = rig
+        .audio(id)
+        .iter()
+        .find(|packet| {
+            let frames = decode(Codec::Pcm, &packet.payload);
+            frames[0] != [0, 0] && frames[FRAMES_PER_PACKET - 1] == [0, 0]
+        })
+        .map(|packet| rig.frame_of(id, packet.header.timestamp))
+        .expect("a packet fades out");
+    let origin = rig
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::Timeline { origin, .. } => Some(*origin),
+            _ => None,
+        })
+        .next_back()
+        .unwrap_or(0);
+    assert_eq!(moved.position as i64, faded + origin);
+}
+
+// covers: P200
+#[test]
 fn a_packet_sent_late_steps_lf_as_a_resend_request_does() {
     let mut rig = low_rig();
     rig.add(speaker(1, Codec::Alac));

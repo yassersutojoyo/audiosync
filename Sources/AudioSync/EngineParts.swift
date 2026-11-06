@@ -110,6 +110,7 @@ struct EngineParts {
         }
         ring.write(interleaved: block, frames: frames)
         NativeAirPlayTap.write(block, frames: frames)
+        NativeAirPlayTap.forwardMove(to: ring)
         CastTap.write(block, frames: frames)
     }
 

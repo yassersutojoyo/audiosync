@@ -70,7 +70,6 @@ S267 Hosts only: keyboard reach and focus of the preset controls; the Windows te
 S268 Hosts only: the preset controls' colors in light and dark; the Windows contrast tests and the Mac logic suite (the Presets card's tokens and their 4.5:1 contrast) check it.
 S269 Hosts only: the preset wording in UIStrings (Mac) and strings.slint (Windows); the Mac logic suite's "presets: the preset texts" and view.rs the_preset_texts_come_from_strings check it.
 S280 Hosts only: keeping each speaker's reported latency and setting the session's L; the rule is the AirPlay crate's (AirPlay spec P200); the Windows tests and the Mac logic suite check it.
-S281 Hosts only: re-timing on a new L reported by the AirPlay sender, through S177 and S178, which the core covers.
 S282 Hosts only: the debug log lines for reported latencies and L; the Mac logic suite and airplay.rs a_receiver_reporting_nothing_starts_at_zero_without_a_warning check them.
 S283 Hosts only: each AirPlay speaker's reported latency as its starting estimate, the per-speaker delay and L the host derives from it; S235's window part is the core's `airplay_wait_ms`, covered there.
 S284 Hosts only: Lf, E and each row's delay with several AirPlay 2 receivers, a target at its largest member's R_s; the Windows tests and the Mac logic suite check it.

@@ -727,6 +727,10 @@ final class StreamEngine {
         DebugTrace.log("[AudioSync] output \(uid): delay \(ms) ms")
     }
 
+    /// Output `uid`'s newest delay in capture-rate frames, a step's move
+    /// (S281) included; nil without a running renderer.
+    func delayFrames(uid: String) -> Int64? { renderers[uid]?.currentDelayFrames }
+
     /// For the debug log: how far output `uid`'s reader trails the newest
     /// frame against its delay, which drift may move inside the 50 ms dead
     /// band (S50, S56), and the corrections it counted (S158).

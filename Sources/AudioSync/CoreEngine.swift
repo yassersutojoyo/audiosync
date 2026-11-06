@@ -64,6 +64,12 @@ final class CoreDelayRing {
     func write(interleaved samples: UnsafePointer<Float>, frames: Int) {
         asc_ring_write(writer, samples, frames)
     }
+
+    /// Capture thread, after a block went to this ring and to `input`: passes
+    /// on the AirPlay speakers' next timeline move, if any (S281). Real-time safe.
+    func forwardAirPlayMove(from input: OpaquePointer) {
+        _ = asc_airplay_input_forward_move(input, writer)
+    }
 }
 
 /// One local output's delayed read of the core's ring, with drift

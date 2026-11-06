@@ -71,6 +71,16 @@ enum LocalDelay {
         return calls
     }
 
+    /// Whether a re-time to `ms` moves a renderer whose newest delay is
+    /// `delayFrames` at `captureRate`: not when a step's move (S281) already
+    /// put it there, since any call fades the output out and in (S187).
+    static func retimeMoves(toMs ms: Double, captureRate: Double, delayFrames: Int64) -> Bool {
+        var frames: Int64 = 0
+        guard let rate = CoreRate.hz(captureRate), asc_delay_ms_to_frames(ms, rate, &frames) else { return true }
+        // The move rounds its frames and this floors its ms, so a moved output may sit one frame off.
+        return abs(frames - delayFrames) > 1
+    }
+
     // MARK: Settings (S175, S178)
 
     /// An offset ready to store: clamped to −2000…20 000 ms; nil (ignored)

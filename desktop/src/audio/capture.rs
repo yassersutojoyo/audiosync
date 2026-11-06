@@ -791,7 +791,9 @@ impl CaptureConverter {
     /// equalized, as part of the packet's block, and hands them to the
     /// AirPlay sender as audio that arrived at `arrived`. While a calibration
     /// runs, the music fades out of both and the signal from `signal` goes
-    /// into the ring. Returns the frames written to the ring.
+    /// into the ring. The sender's newest timeline move goes on to the
+    /// outputs at its ring frame (S281). Returns the frames written to the
+    /// ring.
     fn write_stereo(&mut self, frames: usize, arrived: Instant, signal: &mut i64) -> usize {
         let CaptureConverter {
             writer,
@@ -802,7 +804,7 @@ impl CaptureConverter {
             resampled,
             ..
         } = self;
-        match resampler {
+        let written = match resampler {
             None => {
                 let block = &mut stereo[..frames * 2];
                 equalizer.process(block);
@@ -828,7 +830,12 @@ impl CaptureConverter {
                 }
                 written
             }
+        };
+        let end = writer.ring().frames_written();
+        if let Some(moved) = feeds.airplay.as_mut().and_then(|feed| feed.take_move(end)) {
+            writer.announce_move(moved);
         }
+        written
     }
 }
 
@@ -2764,5 +2771,202 @@ mod tests {
         let lease = slot.lease().expect("the capture gave the feed back");
         let position = lease.position();
         assert!((44_000..=44_100).contains(&position), "{position} frames");
+    }
+
+    // covers: S281
+    #[test]
+    fn a_local_output_starts_an_airplay_step_on_the_frame_the_speaker_starts_it() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        use audiosync_airplay::audio::{FRAMES_PER_PACKET, Frame, read_pcm_payload};
+        use audiosync_airplay::rtp::{HEADER_BYTES, ResendRequest, RtpHeader};
+        use audiosync_airplay::sdp::Codec;
+        use audiosync_airplay::session::{MediaDestinations, ReceiverPorts};
+        use audiosync_airplay::stream::{PacketKind, SpeakerConfig, StreamEvent};
+        use audiosync_core::render::{Renderer, RendererControl};
+        use audiosync_core::volume::SharedGain;
+
+        const BLOCK: usize = 480;
+        const POLL: f64 = 0.5;
+        let start = std::time::Instant::now();
+        let clock = SenderClock::new(start);
+        let config = StreamConfig {
+            latency_frames: 4_410,
+            input_frames: 88_200,
+        };
+        let (mut stream, input) = Stream::new(config, clock, start);
+        let slot = FeedSlot::new(input);
+        let (ring, writer) = session_ring();
+        let (_control, processor) = equalizer();
+        let feeds = Feeds {
+            airplay: Some(slot.lease().expect("the feed is free")),
+            cast: None,
+            calibration: None,
+        };
+        let mut converter =
+            CaptureConverter::new(CAPTURE_ATTEMPTS[0].format, writer, processor, feeds).unwrap();
+        // A local output held back by L = 100 ms, in step with the speaker.
+        let reader = Reader::new(Arc::clone(&ring), SESSION_RATE);
+        reader.control().set_delay_frames(4_800);
+        let control = RendererControl::new(&reader);
+        let gain = Arc::new(SharedGain::new(1.0));
+        let mut renderer =
+            Renderer::new(reader, &control, gain, SESSION_RATE, SESSION_RATE, 2).unwrap();
+        let destinations = MediaDestinations::new(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 21)), 7000),
+            ReceiverPorts {
+                server_port: 50_000,
+                control_port: 50_001,
+                timing_port: 50_002,
+            },
+        );
+        let speaker = stream.add_speaker(
+            SpeakerConfig::new(Codec::Pcm, destinations, 0x5EED_1001, 1_007, 1_000_102),
+            start,
+        );
+
+        let mut bursts = vec![3.0, 3.1, 3.2];
+        let mut next_poll = POLL;
+        let mut blocks = 0u64;
+        let mut t = 0.0f64;
+        let mut transmits = Vec::new();
+        let mut events = Vec::new();
+        let mut polled = 0;
+        let mut played: Vec<[f32; 2]> = Vec::new();
+        let mut burst_end = None;
+        let mut out = vec![0.0f32; BLOCK * 2];
+        while t < 5.0 {
+            let block_due = (blocks + 1) as f64 * BLOCK as f64 / f64::from(SESSION_RATE);
+            let mut next = block_due.min(next_poll);
+            if let Some(at) = stream.poll_timeout() {
+                next = next.min(clock.seconds(at));
+            }
+            if let Some(&burst) = bursts.first() {
+                next = next.min(burst);
+            }
+            t = next.max(t + 1e-6);
+            let now = clock.instant(t);
+            if t + 1e-9 >= block_due {
+                let first = ring.frames_written();
+                // The right channel names each ring frame, so a played frame tells
+                // which one it was whatever gain it got.
+                for i in 0..BLOCK {
+                    let frame = first + i as u64;
+                    converter.stereo[2 * i] = 0.5;
+                    converter.stereo[2 * i + 1] = 0.5 * (frame % 65_536) as f32 / 65_536.0;
+                }
+                converter.write_stereo(BLOCK, now, &mut -1);
+                converter.writer.end_block();
+                blocks += 1;
+                renderer.render(&mut out);
+                played.extend(out.chunks(2).map(|frame| [frame[0], frame[1]]));
+            }
+            if bursts.first().is_some_and(|&burst| burst <= t + 1e-9) {
+                bursts.remove(0);
+                let request = ResendRequest {
+                    seq: 1,
+                    first: 0,
+                    count: 1,
+                };
+                stream.handle_control_packet(speaker, &request.encode(), now);
+                if bursts.is_empty() {
+                    burst_end = Some(played.len());
+                }
+            }
+            stream.handle_timeout(now);
+            while let Some(transmit) = stream.poll_transmit() {
+                transmits.push(transmit);
+            }
+            while let Some(event) = stream.poll_event() {
+                events.push(event);
+            }
+            // The host's poll re-times the output to a new L (S177, S281).
+            if t + 1e-9 >= next_poll {
+                next_poll += POLL;
+                for event in &events[polled..] {
+                    if let StreamEvent::Timeline { latency, .. } = event {
+                        let frames =
+                            latency.as_micros() as i64 * i64::from(SESSION_RATE) / 1_000_000;
+                        if control.delay_frames() != frames {
+                            control.set_delay_frames(frames);
+                        }
+                    }
+                }
+                polled = events.len();
+            }
+        }
+        assert_eq!(stream.latency_frames(), 8_820, "the burst steps Lf");
+
+        // The speaker's step starts with the packet that fades out.
+        let (first_packet, first_rtptime) = events
+            .iter()
+            .find_map(|event| match event {
+                StreamEvent::FirstSound {
+                    packet, rtptime, ..
+                } => Some((*packet, *rtptime)),
+                _ => None,
+            })
+            .expect("the speaker sounds");
+        let origin = events
+            .iter()
+            .filter_map(|event| match event {
+                StreamEvent::Timeline { origin, .. } => Some(*origin),
+                _ => None,
+            })
+            .next_back()
+            .unwrap_or(0);
+        let mut frames: [Frame; FRAMES_PER_PACKET] = [[0; 2]; FRAMES_PER_PACKET];
+        let faded = transmits
+            .iter()
+            .filter(|transmit| transmit.speaker == speaker && transmit.kind == PacketKind::Audio)
+            .find_map(|transmit| {
+                let header = RtpHeader::parse(&transmit.bytes)?;
+                read_pcm_payload(&transmit.bytes[HEADER_BYTES..], &mut frames);
+                let fades = frames[0][0] != 0 && frames[FRAMES_PER_PACKET - 1] == [0, 0];
+                fades.then_some(header.timestamp)
+            })
+            .expect("a packet fades out for the step");
+        let timeline = (first_packet * FRAMES_PER_PACKET as u64) as i64
+            + i64::from(faded.wrapping_sub(first_rtptime) as i32);
+        let position = timeline + origin;
+        let expected = position * i64::from(SESSION_RATE) / 44_100;
+
+        // The local output's step starts with its first frame below full.
+        let from = burst_end.expect("the burst was sent");
+        let fade = from
+            + played[from..]
+                .iter()
+                .position(|frame| frame[0] < 0.4999)
+                .expect("the output fades for the step");
+        let named = (f64::from(played[fade][1] / played[fade][0]) * 65_536.0).round() as i64;
+        let near = expected.rem_euclid(65_536);
+        let wrap = (named - near + 32_768).rem_euclid(65_536) - 32_768;
+        let local = expected + wrap;
+        let offset = local - expected;
+        let packet = (FRAMES_PER_PACKET as i64 * i64::from(SESSION_RATE) + 44_099) / 44_100;
+        eprintln!(
+            "local step starts {offset} frames ({:.1} ms) after the speaker's",
+            offset as f64 * 1000.0 / f64::from(SESSION_RATE)
+        );
+        assert!(
+            offset.abs() <= packet,
+            "the local step starts {offset} frames off the speaker's, more than a packet ({packet})"
+        );
+        // The poll's re-time finds the move made: no second fade.
+        assert_eq!(control.delay_frames(), 9_600, "held back by the new L");
+        let silent = fade
+            + played[fade..]
+                .iter()
+                .position(|frame| frame[0] == 0.0)
+                .expect("the step pauses");
+        let back = silent
+            + played[silent..]
+                .iter()
+                .position(|frame| frame[0] >= 0.4999)
+                .expect("the output plays again");
+        assert!(
+            played[back..].iter().all(|frame| frame[0] >= 0.4999),
+            "one fade for the step"
+        );
     }
 }

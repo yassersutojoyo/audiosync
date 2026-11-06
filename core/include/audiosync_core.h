@@ -2157,6 +2157,15 @@ void asc_airplay_input_request_fade_out(AscAirPlayInput *input);
 size_t asc_airplay_input_write(AscAirPlayInput *input, const float *samples, size_t frames);
 
 /*
+ * Capture thread, after a block went to both `writer`'s ring and this
+ * input: announces on the ring, once, the speakers' newest timeline move, at
+ * the ring frame and in ring frames at the capture rate, so the local
+ * outputs start it on the speakers' frame. Returns whether it announced one.
+ * Real-time safe.
+ */
+bool asc_airplay_input_forward_move(AscAirPlayInput *input, AscRingWriter *writer);
+
+/*
  * Frees an input handle. Takes the address of the host's pointer and sets
  * that pointer to NULL, so destroying through it again does nothing; a NULL
  * address or pointer does nothing.

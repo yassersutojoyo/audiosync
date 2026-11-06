@@ -1947,6 +1947,9 @@ mod realtime {
         let mut input = unsafe { asc_airplay_take_input(sender) };
         assert!(!input.is_null());
         let block: Vec<f32> = (0..512 * 2).map(|i| (i % 17) as f32 / 34.0).collect();
+        let ring = asc_ring_create(asc_ring_capacity_for_rate(48_000));
+        // SAFETY: a live ring handle.
+        let writer = unsafe { asc_ring_writer_create(ring) };
         let mut handed = 0usize;
         let events = heap_events(|| {
             for round in 0..2000usize {
@@ -1965,12 +1968,16 @@ mod realtime {
                         asc_airplay_input_request_fade_out(input);
                     }
                     handed += asc_airplay_input_write(input, block.as_ptr(), 512);
+                    asc_ring_write(writer, block.as_ptr(), 512);
+                    asc_airplay_input_forward_move(input, writer);
                 }
             }
         });
         // SAFETY: each handle destroyed once, by this thread, with no call
         // in progress.
         unsafe {
+            asc_ring_writer_destroy(writer);
+            asc_ring_destroy(ring);
             asc_airplay_input_destroy(&mut input);
             asc_airplay_destroy(&mut sender);
         }
@@ -2154,6 +2161,7 @@ mod realtime {
         let mut converted = vec![0.0f32; 1024 * 2];
         let mut device = vec![0.0f32; 512 * 6];
         let mut report = AscReadReport::default();
+        let mut moves_made = 0;
 
         let events = heap_events(|| {
             for round in 0..600usize {
@@ -2179,6 +2187,14 @@ mod realtime {
                     if round % 151 == 0 {
                         asc_reader_reset_prime(near);
                     }
+                    // An AirPlay step's move (S281), which the renderers
+                    // make mid-callback on its frame.
+                    if round % 59 == 30 {
+                        (*writer).writer.announce_move(crate::ring::RingMove {
+                            frame: asc_ring_frames_written(ring) + 256,
+                            frames: if round % 2 == 0 { 480 } else { -480 },
+                        });
+                    }
                     std::hint::black_box((
                         asc_reader_delay_frames(near),
                         asc_reader_tolerance_frames(far),
@@ -2202,7 +2218,11 @@ mod realtime {
                     if round == 400 {
                         asc_renderer_request_fade_out(timed);
                     }
+                    let before = asc_renderer_delay_frames(converting);
                     asc_renderer_render(converting, rendered.as_mut_ptr(), 441 + round % 300);
+                    if asc_renderer_delay_frames(converting) != before {
+                        moves_made += 1;
+                    }
                     asc_renderer_render_timed(
                         timed,
                         rendered.as_mut_ptr(),
@@ -2264,6 +2284,7 @@ mod realtime {
         };
         assert_eq!(reset, 0, "the ring reset allocated or freed memory");
         assert_eq!(events, 0, "a real-time call allocated or freed memory");
+        assert!(moves_made > 0, "no renderer made a step's move");
         assert_eq!(report.frames, 512);
         assert!(near_counters.primes > 1 && near_counters.resyncs > 0);
         assert!(far_counters.drift_skips + far_counters.drift_silences > 0);
