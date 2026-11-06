@@ -2178,6 +2178,12 @@ struct PresetPicker: View {
     }
 }
 
+/// The level the meter shows, which trails the reading while it falls. An
+/// object rather than @State: the Command Line Tools can't expand @State.
+final class MeterDrawn: ObservableObject {
+    @Published var level: Float = 0
+}
+
 /// The input level meter under the source picker, while an input device is
 /// captured: a bar that only reads out, never a control or a focus stop. Its
 /// row is always laid out, so nothing below it moves when it shows.
@@ -2185,20 +2191,20 @@ struct InputLevelMeter: View {
     @ObservedObject var level: InputLevel
     let text: UIStrings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var drawn: Float = 0
+    @StateObject private var drawn = MeterDrawn()
 
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
                 Capsule().fill(Brand.meterTrack)
                 Capsule().fill(Brand.tealText)
-                    .frame(width: geometry.size.width * CGFloat(min(max(drawn, 0), 1)))
+                    .frame(width: geometry.size.width * CGFloat(min(max(drawn.level, 0), 1)))
             }
         }
         // A peak shows at once; only the fall glides, so no reading is late.
         .onChange(of: level.level, initial: true) { old, new in
             withAnimation(new < old ? Motion.meter(reduceMotion: reduceMotion) : nil) {
-                drawn = new
+                drawn.level = new
             }
         }
         .frame(height: 4)
