@@ -319,6 +319,19 @@ fn one_app_counts_by_its_process_and_its_parents_then_by_name() {
 }
 
 #[test]
+fn a_mix_counts_only_the_players_of_the_apps_it_captures() {
+    let base = prefix("mix");
+    let _fake = serve(&format!("{base}a"), player("Playing", "Song"));
+    let mut players = players("mix");
+    let mix = |except: bool| Follow::Mix {
+        executables: vec!["audiosynctestapp".to_owned()],
+        except,
+    };
+    assert_eq!(picked(&mut players, &mix(false)), Some(format!("{base}a")));
+    assert_eq!(picked(&mut players, &mix(true)), None);
+}
+
+#[test]
 fn without_a_bus_every_reading_is_no_track() {
     let missing = Bus::At("unix:path=/nonexistent/audiosync-test-bus".to_owned());
     let mut players = Players::new(&prefix("nobus"), missing);

@@ -1387,7 +1387,10 @@ impl<D: Driver> Controller<D> {
             },
             SourceId::Apps { executables, .. } | SourceId::AppsExcept { executables } => {
                 TrackSource {
-                    follow: Follow::AnyApp,
+                    follow: Follow::Mix {
+                        executables: executables.clone(),
+                        except: matches!(id, SourceId::AppsExcept { .. }),
+                    },
                     name: None,
                     mix: Some(Mix {
                         apps: executables.iter().map(|app| display_name(app)).collect(),

@@ -412,6 +412,13 @@ fn follow_for(source: CardSource) -> Follow {
     match source {
         CardSource::AnyApp => Follow::AnyApp,
         CardSource::App { executable, pid } => Follow::App { executable, pid },
+        CardSource::Mix {
+            executables,
+            except,
+        } => Follow::Mix {
+            executables,
+            except,
+        },
     }
 }
 
@@ -512,11 +519,13 @@ impl<L: SessionList> Reader<L> {
     ) -> Option<usize> {
         let index = self.sessions.pick(listed, follow);
         // Another app's paused track never takes its place, as on the Mac.
-        if let (Follow::AnyApp, Some(app_id)) = (follow, played_last)
+        if let (Follow::AnyApp | Follow::Mix { .. }, Some(app_id)) = (follow, played_last)
             && !index.is_some_and(|index| listed[index].0.playing)
         {
             return listed.iter().position(|(session, _)| {
-                session.app_id == app_id && !session.title.trim().is_empty()
+                session.app_id == app_id
+                    && !session.title.trim().is_empty()
+                    && follow.admits(&session.app_id)
             });
         }
         index
@@ -907,6 +916,33 @@ mod tests {
 
     // covers: S218
     #[test]
+    fn a_mix_of_apps_never_reads_a_player_it_leaves_out() {
+        use crate::ui_model::{Backend, MockBackend};
+        let (mut fake, _) = fake(Thumbnail::Image);
+        let probe = MediaSession {
+            app_id: "Probe.exe".to_owned(),
+            title: "Probe".to_owned(),
+            ..playing()
+        };
+        fake.sessions.push(probe);
+        let mut reader = Reader::new(fake);
+        let log = DebugLog::default();
+        let mut state = MockBackend::new().snapshot();
+        for mix in ["mix:except:spotify.exe", "mix:only:probe.exe"] {
+            state.source_id = mix.into();
+            let follow = follow_for(CardSource::of(&state).expect("a mix has a card source"));
+            let mut listing = reader.listing(&log);
+            let card = reader.card(&mut listing, &follow, &log);
+            assert_eq!(
+                card.map(|card| card.app_id).as_deref(),
+                Some("Probe.exe"),
+                "{mix} read a player the mix leaves out"
+            );
+        }
+    }
+
+    // covers: S218
+    #[test]
     fn one_listing_and_one_thumbnail_serve_both_readers() {
         let (fake, counts) = fake(Thumbnail::Image);
         let mut reader = Reader::new(fake);
@@ -1052,6 +1088,23 @@ mod tests {
             Some(("Probe.exe".to_owned(), false)),
             "another app's paused track took the place of the one just paused"
         );
+        let (mut mixed, _) = self::fake(Thumbnail::Image);
+        mixed.sessions = vec![reader.sessions.sessions[0].clone(), probe(true)];
+        let mut mixed = Reader::new(mixed);
+        let mix = Follow::Mix {
+            executables: vec!["Chat.exe".to_owned()],
+            except: true,
+        };
+        let log = DebugLog::default();
+        for plays in [true, false] {
+            mixed.sessions.sessions[1] = probe(plays);
+            let mut listing = mixed.listing(&log);
+            assert_eq!(
+                shown(mixed.card(&mut listing, &mix, &log)),
+                Some(("Probe.exe".to_owned(), plays)),
+                "in a mix, another app's paused track took the place of the one just paused"
+            );
+        }
         let (mut second, counts) = self::fake(Thumbnail::Image);
         second.sessions = vec![reader.sessions.sessions[0].clone(), probe(true)];
         let (_track, mut card) = spawn(

@@ -189,13 +189,32 @@ pub enum Follow {
         executable: String,
         pid: Option<u32>,
     },
+    /// Several apps: those running one of `executables`, or with `except`
+    /// every app but those, as the mix captures them.
+    Mix {
+        executables: Vec<String>,
+        except: bool,
+    },
 }
 
 impl Follow {
-    fn admits(&self, app_id: &str) -> bool {
+    pub fn admits(&self, app_id: &str) -> bool {
         match self {
             Follow::AnyApp => true,
             Follow::App { executable, .. } => app_matches(app_id, executable),
+            Follow::Mix { .. } => self.mix_admits(|executable| app_matches(app_id, executable)),
+        }
+    }
+
+    /// Whether a mix captures the app `runs` tells apart by executable; any
+    /// other follow admits it.
+    pub fn mix_admits(&self, runs: impl Fn(&str) -> bool) -> bool {
+        match self {
+            Follow::Mix {
+                executables,
+                except,
+            } => executables.iter().any(|executable| runs(executable)) != *except,
+            _ => true,
         }
     }
 }
@@ -423,7 +442,7 @@ pub fn decide(
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .unwrap_or(match source.follow {
-            Follow::AnyApp => &labels.whole_system,
+            Follow::AnyApp | Follow::Mix { .. } => &labels.whole_system,
             Follow::App { .. } => &labels.unnamed_source,
         });
     Shown {

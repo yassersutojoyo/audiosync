@@ -6,10 +6,10 @@
 //! [`MediaControls`] (on Windows, the card's half of
 //! `audio::wasapi::read_media_sessions`; a fake in tests). They are read
 //! only while the main window shows, as the Mac reads its players only
-//! while the window or a receiver needs them. With the whole system or a
-//! mix of apps as the source, the session that plays counts, else the
-//! first paused one; with one app, that app's own; an input device has
-//! none, so the card hides. Without a session that counts, the card hides too.
+//! while the window or a receiver needs them. With the whole system as the
+//! source, the session that plays counts, else the first paused one; with
+//! a mix of apps, the same among the apps it captures; with one app, that
+//! app's own; an input device has none, so the card hides. Without a session that counts, the card hides too.
 //!
 //! The card keeps the last track while the window is hidden, so it shows at
 //! once when the window comes back, and changes with the first new reading.
@@ -23,13 +23,18 @@ use crate::ui_model::AppState;
 /// Which sessions count for the card, from the chosen source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CardSource {
-    /// The whole system or a mix of apps: any app's session.
+    /// The whole system: any app's session.
     AnyApp,
     /// One app, by its executable's file name and its process ID: its own
     /// session only.
     App {
         executable: String,
         pid: Option<u32>,
+    },
+    /// A mix of apps: the sessions of the apps it captures.
+    Mix {
+        executables: Vec<String>,
+        except: bool,
     },
 }
 
@@ -38,8 +43,16 @@ impl CardSource {
     /// `None` for an input device, which has no media session.
     pub fn of(state: &AppState) -> Option<CardSource> {
         let id = state.source_id.as_str();
-        if id == "system" || id.starts_with("mix:") {
+        if id == "system" {
             return Some(CardSource::AnyApp);
+        }
+        // Mix sources are `mix:only:<executables>` or `mix:except:<executables>`.
+        if let Some(mix) = id.strip_prefix("mix:") {
+            let (mode, executables) = mix.split_once(':')?;
+            return Some(CardSource::Mix {
+                executables: executables.split(',').map(str::to_owned).collect(),
+                except: mode == "except",
+            });
         }
         // App sources are `app:<pid>:<executable>`.
         let (pid, executable) = id.strip_prefix("app:")?.split_once(':')?;
@@ -434,9 +447,18 @@ mod tests {
         assert_eq!(source("app:2000:player.exe"), player());
         assert_eq!(
             source("mix:only:player.exe,browser.exe"),
-            Some(CardSource::AnyApp)
+            Some(CardSource::Mix {
+                executables: vec!["player.exe".into(), "browser.exe".into()],
+                except: false,
+            })
         );
-        assert_eq!(source("mix:except:game.exe"), Some(CardSource::AnyApp));
+        assert_eq!(
+            source("mix:except:game.exe"),
+            Some(CardSource::Mix {
+                executables: vec!["game.exe".into()],
+                except: true,
+            })
+        );
         assert_eq!(source("input:{0.0.1.00000000}.{mic}"), None);
     }
 

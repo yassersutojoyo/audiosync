@@ -181,7 +181,8 @@ impl SessionList for Players {
     }
 
     /// For one app, the players of its process or a parent's, else those
-    /// named for its executable; among them the usual pick.
+    /// named for its executable; for a mix, those named for an app it
+    /// captures; among them the usual pick.
     fn pick(&self, listed: &[(MediaSession, Entry)], follow: &Follow) -> Option<usize> {
         let mine: Vec<usize> = match follow {
             Follow::AnyApp => (0..listed.len()).collect(),
@@ -204,6 +205,15 @@ impl SessionList for Players {
                     },
                 )
             }
+            Follow::Mix { .. } => (0..listed.len())
+                .filter(|&index| {
+                    let entry = &listed[index].1;
+                    let desktop_entry = entry.desktop_entry();
+                    follow.mix_admits(|executable| {
+                        owner::named_for(&entry.name, desktop_entry.as_deref(), executable)
+                    })
+                })
+                .collect(),
         };
         let described: Vec<MediaSession> =
             mine.iter().map(|&index| listed[index].0.clone()).collect();
