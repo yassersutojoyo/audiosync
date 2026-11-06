@@ -1213,8 +1213,9 @@ impl Controller<MockDriver> {
     }
 
     /// Renders `frames` frames of the output playing on `id` as its render
-    /// thread would.
-    pub fn render_output(&mut self, id: &str, frames: usize) {
+    /// thread would, and returns what it rendered.
+    pub fn render_output(&mut self, id: &str, frames: usize) -> Vec<f32> {
+        let mut played = Vec::new();
         for link in &mut self.driver_mut().renderers {
             if link.id != id || !link.plays() {
                 continue;
@@ -1222,8 +1223,10 @@ impl Controller<MockDriver> {
             link.with_renderer(|renderer| {
                 let mut out = vec![0.0; frames * renderer.channels()];
                 renderer.render(&mut out);
+                played = out;
             });
         }
+        played
     }
 
     /// Plays the output on `id` for 10 s of its device frames on a device

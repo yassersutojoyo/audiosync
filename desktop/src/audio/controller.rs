@@ -12736,6 +12736,48 @@ mod tests {
         assert_eq!(held(&backend), [Some(2470), Some(2620), Some(2220)]);
     }
 
+    // covers: S187, S177
+    #[test]
+    fn an_airplay_latency_step_fades_each_local_output_out_and_in() {
+        let (mut backend, fake, kitchen) = local_delay_with_airplay();
+        backend.set_output_delay(USB, 250.0);
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        fake.set_latency(Duration::from_millis(500));
+        backend.poll();
+        let play = |backend: &mut MockBackend, ticks: usize| {
+            let mut played: [Vec<f32>; 2] = Default::default();
+            for _ in 0..ticks {
+                backend.feed_capture_level(480, 0.5);
+                for (id, out) in [BUILT_IN, USB].iter().zip(&mut played) {
+                    let block = backend.render_output(id, 480);
+                    out.extend(block.chunks(2).map(|frame| frame[0]));
+                }
+            }
+            played
+        };
+        let before = play(&mut backend, 100);
+        fake.set_latency(Duration::from_millis(1000));
+        backend.poll();
+        assert_eq!(held(&backend)[..2], [Some(1000), Some(1250)]);
+        let after = play(&mut backend, 100);
+        for (d_ms, (before, after)) in [0, 250].iter().zip(before.iter().zip(&after)) {
+            let full = *before.last().unwrap();
+            assert!(full > 0.1, "d = {d_ms} ms plays before the step: {full}");
+            let jump = std::iter::once(&full)
+                .chain(after)
+                .zip(after)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(
+                jump < full / 100.0,
+                "d = {d_ms} ms jumps by {jump} of {full}"
+            );
+            assert!(after.contains(&0.0), "d = {d_ms} ms pauses for the step");
+            assert_eq!(*after.last().unwrap(), full, "d = {d_ms} ms plays again");
+        }
+    }
+
     // covers: S281
     #[test]
     fn a_new_airplay_latency_beside_a_cast_speaker_waits_for_the_longer_of_the_two() {
