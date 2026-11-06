@@ -11,9 +11,14 @@ use std::collections::BTreeMap;
 pub const MAX_NAME_CHARS: usize = 60;
 
 /// What the name field keeps while typing: at most [`MAX_NAME_CHARS`]
-/// characters, untrimmed so a space can still be typed between words.
+/// characters after any leading whitespace, which the kept name trims,
+/// untrimmed so a space can still be typed between words.
 pub fn fitting(typed: &str) -> String {
-    typed.chars().take(MAX_NAME_CHARS).collect()
+    let rest = typed.trim_start();
+    let lead = &typed[..typed.len() - rest.len()];
+    lead.chars()
+        .chain(rest.chars().take(MAX_NAME_CHARS))
+        .collect()
 }
 
 /// A typed name as it is kept: trimmed, line breaks turned into spaces, cut
@@ -122,6 +127,13 @@ mod tests {
     fn a_name_is_cut_at_60_unicode_scalars_the_same_count_on_both_hosts() {
         let typed = format!("{}e\u{301}xyz", "a".repeat(59));
         assert_eq!(normalized(&typed), format!("{}e", "a".repeat(59)));
+    }
+
+    // covers: S228
+    #[test]
+    fn leading_spaces_typed_in_the_field_do_not_count_toward_the_cap() {
+        let letters = "a".repeat(MAX_NAME_CHARS);
+        assert_eq!(normalized(&fitting(&format!("  {letters}b"))), letters);
     }
 
     // covers: S228
