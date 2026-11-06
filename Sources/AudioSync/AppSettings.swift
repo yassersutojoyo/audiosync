@@ -37,6 +37,8 @@ struct AppSettings: Equatable {
         static let localDelays = "localDelayMsByUID"
         /// Each AirPlay speaker's own volume s, unrounded, by output ID (S290).
         static let airplayVolumes = "airPlayVolumeByID"
+        /// Each AirPlay speaker's Lf its stream last stepped to, in frames, by receiver ID (P200).
+        static let airplayLatencyFrames = "airPlayLatencyFramesByID"
         /// `[SpeakerGroup]` as JSON (S149). Left as it is when the groups
         /// become zones, for older builds (S248).
         static let groups = "speakerGroups"
@@ -132,6 +134,7 @@ struct AppSettings: Equatable {
     /// migration reads them.
     var localDelays: [String: Double] = [:]
     var airplayVolumes: [String: Double] = [:]
+    var airplayLatencyFrames: [String: UInt32] = [:]
     var groups: [SpeakerGroup] = []
     var zones: [SpeakerZone] = []
     /// The groups became zones and no launch said so yet.
@@ -194,6 +197,10 @@ struct AppSettings: Equatable {
             .flatMap(LocalDelay.sanitizedAdjustment) ?? 0
         s.localDelaysMigrated = read(Keys.localDelaysMigrated) as? Bool ?? false
         s.airplayVolumes = levels(read(Keys.airplayVolumes), airPlayOwn)
+        // Up to the steps' cap, as on Windows.
+        s.airplayLatencyFrames = levels(read(Keys.airplayLatencyFrames)) {
+            min(max($0, 0), Double(NativeReceiverLatency.defaultFrames))
+        }.mapValues { UInt32($0) }
         s.groups = decodeGroups(read(Keys.groups) as? Data)
         s.zones = decodeZones(read(Keys.zones) as? Data)
         s.zonesNoticeDue = read(Keys.zonesNoticeDue) as? Bool ?? false
@@ -465,6 +472,8 @@ struct SettingsStore {
     }
 
     func save(levels: [String: Double], forKey key: String) { write(levels, key) }
+
+    func save(latencyFrames: [String: UInt32]) { write(latencyFrames.mapValues { Int($0) }, Keys.airplayLatencyFrames) }
 
     func save(master: Double) { write(master, Keys.master) }
 

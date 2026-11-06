@@ -57,6 +57,7 @@ extension AppDelegate {
             self?.nativeStartFinished(native, started: started)
         }
         native.model.runMarks = nativeRunMarks
+        native.model.receiverLatency.stepped = airplayLatencyFrames
         // Queued after `start`, whose block creates the sender they go to.
         for id in nativeRunMarks.passwords { native.setPassword(id, nativePasswords[id]) }
         for id in nativeRunMarks.credentialsTurnedDown { native.markCredentialsTurnedDown(id) }
@@ -170,6 +171,7 @@ extension AppDelegate {
         case .turnOff(let id, let reason):
             turnOffNativeSpeaker(id, reason: reason, origin: .automatic)
         case .latencyChanged:
+            if let stepped = nativeAirPlay?.model.receiverLatency.stepped { airplayLatencyFrames = stepped }
             retimeLocalOutputs()   // L = L_s + A follows the new L_s (S178)
             pushModel()   // and so does the AirPlay delay field (S181)
         case .senderFailed:
@@ -554,6 +556,8 @@ extension AppDelegate {
         nativeAirPlay?.setPassword(receiver, nil)
         nativeAirPlay?.model.forgetPassword(receiver)
         nativePasswords[receiver] = nil
+        nativeAirPlay?.model.receiverLatency.stepped[receiver] = nil
+        airplayLatencyFrames[receiver] = nil
         clearNotices(Notice.forgotten(airPlay: id))
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) pairing and password forgotten")
         if enabledAirPlay.remove(id) != nil {

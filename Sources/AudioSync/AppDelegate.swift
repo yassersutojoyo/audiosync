@@ -158,6 +158,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var airplayVolume: [String: Double] {
         didSet { if airplayVolume != oldValue { store.save(levels: airplayVolume, forKey: Keys.airplayVolumes) } }
     }
+    /// The Lf each AirPlay speaker's stream last stepped to, by receiver ID,
+    /// where its next stream starts until the user forgets it (P200).
+    var airplayLatencyFrames: [String: UInt32] {
+        didSet { if airplayLatencyFrames != oldValue { store.save(latencyFrames: airplayLatencyFrames) } }
+    }
     /// A level set on an AirPlay speaker while its k was 0, by output ID,
     /// which its row shows until s, its zone or the master moves (S290).
     var airplayHeldLevel: [String: Double] = [:]
@@ -349,6 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         airPlayDelay = saved.airPlayDelay
         localDelaysMigrated = saved.localDelaysMigrated
         airplayVolume = saved.airplayVolumes
+        airplayLatencyFrames = saved.airplayLatencyFrames
         groups = saved.groups
         zones = saved.zones
         zonesNoticeDue = saved.zonesNoticeDue
