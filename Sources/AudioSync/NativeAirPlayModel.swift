@@ -1294,6 +1294,7 @@ struct NativeAirPlayModel {
         case .latencyHeld, .estimate:
             return nil
         case .timeline(let ms, _):
+            receiverLatency.timeline(ms: ms, members: Array(latencyRows.members.joined()))
             guard ms != latencyMs else { return nil }
             latencyMs = ms
             return .latencyChanged
@@ -1670,6 +1671,11 @@ struct NativeReceiverLatency {
     private(set) var reportedUs: [String: Int64] = [:]
     /// The Lf last given to the sender.
     private(set) var frames: UInt32 = defaultFrames
+    /// The Lf the sender's timeline has now: the one set last or a step.
+    private(set) var current: UInt32 = defaultFrames
+    /// The Lf each speaker's stream last stepped to, by receiver ID, where
+    /// its next stream starts until the user forgets it (P200).
+    var stepped: [String: UInt32] = [:]
     /// E in ms, as it applies now.
     private(set) var estimateMs: Double = 0
     /// The E waiting while a speaker sounds.
@@ -1687,12 +1693,23 @@ struct NativeReceiverLatency {
     func estimateMs(of members: [String]) -> Double { members.map(reportedMs).max() ?? 0 }
 
     /// The Lf `rule` gives over `members` (the core's
-    /// `asc_airplay_session_latency_frames`), or nil when it is the one set last.
+    /// `asc_airplay_session_latency_frames`), at least the largest step among
+    /// them, or nil when the timeline has it already.
     mutating func newFrames(over members: [String], rule: ([Int64]) -> UInt32) -> UInt32? {
-        let next = rule(members.map { reportedUs[$0] ?? 0 })
-        guard next != frames else { return nil }
+        let next = max(rule(members.map { reportedUs[$0] ?? 0 }), members.compactMap { stepped[$0] }.max() ?? 0)
+        guard next != current else { return nil }
         frames = next
+        current = next
         return next
+    }
+
+    /// The sender's timeline L in ms: an Lf other than the one set last is
+    /// the sender's own step, which every speaker in `members` keeps (P200).
+    mutating func timeline(ms: Double, members: [String]) {
+        let reached = UInt32((ms * 44.1).rounded())
+        current = reached
+        guard reached != frames else { return }
+        for id in members { stepped[id] = reached }
     }
 
     /// E over `rows` (each row's members): applied when `canChange` (no
