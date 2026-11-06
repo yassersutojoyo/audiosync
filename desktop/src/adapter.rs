@@ -4848,6 +4848,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn push_zone_volumes(&mut self) {
         let mut volumes = ZoneVolumes::default();
         for zone in self.zones.list() {
+            volumes.names.push((zone.name.clone(), zone.volume));
             for member in &zone.members {
                 let (map, id) = match SpeakerKey::parse(member) {
                     Some(SpeakerKey::Local(id)) => (&mut volumes.outputs, id),

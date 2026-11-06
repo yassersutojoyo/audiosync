@@ -129,6 +129,7 @@ enum VolumeMove {
     Master,
     Output(String),
     AirPlay(String),
+    Zones,
 }
 
 /// A capture lost because Windows audio restarted, or its device went away
@@ -2480,6 +2481,21 @@ impl<D: Driver> Controller<D> {
                         airplay.log_row(&id);
                     }
                 }
+                VolumeMove::Zones => self.log.log(|| {
+                    let zones = &self.zone_volumes;
+                    let named: Vec<String> = zones
+                        .names
+                        .iter()
+                        .map(|(name, volume)| format!("\"{name}\" {}", logged_volume(*volume)))
+                        .collect();
+                    format!(
+                        "zone volumes: {} ({} local, {} AirPlay and {} Cast speaker(s) in a zone)",
+                        named.join(", "),
+                        zones.outputs.len(),
+                        zones.airplay.len(),
+                        zones.cast.len()
+                    )
+                }),
             }
         }
     }
@@ -4376,14 +4392,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         if zones == self.zone_volumes {
             return;
         }
-        self.log.log(|| {
-            format!(
-                "zone volumes: {} local, {} AirPlay and {} Cast speaker(s) in a zone",
-                zones.outputs.len(),
-                zones.airplay.len(),
-                zones.cast.len()
-            )
-        });
+        self.volume_moves.insert(VolumeMove::Zones, Instant::now());
         for id in self.policy.set_zones(zones.outputs.clone()) {
             self.apply_gain(&id);
         }
@@ -10851,6 +10860,29 @@ mod tests {
         backend.log_rested_volumes(now + VOLUME_LOG_PAUSE);
         backend.log_rested_volumes(now + 2 * VOLUME_LOG_PAUSE);
         assert_eq!(logged(&log, &dir), ["master volume: 80"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S348
+    #[test]
+    fn a_zone_drag_is_logged_once_after_its_last_step_with_its_value() {
+        let (mut backend, log, dir) = logged_backend("controller-zone-drag");
+        for volume in [70.0, 75.0, 80.0] {
+            backend.set_zone_volumes(ZoneVolumes {
+                outputs: BTreeMap::from([(HEADPHONES.to_owned(), volume)]),
+                names: vec![("Upstairs".to_owned(), volume)],
+                ..ZoneVolumes::default()
+            });
+        }
+        let now = Instant::now();
+        backend.log_rested_volumes(now);
+        assert!(logged(&log, &dir).is_empty(), "nothing while it moves");
+        backend.log_rested_volumes(now + VOLUME_LOG_PAUSE);
+        backend.log_rested_volumes(now + 2 * VOLUME_LOG_PAUSE);
+        assert_eq!(
+            logged(&log, &dir),
+            ["zone volumes: \"Upstairs\" 80 (1 local, 0 AirPlay and 0 Cast speaker(s) in a zone)"]
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

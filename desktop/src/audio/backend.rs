@@ -29,6 +29,8 @@ pub struct ZoneVolumes {
     pub outputs: BTreeMap<String, f64>,
     pub airplay: BTreeMap<String, f64>,
     pub cast: BTreeMap<String, f64>,
+    /// Each zone's name and volume, for the log.
+    pub names: Vec<(String, f64)>,
 }
 
 /// What AudioSync captures.
