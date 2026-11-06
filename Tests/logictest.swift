@@ -2193,6 +2193,19 @@ do {
     check(!NowPlayingMonitor.Position.advances(from: old, to: otherTrack), "now playing: another length is no advance")
     check(!NowPlayingMonitor.Position.advances(from: old, to: old), "now playing: the same reading twice does not advance")
 }
+// covers: S218
+check(NowPlayingMonitor.players(for: .system) == NowPlayingMonitor.supported
+        && NowPlayingMonitor.players(for: .app(bundleID: NowPlayingMonitor.music)) == [NowPlayingMonitor.music]
+        && NowPlayingMonitor.players(for: .app(bundleID: "com.apple.Safari")).isEmpty
+        && NowPlayingMonitor.players(for: .input(uid: "mic")).isEmpty,
+      "now playing: All System Audio reads every player, an app source only itself, an input none")
+check(NowPlayingMonitor.players(for: .mix(.allExcept, bundleIDs: [NowPlayingMonitor.spotify, "com.apple.Safari"]))
+        == [NowPlayingMonitor.music],
+      "now playing: All Apps Except the Checked Ones never reads a player the mix leaves out")
+check(NowPlayingMonitor.players(for: .mix(.only, bundleIDs: ["com.apple.Safari", NowPlayingMonitor.music]))
+        == [NowPlayingMonitor.music]
+        && NowPlayingMonitor.players(for: .mix(.only, bundleIDs: ["com.apple.Safari", "com.apple.Podcasts"])).isEmpty,
+      "now playing: Only the Checked Apps reads only the players in the mix")
 do {
     var block: [Float] = Array(repeating: 0, count: 8)
     check(!block.withUnsafeBufferPointer { CaptureChannels.hasSound($0.baseAddress!, frames: 4) }, "capture: zeros are silent")
@@ -6393,7 +6406,7 @@ check(NowPlayingMonitor.scriptErrorLine(target: "com.apple.Music", code: -2753, 
 do {
     let noticePosts = NotificationCenter()
     let noticeMonitor = NowPlayingMonitor(noticeCenter: noticePosts)
-    noticeMonitor.preferredBundleID = ""   // no player to read, so no Apple event leaves the test
+    noticeMonitor.players = []   // no player to read, so no Apple event leaves the test
     var noticeReadings = 0
     noticeMonitor.onReading = { _ in noticeReadings += 1 }
     // Well before the 2 s poll's first tick, so a second reading can only come from the notice.
@@ -6415,7 +6428,7 @@ do {
 do {
     let againPosts = NotificationCenter()
     let againMonitor = NowPlayingMonitor(noticeCenter: againPosts)
-    againMonitor.preferredBundleID = ""
+    againMonitor.players = []
     var againReadings = 0
     againMonitor.onReading = { _ in againReadings += 1 }
     // startWatching's reading only lands once the main queue runs, so both notices arrive while it is under way.

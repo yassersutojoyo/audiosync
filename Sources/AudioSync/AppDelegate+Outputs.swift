@@ -293,12 +293,7 @@ extension AppDelegate {
     /// Whole-system source: follow whichever player is playing. App source: that
     /// app, if it is scriptable. Input device: nothing to control.
     func updateNowPlayingTarget() {
-        switch audioSource {
-        case .system: nowPlaying.preferredBundleID = nil
-        case .app(let bundleID): nowPlaying.preferredBundleID = bundleID
-        case .mix: nowPlaying.preferredBundleID = nil
-        case .input: nowPlaying.preferredBundleID = ""
-        }
+        nowPlaying.players = NowPlayingMonitor.players(for: audioSource)
         if nowPlaying.noteSource(audioSource) {
             DispatchQueue.main.async { [weak self] in self?.sendTrackInfo() }
         }

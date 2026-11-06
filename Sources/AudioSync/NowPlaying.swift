@@ -314,9 +314,21 @@ final class NowPlayingMonitor {
             : "[AudioSync] AppleScript error: \(error)"
     }
 
-    /// Which player to follow (main thread): the source app itself if it is a
-    /// supported player, "" for none, nil for whichever player is playing.
-    var preferredBundleID: String?
+    /// The players to read (main thread), from `players(for:)`.
+    var players = NowPlayingMonitor.supported
+
+    /// The supported players a source follows: whichever plays for the whole
+    /// system, the app itself if it is one, only those a mix captures, none for
+    /// an input device.
+    static func players(for source: AudioSource) -> [String] {
+        switch source {
+        case .system: supported
+        case .app(let id): supported.filter { $0 == id }
+        case .mix(.only, let ids): supported.filter { ids.contains($0) }
+        case .mix(.allExcept, let ids): supported.filter { !ids.contains($0) }
+        case .input: []
+        }
+    }
 
     /// Where the players post their change notices; a test hands in its own.
     let noticeCenter: NotificationCenter
@@ -523,12 +535,7 @@ final class NowPlayingMonitor {
 
     // MARK: - Scripting (scripts queue)
 
-    private func candidates() -> [String] {
-        if let preferred = preferredBundleID {
-            return Self.supported.contains(preferred) ? [preferred] : []
-        }
-        return Self.supported
-    }
+    private func candidates() -> [String] { players }
 
     private static func isRunning(_ bundleID: String) -> Bool {
         !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
