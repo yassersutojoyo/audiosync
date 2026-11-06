@@ -15623,6 +15623,20 @@ mod tests {
         );
         assert!(!dropped.iter().any(|m| m.contains("9731")));
 
+        let unnamed = launch_with(
+            "adapter-settings-dropped-preset",
+            r#"{"version": 3, "speaker_presets_migrated": true,
+                "speaker_presets": [{"id": "p1", "gains_db": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}]}"#,
+        );
+        assert_in_order(
+            &unnamed,
+            &[
+                "settings: read (format version 3; values out of range clamped, unusable \
+                 entries dropped)",
+                "settings: entry speaker_presets[0] unreadable, dropped",
+            ],
+        );
+
         let clean = launch_with(
             "adapter-settings-clean",
             &settings::Settings::default().to_json(),

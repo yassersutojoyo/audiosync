@@ -472,6 +472,24 @@ where
         .collect())
 }
 
+/// The stored presets; one whose name is missing or isn't text is skipped,
+/// as on the Mac (S251).
+fn presets_that_read<'de, D>(deserializer: D) -> Result<Vec<SavedPreset>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut entries = serde_json::Value::deserialize(deserializer)?;
+    if let Some(entries) = entries.as_array_mut() {
+        entries.retain(is_named);
+    }
+    entries_that_read(entries).map_err(serde::de::Error::custom)
+}
+
+/// Whether a stored preset's name is text; one whose name isn't is skipped.
+fn is_named(entry: &serde_json::Value) -> bool {
+    entry.get("name").is_some_and(serde_json::Value::is_string)
+}
+
 /// The equalizer.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -772,7 +790,7 @@ pub struct Settings {
     #[serde(default, deserialize_with = "bool_or_true")]
     pub speaker_zones_migrated: bool,
     /// The speaker presets, in order (spec S251).
-    #[serde(deserialize_with = "entries_that_read")]
+    #[serde(deserialize_with = "presets_that_read")]
     pub speaker_presets: Vec<SavedPreset>,
     /// The groups that lost a member to the zones became presets (spec
     /// S254). A file without it has not been migrated; the defaults have.
@@ -1520,6 +1538,9 @@ fn dropped_entries(text: &str) -> Vec<String> {
     fn reads<T: serde::de::DeserializeOwned>(value: &Value) -> bool {
         T::deserialize(value).is_ok()
     }
+    fn preset_reads(value: &Value) -> bool {
+        is_named(value) && reads::<SavedPreset>(value)
+    }
     type Reads = fn(&Value) -> bool;
     const ENTRIES: &[(&str, Reads)] = &[
         ("outputs", reads::<SavedSpeaker>),
@@ -1527,7 +1548,7 @@ fn dropped_entries(text: &str) -> Vec<String> {
         ("hidden_speakers", reads::<SavedHidden>),
         ("groups", reads::<SavedGroup>),
         ("speaker_zones", reads::<SavedZone>),
-        ("speaker_presets", reads::<SavedPreset>),
+        ("speaker_presets", preset_reads),
         ("cast_addresses", Value::is_string),
     ];
     let Ok(Value::Object(stored)) = serde_json::from_str::<Value>(text) else {
@@ -2219,6 +2240,23 @@ mod tests {
         );
         let (again, _) = Settings::from_json(&read.to_json()).expect("read");
         assert_eq!(again, read);
+
+        let (unnamed, _) = Settings::from_json(
+            r#"{"version": 3, "speaker_zones_migrated": true, "speaker_presets_migrated": true,
+                "speaker_presets": [{"id": "p1"}, {"id": "p2", "name": 7},
+                                    {"id": "p3", "name": null}, {"id": "p4", "name": "Late"}]}"#,
+        )
+        .expect("read");
+        let names: Vec<&str> = unnamed
+            .speaker_presets
+            .iter()
+            .map(|preset| preset.name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            ["Late"],
+            "a preset without a name in text is dropped"
+        );
 
         // A format 3 file written before presets: its groups that lost a
         // member to the zones become presets once, in the same save.
