@@ -1965,6 +1965,10 @@ struct SpeakerBadge: View {
     /// Panel only: a hairline ring with a spinning amber arc while the
     /// speaker connects; teal stays for a speaker that is on.
     var connecting = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The teal fill shows: it grows out of the ring as the speaker starts.
+    private var filled: Bool { state == .playing && !(ring && connecting) }
 
     var body: some View {
         ZStack {
@@ -1973,7 +1977,7 @@ struct SpeakerBadge: View {
                 Circle().strokeBorder(Color.secondary, lineWidth: 1.5)
                 ConnectingArc(size: size)
             case .playing:
-                Circle().fill(accent)
+                Circle().fill(accent).transition(.scale)
             case .willPlay where ring:
                 Circle().strokeBorder(Brand.tealText, lineWidth: 2.5)
             case .willPlay:
@@ -1989,6 +1993,7 @@ struct SpeakerBadge: View {
                 .font(.system(size: size * 0.43, weight: .semibold))
                 .foregroundStyle(iconColor)
         }
+        .animation(reduceMotion || !filled ? nil : .easeOut(duration: PanelRowMotion.duration), value: filled)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }

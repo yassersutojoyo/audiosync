@@ -23,7 +23,7 @@ use audiosync_core::calibrate_all::{
 };
 use audiosync_core::policy::delay::{MAX_HOLD_BACK_MS, native_airplay_latency_ms};
 use audiosync_core::policy::device_volume::DeviceVolume;
-use audiosync_core::policy::speakers::SpeakerKey;
+use audiosync_core::policy::speakers::{SpeakerKey, compare_names};
 
 use super::backend::{AudioBackend, CastStatus, SourceId};
 use super::calibration::{
@@ -309,7 +309,7 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
             Some((id.clone(), device))
         })
         .collect();
-    let mut locals: Vec<Member> = engine
+    let locals: Vec<Member> = engine
         .playing
         .iter()
         .map(|id| Member {
@@ -324,10 +324,6 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
             adjustment_ms: 0.0,
         })
         .collect();
-    locals.sort_by(|a, b| {
-        let first = |m: &Member| engine.reference.as_deref() != Some(m.id.as_str());
-        (first(a), &a.id).cmp(&(first(b), &b.id))
-    });
     let casts: Vec<Member> = audio
         .cast_speakers()
         .into_iter()
@@ -351,24 +347,29 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
     let sender_ms = audio.airplay_sender_latency_ms();
     let base_ms = sender_ms.unwrap_or_else(|| audio.airplay_adjustment_base_ms());
     let shown_ms = native_airplay_latency_ms(base_ms, audio.airplay_adjustment());
-    let airplay: Vec<Member> = audio
+    let airplay: Vec<(String, Member)> = audio
         .airplay_speakers()
         .into_iter()
         .filter(|speaker| speaker.enabled && speaker.playing)
-        .map(|speaker| Member {
-            latency_ms: airplay_wait_ms(
-                sender_ms,
-                shown_ms.max(cast_offset_ms),
-                speaker.delay_ms,
-                speaker.reported_latency_ms,
-            ),
-            id: speaker.id,
-            class: Class::AirPlay,
-            offset_ms: Some(shown_ms),
-            sender_ms: base_ms,
-            adjustment_ms: audio.airplay_adjustment(),
+        .map(|speaker| {
+            let member = Member {
+                latency_ms: airplay_wait_ms(
+                    sender_ms,
+                    shown_ms.max(cast_offset_ms),
+                    speaker.delay_ms,
+                    speaker.reported_latency_ms,
+                ),
+                id: speaker.id,
+                class: Class::AirPlay,
+                offset_ms: Some(shown_ms),
+                sender_ms: base_ms,
+                adjustment_ms: audio.airplay_adjustment(),
+            };
+            (speaker.name, member)
         })
         .collect();
+    let listed: Vec<String> = outputs.iter().map(|output| output.id.clone()).collect();
+    let members = window_order(engine.reference.as_deref(), &listed, locals, casts, airplay);
     let reference_off = outputs
         .iter()
         .any(|output| output.is_reference && !output.enabled);
@@ -401,12 +402,35 @@ pub fn lineup<A: AudioBackend + ?Sized>(audio: &A) -> Lineup {
             .find(|output| output.is_reference)
             .and_then(|output| output.device_volume)
             .unwrap_or_default(),
-        members: locals.into_iter().chain(airplay).chain(casts).collect(),
+        members,
         hold_backs_ms: engine.hold_backs_ms,
         devices,
         reference_off,
         switched_off,
     }
+}
+
+/// The members in the order a run measures them (S235): the reference, the
+/// other local outputs in the order the PC lists its outputs, as the Mac
+/// does, the Cast speakers, then the AirPlay speakers by name.
+fn window_order(
+    reference: Option<&str>,
+    outputs: &[String],
+    mut locals: Vec<Member>,
+    casts: Vec<Member>,
+    mut airplay: Vec<(String, Member)>,
+) -> Vec<Member> {
+    locals.sort_by_key(|m| {
+        let place = outputs.iter().position(|id| *id == m.id);
+        let place = place.unwrap_or(usize::MAX);
+        (reference != Some(m.id.as_str()), place)
+    });
+    airplay.sort_by(|a, b| compare_names(&a.0, &b.0));
+    locals
+        .into_iter()
+        .chain(casts)
+        .chain(airplay.into_iter().map(|(_, member)| member))
+        .collect()
 }
 
 fn finite_ms(ms: Option<f64>) -> f64 {
@@ -1430,6 +1454,35 @@ pub(crate) mod tests {
         mic_fault: Rc<MicFault>,
         /// The capture writes no block, as when the source sends nothing.
         capture_off: bool,
+    }
+
+    #[test]
+    fn a_run_measures_in_the_windows_order_with_cast_before_airplay() {
+        let local = |id: &str| member(Class::Local, id, None, 0.0);
+        let airplay =
+            |name: &str, id: &str| (name.to_owned(), member(Class::AirPlay, id, None, 0.0));
+        let outputs = ["c-ref", "b-usb", "a-hdmi"].map(str::to_owned);
+        let order = window_order(
+            Some("c-ref"),
+            &outputs,
+            vec![local("a-hdmi"), local("b-usb"), local("c-ref")],
+            vec![member(Class::Cast, "0-tv", None, 0.0)],
+            vec![airplay("Study", "1-study"), airplay("kitchen", "2-kitchen")],
+        );
+        let ids: Vec<&str> = order.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["c-ref", "b-usb", "a-hdmi", "0-tv", "2-kitchen", "1-study"]
+        );
+        let unlisted = window_order(
+            Some("c-ref"),
+            &outputs,
+            vec![local("0-gone"), local("b-usb"), local("c-ref")],
+            Vec::new(),
+            Vec::new(),
+        );
+        let ids: Vec<&str> = unlisted.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["c-ref", "b-usb", "0-gone"]);
     }
 
     fn member(class: Class, id: &str, offset_ms: Option<f64>, latency_ms: f64) -> Member {
