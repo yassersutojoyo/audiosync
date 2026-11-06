@@ -35,7 +35,7 @@ use super::SESSION_RATE;
 use super::backend::{BackendError, OutputKind};
 use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode};
 use super::controller::{
-    CaptureHandle, CaptureState, Controller, Driver, PowerNotice, RendererHandle,
+    CaptureHandle, CaptureState, Controller, Driver, FEED_FADE, PowerNotice, RendererHandle,
 };
 use super::outputs::{
     DeviceTraits, Endpoint, EndpointProperties, EndpointReading, Listing, RenderFormat,
@@ -158,6 +158,8 @@ struct CaptureLink {
     watch_refused: Option<i32>,
     /// The processes that refuse a wait, for the apps a mix follows.
     unwatchable: BTreeSet<u32>,
+    /// The level of the live AirPlay feed, while one runs.
+    live: Option<f32>,
 }
 
 /// The error a wait on `target`'s apps is refused with. As on Windows, one
@@ -223,6 +225,12 @@ impl CaptureHandle for MockCapture {
 impl Drop for MockCapture {
     fn drop(&mut self) {
         let mut link = lock(&self.link);
+        // A mock output's fade plays at once, so the capture ends at the stop
+        // request; the FEED_FADE a real one delivers on (S189) is given here.
+        if let (Some(level), Some(feed)) = (link.live, link.feeds.airplay.as_mut()) {
+            let frames = (FEED_FADE.as_secs_f64() * f64::from(SESSION_RATE)) as usize;
+            feed.push(&vec![level; frames * 2], frames, Instant::now());
+        }
         link.writer = None;
         link.feeds = Feeds::default();
     }
@@ -848,6 +856,7 @@ impl Driver for MockDriver {
             setup: self.capture_setup,
             watch_refused,
             unwatchable: self.unwatchable.clone(),
+            live: None,
         }));
         self.capture = Some(Arc::clone(&link));
         Ok(MockCapture { link })
@@ -1521,6 +1530,9 @@ impl Controller<MockDriver> {
     /// capture does, until the capture ends.
     pub fn feed_airplay_live(&self, level: f32) -> JoinHandle<()> {
         let link = self.driver().capture.clone();
+        if let Some(link) = &link {
+            lock(link).live = Some(level);
+        }
         thread::spawn(move || {
             let Some(link) = link else {
                 return;
@@ -1528,6 +1540,9 @@ impl Controller<MockDriver> {
             let frames = SESSION_RATE as usize / 100;
             let block = vec![level; frames * 2];
             let started = Instant::now();
+            // Half a second ahead, so a thread the OS holds back under load
+            // never leaves the sender's cut without frames (P112).
+            let ahead = f64::from(SESSION_RATE) / 2.0;
             let mut fed = 0.0;
             loop {
                 {
@@ -1535,7 +1550,7 @@ impl Controller<MockDriver> {
                     let Some(feed) = link.feeds.airplay.as_mut() else {
                         return;
                     };
-                    while fed < started.elapsed().as_secs_f64() * f64::from(SESSION_RATE) {
+                    while fed < started.elapsed().as_secs_f64() * f64::from(SESSION_RATE) + ahead {
                         feed.push(&block, frames, Instant::now());
                         fed += frames as f64;
                     }
