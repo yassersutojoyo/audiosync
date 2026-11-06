@@ -17111,19 +17111,72 @@ do {
     let speakersMenuSource = mainMenuSource.components(separatedBy: "let speakers = submenu(").dropFirst().first?
         .components(separatedBy: "let window = submenu(").first ?? ""
     let menuCommands = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
+    let settingsSource = (try? String(contentsOfFile: "Sources/AudioSync/SettingsWindow.swift", encoding: .utf8)) ?? ""
     check(menuWords.menuCheckUpdatesAutomatically == "Check for Updates Automatically"
-            && mainMenuSource.contains("item(t.menuCheckUpdatesAutomatically, #selector(AppDelegate.toggleAutomaticUpdateChecks(_:)))")
-            && menuCommands.contains("menuItem.state = MainActor.assumeIsolated { AppUpdater.checksAutomatically } ? .on : .off"),
-          "main menu: Check for Updates Automatically follows Check for Updates…, worded as on Windows, checked from Sparkle's setting")
+            && settingsSource.contains("SwitchRow(title: t.menuCheckUpdatesAutomatically,")
+            && settingsSource.contains("func reread() { automatic = AppUpdater.checksAutomatically }"),
+          "Settings: Check for Updates Automatically sits in the Updates box, worded as on Windows, read from Sparkle's setting")
     check(menuWords.showVirtualDevices == "Show Virtual Devices"
-            && speakersMenuSource.contains("item(t.showVirtualDevices, #selector(AppDelegate.toggleShowVirtualDevices(_:)))")
-            && menuCommands.contains("setShowVirtualDevices(!showVirtualDevices)")
-            && menuCommands.contains("menuItem.state = showVirtualDevices ? .on : .off"),
-          "main menu: Speakers > Show Virtual Devices sets and checks the setting the gear menu does")
+            && settingsSource.contains("SwitchRow(title: t.showVirtualDevices, isOn: Binding(get: { model.showVirtualDevices },")
+            && settingsSource.contains("set: { model.actions.setShowVirtualDevices($0) }")
+            && !mainMenuSource.contains("showVirtualDevices"),
+          "Settings: Show Virtual Devices is in the Speakers box and no longer in the Speakers menu")
     check(menuWords.castAddByAddress == "Add by Address…"
             && speakersMenuSource.contains("item(t.castAddByAddress, #selector(AppDelegate.addCastByAddress(_:)))")
             && menuCommands.contains("case #selector(addCastByAddress(_:)):\n            return appModel.castCanAdd"),
           "main menu: Speakers > Add by Address… is offered only while Cast can add a speaker, worded as on Windows")
+}
+
+// MARK: Settings window and the menus around it
+do {
+    let t = UIStrings()
+    func source(_ name: String) -> String {
+        (try? String(contentsOfFile: "Sources/AudioSync/\(name)", encoding: .utf8)) ?? ""
+    }
+    func section(_ text: String, from start: String, to end: String) -> String {
+        text.components(separatedBy: start).dropFirst().first?.components(separatedBy: end).first ?? ""
+    }
+    let mainMenu = source("MainMenu.swift")
+    let appMenu = section(mainMenu, from: "let app = submenu(", to: "let edit = submenu(")
+    let speakersMenu = section(mainMenu, from: "let speakers = submenu(", to: "let window = submenu(")
+    let windowMenu = section(mainMenu, from: "let window = submenu(", to: "let help = submenu(")
+    let gearMenu = section(source("MainWindow.swift"), from: "private enum GearMenu", to: "return menu")
+    let settings = source("SettingsWindow.swift")
+    func count(_ needle: String, in text: String) -> Int { text.components(separatedBy: needle).count - 1 }
+
+    check(t.settingsMenu == "Settings…" && t.settingsTitle == "Settings"
+            && appMenu.contains("item(t.settingsMenu, #selector(AppDelegate.showSettings(_:)), \",\")")
+            && gearMenu.contains("MenuAction.item(t.settingsMenu) { model.actions.openSettings() }")
+            && source("AppDelegate+Windows.swift").contains("a.openSettings = { [weak self] in self?.openSettingsWindow() }"),
+          "menus: Settings… (Command-comma) in the AudioSync menu and in the gear menu open the Settings window")
+    check(count("app.addItem(", in: appMenu) - count("app.addItem(.separator())", in: appMenu) == 8
+            && !appMenu.contains("t.appearance") && !appMenu.contains("t.launchAtLogin")
+            && !appMenu.contains("t.switchToSystemWhenSourceQuits") && !appMenu.contains("t.setupMenu")
+            && !appMenu.contains("menuCheckUpdatesAutomatically"),
+          "AudioSync menu: 8 items, the choices and Set Up Permissions… now in Settings")
+    check(settings.contains("Button(t.menuCheckForUpdates) { AppUpdater.checkForUpdates() }"),
+          "Settings: the Updates box's Check for Updates… button checks for updates")
+    check(count("MenuAction.item(", in: gearMenu) == 5
+            && count(".sectionHeader(title:", in: gearMenu) == 2 && !gearMenu.contains(".separator()"),
+          "gear menu: 5 items under the Speakers and Windows group titles")
+    check(!mainMenu.contains("menuFile")
+            && speakersMenu.contains(".sectionHeader(title: t.menuGroupDelay))\n        speakers.addItem(item(t.menuApplyDelay, #selector(AppDelegate.applyTypedDelay(_:)), \"s\"))")
+            && windowMenu.components(separatedBy: "window.addItem(").dropFirst().first?
+                .hasPrefix("item(t.menuCloseWindow, #selector(NSWindow.performClose(_:)), \"w\"))") == true,
+          "no File menu: Apply Typed Delay keeps Command-S under Speakers > Delay, Close Window keeps Command-W atop Window")
+    check(settings.contains("Button(t.setupMenu, action: setUpPermissions)")
+            && settings.contains("Button(t.unhide) { model.unhide(entry) }")
+            && settings.contains(".accessibilityLabel(t.unhideLabel(entry.title))")
+            && settings.contains("Text(t.noHiddenSpeakers)")
+            && settings.contains("if AppUpdater.isRunning {")
+            && t.unhideLabel("Bedroom") == "Unhide Bedroom",
+          "Settings: Set Up Permissions…, hidden speakers each with an Unhide VoiceOver names, an empty line, Updates only when updates run")
+    check(t.allSpeakersHidden.contains("Settings… in the gear menu and click Unhide")
+            && !t.helpText.contains("gear menu, or in the AudioSync menu")
+            && !t.helpText.contains("Show Virtual Devices in the gear menu")
+            && !t.helpText.contains("Hidden Speakers in the gear menu")
+            && t.helpText.contains("Source App Quits” in Settings."),
+          "texts: the hidden-speaker line and the Guide send people to Settings, not to the gear menu")
 }
 
 // MARK: Master mute

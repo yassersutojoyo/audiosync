@@ -660,7 +660,6 @@ struct UIStrings {
     let menuSpeakers = "Speakers"
     let menuTurnStreamingOn = "Turn Streaming On"
     let menuTurnStreamingOff = "Turn Streaming Off"
-    let menuFile = "File"
     let menuCloseWindow = "Close Window"
     /// Command-S: applies the delay typed in an open delay panel.
     let menuApplyDelay = "Apply Typed Delay"
@@ -669,6 +668,17 @@ struct UIStrings {
     let menuZoom = "Zoom"
     let menuBringAllToFront = "Bring All to Front"
     let menuHelp = "Help"
+    /// The AudioSync menu (Command-comma) and the gear menu: opens the Settings window.
+    let settingsMenu = "Settings…"
+    let settingsTitle = "Settings"
+    /// Settings box titles; the other boxes take sourceLabel, menuSpeakers and setupTitle.
+    let settingsGeneral = "General"
+    let settingsUpdates = "Updates"
+    /// Group titles in the Speakers menu and the gear menu, next to streamingSwitch and menuSpeakers.
+    let menuGroupFind = "Find"
+    let menuGroupArrange = "Arrange"
+    let menuGroupDelay = "Delay"
+    let menuGroupWindows = "Windows"
 
     // MARK: Sources
 
@@ -1292,9 +1302,12 @@ struct UIStrings {
     /// What VoiceOver says after Hide Speaker and after choosing a hidden speaker.
     func speakerHidden(_ name: String) -> String { "\(name) hidden" }
     func speakerShown(_ name: String) -> String { "\(name) shown" }
-    /// The submenu in the gear menu and the Speakers menu.
+    /// The submenu in the Speakers menu and the list in Settings.
     let hiddenSpeakers = "Hidden Speakers"
     let noHiddenSpeakers = "No hidden speakers"
+    /// The button beside a hidden speaker in Settings; VoiceOver hears which one.
+    let unhide = "Unhide"
+    func unhideLabel(_ entry: String) -> String { "Unhide \(entry)" }
     func hiddenSpeakerEntry(name: String, kind: String) -> String {
         kind.isEmpty ? name : "\(name) (\(kind))"
     }
@@ -1302,7 +1315,7 @@ struct UIStrings {
         kind.isEmpty ? "\(name) (not found)" : "\(name) (\(kind), not found)"
     }
     /// A section whose every speaker is hidden.
-    let allSpeakersHidden = "Every speaker here is hidden. Choose Hidden Speakers in the gear menu to show one again."
+    let allSpeakersHidden = "Every speaker here is hidden. To show one again, choose Settings… in the gear menu and click Unhide."
     let create = "Create"
     let cancel = "Cancel"
     let autoConnect = "Auto-Connect When Available"
@@ -1813,8 +1826,8 @@ struct UIStrings {
         - Hide: to keep a speaker you never use out of the lists, right-click it
           or use its ⋯ button and choose “Hide Speaker”. A speaker that is on
           turns off first.
-          Hidden Speakers in the gear menu lists what you hid; choose one to
-          show it again, off, with its volume and delay as you left them.
+          Settings lists what you hid under Hidden Speakers; click Unhide to
+          show one again, off, with its volume and delay as you left them.
         - Equalizer: click Equalizer in the window for 10 bands, a preamp,
           preset curves and curves you save yourself. It shapes the sound on
           every speaker at once.
@@ -1825,16 +1838,16 @@ struct UIStrings {
           system-wide Now Playing info.
           macOS asks once for Automation access to Spotify or Music.
         - Virtual devices (loopback drivers, meeting apps, aggregate devices) are
-          hidden unless you use them; Show Virtual Devices in the gear menu
-          lists them all.
-        - Launch at Login: in the gear menu, or in the AudioSync menu. The window
-          doesn't open at login; click the Dock icon to bring it back.
-        - Appearance: in the gear menu, or in the AudioSync menu. Match System
-          follows macOS; Light or Dark keeps AudioSync's windows that way.\(guideUpdatesLine)
+          hidden unless you use them; turn on Show Virtual Devices in Settings
+          to list them all.
+        - Launch at Login: in Settings (AudioSync > Settings…, or Settings… in
+          the gear menu). The window doesn't open at login; click the Dock icon
+          to bring it back.
+        - Appearance: in Settings. Match System follows macOS; Light or Dark
+          keeps AudioSync's windows that way.\(guideUpdatesLine)
         - When the source app quits, AudioSync switches to All System Audio and
           keeps playing. To stop streaming instead, turn off “Switch to All
-          System Audio When the Source App Quits” in the gear menu or the
-          AudioSync menu.
+          System Audio When the Source App Quits” in Settings.
 
         Calibration
         A microphone can measure the delays for you. Put it where you listen

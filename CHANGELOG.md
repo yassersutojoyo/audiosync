@@ -7,6 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Changed
 
 - AirPlay now starts at 0.1 s and raises its buffer only when the network drops packets. The hidden latency setting from 0.8.8 is gone.
+- On the Mac, the settings (Launch at Login, Appearance, Show Virtual Devices, what happens when the source app quits, automatic update checks, permissions and the hidden speakers list) now live in one Settings window, under AudioSync > Settings… or Command-comma. The gear menu and the AudioSync menu got shorter, and the File menu is gone: Close Window moved to the Window menu and Apply Typed Delay to the Speakers menu.
 
 ### Fixed
 

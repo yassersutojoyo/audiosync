@@ -26,6 +26,21 @@ enum AppUpdater {
         #endif
     }
 
+    /// Whether this build checks for updates; Settings shows its Updates box only then.
+    static var isRunning: Bool {
+        #if canImport(Sparkle)
+        return controller != nil
+        #else
+        return false
+        #endif
+    }
+
+    static func checkForUpdates() {
+        #if canImport(Sparkle)
+        controller?.checkForUpdates(nil)
+        #endif
+    }
+
     /// Sparkle keeps this setting in the user defaults itself.
     static var checksAutomatically: Bool {
         get {
