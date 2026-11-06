@@ -139,6 +139,7 @@ extension AppDelegate {
         DebugTrace.log(event.logLine { names[$0] })
         if let saved = event.pairingsSaved { pairingsWritten(saved) }
         if let outcome { nativeOutcome(outcome) }
+        if let stepped = nativeAirPlay?.model.receiverLatency.stepped { airplayLatencyFrames = stepped }
         closeWithdrawnPrompt()   // its pairing may have ended underneath
     }
 
@@ -171,7 +172,6 @@ extension AppDelegate {
         case .turnOff(let id, let reason):
             turnOffNativeSpeaker(id, reason: reason, origin: .automatic)
         case .latencyChanged:
-            if let stepped = nativeAirPlay?.model.receiverLatency.stepped { airplayLatencyFrames = stepped }
             retimeLocalOutputs()   // L = L_s + A follows the new L_s (S178)
             pushModel()   // and so does the AirPlay delay field (S181)
         case .senderFailed:
