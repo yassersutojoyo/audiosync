@@ -92,8 +92,7 @@ use audiosync_airplay::sender::{
     airplay2_auto, airplay2_switch,
 };
 use audiosync_airplay::stream::{
-    DEFAULT_LATENCY_FRAMES, MAX_DELAY, MAX_LATENCY_FRAMES, MIN_LATENCY_FRAMES, SpeakerCounters,
-    SpeakerLatency,
+    MAX_DELAY, MAX_LATENCY_FRAMES, MIN_LATENCY_FRAMES, SpeakerCounters, SpeakerLatency,
 };
 use audiosync_airplay::targets::{Target, TargetChange, TargetId};
 use audiosync_airplay::volume::Volume;
@@ -3400,7 +3399,7 @@ pub unsafe extern "C" fn asc_airplay_sounding(airplay: *const AscAirPlay) -> boo
 
 /// The stream's Lf in frames from every speaker's reported latency R_s
 /// (P200, P202): `reported_us` holds `count` values in microseconds, a
-/// negative one counting as 0. A null array or a count of 0 gives 77 175.
+/// negative one counting as 0. A null array or a count of 0 gives 4410.
 ///
 /// # Safety
 ///
@@ -3411,7 +3410,7 @@ pub unsafe extern "C" fn asc_airplay_session_latency_frames(
     count: usize,
 ) -> u32 {
     if reported_us.is_null() || count == 0 {
-        return DEFAULT_LATENCY_FRAMES;
+        return MIN_LATENCY_FRAMES;
     }
     // SAFETY: by the caller's contract `count` readable values.
     let values = unsafe { std::slice::from_raw_parts(reported_us, count) };

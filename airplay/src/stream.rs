@@ -59,6 +59,16 @@ pub const MAX_RESEND_REQUEST: u16 = 128;
 pub const MAX_RESENDS: u8 = 3;
 /// A packet sent later than this after its time counts as late (P84, P144).
 pub const LATE_SEND: Duration = Duration::from_millis(5);
+/// Lf steps up to at most 77 175 frames, 1.75 s (P200).
+const STEP_CAP_FRAMES: u32 = DEFAULT_LATENCY_FRAMES;
+/// Lf steps up at most once in this many seconds (P200).
+const STEP_INTERVAL: f64 = 10.0;
+/// Three resend requests within this many seconds are a burst (P200).
+const BURST_SECONDS: f64 = 2.0;
+/// Silent packets after a step's fade-out, about 32 ms: the sync stating
+/// the step reaches each receiver within them, wherever its network or
+/// timer puts it (P200).
+const STEP_SILENCE_PACKETS: u64 = 4;
 /// The input ring by default: 2 s (at least 1 s, P111).
 pub const DEFAULT_INPUT_FRAMES: usize = 2 * audio::SAMPLE_RATE as usize;
 /// Times within this many seconds of being due count as due, so a wake-up
@@ -514,6 +524,10 @@ struct Speaker {
     /// The next audio packet carries the marker and the next sync the
     /// first flag (P78, P93).
     first_pending: bool,
+    /// The Lf its syncs still state while a step is on its way, and when
+    /// the sync stating the step goes: as the faded-out packet's end sounds
+    /// on this speaker (P200).
+    step_sync: Option<(u32, f64)>,
     /// Anything sent since RECORD.
     started: bool,
     /// The FLUSH of an explicit pause or a timeline restart is not answered
@@ -630,38 +644,7 @@ fn send(
     let rtptime = speaker.next_rtptime();
     let marker = speaker.first_pending;
     if marker || starts_sync_mark(packet) {
-        let latency = context.latency_frames;
-        let heard = (packet * PACKET_FRAMES) as i64 - i64::from(latency);
-        let at = context.heard(heard, speaker.delay);
-        let bytes = match speaker.clock_identity {
-            Some(clock_identity) => TimeAnnounce {
-                first: marker,
-                seq: speaker.sync_seq,
-                rtp_heard: rtptime.wrapping_sub(latency),
-                nanos: context.clock.ptp_at(at).total_nanos(),
-                next_rtp: rtptime,
-                clock_identity,
-            }
-            .encode()
-            .to_vec(),
-            None => SyncPacket {
-                first: marker,
-                seq: speaker.sync_seq,
-                rtp_heard: rtptime.wrapping_sub(latency),
-                time: context.clock.ntp_at(at),
-                next_rtp: rtptime,
-            }
-            .encode()
-            .to_vec(),
-        };
-        speaker.sync_seq = speaker.sync_seq.wrapping_add(1);
-        transmits.push_back(Transmit {
-            speaker: speaker.id,
-            kind: PacketKind::Sync,
-            from: LocalSocket::Control,
-            to: speaker.destinations.control,
-            bytes,
-        });
+        send_sync(speaker, context, marker, transmits);
     }
     let number = context.packet_base + packet;
     let seq = speaker.next_seq;
@@ -759,6 +742,55 @@ fn report_first_sound(
     });
 }
 
+/// Sends a speaker's sync packet for its next packet (P93, P94, P97),
+/// stating the Lf it keeps while a step is on its way (P200).
+fn send_sync(
+    speaker: &mut Speaker,
+    context: &Context<'_>,
+    marker: bool,
+    transmits: &mut VecDeque<Transmit>,
+) {
+    if marker {
+        speaker.step_sync = None;
+    }
+    let packet = speaker.next_packet;
+    let rtptime = speaker.next_rtptime();
+    let latency = speaker
+        .step_sync
+        .map_or(context.latency_frames, |(frames, _)| frames);
+    let heard = (packet * PACKET_FRAMES) as i64 - i64::from(latency);
+    let at = context.heard(heard, speaker.delay);
+    let bytes = match speaker.clock_identity {
+        Some(clock_identity) => TimeAnnounce {
+            first: marker,
+            seq: speaker.sync_seq,
+            rtp_heard: rtptime.wrapping_sub(latency),
+            nanos: context.clock.ptp_at(at).total_nanos(),
+            next_rtp: rtptime,
+            clock_identity,
+        }
+        .encode()
+        .to_vec(),
+        None => SyncPacket {
+            first: marker,
+            seq: speaker.sync_seq,
+            rtp_heard: rtptime.wrapping_sub(latency),
+            time: context.clock.ntp_at(at),
+            next_rtp: rtptime,
+        }
+        .encode()
+        .to_vec(),
+    };
+    speaker.sync_seq = speaker.sync_seq.wrapping_add(1);
+    transmits.push_back(Transmit {
+        speaker: speaker.id,
+        kind: PacketKind::Sync,
+        from: LocalSocket::Control,
+        to: speaker.destinations.control,
+        bytes,
+    });
+}
+
 struct Context<'a> {
     clock: SenderClock,
     model: &'a RateModel,
@@ -824,6 +856,22 @@ pub struct Stream {
     latency_frames: u32,
     /// An Lf the host set while a speaker sounds (P201).
     pending_latency: Option<u32>,
+    /// A burst of resend requests, a late packet or a stall came since the
+    /// last timeout (P200).
+    lost_or_late: bool,
+    /// When the last two resend requests came (P200).
+    resends_at: [f64; 2],
+    /// When Lf last stepped up (P200).
+    last_step: Option<f64>,
+    /// The stepped Lf: no lower one applies until the stream has no
+    /// speaker (P200, P201).
+    step_floor: u32,
+    /// A step on its way: the packet that fades out before it, when that
+    /// packet's end sounds, and the new Lf (P200).
+    step_due: Option<(f64, u32)>,
+    /// The first packet cut at full gain again after a step's fade-out and
+    /// silence (P200).
+    silence_until: u64,
     input: InputReader,
     model: RateModel,
     margin: Margin,
@@ -870,6 +918,12 @@ impl Stream {
                 .latency_frames
                 .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES),
             pending_latency: None,
+            lost_or_late: false,
+            resends_at: [f64::NEG_INFINITY; 2],
+            last_step: None,
+            step_floor: 0,
+            step_due: None,
+            silence_until: 0,
             input: reader,
             model: RateModel::new(start),
             margin: Margin::new(start),
@@ -1049,6 +1103,9 @@ impl Stream {
     pub fn poll_timeout(&self) -> Option<Instant> {
         let context = self.context();
         let mut next = context.cut_due(self.next_cut);
+        if let Some((at, _)) = self.step_due {
+            next = next.min(at);
+        }
         for speaker in self.speakers.iter().filter(|s| self.sending(s)) {
             if let Some((_, at)) = speaker.pending_delay
                 && !speaker.delay_due
@@ -1057,6 +1114,9 @@ impl Stream {
             }
             if speaker.next_packet < self.next_cut {
                 next = next.min(context.cut_due(speaker.next_packet) + speaker.delay);
+            }
+            if let Some((_, at)) = speaker.step_sync {
+                next = next.min(at);
             }
         }
         Some(self.clock.instant(next))
@@ -1076,7 +1136,14 @@ impl Stream {
         self.model.ensure(last_frame(self.next_cut));
         let overdue = t - (self.model.time(last_frame(self.next_cut)) + self.margin.value());
         if overdue > f64::from(self.latency_frames) / NOMINAL_RATE {
+            self.lost_or_late = true;
+            self.step_latency(t, true);
             self.restart_timeline(t);
+        }
+        if let Some((at, frames)) = self.step_due
+            && at <= t
+        {
+            self.apply_step(frames, Some(at));
         }
         loop {
             self.model.ensure(last_frame(self.next_cut));
@@ -1089,7 +1156,16 @@ impl Stream {
         let context = context!(self);
         let silence = (&*self.silence_pcm, &*self.silence_alac);
         let paused = self.paused;
+        let mut late = false;
         for speaker in &mut self.speakers {
+            if let Some((_, at)) = speaker.step_sync
+                && at <= t
+            {
+                speaker.step_sync = None;
+                if !paused && !speaker.awaiting_flush && !speaker.first_pending {
+                    send_sync(speaker, &context, false, &mut self.transmits);
+                }
+            }
             if paused || speaker.awaiting_flush {
                 continue;
             }
@@ -1103,10 +1179,68 @@ impl Stream {
                 if due > t + DUE_TOLERANCE {
                     break;
                 }
+                late |= t - due > seconds(LATE_SEND);
                 send(speaker, &context, silence, t - due, &mut self.transmits);
             }
         }
+        self.lost_or_late |= late;
+        self.step_latency(t, false);
         self.publish();
+    }
+
+    /// Doubles Lf on a burst of resend requests, a late packet or a stall
+    /// while a speaker sounds, at most every 10 s, to 35 280 frames and then
+    /// 77 175 (P200). The next packet cut fades out and the one after fades
+    /// in; the step applies on the same timeline, with no flush, when the
+    /// faded packet's end sounds, so the pause of the step falls there. A
+    /// stall applies it `now`, as its restart silences every speaker.
+    fn step_latency(&mut self, t: f64, now: bool) {
+        if !std::mem::take(&mut self.lost_or_late)
+            || self.step_due.is_some()
+            || self.latency_frames >= STEP_CAP_FRAMES
+            || self.last_step.is_some_and(|at| t - at < STEP_INTERVAL)
+            || !self.sounding(t)
+        {
+            return;
+        }
+        self.last_step = Some(t);
+        let doubled = self.latency_frames * 2;
+        let frames = if doubled * 2 > STEP_CAP_FRAMES {
+            STEP_CAP_FRAMES
+        } else {
+            doubled
+        };
+        if now {
+            self.apply_step(frames, None);
+            return;
+        }
+        let fade = self.next_cut;
+        self.silence_until = fade + 1 + STEP_SILENCE_PACKETS;
+        self.model.ensure(last_frame(fade));
+        let at = self.model.time(last_frame(fade)) + f64::from(self.latency_frames) / NOMINAL_RATE;
+        self.step_due = Some((at, frames));
+    }
+
+    /// Sets the stepped Lf, which the local outputs follow with the timeline
+    /// event; with the time `faded` the faded-out packet's end sounds, each
+    /// speaker gets its sync stating it when that end sounds there, at
+    /// `faded` plus its delay (P200).
+    fn apply_step(&mut self, frames: u32, faded: Option<f64>) {
+        self.step_due = None;
+        let old = self.latency_frames;
+        self.latency_frames = frames;
+        self.step_floor = frames;
+        if self.pending_latency.is_some_and(|held| held <= frames) {
+            self.pending_latency = None;
+        }
+        for speaker in &mut self.speakers {
+            speaker.step_sync = faded.map(|at| (old, at + speaker.delay));
+        }
+        self.events.push_back(StreamEvent::Timeline {
+            latency: self.latency(),
+            origin: self.origin,
+            restarted: false,
+        });
     }
 
     /// Adds a speaker whose RECORD succeeded (P103): it starts with the
@@ -1164,6 +1298,7 @@ impl Stream {
             next_seq: config.first_seq,
             rtp_offset: 0,
             first_pending: true,
+            step_sync: None,
             started: false,
             awaiting_flush: false,
             sync_seq: 0,
@@ -1215,6 +1350,9 @@ impl Stream {
     pub fn remove_speaker(&mut self, id: SpeakerId) -> bool {
         let before = self.speakers.len();
         self.speakers.retain(|speaker| speaker.id != id);
+        if self.speakers.is_empty() {
+            self.step_floor = 0;
+        }
         if self.speakers.is_empty()
             && let Some(frames) = self.pending_latency.take()
             && frames != self.latency_frames
@@ -1328,7 +1466,9 @@ impl Stream {
     /// the new latency from then on. Once one sounds the value is held
     /// until the stream has no speaker or restarts (P201).
     pub fn set_latency(&mut self, frames: u32, now: Instant) {
-        let frames = frames.clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES);
+        let frames = frames
+            .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES)
+            .max(self.step_floor);
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
         if self.paused || self.sounding(t) {
@@ -1386,6 +1526,9 @@ impl Stream {
 
     /// Starts the timeline over at `t` seconds (P143).
     fn restart_timeline(&mut self, t: f64) {
+        if let Some((_, frames)) = self.step_due {
+            self.apply_step(frames, None);
+        }
         if let Some(frames) = self.pending_latency.take() {
             self.latency_frames = frames;
         }
@@ -1525,16 +1668,19 @@ impl Stream {
     /// A packet from the receiver on a speaker's control socket: a
     /// retransmission request is answered (P86, P87, P88); anything else is
     /// ignored.
-    pub fn handle_control_packet(&mut self, id: SpeakerId, bytes: &[u8], _now: Instant) {
+    pub fn handle_control_packet(&mut self, id: SpeakerId, bytes: &[u8], now: Instant) {
         let Some(request) = ResendRequest::parse(bytes) else {
             return;
         };
+        let t = self.clock.seconds(now);
         let context = context!(self);
         let Some(speaker) = self.speakers.iter_mut().find(|s| s.id == id) else {
             return;
         };
         let counters = speaker.counters.clone();
         counters.resend_requests.fetch_add(1, Ordering::Relaxed);
+        self.lost_or_late |= t - self.resends_at[0] <= BURST_SECONDS;
+        self.resends_at = [self.resends_at[1], t];
         for offset in 0..request.count.min(MAX_RESEND_REQUEST) {
             let seq = request.first.wrapping_add(offset);
             let slot = usize::from(seq) % HISTORY_PACKETS;
@@ -1675,7 +1821,10 @@ impl Stream {
         let start = (self.next_cut * PACKET_FRAMES) as i64 + self.origin;
 
         let silent = self.input.cut(start, &mut self.frames);
-        if self.cut_gain == self.master_gain {
+        if self.next_cut < self.silence_until {
+            audio::ramp_gain(&mut self.frames, self.cut_gain, 0.0);
+            self.cut_gain = 0.0;
+        } else if self.cut_gain == self.master_gain {
             audio::apply_gain(&mut self.frames, self.master_gain);
         } else {
             audio::ramp_gain(&mut self.frames, self.cut_gain, self.master_gain);

@@ -4,6 +4,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Changed
+
+- AirPlay now starts at 0.1 s and raises its buffer only when the network drops packets. The hidden latency setting from 0.8.8 is gone.
+
 ## [0.8.8] - 2026-11-06
 
 ### Security

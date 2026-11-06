@@ -1923,8 +1923,7 @@ bool asc_airplay_sounding(const AscAirPlay *airplay);
 /*
  * The stream's Lf in frames from every speaker's reported latency, count
  * values in microseconds (a negative one counts as 0):
- * clamp(max(77175, R_max + 22050), 4410, 88200). NULL or a count of 0
- * gives 77175.
+ * clamp(R_max + 4410, 4410, 88200). NULL or a count of 0 gives 4410.
  */
 uint32_t asc_airplay_session_latency_frames(const int64_t *reported_us, size_t count);
 

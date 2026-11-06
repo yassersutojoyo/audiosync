@@ -923,7 +923,7 @@ pub struct Ap2Server {
     cuts: Arc<AtomicUsize>,
     /// Open data and control ports for a fake that names none of its own,
     /// so the audio has somewhere to go and no send comes back unreachable.
-    _udp: Vec<UdpSocket>,
+    udp: Vec<UdpSocket>,
 }
 
 impl Ap2Server {
@@ -984,12 +984,21 @@ impl Ap2Server {
             event_answers,
             stop,
             cuts,
-            _udp: udp,
+            udp,
         }
     }
 
     pub fn fake(&self) -> MutexGuard<'_, FakeAp2> {
         lock(&self.fake)
+    }
+
+    /// The data and control sockets it opened, to read what the sender
+    /// sends and answer as the television would.
+    pub fn udp(&self) -> Vec<UdpSocket> {
+        self.udp
+            .iter()
+            .map(|socket| socket.try_clone().expect("a socket clone"))
+            .collect()
     }
 
     pub fn event_answers(&self) -> Vec<Response> {
