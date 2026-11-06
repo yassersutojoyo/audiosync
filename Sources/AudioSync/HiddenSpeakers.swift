@@ -21,12 +21,13 @@ struct HiddenSpeakers: Equatable {
     init() {}
 
     /// The array stored under `AppSettings.Keys.hiddenSpeakers`, read
-    /// leniently: an entry without a key is skipped, a missing name or kind
-    /// reads as empty, and a repeated key keeps its first entry.
+    /// leniently: an entry whose key names no speaker is skipped, a missing
+    /// name or kind reads as empty, and a repeated key keeps its first entry.
     init(stored: Any?) {
         guard let list = stored as? [Any] else { return }
         for item in list {
-            guard let fields = item as? [String: Any], let key = fields["key"] as? String, !key.isEmpty
+            guard let fields = item as? [String: Any], let key = fields["key"] as? String,
+                  !(SpeakerKey.parse(key)?.id ?? CastID.device(key) ?? "").isEmpty
             else { continue }
             hide(key: key, name: fields["name"] as? String ?? "", kind: fields["kind"] as? String ?? "")
         }

@@ -15915,6 +15915,11 @@ do {
     check(lenient.entries == [.init(key: "lc:a", name: "A", kind: "USB"), .init(key: "lc:b", name: "", kind: "")]
           && HiddenSpeakers(stored: "nonsense").isEmpty,
           "hidden speakers: a malformed stored entry is skipped")
+    let unmatched = HiddenSpeakers(stored: ["Kitchen", "lc:", "cast:", "cc:nest-1", "ap:x", "cast:nest-1"]
+                                               .map { ["key": $0] } as [Any])
+    // covers: S360
+    check(unmatched.entries.map(\.key) == ["ap:x", "cast:nest-1"],
+          "hidden speakers: a stored key no speaker row is hidden under is skipped")
 
     var moved = HiddenSpeakers()
     moved.hide(key: "ap:123456789", name: "Den", kind: "AirPlay")
