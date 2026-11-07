@@ -275,6 +275,12 @@ enum ZoneClick {
         case castAnotherPlays, castOneAtATime, castBusy
     }
 
+    /// Whether a click with `step` on a Cast member that is off drops its saved-on mark (C112):
+    /// it switches the zone off or passes the member over, never when it turns it on.
+    static func dropsSavedOn(_ step: Step, turningOn: Bool) -> Bool {
+        !turningOn || step == .castAnotherPlays || step == .castOneAtATime
+    }
+
     static func plan(_ members: [ZoneMemberFacts], streaming: Bool, castOnElsewhere: Bool,
                      airPlay2PlayingElsewhere: Bool) -> (action: Action, steps: [Step]) {
         let raw = members.map { member in

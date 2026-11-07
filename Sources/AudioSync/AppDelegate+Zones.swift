@@ -112,6 +112,10 @@ extension AppDelegate {
         let running = engine.isRunning
         var attempts: [String] = []   // AirPlay members this click turns on
         for (member, step) in zip(members, plan.steps) {
+            // Saved as on, a Cast member the click switches off or passes over would turn on once listed (C112).
+            if !member.facts.on, ZoneClick.dropsSavedOn(step, turningOn: turnOn), castModel.savedOn.map({ CastID.key($0) }) == member.key {
+                castModel.savedOn = nil
+            }
             switch step {
             case .on, .waiting:
                 // While streaming is off every member starts a new attempt;

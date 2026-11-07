@@ -79,7 +79,7 @@ use audiosync_core::policy::session::{
 };
 use audiosync_core::policy::source_quit::WhenSourceQuits;
 use audiosync_core::policy::speakers::{NoticeSubject, Notices, SpeakerKey, compare_names};
-use audiosync_core::policy::zones::{self, MemberKind, Situation, Step, Zone, Zones};
+use audiosync_core::policy::zones::{self, CastLeftOff, MemberKind, Situation, Step, Zone, Zones};
 use audiosync_core::reader::DRIFT_TOLERANCE_MS;
 use audiosync_core::volume::row_level;
 use icu_normalizer::DecomposingNormalizerBorrowed;
@@ -2468,7 +2468,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
             }
         }
         let running = self.running();
+        let saved = self.audio.cast_on_to_save().map(SpeakerKey::Cast);
         for ((key, on, _), step) in members.iter().zip(&plan.steps) {
+            // Saved as on, a Cast member the click switches off or passes over would turn on once listed (C112).
+            let passed_over = matches!(
+                step,
+                Step::CastLeftOff(CastLeftOff::OneCastAtATime | CastLeftOff::AnotherCastPlays)
+            );
+            if !on && saved.as_ref() == Some(key) && (!turn_on || passed_over) {
+                self.switch_zone_member(key, false);
+            }
             let switch_on = match step {
                 // While streaming is off every member starts a new attempt.
                 Step::On | Step::Waiting if !running || !on => true,
@@ -2488,6 +2497,10 @@ impl<A: AudioBackend> AudioAdapter<A> {
         } else {
             self.airplay_unrestored
                 .retain(|id| !zone.members.contains(&airplay_key(id)));
+            self.cast_unrestored = self
+                .cast_unrestored
+                .take()
+                .filter(|id| !zone.members.contains(&cast_key(id)));
             self.stop_if_idle();
         }
         self.take_events();
@@ -2760,9 +2773,22 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 self.switch_zone_member(&key, false);
             }
         }
+        // Saved as on, a Cast speaker the preset leaves out would turn on once listed (C112).
+        let saved = self.audio.cast_on_to_save().map(SpeakerKey::Cast);
+        if let Some(key) =
+            saved.filter(|key| !preset.members.iter().any(|m| m.key == key.to_string()))
+        {
+            self.switch_zone_member(&key, false);
+        }
         self.airplay_unrestored.retain(|id| {
             let key = airplay_key(id);
             preset.members.iter().any(|member| member.key == key)
+        });
+        self.cast_unrestored = self.cast_unrestored.take().filter(|id| {
+            preset
+                .members
+                .iter()
+                .any(|member| member.key == cast_key(id))
         });
         let running = self.running();
         for ((key, _, _, facts), step) in members.iter().zip(&plan.steps) {
@@ -16619,6 +16645,130 @@ mod tests {
         );
         adapter.poll();
         assert!(!adapter.audio.cast_on());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S246, S252
+    #[test]
+    fn an_offline_cast_speaker_saved_as_on_stays_off_once_online_after_a_preset_left_it_out_or_its_zone_went_off()
+     {
+        let dir = test_dir("adapter-cast-saved-on-recall");
+        let path = dir.join(settings::FILE_NAME);
+        let den = "00112233445566778899aabbccddeeff";
+        let (mut adapter, _fake) = cast_launch(&path, &[], false);
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.save_preset("Desk").expect("saved");
+        adapter.add_zone("Den", &[key(SPEAKERS), cc_address("192.0.2.31")]);
+        adapter.set_speaker_enabled(&cc_address("192.0.2.31"), true);
+        assert!(adapter.save_settings());
+        let comes_online = |fake: &FakeCast, adapter: &mut AudioAdapter<MockBackend>| {
+            let at = std::net::Ipv4Addr::new(192, 0, 2, 31);
+            fake.announce_at(den, "Den", DEVICE_PORT, at);
+            adapter.poll();
+            speaker_of(adapter, &cc(den)).enabled
+        };
+
+        let copy = |name: &str| {
+            let copy = dir.join(name);
+            std::fs::copy(&path, &copy).expect("copied");
+            copy
+        };
+        let (preset, zone_off, zone_on) = (copy("preset.json"), copy("off.json"), copy("on.json"));
+        let (mut adapter, fake) = cast_launch(&preset, &[], false);
+        adapter.recall_preset("preset:1");
+        assert!(!comes_online(&fake, &mut adapter), "the preset left it out");
+
+        let (mut adapter, fake) = cast_launch(&zone_off, &[], false);
+        adapter.set_running(true);
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS), "the zone went off");
+        assert!(!comes_online(&fake, &mut adapter), "its zone went off");
+
+        let (mut adapter, fake) = cast_launch(&zone_on, &[], false);
+        adapter.set_running(false);
+        adapter.toggle_zone("zone:1");
+        assert!(adapter.running(), "the zone went on");
+        assert!(comes_online(&fake, &mut adapter), "its zone went on");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // covers: S252
+    #[test]
+    fn a_preset_without_the_cast_speaker_saved_as_on_drops_it_without_a_cast_sender() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.restore(Settings {
+            cast_on: Some(CAST_KITCHEN.to_owned()),
+            speaker_presets: vec![saved_preset(&[(key(SPEAKERS), None)])],
+            ..Settings::default()
+        });
+        adapter.recall_preset("preset:1");
+        assert_eq!(adapter.current_settings().cast_on, None);
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_switched_off_drops_its_cast_member_saved_as_on_without_a_cast_sender() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        adapter.restore(Settings {
+            cast_on: Some(CAST_KITCHEN.to_owned()),
+            speaker_zones: vec![zone(vec![key(SPEAKERS), cc(CAST_KITCHEN)])],
+            ..Settings::default()
+        });
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_running(true);
+        adapter.toggle_zone("zone:1");
+        assert!(!enabled(&adapter, SPEAKERS), "the zone went off");
+        assert_eq!(adapter.current_settings().cast_on, None);
+    }
+
+    // covers: S246
+    #[test]
+    fn a_zone_click_drops_the_mark_of_a_cast_member_it_passes_over_and_keeps_one_outside_the_zone()
+    {
+        let dir = test_dir("adapter-cast-saved-on-passed-over");
+        let path = dir.join(settings::FILE_NAME);
+        let den = "00112233445566778899aabbccddeeff";
+        let kitchen = [(CAST_KITCHEN, "Kitchen")];
+        let (mut adapter, _fake) = cast_launch(&path, &kitchen, false);
+        adapter.set_cast_probe(|_| true);
+        assert_eq!(adapter.add_cast_address("192.0.2.31"), Ok(()));
+        adapter.add_zone("Den", &[cc(CAST_KITCHEN), cc_address("192.0.2.31")]);
+        adapter.add_zone("Desk", &[key(SPEAKERS)]);
+        adapter.set_speaker_enabled(&cc_address("192.0.2.31"), true);
+        assert!(adapter.save_settings());
+        let comes_online = |fake: &FakeCast, adapter: &mut AudioAdapter<MockBackend>| {
+            let at = std::net::Ipv4Addr::new(192, 0, 2, 31);
+            fake.announce_at(den, "Den", DEVICE_PORT, at);
+            adapter.poll();
+            speaker_of(adapter, &cc(den)).enabled
+        };
+        let outside = dir.join("outside.json");
+        std::fs::copy(&path, &outside).expect("copied");
+
+        let (mut adapter, fake) = cast_launch(&path, &kitchen, false);
+        adapter.toggle_zone("zone:1");
+        assert!(
+            speaker_of(&adapter, &cc(CAST_KITCHEN)).enabled,
+            "one Cast speaker at a time"
+        );
+        adapter.set_speaker_enabled(&cc(CAST_KITCHEN), false);
+        assert!(
+            !comes_online(&fake, &mut adapter),
+            "the click passed it over"
+        );
+
+        let (mut adapter, fake) = cast_launch(&outside, &kitchen, false);
+        adapter.toggle_zone("zone:2");
+        assert!(
+            comes_online(&fake, &mut adapter),
+            "outside the zone, it keeps its mark"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

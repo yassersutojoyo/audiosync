@@ -96,6 +96,8 @@ extension AppDelegate {
         for (other, off) in zip(others, plan.switchOff) where off {
             switchZoneMember(other, on: false, attempts: &attempts)
         }
+        // Saved as on, a Cast speaker the preset leaves out would turn on once listed (C112).
+        if let saved = castModel.savedOn, !stored.contains(CastID.key(saved)) { castModel.savedOn = nil }
         for (state, step) in zip(states, plan.steps) {
             guard let state, step == .on || step == .waiting else { continue }
             if !running || !state.facts.on { switchZoneMember(state, on: true, attempts: &attempts, origin: source.origin) }

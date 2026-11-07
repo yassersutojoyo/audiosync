@@ -467,6 +467,8 @@ struct SettingsStore {
         // One left to come back on once listed (`savedOn`) stays saved as on (C112).
         if model.enabled != old.enabled, model.enabled != nil || model.savedOn != old.enabled {
             save(cast: model.enabled)
+        } else if model.enabled == nil, old.savedOn != nil, model.savedOn == nil {
+            save(cast: nil)   // a recall left it off (S246, S252)
         }
         if model.foundIDs != old.foundIDs { write(model.foundIDs.isEmpty ? nil : model.foundIDs, Keys.castFoundIDs) }
     }

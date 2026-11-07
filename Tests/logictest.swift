@@ -7862,6 +7862,12 @@ do {
     // covers: S246
     check(unplugged.action == .turnOff && unplugged.steps == [.off, .off],
           "zones: a zone switched off turns its unplugged members off too, so they stay off when plugged back")
+    // covers: S246
+    check(ZoneClick.dropsSavedOn(.off, turningOn: false) && ZoneClick.dropsSavedOn(.absent, turningOn: false)
+            && ZoneClick.dropsSavedOn(.castOneAtATime, turningOn: true)
+            && ZoneClick.dropsSavedOn(.castAnotherPlays, turningOn: true)
+            && !ZoneClick.dropsSavedOn(.castBusy, turningOn: true) && !ZoneClick.dropsSavedOn(.absent, turningOn: true),
+          "zones: a click drops the saved-on mark of a Cast member it switches off or passes over, never of one it turns on (S246)")
 
     // covers: S247 (a member its pair holds: off the rows, as memberState gives it, so the core plans it absent)
     func held(_ on: Bool) -> ZoneMemberFacts { ZoneMemberFacts(kind: .airplay2, listed: false, on: on, inTarget: true) }
@@ -13324,6 +13330,17 @@ do {
     // covers: C112
     check(waitedOffline && wakes.enabled == kitchen,
           "cast: a speaker saved as on turns on once it comes online (C112)")
+    var leftOutCast = CastModel()
+    leftOutCast.savedOn = kitchen
+    leftOutCast.apply(.appeared(CastDevice(id: kitchen, name: "Kitchen", offline: true), offsetMs: nil))
+    castStore.save(cast: kitchen)
+    let leftOutBefore = leftOutCast
+    leftOutCast.savedOn = nil   // what a recall that leaves it off does
+    castStore.save(cast: leftOutCast, was: leftOutBefore)
+    leftOutCast.apply(.changed(CastDevice(id: kitchen, name: "Kitchen"), offsetMs: nil))
+    // covers: S246, S252
+    check(leftOutCast.enabled == nil && castStore.load().enabledCast == nil,
+          "cast: a speaker no longer saved as on is saved as off (S246, S252)")
 
     // C108: the sender hears the selection at its start and at every change, played or not.
     var naming = CastModel()
