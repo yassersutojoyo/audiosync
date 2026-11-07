@@ -12,6 +12,9 @@ concurrency:
   group: ci.yml-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+permissions:
+  contents: read
+
 jobs:
   proven:
     # main skips the rest for a commit this workflow already passed on an integ/* train.
@@ -53,6 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Does this push touch Sources/, Tests/, Package.swift or build.sh?
         id: diff
@@ -77,6 +81,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Toolchain versions (Swift)
         run: swift --version
@@ -236,6 +242,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Rust toolchain (1.99.1, with the Apple silicon and Intel targets)
         run: |
@@ -281,6 +289,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - name: Install the pinned shellcheck
         run: |
           scripts/shellcheck.sh --install "$RUNNER_TEMP/shellcheck"
@@ -294,6 +304,7 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          persist-credentials: false
           fetch-depth: 0 # the commit-message check reads the pushed range
       # The forbidden-name rule keeps only salted hashes in
       # scripts/forbidden-names.txt, so the self-test proves it on made-up names.

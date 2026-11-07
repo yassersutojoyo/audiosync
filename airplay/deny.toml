@@ -33,8 +33,19 @@ unused-allowed-license = "allow"
 [licenses.private]
 ignore = false
 
-# Checked weekly by .github/workflows/advisories.yml; every ignore says why.
+# Gates main and integ/* in the Licenses job, weekly in advisories.yml; every ignore says why.
 [advisories]
 unmaintained = "all"
 unsound = "all"
-yanked = "warn"
+yanked = "deny"
+
+[bans]
+wildcards = "deny"
+# Duplicates come from upstream crates we do not control.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -65,6 +65,8 @@ jobs:
         working-directory: core
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Rust toolchain (1.99.1, with rustfmt and clippy)
         run: |
@@ -120,9 +122,14 @@ jobs:
         working-directory: core
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install the pinned cargo-deny
         run: cargo install --locked cargo-deny --version 0.20.2
 
       - name: Only permissive licenses, dev-dependencies included (core/deny.toml)
         run: cargo deny --locked check licenses
+
+      - name: Crates.io only, no wildcard versions, and on main and integ/* no open RustSec advisory (core/deny.toml)
+        run: cargo deny --locked check bans sources ${{ (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/integ/')) && 'advisories' || '' }}

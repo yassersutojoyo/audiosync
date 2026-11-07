@@ -63,17 +63,20 @@ unused-allowed-license = "allow"
 [licenses.private]
 ignore = false
 
-# Checked weekly by .github/workflows/advisories.yml; every ignore says why.
+# Gates main and integ/* in the Licenses job, weekly in advisories.yml; every ignore says why.
 [advisories]
 unmaintained = "all"
 unsound = "all"
-yanked = "warn"
+yanked = "deny"
 ignore = [
     # A dev-dependency that only generates the fake receiver's test key; ring
     # signs with it, and no shipped code runs RSA.
     { id = "RUSTSEC-2023-0071", reason = "rsa only makes a test key; Marvin needs RSA decryption; no patched rsa version exists" },
     # Slint parses styled text with ENABLE_STRIKETHROUGH only, never wikilinks.
     { id = "RUSTSEC-2026-0414", reason = "Slint never sets ENABLE_WIKILINKS; 0.13.5 fixes it, kept out of this change, which bumps only the advisories it names" },
+    { id = "RUSTSEC-2026-0433", reason = "Slint never sets ENABLE_WIKILINKS; pulldown-cmark 0.13.6 fixes it, a lockfile bump left to its own change" },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils: unmaintained, no safe upgrade, build-time only under Slint through spin_on" },
+    { crate = "clipboard-win@5.4.1", reason = "yanked; under Slint through arboard; cargo update -p clipboard-win clears it in its own change" },
     # Linux-only, under Slint through winit's window decorations.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained, Linux-only, under Slint" },
     # zbus 5 brings these; our MPRIS code uses it directly, as do the ksni tray
@@ -82,3 +85,16 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "zbus_names: unmaintained, under zbus 5, no maintained replacement yet" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: unmaintained, under zbus 5, no maintained replacement yet" },
 ]
+
+[bans]
+wildcards = "deny"
+# Our own crates are path dependencies without a version; none is published.
+allow-wildcard-paths = true
+# Duplicates come from upstream crates we do not control.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
