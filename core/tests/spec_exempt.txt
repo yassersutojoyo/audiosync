@@ -194,3 +194,4 @@ S424 Linux host only: the AppImage updater of section 19 (desktop/src/updater); 
 S425 Web remote only: the token's pairing address and its rotation; the remote crate's tests check it.
 S426 Web remote only: the install ID in the token cookie's name; the remote crate's tests check it.
 S427 Web remote only: a replaced token that comes back unpairs its device; the remote crate's tests check it.
+S428 Windows host only: the web remote's IP address on Wi-Fi or Ethernet, never a VPN tunnel's; the Windows tests named in the test map check it.

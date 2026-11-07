@@ -567,8 +567,53 @@ pub fn spaced_digits(code: &str) -> String {
     code.chars().map(String::from).collect::<Vec<_>>().join(" ")
 }
 
-/// This PC's IPv4 address on the home network: the one its default route
-/// leaves from, when it is private. Nothing is sent.
+/// What kind of link a network adapter is, as the address choice ranks them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub enum AdapterKind {
+    Ethernet,
+    WiFi,
+    Other,
+}
+
+/// One adapter that is up, with its IPv4 addresses.
+#[derive(Clone, Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub struct Adapter {
+    pub kind: AdapterKind,
+    pub metric: u32,
+    pub addresses: Vec<Ipv4Addr>,
+}
+
+/// The address a phone on the home network can reach, given the adapters and
+/// the address the default route leaves from.
+pub fn choose_lan_address(adapters: &[Adapter], route: Option<Ipv4Addr>) -> Option<Ipv4Addr> {
+    let private = |address: &Ipv4Addr| {
+        !address.is_loopback() && audiosync_remote::net::is_private_peer(IpAddr::V4(*address))
+    };
+    let route = route.filter(private);
+    // The default route's own adapter first, then Ethernet before Wi-Fi, then the lowest metric.
+    adapters
+        .iter()
+        .filter(|adapter| adapter.kind != AdapterKind::Other)
+        .filter_map(|adapter| {
+            let on_route = route.filter(|address| adapter.addresses.contains(address));
+            let address = on_route.or_else(|| {
+                adapter
+                    .addresses
+                    .iter()
+                    .copied()
+                    .find(|address| private(address) && !address.is_link_local())
+            })?;
+            Some((on_route.is_none(), adapter.kind, adapter.metric, address))
+        })
+        .min()
+        .map(|(.., address)| address)
+        .or(route)
+}
+
+/// This PC's IPv4 address on the home network: a Wi-Fi or Ethernet adapter's
+/// private address, else the one its default route leaves from. Nothing is sent.
 pub fn lan_address() -> Option<Ipv4Addr> {
     // The wildcard bind could make Windows Firewall ask about the test program,
     // so the tests get a documentation address (RFC 5737) instead.
@@ -576,20 +621,105 @@ pub fn lan_address() -> Option<Ipv4Addr> {
     if audiosync_airplay::ptp::loopback_only() {
         return Some(Ipv4Addr::new(192, 0, 2, 7));
     }
+    choose_lan_address(&up_adapters(), route_address())
+}
+
+fn route_address() -> Option<Ipv4Addr> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
     // A documentation address (RFC 5737): connecting only picks the route.
     socket
         .connect(SocketAddr::from((Ipv4Addr::new(192, 0, 2, 1), 9)))
         .ok()?;
     match socket.local_addr().ok()?.ip() {
-        IpAddr::V4(address)
-            if !address.is_loopback()
-                && audiosync_remote::net::is_private_peer(IpAddr::V4(address)) =>
-        {
-            Some(address)
-        }
-        _ => None,
+        IpAddr::V4(address) => Some(address),
+        IpAddr::V6(_) => None,
     }
+}
+
+#[cfg(not(windows))]
+fn up_adapters() -> Vec<Adapter> {
+    Vec::new()
+}
+
+/// The adapters that are up, with their IPv4 addresses; none when Windows
+/// won't list them.
+#[cfg(windows)]
+fn up_adapters() -> Vec<Adapter> {
+    use windows::Win32::Foundation::ERROR_BUFFER_OVERFLOW;
+    use windows::Win32::NetworkManagement::IpHelper::{
+        GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST,
+        GetAdaptersAddresses, GetIfEntry2Ex, IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211,
+        IP_ADAPTER_ADDRESSES_LH, MIB_IF_ROW2, MibIfEntryNormalWithoutStatistics,
+    };
+    use windows::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+    use windows::Win32::Networking::WinSock::{AF_INET, SOCKADDR_IN};
+
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut size = 16 * 1024u32;
+    let buffer = 'list: {
+        for _ in 0..3 {
+            let mut buffer = vec![0u64; (size as usize).div_ceil(8)];
+            // SAFETY: `buffer` holds `size` bytes, 8-byte aligned.
+            let result = unsafe {
+                GetAdaptersAddresses(
+                    u32::from(AF_INET.0),
+                    flags,
+                    None,
+                    Some(buffer.as_mut_ptr().cast()),
+                    &mut size,
+                )
+            };
+            match result {
+                0 => break 'list buffer,
+                code if code == ERROR_BUFFER_OVERFLOW.0 => {}
+                _ => break,
+            }
+        }
+        return Vec::new();
+    };
+    let mut adapters = Vec::new();
+    let mut next = buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+    // SAFETY: Windows filled `buffer` with a linked list that lives as long as it.
+    while let Some(adapter) = unsafe { next.as_ref() } {
+        next = adapter.Next;
+        if adapter.OperStatus != IfOperStatusUp {
+            continue;
+        }
+        let mut row = MIB_IF_ROW2 {
+            InterfaceLuid: adapter.Luid,
+            ..Default::default()
+        };
+        // Hyper-V switches, VPN TAP drivers and the hotspot adapter report Ethernet or Wi-Fi
+        // too; only HardwareInterface (bit 0) tells them apart.
+        // SAFETY: `row` is a valid MIB_IF_ROW2 with its LUID set.
+        let hardware = unsafe { GetIfEntry2Ex(MibIfEntryNormalWithoutStatistics, &mut row) }
+            .is_ok()
+            && row.InterfaceAndOperStatusFlags._bitfield & 1 != 0;
+        let kind = match adapter.IfType {
+            IF_TYPE_ETHERNET_CSMACD if hardware => AdapterKind::Ethernet,
+            IF_TYPE_IEEE80211 if hardware => AdapterKind::WiFi,
+            _ => AdapterKind::Other,
+        };
+        let mut addresses = Vec::new();
+        let mut unicast = adapter.FirstUnicastAddress;
+        // SAFETY: the unicast list and its socket addresses live in `buffer`.
+        while let Some(entry) = unsafe { unicast.as_ref() } {
+            unicast = entry.Next;
+            let socket = entry.Address.lpSockaddr;
+            if !socket.is_null() && unsafe { (*socket).sa_family } == AF_INET {
+                let socket = unsafe { &*socket.cast::<SOCKADDR_IN>() };
+                addresses.push(Ipv4Addr::from(
+                    unsafe { socket.sin_addr.S_un.S_addr }.to_ne_bytes(),
+                ));
+            }
+        }
+        adapters.push(Adapter {
+            kind,
+            metric: adapter.Ipv4Metric,
+            addresses,
+        });
+    }
+    adapters
 }
 
 /// The QR code of `text`: its side in modules and each module, row by row,
@@ -1771,5 +1901,53 @@ pub(crate) mod tests {
         assert_eq!(pixels[0], [255; 3], "the quiet zone is light");
         // The top-left finder pattern starts dark right after the quiet zone.
         assert_eq!(pixels[(4 * 3) * side + 4 * 3], [0; 3]);
+    }
+
+    #[test]
+    fn a_full_vpn_shows_the_wifi_address_not_the_tunnels() {
+        let tunnel = Ipv4Addr::new(10, 8, 0, 2);
+        let wifi = Ipv4Addr::new(192, 168, 1, 20);
+        let adapters = [
+            Adapter {
+                kind: AdapterKind::Other,
+                metric: 1,
+                addresses: vec![tunnel],
+            },
+            Adapter {
+                kind: AdapterKind::WiFi,
+                metric: 35,
+                addresses: vec![wifi],
+            },
+        ];
+        assert_eq!(choose_lan_address(&adapters, Some(tunnel)), Some(wifi));
+    }
+
+    #[test]
+    fn the_routes_adapter_wins_then_ethernet_then_the_lowest_metric() {
+        let adapter = |kind, metric, last| Adapter {
+            kind,
+            metric,
+            addresses: vec![
+                Ipv4Addr::new(169, 254, 9, last),
+                Ipv4Addr::new(192, 168, 1, last),
+            ],
+        };
+        let wifi = adapter(AdapterKind::WiFi, 35, 20);
+        let ethernet = adapter(AdapterKind::Ethernet, 25, 30);
+        let second_ethernet = adapter(AdapterKind::Ethernet, 5, 40);
+        let route = Some(Ipv4Addr::new(192, 168, 1, 20));
+        let all = [wifi.clone(), ethernet.clone(), second_ethernet];
+        assert_eq!(choose_lan_address(&all, route), route);
+        assert_eq!(
+            choose_lan_address(&all, None),
+            Some(Ipv4Addr::new(192, 168, 1, 40))
+        );
+        assert_eq!(
+            choose_lan_address(&[wifi, ethernet], None),
+            Some(Ipv4Addr::new(192, 168, 1, 30))
+        );
+        assert_eq!(choose_lan_address(&[], route), route);
+        let public = Some(Ipv4Addr::new(198, 51, 100, 7));
+        assert_eq!(choose_lan_address(&[], public), None);
     }
 }

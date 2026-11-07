@@ -3,8 +3,9 @@
 //! pairing page. The server listens on every address, so a single connected
 //! Public network is enough for the warning.
 
-use std::sync::Arc;
+use std::net::Ipv4Addr;
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// A network's profile, as Windows' Network List Manager names it.
@@ -32,6 +33,12 @@ pub trait ProfileSource: Send + Sync {
     /// The categories of the networks this PC is connected to; `None` when
     /// Windows didn't answer.
     fn connected(&self) -> Option<Vec<Category>>;
+
+    /// The address the web remote window shows (S428); none from a fake
+    /// that doesn't give one.
+    fn lan_address(&self) -> Option<Ipv4Addr> {
+        None
+    }
 }
 
 /// The warning while the web remote listens: whether a connected network is
@@ -78,6 +85,7 @@ impl PublicNetworkWarning {
 /// `every`, until this value is dropped.
 pub struct Watch {
     readings: mpsc::Receiver<Option<Vec<Category>>>,
+    address: Arc<Mutex<Option<Ipv4Addr>>>,
     _stop: mpsc::Sender<()>,
 }
 
@@ -85,6 +93,8 @@ impl Watch {
     pub fn start(source: Arc<dyn ProfileSource>, every: Duration) -> Watch {
         let (reading_sender, readings) = mpsc::channel();
         let (stop, stopped) = mpsc::channel::<()>();
+        let address = Arc::new(Mutex::new(None));
+        let read_address = Arc::clone(&address);
         // The thread isn't joined: a reading may take a moment, and it ends
         // by itself at its next send or wait once this value is gone. Without
         // the thread no reading comes, and the warning never shows.
@@ -92,6 +102,8 @@ impl Watch {
             .name("network profiles".to_owned())
             .spawn(move || {
                 loop {
+                    let lan_address = source.lan_address();
+                    *read_address.lock().unwrap_or_else(|e| e.into_inner()) = lan_address;
                     if reading_sender.send(source.connected()).is_err() {
                         return;
                     }
@@ -102,6 +114,7 @@ impl Watch {
             });
         Watch {
             readings,
+            address,
             _stop: stop,
         }
     }
@@ -109,6 +122,11 @@ impl Watch {
     /// The newest reading since the last call, if one came.
     pub fn latest(&self) -> Option<Option<Vec<Category>>> {
         self.readings.try_iter().last()
+    }
+
+    /// The newest address the thread read; `None` before its first reading.
+    pub fn lan_address(&self) -> Option<Ipv4Addr> {
+        *self.address.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 
@@ -121,6 +139,10 @@ impl ProfileSource for NetworkList {
     fn connected(&self) -> Option<Vec<Category>> {
         APARTMENT.with(|_| ());
         connected_categories()
+    }
+
+    fn lan_address(&self) -> Option<Ipv4Addr> {
+        crate::remote::lan_address()
     }
 }
 

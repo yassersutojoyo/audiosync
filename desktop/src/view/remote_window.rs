@@ -704,8 +704,12 @@ impl App {
             .as_deref()
             .map(|name| remote::local_url(name, port));
         window.set_local_address(local.clone().unwrap_or_default().into());
-        // The PC may have moved to another network since the remote started.
-        host.lan_address = remote::lan_address();
+        // The PC may have moved to another network since the remote started. Windows reads
+        // its adapters on the profile thread; without that thread the route alone is cheap.
+        host.lan_address = match host.watch.as_ref() {
+            Some(watch) => watch.lan_address(),
+            None => remote::lan_address(),
+        };
         let ip = host
             .lan_address
             .map(|address| remote::ip_url(address, port));
@@ -1729,6 +1733,29 @@ mod tests {
     impl ProfileSource for FakeProfiles {
         fn connected(&self) -> Option<Vec<Category>> {
             Some(self.0.lock().unwrap().clone())
+        }
+
+        fn lan_address(&self) -> Option<Ipv4Addr> {
+            Some(Ipv4Addr::new(198, 51, 100, 9))
+        }
+    }
+
+    #[test]
+    fn the_window_shows_the_address_the_profile_thread_read() {
+        let app = over_loopback(MockBackend::new());
+        app.remote.borrow_mut().profiles =
+            Some(Arc::new(FakeProfiles(std::sync::Mutex::new(Vec::new()))));
+        let port = free_port();
+        app.ui.borrow_mut().remote.port = port;
+        app.main.invoke_remote_requested();
+        app.remote_window.invoke_remote_toggled(true);
+        // The UI thread's own lookup would give 192.0.2.7 here, or the CI runner's address.
+        let wanted = crate::remote::ip_url(Ipv4Addr::new(198, 51, 100, 9), port);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.remote_window.get_ip_address() != wanted.as_str() {
+            assert!(std::time::Instant::now() < deadline, "no reading");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            app.poll_remote();
         }
     }
 
