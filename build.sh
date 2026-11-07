@@ -55,6 +55,22 @@ warn() { echo "   ⚠️  $*" >&2; }
 absolute() {
   case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s\n' "$caller_dir/$1" ;; esac
 }
+# physical PATH: PATH with its existing part's symlinks resolved; the rest may not exist yet.
+physical() {
+  local dir=$1 rest="" up=0 name
+  until [ -d "$dir" ]; do
+    while [ "$dir" != "${dir%/}" ]; do dir=${dir%/}; done
+    name=${dir##*/}
+    dir=$(dirname -- "$dir")
+    case "$name" in
+      .) ;;
+      ..) up=$((up + 1)) ;;
+      *) if [ "$up" -gt 0 ]; then up=$((up - 1)); else rest="/$name$rest"; fi ;;
+    esac
+  done
+  dir=$(cd -P -- "$dir" && while [ "$up" -gt 0 ]; do cd -P ..; up=$((up - 1)); done && pwd -P)
+  printf '%s%s\n' "$dir" "$rest"
+}
 plist_value() { plutil -extract "$1" raw -o - "$ROOT/Info.plist" 2>/dev/null; }
 
 install=1
@@ -67,6 +83,13 @@ for arg in "$@"; do
     *) die "unknown option $arg (./build.sh --help lists the options)" ;;
   esac
 done
+
+# The install step deletes STAGE after copying, which would take the installed app with it.
+if [ "$install" = 1 ] && [ -n "${AUDIOSYNC_INSTALL_DIR:-}" ]; then
+  case "$(physical "$(absolute "$AUDIOSYNC_INSTALL_DIR")")/" in
+    "$(physical "$STAGE")"/*) die "AUDIOSYNC_INSTALL_DIR is in build.sh's staging folder $STAGE, which the install deletes: pick another folder" ;;
+  esac
+fi
 
 [ "$(uname -s)" = Darwin ] || die "AudioSync.app builds on macOS only"
 command -v swift >/dev/null || die "swift not found: install the Xcode Command Line Tools (xcode-select --install)"
