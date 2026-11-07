@@ -301,7 +301,7 @@ extern "C" {
 #define ASC_CALIBRATION_TOO_LONG 2       /* over 2^21 frames */
 #define ASC_CALIBRATION_CLIPPED 3        /* 3 samples in a row at 0.99 or more, or one not finite */
 #define ASC_CALIBRATION_TOO_QUIET 4      /* no peak 12 times over the noise floor */
-#define ASC_CALIBRATION_AMBIGUOUS_ECHO 5 /* a second arrival over 0.7 of the first, 3 ms or more away */
+#define ASC_CALIBRATION_AMBIGUOUS_ECHO 5 /* another lag over 0.7 of the peak away from the arrival, or an earlier arrival over 0.9 of it */
 #define ASC_CALIBRATION_IMPLAUSIBLE 6    /* a difference over 22 000 ms */
 #define ASC_CALIBRATION_DISAGREE 7       /* asc_calibration_estimate_agreed only: all accepted, differences over 5 ms apart */
 
@@ -1418,7 +1418,7 @@ typedef struct AscCalibrationArrival {
     uint32_t status;        /* ASC_CALIBRATION_ACCEPTED when measured, else the refusal */
     size_t frame;           /* the arrival: the earliest strong lag, else the peak */
     size_t peak_frame;      /* the strongest lag */
-    size_t echo_frame;      /* the strongest lag more than 3 ms from the peak */
+    size_t echo_frame;      /* the strongest lag more than 3 ms from the arrival, and from the peak when that is its reflection */
     double peak_over_floor; /* the peak over the median magnitude */
     double echo_share;      /* that echo as a share of the peak */
 } AscCalibrationArrival;

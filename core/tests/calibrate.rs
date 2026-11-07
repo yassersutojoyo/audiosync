@@ -315,6 +315,39 @@ fn a_reflection_stronger_than_the_direct_path_still_times_the_direct_path() {
     assert_eq!(found.frame, 80 * RATE as usize / 1000, "{found:?}");
 }
 
+// A direct path over 0.7 of its stronger reflection is still the first
+// arrival; only one about as strong as the reflection leaves either one the
+// direct path.
+// covers: S234
+#[test]
+fn a_direct_path_close_under_its_reflection_is_timed_not_refused() {
+    let with_direct = |share: f32| {
+        room(
+            RATE,
+            2.0,
+            &[
+                Path {
+                    at_ms: 80.0,
+                    gain: 0.5 * share,
+                },
+                Path {
+                    at_ms: 102.0,
+                    gain: 0.5,
+                },
+            ],
+            1e-4,
+            5,
+        )
+    };
+    let found = arrival(&with_direct(0.8), RATE).expect("accepted");
+    assert_eq!(found.frame, 80 * RATE as usize / 1000, "{found:?}");
+    assert_eq!(found.peak_frame, 102 * RATE as usize / 1000, "{found:?}");
+    assert_eq!(
+        arrival(&with_direct(0.95), RATE),
+        Err(Refusal::AmbiguousEcho)
+    );
+}
+
 // A knock or a burst of hiss before a faint sweep correlates with it more
 // than half as strongly as the sweep's peak, so "earliest strong lag" alone
 // would time the noise.

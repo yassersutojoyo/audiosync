@@ -47,6 +47,9 @@ pub const MAX_ECHO_SHARE: f64 = 0.7;
 pub const GUARD_MS: f64 = 3.0;
 /// An arrival before the strongest peak counts from this share of it (S234).
 pub const MIN_ARRIVAL_SHARE: f64 = 0.5;
+/// An arrival before the strongest peak over this share of it is as strong as
+/// the peak, so either may be the direct path (S234).
+pub const MAX_ARRIVAL_SHARE: f64 = 0.9;
 /// The lags from this far up to [`GUARD_MS`] before an earlier arrival are
 /// its local noise floor (S234).
 pub const LOOKBACK_MS: f64 = 20.0;
@@ -101,10 +104,11 @@ pub struct Arrival {
     pub peak_frame: usize,
     /// The peak over the median of the correlation's magnitude.
     pub peak_over_floor: f64,
-    /// The strongest lag outside the peak's guard window as a share of the
-    /// peak.
+    /// The strongest lag outside the arrival's guard window as a share of the
+    /// peak, leaving out the peak's window too when an earlier arrival is
+    /// under [`MAX_ARRIVAL_SHARE`] of it, the peak then being its reflection.
     pub echo_share: f64,
-    /// The lag of that strongest lag outside the guard window.
+    /// The lag of that strongest lag.
     pub echo_frame: usize,
 }
 
@@ -206,18 +210,20 @@ pub fn measure(signal: &[f32], recording: &[f32], rate: u32) -> Result<Arrival, 
         f64::INFINITY
     };
     let guard = (GUARD_MS * f64::from(rate) / 1000.0).ceil() as usize;
+    let lookback = (LOOKBACK_MS * f64::from(rate) / 1000.0).ceil() as usize;
+    let first = first_arrival(&magnitude, frame, floor, guard, lookback);
+    let reflection = first != frame && magnitude[first] <= MAX_ARRIVAL_SHARE * peak;
     let (echo_frame, echo) = magnitude
         .iter()
         .copied()
         .enumerate()
-        .filter(|(i, _)| i.abs_diff(frame) > guard)
+        .filter(|(i, _)| i.abs_diff(first) > guard && !(reflection && i.abs_diff(frame) <= guard))
         .fold(
             (0, 0.0),
             |best, (i, m)| if m > best.1 { (i, m) } else { best },
         );
-    let lookback = (LOOKBACK_MS * f64::from(rate) / 1000.0).ceil() as usize;
     Ok(Arrival {
-        frame: first_arrival(&magnitude, frame, floor, guard, lookback),
+        frame: first,
         peak_frame: frame,
         peak_over_floor,
         echo_share: echo / peak,
