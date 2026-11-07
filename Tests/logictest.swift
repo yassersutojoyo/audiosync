@@ -17400,6 +17400,10 @@ do {
             && !scrollSource.contains(".padding(.vertical, -Self.fade)")
             && mainWindowSource.contains(".padding(.top, NoticeStack.windowGap)"),
           "main window source: a column starts at the gap under the header and fades its top 12 pt inside itself")
+    // covers: S402
+    check(scrollSource.contains("minHeight: viewport.size.height.rounded(.down)")
+            && !scrollSource.contains("minHeight: viewport.size.height,"),
+          "main window source: a column that fits is never taller than its scroll view, so a scroll leaves it where it rests")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

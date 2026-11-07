@@ -1875,7 +1875,10 @@ private struct FadingScroll<Content: View>: View {
                     // At rest the cards sit clear of the faded bottom edge.
                     .padding(.bottom, Self.fade)
                     // Blank space under a short column is outside every control too.
-                    .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
+                    // Whole points: the scroll view's frame is snapped to pixels, and a
+                    // fraction more here let a column that fits scroll by it once.
+                    .frame(maxWidth: .infinity, minHeight: viewport.size.height.rounded(.down),
+                           alignment: .topLeading)
                     // The scroll geometry callback may not run before the first
                     // scroll, so a column already too long at open is seeded here.
                     .background(GeometryReader { column in
