@@ -1013,7 +1013,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             update_record: saved.update_record.clone(),
         };
         self.airplay2_at_launch =
-            crate::audio::airplay::airplay2_on(false, self.airplay2_switch_env.as_deref());
+            crate::audio::airplay::airplay2_on(self.airplay2_switch_env.as_deref());
         self.saved = saved;
     }
 

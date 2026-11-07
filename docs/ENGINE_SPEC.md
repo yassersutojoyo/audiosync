@@ -4958,7 +4958,7 @@ The release side:
 | under_the_airplay2_flag_the_preference_moves_a_dual_receiver_to_airplay2 (`desktop/src/adapter.rs`) | S312 |
 | with_nothing_switched_the_path_is_on_and_airplay2_comes_first (`desktop/src/audio/airplay.rs`) | S312 |
 | the_airplay2_flag_keeps_the_path_on_and_prefers_airplay2 (`desktop/src/audio/airplay.rs`) | S312 |
-| the_airplay2_switch_is_off_unless_the_setting_or_the_variable_turns_it_on (`desktop/src/audio/airplay.rs`) | S312 |
+| the_airplay2_switch_is_off_unless_the_variable_turns_it_on (`desktop/src/audio/airplay.rs`) | S312 |
 | a_dual_receiver_is_listed_on_the_path_its_session_takes (`core/src/ffi/airplay.rs`) | S313 |
 | a_dual_receiver_reads_the_path_its_session_takes (`desktop/src/adapter.rs`) | S313 |
 | a_stopped_or_new_sender_forgets_the_path_a_session_took (`desktop/src/audio/airplay.rs`) | S313 |

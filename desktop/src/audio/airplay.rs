@@ -267,10 +267,10 @@ impl StartedSender {
 /// or couldn't start; `None` when it couldn't start (it logs why).
 pub type SenderStarter = Box<dyn FnMut() -> Option<StartedSender>>;
 
-/// Whether the AirPlay 2 path runs (spec P2, P170): when `saved` is on, or
-/// the environment variable turns it on without a rebuild.
-pub fn airplay2_on(saved: bool, env: Option<&str>) -> bool {
-    saved || airplay2_switch(env)
+/// Whether the AirPlay 2 path runs (spec P2, P170): when the environment
+/// variable turns it on without a rebuild.
+pub fn airplay2_on(env: Option<&str>) -> bool {
+    airplay2_switch(env)
 }
 
 /// `AUDIOSYNC_AIRPLAY2` as this launch reads it, for [`airplay2_on`].
@@ -284,16 +284,16 @@ pub fn airplay2_auto_on() -> bool {
     airplay2_auto(std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref())
 }
 
-/// The sender's AirPlay 2 path and preference (S312): the switch is `saved`
-/// (false since the menu item went) or `switch_env`, and the flag `auto` decides.
+/// The sender's AirPlay 2 path and preference (S312): the switch is
+/// `switch_env`, and the flag `auto` decides.
 /// On Windows the driver thread runs as a Pro Audio task (S323).
-pub fn airplay2_config(saved: bool, switch_env: Option<&str>, auto: bool) -> SenderConfig {
+pub fn airplay2_config(switch_env: Option<&str>, auto: bool) -> SenderConfig {
     SenderConfig {
         #[cfg(windows)]
         on_driver_thread: Some(super::wasapi::pro_audio_thread),
         ..SenderConfig::default()
     }
-    .with_airplay2_switch(auto, airplay2_on(saved, switch_env))
+    .with_airplay2_switch(auto, airplay2_on(switch_env))
 }
 
 /// The real sender.
@@ -308,7 +308,6 @@ impl SenderLink {
     /// gives its audio input for the capture.
     pub fn start() -> io::Result<(SenderLink, InputWriter)> {
         let config = airplay2_config(
-            false,
             std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
             airplay2_auto_on(),
         );
@@ -8613,18 +8612,17 @@ pub mod tests {
 
     // covers: S312
     #[test]
-    fn the_airplay2_switch_is_off_unless_the_setting_or_the_variable_turns_it_on() {
+    fn the_airplay2_switch_is_off_unless_the_variable_turns_it_on() {
         // P170: the switch alone, before the build flag; the path is S312's test below.
-        assert!(!airplay2_on(false, None));
-        assert!(!airplay2_on(false, Some("0")));
-        assert!(airplay2_on(true, None));
-        assert!(airplay2_on(false, Some("1")));
+        assert!(!airplay2_on(None));
+        assert!(!airplay2_on(Some("0")));
+        assert!(airplay2_on(Some("1")));
     }
 
     // covers: S323
     #[test]
     fn the_app_raises_the_airplay_driver_thread_on_windows() {
-        let config = airplay2_config(false, None, false);
+        let config = airplay2_config(None, false);
         assert_eq!(config.on_driver_thread.is_some(), cfg!(windows));
     }
 
@@ -8632,17 +8630,13 @@ pub mod tests {
     #[test]
     fn the_airplay2_flag_keeps_the_path_on_and_prefers_airplay2() {
         // Spec S312: with the flag off the switch alone sets the path.
-        for (saved, env, on) in [
-            (false, None, false),
-            (true, None, true),
-            (false, Some("1"), true),
-        ] {
-            let config = airplay2_config(saved, env, false);
+        for (env, on) in [(None, false), (Some("1"), true)] {
+            let config = airplay2_config(env, false);
             assert_eq!(config.airplay2, on);
             assert!(!config.airplay2_preferred);
         }
-        for (saved, env) in [(false, None), (true, None), (false, Some("1"))] {
-            let on = airplay2_config(saved, env, true);
+        for env in [None, Some("1")] {
+            let on = airplay2_config(env, true);
             assert!(on.airplay2 && on.airplay2_preferred);
         }
     }
@@ -8650,7 +8644,7 @@ pub mod tests {
     // covers: S312
     #[test]
     fn with_nothing_switched_the_path_is_on_and_airplay2_comes_first() {
-        let config = airplay2_config(false, None, airplay2_auto(None));
+        let config = airplay2_config(None, airplay2_auto(None));
         assert!(config.airplay2, "AirPlay 2 only receivers play");
         assert!(
             config.airplay2_preferred,

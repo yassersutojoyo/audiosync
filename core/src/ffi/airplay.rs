@@ -2530,20 +2530,6 @@ pub extern "C" fn asc_airplay_create() -> *mut AscAirPlay {
     create_with(live_browser)
 }
 
-/// [`asc_airplay_create`] with an AirPlay 2 switch: AirPlay 2 is on
-/// when `airplay2` is or when the environment variable turns it on (P2);
-/// off, the sender makes no AirPlay 2 traffic (P170).
-#[unsafe(no_mangle)]
-pub extern "C" fn asc_airplay_create_with_airplay2(airplay2: bool) -> *mut AscAirPlay {
-    create_configured(live_browser, airplay2)
-}
-
-/// [`asc_airplay_create`] with the browser [`asc_airplay_start_discovery`]
-/// opens: live multicast DNS for the app, one a test supplies otherwise.
-pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
-    create_configured(open_browser, false)
-}
-
 /// Whether AirPlay 2 is automatic per receiver (S312): the build's flag, or
 /// `AUDIOSYNC_AIRPLAY2_AUTO` for this launch.
 #[unsafe(no_mangle)]
@@ -2551,16 +2537,15 @@ pub extern "C" fn asc_airplay2_auto() -> bool {
     airplay2_auto(std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref())
 }
 
-/// The sender's configuration for an AirPlay 2 switch and the two
-/// environment variables' values: the switch is `setting` or
-/// `AUDIOSYNC_AIRPLAY2`, and `AUDIOSYNC_AIRPLAY2_AUTO` (or the build's flag)
-/// decides what it means (S312).
-fn sender_config(setting: bool, switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
+/// The sender's configuration for the two environment variables' values:
+/// the switch is `AUDIOSYNC_AIRPLAY2`, and `AUDIOSYNC_AIRPLAY2_AUTO` (or the
+/// build's flag) decides what it means (S312).
+fn sender_config(switch: Option<&str>, auto: Option<&str>) -> SenderConfig {
     SenderConfig {
         on_driver_thread: Some(raise_driver_thread),
         ..SenderConfig::default()
     }
-    .with_airplay2_switch(airplay2_auto(auto), setting || airplay2_switch(switch))
+    .with_airplay2_switch(airplay2_auto(auto), airplay2_switch(switch))
 }
 
 /// The driver thread's setup (P226): user-interactive QoS on macOS (S323).
@@ -2575,15 +2560,14 @@ fn raise_driver_thread() -> Box<dyn std::any::Any> {
     Box::new(())
 }
 
-fn create_configured(open_browser: OpenBrowser, airplay2_setting: bool) -> *mut AscAirPlay {
+/// [`asc_airplay_create`] with the browser [`asc_airplay_start_discovery`]
+/// opens: live multicast DNS for the app, one a test supplies otherwise.
+pub(crate) fn create_with(open_browser: OpenBrowser) -> *mut AscAirPlay {
     note_panic_locations();
     let panics_before = PANICS.load(Ordering::SeqCst);
     let created = panic::catch_unwind(|| {
         injected_panic();
-        // The environment variable still works without the app's setting,
-        // for CI and debug runs.
         let config = sender_config(
-            airplay2_setting,
             std::env::var(AIRPLAY2_SWITCH_ENV).ok().as_deref(),
             std::env::var(AIRPLAY2_AUTO_ENV).ok().as_deref(),
         );
@@ -4812,24 +4796,22 @@ mod tests {
     }
 
     #[test]
-    fn airplay2_stays_off_without_the_setting_or_the_environment_variable() {
-        assert!(!sender_config(false, None, Some("0")).airplay2);
-        assert!(!sender_config(false, Some("0"), Some("0")).airplay2);
+    fn airplay2_stays_off_without_the_environment_variable() {
+        assert!(!sender_config(None, Some("0")).airplay2);
+        assert!(!sender_config(Some("0"), Some("0")).airplay2);
     }
 
     #[test]
-    fn the_setting_or_the_environment_variable_turns_airplay2_on() {
-        for (setting, switch) in [(true, None), (false, Some("1")), (true, Some("1"))] {
-            let config = sender_config(setting, switch, Some("0"));
-            assert!(config.airplay2);
-            assert!(!config.airplay2_preferred, "the flag is off");
-        }
+    fn the_environment_variable_turns_airplay2_on() {
+        let config = sender_config(Some("1"), Some("0"));
+        assert!(config.airplay2);
+        assert!(!config.airplay2_preferred, "the flag is off");
     }
 
     // covers: S323
     #[test]
     fn the_sender_config_installs_the_driver_thread_hook() {
-        assert!(sender_config(false, None, None).on_driver_thread.is_some());
+        assert!(sender_config(None, None).on_driver_thread.is_some());
     }
 
     // covers: S323
@@ -4854,9 +4836,9 @@ mod tests {
     // covers: S312
     #[test]
     fn with_the_flag_on_the_path_is_on_and_airplay2_preferred() {
-        assert!(sender_config(false, None, None).airplay2_preferred);
-        for (setting, switch) in [(false, None), (true, None), (false, Some("1"))] {
-            let on = sender_config(setting, switch, Some("1"));
+        assert!(sender_config(None, None).airplay2_preferred);
+        for switch in [None, Some("1")] {
+            let on = sender_config(switch, Some("1"));
             assert!(on.airplay2 && on.airplay2_preferred);
         }
     }

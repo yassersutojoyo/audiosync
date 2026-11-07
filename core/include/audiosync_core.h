@@ -1728,13 +1728,6 @@ typedef struct AscAirPlayEvent {
 AscAirPlay *asc_airplay_create(void);
 
 /*
- * asc_airplay_create with the app's AirPlay 2 setting: AirPlay 2 is on when
- * airplay2 is true or when AUDIOSYNC_AIRPLAY2=1 is set; off, the sender makes
- * no AirPlay 2 traffic.
- */
-AscAirPlay *asc_airplay_create_with_airplay2(bool airplay2);
-
-/*
  * Whether AirPlay 2 is automatic per receiver: the build's flag, or
  * AUDIOSYNC_AIRPLAY2_AUTO=1 (on) or 0 (off) for this launch. While it is on,
  * AirPlay 2 only receivers play with the setting off, and the setting means
