@@ -17406,5 +17406,38 @@ do {
           "main window source: a column that fits is never taller than its scroll view, so a scroll leaves it where it rests")
 }
 
+// MARK: The panel's open refresh asks other processes off the main thread (AppDelegate+Windows.swift)
+do {
+    let windowsSource = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
+    let rereadBody = windowsSource.components(separatedBy: "private func rereadExternalState(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let offMainReads = rereadBody.components(separatedBy: "Self.externalReadQueue.async").dropFirst().first?
+        .components(separatedBy: "DispatchQueue.main.async").first ?? ""
+    // covers: S406
+    check(["SMAppService.mainApp.status", "SourceApps.running()", "allInputDevices()"].allSatisfy(offMainReads.contains),
+          "menu bar panel: the open's refresh asks macOS for the login item, the running apps and the inputs off the main thread, so the scrolling title never stalls",
+          offMainReads.isEmpty ? "no background read in rereadExternalState" : offMainReads)
+
+    var reads = ExternalReads()
+    let older = reads.begin(), newer = reads.begin()
+    // covers: S406
+    check(!reads.applies(older) && reads.applies(newer) && reads.loginApplies(newer),
+          "menu bar panel: only the newest background read of macOS's state applies when it lands")
+    let switchedDuring = reads.begin()
+    reads.loginChanged()
+    let switchKept = reads.applies(switchedDuring) && !reads.loginApplies(switchedDuring)
+    let afterSwitch = reads.begin()
+    // covers: S406
+    check(switchKept && reads.loginApplies(afterSwitch),
+          "menu bar panel: a login item status read before Launch at Login was switched never undoes the switch")
+    let pushedDuring = reads.begin()
+    reads.sourcesPushed()
+    let pushKept = reads.applies(pushedDuring) && !reads.sourcesApply(pushedDuring) && reads.loginApplies(pushedDuring)
+    let afterPush = reads.begin()
+    // covers: S406
+    check(pushKept && reads.sourcesApply(afterPush),
+          "menu bar panel: apps and inputs read before the source picker was refreshed never bring back a gone app or input")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

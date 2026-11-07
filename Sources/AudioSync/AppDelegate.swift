@@ -317,6 +317,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var streamingActivity: NSObjectProtocol?
     /// Mirrors the login item's state (System Settings can change it too).
     var launchAtLogin = false
+    /// Which background read of macOS's state may still apply (`rereadExternalState`).
+    var externalReads = ExternalReads()
 
     /// The safety net's timer (`startSafetyNet`, S101).
     private var safetyNetTimer: Timer?

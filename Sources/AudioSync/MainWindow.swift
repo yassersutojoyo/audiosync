@@ -101,7 +101,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) {
         updateOnScreen()
         // The window turns key again as the menu bar panel closes; the refresh waits until it is gone.
-        model.whenPanelQuiet("window refresh") { [weak self] in self?.model.actions.refreshExternalState() }
+        model.whenPanelQuiet("window refresh") { [weak self] in self?.model.actions.refreshExternalState {} }
     }
 
     /// The zoom button springs between the slim and the widest width
