@@ -50,7 +50,8 @@ final class CalibrationMicrophone {
         }
         guard let nominal = MicrophoneHAL.nominalRate(of: device) else { throw StartError.noDevice }
         guard let rate = CalibrationFlow.microphoneRate(nominal: nominal) else { throw StartError.unsupportedRate }
-        let sink = MicrophoneSink(capacity: Int((seconds * nominal).rounded(.up)), layout: layout)
+        let sink = MicrophoneSink(capacity: Int((seconds * nominal).rounded(.up)), layout: layout,
+                                  ticksPerFrame: Double(HostClock.shared.ticks(nanoseconds: 1_000_000_000)) / nominal)
         var created: AudioDeviceIOProcID?
         let status = AudioDeviceCreateIOProcIDWithBlock(&created, device, nil) { _, input, inputTime, _, _ in
             sink.consume(input, at: inputTime)
@@ -106,8 +107,8 @@ final class CalibrationMicrophone {
         return ticks == 0 ? nil : ticks
     }
 
-    /// The first frame's time came from the device's timestamp, not the
-    /// host clock at the callback; read once `firstFrameTicks` is set.
+    /// The first buffer had its own host time; false when a later buffer's
+    /// timed the first frame. Read once `firstFrameTicks` is set.
     var firstFrameStamped: Bool { sink.firstStamped.load(ordering: .acquiring) }
 
     /// Frames recorded so far.
@@ -153,9 +154,11 @@ private final class MicrophoneSink {
     /// Behind a pointer: a class's stored var would get a runtime exclusivity check on every callback.
     private let continuity: UnsafeMutablePointer<MicrophoneContinuity>
     private let layout: CaptureChannels.Layout
+    private let ticksPerFrame: Double
 
-    init(capacity: Int, layout: CaptureChannels.Layout) {
+    init(capacity: Int, layout: CaptureChannels.Layout, ticksPerFrame: Double) {
         self.layout = layout
+        self.ticksPerFrame = ticksPerFrame
         self.capacity = max(capacity, 1)
         samples = .allocate(capacity: self.capacity)
         samples.initialize(repeating: 0, count: self.capacity)
@@ -178,10 +181,11 @@ private final class MicrophoneSink {
         let channels = CaptureChannels(input, layout: layout)
         guard channels.frames > 0 else { return }
         var count = written.load(ordering: .relaxed)
-        if count == 0 && firstTicks.load(ordering: .relaxed) == 0 {
-            let stamped = time.pointee.mFlags.contains(.hostTimeValid) && time.pointee.mHostTime != 0
-            firstStamped.store(stamped, ordering: .relaxed)
-            firstTicks.store(stamped ? time.pointee.mHostTime : mach_absolute_time(), ordering: .releasing)
+        // The callback runs after the capture, so only a host time the device gives times the first frame.
+        if firstTicks.load(ordering: .relaxed) == 0,
+           let ticks = CalibrationFlow.firstFrameTicks(time.pointee, framesBefore: count, ticksPerFrame: ticksPerFrame) {
+            firstStamped.store(count == 0, ordering: .relaxed)
+            firstTicks.store(ticks, ordering: .releasing)
         }
         let stamp = time.pointee
         continuity.pointee.buffer(sampleTime: stamp.mFlags.contains(.sampleTimeValid) ? stamp.mSampleTime : nil,

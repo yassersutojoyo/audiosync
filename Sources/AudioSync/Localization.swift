@@ -522,7 +522,12 @@ struct UIStrings {
 
     /// A measured delay with its uncertainty: "+50 ms ± 3 ms".
     func calibrateAllMeasured(_ ms: Double, uncertaintyMs: Double, kind: CalibrateAllKind) -> String {
-        "\(calibrateAllValue(ms, kind: kind)) ± \(Int(uncertaintyMs.rounded())) \(millisecondsUnit)"
+        "\(calibrateAllValue(ms, kind: kind)) \(calibrateAllUncertainty(uncertaintyMs))"
+    }
+
+    /// "± 3 ms", rounded up to whole milliseconds and at least 1, as on Windows.
+    private func calibrateAllUncertainty(_ ms: Double) -> String {
+        "± \(Int(max(ms.rounded(.up), 1))) \(millisecondsUnit)"
     }
 
     /// What the New column says about a row.
@@ -551,7 +556,7 @@ struct UIStrings {
 
     /// Under a result card's new delay: "± 2 ms · was +12 ms".
     func calibrateAllWas(uncertaintyMs: Double, was current: String) -> String {
-        "± \(Int(uncertaintyMs.rounded())) \(millisecondsUnit) · was \(current)"
+        "\(calibrateAllUncertainty(uncertaintyMs)) · was \(current)"
     }
 
     /// A card's note when nothing new was measured: "Not measured. · was +12 ms".

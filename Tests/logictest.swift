@@ -11926,6 +11926,15 @@ do {
     check(steady.gapAt == nil && unstamped.gapAt == nil && dropped.gapAt == 1024,
           "calibration microphone: a buffer that doesn't start where the last one ended marks the first gap",
           "\(String(describing: steady.gapAt)) \(String(describing: unstamped.gapAt)) \(String(describing: dropped.gapAt))")
+    var vouched = AudioTimeStamp()
+    vouched.mHostTime = 9_000_000
+    vouched.mFlags = [.hostTimeValid]
+    // covers: S232
+    check(CalibrationFlow.firstFrameTicks(AudioTimeStamp(), framesBefore: 0, ticksPerFrame: 500) == nil
+            && CalibrationFlow.firstFrameTicks(vouched, framesBefore: 0, ticksPerFrame: 500) == 9_000_000
+            && CalibrationFlow.firstFrameTicks(vouched, framesBefore: 512, ticksPerFrame: 500) == 8_744_000,
+          "calibration microphone: the first frame is timed from the first buffer with a host time, "
+            + "less the frames recorded before it, as on Windows")
     // covers: S232
     check(CalibrationFlow.microphoneLoss(gapAt: nil, alive: true, recorded: 100, needed: 4800) == nil
             && CalibrationFlow.microphoneLoss(gapAt: 1024, alive: true, recorded: 2000, needed: 4800) == .microphoneSkipped
@@ -12475,6 +12484,14 @@ do {
                                                    deadlineNs: limitDeadlineNs),
               "calibrate all: a nanosecond before each limit the run goes on waiting")
     }
+
+    // covers: S238
+    check(t.calibrateAllMeasured(40, uncertaintyMs: 3.2, kind: .local) == "+40 ms ± 4 ms"
+            && t.calibrateAllMeasured(40, uncertaintyMs: 0.2, kind: .airPlay) == "40 ms ± 1 ms"
+            && t.calibrateAllWas(uncertaintyMs: 3.2, was: "+12 ms") == "± 4 ms · was +12 ms",
+          "calibrate all: the uncertainty rounds up, to 1 ms at least, as on Windows",
+          "\(t.calibrateAllMeasured(40, uncertaintyMs: 3.2, kind: .local)) | "
+            + t.calibrateAllMeasured(40, uncertaintyMs: 0.2, kind: .airPlay))
 
     // A whole run through the core on synthetic recordings at 48 kHz.
     if let signal = CalibrationFlow.signal(rate: 48_000) {

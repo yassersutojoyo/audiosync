@@ -320,6 +320,15 @@ enum CalibrationFlow {
         return fits(largestHoldBackMs: largestHoldBackMs, rate: now.rate) ? nil : .tooLong(nil)
     }
 
+    /// Host ticks of the first recorded frame from a buffer that follows
+    /// `framesBefore` recorded frames; nil when the device gave the buffer
+    /// no host time, so the first buffer that has one decides. Plain
+    /// arithmetic, safe on the microphone's IOProc.
+    static func firstFrameTicks(_ stamp: AudioTimeStamp, framesBefore: Int, ticksPerFrame: Double) -> UInt64? {
+        guard stamp.mFlags.contains(.hostTimeValid), stamp.mHostTime != 0 else { return nil }
+        return stamp.mHostTime &- UInt64(Double(framesBefore) * ticksPerFrame)
+    }
+
     /// Why a run stops at once because of the microphone itself: it went
     /// away before its recording was whole, or it lost audio before the
     /// recording's end, which shifts every frame after the gap. `needed` is
