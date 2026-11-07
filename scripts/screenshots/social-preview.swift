@@ -105,14 +105,14 @@ func paragraph(_ lineHeight: CGFloat) -> NSParagraphStyle {
 }
 
 let tagline = NSMutableAttributedString(
-    string: "Free, open-source\nmulti-room audio\nfor Mac,",
+    string: "Free, open-source\nmulti-room audio\nfor Mac, Windows\nand Linux,",
     attributes: [.font: poppins.withSize(42), .foregroundColor: color(0x292929),
                  .kern: -0.6, .paragraphStyle: paragraph(54)])
 tagline.append(NSAttributedString(
     string: "\nan Airfoil alternative",
     attributes: [.font: poppins.withSize(42), .foregroundColor: color(0x147167),
                  .kern: -0.6, .paragraphStyle: paragraph(54)]))
-tagline.draw(with: CGRect(x: left, y: 214, width: column, height: 240),
+tagline.draw(with: CGRect(x: left, y: 196, width: column, height: 280),
              options: [.usesLineFragmentOrigin])
 
 let detail = NSAttributedString(
