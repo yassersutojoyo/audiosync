@@ -1764,6 +1764,17 @@ impl Driver {
             StreamEvent::LatencyHeld { frames } => {
                 self.emit(SenderEvent::LatencyHeld { frames });
             }
+            StreamEvent::StepWaiting { margin } => {
+                let line = format!(
+                    "step_waits margin_ms={:.1} latency_frames={}",
+                    margin.as_secs_f64() * 1000.0,
+                    self.stream.latency_frames()
+                );
+                let keys: Vec<DeviceKey> = self.stream_ids.values().cloned().collect();
+                for key in keys {
+                    self.emit_speaker(&key, SpeakerEvent::Trace(line.clone()));
+                }
+            }
             StreamEvent::LatencyShortfall {
                 speaker,
                 reported_us,

@@ -74,6 +74,10 @@ pub struct Host {
     pub pauses: Vec<(u64, f64)>,
     /// Write float samples instead of 16-bit ones.
     pub float: bool,
+    /// (period, length) in frames: the last `length` frames of every
+    /// `period` are a quiet pause between two tracks, never zero but under
+    /// -60 dBFS, so a mute in it shows.
+    pub quiet: Option<(u64, u64)>,
     rng: Rng,
     next_at: Option<f64>,
     held_until: f64,
@@ -92,6 +96,7 @@ impl Host {
             stalls: Vec::new(),
             pauses: Vec::new(),
             float: false,
+            quiet: None,
             rng: Rng::new(0x5EED),
             next_at: None,
             held_until: f64::MIN,
@@ -130,11 +135,22 @@ impl Host {
         self.next_at
     }
 
+    /// Frame `f` of the host's audio.
+    pub fn frame(&self, f: u64) -> Frame {
+        match self.quiet {
+            Some((period, length)) if f % period >= period - length => {
+                let value = (f % 32) as i16 + 1;
+                [value, -value]
+            }
+            _ => host_frame(f),
+        }
+    }
+
     /// The samples of block `k`, interleaved.
     pub fn samples(&self, k: u64) -> Vec<i16> {
         let first = k * self.block as u64;
         (first..first + self.block as u64)
-            .flat_map(host_frame)
+            .flat_map(|f| self.frame(f))
             .collect()
     }
 

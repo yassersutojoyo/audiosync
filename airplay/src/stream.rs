@@ -62,13 +62,22 @@ pub const LATE_SEND: Duration = Duration::from_millis(5);
 /// A packet already cut leaves this long before its time, so a wake-up
 /// that much late still sends it on time (P84).
 pub const SEND_LEAD: Duration = Duration::from_millis(4);
-/// Lf steps up to at most 8820 frames, 0.2 s: AudioSync's own margin (P200).
-const STEP_CAP_FRAMES: u32 = 8_820;
-/// Lf steps up at most once in this many seconds (P200).
-const STEP_INTERVAL: f64 = 10.0;
-/// Silent packets after a step's fade-out, about 32 ms: the sync stating
-/// the step reaches each receiver within them, wherever its network or
-/// timer puts it (P200).
+/// A step moves AudioSync's own margin between 4410 and 8820 frames (P200).
+const STEP_FRAMES: u32 = 4_410;
+/// After a step up, this many seconds without a gap step back down (P200).
+const CLEAN_WINDOW: f64 = 60.0;
+/// A packet whose samples all stay below this, -60 dBFS, is quiet (P200).
+const QUIET_PEAK: u16 = 33;
+/// A step waits for this many quiet packets before its own, about 207 ms
+/// (P200).
+const QUIET_PACKETS: u64 = 26;
+/// The step's own packet and the 5 cut after it, all quiet: the step falls
+/// at the end of the first, and the sync stating it reaches each receiver
+/// within the other 5, about 40 ms (P200).
+const STEP_PACKETS: u64 = 6;
+/// Silent packets after the fade-out of a forced step, which only the
+/// test-only [`Stream::step_up`] makes, about 32 ms: the sync stating the
+/// step reaches each receiver within them (P200).
 const STEP_SILENCE_PACKETS: u64 = 4;
 /// The input ring by default: 2 s (at least 1 s, P111).
 pub const DEFAULT_INPUT_FRAMES: usize = 2 * audio::SAMPLE_RATE as usize;
@@ -219,6 +228,9 @@ pub enum StreamEvent {
     /// when the stream next has no speaker or the timeline restarts
     /// (P201).
     LatencyHeld { frames: u32 },
+    /// A wanted step waits: the send margin M leaves its quiet packets no
+    /// time ahead of their play time. Once per wanted step (P200).
+    StepWaiting { margin: Duration },
     /// A speaker whose R_s needs more than the stream's Lf joined a
     /// sounding stream and plays at that Lf; once per session (P201).
     LatencyShortfall {
@@ -526,8 +538,8 @@ struct Speaker {
     /// first flag (P78, P93).
     first_pending: bool,
     /// The Lf its syncs still state while a step is on its way, and when
-    /// the sync stating the step goes: as the faded-out packet's end sounds
-    /// on this speaker (P200).
+    /// the sync stating the step goes: as the end of the step's packet
+    /// sounds on this speaker (P200).
     step_sync: Option<(u32, f64)>,
     /// Anything sent since RECORD.
     started: bool,
@@ -858,16 +870,29 @@ pub struct Stream {
     latency_frames: u32,
     /// An Lf the host set while a speaker sounds (P201).
     pending_latency: Option<u32>,
-    /// When Lf last stepped up (P200).
-    last_step: Option<f64>,
+    /// A step waiting for a quiet window: the Lf it goes to (P200).
+    step_wanted: Option<u32>,
+    /// The session stepped up already (P200).
+    stepped_up: bool,
+    /// Since a step up applied, the last gap or the step: the start of the
+    /// clean window that steps back down (P200).
+    clean_since: Option<f64>,
+    /// Quiet packets cut in a row (P200).
+    quiet_packets: u64,
+    /// The wanted step's wait for a smaller M was reported (P200).
+    step_wait_told: bool,
     /// The stepped Lf: no lower one applies until the stream has no
     /// speaker (P200, P201).
     step_floor: u32,
-    /// A step on its way: the packet that fades out before it, when that
-    /// packet's end sounds, and the new Lf (P200).
+    /// The Lf before the step up and the host's latest Lf: a step down
+    /// returns to the larger (P200).
+    before_step: u32,
+    host_latency: u32,
+    /// A step on its way: when the end of its packet sounds, and the new Lf
+    /// (P200).
     step_due: Option<(f64, u32)>,
-    /// The first packet cut at full gain again after a step's fade-out and
-    /// silence (P200).
+    /// The first packet cut at full gain again after a forced step's
+    /// fade-out and silence; only the test-only `step_up` sets it (P200).
     silence_until: u64,
     input: InputReader,
     model: RateModel,
@@ -915,8 +940,14 @@ impl Stream {
                 .latency_frames
                 .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES),
             pending_latency: None,
-            last_step: None,
+            step_wanted: None,
+            stepped_up: false,
+            clean_since: None,
+            quiet_packets: 0,
+            step_wait_told: false,
             step_floor: 0,
+            before_step: 0,
+            host_latency: 0,
             step_due: None,
             silence_until: 0,
             input: reader,
@@ -1140,7 +1171,19 @@ impl Stream {
         if let Some((at, frames)) = self.step_due
             && at <= t
         {
-            self.apply_step(frames, Some(at));
+            self.apply_step(frames, at, true);
+        }
+        if self.step_wanted.is_none()
+            && self
+                .clean_since
+                .is_some_and(|since| t - since >= CLEAN_WINDOW)
+        {
+            self.step_wait_told = false;
+            self.step_wanted = Some(
+                self.before_step
+                    .max(self.host_latency)
+                    .min(self.latency_frames),
+            );
         }
         let lead = seconds(SEND_LEAD);
         loop {
@@ -1150,6 +1193,11 @@ impl Stream {
                 break;
             }
             self.cut();
+            if let Some(frames) = self.step_wanted
+                && self.quiet_packets >= QUIET_PACKETS + STEP_PACKETS
+            {
+                self.start_step(t, frames, self.next_cut - STEP_PACKETS);
+            }
         }
         let context = context!(self);
         let silence = (&*self.silence_pcm, &*self.silence_alac);
@@ -1188,53 +1236,95 @@ impl Stream {
         u64::try_from(end).is_ok_and(|end| self.input.written() >= end)
     }
 
-    /// Steps Lf up as P200 says. Hosts never call it: no evidence steps Lf
-    /// now, and tests use it to reach the step.
+    /// What a gap does, without waiting for a quiet window: the next packet
+    /// cut fades out, the 4 after it are silent, and the step falls at the
+    /// faded packet's end. Hosts never call it; tests use it to step on a
+    /// programme that never goes quiet.
     #[doc(hidden)]
     pub fn step_up(&mut self, now: Instant) {
         let t = self.clock.seconds(now);
-        self.step_latency(t);
+        self.note_gap(t);
+        let fade = self.next_cut;
+        if let Some(frames) = self.step_wanted
+            && self.start_step(t, frames, fade)
+        {
+            self.silence_until = fade + 1 + STEP_SILENCE_PACKETS;
+        }
     }
 
-    /// Doubles Lf while a speaker sounds, at most every 10 s, up to 8820
-    /// frames (P200). The next packet cut fades out and the one after fades
-    /// in; the step applies on the same timeline, with no flush, when the
-    /// faded packet's end sounds, so the pause of the step falls there.
-    fn step_latency(&mut self, t: f64) {
-        if self.step_due.is_some()
-            || self.latency_frames >= STEP_CAP_FRAMES
-            || self.last_step.is_some_and(|at| t - at < STEP_INTERVAL)
-            || !self.sounding(t)
-        {
-            return;
+    /// A speaker played without a packet (P200): the session's one step up
+    /// is wanted, or after it the clean window starts again.
+    fn note_gap(&mut self, t: f64) {
+        if self.clean_since.is_some() {
+            self.clean_since = Some(t);
+            self.step_wanted = None;
+        } else if !self.stepped_up {
+            self.stepped_up = true;
+            self.step_wait_told = false;
+            self.step_wanted = Some((self.latency_frames + STEP_FRAMES).min(MAX_LATENCY_FRAMES));
         }
-        self.last_step = Some(t);
-        let frames = (self.latency_frames * 2).min(STEP_CAP_FRAMES);
-        let fade = self.next_cut;
-        self.silence_until = fade + 1 + STEP_SILENCE_PACKETS;
-        self.model.ensure(last_frame(fade));
-        let at = self.model.time(last_frame(fade)) + f64::from(self.latency_frames) / NOMINAL_RATE;
+    }
+
+    /// Starts a step to `frames` while a speaker sounds (P200), true when
+    /// it did. The step applies on the same timeline, with no flush, when
+    /// the end of `packet` sounds at the lower of the two Lf.
+    fn start_step(&mut self, t: f64, frames: u32, packet: u64) -> bool {
+        if self.step_due.is_some() || !self.sounding(t) {
+            return false;
+        }
+        if frames == self.latency_frames {
+            self.step_wanted = None;
+            return false;
+        }
+        self.model.ensure(last_frame(packet));
+        // Down, the speakers skip the 0.1 s before the packet's end, frames
+        // of the quiet run already cut, rather than audio to come.
+        let at = self.model.time(last_frame(packet))
+            + f64::from(frames.min(self.latency_frames)) / NOMINAL_RATE;
+        // The packet's end is 5 packets (40 ms) before the newest cut, which
+        // left M less SEND_LEAD before its time: the step only fits while M
+        // stays under the lower Lf less about 40 ms, 60 ms at 0.1 s.
+        if at <= t {
+            if !self.step_wait_told {
+                self.step_wait_told = true;
+                self.events.push_back(StreamEvent::StepWaiting {
+                    margin: Duration::from_secs_f64(self.margin.value()),
+                });
+            }
+            return false;
+        }
+        self.step_wanted = None;
+        if frames < self.latency_frames {
+            self.clean_since = None;
+        }
         self.step_due = Some((at, frames));
         self.input.announce_move(TimelineMove {
-            position: ((fade * PACKET_FRAMES) as i64 + self.origin).max(0) as u64,
+            position: ((packet * PACKET_FRAMES) as i64 + self.origin).max(0) as u64,
             frames: i64::from(frames) - i64::from(self.latency_frames),
         });
+        true
     }
 
-    /// Sets the stepped Lf, which the local outputs follow with the timeline
-    /// event; with the time `faded` the faded-out packet's end sounds, each
-    /// speaker gets its sync stating it when that end sounds there, at
-    /// `faded` plus its delay (P200).
-    fn apply_step(&mut self, frames: u32, faded: Option<f64>) {
+    /// Sets the stepped Lf at `at`, which the local outputs follow with the
+    /// timeline event; with `sync`, each speaker gets its sync stating it
+    /// when the end of the step's packet sounds there, at `at` plus its
+    /// delay (P200).
+    fn apply_step(&mut self, frames: u32, at: f64, sync: bool) {
         self.step_due = None;
         let old = self.latency_frames;
         self.latency_frames = frames;
-        self.step_floor = frames;
-        if self.pending_latency.is_some_and(|held| held <= frames) {
-            self.pending_latency = None;
+        if frames > old {
+            self.step_floor = frames;
+            self.before_step = old;
+            self.clean_since = Some(at);
+            if self.pending_latency.is_some_and(|held| held <= frames) {
+                self.pending_latency = None;
+            }
+        } else {
+            self.step_floor = 0;
         }
         for speaker in &mut self.speakers {
-            speaker.step_sync = faded.map(|at| (old, at + speaker.delay));
+            speaker.step_sync = sync.then_some((old, at + speaker.delay));
         }
         self.events.push_back(StreamEvent::Timeline {
             latency: self.latency(),
@@ -1352,6 +1442,9 @@ impl Stream {
         self.speakers.retain(|speaker| speaker.id != id);
         if self.speakers.is_empty() {
             self.step_floor = 0;
+            self.step_wanted = None;
+            self.stepped_up = false;
+            self.clean_since = None;
         }
         if self.speakers.is_empty()
             && let Some(frames) = self.pending_latency.take()
@@ -1466,9 +1559,9 @@ impl Stream {
     /// the new latency from then on. Once one sounds the value is held
     /// until the stream has no speaker or restarts (P201).
     pub fn set_latency(&mut self, frames: u32, now: Instant) {
-        let frames = frames
-            .clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES)
-            .max(self.step_floor);
+        let frames = frames.clamp(MIN_LATENCY_FRAMES, MAX_LATENCY_FRAMES);
+        self.host_latency = frames;
+        let frames = frames.max(self.step_floor);
         self.handle_timeout(now);
         let t = self.clock.seconds(now);
         if self.paused || self.sounding(t) {
@@ -1527,7 +1620,7 @@ impl Stream {
     /// Starts the timeline over at `t` seconds (P143).
     fn restart_timeline(&mut self, t: f64) {
         if let Some((_, frames)) = self.step_due {
-            self.apply_step(frames, None);
+            self.apply_step(frames, t, false);
         }
         if let Some(frames) = self.pending_latency.take() {
             self.latency_frames = frames;
@@ -1668,10 +1761,12 @@ impl Stream {
     /// A packet from the receiver on a speaker's control socket: a
     /// retransmission request is answered (P86, P87, P88); anything else is
     /// ignored.
-    pub fn handle_control_packet(&mut self, id: SpeakerId, bytes: &[u8], _now: Instant) {
+    pub fn handle_control_packet(&mut self, id: SpeakerId, bytes: &[u8], now: Instant) {
         let Some(request) = ResendRequest::parse(bytes) else {
             return;
         };
+        let t = self.clock.seconds(now);
+        let mut gap = false;
         let context = context!(self);
         let Some(speaker) = self.speakers.iter_mut().find(|s| s.id == id) else {
             return;
@@ -1686,6 +1781,11 @@ impl Stream {
             let in_history =
                 entry.valid && entry.seq == seq && (1..=HISTORY_PACKETS as u16).contains(&age);
             let held = in_history && entry.resends < MAX_RESENDS;
+            // Asked for once its play time here passed, it was played
+            // without (P200); a packet of an earlier timeline never counts.
+            if in_history && let Some(j) = entry.number.checked_sub(context.packet_base) {
+                gap |= t >= context.heard((j * PACKET_FRAMES) as i64, speaker.delay);
+            }
             let bytes = match &speaker.sealed {
                 // The sealed packet exactly as first sent, never sealed
                 // again (P155).
@@ -1726,6 +1826,9 @@ impl Stream {
             });
             speaker.history[slot].resends += 1;
             counters.packets_resent.fetch_add(1, Ordering::Relaxed);
+        }
+        if gap {
+            self.note_gap(t);
         }
     }
 
@@ -1827,6 +1930,11 @@ impl Stream {
             audio::ramp_gain(&mut self.frames, self.cut_gain, self.master_gain);
             self.cut_gain = self.master_gain;
         }
+        let peak = self.frames.iter().flatten().map(|s| s.unsigned_abs()).max();
+        self.quiet_packets = match peak {
+            Some(peak) if peak >= QUIET_PEAK => 0,
+            _ => self.quiet_packets + 1,
+        };
         let number = self.packet_base + self.next_cut;
         encode(Codec::Pcm, &self.frames, &mut self.pcm, number, silent);
         encode(Codec::Alac, &self.frames, &mut self.alac, number, silent);

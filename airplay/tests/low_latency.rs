@@ -91,7 +91,7 @@ fn timelines(rig: &Rig) -> Vec<(u128, bool)> {
 
 // covers: P200, P201
 #[test]
-fn a_step_doubles_lf_once_to_8820_without_a_flush() {
+fn a_forced_step_steps_lf_up_once_to_8820_without_a_flush() {
     let mut rig = low_rig();
     let id = rig.add(speaker(1, Codec::Alac));
     rig.run_for(Duration::from_secs(30));
@@ -466,4 +466,290 @@ fn a_sender_set_to_a_tenth_of_a_second_states_it_and_serves_resends_over_loopbac
     }
     assert!(resent, "resent {}", counters.packets_resent());
     sender.shutdown();
+}
+
+/// Four seconds of programme, the last half second of each silent.
+const PERIOD: u64 = 176_400;
+const PAUSE: u64 = 22_050;
+/// The quiet run a step waits for: 26 packets, about 207 ms (P200).
+const QUIET_FRAMES: u64 = 26 * FRAMES_PER_PACKET as u64;
+
+fn quiet_rig() -> Rig {
+    let mut rig = low_rig();
+    if let Some(host) = rig.host.as_mut() {
+        host.quiet = Some((PERIOD, PAUSE));
+    }
+    rig
+}
+
+/// The receiver asks for a packet whose play time has passed: it played
+/// without it.
+fn gap(rig: &mut Rig, id: SpeakerId) {
+    let now = rig.t();
+    let latency = rig.latency();
+    let missed = rig
+        .audio(id)
+        .into_iter()
+        .rfind(|packet| packet.at < now - latency - 0.3)
+        .expect("a packet played");
+    let request = ResendRequest {
+        seq: 1,
+        first: missed.header.seq,
+        count: 1,
+    };
+    rig.stream
+        .handle_control_packet(id, &request.encode(), rig.now);
+    rig.drain();
+}
+
+fn run_to(rig: &mut Rig, seconds: f64) {
+    let end = rig.instant(seconds);
+    rig.run_for(end.saturating_duration_since(rig.now));
+}
+
+/// Whether the programme is silent over the quiet run before `position`
+/// and the step's packet and the 5 after it.
+fn quiet_around(rig: &Rig, position: u64) -> bool {
+    let host = rig.host.as_ref().expect("host");
+    let after = 6 * FRAMES_PER_PACKET as u64;
+    (position - QUIET_FRAMES..position + after)
+        .all(|f| host.frame(f).iter().all(|s| s.unsigned_abs() < 33))
+}
+
+/// Whether every packet the speaker got carries the programme unchanged:
+/// a step mutes or fades nothing.
+fn programme_unchanged(rig: &Rig, id: SpeakerId) -> bool {
+    let host = rig.host.as_ref().expect("host");
+    rig.audio(id).iter().all(|packet| {
+        let n = rig.frame_of(id, packet.header.timestamp) as u64;
+        decode(Codec::Pcm, &packet.payload)
+            .iter()
+            .enumerate()
+            .all(|(i, frame)| *frame == host.frame(n + i as u64))
+    })
+}
+
+// covers: P200
+#[test]
+fn a_gap_steps_up_once_inside_a_quiet_window() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    gap(&mut rig, id);
+    run_to(&mut rig, 3.5);
+    assert_eq!(rig.stream.latency_frames(), LOW, "waits for a pause");
+    assert_eq!(rig.writer.take_move(), None);
+    run_to(&mut rig, 4.5);
+    assert_eq!(rig.stream.latency_frames(), 8_820);
+    let moved = rig.writer.take_move().expect("the step is announced");
+    assert_eq!(moved.frames, 4_410);
+    assert!(quiet_around(&rig, moved.position), "at {}", moved.position);
+    assert!(moved.position < PERIOD, "in the first pause");
+    assert_eq!(timelines(&rig), [(200, false)]);
+    assert!(programme_unchanged(&rig, id));
+}
+
+// covers: P200
+#[test]
+fn a_step_waits_while_the_programme_is_loud() {
+    let mut rig = low_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    gap(&mut rig, id);
+    run_to(&mut rig, 31.0);
+    assert_eq!(rig.stream.latency_frames(), LOW);
+    assert_eq!(rig.writer.take_move(), None);
+    assert_eq!(timelines(&rig), []);
+}
+
+// covers: P200
+#[test]
+fn a_session_steps_up_once_and_back_down_once() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    gap(&mut rig, id);
+    run_to(&mut rig, 5.0);
+    assert_eq!(rig.stream.latency_frames(), 8_820);
+    for second in [6.0, 12.0, 20.0] {
+        run_to(&mut rig, second);
+        gap(&mut rig, id);
+    }
+    // The last gap starts the clean minute again.
+    run_to(&mut rig, 79.9);
+    assert_eq!(rig.stream.latency_frames(), 8_820, "not before 60 s clean");
+    assert_eq!(timelines(&rig), [(200, false)], "never a second step up");
+    let _ = rig.writer.take_move();
+    run_to(&mut rig, 85.0);
+    assert_eq!(rig.stream.latency_frames(), LOW, "back down");
+    let moved = rig.writer.take_move().expect("the step down is announced");
+    assert_eq!(moved.frames, -4_410);
+    assert!(quiet_around(&rig, moved.position), "at {}", moved.position);
+    assert!(
+        moved.position > 80 * 44_100 - PAUSE,
+        "in the pause the clean minute ends in"
+    );
+    assert!(programme_unchanged(&rig, id));
+
+    run_to(&mut rig, 86.0);
+    gap(&mut rig, id);
+    run_to(&mut rig, 160.0);
+    assert_eq!(rig.stream.latency_frames(), LOW, "no step after the cycle");
+    assert_eq!(timelines(&rig), [(200, false), (100, false)]);
+}
+
+// covers: P200, P144
+#[test]
+fn in_time_resends_and_late_sends_never_step() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    for _ in 0..4 {
+        burst(&mut rig, id);
+        let late = rig.now + Duration::from_millis(50);
+        rig.jump_to(late);
+        rig.run_for(Duration::from_secs(5));
+    }
+    assert_eq!(rig.stream.latency_frames(), LOW);
+    assert_eq!(rig.writer.take_move(), None);
+    assert_eq!(timelines(&rig), []);
+}
+
+// covers: P200, P96, P102
+#[test]
+fn received_timestamps_run_on_across_both_steps() {
+    let mut rig = quiet_rig();
+    let one = rig.add(speaker(1, Codec::Pcm));
+    let mut later = speaker(2, Codec::Pcm);
+    later.delay = Duration::from_millis(250);
+    let two = rig.add(later);
+    run_to(&mut rig, 1.0);
+    gap(&mut rig, one);
+    run_to(&mut rig, 72.0);
+    assert_eq!(timelines(&rig), [(200, false), (100, false)]);
+    assert!(
+        !rig.events
+            .iter()
+            .any(|event| matches!(event, StreamEvent::Flush { .. }))
+    );
+    let lead = |sync: &SyncPacket| sync.next_rtp.wrapping_sub(sync.rtp_heard);
+    for id in [one, two] {
+        assert_eq!(rig.first_sounds(id).len(), 1);
+        let audio = rig.audio(id);
+        for pair in audio.windows(2) {
+            assert_eq!(pair[1].header.seq, pair[0].header.seq.wrapping_add(1));
+            assert_eq!(
+                pair[1].header.timestamp,
+                pair[0]
+                    .header
+                    .timestamp
+                    .wrapping_add(FRAMES_PER_PACKET as u32)
+            );
+        }
+        let first = rig.frame_of(id, audio[0].header.timestamp);
+        let samples: Vec<[i16; 2]> = audio
+            .iter()
+            .flat_map(|packet| decode(Codec::Pcm, &packet.payload))
+            .collect();
+        let quiet_at = |n: i64| {
+            (n - 441..n + 441).all(|m| {
+                let frame = samples[(m - first) as usize];
+                frame[0].unsigned_abs() < 33 && frame[1].unsigned_abs() < 33
+            })
+        };
+        // Where frame 0 sounds, by each sync: it moves twice, by the step.
+        let reference = rtp_of(&rig, id, 0);
+        let syncs = rig.syncs(id);
+        let mut moves = Vec::new();
+        for pair in syncs.windows(2) {
+            let (before, after) = (&pair[0].1, &pair[1].1);
+            let shift = heard_by(after, reference) - heard_by(before, reference);
+            if lead(before) == lead(after) {
+                assert!(shift.abs() < 1e-3, "a jump of {shift} s");
+                continue;
+            }
+            moves.push((shift * 1000.0).round() as i64);
+            // The receiver hears silence on both sides of the jump.
+            let time = rig.clock.ntp_at(pair[1].0);
+            let sent = (time.0 >> 32) as f64 + (time.0 & 0xffff_ffff) as f64 / 4_294_967_296.0;
+            for sync in [before, after] {
+                let rtp = sync
+                    .rtp_heard
+                    .wrapping_add(((sent - sync_seconds(sync)) * 44_100.0).round() as i64 as u32);
+                let n = rig.frame_of(id, rtp);
+                assert!(quiet_at(n), "speaker {id:?} hears sound at frame {n}");
+            }
+        }
+        assert_eq!(moves, [100, -100], "speaker {id:?}");
+    }
+}
+
+// covers: P200
+#[test]
+fn a_step_down_returns_to_the_lf_a_clamped_step_up_left() {
+    let mut rig = quiet_rig();
+    rig.stream.set_latency(87_000, rig.now);
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 3.0);
+    gap(&mut rig, id);
+    run_to(&mut rig, 7.0);
+    assert_eq!(rig.stream.latency_frames(), 88_200, "clamped");
+    run_to(&mut rig, 75.0);
+    assert_eq!(rig.stream.latency_frames(), 87_000);
+}
+
+// covers: P200, P201, P143
+#[test]
+fn a_step_down_never_goes_below_a_host_value_a_restart_applied() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    gap(&mut rig, id);
+    run_to(&mut rig, 5.0);
+    assert_eq!(rig.stream.latency_frames(), 8_820);
+    rig.stream.set_latency(13_230, rig.now);
+    rig.stream.restart(rig.now);
+    rig.answer_flushes();
+    run_to(&mut rig, 6.0);
+    assert_eq!(rig.stream.latency_frames(), 13_230);
+    run_to(&mut rig, 75.0);
+    assert_eq!(rig.stream.latency_frames(), 13_230);
+}
+
+// covers: P200, P201
+#[test]
+fn a_step_down_returns_to_a_host_value_the_step_up_dropped() {
+    let mut rig = quiet_rig();
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 1.0);
+    rig.stream.set_latency(6_000, rig.now);
+    assert_eq!(rig.stream.pending_latency_frames(), Some(6_000));
+    gap(&mut rig, id);
+    run_to(&mut rig, 5.0);
+    assert_eq!(rig.stream.latency_frames(), 8_820);
+    run_to(&mut rig, 75.0);
+    assert_eq!(rig.stream.latency_frames(), 6_000);
+}
+
+// covers: P200
+#[test]
+fn a_step_waits_and_says_so_once_while_m_leaves_no_room() {
+    let mut rig = quiet_rig();
+    if let Some(host) = rig.host.as_mut() {
+        // A 90 ms capture stall every half second holds M near 0.1 s.
+        host.stalls = (1..60).map(|k| (k * 50, 0.09)).collect();
+    }
+    let id = rig.add(speaker(1, Codec::Pcm));
+    run_to(&mut rig, 10.0);
+    let margin = rig.stream.margin().as_secs_f64();
+    assert!(margin > 0.07, "M {margin}");
+    gap(&mut rig, id);
+    run_to(&mut rig, 30.0);
+    assert_eq!(rig.stream.latency_frames(), LOW);
+    let told = rig
+        .events
+        .iter()
+        .filter(|event| matches!(event, StreamEvent::StepWaiting { .. }))
+        .count();
+    assert_eq!(told, 1);
 }
