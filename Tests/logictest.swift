@@ -17402,5 +17402,18 @@ do {
           "main window source: a column starts at the gap under the header and fades its top 12 pt inside itself")
 }
 
+// MARK: The panel's open refresh asks other processes off the main thread (AppDelegate+Windows.swift)
+do {
+    let windowsSource = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
+    let rereadBody = windowsSource.components(separatedBy: "private func rereadExternalState(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let offMainReads = rereadBody.components(separatedBy: "DispatchQueue.global(").dropFirst().first?
+        .components(separatedBy: "DispatchQueue.main.async").first ?? ""
+    // covers: S406
+    check(["SMAppService.mainApp.status", "SourceApps.running()", "allInputDevices()"].allSatisfy(offMainReads.contains),
+          "menu bar panel: the open's refresh asks macOS for the login item, the running apps and the inputs off the main thread, so the scrolling title never stalls",
+          offMainReads.isEmpty ? "no background read in rereadExternalState" : offMainReads)
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

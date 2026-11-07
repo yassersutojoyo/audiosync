@@ -2490,6 +2490,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | menu bar panel: deferred work waits exactly for the panel's own motion | S406 |
 | menu bar panel: the open's refresh waits until the panel's parts have faded in, so it never freezes them | S406 |
 | menu bar panel: the open's quiet wait counts the panel's last intro part | S406 |
+| menu bar panel: the open's refresh asks macOS for the login item, the running apps and the inputs off the main thread, so the scrolling title never stalls | S406 |
 | menu bar panel: with Reduce Motion, which skips the parts' fade-in, work after an open waits only for the panel itself | S406 |
 | menu bar panel: ending the spring at its settle time moves even a 600 pt panel's far edge under half a point | S405 |
 | menu bar panel: the rows move and the panel resizes on one 0.3-0.4 s ease-out, and a shrink waits for the rows to settle | S403 |
