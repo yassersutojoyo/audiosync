@@ -17343,6 +17343,19 @@ do {
           "texts: the hidden-speaker line and the Guide send people to Settings, not to the gear menu")
 }
 
+// MARK: The playing badge's fill grows where the badge is, even as its row grows (MenuBar.swift)
+do {
+    let menuBarSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let badgeSource = menuBarSource.components(separatedBy: "struct SpeakerBadge: View {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(!badgeSource.isEmpty && !badgeSource.contains(".transition(")
+            && badgeSource.contains(".scaleEffect(filled ? 1 : 0)")
+            && badgeSource.contains("case .off, .willPlay, .playing:")
+            && badgeSource.contains("Circle().fill(Color.secondary.opacity(0.18)).opacity(state == .off ? 1 : 0)")
+            && badgeSource.contains("Circle().fill(accent.opacity(0.14)).opacity(state == .willPlay ? 1 : 0)"),
+          "speaker badge source: the teal fill scales inside one lasting view over the main window's off or waiting look, which fades out under it, never an insert that lands where the grown row puts it")
+}
+
 // MARK: Master mute
 do {
     let glyphs = [0, 0.4, 0.6, 33, 34, 66, 67, 100].map { MasterMute.symbol(level: $0) }

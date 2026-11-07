@@ -1976,19 +1976,22 @@ struct SpeakerBadge: View {
             case _ where ring && connecting:
                 Circle().strokeBorder(Color.secondary, lineWidth: 1.5)
                 ConnectingArc(size: size)
-            case .playing:
-                Circle().fill(accent).transition(.scale)
             case .willPlay where ring:
                 Circle().strokeBorder(Brand.tealText, lineWidth: 2.5)
-            case .willPlay:
-                Circle().fill(accent.opacity(0.14))
-                // tealText, not accent: the outline must reach 3:1 on the window.
-                Circle().strokeBorder(Brand.tealText, lineWidth: max(1.5, size / 18))
             case .off where ring:
                 Circle().strokeBorder(Color.secondary, lineWidth: 1.5)
-            case .off:
-                Circle().fill(Color.secondary.opacity(0.18))
+            case .playing where ring:
+                EmptyView()
+            case .off, .willPlay, .playing:
+                // Faded, not removed: a removed layer stays where it was while the main window's row grows.
+                Circle().fill(Color.secondary.opacity(0.18)).opacity(state == .off ? 1 : 0)
+                Circle().fill(accent.opacity(0.14)).opacity(state == .willPlay ? 1 : 0)
+                // tealText, not accent: the outline must reach 3:1 on the window.
+                Circle().strokeBorder(Brand.tealText, lineWidth: max(1.5, size / 18))
+                    .opacity(state == .willPlay ? 1 : 0)
             }
+            // Scaled, not inserted, so it grows wherever the row has just moved the badge.
+            Circle().fill(accent).scaleEffect(filled ? 1 : 0)
             Image(systemName: symbol)
                 .font(.system(size: size * 0.43, weight: .semibold))
                 .foregroundStyle(iconColor)
