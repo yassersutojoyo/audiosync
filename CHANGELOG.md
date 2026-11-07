@@ -6,13 +6,18 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
-- AirPlay now starts at 0.1 s and raises its buffer only when the network drops packets. The hidden latency setting from 0.8.8 is gone.
+- AirPlay now starts with a buffer as low as 0.1 s and raises it only when packets get lost or arrive late, or the stream stalls. The hidden latency setting from 0.8.8 is gone.
+- The busy moment when a speaker starts, joins or resumes no longer counts as late packets, so it doesn't raise the AirPlay buffer. Each AirPlay speaker starts its next stream at the buffer it last needed, until you forget the speaker.
+- When AirPlay raises its buffer, the computer's own outputs move with it and stay in sync with the speakers, on the Mac, Windows and Linux.
 - On the Mac, the settings (Launch at Login, Appearance, Show Virtual Devices, what happens when the source app quits, automatic update checks, permissions and the hidden speakers list) now live in one Settings window, under AudioSync > Settings… or Command-comma. The gear menu and the AudioSync menu got shorter, and the File menu is gone: Close Window moved to the Window menu and Apply Typed Delay to the Speakers menu.
 - The Mac main window and menu bar panel got a calmer look: fewer controls in view, thin lines instead of boxes, and colour only where something is on, connecting or playing. The song now has art that moves with the music, a speaker that is connecting shows a turning amber ring, and the main window opens slim and zooms wider with the green button.
+- On the Mac, the main window's page is white in light appearance, and its scrolling columns no longer run into the gap under the header.
+- On Windows, Calibrate All measures in the same order as on the Mac: the reference first, then your outputs in the order Windows lists them, then Google Cast and AirPlay speakers.
 
 ### Fixed
 
 - The Windows app now starts on a fresh Windows without the Visual C++ runtime installed. Before, it stopped at launch because VCRUNTIME140.dll was missing.
+- On the Mac, the Web Remote window now shows its address and pairing code whenever the remote is listening, as it does on Windows.
 
 ## [0.8.8] - 2026-11-06
 
