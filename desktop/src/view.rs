@@ -7425,7 +7425,7 @@ mod tests {
         );
     }
 
-    // covers: S418
+    // covers: S416
     #[test]
     fn the_tray_panel_is_named_so_it_isnt_taken_for_windows_quick_settings() {
         let app = app_over(MockBackend::new());
@@ -11002,7 +11002,7 @@ mod tests {
     /// With the updater, More Controls ends with how updates work, naming
     /// the menu items and the notice button by their own words; without it,
     /// the Guide leaves them out as the menus do.
-    // covers: S418
+    // covers: S416
     #[test]
     fn the_guide_says_how_updates_work_only_with_the_updater() {
         let app = app_over(MockBackend::new());
