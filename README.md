@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  Multiroom audio for macOS, Windows and Linux: play your computer's sound on AirPlay speakers, Bluetooth speakers and every other output it knows, plus Google Cast, all at once and in sync. A free, open-source Airfoil alternative.
+  Play your computer's sound on AirPlay, Google Cast, Bluetooth and every other speaker it knows, all at once and in sync. For macOS, Windows and Linux. A free, open-source Airfoil alternative.
 </p>
 
 <p align="center">
@@ -27,76 +27,59 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-dark.png">
-    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window: audio source, now playing, master volume, presets with Evening checked, and the equalizer set to Loudness on the left; on the right, the MacBook Pro speakers under This Mac, a Downstairs zone holding Living Room and Kitchen, then Connected Speakers listed by name, each with a small icon for its kind and a volume slider, and a delay on the local outputs">
+    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window on a Mac: the song playing with its art, the audio source, and the speakers, each with a round on/off icon and a volume slider">
   </picture>
 </p>
 
-AirPlay speakers play about two seconds late. Local speakers don't. Play the same song on both and you get an echo.
-
-AudioSync fixes that. It grabs your computer's audio once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. It's free, and it's a beta, so expect rough edges.
-
-- On a Mac with Apple silicon (macOS 15 or later) it plays system audio, one app or a mic on AirPlay speakers, Google Cast speakers, Bluetooth and every other output the Mac knows.
-- On Windows 11 it's multiroom audio for your PC: it plays the PC's audio on AirPlay speakers, sends desktop audio to a Google Cast speaker, and keeps Bluetooth and the other Windows outputs in sync with them.
-- On Linux it's an AirPlay sender that also plays to Google Cast and keeps Bluetooth and AirPlay speakers in sync, through PipeWire.
+AirPlay speakers play a little late and local speakers don't, so the same song on both turns into an echo. AudioSync grabs your computer's audio once, sends it to the AirPlay speakers and plays a delayed copy on each local speaker, so everything lines up. It's free, and it's a beta, so expect rough edges.
 
 ## What it does
 
-- Source: all system audio, one app, several apps (or every app except the ones you check), or an input device (mic, audio interface).
-- Outputs: AirPlay speakers, Apple TVs, Google Cast speakers, and anything your computer can play to (built-in, headphone jack, HDMI, USB, Bluetooth).
-- A delay per local speaker (−2 to +20 s), plus one AirPlay delay.
-- Volume per speaker and master, a 10-band EQ, zones that switch on and off together, each with its own volume, presets, Calibrate with Microphone, rename and hide speakers, auto-connect, launch at login, and the Web Remote.
-- Now Playing: Spotify and Music on the Mac, any app that shows in Windows' media controls on Windows, any MPRIS player on Linux.
-- On the Mac it lives in the menu bar. On Windows it's a window plus a tray icon with its own panel. On Linux it sits in the tray when your desktop has a StatusNotifier host, and runs as a plain window when it doesn't.
+- Source: all system audio, one app, several apps (or every app except a few), or an input like a mic.
+- Outputs: AirPlay speakers and Apple TVs, Google Cast speakers, and whatever your computer plays to: built-in, headphones, HDMI, USB, Bluetooth.
+- A delay per local speaker (−2 to +20 s) and one for AirPlay, or let Calibrate with Microphone set them.
+- Volume per speaker and master, a 10-band EQ, zones, presets, Now Playing, and a Web Remote for your phone.
+- AirPlay starts with a 0.1 s buffer and raises it, up to 1.75 s, only when your network drops packets.
 
-Everything in this list is in all three versions, except where a line says otherwise.
+It's the same app on all three systems. On the Mac it lives in the menu bar, on Windows it's a window with a tray icon, and on Linux it sits in the tray when your desktop has one (it plays through PipeWire).
 
-Like Airfoil, but less. Not made by Rogue Amoeba, no shared code.
+Up to 16 AirPlay 2 speakers play at once, and a stereo pair or an Apple TV with its HomePods shows up as one row. Google Cast plays one speaker or Google Home group at a time. Cast has no shared clock, so you set its offset by ear once and it's remembered; Resync under its volume fixes drift.
 
-Speakers that only do AirPlay 2 play out of the box. A speaker that does both AirPlay 1 and AirPlay 2 uses AirPlay 2, or AirPlay 1 when it was paired over AirPlay 1 or AirPlay 2 can't take it. Up to 16 AirPlay 2 speakers play at once. A stereo pair, or an Apple TV with the HomePods it plays through, shows up as one row with one volume and one delay.
-
-Since the local speakers wait for the network ones, everything you hear is about two seconds late. Music doesn't mind. For video, a player with an audio delay setting (mpv, VLC, IINA) can hold the picture back to match.
-
-Google Cast speakers work in every version, one at a time. Cast has no shared clock, so AudioSync can't sync them by itself: you set an offset by ear for each Cast speaker and it's remembered. If one drifts, hit Resync under its volume. That restarts the stream with a short gap, and it never happens on its own. A speaker group made in the Google Home app plays as one speaker, with one volume and one offset, and its row names the members once the group reports them. A speaker in the group keeps its own row and is busy while the group plays. When a Cast speaker and AirPlay speakers are on together, the faster side waits for the slower one, but AirPlay can only wait up to 20 s. Past that a notice tells you how far ahead AirPlay plays.
+Not made by Rogue Amoeba, and no shared code with Airfoil.
 
 ## Install
 
-### macOS
+macOS 15 or later, Apple silicon:
 
-- Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest), open it and drag AudioSync to Applications. Needs a Mac with Apple silicon and macOS 15 or later. Your audio is never written to disk.
-- The first launch takes one extra step, because AudioSync isn't notarized. When macOS says it can't verify the app, click Done, then go to System Settings → Privacy & Security, click Open Anyway and confirm with your password. After that it opens like any other app. Only Apple's paid Developer Program would remove that step, and I'm not in it.
-- Or, from Terminal: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.sh | bash`. It downloads the latest release's zip, checks it against the release's SHA-256 checksums, puts AudioSync in Applications and opens it. A copy downloaded by curl isn't flagged as downloaded, so macOS doesn't ask for the extra step. Run it again to update.
-- Coming from 0.6 or older, replace the app by hand once. Later versions can update themselves (the app asks on its second launch).
-- HomePods: in Allow Speaker & TV Access, pick “Anyone on the Same Network” on a network you trust, not Everyone.
-- Build it yourself: see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+- Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag it to Applications. It isn't notarized, so on the first launch click Done, then System Settings → Privacy & Security → Open Anyway.
+- Or from Terminal, with no Open Anyway step: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.sh | bash`
 
-### Windows
+Windows 11, x64 or ARM64:
 
-- Get the zip for your PC (x64 or ARM64) from the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page. Needs Windows 11. It's one exe with no installer: unzip it into a folder of its own and run it. [desktop/README.md](desktop/README.md#running-the-exe) has the details.
-- The exe isn't signed, so the first time you open it Windows SmartScreen may say it protected your PC. Click More info, then Run anyway, to open it.
-- Or, from PowerShell: `irm https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.ps1 | iex`. It picks the zip for your PC, checks it against the release's SHA-256 checksums, puts AudioSync in your user folder with a Start menu shortcut (no admin needed) and opens it. A copy fetched this way isn't marked as downloaded, so SmartScreen doesn't ask. Run it again to update.
-- Versions after 0.7.1 update themselves. 0.7.1 doesn't, so get the next one from Releases by hand. Help > Check for Updates… looks for a newer version, and File > Check for Updates Automatically, on by default, does it at launch and while the app runs, at most once a day. Nothing downloads until you click Download and Install.
+- Get the zip for your PC from [Releases](https://github.com/yassersutojoyo/audiosync/releases), unzip it into its own folder and run `audiosync.exe`. It isn't signed, so SmartScreen may ask: click More info, then Run anyway. [desktop/README.md](desktop/README.md#running-the-exe) has more.
+- Or from PowerShell, no admin and no SmartScreen: `irm https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.ps1 | iex`
 
-### Linux
+Linux, x86_64 or aarch64, glibc 2.39 or newer and PipeWire:
 
-- Get the AppImage for your machine (x86_64 or aarch64) from the [Releases](https://github.com/yassersutojoyo/audiosync/releases) page, make it executable and run it. It needs glibc 2.39 or newer and PipeWire, and it updates itself, like the Windows version.
-- Or, from a terminal: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install-linux.sh | bash`. It downloads the latest release's AppImage for your machine, checks it against the release's SHA-256 checksums, and puts it in `~/.local/bin` with an app menu entry and opens it, no sudo. Run it again to update.
-- On Debian or Ubuntu there's a `.deb` too (amd64 or arm64): `sudo apt install ./AudioSync-<version>-amd64.deb`. A copy from the `.deb` doesn't update itself, so get the next one from Releases.
-- It's built from the same code as the Windows app. [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#the-linux-build-and-its-appimage) has the build details.
-- It captures and plays through PipeWire. Its data lives in `$XDG_DATA_HOME/audiosync`, and launch at login is an XDG autostart entry.
-- Hear the source twice and have no output to spare? [desktop/README.md](desktop/README.md#linux-a-silent-output) shows how to add a silent one.
+- Get the AppImage from [Releases](https://github.com/yassersutojoyo/audiosync/releases), make it executable and run it.
+- Or from a terminal, no sudo: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install-linux.sh | bash`
+- On Debian or Ubuntu there's a `.deb` too: `sudo apt install ./AudioSync-<version>-amd64.deb` (or `arm64`).
+- Hear the source twice with no output to spare? [desktop/README.md](desktop/README.md#linux-a-silent-output) shows how to add a silent one.
+
+Each install script checks the download against the release's SHA-256 checksums; run it again to update. The Mac app, the Windows exe and the AppImage update themselves; a `.deb` install and Windows 0.7.1 don't, so get the next version by hand. To build it yourself, see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Use
 
 - Leave your computer's sound output on a local device, not a HomePod.
-- Pick a source, click a speaker's round icon to turn it on.
+- Pick a source and click a speaker's round icon to turn it on. Speakers that want a code or password ask when you do.
 - On the Mac, the window doesn't open at login. Click the Dock icon.
-- Speaker plays too early? Raise its delay. Too late? Lower it, below zero if needed. Bluetooth usually ends up around −150 to −300 ms.
-- Your computer plays before the HomePod? Raise the AirPlay delay. After? Lower it.
-- Speakers that want a code or password ask for it when you turn them on. An Apple TV pairs once, unless it's set to ask for a code every time.
-- Several Bluetooth outputs at once may stutter. One Bluetooth radio serves every speaker in turns and shares 2.4 GHz with Wi-Fi. AudioSync handles clock drift, but it can't fix the radio. What helps: 5 GHz Wi-Fi or a cable for the internet, fewer Bluetooth outputs, a dual-link USB transmitter, or AirPlay for the rest.
-- The Web Remote lets a phone on your home network switch speakers and set volumes and delays. It's plain HTTP, so I'd leave it off whenever the computer is on a network you share with strangers, like cafe, hotel or office guest Wi-Fi.
-- More in the AudioSync Guide, in the gear menu on the Mac and under Help > AudioSync Guide on Windows and Linux.
-- If something fails, [open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log. On the Mac: quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again, attach `/tmp/audiosync-debug.log`. On Windows the steps are under [Running the exe](desktop/README.md#running-the-exe).
+- Speaker too early? Raise its delay. Too late? Lower it, below zero if needed. Bluetooth usually lands around −150 to −300 ms.
+- For video, a player with an audio delay setting (mpv, VLC, IINA) can hold the picture back to match.
+- Several Bluetooth outputs at once may stutter, since one radio serves them all and shares 2.4 GHz with Wi-Fi. Fewer of them, 5 GHz Wi-Fi or AirPlay for the rest helps.
+- The Web Remote is plain HTTP, so I'd keep it off on networks you share with strangers.
+- HomePods: in Allow Speaker & TV Access, pick “Anyone on the Same Network” on a network you trust.
+- More in Help > AudioSync Guide.
+- Something broken? [Open an issue](https://github.com/yassersutojoyo/audiosync/issues/new/choose) with a log. On the Mac, quit AudioSync, run `AUDIOSYNC_DEBUG=1 /Applications/AudioSync.app/Contents/MacOS/AudioSync`, do it again and attach `/tmp/audiosync-debug.log`. On Windows, see [Running the exe](desktop/README.md#running-the-exe).
 
 ## License and credits
 
