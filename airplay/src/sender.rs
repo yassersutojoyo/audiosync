@@ -152,6 +152,9 @@ pub struct SenderConfig {
 /// target counting as one (P204).
 pub const AIRPLAY2_SESSIONS: usize = 16;
 
+/// Events waiting for a host that doesn't poll.
+pub const MAX_SENDER_EVENTS: usize = 256;
+
 /// [`SenderConfig::pairing_hold`]'s default (P153).
 const PAIRING_HOLD: Duration = Duration::from_secs(30);
 
@@ -712,7 +715,7 @@ impl Sender {
         let latency_frames = Arc::new(AtomicU32::new(stream.latency_frames()));
         let sounding = Arc::new(AtomicBool::new(false));
         let (inputs, receiver) = mpsc::channel();
-        let (events_out, events) = mpsc::channel();
+        let (events_out, events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let driver = Driver::new(
             stream,
             receiver,
@@ -1061,7 +1064,9 @@ impl Sender {
         self.command(Command::Resume);
     }
 
-    /// The next event, if one is waiting.
+    /// The next event, if one is waiting. At most [`MAX_SENDER_EVENTS`]
+    /// wait; beyond that, debug lines are dropped and a newer state report
+    /// replaces a held one of the same kind (P237).
     pub fn poll_event(&self) -> Option<SenderEvent> {
         self.events.try_recv().ok()
     }

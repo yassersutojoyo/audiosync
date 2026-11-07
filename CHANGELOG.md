@@ -7,6 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Fixed
 
 - On the Mac, calibration's ± figure now rounds up to whole milliseconds, at least 1 ms, as on Windows. A microphone whose first buffers come without a timestamp is now timed from the first one that has it, as on Windows, instead of from when the Mac read it.
+- AirPlay: when the app falls behind, speaker updates no longer pile up in memory, and each speaker still shows its latest state.
 
 ## [0.9.0] - 2026-11-07
 

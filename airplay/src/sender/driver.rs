@@ -17,7 +17,8 @@ mod dacp;
 mod outcomes;
 mod targets;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
@@ -76,6 +77,8 @@ const SHUTDOWN_RESERVE: Duration = Duration::from_millis(250);
 /// Messages handled before the timers get their turn again, so a flood of
 /// datagrams can't hold back the audio.
 const INPUTS_PER_TURN: usize = 256;
+/// The most events held behind a full event channel (P237).
+const MAX_HELD_EVENTS: usize = 1024;
 
 /// What the host asks of the driver.
 pub(crate) enum Command {
@@ -410,7 +413,10 @@ pub(crate) struct Driver {
     inputs: mpsc::Receiver<Input>,
     /// A sender for the I/O threads, into the same channel.
     io_sink: mpsc::Sender<Input>,
-    events: mpsc::Sender<SenderEvent>,
+    events: mpsc::SyncSender<SenderEvent>,
+    /// Events that found the channel full, sent in order once it has room
+    /// (P237).
+    held_events: RefCell<VecDeque<SenderEvent>>,
     latency_frames: Arc<AtomicU32>,
     sounding: Arc<AtomicBool>,
     speakers: BTreeMap<DeviceKey, Speaker>,
@@ -512,7 +518,7 @@ impl Driver {
         stream: Stream,
         inputs: mpsc::Receiver<Input>,
         io_sink: mpsc::Sender<Input>,
-        events: mpsc::Sender<SenderEvent>,
+        events: mpsc::SyncSender<SenderEvent>,
         latency_frames: Arc<AtomicU32>,
     ) -> Driver {
         let sink = io_sink.clone();
@@ -524,6 +530,7 @@ impl Driver {
             inputs,
             io_sink,
             events,
+            held_events: RefCell::new(VecDeque::new()),
             latency_frames,
             sounding: Arc::new(AtomicBool::new(false)),
             speakers: BTreeMap::new(),
@@ -645,6 +652,7 @@ impl Driver {
             restarted: false,
         });
         loop {
+            self.send_held_events();
             // Inputs already queued go first, so a stalled turn never times
             // out an answer it holds (P134).
             self.wait(Instant::now());
@@ -687,8 +695,54 @@ impl Driver {
         self.retired.clear();
     }
 
+    /// Sends held events in order until the channel is full.
+    fn send_held_events(&self) {
+        let mut held = self.held_events.borrow_mut();
+        while let Some(event) = held.pop_front() {
+            match self.events.try_send(event) {
+                Ok(()) => {}
+                Err(mpsc::TrySendError::Full(event)) => {
+                    held.push_front(event);
+                    return;
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    held.clear();
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Sends `event`, or holds it while the host is behind (P237): a debug
+    /// line is dropped, a newer report replaces a held one of its kind, and
+    /// at the ceiling the oldest replaceable report goes first.
     fn emit(&self, event: SenderEvent) {
-        let _ = self.events.send(event);
+        self.send_held_events();
+        let mut held = self.held_events.borrow_mut();
+        let event = if held.is_empty() {
+            match self.events.try_send(event) {
+                Err(mpsc::TrySendError::Full(event)) => event,
+                _ => return,
+            }
+        } else {
+            event
+        };
+        if matches!(
+            event,
+            SenderEvent::RemoteLog(_)
+                | SenderEvent::Speaker {
+                    event: SpeakerEvent::Trace(_),
+                    ..
+                }
+        ) {
+            return;
+        }
+        held.retain(|older| !replaces(&event, older));
+        if held.len() >= MAX_HELD_EVENTS {
+            let oldest = held.iter().position(|older| replaces(older, older));
+            held.remove(oldest.unwrap_or(0));
+        }
+        held.push_back(event);
     }
 
     fn emit_speaker(&self, key: &DeviceKey, event: SpeakerEvent) {
@@ -2759,11 +2813,64 @@ fn progress_at(progress: Progress, set_at: Instant, now: Instant) -> Option<Prog
     })
 }
 
+/// Whether `newer` leaves nothing of `older` for the host to act on: the
+/// latest of these per speaker, receiver or target is all it shows (P237).
+fn replaces(newer: &SenderEvent, older: &SenderEvent) -> bool {
+    match (newer, older) {
+        (
+            SenderEvent::Speaker { key, event },
+            SenderEvent::Speaker {
+                key: older_key,
+                event: older_event,
+            },
+        ) => {
+            key == older_key
+                && match (event, older_event) {
+                    (SpeakerEvent::Warning(warning), SpeakerEvent::Warning(older)) => {
+                        std::mem::discriminant(warning) == std::mem::discriminant(older)
+                    }
+                    _ => {
+                        std::mem::discriminant(event) == std::mem::discriminant(older_event)
+                            && matches!(
+                                event,
+                                SpeakerEvent::State(_)
+                                    | SpeakerEvent::Path(_)
+                                    | SpeakerEvent::Error(_)
+                                    | SpeakerEvent::Latency(_)
+                                    | SpeakerEvent::Methods(_)
+                                    | SpeakerEvent::Server(_)
+                                    | SpeakerEvent::AudioJack(_)
+                                    | SpeakerEvent::VolumeReported(_)
+                            )
+                    }
+                }
+        }
+        // The hosts take Appeared and Changed alike, as the receiver's
+        // current record.
+        (SenderEvent::Receiver(event), SenderEvent::Receiver(older)) => {
+            let key = |event: &ReceiverEvent| match event {
+                ReceiverEvent::Appeared(info) | ReceiverEvent::Changed(info) => {
+                    Some(info.device.key.clone())
+                }
+                ReceiverEvent::Gone(key) => Some(key.clone()),
+                ReceiverEvent::Target(_) => None,
+            };
+            let changed = |event: &ReceiverEvent| matches!(event, ReceiverEvent::Changed(_));
+            key(event).is_some() && key(event) == key(older) && (!changed(event) || changed(older))
+        }
+        (SenderEvent::TargetMissing { id, .. }, SenderEvent::TargetMissing { id: older, .. }) => {
+            id == older
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::clock::SenderClock;
     use crate::discovery::BrowseEvent;
+    use crate::sender::MAX_SENDER_EVENTS;
     use crate::stream::StreamConfig;
 
     #[test]
@@ -2795,7 +2902,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency);
         let destinations = MediaDestinations::new(
@@ -2834,7 +2941,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency);
         driver.offload(SessionKey(7), SrpWork::for_tests(), |_| {
@@ -2858,7 +2965,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency);
         crate::test_hooks::SPAWN_FAILS.with(|fails| fails.set(true));
@@ -2883,7 +2990,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs.clone(), events, latency);
         let (release, stuck) = mpsc::channel::<()>();
@@ -2925,7 +3032,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         // Both sockets are held until both are bound, so the two ports
         // differ, and on the address the driver binds.
@@ -3032,7 +3139,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let free = || {
             let [event, general] = [(); 2].map(|()| {
@@ -3145,7 +3252,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let v6 = IpAddr::V6(Ipv6Addr::LOCALHOST);
         let bind_ip = crate::ptp::service_bind_ip(v6);
@@ -3240,7 +3347,7 @@ mod tests {
     fn one_place_driver(now: Instant) -> (Driver, std::net::TcpListener) {
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let driver = Driver::new(stream, receiver, inputs, events, latency)
             .with_airplay2(true, false, Some([0x10, 0x20, 0x30, 0x40, 0x50, 0x60]))
@@ -3338,7 +3445,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, seen) = mpsc::channel();
+        let (events, seen) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency);
         let first = place_record(ServiceKind::AirPlay, 1, 7000);
@@ -3522,7 +3629,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, emitted) = mpsc::channel();
+        let (events, emitted) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency);
 
@@ -3688,7 +3795,7 @@ mod tests {
             .expect("a clock older than the timeout");
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, emitted) = mpsc::channel();
+        let (events, emitted) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs.clone(), events, latency);
         let record = ServiceRecord {
@@ -3799,7 +3906,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _emitted) = mpsc::channel();
+        let (events, _emitted) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs.clone(), events, latency);
         let flood = 3 * INPUTS_PER_TURN;
@@ -3832,7 +3939,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency).with_airplay2(
             true,
@@ -3910,7 +4017,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency);
         let v6: IpAddr = "2001:db8::56".parse().expect("an address");
@@ -3983,7 +4090,7 @@ mod tests {
         let now = Instant::now();
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency);
         for name in ["0123456789AB@Dapur", "0123456789AB@Ruang"] {
@@ -4043,7 +4150,7 @@ mod tests {
     fn kitchen_driver(now: Instant) -> (Driver, DeviceKey) {
         let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
         let (inputs, receiver) = mpsc::channel();
-        let (events, _events) = mpsc::channel();
+        let (events, _events) = mpsc::sync_channel(MAX_SENDER_EVENTS);
         let latency = Arc::new(AtomicU32::new(0));
         let mut driver = Driver::new(stream, receiver, inputs, events, latency);
         for record in [kitchen(5000), kitchen_airplay(&["flags=0x4"])] {
@@ -4151,5 +4258,115 @@ mod tests {
         assert_eq!(relist_kitchen(&mut driver, &key, 5001, before), None);
         driver.run_timers(retry_at);
         assert_eq!(driver.next_output(&key), Some(connect_kitchen(5001)));
+    }
+
+    // A host that stops polling: what waits stays within the bound, and
+    // once it polls again each speaker's last state still reaches it.
+    // covers: P237
+    #[test]
+    fn a_host_that_does_not_poll_finds_at_most_the_bound_waiting_and_the_last_state() {
+        use crate::discovery::DeviceId;
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, emitted) = mpsc::sync_channel(MAX_SENDER_EVENTS);
+        let latency = Arc::new(AtomicU32::new(0));
+        let driver = Driver::new(stream, receiver, inputs, events, latency);
+        let key = DeviceKey::Id(DeviceId([0x02, 0x00, 0x5E, 0x00, 0x53, 1]));
+        for n in 0..4 * MAX_SENDER_EVENTS {
+            driver.emit_speaker(&key, SpeakerEvent::Trace(format!("line {n}")));
+            let state = if n % 2 == 0 {
+                SpeakerState::Connecting
+            } else {
+                SpeakerState::Playing
+            };
+            driver.emit_speaker(&key, SpeakerEvent::State(state));
+        }
+        driver.emit_speaker(&key, SpeakerEvent::State(SpeakerState::Failed));
+
+        let waiting: Vec<SenderEvent> = emitted.try_iter().collect();
+        assert!(
+            waiting.len() <= MAX_SENDER_EVENTS,
+            "{} waiting",
+            waiting.len()
+        );
+        driver.emit(SenderEvent::RemoteLog("after the poll".to_owned()));
+        let last_state = waiting
+            .iter()
+            .chain(&emitted.try_iter().collect::<Vec<_>>())
+            .filter_map(|event| match event {
+                SenderEvent::Speaker {
+                    event: SpeakerEvent::State(state),
+                    ..
+                } => Some(*state),
+                _ => None,
+            })
+            .next_back();
+        assert_eq!(last_state, Some(SpeakerState::Failed));
+    }
+
+    // A receiver that keeps going and coming back while the host doesn't
+    // poll leaves one held report, and a report held before a speaker's
+    // state still arrives before it; reports of many receivers stop at the
+    // ceiling.
+    // covers: P237
+    #[test]
+    fn held_reports_stay_bounded_and_in_order_while_receivers_flap() {
+        use crate::discovery::DeviceId;
+
+        let now = Instant::now();
+        let (stream, _writer) = Stream::new(StreamConfig::default(), SenderClock::new(now), now);
+        let (inputs, receiver) = mpsc::channel();
+        let (events, emitted) = mpsc::sync_channel(MAX_SENDER_EVENTS);
+        let latency = Arc::new(AtomicU32::new(0));
+        let mut driver = Driver::new(stream, receiver, inputs, events, latency);
+        let changes = driver.directory.apply(BrowseEvent::Resolved(kitchen(5000)));
+        driver.report_changes(changes);
+        let info = emitted
+            .try_iter()
+            .find_map(|event| match event {
+                SenderEvent::Receiver(ReceiverEvent::Appeared(info)) => Some(info),
+                _ => None,
+            })
+            .expect("listed");
+        let key = info.device.key.clone();
+        for n in 0..MAX_SENDER_EVENTS {
+            driver.emit(SenderEvent::RemoteLog(format!("line {n}")));
+        }
+        driver.emit(SenderEvent::Receiver(ReceiverEvent::Appeared(info.clone())));
+        driver.emit_speaker(&key, SpeakerEvent::State(SpeakerState::Connecting));
+        for _ in 0..4 * MAX_SENDER_EVENTS {
+            driver.emit(SenderEvent::Receiver(ReceiverEvent::Gone(key.clone())));
+            driver.emit(SenderEvent::Receiver(ReceiverEvent::Appeared(info.clone())));
+            driver.emit_speaker(&key, SpeakerEvent::Warning(Warning::JackDisconnected));
+        }
+        driver.emit_speaker(&key, SpeakerEvent::State(SpeakerState::Playing));
+        assert_eq!(driver.held_events.borrow().len(), 3);
+
+        while emitted.try_recv().is_ok() {}
+        driver.send_held_events();
+        let delivered: Vec<SenderEvent> = emitted.try_iter().collect();
+        let appeared = delivered
+            .iter()
+            .position(|event| matches!(event, SenderEvent::Receiver(ReceiverEvent::Appeared(_))));
+        let playing = delivered.iter().position(|event| {
+            matches!(
+                event,
+                SenderEvent::Speaker {
+                    event: SpeakerEvent::State(SpeakerState::Playing),
+                    ..
+                }
+            )
+        });
+        assert!(appeared.is_some() && appeared < playing, "{delivered:?}");
+
+        for n in 0..8 * MAX_SENDER_EVENTS {
+            let mut other = info.clone();
+            other.device.key =
+                DeviceKey::Id(DeviceId([0x02, 0x00, 0x5E, 0x01, (n >> 8) as u8, n as u8]));
+            driver.emit(SenderEvent::Receiver(ReceiverEvent::Appeared(other)));
+        }
+        assert!(driver.held_events.borrow().len() <= MAX_HELD_EVENTS);
     }
 }
