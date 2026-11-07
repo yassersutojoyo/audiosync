@@ -4,14 +4,22 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Changed
+
+- AirPlay no longer creeps up to a long delay. AudioSync adds at most 0.2 s on AirPlay on top of what the speaker asks for, and comes back to 0.1 s by itself. It steps up only after a speaker had to skip a bit of audio, during a quiet moment such as the pause between two songs, and nothing carries over to the next time you play.
+- On the Mac, the logo in the main window and the menu bar panel breathes slowly while no network speaker has been found, the input meter glides down, and the volume number brightens while you drag its slider.
+
 ### Fixed
 
 - On Windows, the Web Remote shows your Wi-Fi or Ethernet address while a VPN is on, so your phone can reach it.
-- On the Mac, calibration's ± figure now rounds up to whole milliseconds, at least 1 ms, as on Windows. A microphone whose first buffers come without a timestamp is now timed from the first one that has it, as on Windows, instead of from when the Mac read it.
-- AirPlay: when the app falls behind, speaker updates no longer pile up in memory, and each speaker still shows its latest state.
+- On the Mac, calibration's ± figure rounds up to whole milliseconds, at least 1 ms, and a microphone is timed from its first timestamped buffer, as on Windows.
 - Calibration now measures a speaker whose direct sound is a bit quieter than its echo off a wall, instead of refusing it as an ambiguous echo.
 - A Google Cast speaker that was waiting to come back on no longer turns on by itself once it's online, when a preset left it out or its zone was switched without it.
-- AirPlay no longer creeps up to almost two seconds of delay. AudioSync adds at most 0.2 s on AirPlay on top of what the speaker itself asks for, and comes back to 0.1 s by itself. It goes to 0.2 s only when a speaker actually had to skip a bit of audio, and only during a quiet moment such as the pause between two songs. Nothing carries over to the next time you play.
+- AirPlay: when the app falls behind, speaker updates no longer pile up in memory, and each speaker still shows its latest state.
+- On the Mac, an internal error in the audio core now fails that one action instead of quitting the app.
+- On the Mac, the scrolling song title in the menu bar panel no longer stalls when the panel opens.
+- On the Mac, a main window column that fits no longer scrolls a little the first time you scroll it.
+- On Windows, an output device that stops responding no longer makes the app start another audio thread each time it reopens.
 
 ## [0.9.0] - 2026-11-07
 
