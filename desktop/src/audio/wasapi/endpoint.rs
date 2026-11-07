@@ -37,7 +37,7 @@ use windows_core::implement;
 use super::com::{
     Apartment, Awaited, ComMemory, Event, ProAudioTask, READY_TIMEOUT, Ready, StuckThreads,
     WINDOWS_AUDIO, Worker, awaited, device_error, float_format, or_on_panic, read_mix_format,
-    spawn_ready_within, spawn_worker,
+    spawn_device_worker, spawn_ready_within,
 };
 use super::devices::enumerator;
 use crate::audio::backend::BackendError;
@@ -161,7 +161,7 @@ pub(super) fn start(
         let wakes = Arc::clone(&wakes);
         let stall = Arc::clone(&stall);
         let invalidated = Arc::clone(&invalidated);
-        spawn_worker("audiosync-output", move |ready| {
+        spawn_device_worker("audiosync-output", endpoint_id, move |ready| {
             let signals = Signals {
                 stop: &stop,
                 abort: &abort,

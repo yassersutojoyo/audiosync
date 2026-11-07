@@ -32,6 +32,7 @@ use windows::core::{HRESULT, PCWSTR, PWSTR, w};
 use crate::audio::backend::BackendError;
 use crate::audio::capture::{SampleType, StreamFormat};
 use crate::audio::outputs::{MixFormat, RenderFormat};
+use crate::debug_log::DebugLog;
 
 /// COM on the calling thread, in the multithreaded apartment, for as long as
 /// this value lives. A thread that is already in a single-threaded apartment
@@ -264,13 +265,60 @@ pub(super) fn spawn_ready_within<T: Send + 'static>(
 /// ends within milliseconds of being told to.
 pub(super) const STUCK_GRACE: Duration = Duration::from_millis(250);
 
+/// How many threads of one key (an output's device, or the thread name of
+/// the others) may hang let go in a Windows call before [`spawn_keyed_within`]
+/// starts no other of that key until one returns: a device whose call hangs
+/// for good would otherwise leave a thread behind at every reopen. A sync
+/// pass lets at most one start hang, so four leave room for the stops of
+/// streams that stalled meanwhile.
+const STUCK_PER_KEY: usize = 4;
+
 /// The threads, and the calls other threads wait for, let go while still in
-/// a Windows call ([`Awaited::let_go`]), counted until they end.
-pub(super) struct StuckThreads(AtomicUsize);
+/// a Windows call ([`Awaited::let_go`]), counted until they end, and the
+/// keys of the threads among them.
+pub(super) struct StuckThreads(AtomicUsize, Mutex<Vec<String>>);
 
 impl StuckThreads {
     pub(super) const fn new() -> StuckThreads {
-        StuckThreads(AtomicUsize::new(0))
+        StuckThreads(AtomicUsize::new(0), Mutex::new(Vec::new()))
+    }
+
+    fn keys(&self) -> MutexGuard<'_, Vec<String>> {
+        self.1.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// How many threads of the key `key` are still in their call.
+    fn of_key(&self, key: &str) -> usize {
+        self.keys().iter().filter(|stuck| *stuck == key).count()
+    }
+
+    fn count(&self, key: Option<&str>) {
+        if let Some(key) = key {
+            let reached = {
+                let mut keys = self.keys();
+                keys.push(key.to_owned());
+                keys.iter().filter(|stuck| *stuck == key).count() == STUCK_PER_KEY
+            };
+            if reached {
+                DebugLog::appending_from_env().log(|| {
+                    format!(
+                        "{STUCK_PER_KEY} threads for {key} hang in Windows audio; no other \
+                         starts until one returns"
+                    )
+                });
+            }
+        }
+        self.0.fetch_add(1, Ordering::AcqRel);
+    }
+
+    fn uncount(&self, key: Option<&str>) {
+        if let Some(key) = key {
+            let mut keys = self.keys();
+            if let Some(at) = keys.iter().position(|stuck| stuck == key) {
+                keys.swap_remove(at);
+            }
+        }
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 
     /// Whether one of them is still in its call.
@@ -309,6 +357,8 @@ const LET_GO: u8 = 2;
 struct Lifetime {
     state: AtomicU8,
     stuck: &'static StuckThreads,
+    /// The key of a thread [`spawn_keyed_within`] started.
+    key: Option<String>,
 }
 
 impl Lifetime {
@@ -316,14 +366,14 @@ impl Lifetime {
     /// already; returns whether it was let go.
     fn let_go(&self) -> bool {
         // Counted before it's marked, so its end never uncounts it first.
-        self.stuck.0.fetch_add(1, Ordering::AcqRel);
+        self.stuck.count(self.key.as_deref());
         let marked = self
             .state
             .compare_exchange(RUNNING, LET_GO, Ordering::AcqRel, Ordering::Acquire)
             .is_ok();
         if !marked {
             // It ended just now.
-            self.stuck.0.fetch_sub(1, Ordering::AcqRel);
+            self.stuck.uncount(self.key.as_deref());
         }
         marked
     }
@@ -331,7 +381,7 @@ impl Lifetime {
     /// What's awaited ends.
     fn end(&self) {
         if self.state.swap(ENDED, Ordering::AcqRel) == LET_GO {
-            self.stuck.0.fetch_sub(1, Ordering::AcqRel);
+            self.stuck.uncount(self.key.as_deref());
         }
     }
 }
@@ -383,9 +433,14 @@ impl Awaited {
 /// A [`Running`] for the thread or call to hold, and the [`Awaited`] that
 /// sees it end, counted in `stuck` once let go.
 pub(super) fn awaited(stuck: &'static StuckThreads) -> (Running, Awaited) {
+    awaited_keyed(stuck, None)
+}
+
+fn awaited_keyed(stuck: &'static StuckThreads, key: Option<String>) -> (Running, Awaited) {
     let lifetime = Arc::new(Lifetime {
         state: AtomicU8::new(RUNNING),
         stuck,
+        key,
     });
     let (sender, ended) = mpsc::channel();
     let running = Running {
@@ -473,6 +528,16 @@ pub(super) fn spawn_worker<T: Send + 'static>(
     spawn_worker_within(name, READY_TIMEOUT, &WINDOWS_AUDIO, body)
 }
 
+/// [`spawn_worker`] for the device `device`, whose threads still hanging
+/// hold back only its own starts.
+pub(super) fn spawn_device_worker<T: Send + 'static>(
+    name: &str,
+    device: &str,
+    body: impl FnOnce(Ready<T>) + Send + 'static,
+) -> Result<(Worker, T), BackendError> {
+    spawn_keyed_within(name, device, READY_TIMEOUT, &WINDOWS_AUDIO, body)
+}
+
 /// [`spawn_worker`], waiting `timeout` at most for the thread's start and
 /// for its end, and counting it in `stuck` when it's let go. A thread whose
 /// start doesn't answer in time is let go the same way: it's in a Windows
@@ -483,7 +548,23 @@ pub(super) fn spawn_worker_within<T: Send + 'static>(
     stuck: &'static StuckThreads,
     body: impl FnOnce(Ready<T>) + Send + 'static,
 ) -> Result<(Worker, T), BackendError> {
-    let (running, end) = awaited(stuck);
+    spawn_keyed_within(name, name, timeout, stuck, body)
+}
+
+/// [`spawn_worker_within`] counting the thread under `key` when it's let
+/// go. While [`STUCK_PER_KEY`] threads of that key are still in their call,
+/// no thread starts and it returns [`BackendError::NotResponding`] at once.
+fn spawn_keyed_within<T: Send + 'static>(
+    name: &str,
+    key: &str,
+    timeout: Duration,
+    stuck: &'static StuckThreads,
+    body: impl FnOnce(Ready<T>) + Send + 'static,
+) -> Result<(Worker, T), BackendError> {
+    if stuck.of_key(key) >= STUCK_PER_KEY {
+        return Err(BackendError::NotResponding);
+    }
+    let (running, end) = awaited_keyed(stuck, Some(key.to_owned()));
     let started = spawn_ready_within(name, timeout, move |ready| {
         // Declared first, so it's dropped last, as the thread ends.
         let _running = running;
@@ -875,6 +956,59 @@ mod tests {
         assert!(STUCK.any(), "the thread counts as stuck");
         drop(answer);
         assert!(STUCK.none_within(LONG), "the thread ends");
+    }
+
+    // covers: S331
+    #[test]
+    fn a_start_that_keeps_hanging_stops_adding_threads_until_one_returns() {
+        static STUCK: StuckThreads = StuckThreads::new();
+        let started = Arc::new(AtomicUsize::new(0));
+        let mut answers = Vec::new();
+        for _ in 0..10 {
+            let (answer, hung) = mpsc::channel::<()>();
+            answers.push(answer);
+            let started = Arc::clone(&started);
+            let result = spawn_keyed_within(
+                "audiosync-test",
+                "speakers",
+                Duration::from_millis(50),
+                &STUCK,
+                move |ready: Ready| {
+                    started.fetch_add(1, Ordering::AcqRel);
+                    let _ = hung.recv();
+                    let _ = ready.ok(());
+                },
+            );
+            assert!(matches!(result, Err(BackendError::NotResponding)));
+        }
+        let deadline = Instant::now() + LONG;
+        while started.load(Ordering::Acquire) < STUCK_PER_KEY && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let piled = started.load(Ordering::Acquire);
+        assert_eq!(piled, STUCK_PER_KEY, "threads started for the hung device");
+        let other = spawn_keyed_within(
+            "audiosync-test",
+            "headphones",
+            READY_TIMEOUT,
+            &STUCK,
+            |ready| {
+                let _ = ready.ok(());
+            },
+        );
+        assert!(other.is_ok(), "another device still starts");
+        drop(answers);
+        assert!(STUCK.none_within(LONG), "the hung threads end");
+        let again = spawn_keyed_within(
+            "audiosync-test",
+            "speakers",
+            READY_TIMEOUT,
+            &STUCK,
+            |ready| {
+                let _ = ready.ok(());
+            },
+        );
+        assert!(again.is_ok(), "a start runs again once they returned");
     }
 
     #[test]
