@@ -17,6 +17,7 @@ pub struct Options {
     pub summary: bool,
     pub homepod: bool,
     pub dump: Option<PathBuf>,
+    pub loss: f64,
 }
 
 pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
@@ -33,6 +34,7 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> 
         summary: false,
         homepod: false,
         dump: None,
+        loss: 0.0,
     };
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
@@ -43,6 +45,13 @@ pub fn parse(mut args: impl Iterator<Item = String>) -> Result<Options, String> 
             "--homepod" => options.homepod = true,
             "--dump" => options.dump = Some(PathBuf::from(value()?)),
             "--name" => name = Some(value()?),
+            "--loss" => {
+                options.loss = value()?
+                    .parse()
+                    .ok()
+                    .filter(|percent| (0.0..=100.0).contains(percent))
+                    .ok_or("--loss takes a percent from 0 to 100")?
+            }
             "--deviceid" => options.device_id = television::parse_device_id(&value()?)?,
             "--port" => options.port = value()?.parse().map_err(|_| "bad --port")?,
             "--pin" => {

@@ -2,12 +2,14 @@
 //! receiver's clock when it arrived, so the RTP time can be set against an
 //! anchor (a sync packet or SETRATEANCHORTIME) and the arrival.
 
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::net::{TcpListener, UdpSocket};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Instant, SystemTime};
 
 use crate::dump::unix;
+use crate::realtime::{Declared, Loss};
 use crate::summary;
 
 fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
@@ -48,16 +50,48 @@ fn sync(packet: &[u8]) -> String {
     )
 }
 
-/// Reads `socket` for good, logging its first datagram, the audio on the
-/// data port or a sync packet on the control port.
-pub fn watch_udp(socket: UdpSocket, control: bool, start: Instant) {
+/// Reads `socket` for good: the audio on the data port, which `loss` may
+/// drop, or the control port, whose sync packets show the latency the
+/// sender declares. With `first`, it logs the first datagram.
+pub fn watch_udp(socket: UdpSocket, control: bool, start: Instant, first: bool, loss: Arc<Loss>) {
     thread::spawn(move || {
         let mut buffer = [0u8; 2048];
-        let mut first = true;
-        while let Ok(count) = socket.recv(&mut buffer) {
+        let mut first = first;
+        let mut declared = Declared::default();
+        loop {
+            let (count, from) = match socket.recv_from(&mut buffer) {
+                Ok(datagram) => datagram,
+                // On Windows a resend request to a closed port makes the next
+                // receive fail with ConnectionReset; the socket still works.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::ConnectionReset | ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(_) => break,
+            };
+            let packet = &buffer[..count];
+            if control {
+                let seconds = start.elapsed().as_secs_f64();
+                let lines = [
+                    loss.on_control(packet, from),
+                    declared.sync(packet, seconds),
+                ];
+                for line in lines.into_iter().flatten() {
+                    println!(
+                        "{} {line}, unix {:.6}",
+                        summary::stamp(seconds),
+                        unix(SystemTime::now())
+                    );
+                }
+            } else {
+                loss.on_data(packet);
+            }
             if first {
                 first = false;
-                let packet = &buffer[..count];
                 let (port, fields) = if control {
                     ("control", sync(packet))
                 } else {
