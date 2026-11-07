@@ -236,9 +236,13 @@ impl Rig {
         }
     }
 
-    /// A rig whose host writes 10 ms blocks from the start.
+    /// A rig whose host writes 10 ms blocks from the start, at the 1.75 s
+    /// of the published capture, which these tests were written at.
     pub fn with_host() -> Rig {
-        let mut rig = Rig::new(StreamConfig::default());
+        let mut rig = Rig::new(StreamConfig {
+            latency_frames: 77_175,
+            ..StreamConfig::default()
+        });
         rig.host = Some(Host::new(0.0));
         rig
     }

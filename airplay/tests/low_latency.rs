@@ -1,6 +1,6 @@
-//! The stream at the smallest base latency, 4410 frames (0.1 s), where an
-//! unseen speaker starts (P200): the steps up on lost or late packets, the
-//! timing of the first packets against the sync anchor on a fake clock, and
+//! The stream at the smallest base latency, 4410 frames (0.1 s), where
+//! every stream starts (P200): lost or late packets that never step Lf, the
+//! step itself, the timing of the first packets against the sync anchor on a fake clock, and
 //! resends over loopback.
 
 mod common;
@@ -11,7 +11,7 @@ use audiosync_airplay::audio::FRAMES_PER_PACKET;
 use audiosync_airplay::rtp::{HEADER_BYTES, RESEND_PREFIX_BYTES, ResendRequest, SyncPacket};
 use audiosync_airplay::sdp::Codec;
 use audiosync_airplay::sender::{Sender, SenderConfig, SenderEvent, SpeakerOptions, SpeakerState};
-use audiosync_airplay::stream::{PacketKind, SpeakerId, StepCause, StreamConfig, StreamEvent};
+use audiosync_airplay::stream::{PacketKind, SpeakerId, StreamConfig, StreamEvent};
 use audiosync_airplay::volume::Volume;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 use common::rig::{Host, Rig, decode, host_frame, speaker};
@@ -91,24 +91,21 @@ fn timelines(rig: &Rig) -> Vec<(u128, bool)> {
 
 // covers: P200, P201
 #[test]
-fn a_resend_request_doubles_lf_at_most_once_per_ten_seconds_without_a_flush() {
+fn a_step_doubles_lf_once_to_8820_without_a_flush() {
     let mut rig = low_rig();
     let id = rig.add(speaker(1, Codec::Alac));
     rig.run_for(Duration::from_secs(30));
-    assert_eq!(rig.stream.latency_frames(), LOW, "no loss, no step");
+    assert_eq!(rig.stream.latency_frames(), LOW, "no step asked");
     let mut steps = Vec::new();
-    for _ in 0..6 {
-        burst(&mut rig, id);
+    for _ in 0..3 {
+        rig.stream.step_up(rig.now);
         rig.run_for(Duration::from_secs(1));
-        burst(&mut rig, id);
+        rig.stream.step_up(rig.now);
         steps.push(rig.stream.latency_frames());
-        rig.run_for(Duration::from_millis(8_500));
+        rig.run_for(Duration::from_millis(9_500));
     }
-    assert_eq!(steps, [8_820, 17_640, 35_280, 77_175, 77_175, 77_175]);
-    assert_eq!(
-        timelines(&rig),
-        [(200, false), (400, false), (800, false), (1750, false)]
-    );
+    assert_eq!(steps, [8_820, 8_820, 8_820]);
+    assert_eq!(timelines(&rig), [(200, false)]);
 
     // Seamless: no flush, one first sound, numbering and RTP time run on.
     assert!(
@@ -130,61 +127,21 @@ fn a_resend_request_doubles_lf_at_most_once_per_ten_seconds_without_a_flush() {
         assert!(!pair[1].header.marker);
     }
     let (_, sync) = *rig.syncs(id).last().expect("a sync");
-    assert_eq!(sync.next_rtp.wrapping_sub(sync.rtp_heard), 77_175);
+    assert_eq!(sync.next_rtp.wrapping_sub(sync.rtp_heard), 8_820);
 
     // Never down within the session: a lower Lf from the host is held.
     rig.stream.set_latency(LOW, rig.now);
     rig.run_for(Duration::from_secs(5));
-    assert_eq!(rig.stream.latency_frames(), 77_175);
-}
-
-// covers: P200
-#[test]
-fn a_stray_resend_request_steps_nothing_and_three_within_2_s_do() {
-    let mut rig = low_rig();
-    let id = rig.add(speaker(1, Codec::Alac));
-    rig.run_for(Duration::from_secs(2));
-    for _ in 0..3 {
-        lose_one(&mut rig, id);
-        rig.run_for(Duration::from_millis(2_500));
-    }
-    assert_eq!(rig.stream.latency_frames(), LOW, "one at a time");
-    burst(&mut rig, id);
-    rig.run_for(Duration::from_secs(1));
     assert_eq!(rig.stream.latency_frames(), 8_820);
-    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::Resends));
-}
-
-// covers: P200, P143
-#[test]
-fn a_stall_longer_than_lf_restarts_the_timeline_and_steps_lf() {
-    let mut rig = low_rig();
-    rig.add(speaker(1, Codec::Alac));
-    rig.run_for(Duration::from_secs(2));
-    let mut steps = Vec::new();
-    for _ in 0..3 {
-        let stall = rig.now + Duration::from_millis(1_000);
-        rig.jump_to(stall);
-        rig.answer_flushes();
-        rig.run_for(Duration::from_secs(5));
-        steps.push(rig.stream.latency_frames());
-    }
-    assert_eq!(steps, [8_820, 8_820, 17_640], "at most once per 10 s");
-    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::Stall));
-    assert!(
-        timelines(&rig).contains(&(200, true)),
-        "{:?}",
-        timelines(&rig)
-    );
 }
 
 // covers: P200, P201, P213
 #[test]
 fn a_lower_lf_held_while_sounding_never_applies_below_a_step() {
     let mut rig = low_rig();
-    let id = rig.add(speaker(1, Codec::Alac));
+    rig.add(speaker(1, Codec::Alac));
     rig.run_for(Duration::from_secs(2));
-    burst(&mut rig, id);
+    rig.stream.step_up(rig.now);
     rig.run_for(Duration::from_secs(1));
     assert_eq!(rig.stream.latency_frames(), 8_820);
     rig.stream.set_latency(LOW, rig.now);
@@ -210,7 +167,7 @@ fn a_step_pauses_each_speaker_inside_silence_whatever_its_delay() {
     later.delay = Duration::from_millis(250);
     let two = rig.add(later);
     rig.run_for(Duration::from_secs(2));
-    burst(&mut rig, one);
+    rig.stream.step_up(rig.now);
     rig.run_for(Duration::from_secs(1));
     assert_eq!(rig.stream.latency_frames(), 8_820);
     let lead = |sync: &SyncPacket| sync.next_rtp.wrapping_sub(sync.rtp_heard);
@@ -298,10 +255,8 @@ fn a_step_tells_the_host_where_the_speakers_move_before_they_do() {
     let id = rig.add(speaker(1, Codec::Pcm));
     rig.run_for(Duration::from_secs(2));
     assert_eq!(rig.writer.take_move(), None, "no step, no move");
-    for _ in 0..3 {
-        lose_one(&mut rig, id);
-        rig.run_for(Duration::from_millis(10));
-    }
+    rig.stream.step_up(rig.now);
+    rig.run_for(Duration::from_millis(10));
     let moved = rig.writer.take_move().expect("the step is announced");
     assert_eq!(rig.stream.latency_frames(), LOW, "before the speakers move");
     assert_eq!(moved.frames, 4_410, "by the step");
@@ -331,97 +286,49 @@ fn a_step_tells_the_host_where_the_speakers_move_before_they_do() {
     assert_eq!(moved.position as i64, faded + origin);
 }
 
-// covers: P200
+// covers: P200, P144
 #[test]
-fn a_packet_sent_late_steps_lf_as_a_resend_request_does() {
+fn late_sends_never_raise_lf_and_are_counted() {
     let mut rig = low_rig();
-    rig.add(speaker(1, Codec::Alac));
+    let id = rig.add(speaker(1, Codec::Alac));
     rig.run_for(Duration::from_secs(2));
+    for _ in 0..4 {
+        let late = rig.now + Duration::from_millis(50);
+        rig.jump_to(late);
+        rig.run_for(Duration::from_secs(11));
+    }
     assert_eq!(rig.stream.latency_frames(), LOW);
-    let late = rig.now + Duration::from_millis(50);
-    rig.jump_to(late);
-    rig.run_for(Duration::from_millis(100));
-    assert_eq!(rig.stream.latency_frames(), 8_820);
-    assert_eq!(timelines(&rig), [(200, false)]);
+    assert_eq!(timelines(&rig), []);
+    let counters = rig.stream.speaker_counters(id).expect("counters");
+    assert!(counters.late_packets() >= 4, "{}", counters.late_packets());
 }
 
-// covers: P200
+// covers: P200, P143
 #[test]
-fn late_sends_in_a_speakers_first_second_step_nothing_and_a_late_send_after_it_does() {
+fn resend_bursts_and_stalls_never_raise_lf() {
     let mut rig = low_rig();
-    rig.run_for(Duration::from_secs(1));
-    rig.add(speaker(1, Codec::Alac));
-    // A loaded host wakes the sender late as a speaker starts, as a CI
-    // runner does: the first turn ends past the speaker's first sound,
-    // short of a stall, and a wake 0.2 s on is late again.
-    let slow = rig.now + Duration::from_millis(90);
-    rig.jump_to(slow);
-    rig.run_for(Duration::from_millis(200));
-    let again = rig.now + Duration::from_millis(30);
-    rig.jump_to(again);
+    let id = rig.add(speaker(1, Codec::Alac));
     rig.run_for(Duration::from_secs(2));
+    for _ in 0..4 {
+        burst(&mut rig, id);
+        rig.run_for(Duration::from_secs(11));
+    }
     assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
-    assert_eq!(rig.stream.counters().last_step(), None);
-    let late = rig.now + Duration::from_millis(50);
-    rig.jump_to(late);
-    rig.run_for(Duration::from_millis(100));
-    assert_eq!(rig.stream.latency_frames(), 8_820);
-    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::LateSend));
+    for _ in 0..2 {
+        let stall = rig.now + Duration::from_millis(1_000);
+        rig.jump_to(stall);
+        rig.answer_flushes();
+        rig.run_for(Duration::from_secs(11));
+    }
+    assert_eq!(rig.stream.latency_frames(), LOW);
+    assert_eq!(timelines(&rig), [(100, true), (100, true)]);
 }
 
-// covers: P200
+// covers: P98
 #[test]
-fn a_join_mid_stream_excuses_every_speakers_late_sends_for_a_second() {
-    let mut rig = low_rig();
-    rig.add(speaker(1, Codec::Alac));
-    rig.run_for(Duration::from_secs(3));
-    rig.add(speaker(2, Codec::Alac));
-    // The join's start-up work wakes the sender late, so the first
-    // speaker's packets, long past its own first second, leave late too.
-    let slow = rig.now + Duration::from_millis(50);
-    rig.jump_to(slow);
-    rig.run_for(Duration::from_secs(2));
-    assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
-    assert_eq!(rig.stream.counters().last_step(), None);
-    let late = rig.now + Duration::from_millis(50);
-    rig.jump_to(late);
-    rig.run_for(Duration::from_millis(100));
-    assert_eq!(rig.stream.latency_frames(), 8_820);
-    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::LateSend));
-}
-
-// covers: P200
-#[test]
-fn a_long_delay_edit_counts_late_sends_once_its_second_is_over() {
-    let mut rig = low_rig();
-    let edited = rig.add(speaker(1, Codec::Alac));
-    rig.add(speaker(2, Codec::Alac));
-    rig.run_for(Duration::from_secs(3));
-    // The edit's first sound comes over 5 s on; the grace must not wait for it.
-    assert!(
-        rig.stream
-            .set_delay(edited, Duration::from_secs(5), rig.now)
-    );
-    rig.run_for(Duration::from_secs(2));
-    let late = rig.now + Duration::from_millis(50);
-    rig.jump_to(late);
-    rig.run_for(Duration::from_millis(100));
-    assert_eq!(rig.stream.latency_frames(), 8_820, "{:?}", timelines(&rig));
-    assert_eq!(rig.stream.counters().last_step(), Some(StepCause::LateSend));
-}
-
-// covers: P200
-#[test]
-fn a_restart_flush_answered_late_excuses_its_catch_up_sends() {
-    let mut rig = low_rig();
-    rig.add(speaker(1, Codec::Alac));
-    rig.run_for(Duration::from_secs(3));
-    rig.stream.restart(rig.now);
-    rig.run_for(Duration::from_millis(1_500));
-    rig.answer_flushes();
-    rig.run_for(Duration::from_secs(2));
-    assert_eq!(rig.stream.latency_frames(), LOW, "{:?}", timelines(&rig));
-    assert_eq!(rig.stream.counters().last_step(), None);
+fn a_stream_starts_at_a_tenth_of_a_second_by_default() {
+    assert_eq!(StreamConfig::default().latency_frames, LOW);
+    assert_eq!(SenderConfig::default().latency_frames, LOW);
 }
 
 // covers: P98
@@ -522,33 +429,22 @@ fn a_sender_set_to_a_tenth_of_a_second_states_it_and_serves_resends_over_loopbac
     let playing = events.wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing);
     assert!(playing.is_some(), "never played: {:?}", events.of(&key));
     assert!(wait_until(LONG, || receiver.log().audio.len() >= 100));
-    // A burst of resend requests steps Lf (P200) as a late send on a loaded
-    // runner does, so the step is certain; five, as loopback can lose one.
+    // A burst of resend requests leaves Lf where it is (P200).
     let newest = receiver.log().audio.last().expect("a packet").header.seq;
     for _ in 0..5 {
         receiver.request_resend(newest, 1);
     }
-    let lead = |sync: &SyncPacket| sync.next_rtp.wrapping_sub(sync.rtp_heard);
-    assert!(wait_until(LONG, || receiver
-        .log()
-        .syncs
-        .iter()
-        .any(|(_, _, sync)| lead(sync) == 2 * LOW)));
-    // A wrong second step would state its L about one L later.
     std::thread::sleep(Duration::from_secs(1));
+    let lead = |sync: &SyncPacket| sync.next_rtp.wrapping_sub(sync.rtp_heard);
     let stated: Vec<u32> = receiver
         .log()
         .syncs
         .iter()
         .map(|(_, _, s)| lead(s))
         .collect();
-    let step = stated
-        .iter()
-        .position(|&lf| lf != LOW)
-        .expect("a stepped sync");
     assert!(
-        step > 0 && stated[step..].iter().all(|&lf| lf == 2 * LOW),
-        "Lf 4410 until the one step, 8820 after: {stated:?}"
+        !stated.is_empty() && stated.iter().all(|&lf| lf == LOW),
+        "Lf 4410 throughout: {stated:?}"
     );
 
     // Asked again for the newest packet each time, as the loopback resend

@@ -227,7 +227,7 @@ fn ap2_session_runs_in_order() {
     assert_eq!(stream.get("audioFormat"), Some(&int(0x40000)));
     assert_eq!(stream.get("spf"), Some(&int(352)));
     assert_eq!(stream.get("sr"), Some(&int(44_100)));
-    assert_eq!(stream.get("latencyMin"), Some(&int(11_025)));
+    assert_eq!(stream.get("latencyMin"), Some(&int(4_410)));
     assert_eq!(stream.get("latencyMax"), Some(&int(88_200)));
     assert_eq!(
         stream.get("controlPort"),

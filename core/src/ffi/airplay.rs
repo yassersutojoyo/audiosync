@@ -5530,11 +5530,11 @@ mod tests {
         // SAFETY: a live handle, used by this thread only.
         let latency = unsafe { asc_airplay_latency_ms(handle) };
         assert!(
-            (latency - 1750.0).abs() < 0.01,
-            "Lf 77 175 frames at 44.1 kHz (P98): {latency}"
+            (latency - 100.0).abs() < 0.01,
+            "Lf 4410 frames at 44.1 kHz (P98): {latency}"
         );
         assert_eq!(events.len(), 1, "{events:?}");
-        assert!((events[0].latency_ms - 1750.0).abs() < 0.01, "{events:?}");
+        assert!((events[0].latency_ms - 100.0).abs() < 0.01, "{events:?}");
         assert_eq!(
             events[0],
             Event {
@@ -5652,7 +5652,7 @@ mod tests {
         // L + d_s with no delay of its own, and the receiver's Audio-Latency
         // (P113).
         let latency = events.last().unwrap();
-        assert!((latency.latency_ms - 1750.0).abs() < 0.01, "{latency:?}");
+        assert!((latency.latency_ms - 100.0).abs() < 0.01, "{latency:?}");
         assert_eq!(latency.receiver_latency_frames, 2205);
         // Its own position alone, whatever the master (P119, S413).
         assert!(
@@ -6000,7 +6000,7 @@ mod tests {
         });
         // A speaker added later starts at L + the hold-back.
         let latency = events.last().unwrap();
-        assert!((latency.latency_ms - 2750.0).abs() < 0.01, "{latency:?}");
+        assert!((latency.latency_ms - 1100.0).abs() < 0.01, "{latency:?}");
         // SAFETY: a live handle, used by this thread only; a C string.
         unsafe {
             assert_eq!(asc_airplay_set_hold_back(handle, 1250.0), 1250.0);
@@ -6033,7 +6033,7 @@ mod tests {
         });
         // L + the hold-back + its offset.
         let latency = events.last().unwrap();
-        assert!((latency.latency_ms - 3250.0).abs() < 0.01, "{latency:?}");
+        assert!((latency.latency_ms - 1600.0).abs() < 0.01, "{latency:?}");
         // SAFETY: destroyed once, by this thread.
         unsafe { asc_airplay_destroy(&mut handle) };
     }

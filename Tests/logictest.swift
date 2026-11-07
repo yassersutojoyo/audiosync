@@ -4498,48 +4498,19 @@ do {
             == "[AudioSync] native AirPlay: timeline: L = 1750 ms, restarted",
           "native airplay: latency and timeline log lines")
 
-    // covers: P200 (the Mac host keeps a speaker's stepped Lf, as the Windows host's settings record does)
+    // covers: P200 (the Mac host starts every stream at 0.1 s, whatever Lf the last one reached)
     do {
-        let lfRule: ([Int64]) -> UInt32 = { reported in
+        let freshRule: ([Int64]) -> UInt32 = { reported in
             reported.withUnsafeBufferPointer { asc_airplay_session_latency_frames($0.baseAddress, $0.count) }
         }
-        var stepModel = NativeAirPlayModel()
-        stepModel.apply(.appeared(NativeReceiver(id: "A1", name: "Kitchen", model: "", availability: .available,
-                                                 reason: nil, hints: [])))
-        stepModel.added("A1")
-        _ = stepModel.receiverLatency.newFrames(over: ["A1"], rule: lfRule)
-        _ = stepModel.apply(.timeline(latencyMs: 100, restarted: false))
-        let unstepped = stepModel.receiverLatency.stepped
-        _ = stepModel.apply(.timeline(latencyMs: 200, restarted: false))
-        let steppedNow = stepModel.receiverLatency.stepped
-        check(unstepped.isEmpty && steppedNow == ["A1": 8_820],
-              "airplay latency: only the sender's own step is remembered", "\(unstepped) \(steppedNow)")
-
-        final class SavedSteps { var values: [String: Any] = [:] }
-        let savedSteps = SavedSteps()
-        let stepStore = SettingsStore(read: { savedSteps.values[$0] }, write: { value, key in savedSteps.values[key] = value })
-        stepStore.save(latencyFrames: steppedNow.merging(["B2": 90_000]) { $1 })
-        let loadedSteps = stepStore.load().airplayLatencyFrames
-        var nextStream = NativeReceiverLatency()
-        nextStream.stepped = loadedSteps
-        let startAt = nextStream.newFrames(over: ["A1"], rule: lfRule)
-        let cappedAt = nextStream.newFrames(over: ["B2"], rule: lfRule)
-        nextStream.stepped["A1"] = nil
-        let forgottenAt = nextStream.newFrames(over: ["A1"], rule: lfRule)
-        check(loadedSteps == ["A1": 8_820, "B2": 77_175] && startAt == 8_820 && cappedAt == 77_175 && forgottenAt == 4_410,
-              "airplay latency: a relaunch starts a speaker at its saved step, up to 1.75 s, and at 0.1 s once forgotten",
-              "\(loadedSteps) \(String(describing: startAt)) \(String(describing: cappedAt)) \(String(describing: forgottenAt))")
-
-        // The sender stays at a step until the app sets another Lf, so the emptied stream needs the set.
-        var emptied = NativeReceiverLatency()
-        _ = emptied.newFrames(over: ["A1"], rule: lfRule)
-        emptied.timeline(ms: 200, members: ["A1"])
-        let emptyAt = emptied.newFrames(over: [], rule: lfRule)
-        let joinAt = emptied.newFrames(over: ["B2"], rule: lfRule)
-        emptied.timeline(ms: 100, members: ["B2"])
-        check(emptyAt == 4_410 && joinAt == nil && emptied.stepped == ["A1": 8_820],
-              "airplay latency: a speaker joining after a stepped one left starts at 0.1 s and keeps no step",
-              "\(String(describing: emptyAt)) \(String(describing: joinAt)) \(emptied.stepped)")
+        var afterStep = NativeReceiverLatency()
+        _ = afterStep.newFrames(over: ["A1"], rule: freshRule)
+        afterStep.timeline(ms: 400)
+        let emptiedAt = afterStep.newFrames(over: [], rule: freshRule)
+        let rejoinAt = afterStep.newFrames(over: ["A1"], rule: freshRule)
+        check(emptiedAt == 4_410 && rejoinAt == nil,
+              "airplay latency: a speaker whose last stream stepped starts its next one at 0.1 s",
+              "\(String(describing: emptiedAt)) \(String(describing: rejoinAt))")
     }
 
     // covers: S280, S282, S283 (the Mac host; the Windows tests carry the same names)
@@ -4551,7 +4522,7 @@ do {
         known.report("D2", us: 1_300_000)
         let leaving = known.newFrames(over: [], rule: rule)
         let joining = known.newFrames(over: ["A1", "D2"], rule: rule)
-        check(leaving == 4_410 && joining == 61_740 && known.newFrames(over: ["A1", "D2"], rule: rule) == nil,
+        check(leaving == nil && joining == 61_740 && known.newFrames(over: ["A1", "D2"], rule: rule) == nil,
               "airplay latency: is set from known reports before speakers are added",
               "\(String(describing: leaving)) \(String(describing: joining))")
 
@@ -4622,7 +4593,7 @@ do {
         let outcome = nothing.apply(.latency(id: "A1", ms: 1750, receiverFrames: nil, reportedUs: 0, sources: 0))
         // covers: S283
         check(outcome == nil && nothing.receiverLatency.estimateMs(of: ["A1"]) == 0
-                && nothing.receiverLatency.newFrames(over: ["A1"], rule: rule) == 4_410
+                && nothing.receiverLatency.newFrames(over: ["A1"], rule: rule) == nil
                 && NativeReceiverLatency.reportText(us: 0, sources: 0) == "reports nothing"
                 && NativeReceiverLatency.reportText(us: 220_400, sources: 5) == "reports 220 ms (Audio-Latency, arrivalToRender)",
               "airplay latency: a receiver reporting nothing starts at zero without a warning")

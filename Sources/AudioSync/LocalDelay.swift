@@ -14,7 +14,7 @@ import CAudioSyncCore
 enum LocalDelay {
     /// The AirPlay sender's latency before it reports one: its configured
     /// Lf's default (AirPlay spec P98).
-    static let senderDefaultLatencyMs = 1750.0
+    static let senderDefaultLatencyMs = 100.0
 
     // MARK: The reference (S173)
 

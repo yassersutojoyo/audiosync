@@ -74,7 +74,7 @@ fn set_latency_clamps_and_ignores_a_null_handle() {
     unsafe { asc_airplay_set_latency(ptr::null_mut(), 44_100) };
     let mut handle = asc_airplay_create();
     assert!(!handle.is_null());
-    assert!(latency_becomes(handle, 1750.0), "1.75 s by default");
+    assert!(latency_becomes(handle, 100.0), "0.1 s by default");
     // With no speaker sounding the value applies at once (P201).
     for (frames, ms) in [(1_000, 100.0), (200_000, 2000.0), (44_100, 1000.0)] {
         // SAFETY: a live handle, used by this thread only.

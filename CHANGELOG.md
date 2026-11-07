@@ -11,6 +11,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - AirPlay: when the app falls behind, speaker updates no longer pile up in memory, and each speaker still shows its latest state.
 - Calibration now measures a speaker whose direct sound is a bit quieter than its echo off a wall, instead of refusing it as an ambiguous echo.
 - A Google Cast speaker that was waiting to come back on no longer turns on by itself once it's online, when a preset left it out or its zone was switched without it.
+- AirPlay no longer creeps up to almost two seconds of delay. AudioSync adds 0.1 s on top of what the speaker itself asks for, and that no longer grows when packets arrive late or get lost, or carries over to the next time you play.
 
 ## [0.9.0] - 2026-11-07
 

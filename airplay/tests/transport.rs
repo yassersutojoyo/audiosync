@@ -899,11 +899,13 @@ fn the_host_reads_latency_and_first_sound_and_restarts_the_timeline() {
             ..
         })
     ));
-    assert_eq!(sender.latency(), Duration::from_secs_f64(1.75));
+    assert_eq!(sender.latency(), Duration::from_millis(100));
     assert_eq!(
         sender.local_output_delay(Duration::from_millis(100)),
-        Duration::from_secs_f64(1.75) + Duration::from_millis(100)
+        Duration::from_millis(100) + Duration::from_millis(100)
     );
+    // At 0.1 s the speaker would sound before the flush half below runs.
+    sender.set_latency(77_175);
     let device = receiver.device(13, PCM_TXT);
     let key = device.key.clone();
     let mut delayed = options(-20.0);

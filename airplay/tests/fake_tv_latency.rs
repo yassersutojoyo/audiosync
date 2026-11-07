@@ -121,7 +121,7 @@ fn fake_tv_latency_reaches_the_sender_as_r_s() {
 #[test]
 fn fake_tv_stream_setup_asks_the_lf_in_use_when_it_is_below_the_capture_minimum() {
     let _serial = serial();
-    for (lf, latency_min) in [(None, 11_025), (Some(4_410), 4_410)] {
+    for (lf, latency_min) in [(None, 4_410), (Some(17_640), 11_025)] {
         let server = Ap2Server::start(plain_tv());
         let (sender, writer) = Sender::start(SenderConfig {
             airplay2: true,
@@ -135,7 +135,7 @@ fn fake_tv_stream_setup_asks_the_lf_in_use_when_it_is_below_the_capture_minimum(
             sender.set_latency(frames);
             let applied = events.wait_for(&sender, LONG, |event| {
                 matches!(event, SenderEvent::Timeline { latency, .. }
-                    if *latency == Duration::from_millis(100))
+                    if *latency == Duration::from_millis(400))
             });
             assert!(applied.is_some(), "Lf {frames} applies before any speaker");
         }
@@ -171,7 +171,7 @@ fn read_for(socket: &UdpSocket, span: Duration) -> Vec<(Instant, Vec<u8>)> {
 
 // covers: P200
 #[test]
-fn fake_tv_a_burst_of_resend_requests_raises_lf_by_a_pause_the_size_of_the_step() {
+fn fake_tv_a_burst_of_resend_requests_leaves_lf_at_a_tenth_of_a_second() {
     let _serial = serial();
     let server = Ap2Server::start(plain_tv());
     let [data, control] = <[UdpSocket; 2]>::try_from(server.udp()).expect("two sockets");
@@ -189,8 +189,6 @@ fn fake_tv_a_burst_of_resend_requests_raises_lf_by_a_pause_the_size_of_the_step(
             if *latency == Duration::from_millis(100))
     });
     assert!(started.is_some(), "Lf 4410 applies before any speaker");
-    // Syncs are read from before the speaker joins and until the step is
-    // seen: on a slow runner a late packet can step Lf before the burst does.
     let stop = Arc::new(AtomicBool::new(false));
     let reading = Arc::clone(&stop);
     let watcher = control.try_clone().expect("a control reader");
@@ -249,70 +247,23 @@ fn fake_tv_a_burst_of_resend_requests_raises_lf_by_a_pause_the_size_of_the_step(
             .send_to(&request.encode(), (Ipv4Addr::LOCALHOST, port as u16))
             .expect("the request goes out");
     }
-    let stepped = events.wait_for(&sender, LONG, |event| {
-        matches!(event, SenderEvent::Timeline { latency, restarted: false, .. }
-            if *latency == Duration::from_millis(200))
+    let stepped = events.wait_for(&sender, Duration::from_secs(3), |event| {
+        matches!(event, SenderEvent::Timeline { latency, .. }
+            if *latency != Duration::from_millis(100))
     });
-    let after = read_for(&data, Duration::from_secs(2));
     stop.store(true, Ordering::Relaxed);
     let control_reads = control_reads.join().expect("the control reader");
-    let syncs: Vec<SyncPacket> = control_reads
+    let stated: Vec<u32> = control_reads
         .iter()
         .filter_map(|bytes| SyncPacket::parse(bytes))
-        .collect();
-    let stated: Vec<u32> = syncs
-        .iter()
         .map(|sync| sync.next_rtp.wrapping_sub(sync.rtp_heard))
         .collect();
     let flushed_after = flushes();
-    let cause = sender.stream_counters().last_step();
     sender.shutdown();
-    assert!(stepped.is_some(), "Lf steps to 200 ms on the burst");
-    assert_eq!(flushed_after, flushed, "no FLUSH for the step");
-    let audio: Vec<(Instant, RtpHeader)> = before
-        .iter()
-        .chain(&after)
-        .filter_map(|(at, bytes)| Some((*at, RtpHeader::parse(bytes)?)))
-        .collect();
-    let mut longest = Duration::ZERO;
-    for pair in audio.windows(2) {
-        assert_eq!(
-            pair[1].1.seq,
-            pair[0].1.seq.wrapping_add(1),
-            "numbering runs on"
-        );
-        longest = longest.max(pair[1].0 - pair[0].0);
-    }
-    eprintln!(
-        "fake_tv step: {} packets, longest arrival gap {} ms, syncs state {stated:?}, last step on {cause:?}",
-        audio.len(),
-        longest.as_millis()
-    );
+    assert!(stepped.is_none(), "{stepped:?}");
+    assert_eq!(flushed_after, flushed, "no FLUSH");
     assert!(
-        longest < Duration::from_millis(150),
-        "sending pauses only for the 100 ms step: {longest:?}"
+        !stated.is_empty() && stated.iter().all(|&lf| lf == 4_410),
+        "{stated:?}"
     );
-    let step = stated
-        .iter()
-        .position(|&lf| lf != 4_410)
-        .expect("a sync after the step");
-    assert!(step > 0, "a sync before the step: {stated:?}");
-    assert!(
-        stated[step..].iter().all(|&lf| lf == 8_820),
-        "one step, from 4410 to 8820: {stated:?}"
-    );
-    let earlier = &syncs[step - 1];
-    let sync = syncs.last().expect("a sync after the step");
-    let silence = heard_by(sync, sync.next_rtp) - heard_by(earlier, sync.next_rtp);
-    eprintln!("fake_tv step: silence {:.1} ms", silence * 1_000.0);
-    assert!(
-        (silence - 0.1).abs() < 0.002,
-        "the pause is the step: {silence}"
-    );
-}
-
-/// When a sync says RTP time `rtp` sounds.
-fn heard_by(sync: &SyncPacket, rtp: u32) -> f64 {
-    let at = (sync.time.0 >> 32) as f64 + (sync.time.0 & 0xffff_ffff) as f64 / 4_294_967_296.0;
-    at + f64::from(rtp.wrapping_sub(sync.rtp_heard) as i32) / 44_100.0
 }

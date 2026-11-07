@@ -191,8 +191,6 @@ pub struct AirPlayInfo {
     /// The latency it reported in this run, R_s in ms (a group's largest
     /// member's), 0 when it reported nothing (S283).
     pub reported_latency_ms: f64,
-    /// The Lf its stream last stepped to, which is saved, 0 for none (P200).
-    pub latency_frames: u32,
     /// Whether it plays right now.
     pub playing: bool,
     /// Whether AudioSync keeps credentials from pairing with it, on
@@ -1044,10 +1042,6 @@ pub trait AudioBackend {
     /// The AirPlay speaker's volume slider is held (true) or let go
     /// (false): a level it reads back meanwhile is ignored (S271).
     fn set_airplay_volume_dragging(&mut self, _id: &str, _dragging: bool) {}
-
-    /// Starts an AirPlay speaker's next stream at the saved Lf it last
-    /// stepped to, 0 for none (P200).
-    fn set_airplay_latency_frames(&mut self, _id: &str, _frames: u32) {}
 
     /// A phone's volume step holds the speaker's row as a drag does, until
     /// its steps rest (S291).

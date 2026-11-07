@@ -2779,7 +2779,7 @@ mod tests {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
         use audiosync_airplay::audio::{FRAMES_PER_PACKET, Frame, read_pcm_payload};
-        use audiosync_airplay::rtp::{HEADER_BYTES, ResendRequest, RtpHeader};
+        use audiosync_airplay::rtp::{HEADER_BYTES, RtpHeader};
         use audiosync_airplay::sdp::Codec;
         use audiosync_airplay::session::{MediaDestinations, ReceiverPorts};
         use audiosync_airplay::stream::{PacketKind, SpeakerConfig, StreamEvent};
@@ -2825,7 +2825,7 @@ mod tests {
             start,
         );
 
-        let mut bursts = vec![3.0, 3.1, 3.2];
+        let mut step_at = Some(3.2);
         let mut next_poll = POLL;
         let mut blocks = 0u64;
         let mut t = 0.0f64;
@@ -2833,7 +2833,7 @@ mod tests {
         let mut events = Vec::new();
         let mut polled = 0;
         let mut played: Vec<[f32; 2]> = Vec::new();
-        let mut burst_end = None;
+        let mut step_end = None;
         let mut out = vec![0.0f32; BLOCK * 2];
         while t < 5.0 {
             let block_due = (blocks + 1) as f64 * BLOCK as f64 / f64::from(SESSION_RATE);
@@ -2841,8 +2841,8 @@ mod tests {
             if let Some(at) = stream.poll_timeout() {
                 next = next.min(clock.seconds(at));
             }
-            if let Some(&burst) = bursts.first() {
-                next = next.min(burst);
+            if let Some(at) = step_at {
+                next = next.min(at);
             }
             t = next.max(t + 1e-6);
             let now = clock.instant(t);
@@ -2861,17 +2861,10 @@ mod tests {
                 renderer.render(&mut out);
                 played.extend(out.chunks(2).map(|frame| [frame[0], frame[1]]));
             }
-            if bursts.first().is_some_and(|&burst| burst <= t + 1e-9) {
-                bursts.remove(0);
-                let request = ResendRequest {
-                    seq: 1,
-                    first: 0,
-                    count: 1,
-                };
-                stream.handle_control_packet(speaker, &request.encode(), now);
-                if bursts.is_empty() {
-                    burst_end = Some(played.len());
-                }
+            if step_at.is_some_and(|at| at <= t + 1e-9) {
+                step_at = None;
+                stream.step_up(now);
+                step_end = Some(played.len());
             }
             stream.handle_timeout(now);
             while let Some(transmit) = stream.poll_transmit() {
@@ -2895,7 +2888,7 @@ mod tests {
                 polled = events.len();
             }
         }
-        assert_eq!(stream.latency_frames(), 8_820, "the burst steps Lf");
+        assert_eq!(stream.latency_frames(), 8_820, "Lf steps");
 
         // The speaker's step starts with the packet that fades out.
         let (first_packet, first_rtptime) = events
@@ -2932,7 +2925,7 @@ mod tests {
         let expected = position * i64::from(SESSION_RATE) / 44_100;
 
         // The local output's step starts with its first frame below full.
-        let from = burst_end.expect("the burst was sent");
+        let from = step_end.expect("the step was asked");
         let fade = from
             + played[from..]
                 .iter()

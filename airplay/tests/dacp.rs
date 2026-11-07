@@ -199,6 +199,8 @@ fn warnings(events: &Events, key: &DeviceKey) -> Vec<Warning> {
         .of(key)
         .into_iter()
         .filter_map(|event| match event {
+            // The fake receiver's 50 ms report needs more than the 0.1 s a stream starts at.
+            SpeakerEvent::Warning(Warning::LatencyShortfall { .. }) => None,
             SpeakerEvent::Warning(warning) => Some(warning),
             _ => None,
         })

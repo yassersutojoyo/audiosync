@@ -402,6 +402,23 @@ fn an_own_encoding_joining_late_finds_packets_a_long_delay_back() {
     }
 }
 
+// covers: P84
+#[test]
+fn a_packet_already_cut_leaves_its_send_lead_before_its_time() {
+    let mut rig = Rig::with_host();
+    let mut config = speaker(1, Codec::Alac);
+    config.delay = Duration::from_millis(500);
+    let id = rig.add(config);
+    rig.run_for(Duration::from_secs(5));
+    let audio = rig.audio(id);
+    assert!(audio.len() > 100);
+    for packet in &audio {
+        let j = packet_of(&rig, id, packet.header.timestamp);
+        let early = due(&rig, j, packet.margin, 0.5) - packet.at;
+        assert!((0.003..=0.005).contains(&early), "packet {j}: {early}");
+    }
+}
+
 // covers: P84, P99
 #[test]
 fn pacing() {
@@ -529,7 +546,7 @@ fn sync_latency_and_times() {
     let mut rig = Rig::with_host();
     let id = rig.add(speaker(1, Codec::Alac));
     rig.run_for(Duration::from_secs(4));
-    assert_eq!(rig.stream.latency_frames(), 77_175, "1.75 s by default");
+    assert_eq!(rig.stream.latency_frames(), 77_175, "the rig's 1.75 s");
     assert!((rig.latency() - 1.75).abs() < 1e-9);
     let syncs = rig.syncs(id);
     assert!(syncs.len() >= 4);

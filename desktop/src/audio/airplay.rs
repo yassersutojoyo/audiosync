@@ -1245,9 +1245,6 @@ pub struct AirPlaySpeakers {
     reported_us: BTreeMap<String, u64>,
     /// The Lf last given to the sender, in frames.
     latency_frames: u32,
-    /// The Lf the host last asked, which a timeline event of the sender's
-    /// own step differs from (P200).
-    requested_frames: u32,
     /// E: the largest reported latency among the AirPlay speakers in the
     /// stream, in ms, as it applies now (S283).
     estimate_ms: f64,
@@ -1262,9 +1259,6 @@ pub struct AirPlaySpeakers {
     /// The speakers warned this session that their R_s needs more than the
     /// largest Lf (P200).
     latency_warned: BTreeSet<String>,
-    /// The Lf each speaker's stream last had, where it starts next time
-    /// until the user forgets it (P200).
-    ended_frames: BTreeMap<String, u32>,
     /// Added to every speaker's d_s while a Google Cast speaker plays later
     /// than L (C77), in ms.
     hold_back_ms: f64,
@@ -1357,13 +1351,11 @@ impl AirPlaySpeakers {
             latency,
             reported_us: BTreeMap::new(),
             latency_frames: DEFAULT_LATENCY_FRAMES,
-            requested_frames: DEFAULT_LATENCY_FRAMES,
             estimate_ms: 0.0,
             estimate_held_ms: None,
             row_estimates: BTreeMap::new(),
             latency_held: false,
             latency_warned: BTreeSet::new(),
-            ended_frames: BTreeMap::new(),
             hold_back_ms: 0.0,
             calibration_solo: None,
             volume_read_at: Instant::now(),
@@ -1492,7 +1484,6 @@ impl AirPlaySpeakers {
         self.latency = self.link.latency();
         self.reported_us.clear();
         self.latency_frames = DEFAULT_LATENCY_FRAMES;
-        self.requested_frames = DEFAULT_LATENCY_FRAMES;
         self.estimate_ms = 0.0;
         self.estimate_held_ms = None;
         self.row_estimates.clear();
@@ -1712,21 +1703,14 @@ impl AirPlaySpeakers {
     }
 
     /// Gives the sender the Lf of every speaker in `rows` from the R_s each
-    /// reported and the Lf each last played at (S280, P200), then sets E (S283).
+    /// reported (S280, P200), then sets E (S283).
     fn sync_latency(&mut self, rows: &[String]) {
         let members: Vec<String> = rows.iter().flat_map(|row| self.members_of(row)).collect();
-        let frames = members
-            .iter()
-            .chain(rows)
-            .filter_map(|id| self.ended_frames.get(id).copied())
-            .fold(
-                session_latency_frames(
-                    members
-                        .iter()
-                        .map(|id| self.reported_us.get(id).copied().unwrap_or(0)),
-                ),
-                u32::max,
-            );
+        let frames = session_latency_frames(
+            members
+                .iter()
+                .map(|id| self.reported_us.get(id).copied().unwrap_or(0)),
+        );
         for id in &members {
             let reported = self.reported_us.get(id).copied().unwrap_or(0);
             if exceeds_largest_latency(reported) && self.latency_warned.insert(id.clone()) {
@@ -1741,7 +1725,6 @@ impl AirPlaySpeakers {
         }
         if frames != self.latency_frames {
             self.latency_frames = frames;
-            self.requested_frames = frames;
             self.link.set_latency(frames);
             self.log_latency(&format!("Lf set to {frames} frames"), rows);
         }
@@ -2192,7 +2175,6 @@ impl AirPlaySpeakers {
                         device_level: self.device_level_of(id),
                         delay_ms: settings.delay_ms,
                         reported_latency_ms: self.estimate_of(id),
-                        latency_frames: self.ended_frames.get(id).copied().unwrap_or(0),
                         playing: self.is_playing(id),
                         paired: false,
                         holds_password: false,
@@ -2221,7 +2203,6 @@ impl AirPlaySpeakers {
                     device_level: self.device_level_of(id),
                     delay_ms: settings.delay_ms,
                     reported_latency_ms: self.estimate_of(id),
-                    latency_frames: self.ended_frames.get(id).copied().unwrap_or(0),
                     playing: self.is_playing(id),
                     paired: self.legacy_paired(id) || self.homekit_paired(id),
                     holds_password: self.passwords.contains_key(id),
@@ -2482,7 +2463,6 @@ impl AirPlaySpeakers {
                 .log(|| format!("AirPlay {}: password forgotten", self.label(id)));
         }
         self.credentials_turned_down.remove(id);
-        self.ended_frames.remove(id);
         let homekit = self.forget_homekit(id);
         let homekit_or_password = homekit.is_some() || password;
         let (saved, pruned) = self.store.remove(id);
@@ -2785,15 +2765,6 @@ impl AirPlaySpeakers {
                 name: self.names.get(id).cloned().unwrap_or_else(|| id.clone()),
                 wrong: ask.wrong,
             })
-    }
-
-    /// Starts the speaker's next stream at the saved Lf `frames` it last
-    /// stepped to, 0 for none, up to the steps' cap of 77 175 (P200).
-    pub fn remember_latency(&mut self, id: &str, frames: u32) {
-        if frames > 0 {
-            self.ended_frames
-                .insert(id.to_owned(), frames.min(DEFAULT_LATENCY_FRAMES));
-        }
     }
 
     /// Sets a speaker's own volume s, live: it plays at min(100, s × k)
@@ -3695,22 +3666,7 @@ impl AirPlaySpeakers {
                             .log(|| "AirPlay: the held Lf applies now".to_owned());
                     }
                     self.latency = latency;
-                    let frames = micros_to_frames(latency.as_micros() as u64) as u32;
-                    // An Lf other than the one the host asked is the sender's
-                    // own step; one the host asked is a report's, not remembered.
-                    let stepped = frames != self.requested_frames;
-                    self.latency_frames = frames;
-                    if stepped {
-                        let rows = self.stream_rows(&[]);
-                        let ids: Vec<String> = rows
-                            .iter()
-                            .flat_map(|row| self.members_of(row))
-                            .chain(rows.iter().cloned())
-                            .collect();
-                        for id in ids {
-                            self.ended_frames.insert(id, frames);
-                        }
-                    }
+                    self.latency_frames = micros_to_frames(latency.as_micros() as u64) as u32;
                 }
                 SenderEvent::LatencyHeld { frames } => {
                     self.latency_held = true;
@@ -5713,14 +5669,10 @@ pub mod tests {
         let calls = fake.take_calls();
         assert!(matches!(
             &calls[..],
-            [
-                Call::Latency(4_410),
-                Call::Add { .. },
-                Call::Credentials(..)
-            ]
+            [Call::Add { .. }, Call::Credentials(..)]
         ));
         assert_eq!(
-            calls[2],
+            calls[1],
             Call::Credentials(id.clone(), "0123456789ABCDEF".to_owned())
         );
         drop(airplay);
@@ -5735,7 +5687,7 @@ pub mod tests {
         assert_eq!(airplay.set_enabled(&id, true), Ok(()));
         airplay.set_streaming(true);
         assert_eq!(
-            fake.take_calls()[2..],
+            fake.take_calls()[1..],
             [Call::Credentials(id, "0123456789ABCDEF".to_owned())]
         );
     }
@@ -8165,14 +8117,11 @@ pub mod tests {
         airplay.set_streaming(true);
         assert_eq!(
             fake.take_calls(),
-            [
-                Call::Latency(4_410),
-                Call::Add {
-                    id: id.clone(),
-                    volume: Volume::Db(-12.0),
-                    delay: Duration::ZERO,
-                }
-            ]
+            [Call::Add {
+                id: id.clone(),
+                volume: Volume::Db(-12.0),
+                delay: Duration::ZERO,
+            }]
         );
         airplay.set_streaming(false);
         assert_eq!(fake.take_calls(), [Call::Remove(id.clone())]);
@@ -8746,7 +8695,7 @@ pub mod tests {
         assert!(airplay.submit_password(&id, "hunter2"));
         assert_eq!(airplay.password_prompt(), None);
         assert_eq!(airplay.enabled_ids(), std::slice::from_ref(&id));
-        assert_eq!(fake.take_calls()[1..], joined_with(&id, "hunter2"));
+        assert_eq!(fake.take_calls(), joined_with(&id, "hunter2"));
         assert!(airplay.chosen());
         assert_eq!(
             airplay.speakers()[0].availability,
@@ -10730,15 +10679,12 @@ pub mod tests {
         let volume = airplay_volume(DEFAULT_LOCAL_POSITION, NO_ZONE_POSITION);
         assert_eq!(
             fake.take_calls(),
-            [
-                Call::Latency(4_410),
-                Call::AddTarget {
-                    id: PAIR.to_owned(),
-                    volume,
-                    delay: Duration::ZERO,
-                    members: vec![id_of(&left), id_of(&right)],
-                }
-            ]
+            [Call::AddTarget {
+                id: PAIR.to_owned(),
+                volume,
+                delay: Duration::ZERO,
+                members: vec![id_of(&left), id_of(&right)],
+            }]
         );
         assert!(airplay.chosen());
 
@@ -11080,9 +11026,7 @@ pub mod tests {
         airplay.poll();
         assert!(airplay.chosen(), "Left counts as chosen");
         airplay.set_streaming(true);
-        assert!(
-            matches!(&fake.take_calls()[..], [Call::Latency(4_410), Call::Add { id, .. }] if *id == id_of(&left))
-        );
+        assert!(matches!(&fake.take_calls()[..], [Call::Add { id, .. }] if *id == id_of(&left)));
 
         // Right, held back by the pair, says why it stays off.
         assert_eq!(
@@ -11165,9 +11109,7 @@ pub mod tests {
             AirPlayAvailability::Open
         );
         airplay.set_enabled(PAIR, true).expect("Left can play");
-        assert!(
-            matches!(&fake.take_calls()[..], [Call::Latency(4_410), Call::AddTarget { id, .. }] if id == PAIR)
-        );
+        assert!(matches!(&fake.take_calls()[..], [Call::AddTarget { id, .. }] if id == PAIR));
     }
 
     // covers: P176
@@ -11321,9 +11263,7 @@ pub mod tests {
         let prompt = airplay.password_prompt().expect("a prompt");
         assert_eq!((prompt.name.as_str(), prompt.wrong), ("Right", false));
         assert!(airplay.submit_password(&id_of(&right), "hunter2"));
-        assert!(
-            matches!(&fake.take_calls()[..], [Call::Latency(4_410), Call::AddTarget { id, .. }] if id == PAIR)
-        );
+        assert!(matches!(&fake.take_calls()[..], [Call::AddTarget { id, .. }] if id == PAIR));
         (airplay, left, right)
     }
 
@@ -12353,85 +12293,16 @@ pub mod tests {
 
     // covers: P200
     #[test]
-    fn a_held_lf_that_applies_after_a_step_is_not_remembered_as_one() {
+    fn every_new_stream_starts_at_4410_whatever_lf_the_last_one_reached() {
         let fake = FakeAirPlay::new();
-        let (mut airplay, kitchen, den) = kitchen_and_den(&fake, 0.0);
-        fake.report_latency(&den, 1_300_000, LatencySources::AUDIO_LATENCIES);
-        airplay.poll();
-        assert_eq!(
-            latencies(&fake.take_calls()),
-            [61_740],
-            "held while sounding"
-        );
-        fake.set_latency(Duration::from_millis(200));
-        airplay.poll();
-        fake.set_latency(Duration::from_micros(frames_to_micros(61_740)));
-        airplay.poll();
-        let rows = airplay.speakers();
-        let row = rows
-            .iter()
-            .find(|row| row.id == id_of(&kitchen))
-            .expect("Kitchen");
-        assert_eq!(row.latency_frames, 8_820, "only the step is remembered");
-    }
-
-    // covers: P200
-    #[test]
-    fn airplay_speakers_start_at_the_lf_they_ended_on_until_forgotten() {
-        let fake = FakeAirPlay::new();
-        let (mut airplay, kitchen, den) = kitchen_and_den(&fake, 0.0);
+        let (mut airplay, _kitchen, _den) = kitchen_and_den(&fake, 0.0);
         fake.set_latency(Duration::from_millis(400));
         airplay.poll();
-        let row = |airplay: &AirPlaySpeakers, speaker: &Device| {
-            let rows = airplay.speakers();
-            rows.iter()
-                .find(|row| row.id == id_of(speaker))
-                .expect("its row")
-                .latency_frames
-        };
-        assert_eq!(row(&airplay, &kitchen), 17_640, "the row saves the step");
         airplay.set_streaming(false);
-        assert_eq!(
-            latencies(&fake.take_calls()),
-            [4_410],
-            "the stream has no speaker"
-        );
+        fake.take_calls();
         airplay.set_streaming(true);
         let calls = fake.take_calls();
-        let first_add = calls
-            .iter()
-            .position(|call| matches!(call, Call::Add { .. }))
-            .expect("the speakers join again");
-        assert_eq!(calls[..first_add], [Call::Latency(17_640)], "{calls:?}");
-        airplay.set_streaming(false);
-        for speaker in [&kitchen, &den] {
-            airplay.forget_pairing(&id_of(speaker));
-            airplay.set_enabled(&id_of(speaker), true).unwrap();
-        }
-        fake.take_calls();
-        airplay.set_streaming(true);
-        assert!(
-            latencies(&fake.take_calls()).is_empty(),
-            "forgotten, they start at 4410 again"
-        );
-        assert_eq!(row(&airplay, &den), 0, "forgetting clears the saved Lf");
-        airplay.set_streaming(false);
-        airplay.remember_latency(&id_of(&kitchen), u32::MAX);
-        assert_eq!(
-            row(&airplay, &kitchen),
-            77_175,
-            "a corrupt saved Lf stops at the cap"
-        );
-        airplay.forget_pairing(&id_of(&kitchen));
-        airplay.set_enabled(&id_of(&kitchen), true).unwrap();
-        airplay.remember_latency(&id_of(&den), 8_820);
-        fake.take_calls();
-        airplay.set_streaming(true);
-        assert_eq!(
-            latencies(&fake.take_calls()),
-            [8_820],
-            "a saved Lf starts the next stream"
-        );
+        assert!(latencies(&calls).is_empty(), "{calls:?}");
     }
 
     // covers: S280
@@ -12805,7 +12676,7 @@ pub mod tests {
         fake.report_latency(b2, 50_000, LatencySources::AUDIO_LATENCY);
         fake.report_latency(c3, 1_400_000, LatencySources::AUDIO_LATENCY);
         airplay.poll();
-        assert_eq!(latencies(&fake.take_calls()), [4_410, 14_112, 66_150]);
+        assert_eq!(latencies(&fake.take_calls()), [14_112, 66_150]);
         assert_eq!(ms(airplay.latency()), 3150);
         fake.set_sounding(true);
         airplay.set_enabled(&id_of(c3), false).unwrap();

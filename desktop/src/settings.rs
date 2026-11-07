@@ -218,14 +218,6 @@ pub struct SavedSpeaker {
     /// the next save while the speaker is listed (spec S180).
     #[serde(deserialize_with = "number_or_nan")]
     pub delay_ms: f64,
-    /// The Lf an AirPlay speaker's stream last stepped to, where its next
-    /// stream starts until the user forgets it; 0 for none (P200).
-    #[serde(deserialize_with = "or_default", skip_serializing_if = "is_zero")]
-    pub latency_frames: u32,
-}
-
-fn is_zero(frames: &u32) -> bool {
-    *frames == 0
 }
 
 impl Default for SavedSpeaker {
@@ -234,7 +226,6 @@ impl Default for SavedSpeaker {
             enabled: false,
             volume: DEFAULT_LOCAL_POSITION,
             delay_ms: 0.0,
-            latency_frames: 0,
         }
     }
 }
@@ -263,7 +254,6 @@ impl SavedSpeaker {
             } else {
                 0.0
             },
-            latency_frames: self.latency_frames,
         }
     }
 }
@@ -1864,7 +1854,6 @@ mod tests {
                 enabled: true,
                 volume: 45.0,
                 delay_ms: 180.0,
-                latency_frames: 0,
             },
         );
         settings.airplay.insert(
@@ -1873,7 +1862,6 @@ mod tests {
                 enabled: true,
                 volume: 30.0,
                 delay_ms: 250.0,
-                latency_frames: 0,
             },
         );
         settings
@@ -2808,7 +2796,6 @@ mod tests {
                 enabled: false,
                 volume: 10.0,
                 delay_ms: 0.0,
-                latency_frames: 0
             })
         );
         assert_eq!(loaded.source, SavedSource::System);
@@ -2816,21 +2803,14 @@ mod tests {
 
     // covers: P200
     #[test]
-    fn a_saved_speaker_keeps_its_stepped_lf_and_writes_none_without_one() {
-        let stepped = SavedSpeaker {
-            latency_frames: 8_820,
-            ..SavedSpeaker::default()
-        };
-        let json = serde_json::to_value(stepped).unwrap();
+    fn an_lf_an_older_build_saved_for_a_speaker_is_ignored_and_dropped() {
+        let old = serde_json::json!({"enabled": true, "volume": 50.0, "latency_frames": 77_175});
+        let loaded: SavedSpeaker = serde_json::from_value(old).unwrap();
+        let saved = serde_json::to_value(loaded).unwrap();
         assert_eq!(
-            serde_json::from_value::<SavedSpeaker>(json).unwrap(),
-            stepped
+            saved,
+            serde_json::json!({"enabled": true, "volume": 50.0, "delay_ms": 0.0})
         );
-        let none = serde_json::to_value(SavedSpeaker::default()).unwrap();
-        assert!(none.get("latency_frames").is_none());
-        let broken: SavedSpeaker =
-            serde_json::from_value(serde_json::json!({"latency_frames": "x"})).unwrap();
-        assert_eq!(broken.latency_frames, 0);
     }
 
     // covers: S212
@@ -3028,7 +3008,6 @@ mod tests {
                 enabled: true,
                 volume: 100.0,
                 delay_ms: MAX_DELAY_MS,
-                latency_frames: 0
             })
         );
         assert_eq!(
@@ -3037,7 +3016,6 @@ mod tests {
                 enabled: false,
                 volume: 0.0,
                 delay_ms: 0.0,
-                latency_frames: 0
             })
         );
         assert!(!settings.outputs.contains_key(""));

@@ -902,8 +902,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
         }
         for (id, speaker) in &saved.airplay {
             self.audio.set_airplay_volume(id, speaker.volume);
-            self.audio
-                .set_airplay_latency_frames(id, speaker.latency_frames);
             if speaker.enabled
                 && !self.is_hidden(&airplay_key(id))
                 && !self.auto_connect_skipped
@@ -1054,7 +1052,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     enabled: settings.enabled,
                     volume: settings.volume,
                     delay_ms: settings.delay_ms,
-                    latency_frames: 0,
                 };
                 (id, speaker)
             });
@@ -1065,7 +1062,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     enabled: output.enabled,
                     volume: output.volume,
                     delay_ms: output.delay_ms,
-                    latency_frames: 0,
                 };
                 (output.id, speaker)
             })),
@@ -1079,7 +1075,6 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     enabled: speaker.enabled,
                     volume: speaker.volume,
                     delay_ms: speaker.delay_ms,
-                    latency_frames: speaker.latency_frames,
                 };
                 (speaker.id, saved)
             }),
@@ -9506,10 +9501,7 @@ mod tests {
 
         adapter.set_speaker_enabled(&ap(&kitchen), true);
         assert!(adapter.snapshot().speaker(&ap(&kitchen)).unwrap().enabled);
-        assert!(matches!(
-            fake.take_calls()[..],
-            [Call::Latency(4_410), Call::Add { .. }]
-        ));
+        assert!(matches!(fake.take_calls()[..], [Call::Add { .. }]));
         assert_eq!(local_delay(&adapter, SPEAKERS), 91_200, "L + 150 ms");
 
         adapter.set_speaker_enabled(&ap(&kitchen), false);
@@ -12376,7 +12368,7 @@ mod tests {
         assert_eq!(speaker.volume, 30.0);
         assert!(matches!(
             next.take_calls().as_slice(),
-            [Call::Latency(4_410), Call::Add { id, .. }] if *id == id_of(&kitchen)
+            [Call::Add { id, .. }] if *id == id_of(&kitchen)
         ));
     }
 
@@ -14872,7 +14864,10 @@ mod tests {
         adapter.audio_mut().set_airplay(fake.link(), None);
         adapter.poll();
         assert_eq!(adapter.audio.airplay_sender_latency_ms(), Some(1750.0));
-        assert_eq!(adapter.snapshot().airplay_delay_ms, Some(airplay_ms));
+        assert_eq!(
+            adapter.snapshot().airplay_delay_ms,
+            Some(airplay_ms - crate::audio::outputs::DEFAULT_SENDER_LATENCY_MS + 1750.0)
+        );
     }
 
     // covers: S238, S395
@@ -15522,7 +15517,6 @@ mod tests {
                 enabled: true,
                 volume: 25.0,
                 delay_ms: 120.0,
-                latency_frames: 0
             })
         );
         assert_eq!(saved.outputs[SPEAKERS].volume, 80.0);
@@ -15628,7 +15622,6 @@ mod tests {
                 enabled: true,
                 volume: 30.0,
                 delay_ms: 0.0,
-                latency_frames: 0
             })
         );
         let _ = std::fs::remove_dir_all(dir);

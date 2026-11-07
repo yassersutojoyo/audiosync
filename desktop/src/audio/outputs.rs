@@ -1393,7 +1393,7 @@ mod tests {
     #[test]
     fn the_airplay_delay_base_is_the_last_sender_latency_known() {
         let mut policy = OutputPolicy::new(AirPlay::Unavailable);
-        assert_eq!(DEFAULT_SENDER_LATENCY_MS, L.as_secs_f64() * 1000.0);
+        assert_eq!(DEFAULT_SENDER_LATENCY_MS, 100.0);
         assert_eq!(policy.adjustment_base_ms(), DEFAULT_SENDER_LATENCY_MS);
         policy.set_airplay(sender(false, Duration::from_secs(1)));
         assert_eq!(policy.adjustment_base_ms(), 1000.0);
