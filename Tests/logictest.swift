@@ -17413,6 +17413,17 @@ do {
     check(["SMAppService.mainApp.status", "SourceApps.running()", "allInputDevices()"].allSatisfy(offMainReads.contains),
           "menu bar panel: the open's refresh asks macOS for the login item, the running apps and the inputs off the main thread, so the scrolling title never stalls",
           offMainReads.isEmpty ? "no background read in rereadExternalState" : offMainReads)
+
+    var reads = ExternalReads()
+    let older = reads.begin(), newer = reads.begin()
+    // covers: S406
+    check(!reads.applies(older) && reads.applies(newer) && reads.loginApplies(newer),
+          "menu bar panel: only the newest background read of macOS's state applies when it lands")
+    let switchedDuring = reads.begin()
+    reads.loginChanged()
+    // covers: S406
+    check(reads.applies(switchedDuring) && !reads.loginApplies(switchedDuring) && reads.loginApplies(reads.begin()),
+          "menu bar panel: a login item status read before Launch at Login was switched never undoes the switch")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
