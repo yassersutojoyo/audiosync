@@ -57,7 +57,7 @@ final class SettingsWindowController {
     }
 
     private func reread() {
-        model.actions.refreshExternalState()
+        model.actions.refreshExternalState {}
         updates.reread()
     }
 

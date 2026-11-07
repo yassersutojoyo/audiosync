@@ -377,7 +377,7 @@ extension AppDelegate {
         a.openWebRemote = { [weak self] in self?.openWebRemoteWindow() }
         a.openSettings = { [weak self] in self?.openSettingsWindow() }
         a.refreshDevices = { [weak self] in self?.rescanDevices() }
-        a.refreshExternalState = { [weak self] in self?.rereadExternalState() }
+        a.refreshExternalState = { [weak self] done in self?.rereadExternalState(then: done) }
         a.refreshModel = { [weak self] in self?.pushModel() }
         a.mainWindowVisible = { [weak self] visible in
             guard let self, visible != self.nowPlayingOnScreen else { return }
@@ -490,14 +490,25 @@ extension AppDelegate {
     /// wasn't looking. Opening the panel doesn't activate AudioSync, so this
     /// is also how a change made in System Settings shows after coming back
     /// through the menu bar icon.
-    private func rereadExternalState() {
-        launchAtLogin = SMAppService.mainApp.status == .enabled
-        if Notice.loginSettled(in: appModel.notices, enabled: launchAtLogin, text) {
-            clearNotices([Notice.login])   // changed in System Settings meanwhile
+    private func rereadExternalState(then done: @escaping () -> Void) {
+        let devices = self.devices
+        // Each read waits on another process; on the main thread they held the panel's scrolling title for 56-63 ms.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let login = SMAppService.mainApp.status == .enabled
+            let running = SourceApps.running()
+            let inputDevices = devices.allInputDevices()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.launchAtLogin = login
+                if Notice.loginSettled(in: self.appModel.notices, enabled: login, self.text) {
+                    self.clearNotices([Notice.login])   // changed in System Settings meanwhile
+                }
+                self.recheckLocalNetwork()
+                self.pushSources(running: running, inputDevices: inputDevices)
+                self.pushModel()
+                done()
+            }
         }
-        recheckLocalNetwork()
-        pushSources()
-        pushModel()
     }
 
     private func setAutoConnect(_ key: String, _ on: Bool) {
@@ -599,9 +610,8 @@ extension AppDelegate {
 
     /// Refreshes the source picker: apps come and go, input devices are
     /// plugged in and out.
-    func pushSources() {
-        let running = SourceApps.running()
-        let inputDevices = devices.allInputDevices()
+    func pushSources(running: [SourceApps.Entry] = SourceApps.running(), inputDevices: [AudioDevices.Device]? = nil) {
+        let inputDevices = inputDevices ?? devices.allInputDevices()
         let inputs = inputDevices.map {
             SourceList.Input(uid: $0.uid, name: text.deviceName($0.name), transport: $0.transport,
                              inputSubTransports: $0.inputSubTransports)

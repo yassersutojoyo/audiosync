@@ -172,8 +172,8 @@ final class AppModel: ObservableObject {
         var openGuide: () -> Void = {}
         var refreshDevices: () -> Void = {}
         /// The panel opened or the window became key: re-read what can change
-        /// outside AudioSync.
-        var refreshExternalState: () -> Void = {}
+        /// outside AudioSync, then call back once the model has it.
+        var refreshExternalState: (_ done: @escaping () -> Void) -> Void = { $0() }
         /// Brings the model up to date with AudioSync's own state, without the
         /// slower look outside it (some rows depend on how long a search has run).
         var refreshModel: () -> Void = {}
@@ -1187,13 +1187,14 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             rest = PanelRest(frame: window.frame, content: popover.contentSize, icon: iconMiddle)
             watchTopEdge(window)
         }
-        model.actions.refreshExternalState()
-        let refreshed = Self.uptime
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.host.sizing.followsContent, self.quietQueue.quiet.wait(at: Self.uptime) == 0 else { return }
-            DebugTrace.log(String(format: "[AudioSync] panel quiet: SwiftUI pass %.1f ms", (Self.uptime - refreshed) * 1000))
-            // The final size even if SwiftUI reported no new preferred size.
-            self.resizeLater(self.host.sizeThatFits(in: PanelTopLayout.measuring))
+        model.actions.refreshExternalState { [weak self] in
+            let refreshed = Self.uptime
+            DispatchQueue.main.async {
+                guard let self, self.host.sizing.followsContent, self.quietQueue.quiet.wait(at: Self.uptime) == 0 else { return }
+                DebugTrace.log(String(format: "[AudioSync] panel quiet: SwiftUI pass %.1f ms", (Self.uptime - refreshed) * 1000))
+                // The final size even if SwiftUI reported no new preferred size.
+                self.resizeLater(self.host.sizeThatFits(in: PanelTopLayout.measuring))
+            }
         }
     }
 
