@@ -64,9 +64,9 @@ manual_is_multiple_of = "allow"
 # its threads, or in a call through its C interface) stops at the
 # asc_airplay_* boundary and becomes a failed sender the app restarts,
 # instead of ending the app (src/ffi/airplay.rs, "Panics"). Elsewhere:
-# - a panic that reaches any other extern "C" function aborts there: since
-#   Rust 1.81 unwinding out of an extern "C" function aborts the process, so
-#   it never unwinds into the host (rust-version is above that);
+# - every other extern "C" function stops a panic at its boundary too and
+#   returns its failure value (src/ffi.rs, guard); one that slipped past
+#   would abort there, since Rust 1.81 (rust-version is above that);
 # - a panic on a thread the core spawns ends only that thread. The AirPlay
 #   transport's threads catch it and report a lost connection
 #   (airplay/src/transport.rs, spawn); Cast streaming and discovery and

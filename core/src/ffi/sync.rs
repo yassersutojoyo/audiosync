@@ -9,7 +9,7 @@
 use std::ffi::{CStr, CString, c_char};
 use std::time::Duration;
 
-use super::{host_slice, host_slice_mut};
+use super::{guard, host_slice, host_slice_mut};
 use crate::policy::delay;
 use crate::reader;
 
@@ -22,16 +22,18 @@ use crate::reader;
 /// nothing else touches during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_delay_sanitize_ms(delay_ms: f64, sanitized_ms: *mut f64) -> bool {
-    let Some(sanitized) = delay::sanitize_delay_ms(delay_ms) else {
-        return false;
-    };
-    if sanitized_ms.is_null() {
-        return false;
-    }
-    // SAFETY: non-null, and by the caller's contract aligned, writable and
-    // not touched by anyone else.
-    unsafe { sanitized_ms.write(sanitized) };
-    true
+    guard(false, || {
+        let Some(sanitized) = delay::sanitize_delay_ms(delay_ms) else {
+            return false;
+        };
+        if sanitized_ms.is_null() {
+            return false;
+        }
+        // SAFETY: non-null, and by the caller's contract aligned, writable and
+        // not touched by anyone else.
+        unsafe { sanitized_ms.write(sanitized) };
+        true
+    })
 }
 
 /// [`reader::delay_ms_to_frames`] (S3): false, writing nothing, for a
@@ -47,16 +49,18 @@ pub unsafe extern "C" fn asc_delay_ms_to_frames(
     rate: u32,
     frames: *mut i64,
 ) -> bool {
-    let Some(value) = reader::delay_ms_to_frames(delay_ms, rate) else {
-        return false;
-    };
-    if frames.is_null() {
-        return false;
-    }
-    // SAFETY: non-null, and by the caller's contract aligned, writable and
-    // not touched by anyone else.
-    unsafe { frames.write(value) };
-    true
+    guard(false, || {
+        let Some(value) = reader::delay_ms_to_frames(delay_ms, rate) else {
+            return false;
+        };
+        if frames.is_null() {
+            return false;
+        }
+        // SAFETY: non-null, and by the caller's contract aligned, writable and
+        // not touched by anyone else.
+        unsafe { frames.write(value) };
+        true
+    })
 }
 
 /// A local output taking part, for the hold-backs (S172, S176).
@@ -129,32 +133,34 @@ pub unsafe extern "C" fn asc_local_hold_backs_ms(
     airplay_latency_ms: f64,
     hold_backs_ms: *mut f64,
 ) -> bool {
-    // SAFETY: by the caller's contract each array is null or holds `count`
-    // elements that only this call touches.
-    let (Some(outputs), Some(held)) = (unsafe {
-        (
-            host_slice(outputs, count),
-            host_slice_mut(hold_backs_ms, count),
-        )
-    }) else {
-        return false;
-    };
-    let taking_part: Vec<delay::Participant> = outputs
-        .iter()
-        .map(|output| delay::Participant {
-            id: "",
-            offset_ms: output.offset_ms,
-            is_reference: output.is_reference,
-        })
-        .collect();
-    let latency = airplay_chosen.then_some(airplay_latency_ms);
-    for (out, (_, value)) in held
-        .iter_mut()
-        .zip(delay::hold_backs(&taking_part, latency))
-    {
-        *out = value;
-    }
-    true
+    guard(false, || {
+        // SAFETY: by the caller's contract each array is null or holds `count`
+        // elements that only this call touches.
+        let (Some(outputs), Some(held)) = (unsafe {
+            (
+                host_slice(outputs, count),
+                host_slice_mut(hold_backs_ms, count),
+            )
+        }) else {
+            return false;
+        };
+        let taking_part: Vec<delay::Participant> = outputs
+            .iter()
+            .map(|output| delay::Participant {
+                id: "",
+                offset_ms: output.offset_ms,
+                is_reference: output.is_reference,
+            })
+            .collect();
+        let latency = airplay_chosen.then_some(airplay_latency_ms);
+        for (out, (_, value)) in held
+            .iter_mut()
+            .zip(delay::hold_backs(&taking_part, latency))
+        {
+            *out = value;
+        }
+        true
+    })
 }
 
 /// [`delay::sanitize_offset_ms`] (S175): false, writing nothing, for a
@@ -169,8 +175,10 @@ pub unsafe extern "C" fn asc_local_offset_sanitize_ms(
     offset_ms: f64,
     sanitized_ms: *mut f64,
 ) -> bool {
-    // SAFETY: by the caller's contract.
-    unsafe { write_sanitized(delay::sanitize_offset_ms(offset_ms), sanitized_ms) }
+    guard(false, || {
+        // SAFETY: by the caller's contract.
+        unsafe { write_sanitized(delay::sanitize_offset_ms(offset_ms), sanitized_ms) }
+    })
 }
 
 /// [`delay::sanitize_airplay_delay_ms`] (S178): false, writing nothing, for
@@ -185,14 +193,18 @@ pub unsafe extern "C" fn asc_local_airplay_delay_sanitize_ms(
     delay_ms: f64,
     sanitized_ms: *mut f64,
 ) -> bool {
-    // SAFETY: by the caller's contract.
-    unsafe { write_sanitized(delay::sanitize_airplay_delay_ms(delay_ms), sanitized_ms) }
+    guard(false, || {
+        // SAFETY: by the caller's contract.
+        unsafe { write_sanitized(delay::sanitize_airplay_delay_ms(delay_ms), sanitized_ms) }
+    })
 }
 
 /// [`delay::native_airplay_latency_ms`] (S178).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_local_native_latency_ms(sender_latency_ms: f64, adjustment_ms: f64) -> f64 {
-    delay::native_airplay_latency_ms(sender_latency_ms, adjustment_ms)
+    guard(0.0, || {
+        delay::native_airplay_latency_ms(sender_latency_ms, adjustment_ms)
+    })
 }
 
 /// [`delay::native_airplay_adjustment_ms`] (S178, S181): false, writing
@@ -208,13 +220,15 @@ pub unsafe extern "C" fn asc_local_native_adjustment_ms(
     sender_latency_ms: f64,
     adjustment_ms: *mut f64,
 ) -> bool {
-    // SAFETY: by the caller's contract.
-    unsafe {
-        write_sanitized(
-            delay::native_airplay_adjustment_ms(shown_ms, sender_latency_ms),
-            adjustment_ms,
-        )
-    }
+    guard(false, || {
+        // SAFETY: by the caller's contract.
+        unsafe {
+            write_sanitized(
+                delay::native_airplay_adjustment_ms(shown_ms, sender_latency_ms),
+                adjustment_ms,
+            )
+        }
+    })
 }
 
 /// [`delay::migrate_mac_delays`] (S179) of the `count` entries, writing one
@@ -237,39 +251,42 @@ pub unsafe extern "C" fn asc_local_delay_migrate(
     offsets: *mut AscMigratedOffset,
     result: *mut AscDelayMigration,
 ) -> bool {
-    if result.is_null() {
-        return false;
-    }
-    // SAFETY: by the caller's contract each array is null or holds `count`
-    // elements that only this call touches.
-    let (Some(entries), Some(offsets)) =
-        (unsafe { (host_slice(entries, count), host_slice_mut(offsets, count)) })
-    else {
-        return false;
-    };
-    let stored: Vec<delay::StoredDelay> = entries
-        .iter()
-        .map(|entry| delay::StoredDelay {
-            is_reference: entry.is_reference,
-            stored_delay_ms: entry.has_stored_delay.then_some(entry.stored_delay_ms),
-        })
-        .collect();
-    let migration = delay::migrate_mac_delays(&stored, has_legacy_delay.then_some(legacy_delay_ms));
-    for (out, offset) in offsets.iter_mut().zip(&migration.offsets_ms) {
-        *out = AscMigratedOffset {
-            store: offset.is_some(),
-            offset_ms: offset.unwrap_or(0.0),
+    guard(false, || {
+        if result.is_null() {
+            return false;
+        }
+        // SAFETY: by the caller's contract each array is null or holds `count`
+        // elements that only this call touches.
+        let (Some(entries), Some(offsets)) =
+            (unsafe { (host_slice(entries, count), host_slice_mut(offsets, count)) })
+        else {
+            return false;
         };
-    }
-    // SAFETY: non-null, and by the caller's contract aligned, writable and
-    // not touched by anyone else.
-    unsafe {
-        result.write(AscDelayMigration {
-            airplay_delay_ms: migration.airplay_delay_ms,
-            native_adjustment_ms: migration.native_adjustment_ms,
-        });
-    }
-    true
+        let stored: Vec<delay::StoredDelay> = entries
+            .iter()
+            .map(|entry| delay::StoredDelay {
+                is_reference: entry.is_reference,
+                stored_delay_ms: entry.has_stored_delay.then_some(entry.stored_delay_ms),
+            })
+            .collect();
+        let migration =
+            delay::migrate_mac_delays(&stored, has_legacy_delay.then_some(legacy_delay_ms));
+        for (out, offset) in offsets.iter_mut().zip(&migration.offsets_ms) {
+            *out = AscMigratedOffset {
+                store: offset.is_some(),
+                offset_ms: offset.unwrap_or(0.0),
+            };
+        }
+        // SAFETY: non-null, and by the caller's contract aligned, writable and
+        // not touched by anyone else.
+        unsafe {
+            result.write(AscDelayMigration {
+                airplay_delay_ms: migration.airplay_delay_ms,
+                native_adjustment_ms: migration.native_adjustment_ms,
+            });
+        }
+        true
+    })
 }
 
 /// [`delay::BriefLosses`] (S328) behind an opaque C pointer, with the held
@@ -341,13 +358,15 @@ pub extern "C" fn asc_brief_losses_create() -> *mut AscBriefLosses {
 /// that was not destroyed yet, and no other call on it runs now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_brief_losses_destroy(losses: *mut AscBriefLosses) {
-    if losses.is_null() {
-        return;
-    }
-    // SAFETY: the pointer came from Box::into_raw in asc_brief_losses_create,
-    // and by the caller's contract it is destroyed once, with no call in
-    // progress.
-    drop(unsafe { Box::from_raw(losses) });
+    guard((), || {
+        if losses.is_null() {
+            return;
+        }
+        // SAFETY: the pointer came from Box::into_raw in asc_brief_losses_create,
+        // and by the caller's contract it is destroyed once, with no call in
+        // progress.
+        drop(unsafe { Box::from_raw(losses) });
+    })
 }
 
 /// [`delay::BriefLosses::note_listing`]: the `listed_count` IDs listed at
@@ -371,24 +390,26 @@ pub unsafe extern "C" fn asc_brief_losses_note_listing(
     reference: *const c_char,
     now_s: f64,
 ) {
-    // SAFETY: by the caller's contract.
-    let (Some(losses), Some(listed), Some(enabled), reference) = (unsafe {
-        (
-            losses.as_mut(),
-            host_ids(listed, listed_count),
-            host_ids(enabled, enabled_count),
-            host_id(reference),
-        )
-    }) else {
-        return;
-    };
-    losses.losses.note_listing(
-        listed,
-        |id| enabled.contains(&id),
-        reference,
-        host_time(now_s),
-    );
-    losses.refresh_held();
+    guard((), || {
+        // SAFETY: by the caller's contract.
+        let (Some(losses), Some(listed), Some(enabled), reference) = (unsafe {
+            (
+                losses.as_mut(),
+                host_ids(listed, listed_count),
+                host_ids(enabled, enabled_count),
+                host_id(reference),
+            )
+        }) else {
+            return;
+        };
+        losses.losses.note_listing(
+            listed,
+            |id| enabled.contains(&id),
+            reference,
+            host_time(now_s),
+        );
+        losses.refresh_held();
+    })
 }
 
 /// [`delay::BriefLosses::switched_off`]: whether `id` was held; false for a
@@ -404,13 +425,15 @@ pub unsafe extern "C" fn asc_brief_losses_switched_off(
     losses: *mut AscBriefLosses,
     id: *const c_char,
 ) -> bool {
-    // SAFETY: by the caller's contract.
-    let (Some(losses), Some(id)) = (unsafe { (losses.as_mut(), host_id(id)) }) else {
-        return false;
-    };
-    let was_held = losses.losses.switched_off(id);
-    losses.refresh_held();
-    was_held
+    guard(false, || {
+        // SAFETY: by the caller's contract.
+        let (Some(losses), Some(id)) = (unsafe { (losses.as_mut(), host_id(id)) }) else {
+            return false;
+        };
+        let was_held = losses.losses.switched_off(id);
+        losses.refresh_held();
+        was_held
+    })
 }
 
 /// [`delay::BriefLosses::expire`] at `now_s`: whether any hold ended; false
@@ -421,13 +444,15 @@ pub unsafe extern "C" fn asc_brief_losses_switched_off(
 /// `losses` is null or a live handle that nothing else uses during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_brief_losses_expire(losses: *mut AscBriefLosses, now_s: f64) -> bool {
-    // SAFETY: by the caller's contract.
-    let Some(losses) = (unsafe { losses.as_mut() }) else {
-        return false;
-    };
-    let ended = losses.losses.expire(host_time(now_s));
-    losses.refresh_held();
-    ended
+    guard(false, || {
+        // SAFETY: by the caller's contract.
+        let Some(losses) = (unsafe { losses.as_mut() }) else {
+            return false;
+        };
+        let ended = losses.losses.expire(host_time(now_s));
+        losses.refresh_held();
+        ended
+    })
 }
 
 /// [`delay::BriefLosses::restart`] (S20); nothing for a null handle.
@@ -437,11 +462,13 @@ pub unsafe extern "C" fn asc_brief_losses_expire(losses: *mut AscBriefLosses, no
 /// `losses` is null or a live handle that nothing else uses during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_brief_losses_restart(losses: *mut AscBriefLosses) {
-    // SAFETY: by the caller's contract.
-    if let Some(losses) = unsafe { losses.as_mut() } {
-        losses.losses.restart();
-        losses.refresh_held();
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract.
+        if let Some(losses) = unsafe { losses.as_mut() } {
+            losses.losses.restart();
+            losses.refresh_held();
+        }
+    })
 }
 
 /// How many outputs are held; 0 for a null handle.
@@ -451,8 +478,10 @@ pub unsafe extern "C" fn asc_brief_losses_restart(losses: *mut AscBriefLosses) {
 /// `losses` is null or a live handle that nothing changes during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_brief_losses_held_count(losses: *const AscBriefLosses) -> usize {
-    // SAFETY: by the caller's contract.
-    unsafe { losses.as_ref() }.map_or(0, |losses| losses.held.len())
+    guard(0, || {
+        // SAFETY: by the caller's contract.
+        unsafe { losses.as_ref() }.map_or(0, |losses| losses.held.len())
+    })
 }
 
 /// The ID of held output `index`, sorted by ID; null past the end or for a
@@ -466,10 +495,12 @@ pub unsafe extern "C" fn asc_brief_losses_held_id(
     losses: *const AscBriefLosses,
     index: usize,
 ) -> *const c_char {
-    // SAFETY: by the caller's contract.
-    unsafe { losses.as_ref() }
-        .and_then(|losses| losses.held.get(index))
-        .map_or(std::ptr::null(), |id| id.as_ptr())
+    guard(std::ptr::null(), || {
+        // SAFETY: by the caller's contract.
+        unsafe { losses.as_ref() }
+            .and_then(|losses| losses.held.get(index))
+            .map_or(std::ptr::null(), |id| id.as_ptr())
+    })
 }
 
 /// [`delay::BriefLosses::next_expiry`] into `at_s`, in the host's uptime
@@ -486,10 +517,12 @@ pub unsafe extern "C" fn asc_brief_losses_next_expiry_s(
     losses: *const AscBriefLosses,
     at_s: *mut f64,
 ) -> bool {
-    // SAFETY: by the caller's contract.
-    let next = unsafe { losses.as_ref() }.and_then(|losses| losses.losses.next_expiry());
-    // SAFETY: by the caller's contract.
-    unsafe { write_sanitized(next.map(|at| at.as_secs_f64()), at_s) }
+    guard(false, || {
+        // SAFETY: by the caller's contract.
+        let next = unsafe { losses.as_ref() }.and_then(|losses| losses.losses.next_expiry());
+        // SAFETY: by the caller's contract.
+        unsafe { write_sanitized(next.map(|at| at.as_secs_f64()), at_s) }
+    })
 }
 
 #[cfg(test)]

@@ -46,6 +46,8 @@
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::ffi::{CStr, c_char};
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::eq::{
     self, BAND_CENTERS_HZ, BAND_COUNT, EqControl, EqProcessor, EqSettings, PRESET_COUNT, PRESETS,
@@ -109,6 +111,8 @@ const PRESET_IDS: [&CStr; PRESET_COUNT] = [
 pub struct AscEqualizer {
     control: EqControl,
     processor: EqProcessor,
+    /// Set by a panic in `asc_eq_process`; later ones only fill silence.
+    panicked: AtomicBool,
 }
 
 /// The number of samples in `frames` frames of `channels` channels, if such
@@ -164,35 +168,86 @@ unsafe fn host_slice_mut<'a, T>(ptr: *mut T, len: usize) -> Option<&'a mut [T]> 
     Some(unsafe { std::slice::from_raw_parts_mut(ptr, len) })
 }
 
+/// Runs a C call's `body`, stopping a panic at this boundary: the panic hook
+/// has logged it, and the call returns `failed`. Catching costs nothing until
+/// a panic happens, and allocates nothing.
+fn guard<T>(failed: T, body: impl FnOnce() -> T) -> T {
+    guard_else(body, || failed)
+}
+
+/// [`guard`] for a call that makes its failure value after a panic, such as
+/// a render call that silences its buffer.
+fn guard_else<T>(body: impl FnOnce() -> T, on_panic: impl FnOnce() -> T) -> T {
+    panic::catch_unwind(AssertUnwindSafe(|| {
+        #[cfg(test)]
+        tests::injected_panic();
+        body()
+    }))
+    .unwrap_or_else(|_| on_panic())
+}
+
+/// [`guard_else`] for an audio-thread call on a handle: a panic sets the
+/// handle's `panicked` flag, and from then on its calls run only `on_panic`,
+/// so a bug doesn't panic on every callback.
+fn guard_marked<T>(
+    panicked: Option<&AtomicBool>,
+    body: impl FnOnce() -> T,
+    on_panic: impl FnOnce() -> T,
+) -> T {
+    if panicked.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return on_panic();
+    }
+    guard_else(body, || {
+        if let Some(flag) = panicked {
+            flag.store(true, Ordering::Relaxed);
+        }
+        on_panic()
+    })
+}
+
+/// Sets the `samples` floats at `out` to silence, for a call whose panic left
+/// them half written; nothing for a null `out` or no count.
+///
+/// # Safety
+///
+/// Unless null, `out` points to `samples` aligned, writable floats that
+/// nothing else touches during the call.
+unsafe fn silence(out: *mut f32, samples: Option<usize>) {
+    // SAFETY: by the caller's contract.
+    if let Some(block) = samples.and_then(|samples| unsafe { host_slice_mut(out, samples) }) {
+        block.fill(0.0);
+    }
+}
+
 /// The crate version as a static C string.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_version() -> *const c_char {
-    VERSION_C.as_ptr()
+    guard(std::ptr::null(), || VERSION_C.as_ptr())
 }
 
 /// The C interface version ([`ABI_VERSION`]).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_abi_version() -> u32 {
-    ABI_VERSION
+    guard(0, || ABI_VERSION)
 }
 
 /// [`volume::gain_for_position`] (S70).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_volume_gain(position: f64) -> f64 {
-    volume::gain_for_position(position)
+    guard(0.0, || volume::gain_for_position(position))
 }
 
 /// [`volume::position_for_gain`] (S70).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_volume_position(gain: f64) -> f64 {
-    volume::position_for_gain(gain)
+    guard(0.0, || volume::position_for_gain(gain))
 }
 
 /// [`volume::output_gain`]: a local output's gain from its own position and
 /// the master position (S71).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_output_gain(local_position: f64, master_position: f64) -> f64 {
-    volume::output_gain(local_position, master_position)
+    guard(0.0, || volume::output_gain(local_position, master_position))
 }
 
 /// [`volume::zoned_output_gain`]: a local output's gain through its zone,
@@ -203,7 +258,9 @@ pub extern "C" fn asc_zone_output_gain(
     zone_position: f64,
     master_position: f64,
 ) -> f64 {
-    volume::zoned_output_gain(local_position, zone_position, master_position)
+    guard(0.0, || {
+        volume::zoned_output_gain(local_position, zone_position, master_position)
+    })
 }
 
 /// [`volume::device_level`]: an AirPlay speaker's device level, 0 to 100,
@@ -212,14 +269,14 @@ pub extern "C" fn asc_zone_output_gain(
 /// S413).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_airplay_device_level(own_position: f64, zone_position: f64) -> f64 {
-    volume::device_level(own_position, zone_position)
+    guard(0.0, || volume::device_level(own_position, zone_position))
 }
 
 /// [`volume::row_level`]: the whole number an AirPlay row shows for a
 /// device level (S290).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_airplay_row_level(device_level: f64) -> f64 {
-    volume::row_level(device_level)
+    guard(0.0, || volume::row_level(device_level))
 }
 
 /// [`volume::row_move`]: an AirPlay row moved to `row` writes the own
@@ -238,18 +295,20 @@ pub unsafe extern "C" fn asc_airplay_row_move(
     own_position: *mut f64,
     device_level: *mut f64,
 ) -> bool {
-    if own_position.is_null() || device_level.is_null() {
-        return false;
-    }
-    let Some(moved) = volume::row_move(row, zone_position) else {
-        return false;
-    };
-    // SAFETY: both checked non-null above; by the caller's contract writable.
-    unsafe {
-        *own_position = moved.own_position;
-        *device_level = moved.device_level;
-    }
-    true
+    guard(false, || {
+        if own_position.is_null() || device_level.is_null() {
+            return false;
+        }
+        let Some(moved) = volume::row_move(row, zone_position) else {
+            return false;
+        };
+        // SAFETY: both checked non-null above; by the caller's contract writable.
+        unsafe {
+            *own_position = moved.own_position;
+            *device_level = moved.device_level;
+        }
+        true
+    })
 }
 
 /// [`volume::apply_gain`] on `frames` interleaved stereo frames, in place (S64, S65).
@@ -261,42 +320,53 @@ pub unsafe extern "C" fn asc_airplay_row_move(
 /// and writable, that nothing else accesses during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_apply_gain(interleaved: *mut f32, frames: usize, gain: f32) {
-    let Some(samples) = stereo_samples(frames) else {
-        return;
-    };
-    if interleaved.is_null() || samples == 0 {
-        return;
-    }
-    // SAFETY: the pointer is non-null and, by the caller's contract, addresses
-    // `samples` aligned floats that only this call accesses.
-    let block = unsafe { std::slice::from_raw_parts_mut(interleaved, samples) };
-    volume::apply_gain(block, gain);
+    guard_else(
+        || {
+            let Some(samples) = stereo_samples(frames) else {
+                return;
+            };
+            if interleaved.is_null() || samples == 0 {
+                return;
+            }
+            // SAFETY: the pointer is non-null and, by the caller's contract, addresses
+            // `samples` aligned floats that only this call accesses.
+            let block = unsafe { std::slice::from_raw_parts_mut(interleaved, samples) };
+            volume::apply_gain(block, gain);
+        },
+        || {
+            // SAFETY: by the caller's contract `interleaved` is null or holds that many
+            // writable floats that only this call touches.
+            unsafe { silence(interleaved, stereo_samples(frames)) }
+        },
+    )
 }
 
 /// The number of equalizer bands (S22).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_eq_band_count() -> usize {
-    BAND_COUNT
+    guard(0, || BAND_COUNT)
 }
 
 /// A band's center in Hz, or 0 for a bad index (S22).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_eq_band_center_hz(band: usize) -> f64 {
-    BAND_CENTERS_HZ.get(band).copied().unwrap_or(0.0)
+    guard(0.0, || BAND_CENTERS_HZ.get(band).copied().unwrap_or(0.0))
 }
 
 /// The number of presets (S33).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_eq_preset_count() -> usize {
-    PRESET_COUNT
+    guard(0, || PRESET_COUNT)
 }
 
 /// A preset's identifier as a static C string, or null for a bad index (S33).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_eq_preset_id(preset: usize) -> *const c_char {
-    PRESET_IDS
-        .get(preset)
-        .map_or(std::ptr::null(), |id| id.as_ptr())
+    guard(std::ptr::null(), || {
+        PRESET_IDS
+            .get(preset)
+            .map_or(std::ptr::null(), |id| id.as_ptr())
+    })
 }
 
 /// Writes a preset's band gains in dB; false for a bad index or a null pointer (S33).
@@ -307,17 +377,19 @@ pub extern "C" fn asc_eq_preset_id(preset: usize) -> *const c_char {
 /// else accesses during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_eq_preset_gains(preset: usize, gains_db: *mut f64) -> bool {
-    let Some(preset) = PRESETS.get(preset) else {
-        return false;
-    };
-    if gains_db.is_null() {
-        return false;
-    }
-    // SAFETY: the pointer is non-null and, by the caller's contract, addresses
-    // BAND_COUNT aligned doubles that only this call accesses.
-    let gains = unsafe { std::slice::from_raw_parts_mut(gains_db, BAND_COUNT) };
-    gains.copy_from_slice(&preset.gains_db);
-    true
+    guard(false, || {
+        let Some(preset) = PRESETS.get(preset) else {
+            return false;
+        };
+        if gains_db.is_null() {
+            return false;
+        }
+        // SAFETY: the pointer is non-null and, by the caller's contract, addresses
+        // BAND_COUNT aligned doubles that only this call accesses.
+        let gains = unsafe { std::slice::from_raw_parts_mut(gains_db, BAND_COUNT) };
+        gains.copy_from_slice(&preset.gains_db);
+        true
+    })
 }
 
 /// Whether two saved-curve names are one name: equal ignoring case, with no
@@ -329,24 +401,32 @@ pub unsafe extern "C" fn asc_eq_preset_gains(preset: usize, gains_db: *mut f64) 
 /// call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_eq_same_curve_name(a: *const c_char, b: *const c_char) -> bool {
-    if a.is_null() || b.is_null() {
-        return false;
-    }
-    // SAFETY: non-null, and by the caller's contract NUL-terminated and
-    // unchanged during the call.
-    let (a, b) = unsafe { (CStr::from_ptr(a), CStr::from_ptr(b)) };
-    matches!((a.to_str(), b.to_str()), (Ok(a), Ok(b)) if eq::same_name(a, b))
+    guard(false, || {
+        if a.is_null() || b.is_null() {
+            return false;
+        }
+        // SAFETY: non-null, and by the caller's contract NUL-terminated and
+        // unchanged during the call.
+        let (a, b) = unsafe { (CStr::from_ptr(a), CStr::from_ptr(b)) };
+        matches!((a.to_str(), b.to_str()), (Ok(a), Ok(b)) if eq::same_name(a, b))
+    })
 }
 
 /// Creates an equalizer, disabled and flat, designed for `sample_rate`; null
 /// when the rate is not finite and positive.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_eq_create(sample_rate: f64) -> *mut AscEqualizer {
-    let (mut control, processor) = eq::equalizer();
-    if !control.set_sample_rate(sample_rate) {
-        return std::ptr::null_mut();
-    }
-    Box::into_raw(Box::new(AscEqualizer { control, processor }))
+    guard(std::ptr::null_mut(), || {
+        let (mut control, processor) = eq::equalizer();
+        if !control.set_sample_rate(sample_rate) {
+            return std::ptr::null_mut();
+        }
+        Box::into_raw(Box::new(AscEqualizer {
+            control,
+            processor,
+            panicked: AtomicBool::new(false),
+        }))
+    })
 }
 
 /// Destroys an equalizer.
@@ -357,12 +437,14 @@ pub extern "C" fn asc_eq_create(sample_rate: f64) -> *mut AscEqualizer {
 /// destroyed yet, and no other call on it runs now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_eq_destroy(eq: *mut AscEqualizer) {
-    if eq.is_null() {
-        return;
-    }
-    // SAFETY: the pointer came from Box::into_raw in asc_eq_create, and by the
-    // caller's contract it is destroyed once, with no call in progress.
-    drop(unsafe { Box::from_raw(eq) });
+    guard((), || {
+        if eq.is_null() {
+            return;
+        }
+        // SAFETY: the pointer came from Box::into_raw in asc_eq_create, and by the
+        // caller's contract it is destroyed once, with no call in progress.
+        drop(unsafe { Box::from_raw(eq) });
+    })
 }
 
 /// Control thread: publishes new settings (S31).
@@ -378,23 +460,25 @@ pub unsafe extern "C" fn asc_eq_set_settings(
     preamp_db: f64,
     gains_db: *const f64,
 ) -> bool {
-    if eq.is_null() || gains_db.is_null() {
-        return false;
-    }
-    // SAFETY: the pointer is non-null and, by the caller's contract, addresses
-    // BAND_COUNT aligned doubles that stay unchanged during the call.
-    let gains = unsafe { std::slice::from_raw_parts(gains_db, BAND_COUNT) };
-    let mut settings = EqSettings {
-        enabled,
-        preamp_db,
-        gains_db: [0.0; BAND_COUNT],
-    };
-    settings.gains_db.copy_from_slice(gains);
-    // SAFETY: the handle is live; control calls run on one thread at a time and
-    // borrow only the `control` field, which the capture thread never touches.
-    let control = unsafe { &mut (*eq).control };
-    control.set_settings(settings);
-    true
+    guard(false, || {
+        if eq.is_null() || gains_db.is_null() {
+            return false;
+        }
+        // SAFETY: the pointer is non-null and, by the caller's contract, addresses
+        // BAND_COUNT aligned doubles that stay unchanged during the call.
+        let gains = unsafe { std::slice::from_raw_parts(gains_db, BAND_COUNT) };
+        let mut settings = EqSettings {
+            enabled,
+            preamp_db,
+            gains_db: [0.0; BAND_COUNT],
+        };
+        settings.gains_db.copy_from_slice(gains);
+        // SAFETY: the handle is live; control calls run on one thread at a time and
+        // borrow only the `control` field, which the capture thread never touches.
+        let control = unsafe { &mut (*eq).control };
+        control.set_settings(settings);
+        true
+    })
 }
 
 /// Control thread, while capture is stopped: sets the design rate (S30).
@@ -405,13 +489,15 @@ pub unsafe extern "C" fn asc_eq_set_settings(
 /// control call).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_eq_set_sample_rate(eq: *mut AscEqualizer, sample_rate: f64) -> bool {
-    if eq.is_null() {
-        return false;
-    }
-    // SAFETY: the handle is live; control calls run on one thread at a time and
-    // borrow only the `control` field, which the capture thread never touches.
-    let control = unsafe { &mut (*eq).control };
-    control.set_sample_rate(sample_rate)
+    guard(false, || {
+        if eq.is_null() {
+            return false;
+        }
+        // SAFETY: the handle is live; control calls run on one thread at a time and
+        // borrow only the `control` field, which the capture thread never touches.
+        let control = unsafe { &mut (*eq).control };
+        control.set_sample_rate(sample_rate)
+    })
 }
 
 /// Capture thread: equalizes `frames` interleaved stereo frames in place (S26).
@@ -428,19 +514,31 @@ pub unsafe extern "C" fn asc_eq_process(
     interleaved: *mut f32,
     frames: usize,
 ) {
-    let Some(samples) = stereo_samples(frames) else {
-        return;
-    };
-    if eq.is_null() || interleaved.is_null() || samples == 0 {
-        return;
-    }
-    // SAFETY: the handle is live; process calls run on one thread at a time and
-    // borrow only the `processor` field, which control calls never touch.
-    let processor = unsafe { &mut (*eq).processor };
-    // SAFETY: the pointer is non-null and, by the caller's contract, addresses
-    // `samples` aligned floats that only this call accesses.
-    let block = unsafe { std::slice::from_raw_parts_mut(interleaved, samples) };
-    processor.process(block);
+    // SAFETY: the handle is null or live; this borrows only its atomic flag.
+    let panicked = (!eq.is_null()).then(|| unsafe { &(*eq).panicked });
+    guard_marked(
+        panicked,
+        || {
+            let Some(samples) = stereo_samples(frames) else {
+                return;
+            };
+            if eq.is_null() || interleaved.is_null() || samples == 0 {
+                return;
+            }
+            // SAFETY: the handle is live; process calls run on one thread at a time and
+            // borrow only the `processor` field, which control calls never touch.
+            let processor = unsafe { &mut (*eq).processor };
+            // SAFETY: the pointer is non-null and, by the caller's contract, addresses
+            // `samples` aligned floats that only this call accesses.
+            let block = unsafe { std::slice::from_raw_parts_mut(interleaved, samples) };
+            processor.process(block);
+        },
+        || {
+            // SAFETY: by the caller's contract `interleaved` is null or holds that many
+            // writable floats that only this call touches.
+            unsafe { silence(interleaved, stereo_samples(frames)) }
+        },
+    )
 }
 
 /// Control thread: how many channel resets non-finite values caused (S29, S131).
@@ -451,13 +549,15 @@ pub unsafe extern "C" fn asc_eq_process(
 /// control call).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_eq_nan_resets(eq: *const AscEqualizer) -> u64 {
-    if eq.is_null() {
-        return 0;
-    }
-    // SAFETY: the handle is live; the control thread reads only the `control`
-    // field, which the capture thread never touches.
-    let control = unsafe { &(*eq).control };
-    control.nan_resets()
+    guard(0, || {
+        if eq.is_null() {
+            return 0;
+        }
+        // SAFETY: the handle is live; the control thread reads only the `control`
+        // field, which the capture thread never touches.
+        let control = unsafe { &(*eq).control };
+        control.nan_resets()
+    })
 }
 
 /// Control thread: a local output's linear `gain` with the equalizer's
@@ -474,18 +574,20 @@ pub unsafe extern "C" fn asc_eq_returned_gain(
     gain: f64,
     returned_db: *mut f64,
 ) -> f64 {
-    let (played, db) = if eq.is_null() {
-        (gain, 0.0)
-    } else {
-        // SAFETY: the handle is live; the control thread reads only the
-        // `control` field, which the capture thread never touches.
-        unsafe { &(*eq).control }.returned_gain(gain)
-    };
-    if !returned_db.is_null() {
-        // SAFETY: non-null, and by the caller's contract writable.
-        unsafe { *returned_db = db };
-    }
-    played
+    guard(gain, || {
+        let (played, db) = if eq.is_null() {
+            (gain, 0.0)
+        } else {
+            // SAFETY: the handle is live; the control thread reads only the
+            // `control` field, which the capture thread never touches.
+            unsafe { &(*eq).control }.returned_gain(gain)
+        };
+        if !returned_db.is_null() {
+            // SAFETY: non-null, and by the caller's contract writable.
+            unsafe { *returned_db = db };
+        }
+        played
+    })
 }
 
 #[cfg(test)]
@@ -495,6 +597,27 @@ mod tests {
     use std::f64::consts::PI;
     use std::fs;
     use std::path::Path;
+
+    thread_local! {
+        static PANIC_NEXT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Makes the next guarded C call on this thread panic as it starts.
+    pub(super) fn panic_next() {
+        PANIC_NEXT.with(|next| next.set(true));
+    }
+
+    /// Whether [`panic_next`]'s panic is still waiting, as when no guarded
+    /// call started since; clears it.
+    pub(super) fn panic_still_pending() -> bool {
+        PANIC_NEXT.with(|next| next.replace(false))
+    }
+
+    pub(super) fn injected_panic() {
+        if PANIC_NEXT.with(|next| next.replace(false)) {
+            panic!("a panic injected by a test");
+        }
+    }
 
     const HEADER: &str = include_str!("../include/audiosync_core.h");
 

@@ -5,7 +5,7 @@
 //! For the control thread: both calls allocate, and the estimate takes tens
 //! of ms for recordings of a few seconds.
 
-use super::{host_slice, host_slice_mut};
+use super::{guard, host_slice, host_slice_mut};
 use crate::calibrate::{self, Calibration, NotMeasured, Recording, Refusal, Refused, SWEEPS};
 use crate::policy::delay;
 
@@ -52,7 +52,7 @@ pub struct AscCalibration {
 /// 384 000 Hz.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_calibration_signal_frames(rate: u32) -> usize {
-    calibrate::signal_frames(rate).unwrap_or(0)
+    guard(0, || calibrate::signal_frames(rate).unwrap_or(0))
 }
 
 /// [`calibrate::signal`] (S233) into `samples`: false, writing nothing, for
@@ -69,19 +69,21 @@ pub unsafe extern "C" fn asc_calibration_signal(
     samples: *mut f32,
     frames: usize,
 ) -> bool {
-    if calibrate::signal_frames(rate) != Some(frames) {
-        return false;
-    }
-    // SAFETY: by the caller's contract null or `frames` floats only this call
-    // touches.
-    let Some(out) = (unsafe { host_slice_mut(samples, frames) }) else {
-        return false;
-    };
-    let Some(signal) = calibrate::signal(rate) else {
-        return false;
-    };
-    out.copy_from_slice(&signal);
-    true
+    guard(false, || {
+        if calibrate::signal_frames(rate) != Some(frames) {
+            return false;
+        }
+        // SAFETY: by the caller's contract null or `frames` floats only this call
+        // touches.
+        let Some(out) = (unsafe { host_slice_mut(samples, frames) }) else {
+            return false;
+        };
+        let Some(signal) = calibrate::signal(rate) else {
+            return false;
+        };
+        out.copy_from_slice(&signal);
+        true
+    })
 }
 
 pub(super) fn refusal_code(reason: Refusal) -> u32 {
@@ -120,28 +122,30 @@ pub unsafe extern "C" fn asc_calibration_estimate(
     old_offset_ms: f64,
     result: *mut AscCalibration,
 ) -> bool {
-    // SAFETY: by the caller's contract each array is null or holds its count
-    // of floats that nothing writes during the call.
-    let (Some(signal), Some(reference), Some(chosen)) = (unsafe {
-        (
-            host_slice(signal, signal_frames),
-            host_slice(reference, reference_frames),
-            host_slice(chosen, chosen_frames),
-        )
-    }) else {
-        return false;
-    };
-    if result.is_null() {
-        return false;
-    }
-    let found = match calibrate::estimate(signal, reference, chosen, rate, old_offset_ms) {
-        Ok(found) => accepted(found),
-        Err(refused) => refusal(refused, old_offset_ms),
-    };
-    // SAFETY: non-null, and by the caller's contract aligned, writable and
-    // not touched by anyone else.
-    unsafe { result.write(found) };
-    true
+    guard(false, || {
+        // SAFETY: by the caller's contract each array is null or holds its count
+        // of floats that nothing writes during the call.
+        let (Some(signal), Some(reference), Some(chosen)) = (unsafe {
+            (
+                host_slice(signal, signal_frames),
+                host_slice(reference, reference_frames),
+                host_slice(chosen, chosen_frames),
+            )
+        }) else {
+            return false;
+        };
+        if result.is_null() {
+            return false;
+        }
+        let found = match calibrate::estimate(signal, reference, chosen, rate, old_offset_ms) {
+            Ok(found) => accepted(found),
+            Err(refused) => refusal(refused, old_offset_ms),
+        };
+        // SAFETY: non-null, and by the caller's contract aligned, writable and
+        // not touched by anyone else.
+        unsafe { result.write(found) };
+        true
+    })
 }
 
 fn accepted(found: Calibration) -> AscCalibration {
@@ -196,11 +200,17 @@ pub unsafe extern "C" fn asc_calibration_estimate_agreed(
     result: *mut AscCalibration,
     spread_ms: *mut f64,
 ) -> bool {
-    // SAFETY: by the caller's contract the signal is null or holds its count
-    // of floats, and each list is null or holds SWEEPS entries, unchanged
-    // during the call.
-    let (Some(signal), Some(references), Some(reference_frames), Some(chosen), Some(chosen_frames)) =
-        (unsafe {
+    guard(false, || {
+        // SAFETY: by the caller's contract the signal is null or holds its count
+        // of floats, and each list is null or holds SWEEPS entries, unchanged
+        // during the call.
+        let (
+            Some(signal),
+            Some(references),
+            Some(reference_frames),
+            Some(chosen),
+            Some(chosen_frames),
+        ) = (unsafe {
             (
                 host_slice(signal, signal_frames),
                 host_slice(references, SWEEPS),
@@ -209,45 +219,46 @@ pub unsafe extern "C" fn asc_calibration_estimate_agreed(
                 host_slice(chosen_frames, SWEEPS),
             )
         })
-    else {
-        return false;
-    };
-    let mut runs: [(&[f32], &[f32]); SWEEPS] = [(&[], &[]); SWEEPS];
-    for (i, run) in runs.iter_mut().enumerate() {
-        // SAFETY: by the caller's contract each recording is null or holds
-        // its count of floats that nothing writes during the call.
-        let (Some(reference), Some(chosen)) = (unsafe {
-            (
-                host_slice(references[i], reference_frames[i]),
-                host_slice(chosen[i], chosen_frames[i]),
-            )
-        }) else {
+        else {
             return false;
         };
-        *run = (reference, chosen);
-    }
-    if result.is_null() || spread_ms.is_null() {
-        return false;
-    }
-    let (found, spread) = match calibrate::estimate_agreed(signal, &runs, rate, old_offset_ms) {
-        Ok(found) => (accepted(found), 0.0),
-        Err(NotMeasured::Refused(refused)) => (refusal(refused, old_offset_ms), 0.0),
-        Err(NotMeasured::Disagree { spread_ms }) => (
-            AscCalibration {
-                status: CALIBRATION_DISAGREE,
-                offset_ms: delay::offset_ms(Some(old_offset_ms)),
-                ..AscCalibration::default()
-            },
-            spread_ms,
-        ),
-    };
-    // SAFETY: both non-null, and by the caller's contract aligned, writable
-    // and not touched by anyone else.
-    unsafe {
-        result.write(found);
-        spread_ms.write(spread);
-    }
-    true
+        let mut runs: [(&[f32], &[f32]); SWEEPS] = [(&[], &[]); SWEEPS];
+        for (i, run) in runs.iter_mut().enumerate() {
+            // SAFETY: by the caller's contract each recording is null or holds
+            // its count of floats that nothing writes during the call.
+            let (Some(reference), Some(chosen)) = (unsafe {
+                (
+                    host_slice(references[i], reference_frames[i]),
+                    host_slice(chosen[i], chosen_frames[i]),
+                )
+            }) else {
+                return false;
+            };
+            *run = (reference, chosen);
+        }
+        if result.is_null() || spread_ms.is_null() {
+            return false;
+        }
+        let (found, spread) = match calibrate::estimate_agreed(signal, &runs, rate, old_offset_ms) {
+            Ok(found) => (accepted(found), 0.0),
+            Err(NotMeasured::Refused(refused)) => (refusal(refused, old_offset_ms), 0.0),
+            Err(NotMeasured::Disagree { spread_ms }) => (
+                AscCalibration {
+                    status: CALIBRATION_DISAGREE,
+                    offset_ms: delay::offset_ms(Some(old_offset_ms)),
+                    ..AscCalibration::default()
+                },
+                spread_ms,
+            ),
+        };
+        // SAFETY: both non-null, and by the caller's contract aligned, writable
+        // and not touched by anyone else.
+        unsafe {
+            result.write(found);
+            spread_ms.write(spread);
+        }
+        true
+    })
 }
 
 /// What [`asc_calibration_measure`] found in one recording, for the debug
@@ -283,37 +294,39 @@ pub unsafe extern "C" fn asc_calibration_measure(
     rate: u32,
     result: *mut AscCalibrationArrival,
 ) -> bool {
-    // SAFETY: by the caller's contract each array is null or holds its count
-    // of floats that nothing writes during the call.
-    let (Some(signal), Some(recording)) = (unsafe {
-        (
-            host_slice(signal, signal_frames),
-            host_slice(recording, recording_frames),
-        )
-    }) else {
-        return false;
-    };
-    if result.is_null() {
-        return false;
-    }
-    let found = match calibrate::measure(signal, recording, rate) {
-        Ok(found) => AscCalibrationArrival {
-            status: CALIBRATION_ACCEPTED,
-            frame: found.frame,
-            peak_frame: found.peak_frame,
-            echo_frame: found.echo_frame,
-            peak_over_floor: found.peak_over_floor,
-            echo_share: found.echo_share,
-        },
-        Err(reason) => AscCalibrationArrival {
-            status: refusal_code(reason),
-            ..AscCalibrationArrival::default()
-        },
-    };
-    // SAFETY: non-null, and by the caller's contract aligned, writable and
-    // not touched by anyone else.
-    unsafe { result.write(found) };
-    true
+    guard(false, || {
+        // SAFETY: by the caller's contract each array is null or holds its count
+        // of floats that nothing writes during the call.
+        let (Some(signal), Some(recording)) = (unsafe {
+            (
+                host_slice(signal, signal_frames),
+                host_slice(recording, recording_frames),
+            )
+        }) else {
+            return false;
+        };
+        if result.is_null() {
+            return false;
+        }
+        let found = match calibrate::measure(signal, recording, rate) {
+            Ok(found) => AscCalibrationArrival {
+                status: CALIBRATION_ACCEPTED,
+                frame: found.frame,
+                peak_frame: found.peak_frame,
+                echo_frame: found.echo_frame,
+                peak_over_floor: found.peak_over_floor,
+                echo_share: found.echo_share,
+            },
+            Err(reason) => AscCalibrationArrival {
+                status: refusal_code(reason),
+                ..AscCalibrationArrival::default()
+            },
+        };
+        // SAFETY: non-null, and by the caller's contract aligned, writable and
+        // not touched by anyone else.
+        unsafe { result.write(found) };
+        true
+    })
 }
 
 #[cfg(test)]

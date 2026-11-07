@@ -8,6 +8,7 @@
 
 use std::ffi::{CStr, c_char};
 
+use super::guard;
 use crate::eq::BAND_COUNT;
 use crate::policy::presets::{
     self, LeftOff, Levels, MemberNow, RecallAction, RecallMember, RecallOther, RecallStep, ZoneNow,
@@ -156,27 +157,29 @@ pub unsafe extern "C" fn asc_preset_member_keeps(
     count: usize,
     keep: *mut bool,
 ) {
-    if count == 0 || keys.is_null() || keep.is_null() {
-        return;
-    }
-    // SAFETY: non-null, and by the caller's contract `count` elements each.
-    let (keys, keep) = unsafe {
-        (
-            std::slice::from_raw_parts(keys, count),
-            std::slice::from_raw_parts_mut(keep, count),
-        )
-    };
-    let texts = keys.iter().map(|&key| {
-        if key.is_null() {
-            return None;
+    guard((), || {
+        if count == 0 || keys.is_null() || keep.is_null() {
+            return;
         }
-        // SAFETY: non-null, and by the caller's contract NUL-terminated.
-        let text = unsafe { CStr::from_ptr(key) };
-        text.to_str().ok()
-    });
-    for (slot, kept) in keep.iter_mut().zip(presets::member_keeps(texts)) {
-        *slot = kept;
-    }
+        // SAFETY: non-null, and by the caller's contract `count` elements each.
+        let (keys, keep) = unsafe {
+            (
+                std::slice::from_raw_parts(keys, count),
+                std::slice::from_raw_parts_mut(keep, count),
+            )
+        };
+        let texts = keys.iter().map(|&key| {
+            if key.is_null() {
+                return None;
+            }
+            // SAFETY: non-null, and by the caller's contract NUL-terminated.
+            let text = unsafe { CStr::from_ptr(key) };
+            text.to_str().ok()
+        });
+        for (slot, kept) in keep.iter_mut().zip(presets::member_keeps(texts)) {
+            *slot = kept;
+        }
+    })
 }
 
 /// A preset's levels as stored (S251), in place: each member volume clamped
@@ -198,28 +201,30 @@ pub unsafe extern "C" fn asc_preset_levels(
     master: *mut f64,
     gains_db: *mut f64,
 ) {
-    if !volumes.is_null() && count > 0 {
-        // SAFETY: non-null, and by the caller's contract `count` writable elements.
-        for volume in unsafe { std::slice::from_raw_parts_mut(volumes, count) } {
-            *volume = presets::member_volume(optional(*volume)).unwrap_or(f64::NAN);
+    guard((), || {
+        if !volumes.is_null() && count > 0 {
+            // SAFETY: non-null, and by the caller's contract `count` writable elements.
+            for volume in unsafe { std::slice::from_raw_parts_mut(volumes, count) } {
+                *volume = presets::member_volume(optional(*volume)).unwrap_or(f64::NAN);
+            }
         }
-    }
-    if !zone_volumes.is_null() && zone_count > 0 {
-        // SAFETY: non-null, and by the caller's contract `zone_count` writable elements.
-        for volume in unsafe { std::slice::from_raw_parts_mut(zone_volumes, zone_count) } {
-            *volume = zone_volume(*volume);
+        if !zone_volumes.is_null() && zone_count > 0 {
+            // SAFETY: non-null, and by the caller's contract `zone_count` writable elements.
+            for volume in unsafe { std::slice::from_raw_parts_mut(zone_volumes, zone_count) } {
+                *volume = zone_volume(*volume);
+            }
         }
-    }
-    if !master.is_null() {
-        // SAFETY: non-null, and by the caller's contract one writable element.
-        unsafe { *master = presets::master_volume(*master) };
-    }
-    if !gains_db.is_null() {
-        // SAFETY: non-null, and by the caller's contract ten writable elements.
-        for gain in unsafe { std::slice::from_raw_parts_mut(gains_db, BAND_COUNT) } {
-            *gain = crate::eq::quantize_gain_db(*gain);
+        if !master.is_null() {
+            // SAFETY: non-null, and by the caller's contract one writable element.
+            unsafe { *master = presets::master_volume(*master) };
         }
-    }
+        if !gains_db.is_null() {
+            // SAFETY: non-null, and by the caller's contract ten writable elements.
+            for gain in unsafe { std::slice::from_raw_parts_mut(gains_db, BAND_COUNT) } {
+                *gain = crate::eq::quantize_gain_db(*gain);
+            }
+        }
+    })
 }
 
 /// The plan of a preset recall ([`presets::recall_plan`], S252): its
@@ -244,55 +249,58 @@ pub unsafe extern "C" fn asc_preset_recall_plan(
     set_volume: *mut bool,
     switch_off: *mut bool,
 ) -> u32 {
-    if count > 0 && (members.is_null() || steps.is_null() || set_volume.is_null())
-        || other_count > 0 && (others.is_null() || switch_off.is_null())
-    {
-        return PRESET_RECALL_NOTHING;
-    }
-    // SAFETY: checked above, and by the caller's contract the counts hold.
-    let (members, others) = unsafe { (elements(members, count), elements(others, other_count)) };
-    let members: Vec<RecallMember> = members.iter().map(recall_member).collect();
-    let others: Vec<RecallOther> = others
-        .iter()
-        .map(|other| RecallOther {
-            on: other.on,
-            reference: other.reference,
-        })
-        .collect();
-    let plan = presets::recall_plan(&members, &others, streaming);
-    if count > 0 {
-        // SAFETY: non-null, and by the caller's contract `count` writable elements each.
-        let (out_steps, out_volume) = unsafe {
-            (
-                std::slice::from_raw_parts_mut(steps, count),
-                std::slice::from_raw_parts_mut(set_volume, count),
-            )
-        };
-        for ((slot, flag), (step, set)) in out_steps
-            .iter_mut()
-            .zip(out_volume.iter_mut())
-            .zip(plan.steps.iter().zip(&plan.set_volume))
+    guard(PRESET_RECALL_NOTHING, || {
+        if count > 0 && (members.is_null() || steps.is_null() || set_volume.is_null())
+            || other_count > 0 && (others.is_null() || switch_off.is_null())
         {
-            *slot = step_code(*step);
-            *flag = *set;
+            return PRESET_RECALL_NOTHING;
         }
-    }
-    if other_count > 0 {
-        // SAFETY: non-null, and by the caller's contract `other_count` writable elements.
-        let out = unsafe { std::slice::from_raw_parts_mut(switch_off, other_count) };
-        for (slot, off) in out.iter_mut().zip(&plan.switch_off) {
-            *slot = *off;
+        // SAFETY: checked above, and by the caller's contract the counts hold.
+        let (members, others) =
+            unsafe { (elements(members, count), elements(others, other_count)) };
+        let members: Vec<RecallMember> = members.iter().map(recall_member).collect();
+        let others: Vec<RecallOther> = others
+            .iter()
+            .map(|other| RecallOther {
+                on: other.on,
+                reference: other.reference,
+            })
+            .collect();
+        let plan = presets::recall_plan(&members, &others, streaming);
+        if count > 0 {
+            // SAFETY: non-null, and by the caller's contract `count` writable elements each.
+            let (out_steps, out_volume) = unsafe {
+                (
+                    std::slice::from_raw_parts_mut(steps, count),
+                    std::slice::from_raw_parts_mut(set_volume, count),
+                )
+            };
+            for ((slot, flag), (step, set)) in out_steps
+                .iter_mut()
+                .zip(out_volume.iter_mut())
+                .zip(plan.steps.iter().zip(&plan.set_volume))
+            {
+                *slot = step_code(*step);
+                *flag = *set;
+            }
         }
-    }
-    match plan.action {
-        RecallAction::Nothing => PRESET_RECALL_NOTHING,
-        RecallAction::Apply {
-            start_streaming: false,
-        } => PRESET_RECALL_APPLY,
-        RecallAction::Apply {
-            start_streaming: true,
-        } => PRESET_RECALL_START,
-    }
+        if other_count > 0 {
+            // SAFETY: non-null, and by the caller's contract `other_count` writable elements.
+            let out = unsafe { std::slice::from_raw_parts_mut(switch_off, other_count) };
+            for (slot, off) in out.iter_mut().zip(&plan.switch_off) {
+                *slot = *off;
+            }
+        }
+        match plan.action {
+            RecallAction::Nothing => PRESET_RECALL_NOTHING,
+            RecallAction::Apply {
+                start_streaming: false,
+            } => PRESET_RECALL_APPLY,
+            RecallAction::Apply {
+                start_streaming: true,
+            } => PRESET_RECALL_START,
+        }
+    })
 }
 
 /// Whether the host plays a preset exactly ([`presets::matches`], S253):
@@ -317,55 +325,57 @@ pub unsafe extern "C" fn asc_preset_matches(
     master: f64,
     gains_db: *const f64,
 ) -> bool {
-    if count > 0 && members.is_null()
-        || zone_count > 0 && zones.is_null()
-        || stored_gains_db.is_null()
-        || gains_db.is_null()
-    {
-        return false;
-    }
-    // SAFETY: checked above, and by the caller's contract the counts hold.
-    let (members, zones, stored_gains, gains) = unsafe {
-        (
-            elements(members, count),
-            elements(zones, zone_count),
-            elements(stored_gains_db, BAND_COUNT),
-            elements(gains_db, BAND_COUNT),
+    guard(false, || {
+        if count > 0 && members.is_null()
+            || zone_count > 0 && zones.is_null()
+            || stored_gains_db.is_null()
+            || gains_db.is_null()
+        {
+            return false;
+        }
+        // SAFETY: checked above, and by the caller's contract the counts hold.
+        let (members, zones, stored_gains, gains) = unsafe {
+            (
+                elements(members, count),
+                elements(zones, zone_count),
+                elements(stored_gains_db, BAND_COUNT),
+                elements(gains_db, BAND_COUNT),
+            )
+        };
+        let members: Vec<MemberNow> = members
+            .iter()
+            .map(|member| MemberNow {
+                on: member.on,
+                stored_volume: optional(member.stored_volume),
+                volume: optional(member.volume),
+            })
+            .collect();
+        let zones: Vec<ZoneNow> = zones
+            .iter()
+            .map(|zone| ZoneNow {
+                stored: zone.stored,
+                volume: optional(zone.volume),
+            })
+            .collect();
+        let ten = |slice: &[f64]| {
+            let mut out = [0.0; BAND_COUNT];
+            out.copy_from_slice(slice);
+            out
+        };
+        presets::matches(
+            &members,
+            on_now,
+            &zones,
+            Levels {
+                master: stored_master,
+                gains_db: ten(stored_gains),
+            },
+            Levels {
+                master,
+                gains_db: ten(gains),
+            },
         )
-    };
-    let members: Vec<MemberNow> = members
-        .iter()
-        .map(|member| MemberNow {
-            on: member.on,
-            stored_volume: optional(member.stored_volume),
-            volume: optional(member.volume),
-        })
-        .collect();
-    let zones: Vec<ZoneNow> = zones
-        .iter()
-        .map(|zone| ZoneNow {
-            stored: zone.stored,
-            volume: optional(zone.volume),
-        })
-        .collect();
-    let ten = |slice: &[f64]| {
-        let mut out = [0.0; BAND_COUNT];
-        out.copy_from_slice(slice);
-        out
-    };
-    presets::matches(
-        &members,
-        on_now,
-        &zones,
-        Levels {
-            master: stored_master,
-            gains_db: ten(stored_gains),
-        },
-        Levels {
-            master,
-            gains_db: ten(gains),
-        },
-    )
+    })
 }
 
 #[cfg(test)]

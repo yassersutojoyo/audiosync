@@ -10,6 +10,7 @@
 
 use std::ffi::{CStr, c_char};
 
+use super::guard;
 use crate::policy::device_volume::{self, Decision, DeviceVolume};
 
 /// [`Decision::Unknown`]: neither part is known, the row shows nothing.
@@ -87,19 +88,21 @@ fn decision(code: u32) -> Option<Decision> {
 /// a muted device (S197).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_device_volume_decide(reading: AscDeviceVolume) -> AscDeviceVolumeDecision {
-    let reading = DeviceVolume::from(reading);
-    let decision = reading.decision();
-    let percent = reading.percent();
-    let fix = reading.fix();
-    AscDeviceVolumeDecision {
-        decision: code(decision),
-        shows_hint: decision.shows_hint(),
-        has_percent: percent.is_some(),
-        percent: percent.unwrap_or(0),
-        fix_sets_volume: fix.volume.is_some(),
-        fix_volume: fix.volume.unwrap_or(0.0),
-        fix_unmutes: fix.unmute,
-    }
+    guard(AscDeviceVolumeDecision::default(), || {
+        let reading = DeviceVolume::from(reading);
+        let decision = reading.decision();
+        let percent = reading.percent();
+        let fix = reading.fix();
+        AscDeviceVolumeDecision {
+            decision: code(decision),
+            shows_hint: decision.shows_hint(),
+            has_percent: percent.is_some(),
+            percent: percent.unwrap_or(0),
+            fix_sets_volume: fix.volume.is_some(),
+            fix_volume: fix.volume.unwrap_or(0.0),
+            fix_unmutes: fix.unmute,
+        }
+    })
 }
 
 /// Whether a reading whose decision is `now` gets a log line after one whose
@@ -114,15 +117,17 @@ pub extern "C" fn asc_device_volume_decision_changed(
     previous: u32,
     now: u32,
 ) -> bool {
-    let Some(now) = decision(now) else {
-        return false;
-    };
-    let previous = if has_previous {
-        decision(previous)
-    } else {
-        None
-    };
-    device_volume::decision_change(previous, now).is_some()
+    guard(false, || {
+        let Some(now) = decision(now) else {
+            return false;
+        };
+        let previous = if has_previous {
+            decision(previous)
+        } else {
+            None
+        };
+        device_volume::decision_change(previous, now).is_some()
+    })
 }
 
 /// A decision's name in the debug log, "unknown", "fine", "low", "muted" or
@@ -130,15 +135,17 @@ pub extern "C" fn asc_device_volume_decision_changed(
 /// (S201).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_device_volume_decision_name(decision_code: u32) -> *const c_char {
-    let name: &CStr = match decision(decision_code) {
-        Some(Decision::Unknown) => c"unknown",
-        Some(Decision::Fine) => c"fine",
-        Some(Decision::Low) => c"low",
-        Some(Decision::Muted) => c"muted",
-        Some(Decision::MutedAndLow) => c"muted and low",
-        None => return std::ptr::null(),
-    };
-    name.as_ptr()
+    guard(std::ptr::null(), || {
+        let name: &CStr = match decision(decision_code) {
+            Some(Decision::Unknown) => c"unknown",
+            Some(Decision::Fine) => c"fine",
+            Some(Decision::Low) => c"low",
+            Some(Decision::Muted) => c"muted",
+            Some(Decision::MutedAndLow) => c"muted and low",
+            None => return std::ptr::null(),
+        };
+        name.as_ptr()
+    })
 }
 
 #[cfg(test)]

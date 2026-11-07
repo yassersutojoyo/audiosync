@@ -7,6 +7,7 @@
 
 use std::ffi::{CStr, c_char};
 
+use super::guard;
 use crate::policy::source::AudioSource;
 use crate::policy::source_quit::{self, SourceQuitAction, SourceQuitWatch, WhenSourceQuits};
 
@@ -53,20 +54,22 @@ pub unsafe extern "C" fn asc_source_quit_decide(
     quit_app: *const c_char,
     streaming: u32,
 ) -> u32 {
-    // SAFETY: by the caller's contract each is null or a NUL-terminated string.
-    let (setting, source, quit_app) =
-        unsafe { (host_text(setting), host_text(source), host_text(quit_app)) };
-    let streaming = match streaming {
-        STREAMING_RUNNING => source_quit::Streaming::Running,
-        STREAMING_REBUILDING => source_quit::Streaming::Rebuilding,
-        _ => source_quit::Streaming::Off,
-    };
-    let mut watch = SourceQuitWatch::new(WhenSourceQuits::from_stored(setting));
-    match watch.app_exited(&AudioSource::from_stored(source), quit_app, streaming) {
-        SourceQuitAction::Keep => SOURCE_QUIT_KEEP,
-        SourceQuitAction::Stop => SOURCE_QUIT_STOP,
-        SourceQuitAction::SwitchToSystem => SOURCE_QUIT_SWITCH_TO_SYSTEM,
-    }
+    guard(SOURCE_QUIT_KEEP, || {
+        // SAFETY: by the caller's contract each is null or a NUL-terminated string.
+        let (setting, source, quit_app) =
+            unsafe { (host_text(setting), host_text(source), host_text(quit_app)) };
+        let streaming = match streaming {
+            STREAMING_RUNNING => source_quit::Streaming::Running,
+            STREAMING_REBUILDING => source_quit::Streaming::Rebuilding,
+            _ => source_quit::Streaming::Off,
+        };
+        let mut watch = SourceQuitWatch::new(WhenSourceQuits::from_stored(setting));
+        match watch.app_exited(&AudioSource::from_stored(source), quit_app, streaming) {
+            SourceQuitAction::Keep => SOURCE_QUIT_KEEP,
+            SourceQuitAction::Stop => SOURCE_QUIT_STOP,
+            SourceQuitAction::SwitchToSystem => SOURCE_QUIT_SWITCH_TO_SYSTEM,
+        }
+    })
 }
 
 #[cfg(test)]

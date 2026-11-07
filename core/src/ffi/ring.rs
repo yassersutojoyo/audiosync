@@ -12,8 +12,9 @@
 
 use std::ptr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::{host_slice, host_slice_mut, stereo_samples};
+use super::{guard, guard_marked, host_slice, host_slice_mut, silence, stereo_samples};
 use crate::clock;
 use crate::meter;
 use crate::reader::{Correction, ReadReport, Reader, ReaderControl, ReaderCounters};
@@ -48,6 +49,8 @@ pub struct AscRing {
 /// The ring's single writer behind an opaque C pointer (S35).
 pub struct AscRingWriter {
     pub(crate) writer: RingWriter,
+    /// Set by a panic in `asc_ring_write`; later ones write nothing.
+    panicked: AtomicBool,
 }
 
 /// A delay reader behind an opaque C pointer (S41): the output thread's
@@ -55,6 +58,8 @@ pub struct AscRingWriter {
 pub struct AscReader {
     control: ReaderControl,
     reader: Reader,
+    /// Set by a panic in a read; later ones only fill silence.
+    panicked: AtomicBool,
 }
 
 /// [`ReadReport`] for C.
@@ -213,27 +218,70 @@ unsafe fn read_with(
     read(reader, block).into()
 }
 
+/// [`read_with`] behind [`guard`], with its report put to `report`. A panic
+/// marks the reader, and from then on its reads only silence the block, so a
+/// bug doesn't panic on every callback.
+///
+/// # Safety
+///
+/// As [`read_with`]; `report` is null or points to an aligned, writable
+/// [`AscReadReport`] that nothing else touches during the call.
+unsafe fn read_guarded(
+    reader: *mut AscReader,
+    dst: *mut f32,
+    frames: usize,
+    report: *mut AscReadReport,
+    read: impl FnOnce(&mut Reader, &mut [f32]) -> ReadReport,
+) {
+    // SAFETY: the handle is null or live; this borrows only the `panicked`
+    // flag, which only reads use, atomically.
+    let panicked = (!reader.is_null()).then(|| unsafe { &(*reader).panicked });
+    let done = if panicked.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        None
+    } else {
+        guard(None, || {
+            // SAFETY: the caller's contract is read_with's.
+            Some(unsafe { read_with(reader, dst, frames, read) })
+        })
+    };
+    let done = done.unwrap_or_else(|| {
+        if let Some(flag) = panicked {
+            flag.store(true, Ordering::Relaxed);
+        }
+        // SAFETY: by the caller's contract `dst` is null or holds that many
+        // writable floats that only this call touches.
+        unsafe { silence(dst, stereo_samples(frames)) };
+        AscReadReport::default()
+    });
+    // SAFETY: by the caller's contract `report` is null or writable.
+    unsafe { put_report(report, done) };
+}
+
 /// Ring capacity for 24 s at `rate`, or 0 for an unsupported rate (S16, S36).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_ring_capacity_for_rate(rate: u32) -> usize {
-    if ring::is_supported_rate(rate) {
-        ring::capacity_for_rate(rate)
-    } else {
-        0
-    }
+    guard(0, || {
+        if ring::is_supported_rate(rate) {
+            ring::capacity_for_rate(rate)
+        } else {
+            0
+        }
+    })
 }
 
 /// Creates an empty ring of `capacity_frames` frames with the smallest margin
 /// (S35, S40); null outside [`MIN_RING_FRAMES`]..=[`MAX_RING_FRAMES`].
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_ring_create(capacity_frames: usize) -> *mut AscRing {
-    if !(MIN_RING_FRAMES..=MAX_RING_FRAMES).contains(&capacity_frames) {
-        return ptr::null_mut();
-    }
-    match Ring::new(capacity_frames, MIN_MARGIN_FRAMES) {
-        Ok(ring) => Box::into_raw(Box::new(AscRing { ring })),
-        Err(_) => ptr::null_mut(),
-    }
+    guard(ptr::null_mut(), || {
+        if !(MIN_RING_FRAMES..=MAX_RING_FRAMES).contains(&capacity_frames) {
+            return ptr::null_mut();
+        }
+        match Ring::new(capacity_frames, MIN_MARGIN_FRAMES) {
+            Ok(ring) => Box::into_raw(Box::new(AscRing { ring })),
+            Err(_) => ptr::null_mut(),
+        }
+    })
 }
 
 /// Destroys a ring handle; its writer and readers keep the frames alive.
@@ -244,12 +292,14 @@ pub extern "C" fn asc_ring_create(capacity_frames: usize) -> *mut AscRing {
 /// destroyed yet, and no other call on it runs now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_ring_destroy(ring: *mut AscRing) {
-    if ring.is_null() {
-        return;
-    }
-    // SAFETY: the pointer came from Box::into_raw in asc_ring_create, and by
-    // the caller's contract it is destroyed once, with no call in progress.
-    drop(unsafe { Box::from_raw(ring) });
+    guard((), || {
+        if ring.is_null() {
+            return;
+        }
+        // SAFETY: the pointer came from Box::into_raw in asc_ring_create, and by
+        // the caller's contract it is destroyed once, with no call in progress.
+        drop(unsafe { Box::from_raw(ring) });
+    })
 }
 
 /// The ring's capacity C in frames.
@@ -259,8 +309,10 @@ pub unsafe extern "C" fn asc_ring_destroy(ring: *mut AscRing) {
 /// `ring` is null or a live ring handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_ring_capacity(ring: *const AscRing) -> usize {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { ring_of(ring) }.map_or(0, |ring| ring.capacity())
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { ring_of(ring) }.map_or(0, |ring| ring.capacity())
+    })
 }
 
 /// Whether the ring can serve a session at `rate` (S16, S36).
@@ -270,8 +322,10 @@ pub unsafe extern "C" fn asc_ring_capacity(ring: *const AscRing) -> usize {
 /// `ring` is null or a live ring handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_ring_supports_rate(ring: *const AscRing, rate: u32) -> bool {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { ring_of(ring) }.is_some_and(|ring| ring.supports_rate(rate))
+    guard(false, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { ring_of(ring) }.is_some_and(|ring| ring.supports_rate(rate))
+    })
 }
 
 /// Any thread: W, the frames written since the last reset, which is also the
@@ -282,8 +336,10 @@ pub unsafe extern "C" fn asc_ring_supports_rate(ring: *const AscRing, rate: u32)
 /// `ring` is null or a live ring handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_ring_frames_written(ring: *const AscRing) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { ring_of(ring) }.map_or(0, |ring| ring.frames_written())
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { ring_of(ring) }.map_or(0, |ring| ring.frames_written())
+    })
 }
 
 /// Any thread: the largest sample magnitude written since the last call,
@@ -294,22 +350,24 @@ pub unsafe extern "C" fn asc_ring_frames_written(ring: *const AscRing) -> u64 {
 /// `ring` is null or a live ring handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_ring_take_peak(ring: *const AscRing) -> f32 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { ring_of(ring) }.map_or(0.0, |ring| ring.take_peak())
+    guard(0.0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { ring_of(ring) }.map_or(0.0, |ring| ring.take_peak())
+    })
 }
 
 /// [`meter::meter_level`]: the level meter's length, 0 to 1, after a poll
 /// that took `peak` while it showed `previous`.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_meter_level(previous: f32, peak: f32) -> f32 {
-    meter::meter_level(previous, peak)
+    guard(0.0, || meter::meter_level(previous, peak))
 }
 
 /// [`meter::meter_spoken_percent`]: the meter's length as a screen reader
 /// reads it, in steps of 10 percent.
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_meter_spoken_percent(level: f32) -> u32 {
-    meter::meter_spoken_percent(level)
+    guard(0, || meter::meter_spoken_percent(level))
 }
 
 /// Any thread: K, the session lead of the ring's renderers in capture
@@ -326,18 +384,20 @@ pub unsafe extern "C" fn asc_ring_session_lead_frames(
     ring: *const AscRing,
     frames: *mut i64,
 ) -> bool {
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some(lead) =
-        (unsafe { ring_of(ring) }).and_then(|ring| ring.session_leads().published_session_lead())
-    else {
-        return false;
-    };
-    if frames.is_null() {
-        return false;
-    }
-    // SAFETY: non-null, and by the caller's contract aligned, writable and only ours.
-    unsafe { frames.write(lead) };
-    true
+    guard(false, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some(lead) = (unsafe { ring_of(ring) })
+            .and_then(|ring| ring.session_leads().published_session_lead())
+        else {
+            return false;
+        };
+        if frames.is_null() {
+            return false;
+        }
+        // SAFETY: non-null, and by the caller's contract aligned, writable and only ours.
+        unsafe { frames.write(lead) };
+        true
+    })
 }
 
 /// Takes the ring's only writer; null while another one exists (S35).
@@ -347,14 +407,19 @@ pub unsafe extern "C" fn asc_ring_session_lead_frames(
 /// `ring` is null or a live ring handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_ring_writer_create(ring: *mut AscRing) -> *mut AscRingWriter {
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some(ring) = (unsafe { ring_of(ring) }) else {
-        return ptr::null_mut();
-    };
-    match ring.writer() {
-        Some(writer) => Box::into_raw(Box::new(AscRingWriter { writer })),
-        None => ptr::null_mut(),
-    }
+    guard(ptr::null_mut(), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some(ring) = (unsafe { ring_of(ring) }) else {
+            return ptr::null_mut();
+        };
+        match ring.writer() {
+            Some(writer) => Box::into_raw(Box::new(AscRingWriter {
+                writer,
+                panicked: AtomicBool::new(false),
+            })),
+            None => ptr::null_mut(),
+        }
+    })
 }
 
 /// Destroys the writer, so the ring can hand out a new one.
@@ -365,13 +430,15 @@ pub unsafe extern "C" fn asc_ring_writer_create(ring: *mut AscRing) -> *mut AscR
 /// was not destroyed yet, and no other call on it runs now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_ring_writer_destroy(writer: *mut AscRingWriter) {
-    if writer.is_null() {
-        return;
-    }
-    // SAFETY: the pointer came from Box::into_raw in asc_ring_writer_create,
-    // and by the caller's contract it is destroyed once, with no call in
-    // progress.
-    drop(unsafe { Box::from_raw(writer) });
+    guard((), || {
+        if writer.is_null() {
+            return;
+        }
+        // SAFETY: the pointer came from Box::into_raw in asc_ring_writer_create,
+        // and by the caller's contract it is destroyed once, with no call in
+        // progress.
+        drop(unsafe { Box::from_raw(writer) });
+    })
 }
 
 /// Capture thread: appends `frames` stereo frames (S35, S37, S38, S40) as
@@ -389,19 +456,28 @@ pub unsafe extern "C" fn asc_ring_write(
     interleaved: *const f32,
     frames: usize,
 ) {
-    let Some(samples) = stereo_samples(frames) else {
-        return;
-    };
-    // SAFETY: by the caller's contract the buffer is null or holds `samples`
-    // readable floats that nothing writes during the call.
-    let Some(block) = (unsafe { host_slice(interleaved, samples) }) else {
-        return;
-    };
-    // SAFETY: by the caller's contract the handle is null or live and only
-    // this call uses it now.
-    if let Some(handle) = unsafe { writer.as_mut() } {
-        handle.writer.write_at(block, frames, clock::now_ns());
-    }
+    // SAFETY: the handle is null or live; this borrows only its atomic flag.
+    let panicked = (!writer.is_null()).then(|| unsafe { &(*writer).panicked });
+    // Skips after a panic: writing silence would rerun the writer that panicked.
+    guard_marked(
+        panicked,
+        || {
+            let Some(samples) = stereo_samples(frames) else {
+                return;
+            };
+            // SAFETY: by the caller's contract the buffer is null or holds `samples`
+            // readable floats that nothing writes during the call.
+            let Some(block) = (unsafe { host_slice(interleaved, samples) }) else {
+                return;
+            };
+            if !writer.is_null() {
+                // SAFETY: by the caller's contract the handle is live and only this
+                // call uses it now; this borrows only the `writer` field.
+                unsafe { &mut (*writer).writer }.write_at(block, frames, clock::now_ns());
+            }
+        },
+        || (),
+    )
 }
 
 /// Control thread, at a session start: sets W to 0, which makes all history
@@ -413,11 +489,13 @@ pub unsafe extern "C" fn asc_ring_write(
 /// `writer` is null or a live writer handle that no other call uses now.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_ring_writer_reset(writer: *mut AscRingWriter) {
-    // SAFETY: by the caller's contract the handle is null or live and only
-    // this call uses it now.
-    if let Some(handle) = unsafe { writer.as_mut() } {
-        handle.writer.reset();
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live and only
+        // this call uses it now.
+        if let Some(handle) = unsafe { writer.as_mut() } {
+            handle.writer.reset();
+        }
+    })
 }
 
 /// Creates a reader of `ring` for a session captured at `capture_rate`
@@ -432,17 +510,23 @@ pub unsafe extern "C" fn asc_reader_create(
     ring: *mut AscRing,
     capture_rate: u32,
 ) -> *mut AscReader {
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some(ring) = (unsafe { ring_of(ring) }) else {
-        return ptr::null_mut();
-    };
-    // A ring too short for the rate would cap the delay without a word.
-    if !ring.supports_rate(capture_rate) {
-        return ptr::null_mut();
-    }
-    let reader = Reader::new(Arc::clone(ring), capture_rate);
-    let control = reader.control();
-    Box::into_raw(Box::new(AscReader { control, reader }))
+    guard(ptr::null_mut(), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some(ring) = (unsafe { ring_of(ring) }) else {
+            return ptr::null_mut();
+        };
+        // A ring too short for the rate would cap the delay without a word.
+        if !ring.supports_rate(capture_rate) {
+            return ptr::null_mut();
+        }
+        let reader = Reader::new(Arc::clone(ring), capture_rate);
+        let control = reader.control();
+        Box::into_raw(Box::new(AscReader {
+            control,
+            reader,
+            panicked: AtomicBool::new(false),
+        }))
+    })
 }
 
 /// Destroys a reader.
@@ -453,12 +537,14 @@ pub unsafe extern "C" fn asc_reader_create(
 /// not destroyed yet, and no other call on it runs now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_reader_destroy(reader: *mut AscReader) {
-    if reader.is_null() {
-        return;
-    }
-    // SAFETY: the pointer came from Box::into_raw in asc_reader_create, and
-    // by the caller's contract it is destroyed once, with no call in progress.
-    drop(unsafe { Box::from_raw(reader) });
+    guard((), || {
+        if reader.is_null() {
+            return;
+        }
+        // SAFETY: the pointer came from Box::into_raw in asc_reader_create, and
+        // by the caller's contract it is destroyed once, with no call in progress.
+        drop(unsafe { Box::from_raw(reader) });
+    })
 }
 
 /// Output thread: reads `frames` frames at the target delay
@@ -478,10 +564,12 @@ pub unsafe extern "C" fn asc_reader_read(
     frames: usize,
     report: *mut AscReadReport,
 ) {
-    // SAFETY: the caller's contract is read_with's.
-    let done = unsafe { read_with(reader, dst, frames, |r, block| r.read_target(block, frames)) };
-    // SAFETY: by the caller's contract `report` is null or writable.
-    unsafe { put_report(report, done) };
+    // SAFETY: the caller's contract is read_guarded's.
+    unsafe {
+        read_guarded(reader, dst, frames, report, |r, block| {
+            r.read_target(block, frames)
+        })
+    }
 }
 
 /// Output thread: reads `frames` frames at `delay_frames` with
@@ -499,14 +587,12 @@ pub unsafe extern "C" fn asc_reader_read_at(
     tolerance_frames: i64,
     report: *mut AscReadReport,
 ) {
-    // SAFETY: the caller's contract is read_with's.
-    let done = unsafe {
-        read_with(reader, dst, frames, |r, block| {
+    // SAFETY: the caller's contract is read_guarded's.
+    unsafe {
+        read_guarded(reader, dst, frames, report, |r, block| {
             r.read(block, frames, delay_frames, tolerance_frames)
         })
-    };
-    // SAFETY: by the caller's contract `report` is null or writable.
-    unsafe { put_report(report, done) };
+    }
 }
 
 /// Any thread: sets the target delay and requests a resync (S46).
@@ -516,10 +602,12 @@ pub unsafe extern "C" fn asc_reader_read_at(
 /// `reader` is null or a live reader handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_reader_set_delay_frames(reader: *mut AscReader, frames: i64) {
-    // SAFETY: by the caller's contract the handle is null or live.
-    if let Some(control) = unsafe { control_of(reader) } {
-        control.set_delay_frames(frames);
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        if let Some(control) = unsafe { control_of(reader) } {
+            control.set_delay_frames(frames);
+        }
+    })
 }
 
 /// Any thread: the target delay in frames.
@@ -529,8 +617,10 @@ pub unsafe extern "C" fn asc_reader_set_delay_frames(reader: *mut AscReader, fra
 /// `reader` is null or a live reader handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_reader_delay_frames(reader: *const AscReader) -> i64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_of(reader) }.map_or(0, ReaderControl::delay_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_of(reader) }.map_or(0, ReaderControl::delay_frames)
+    })
 }
 
 /// Any thread: sets the drift tolerance T in frames (S50).
@@ -540,10 +630,12 @@ pub unsafe extern "C" fn asc_reader_delay_frames(reader: *const AscReader) -> i6
 /// `reader` is null or a live reader handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_reader_set_tolerance_frames(reader: *mut AscReader, frames: i64) {
-    // SAFETY: by the caller's contract the handle is null or live.
-    if let Some(control) = unsafe { control_of(reader) } {
-        control.set_tolerance_frames(frames);
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        if let Some(control) = unsafe { control_of(reader) } {
+            control.set_tolerance_frames(frames);
+        }
+    })
 }
 
 /// Any thread: the drift tolerance T in frames.
@@ -553,8 +645,10 @@ pub unsafe extern "C" fn asc_reader_set_tolerance_frames(reader: *mut AscReader,
 /// `reader` is null or a live reader handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_reader_tolerance_frames(reader: *const AscReader) -> i64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_of(reader) }.map_or(0, ReaderControl::tolerance_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_of(reader) }.map_or(0, ReaderControl::tolerance_frames)
+    })
 }
 
 /// Any thread: asks the reader to re-anchor at the target delay, which its
@@ -565,10 +659,12 @@ pub unsafe extern "C" fn asc_reader_tolerance_frames(reader: *const AscReader) -
 /// `reader` is null or a live reader handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_reader_request_resync(reader: *mut AscReader) {
-    // SAFETY: by the caller's contract the handle is null or live.
-    if let Some(control) = unsafe { control_of(reader) } {
-        control.request_resync();
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        if let Some(control) = unsafe { control_of(reader) } {
+            control.request_resync();
+        }
+    })
 }
 
 /// Any thread: asks the next read to start over like a new reader (S159).
@@ -578,10 +674,12 @@ pub unsafe extern "C" fn asc_reader_request_resync(reader: *mut AscReader) {
 /// `reader` is null or a live reader handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_reader_reset_prime(reader: *mut AscReader) {
-    // SAFETY: by the caller's contract the handle is null or live.
-    if let Some(control) = unsafe { control_of(reader) } {
-        control.reset_prime();
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        if let Some(control) = unsafe { control_of(reader) } {
+            control.reset_prime();
+        }
+    })
 }
 
 /// Any thread: the `lagFrames` the last read published (S56).
@@ -591,8 +689,10 @@ pub unsafe extern "C" fn asc_reader_reset_prime(reader: *mut AscReader) {
 /// `reader` is null or a live reader handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_reader_lag_frames(reader: *const AscReader) -> i64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_of(reader) }.map_or(0, ReaderControl::lag_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_of(reader) }.map_or(0, ReaderControl::lag_frames)
+    })
 }
 
 /// Any thread: the reader's counters (S158).
@@ -602,9 +702,11 @@ pub unsafe extern "C" fn asc_reader_lag_frames(reader: *const AscReader) -> i64 
 /// `reader` is null or a live reader handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_reader_counters(reader: *const AscReader) -> AscReaderCounters {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_of(reader) }.map_or_else(AscReaderCounters::default, |control| {
-        control.counters().into()
+    guard(AscReaderCounters::default(), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_of(reader) }.map_or_else(AscReaderCounters::default, |control| {
+            control.counters().into()
+        })
     })
 }
 

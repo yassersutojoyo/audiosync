@@ -16,7 +16,7 @@ use super::calibrate::{
     refusal_code,
 };
 use super::cast::{CAST_FORMAT_FLAC, CAST_FORMAT_WAV};
-use super::{host_slice, host_slice_mut};
+use super::{guard, host_slice, host_slice_mut};
 use crate::calibrate::Recording;
 use crate::calibrate_all::{
     self, ApplyRefusal, Class, EndReason, Measurement, PlanError, RowState, Run, SharedState,
@@ -178,12 +178,14 @@ pub extern "C" fn asc_calibration_cast_wait_ms(
     hold_back_ms: f64,
     format: i32,
 ) -> f64 {
-    let codec = match format {
-        CAST_FORMAT_WAV => Some(Codec::Wav),
-        CAST_FORMAT_FLAC => Some(Codec::Flac),
-        _ => None,
-    };
-    calibrate_all::cast_wait_ms(has_offset.then_some(offset_ms), hold_back_ms, codec)
+    guard(0.0, || {
+        let codec = match format {
+            CAST_FORMAT_WAV => Some(Codec::Wav),
+            CAST_FORMAT_FLAC => Some(Codec::Flac),
+            _ => None,
+        };
+        calibrate_all::cast_wait_ms(has_offset.then_some(offset_ms), hold_back_ms, codec)
+    })
 }
 
 /// [`calibrate_all::airplay_wait_ms`] (S235): an AirPlay speaker's expected
@@ -198,12 +200,14 @@ pub extern "C" fn asc_calibration_airplay_wait_ms(
     hold_back_ms: f64,
     reported_ms: f64,
 ) -> f64 {
-    calibrate_all::airplay_wait_ms(
-        has_sender.then_some(sender_latency_ms),
-        shown_ms,
-        hold_back_ms,
-        reported_ms,
-    )
+    guard(0.0, || {
+        calibrate_all::airplay_wait_ms(
+            has_sender.then_some(sender_latency_ms),
+            shown_ms,
+            hold_back_ms,
+            reported_ms,
+        )
+    })
 }
 
 /// Starts a run over `count` speakers, `reference` the index of the
@@ -223,12 +227,14 @@ pub unsafe extern "C" fn asc_calibration_run_create(
     count: usize,
     reference: usize,
 ) -> *mut AscCalibrationRun {
-    // SAFETY: by the caller's contract null or `count` speakers nothing
-    // writes during the call.
-    let Some(speakers) = (unsafe { host_slice(speakers, count) }) else {
-        return ptr::null_mut();
-    };
-    create(rate, speakers, reference, &[])
+    guard(ptr::null_mut(), || {
+        // SAFETY: by the caller's contract null or `count` speakers nothing
+        // writes during the call.
+        let Some(speakers) = (unsafe { host_slice(speakers, count) }) else {
+            return ptr::null_mut();
+        };
+        create(rate, speakers, reference, &[])
+    })
 }
 
 /// [`asc_calibration_run_create`] for Calibrate Zone (S255): each speaker
@@ -248,19 +254,21 @@ pub unsafe extern "C" fn asc_calibration_run_create_listing(
     reference: usize,
     off: *const bool,
 ) -> *mut AscCalibrationRun {
-    // SAFETY: by the caller's contract null or `count` speakers nothing
-    // writes during the call.
-    let Some(speakers) = (unsafe { host_slice(speakers, count) }) else {
-        return ptr::null_mut();
-    };
-    if off.is_null() {
-        return create(rate, speakers, reference, &[]);
-    }
-    // SAFETY: non-null, so by the caller's contract `count` bools.
-    let Some(off) = (unsafe { host_slice(off, count) }) else {
-        return ptr::null_mut();
-    };
-    create(rate, speakers, reference, off)
+    guard(ptr::null_mut(), || {
+        // SAFETY: by the caller's contract null or `count` speakers nothing
+        // writes during the call.
+        let Some(speakers) = (unsafe { host_slice(speakers, count) }) else {
+            return ptr::null_mut();
+        };
+        if off.is_null() {
+            return create(rate, speakers, reference, &[]);
+        }
+        // SAFETY: non-null, so by the caller's contract `count` bools.
+        let Some(off) = (unsafe { host_slice(off, count) }) else {
+            return ptr::null_mut();
+        };
+        create(rate, speakers, reference, off)
+    })
 }
 
 fn create(
@@ -302,27 +310,29 @@ pub unsafe extern "C" fn asc_calibration_run_step(
     run: *const AscCalibrationRun,
     step: *mut AscCalibrationStep,
 ) -> bool {
-    if run.is_null() || step.is_null() {
-        return false;
-    }
-    // SAFETY: a live handle, by the caller's contract.
-    let Some(next) = (unsafe { &(*run).run }).step() else {
-        return false;
-    };
-    let sweep = match next.take {
-        Take::Reference => 0,
-        Take::Sweep(n) => n as u32,
-    };
-    // SAFETY: non-null, and by the caller's contract aligned and writable.
-    unsafe {
-        step.write(AscCalibrationStep {
-            row: next.row,
-            sweep,
-            window_frames: next.window_frames,
-            searching: next.searching,
-        })
-    };
-    true
+    guard(false, || {
+        if run.is_null() || step.is_null() {
+            return false;
+        }
+        // SAFETY: a live handle, by the caller's contract.
+        let Some(next) = (unsafe { &(*run).run }).step() else {
+            return false;
+        };
+        let sweep = match next.take {
+            Take::Reference => 0,
+            Take::Sweep(n) => n as u32,
+        };
+        // SAFETY: non-null, and by the caller's contract aligned and writable.
+        unsafe {
+            step.write(AscCalibrationStep {
+                row: next.row,
+                sweep,
+                window_frames: next.window_frames,
+                searching: next.searching,
+            })
+        };
+        true
+    })
 }
 
 /// The recording the last step asked for, mono at the run's rate. False
@@ -338,16 +348,18 @@ pub unsafe extern "C" fn asc_calibration_run_record(
     recording: *const f32,
     frames: usize,
 ) -> bool {
-    if run.is_null() {
-        return false;
-    }
-    // SAFETY: by the caller's contract null or `frames` floats nothing
-    // writes during the call.
-    let Some(recording) = (unsafe { host_slice(recording, frames) }) else {
-        return false;
-    };
-    // SAFETY: a live handle only this call uses.
-    unsafe { &mut (*run).run }.record(recording)
+    guard(false, || {
+        if run.is_null() {
+            return false;
+        }
+        // SAFETY: by the caller's contract null or `frames` floats nothing
+        // writes during the call.
+        let Some(recording) = (unsafe { host_slice(recording, frames) }) else {
+            return false;
+        };
+        // SAFETY: a live handle only this call uses.
+        unsafe { &mut (*run).run }.record(recording)
+    })
 }
 
 /// Ends the run with an ASC_CALIBRATION_END_ reason (an unknown one counts
@@ -358,11 +370,13 @@ pub unsafe extern "C" fn asc_calibration_run_record(
 /// `run` is null or a live handle no other call uses now.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_calibration_run_cancel(run: *mut AscCalibrationRun, reason: u32) {
-    if run.is_null() {
-        return;
-    }
-    // SAFETY: a live handle only this call uses.
-    unsafe { &mut (*run).run }.cancel(end_reason(reason));
+    guard((), || {
+        if run.is_null() {
+            return;
+        }
+        // SAFETY: a live handle only this call uses.
+        unsafe { &mut (*run).run }.cancel(end_reason(reason));
+    })
 }
 
 /// Turns the run into its sheet and frees the run; a run with steps still
@@ -375,14 +389,16 @@ pub unsafe extern "C" fn asc_calibration_run_cancel(run: *mut AscCalibrationRun,
 pub unsafe extern "C" fn asc_calibration_run_finish(
     run: *mut AscCalibrationRun,
 ) -> *mut AscCalibrationSheet {
-    if run.is_null() {
-        return ptr::null_mut();
-    }
-    // SAFETY: a handle from Box::into_raw that nothing uses any more.
-    let run = unsafe { Box::from_raw(run) }.run;
-    Box::into_raw(Box::new(AscCalibrationSheet {
-        sheet: run.finish(),
-    }))
+    guard(ptr::null_mut(), || {
+        if run.is_null() {
+            return ptr::null_mut();
+        }
+        // SAFETY: a handle from Box::into_raw that nothing uses any more.
+        let run = unsafe { Box::from_raw(run) }.run;
+        Box::into_raw(Box::new(AscCalibrationSheet {
+            sheet: run.finish(),
+        }))
+    })
 }
 
 /// Frees a run without a sheet.
@@ -392,10 +408,12 @@ pub unsafe extern "C" fn asc_calibration_run_finish(
 /// `run` is null or a live handle no other call uses now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_calibration_run_destroy(run: *mut AscCalibrationRun) {
-    if !run.is_null() {
-        // SAFETY: a handle from Box::into_raw that nothing uses any more.
-        drop(unsafe { Box::from_raw(run) });
-    }
+    guard((), || {
+        if !run.is_null() {
+            // SAFETY: a handle from Box::into_raw that nothing uses any more.
+            drop(unsafe { Box::from_raw(run) });
+        }
+    })
 }
 
 /// The number of rows, one per speaker; 0 for a null sheet.
@@ -405,11 +423,13 @@ pub unsafe extern "C" fn asc_calibration_run_destroy(run: *mut AscCalibrationRun
 /// `sheet` is null or a live handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_calibration_sheet_rows(sheet: *const AscCalibrationSheet) -> usize {
-    if sheet.is_null() {
-        return 0;
-    }
-    // SAFETY: a live handle, by the caller's contract.
-    unsafe { &(*sheet).sheet }.rows().len()
+    guard(0, || {
+        if sheet.is_null() {
+            return 0;
+        }
+        // SAFETY: a live handle, by the caller's contract.
+        unsafe { &(*sheet).sheet }.rows().len()
+    })
 }
 
 fn row_of(row: &crate::calibrate_all::Row) -> AscCalibrationRow {
@@ -460,16 +480,18 @@ pub unsafe extern "C" fn asc_calibration_sheet_row(
     index: usize,
     row: *mut AscCalibrationRow,
 ) -> bool {
-    if sheet.is_null() || row.is_null() {
-        return false;
-    }
-    // SAFETY: a live handle, by the caller's contract.
-    let Some(found) = unsafe { &(*sheet).sheet }.rows().get(index) else {
-        return false;
-    };
-    // SAFETY: non-null, and by the caller's contract aligned and writable.
-    unsafe { row.write(row_of(found)) };
-    true
+    guard(false, || {
+        if sheet.is_null() || row.is_null() {
+            return false;
+        }
+        // SAFETY: a live handle, by the caller's contract.
+        let Some(found) = unsafe { &(*sheet).sheet }.rows().get(index) else {
+            return false;
+        };
+        // SAFETY: non-null, and by the caller's contract aligned and writable.
+        unsafe { row.write(row_of(found)) };
+        true
+    })
 }
 
 /// The shared AirPlay delay into `*airplay`; false, writing nothing, for a
@@ -484,32 +506,34 @@ pub unsafe extern "C" fn asc_calibration_sheet_airplay(
     sheet: *const AscCalibrationSheet,
     airplay: *mut AscCalibrationAirPlay,
 ) -> bool {
-    if sheet.is_null() || airplay.is_null() {
-        return false;
-    }
-    // SAFETY: a live handle, by the caller's contract.
-    let Some(shared) = unsafe { &(*sheet).sheet }.airplay().copied() else {
-        return false;
-    };
-    let (has_old, old_ms) = stored(shared.old_ms);
-    let state = match shared.state {
-        SharedState::NoneCertain => CALIBRATION_AIRPLAY_NONE_CERTAIN,
-        SharedState::Certain => CALIBRATION_AIRPLAY_CERTAIN,
-        SharedState::Spread => CALIBRATION_AIRPLAY_SPREAD,
-    };
-    // SAFETY: non-null, and by the caller's contract aligned and writable.
-    unsafe {
-        airplay.write(AscCalibrationAirPlay {
-            state,
-            has_old,
-            old_ms,
-            new_ms: shared.new_ms.unwrap_or(old_ms),
-            spread_ms: shared.spread_ms,
-            certain_rows: shared.certain_rows,
-            clamped: shared.clamped,
-        })
-    };
-    true
+    guard(false, || {
+        if sheet.is_null() || airplay.is_null() {
+            return false;
+        }
+        // SAFETY: a live handle, by the caller's contract.
+        let Some(shared) = unsafe { &(*sheet).sheet }.airplay().copied() else {
+            return false;
+        };
+        let (has_old, old_ms) = stored(shared.old_ms);
+        let state = match shared.state {
+            SharedState::NoneCertain => CALIBRATION_AIRPLAY_NONE_CERTAIN,
+            SharedState::Certain => CALIBRATION_AIRPLAY_CERTAIN,
+            SharedState::Spread => CALIBRATION_AIRPLAY_SPREAD,
+        };
+        // SAFETY: non-null, and by the caller's contract aligned and writable.
+        unsafe {
+            airplay.write(AscCalibrationAirPlay {
+                state,
+                has_old,
+                old_ms,
+                new_ms: shared.new_ms.unwrap_or(old_ms),
+                spread_ms: shared.spread_ms,
+                certain_rows: shared.certain_rows,
+                clamped: shared.clamped,
+            })
+        };
+        true
+    })
 }
 
 /// Why the sheet ended, an ASC_CALIBRATION_END_ code; END_NONE while it can
@@ -520,11 +544,13 @@ pub unsafe extern "C" fn asc_calibration_sheet_airplay(
 /// `sheet` is null or a live handle.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_calibration_sheet_ended(sheet: *const AscCalibrationSheet) -> u32 {
-    if sheet.is_null() {
-        return CALIBRATION_END_NONE;
-    }
-    // SAFETY: a live handle, by the caller's contract.
-    end_code(unsafe { &(*sheet).sheet }.ended())
+    guard(CALIBRATION_END_NONE, || {
+        if sheet.is_null() {
+            return CALIBRATION_END_NONE;
+        }
+        // SAFETY: a live handle, by the caller's contract.
+        end_code(unsafe { &(*sheet).sheet }.ended())
+    })
 }
 
 fn apply_code(refusal: ApplyRefusal) -> u32 {
@@ -554,50 +580,52 @@ pub unsafe extern "C" fn asc_calibration_sheet_apply(
     capacity: usize,
     count: *mut usize,
 ) -> u32 {
-    if sheet.is_null() || count.is_null() || (changes.is_null() && capacity > 0) {
-        return CALIBRATION_APPLY_INVALID;
-    }
-    // SAFETY: a live handle only this call uses.
-    let sheet = unsafe { &mut (*sheet).sheet };
-    let needed = match sheet.changes() {
-        Ok(applied) => applied.changes.len(),
-        Err(refusal) => return apply_code(refusal),
-    };
-    // SAFETY: non-null, and by the caller's contract aligned and writable.
-    unsafe { count.write(needed) };
-    if needed > capacity {
-        return CALIBRATION_APPLY_TOO_MANY;
-    }
-    let applied = match sheet.apply() {
-        Ok(applied) => applied,
-        Err(refusal) => return apply_code(refusal),
-    };
-    for (slot, change) in applied.changes.iter().enumerate() {
-        let (has_old, old_ms) = stored(change.old_ms);
-        let (row, airplay) = match &change.target {
-            Target::Speaker(id) => (
-                sheet
-                    .rows()
-                    .iter()
-                    .position(|row| &row.id == id)
-                    .unwrap_or(0),
-                false,
-            ),
-            Target::AirPlay => (0, true),
+    guard(CALIBRATION_APPLY_INVALID, || {
+        if sheet.is_null() || count.is_null() || (changes.is_null() && capacity > 0) {
+            return CALIBRATION_APPLY_INVALID;
+        }
+        // SAFETY: a live handle only this call uses.
+        let sheet = unsafe { &mut (*sheet).sheet };
+        let needed = match sheet.changes() {
+            Ok(applied) => applied.changes.len(),
+            Err(refusal) => return apply_code(refusal),
         };
-        // SAFETY: `slot` < `capacity`, an aligned, writable change by the
-        // caller's contract.
-        unsafe {
-            changes.add(slot).write(AscCalibrationChange {
-                row,
-                airplay,
-                has_old,
-                old_ms,
-                new_ms: change.new_ms,
-            })
+        // SAFETY: non-null, and by the caller's contract aligned and writable.
+        unsafe { count.write(needed) };
+        if needed > capacity {
+            return CALIBRATION_APPLY_TOO_MANY;
+        }
+        let applied = match sheet.apply() {
+            Ok(applied) => applied,
+            Err(refusal) => return apply_code(refusal),
         };
-    }
-    CALIBRATION_APPLY_OK
+        for (slot, change) in applied.changes.iter().enumerate() {
+            let (has_old, old_ms) = stored(change.old_ms);
+            let (row, airplay) = match &change.target {
+                Target::Speaker(id) => (
+                    sheet
+                        .rows()
+                        .iter()
+                        .position(|row| &row.id == id)
+                        .unwrap_or(0),
+                    false,
+                ),
+                Target::AirPlay => (0, true),
+            };
+            // SAFETY: `slot` < `capacity`, an aligned, writable change by the
+            // caller's contract.
+            unsafe {
+                changes.add(slot).write(AscCalibrationChange {
+                    row,
+                    airplay,
+                    has_old,
+                    old_ms,
+                    new_ms: change.new_ms,
+                })
+            };
+        }
+        CALIBRATION_APPLY_OK
+    })
 }
 
 /// A run of the reference and row `index` alone, for Measure Again; its
@@ -613,14 +641,16 @@ pub unsafe extern "C" fn asc_calibration_sheet_measure_again(
     sheet: *const AscCalibrationSheet,
     index: usize,
 ) -> *mut AscCalibrationRun {
-    if sheet.is_null() {
-        return ptr::null_mut();
-    }
-    // SAFETY: a live handle, by the caller's contract.
-    match unsafe { &(*sheet).sheet }.measure_again(index) {
-        Some(run) => Box::into_raw(Box::new(AscCalibrationRun { run })),
-        None => ptr::null_mut(),
-    }
+    guard(ptr::null_mut(), || {
+        if sheet.is_null() {
+            return ptr::null_mut();
+        }
+        // SAFETY: a live handle, by the caller's contract.
+        match unsafe { &(*sheet).sheet }.measure_again(index) {
+            Some(run) => Box::into_raw(Box::new(AscCalibrationRun { run })),
+            None => ptr::null_mut(),
+        }
+    })
 }
 
 /// Whether row `index` is a zone member that was off (S255), listed and
@@ -635,11 +665,13 @@ pub unsafe extern "C" fn asc_calibration_sheet_row_off(
     sheet: *const AscCalibrationSheet,
     index: usize,
 ) -> bool {
-    if sheet.is_null() {
-        return false;
-    }
-    // SAFETY: a live handle, by the caller's contract.
-    unsafe { &(*sheet).sheet }.is_off(index)
+    guard(false, || {
+        if sheet.is_null() {
+            return false;
+        }
+        // SAFETY: a live handle, by the caller's contract.
+        unsafe { &(*sheet).sheet }.is_off(index)
+    })
 }
 
 /// Measure Again on an off row (S255), with the speaker's stored delay
@@ -658,15 +690,17 @@ pub unsafe extern "C" fn asc_calibration_sheet_measure_again_off(
     offset_ms: f64,
     latency_ms: f64,
 ) -> *mut AscCalibrationRun {
-    if sheet.is_null() {
-        return ptr::null_mut();
-    }
-    let offset = has_offset.then_some(offset_ms);
-    // SAFETY: a live handle, by the caller's contract.
-    match unsafe { &(*sheet).sheet }.measure_again_off(index, offset, latency_ms) {
-        Some(run) => Box::into_raw(Box::new(AscCalibrationRun { run })),
-        None => ptr::null_mut(),
-    }
+    guard(ptr::null_mut(), || {
+        if sheet.is_null() {
+            return ptr::null_mut();
+        }
+        let offset = has_offset.then_some(offset_ms);
+        // SAFETY: a live handle, by the caller's contract.
+        match unsafe { &(*sheet).sheet }.measure_again_off(index, offset, latency_ms) {
+            Some(run) => Box::into_raw(Box::new(AscCalibrationRun { run })),
+            None => ptr::null_mut(),
+        }
+    })
 }
 
 /// Puts the row a Measure Again run's sheet holds in place of the old one,
@@ -684,17 +718,19 @@ pub unsafe extern "C" fn asc_calibration_sheet_replace(
     sheet: *mut AscCalibrationSheet,
     again: *mut AscCalibrationSheet,
 ) -> bool {
-    // Freeing `again` would free `sheet` under the caller.
-    if again.is_null() || ptr::eq(sheet, again) {
-        return false;
-    }
-    // SAFETY: a handle from Box::into_raw that nothing uses any more.
-    let again = unsafe { Box::from_raw(again) }.sheet;
-    if sheet.is_null() {
-        return false;
-    }
-    // SAFETY: a live handle only this call uses.
-    unsafe { &mut (*sheet).sheet }.replace(again)
+    guard(false, || {
+        // Freeing `again` would free `sheet` under the caller.
+        if again.is_null() || ptr::eq(sheet, again) {
+            return false;
+        }
+        // SAFETY: a handle from Box::into_raw that nothing uses any more.
+        let again = unsafe { Box::from_raw(again) }.sheet;
+        if sheet.is_null() {
+            return false;
+        }
+        // SAFETY: a live handle only this call uses.
+        unsafe { &mut (*sheet).sheet }.replace(again)
+    })
 }
 
 /// Frees a sheet.
@@ -704,10 +740,12 @@ pub unsafe extern "C" fn asc_calibration_sheet_replace(
 /// `sheet` is null or a live handle no other call uses now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_calibration_sheet_destroy(sheet: *mut AscCalibrationSheet) {
-    if !sheet.is_null() {
-        // SAFETY: a handle from Box::into_raw that nothing uses any more.
-        drop(unsafe { Box::from_raw(sheet) });
-    }
+    guard((), || {
+        if !sheet.is_null() {
+            // SAFETY: a handle from Box::into_raw that nothing uses any more.
+            drop(unsafe { Box::from_raw(sheet) });
+        }
+    })
 }
 
 /// [`calibrate_all::zone_plan`] answered: `rows`, `off` and `silenced` hold it.
@@ -771,57 +809,59 @@ pub unsafe extern "C" fn asc_calibration_zone_plan(
     row_count: *mut usize,
     silenced: *mut bool,
 ) -> u32 {
-    // SAFETY: by the caller's contract, as each helper documents.
-    let (Some(members), Some(speakers), Some(rows), Some(off), Some(silenced)) = (unsafe {
-        (
-            host_slice(members, member_count),
-            host_slice(speakers, count),
-            host_slice_mut(rows, count),
-            host_slice_mut(off, count),
-            host_slice_mut(silenced, count),
-        )
-    }) else {
-        return CALIBRATION_ZONE_INVALID;
-    };
-    // SAFETY: NUL-terminated keys, by the caller's contract.
-    let members: Option<Vec<String>> = members
-        .iter()
-        .map(|&key| unsafe { key_text(key) })
-        .collect();
-    let listed: Option<Vec<ZoneSpeaker>> = speakers
-        .iter()
-        .map(|speaker| {
-            Some(ZoneSpeaker {
-                // SAFETY: NUL-terminated, by the caller's contract.
-                key: unsafe { key_text(speaker.key) }?,
-                present: speaker.present,
-                on: speaker.on,
+    guard(CALIBRATION_ZONE_INVALID, || {
+        // SAFETY: by the caller's contract, as each helper documents.
+        let (Some(members), Some(speakers), Some(rows), Some(off), Some(silenced)) = (unsafe {
+            (
+                host_slice(members, member_count),
+                host_slice(speakers, count),
+                host_slice_mut(rows, count),
+                host_slice_mut(off, count),
+                host_slice_mut(silenced, count),
+            )
+        }) else {
+            return CALIBRATION_ZONE_INVALID;
+        };
+        // SAFETY: NUL-terminated keys, by the caller's contract.
+        let members: Option<Vec<String>> = members
+            .iter()
+            .map(|&key| unsafe { key_text(key) })
+            .collect();
+        let listed: Option<Vec<ZoneSpeaker>> = speakers
+            .iter()
+            .map(|speaker| {
+                Some(ZoneSpeaker {
+                    // SAFETY: NUL-terminated, by the caller's contract.
+                    key: unsafe { key_text(speaker.key) }?,
+                    present: speaker.present,
+                    on: speaker.on,
+                })
             })
-        })
-        .collect();
-    // SAFETY: NUL-terminated, by the caller's contract.
-    let reference = unsafe { key_text(reference) };
-    let (Some(members), Some(listed), Some(reference), false) =
-        (members, listed, reference, row_count.is_null())
-    else {
-        return CALIBRATION_ZONE_INVALID;
-    };
-    match calibrate_all::zone_plan(&members, &reference, &listed) {
-        Ok(plan) => {
-            for (i, (row, is_off)) in plan.rows.iter().zip(&plan.off).enumerate() {
-                rows[i] = *row;
-                off[i] = *is_off;
+            .collect();
+        // SAFETY: NUL-terminated, by the caller's contract.
+        let reference = unsafe { key_text(reference) };
+        let (Some(members), Some(listed), Some(reference), false) =
+            (members, listed, reference, row_count.is_null())
+        else {
+            return CALIBRATION_ZONE_INVALID;
+        };
+        match calibrate_all::zone_plan(&members, &reference, &listed) {
+            Ok(plan) => {
+                for (i, (row, is_off)) in plan.rows.iter().zip(&plan.off).enumerate() {
+                    rows[i] = *row;
+                    off[i] = *is_off;
+                }
+                for (i, slot) in silenced.iter_mut().enumerate() {
+                    *slot = plan.silenced.contains(&i);
+                }
+                // SAFETY: non-null, writable by the caller's contract.
+                unsafe { *row_count = plan.rows.len() };
+                CALIBRATION_ZONE_OK
             }
-            for (i, slot) in silenced.iter_mut().enumerate() {
-                *slot = plan.silenced.contains(&i);
-            }
-            // SAFETY: non-null, writable by the caller's contract.
-            unsafe { *row_count = plan.rows.len() };
-            CALIBRATION_ZONE_OK
+            Err(PlanError::NoReference) => CALIBRATION_ZONE_NO_REFERENCE,
+            Err(_) => CALIBRATION_ZONE_NOTHING_TO_MEASURE,
         }
-        Err(PlanError::NoReference) => CALIBRATION_ZONE_NO_REFERENCE,
-        Err(_) => CALIBRATION_ZONE_NOTHING_TO_MEASURE,
-    }
+    })
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@
 
 use std::ffi::{CStr, c_char};
 
+use super::guard;
 use crate::policy::zones::{self, CastLeftOff, ClickAction, Member, MemberKind, Situation, Step};
 
 /// [`MemberKind::Local`].
@@ -108,43 +109,45 @@ pub unsafe extern "C" fn asc_zone_click_plan(
     airplay2_playing_elsewhere: bool,
     steps: *mut u32,
 ) -> u32 {
-    if count > 0 && (members.is_null() || steps.is_null()) {
-        return ZONE_CLICK_NOTHING;
-    }
-    let members: Vec<Member> = if count == 0 {
-        Vec::new()
-    } else {
-        // SAFETY: non-null, and by the caller's contract `count` elements.
-        unsafe { std::slice::from_raw_parts(members, count) }
-            .iter()
-            .map(member)
-            .collect()
-    };
-    let plan = zones::click_plan(
-        &members,
-        Situation {
-            streaming,
-            cast_on_elsewhere,
-            airplay2_playing_elsewhere,
-        },
-    );
-    if count > 0 {
-        // SAFETY: non-null, and by the caller's contract `count` writable elements.
-        let out = unsafe { std::slice::from_raw_parts_mut(steps, count) };
-        for (slot, step) in out.iter_mut().zip(plan.steps) {
-            *slot = step_code(step);
+    guard(ZONE_CLICK_NOTHING, || {
+        if count > 0 && (members.is_null() || steps.is_null()) {
+            return ZONE_CLICK_NOTHING;
         }
-    }
-    match plan.action {
-        ClickAction::Nothing => ZONE_CLICK_NOTHING,
-        ClickAction::TurnOn {
-            start_streaming: false,
-        } => ZONE_CLICK_TURN_ON,
-        ClickAction::TurnOn {
-            start_streaming: true,
-        } => ZONE_CLICK_START,
-        ClickAction::TurnOff => ZONE_CLICK_TURN_OFF,
-    }
+        let members: Vec<Member> = if count == 0 {
+            Vec::new()
+        } else {
+            // SAFETY: non-null, and by the caller's contract `count` elements.
+            unsafe { std::slice::from_raw_parts(members, count) }
+                .iter()
+                .map(member)
+                .collect()
+        };
+        let plan = zones::click_plan(
+            &members,
+            Situation {
+                streaming,
+                cast_on_elsewhere,
+                airplay2_playing_elsewhere,
+            },
+        );
+        if count > 0 {
+            // SAFETY: non-null, and by the caller's contract `count` writable elements.
+            let out = unsafe { std::slice::from_raw_parts_mut(steps, count) };
+            for (slot, step) in out.iter_mut().zip(plan.steps) {
+                *slot = step_code(step);
+            }
+        }
+        match plan.action {
+            ClickAction::Nothing => ZONE_CLICK_NOTHING,
+            ClickAction::TurnOn {
+                start_streaming: false,
+            } => ZONE_CLICK_TURN_ON,
+            ClickAction::TurnOn {
+                start_streaming: true,
+            } => ZONE_CLICK_START,
+            ClickAction::TurnOff => ZONE_CLICK_TURN_OFF,
+        }
+    })
 }
 
 /// The one-time migration's rule for members (S248): with every saved
@@ -164,43 +167,45 @@ pub unsafe extern "C" fn asc_zone_migration_keeps(
     count: usize,
     keep: *mut bool,
 ) {
-    if count == 0 || keys.is_null() || keep.is_null() {
-        return;
-    }
-    // SAFETY: non-null, and by the caller's contract `count` elements each.
-    let (keys, keep) = unsafe {
-        (
-            std::slice::from_raw_parts(keys, count),
-            std::slice::from_raw_parts_mut(keep, count),
-        )
-    };
-    let texts: Vec<Option<String>> = keys
-        .iter()
-        .map(|&key| {
-            if key.is_null() {
-                return None;
-            }
-            // SAFETY: non-null, and by the caller's contract NUL-terminated.
-            let text = unsafe { CStr::from_ptr(key) };
-            text.to_str().ok().map(str::to_owned)
-        })
-        .collect();
-    let members: Vec<String> = texts.iter().flatten().cloned().collect();
-    let kept = zones::zones_from_groups([zones::SavedGroup {
-        id: "",
-        name: "",
-        members: &members,
-    }]);
-    let mut kept = kept.list()[0].members.iter().peekable();
-    for (slot, text) in keep.iter_mut().zip(&texts) {
-        *slot = match text {
-            Some(text) if kept.peek() == Some(&text) => {
-                kept.next();
-                true
-            }
-            _ => false,
+    guard((), || {
+        if count == 0 || keys.is_null() || keep.is_null() {
+            return;
+        }
+        // SAFETY: non-null, and by the caller's contract `count` elements each.
+        let (keys, keep) = unsafe {
+            (
+                std::slice::from_raw_parts(keys, count),
+                std::slice::from_raw_parts_mut(keep, count),
+            )
         };
-    }
+        let texts: Vec<Option<String>> = keys
+            .iter()
+            .map(|&key| {
+                if key.is_null() {
+                    return None;
+                }
+                // SAFETY: non-null, and by the caller's contract NUL-terminated.
+                let text = unsafe { CStr::from_ptr(key) };
+                text.to_str().ok().map(str::to_owned)
+            })
+            .collect();
+        let members: Vec<String> = texts.iter().flatten().cloned().collect();
+        let kept = zones::zones_from_groups([zones::SavedGroup {
+            id: "",
+            name: "",
+            members: &members,
+        }]);
+        let mut kept = kept.list()[0].members.iter().peekable();
+        for (slot, text) in keep.iter_mut().zip(&texts) {
+            *slot = match text {
+                Some(text) if kept.peek() == Some(&text) => {
+                    kept.next();
+                    true
+                }
+                _ => false,
+            };
+        }
+    })
 }
 
 #[cfg(test)]

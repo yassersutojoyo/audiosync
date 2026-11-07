@@ -16,9 +16,13 @@
 
 use std::ptr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::ring::{AscReaderCounters, AscRing, ring_of};
-use super::{AscEqualizer, host_slice, host_slice_mut, samples_for, stereo_samples};
+use super::{
+    AscEqualizer, guard, guard_else, guard_marked, host_slice, host_slice_mut, samples_for,
+    silence, stereo_samples,
+};
 use crate::clock;
 use crate::convert;
 use crate::fade::{FadeState, fade_frames};
@@ -50,6 +54,8 @@ pub struct AscRenderer {
     /// F at the device rate (S182), fixed at creation.
     fade_frames: usize,
     renderer: Renderer,
+    /// Set by a panic in a render call; later ones only play silence.
+    panicked: AtomicBool,
 }
 
 /// A streaming resampler behind an opaque C pointer (S62, S85).
@@ -70,15 +76,19 @@ pub struct AscResampleCount {
 pub struct AscGainStage {
     gain: SharedGain,
     stage: GainStage,
+    /// Set by a panic in an output-thread call; later ones only fill silence.
+    panicked: AtomicBool,
 }
 
 /// Creates a resampler; null unless both rates are supported (S16).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_resampler_create(input_rate: u32, output_rate: u32) -> *mut AscResampler {
-    match Resampler::new(input_rate, output_rate) {
-        Ok(resampler) => Box::into_raw(Box::new(AscResampler { resampler })),
-        Err(_) => ptr::null_mut(),
-    }
+    guard(ptr::null_mut(), || {
+        match Resampler::new(input_rate, output_rate) {
+            Ok(resampler) => Box::into_raw(Box::new(AscResampler { resampler })),
+            Err(_) => ptr::null_mut(),
+        }
+    })
 }
 
 /// Destroys a resampler.
@@ -89,13 +99,15 @@ pub extern "C" fn asc_resampler_create(input_rate: u32, output_rate: u32) -> *mu
 /// was not destroyed yet, and no other call on it runs now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_resampler_destroy(resampler: *mut AscResampler) {
-    if resampler.is_null() {
-        return;
-    }
-    // SAFETY: the pointer came from Box::into_raw in asc_resampler_create,
-    // and by the caller's contract it is destroyed once, with no call in
-    // progress.
-    drop(unsafe { Box::from_raw(resampler) });
+    guard((), || {
+        if resampler.is_null() {
+            return;
+        }
+        // SAFETY: the pointer came from Box::into_raw in asc_resampler_create,
+        // and by the caller's contract it is destroyed once, with no call in
+        // progress.
+        drop(unsafe { Box::from_raw(resampler) });
+    })
 }
 
 /// Changes the input rate and resets the phase and history (S94); false for
@@ -109,10 +121,12 @@ pub unsafe extern "C" fn asc_resampler_set_input_rate(
     resampler: *mut AscResampler,
     input_rate: u32,
 ) -> bool {
-    // SAFETY: by the caller's contract the handle is null or live and only
-    // this call uses it now.
-    unsafe { resampler.as_mut() }
-        .is_some_and(|handle| handle.resampler.set_input_rate(input_rate).is_ok())
+    guard(false, || {
+        // SAFETY: by the caller's contract the handle is null or live and only
+        // this call uses it now.
+        unsafe { resampler.as_mut() }
+            .is_some_and(|handle| handle.resampler.set_input_rate(input_rate).is_ok())
+    })
 }
 
 /// Clears the history and the phase (S94). Real-time safe.
@@ -122,11 +136,13 @@ pub unsafe extern "C" fn asc_resampler_set_input_rate(
 /// `resampler` is null or a live handle that no other call uses now.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_resampler_reset(resampler: *mut AscResampler) {
-    // SAFETY: by the caller's contract the handle is null or live and only
-    // this call uses it now.
-    if let Some(handle) = unsafe { resampler.as_mut() } {
-        handle.resampler.reset();
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live and only
+        // this call uses it now.
+        if let Some(handle) = unsafe { resampler.as_mut() } {
+            handle.resampler.reset();
+        }
+    })
 }
 
 /// The content delay in input frames, 0 when passing through. Real-time safe.
@@ -136,9 +152,11 @@ pub unsafe extern "C" fn asc_resampler_reset(resampler: *mut AscResampler) {
 /// `resampler` is null or a live handle that no other call changes now.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_resampler_latency_frames(resampler: *const AscResampler) -> usize {
-    // SAFETY: by the caller's contract the handle is null or live and nothing
-    // changes it now.
-    unsafe { resampler.as_ref() }.map_or(0, |handle| handle.resampler.latency_frames())
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live and nothing
+        // changes it now.
+        unsafe { resampler.as_ref() }.map_or(0, |handle| handle.resampler.latency_frames())
+    })
 }
 
 /// Input frames still needed before the next `output_frames` output frames
@@ -152,10 +170,12 @@ pub unsafe extern "C" fn asc_resampler_input_frames_for(
     resampler: *const AscResampler,
     output_frames: usize,
 ) -> usize {
-    // SAFETY: by the caller's contract the handle is null or live and nothing
-    // changes it now.
-    unsafe { resampler.as_ref() }
-        .map_or(0, |handle| handle.resampler.input_frames_for(output_frames))
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live and nothing
+        // changes it now.
+        unsafe { resampler.as_ref() }
+            .map_or(0, |handle| handle.resampler.input_frames_for(output_frames))
+    })
 }
 
 /// Converts `input_frames` stereo frames into at most `output_frames`
@@ -177,40 +197,53 @@ pub unsafe extern "C" fn asc_resampler_process(
     output: *mut f32,
     output_frames: usize,
 ) -> AscResampleCount {
-    let (Some(input_samples), Some(output_samples)) =
-        (stereo_samples(input_frames), stereo_samples(output_frames))
-    else {
-        return AscResampleCount::default();
-    };
-    // SAFETY: by the caller's contract `input` is null or holds that many
-    // readable floats that nothing writes during the call.
-    let Some(input) = (unsafe { host_slice(input, input_samples) }) else {
-        return AscResampleCount::default();
-    };
-    // SAFETY: by the caller's contract `output` is null or holds that many
-    // writable floats that only this call touches.
-    let Some(output) = (unsafe { host_slice_mut(output, output_samples) }) else {
-        return AscResampleCount::default();
-    };
-    // SAFETY: by the caller's contract the handle is null or live and only
-    // this call uses it now.
-    let Some(handle) = (unsafe { resampler.as_mut() }) else {
-        return AscResampleCount::default();
-    };
-    let (consumed, produced) = handle.resampler.process(input, output);
-    AscResampleCount {
-        input_frames: consumed,
-        output_frames: produced,
-    }
+    guard_else(
+        || {
+            let (Some(input_samples), Some(output_samples)) =
+                (stereo_samples(input_frames), stereo_samples(output_frames))
+            else {
+                return AscResampleCount::default();
+            };
+            // SAFETY: by the caller's contract `input` is null or holds that many
+            // readable floats that nothing writes during the call.
+            let Some(input) = (unsafe { host_slice(input, input_samples) }) else {
+                return AscResampleCount::default();
+            };
+            // SAFETY: by the caller's contract `output` is null or holds that many
+            // writable floats that only this call touches.
+            let Some(output) = (unsafe { host_slice_mut(output, output_samples) }) else {
+                return AscResampleCount::default();
+            };
+            // SAFETY: by the caller's contract the handle is null or live and only
+            // this call uses it now.
+            let Some(handle) = (unsafe { resampler.as_mut() }) else {
+                return AscResampleCount::default();
+            };
+            let (consumed, produced) = handle.resampler.process(input, output);
+            AscResampleCount {
+                input_frames: consumed,
+                output_frames: produced,
+            }
+        },
+        || {
+            // SAFETY: by the caller's contract `output` is null or holds that many
+            // writable floats that only this call touches.
+            unsafe { silence(output, stereo_samples(output_frames)) };
+            AscResampleCount::default()
+        },
+    )
 }
 
 /// Creates an output stage at linear gain `gain` (S64).
 #[unsafe(no_mangle)]
 pub extern "C" fn asc_gain_stage_create(gain: f32) -> *mut AscGainStage {
-    Box::into_raw(Box::new(AscGainStage {
-        gain: SharedGain::new(gain),
-        stage: GainStage::new(),
-    }))
+    guard(ptr::null_mut(), || {
+        Box::into_raw(Box::new(AscGainStage {
+            gain: SharedGain::new(gain),
+            stage: GainStage::new(),
+            panicked: AtomicBool::new(false),
+        }))
+    })
 }
 
 /// Destroys an output stage.
@@ -221,13 +254,15 @@ pub extern "C" fn asc_gain_stage_create(gain: f32) -> *mut AscGainStage {
 /// was not destroyed yet, and no other call on it runs now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_gain_stage_destroy(stage: *mut AscGainStage) {
-    if stage.is_null() {
-        return;
-    }
-    // SAFETY: the pointer came from Box::into_raw in asc_gain_stage_create,
-    // and by the caller's contract it is destroyed once, with no call in
-    // progress.
-    drop(unsafe { Box::from_raw(stage) });
+    guard((), || {
+        if stage.is_null() {
+            return;
+        }
+        // SAFETY: the pointer came from Box::into_raw in asc_gain_stage_create,
+        // and by the caller's contract it is destroyed once, with no call in
+        // progress.
+        drop(unsafe { Box::from_raw(stage) });
+    })
 }
 
 /// The shared gain of an output stage.
@@ -252,10 +287,12 @@ unsafe fn shared_gain<'a>(stage: *const AscGainStage) -> Option<&'a SharedGain> 
 /// `stage` is null or a live output stage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_gain_stage_set_gain(stage: *mut AscGainStage, gain: f32) {
-    // SAFETY: by the caller's contract the handle is null or live.
-    if let Some(shared) = unsafe { shared_gain(stage) } {
-        shared.set(gain);
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        if let Some(shared) = unsafe { shared_gain(stage) } {
+            shared.set(gain);
+        }
+    })
 }
 
 /// Any thread: the gain last set.
@@ -265,8 +302,10 @@ pub unsafe extern "C" fn asc_gain_stage_set_gain(stage: *mut AscGainStage, gain:
 /// `stage` is null or a live output stage.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_gain_stage_gain(stage: *const AscGainStage) -> f32 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { shared_gain(stage) }.map_or(0.0, SharedGain::get)
+    guard(0.0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { shared_gain(stage) }.map_or(0.0, SharedGain::get)
+    })
 }
 
 /// The output thread's side of an output stage and the gain to ramp to.
@@ -302,19 +341,31 @@ pub unsafe extern "C" fn asc_gain_stage_apply(
     frames: usize,
     channels: usize,
 ) {
-    let Some(samples) = samples_for(frames, channels) else {
-        return;
-    };
-    // SAFETY: by the caller's contract the buffer is null or holds `samples`
-    // writable floats that only this call touches.
-    let Some(buffer) = (unsafe { host_slice_mut(interleaved, samples) }) else {
-        return;
-    };
-    // SAFETY: by the caller's contract the handle is null or live and its
-    // output-thread calls run on one thread at a time.
-    if let Some((stage, target)) = unsafe { output_side(stage) } {
-        stage.apply(buffer, channels, target);
-    }
+    // SAFETY: the handle is null or live; this borrows only its atomic flag.
+    let panicked = (!stage.is_null()).then(|| unsafe { &(*stage).panicked });
+    guard_marked(
+        panicked,
+        || {
+            let Some(samples) = samples_for(frames, channels) else {
+                return;
+            };
+            // SAFETY: by the caller's contract the buffer is null or holds `samples`
+            // writable floats that only this call touches.
+            let Some(buffer) = (unsafe { host_slice_mut(interleaved, samples) }) else {
+                return;
+            };
+            // SAFETY: by the caller's contract the handle is null or live and its
+            // output-thread calls run on one thread at a time.
+            if let Some((stage, target)) = unsafe { output_side(stage) } {
+                stage.apply(buffer, channels, target);
+            }
+        },
+        || {
+            // SAFETY: by the caller's contract `interleaved` is null or holds that many
+            // writable floats that only this call touches.
+            unsafe { silence(interleaved, samples_for(frames, channels)) }
+        },
+    )
 }
 
 /// Output thread: maps `frames` stereo frames onto `channels` device channels
@@ -336,29 +387,42 @@ pub unsafe extern "C" fn asc_gain_stage_render(
     device: *mut f32,
     channels: usize,
 ) -> usize {
-    let (Some(stereo_len), Some(device_len)) =
-        (stereo_samples(frames), samples_for(frames, channels))
-    else {
-        return 0;
-    };
-    // SAFETY: by the caller's contract `stereo` is null or holds that many
-    // readable floats that nothing writes during the call.
-    let Some(source) = (unsafe { host_slice(stereo, stereo_len) }) else {
-        return 0;
-    };
-    // SAFETY: by the caller's contract `device` is null or holds that many
-    // writable floats that only this call touches.
-    let Some(target_buffer) = (unsafe { host_slice_mut(device, device_len) }) else {
-        return 0;
-    };
-    // SAFETY: by the caller's contract the handle is null or live and its
-    // output-thread calls run on one thread at a time.
-    let Some((stage, gain)) = (unsafe { output_side(stage) }) else {
-        return 0;
-    };
-    let written = convert::map_to_device(source, frames, 1.0, target_buffer, channels);
-    stage.apply(&mut target_buffer[..written * channels], channels, gain);
-    written
+    // SAFETY: the handle is null or live; this borrows only its atomic flag.
+    let panicked = (!stage.is_null()).then(|| unsafe { &(*stage).panicked });
+    guard_marked(
+        panicked,
+        || {
+            let (Some(stereo_len), Some(device_len)) =
+                (stereo_samples(frames), samples_for(frames, channels))
+            else {
+                return 0;
+            };
+            // SAFETY: by the caller's contract `stereo` is null or holds that many
+            // readable floats that nothing writes during the call.
+            let Some(source) = (unsafe { host_slice(stereo, stereo_len) }) else {
+                return 0;
+            };
+            // SAFETY: by the caller's contract `device` is null or holds that many
+            // writable floats that only this call touches.
+            let Some(target_buffer) = (unsafe { host_slice_mut(device, device_len) }) else {
+                return 0;
+            };
+            // SAFETY: by the caller's contract the handle is null or live and its
+            // output-thread calls run on one thread at a time.
+            let Some((stage, gain)) = (unsafe { output_side(stage) }) else {
+                return 0;
+            };
+            let written = convert::map_to_device(source, frames, 1.0, target_buffer, channels);
+            stage.apply(&mut target_buffer[..written * channels], channels, gain);
+            written
+        },
+        || {
+            // SAFETY: by the caller's contract `device` is null or holds that many
+            // writable floats that only this call touches.
+            unsafe { silence(device, samples_for(frames, channels)) };
+            0
+        },
+    )
 }
 
 /// Control thread: a renderer reading `ring`, captured at `capture_rate`,
@@ -378,36 +442,39 @@ pub unsafe extern "C" fn asc_renderer_create(
     channels: usize,
     gain: f32,
 ) -> *mut AscRenderer {
-    if !ring::is_supported_rate(device_rate) {
-        return ptr::null_mut();
-    }
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some(ring) = (unsafe { ring_of(ring) }) else {
-        return ptr::null_mut();
-    };
-    // A ring too short for the rate would cap the delay without a word.
-    if !ring.supports_rate(capture_rate) {
-        return ptr::null_mut();
-    }
-    let reader = Reader::new(Arc::clone(ring), capture_rate);
-    let control = RendererControl::new(&reader);
-    let gain = Arc::new(SharedGain::new(gain));
-    match Renderer::new(
-        reader,
-        &control,
-        Arc::clone(&gain),
-        capture_rate,
-        device_rate,
-        channels,
-    ) {
-        Ok(renderer) => Box::into_raw(Box::new(AscRenderer {
-            control,
-            gain,
-            fade_frames: fade_frames(device_rate),
-            renderer,
-        })),
-        Err(_) => ptr::null_mut(),
-    }
+    guard(ptr::null_mut(), || {
+        if !ring::is_supported_rate(device_rate) {
+            return ptr::null_mut();
+        }
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some(ring) = (unsafe { ring_of(ring) }) else {
+            return ptr::null_mut();
+        };
+        // A ring too short for the rate would cap the delay without a word.
+        if !ring.supports_rate(capture_rate) {
+            return ptr::null_mut();
+        }
+        let reader = Reader::new(Arc::clone(ring), capture_rate);
+        let control = RendererControl::new(&reader);
+        let gain = Arc::new(SharedGain::new(gain));
+        match Renderer::new(
+            reader,
+            &control,
+            Arc::clone(&gain),
+            capture_rate,
+            device_rate,
+            channels,
+        ) {
+            Ok(renderer) => Box::into_raw(Box::new(AscRenderer {
+                control,
+                gain,
+                fade_frames: fade_frames(device_rate),
+                renderer,
+                panicked: AtomicBool::new(false),
+            })),
+            Err(_) => ptr::null_mut(),
+        }
+    })
 }
 
 /// Destroys a renderer.
@@ -418,13 +485,15 @@ pub unsafe extern "C" fn asc_renderer_create(
 /// was not destroyed yet, and no other call on it runs now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_destroy(renderer: *mut AscRenderer) {
-    if renderer.is_null() {
-        return;
-    }
-    // SAFETY: the pointer came from Box::into_raw in asc_renderer_create,
-    // and by the caller's contract it is destroyed once, with no call in
-    // progress.
-    drop(unsafe { Box::from_raw(renderer) });
+    guard((), || {
+        if renderer.is_null() {
+            return;
+        }
+        // SAFETY: the pointer came from Box::into_raw in asc_renderer_create,
+        // and by the caller's contract it is destroyed once, with no call in
+        // progress.
+        drop(unsafe { Box::from_raw(renderer) });
+    })
 }
 
 /// The output thread's side of a renderer and a device buffer of `frames`
@@ -454,6 +523,43 @@ unsafe fn output_buffer<'a>(
     Some((renderer, buffer))
 }
 
+/// Runs `render` on the output side of `renderer` with the device buffer,
+/// behind [`guard`]. A panic marks the renderer, and from then on its render
+/// calls only silence the buffer, so a bug doesn't panic on every callback.
+///
+/// # Safety
+///
+/// As [`output_buffer`].
+unsafe fn render_guarded(
+    renderer: *mut AscRenderer,
+    device: *mut f32,
+    frames: usize,
+    render: impl FnOnce(&mut Renderer, &mut [f32]),
+) {
+    if renderer.is_null() {
+        return;
+    }
+    // SAFETY: the handle is live; this borrows only the `panicked` flag,
+    // which only output-thread calls use, atomically.
+    let panicked = unsafe { &(*renderer).panicked };
+    let rendered = !panicked.load(Ordering::Relaxed)
+        && guard(false, || {
+            // SAFETY: by the caller's contract the handle and the buffer are
+            // valid for this call.
+            if let Some((renderer, buffer)) = unsafe { output_buffer(renderer, device, frames) } {
+                render(renderer, buffer);
+            }
+            true
+        });
+    if !rendered {
+        panicked.store(true, Ordering::Relaxed);
+        // SAFETY: as above; a panicked call's borrows ended with it.
+        if let Some((_, buffer)) = unsafe { output_buffer(renderer, device, frames) } {
+            buffer.fill(0.0);
+        }
+    }
+}
+
 /// Output thread: fills `frames` frames of the renderer's channels,
 /// interleaved: read at the output's delay, converted to the device rate,
 /// mapped onto the channels, at the gain, with the fade after them (S62 to
@@ -471,10 +577,11 @@ pub unsafe extern "C" fn asc_renderer_render(
     device: *mut f32,
     frames: usize,
 ) {
-    // SAFETY: by the caller's contract the handle and the buffer are null or
-    // valid for this call.
-    if let Some((renderer, buffer)) = unsafe { output_buffer(renderer, device, frames) } {
-        renderer.render(buffer);
+    // SAFETY: the caller's contract is render_guarded's.
+    unsafe {
+        render_guarded(renderer, device, frames, |renderer, buffer| {
+            renderer.render(buffer)
+        })
     }
 }
 
@@ -495,10 +602,11 @@ pub unsafe extern "C" fn asc_renderer_render_timed(
     frames: usize,
     output_time_ns: u64,
 ) {
-    // SAFETY: by the caller's contract the handle and the buffer are null or
-    // valid for this call.
-    if let Some((renderer, buffer)) = unsafe { output_buffer(renderer, device, frames) } {
-        renderer.render_timed_at(buffer, output_time_ns, clock::now_ns());
+    // SAFETY: the caller's contract is render_guarded's.
+    unsafe {
+        render_guarded(renderer, device, frames, |renderer, buffer| {
+            renderer.render_timed_at(buffer, output_time_ns, clock::now_ns());
+        })
     }
 }
 
@@ -524,12 +632,14 @@ unsafe fn control_side<'a>(renderer: *const AscRenderer) -> Option<&'a RendererC
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_set_gain(renderer: *mut AscRenderer, gain: f32) {
-    if renderer.is_null() {
-        return;
-    }
-    // SAFETY: the handle is live; this borrows only the `gain` field, which
-    // the output thread only reads, atomically.
-    unsafe { &(*renderer).gain }.set(gain);
+    guard((), || {
+        if renderer.is_null() {
+            return;
+        }
+        // SAFETY: the handle is live; this borrows only the `gain` field, which
+        // the output thread only reads, atomically.
+        unsafe { &(*renderer).gain }.set(gain);
+    })
 }
 
 /// Any thread: the gain last set.
@@ -539,11 +649,13 @@ pub unsafe extern "C" fn asc_renderer_set_gain(renderer: *mut AscRenderer, gain:
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_gain(renderer: *const AscRenderer) -> f32 {
-    if renderer.is_null() {
-        return 0.0;
-    }
-    // SAFETY: the handle is live; this borrows only the `gain` field.
-    unsafe { &(*renderer).gain }.get()
+    guard(0.0, || {
+        if renderer.is_null() {
+            return 0.0;
+        }
+        // SAFETY: the handle is live; this borrows only the `gain` field.
+        unsafe { &(*renderer).gain }.get()
+    })
 }
 
 /// Control thread: sets the renderer's linear `gain` with each headroom cut
@@ -560,19 +672,21 @@ pub unsafe extern "C" fn asc_eq_give_back(
     renderer: *mut AscRenderer,
     gain: f64,
 ) {
-    if renderer.is_null() {
-        return;
-    }
-    // SAFETY: the handle is live; this borrows only the `gain` field, which
-    // the output thread only reads, atomically.
-    let shared = unsafe { &(*renderer).gain };
-    if eq.is_null() {
-        shared.set(gain as f32);
-        return;
-    }
-    // SAFETY: the handle is live; the control thread reads only the
-    // `control` field, which the capture thread never touches.
-    unsafe { &(*eq).control }.give_back(gain, shared)
+    guard((), || {
+        if renderer.is_null() {
+            return;
+        }
+        // SAFETY: the handle is live; this borrows only the `gain` field, which
+        // the output thread only reads, atomically.
+        let shared = unsafe { &(*renderer).gain };
+        if eq.is_null() {
+            shared.set(gain as f32);
+            return;
+        }
+        // SAFETY: the handle is live; the control thread reads only the
+        // `control` field, which the capture thread never touches.
+        unsafe { &(*eq).control }.give_back(gain, shared)
+    })
 }
 
 /// Any thread: a new delay in capture-rate frames (negative counts as 0).
@@ -585,10 +699,12 @@ pub unsafe extern "C" fn asc_eq_give_back(
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_set_delay_frames(renderer: *mut AscRenderer, frames: i64) {
-    // SAFETY: by the caller's contract the handle is null or live.
-    if let Some(control) = unsafe { control_side(renderer) } {
-        control.set_delay_frames(frames);
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        if let Some(control) = unsafe { control_side(renderer) } {
+            control.set_delay_frames(frames);
+        }
+    })
 }
 
 /// Any thread: the newest delay asked for, in capture-rate frames.
@@ -598,8 +714,10 @@ pub unsafe extern "C" fn asc_renderer_set_delay_frames(renderer: *mut AscRendere
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_delay_frames(renderer: *const AscRenderer) -> i64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::delay_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::delay_frames)
+    })
 }
 
 /// Control thread, before the renderer's first callback: whether its device
@@ -610,10 +728,12 @@ pub unsafe extern "C" fn asc_renderer_delay_frames(renderer: *const AscRenderer)
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_set_bluetooth(renderer: *mut AscRenderer, bluetooth: bool) {
-    // SAFETY: by the caller's contract the handle is null or live.
-    if let Some(control) = unsafe { control_side(renderer) } {
-        control.set_bluetooth(bluetooth);
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        if let Some(control) = unsafe { control_side(renderer) } {
+            control.set_bluetooth(bluetooth);
+        }
+    })
 }
 
 /// Any thread: what the start lead adds for a Bluetooth device, in capture
@@ -624,8 +744,10 @@ pub unsafe extern "C" fn asc_renderer_set_bluetooth(renderer: *mut AscRenderer, 
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_extra_lead_frames(renderer: *const AscRenderer) -> i64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::extra_lead_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::extra_lead_frames)
+    })
 }
 
 /// Control thread, after [`asc_renderer_set_bluetooth`]: hands the renderer
@@ -642,10 +764,12 @@ pub unsafe extern "C" fn asc_renderer_set_reported_latency(
     reported_ns: u64,
     last_plausible_ns: u64,
 ) -> u64 {
-    let last = (last_plausible_ns != 0).then_some(last_plausible_ns);
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(reported_ns, |control| {
-        control.set_reported_latency(reported_ns, last)
+    guard(reported_ns, || {
+        let last = (last_plausible_ns != 0).then_some(last_plausible_ns);
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(reported_ns, |control| {
+            control.set_reported_latency(reported_ns, last)
+        })
     })
 }
 
@@ -660,17 +784,19 @@ pub unsafe extern "C" fn asc_renderer_rejected_latency_ns(
     renderer: *const AscRenderer,
     latency_ns: *mut u64,
 ) -> bool {
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some(rejected) =
-        unsafe { control_side(renderer) }.and_then(RendererControl::rejected_latency_ns)
-    else {
-        return false;
-    };
-    if !latency_ns.is_null() {
-        // SAFETY: non-null, and writable by the caller's contract.
-        unsafe { latency_ns.write(rejected) };
-    }
-    true
+    guard(false, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some(rejected) =
+            unsafe { control_side(renderer) }.and_then(RendererControl::rejected_latency_ns)
+        else {
+            return false;
+        };
+        if !latency_ns.is_null() {
+            // SAFETY: non-null, and writable by the caller's contract.
+            unsafe { latency_ns.write(rejected) };
+        }
+        true
+    })
 }
 
 /// Any thread: asks the renderer to fade out over F device frames from its
@@ -681,10 +807,12 @@ pub unsafe extern "C" fn asc_renderer_rejected_latency_ns(
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_request_fade_out(renderer: *mut AscRenderer) {
-    // SAFETY: by the caller's contract the handle is null or live.
-    if let Some(control) = unsafe { control_side(renderer) } {
-        control.request_fade_out();
-    }
+    guard((), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        if let Some(control) = unsafe { control_side(renderer) } {
+            control.request_fade_out();
+        }
+    })
 }
 
 /// Any thread: whether the requested fade-out's last frame has been rendered.
@@ -694,8 +822,10 @@ pub unsafe extern "C" fn asc_renderer_request_fade_out(renderer: *mut AscRendere
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_fade_rendered(renderer: *const AscRenderer) -> bool {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.is_some_and(RendererControl::fade_rendered)
+    guard(false, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.is_some_and(RendererControl::fade_rendered)
+    })
 }
 
 /// Any thread: the host time in nanoseconds at which the requested
@@ -710,16 +840,19 @@ pub unsafe extern "C" fn asc_renderer_fade_end_time_ns(
     renderer: *const AscRenderer,
     time_ns: *mut u64,
 ) -> bool {
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some(end) = unsafe { control_side(renderer) }.and_then(RendererControl::fade_end_time_ns)
-    else {
-        return false;
-    };
-    if !time_ns.is_null() {
-        // SAFETY: non-null, and writable by the caller's contract.
-        unsafe { time_ns.write(end) };
-    }
-    true
+    guard(false, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some(end) =
+            unsafe { control_side(renderer) }.and_then(RendererControl::fade_end_time_ns)
+        else {
+            return false;
+        };
+        if !time_ns.is_null() {
+            // SAFETY: non-null, and writable by the caller's contract.
+            unsafe { time_ns.write(end) };
+        }
+        true
+    })
 }
 
 /// Any thread: whether the requested fade-out has played by host time
@@ -735,9 +868,11 @@ pub unsafe extern "C" fn asc_renderer_faded_by_time(
     latency_ns: u64,
     now_ns: u64,
 ) -> bool {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }
-        .is_some_and(|control| control.faded_by_time(latency_ns, now_ns))
+    guard(false, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }
+            .is_some_and(|control| control.faded_by_time(latency_ns, now_ns))
+    })
 }
 
 /// Any thread: where the fade was at the end of the latest callback, an
@@ -748,13 +883,15 @@ pub unsafe extern "C" fn asc_renderer_faded_by_time(
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_fade_state(renderer: *const AscRenderer) -> i32 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    match unsafe { control_side(renderer) }.map(RendererControl::fade_state) {
-        Some(FadeState::FadingIn) => FADE_FADING_IN,
-        Some(FadeState::Open) => FADE_OPEN,
-        Some(FadeState::FadingOut) => FADE_FADING_OUT,
-        Some(FadeState::Closed) | None => FADE_CLOSED,
-    }
+    guard(FADE_CLOSED, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        match unsafe { control_side(renderer) }.map(RendererControl::fade_state) {
+            Some(FadeState::FadingIn) => FADE_FADING_IN,
+            Some(FadeState::Open) => FADE_OPEN,
+            Some(FadeState::FadingOut) => FADE_FADING_OUT,
+            Some(FadeState::Closed) | None => FADE_CLOSED,
+        }
+    })
 }
 
 /// Any thread: F, the frames of a fade at the device rate (S182); 0 for a
@@ -765,11 +902,13 @@ pub unsafe extern "C" fn asc_renderer_fade_state(renderer: *const AscRenderer) -
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_fade_frames(renderer: *const AscRenderer) -> usize {
-    if renderer.is_null() {
-        return 0;
-    }
-    // SAFETY: the handle is live; `fade_frames` never changes after creation.
-    unsafe { (*renderer).fade_frames }
+    guard(0, || {
+        if renderer.is_null() {
+            return 0;
+        }
+        // SAFETY: the handle is live; `fade_frames` never changes after creation.
+        unsafe { (*renderer).fade_frames }
+    })
 }
 
 /// Any thread: the reader's last published `lagFrames` (S56).
@@ -779,8 +918,10 @@ pub unsafe extern "C" fn asc_renderer_fade_frames(renderer: *const AscRenderer) 
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_lag_frames(renderer: *const AscRenderer) -> i64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::lag_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::lag_frames)
+    })
 }
 
 /// Any thread: the reader's counters (S158); all zero for a null handle.
@@ -790,9 +931,11 @@ pub unsafe extern "C" fn asc_renderer_lag_frames(renderer: *const AscRenderer) -
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_counters(renderer: *const AscRenderer) -> AscReaderCounters {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or_else(AscReaderCounters::default, |control| {
-        control.counters().into()
+    guard(AscReaderCounters::default(), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or_else(AscReaderCounters::default, |control| {
+            control.counters().into()
+        })
     })
 }
 
@@ -805,8 +948,10 @@ pub unsafe extern "C" fn asc_renderer_counters(renderer: *const AscRenderer) -> 
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_slowed_frames(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::slowed_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::slowed_frames)
+    })
 }
 
 /// Any thread: the capture frames the renderer sped its converter up by to
@@ -817,8 +962,10 @@ pub unsafe extern "C" fn asc_renderer_slowed_frames(renderer: *const AscRenderer
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_sped_frames(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::sped_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::sped_frames)
+    })
 }
 
 /// Any thread: the largest lateness of a callback against the renderer's
@@ -829,8 +976,10 @@ pub unsafe extern "C" fn asc_renderer_sped_frames(renderer: *const AscRenderer) 
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_late_max_ns(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::late_max_ns)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::late_max_ns)
+    })
 }
 
 /// Any thread: the callbacks that came more than 5 ms later
@@ -841,8 +990,10 @@ pub unsafe extern "C" fn asc_renderer_late_max_ns(renderer: *const AscRenderer) 
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_late_callbacks(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::late_callbacks)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::late_callbacks)
+    })
 }
 
 /// Control thread: [`RendererControl::take_level`] into `peak_db` and
@@ -859,20 +1010,23 @@ pub unsafe extern "C" fn asc_renderer_take_level(
     peak_db: *mut f64,
     rms_db: *mut f64,
 ) -> bool {
-    if peak_db.is_null() || rms_db.is_null() {
-        return false;
-    }
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some((peak, rms)) = unsafe { control_side(renderer) }.and_then(RendererControl::take_level)
-    else {
-        return false;
-    };
-    // SAFETY: both pointers are non-null and writable by the caller's contract.
-    unsafe {
-        *peak_db = peak;
-        *rms_db = rms;
-    }
-    true
+    guard(false, || {
+        if peak_db.is_null() || rms_db.is_null() {
+            return false;
+        }
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some((peak, rms)) =
+            unsafe { control_side(renderer) }.and_then(RendererControl::take_level)
+        else {
+            return false;
+        };
+        // SAFETY: both pointers are non-null and writable by the caller's contract.
+        unsafe {
+            *peak_db = peak;
+            *rms_db = rms;
+        }
+        true
+    })
 }
 
 /// Any thread: the device frames the converter couldn't produce and that
@@ -884,8 +1038,10 @@ pub unsafe extern "C" fn asc_renderer_take_level(
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_shortfall_frames(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::shortfall_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::shortfall_frames)
+    })
 }
 
 /// Any thread: the capture frames by which the renderer's slow-down made up
@@ -897,8 +1053,10 @@ pub unsafe extern "C" fn asc_renderer_shortfall_frames(renderer: *const AscRende
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_shortage_frames(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::shortage_frames)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::shortage_frames)
+    })
 }
 
 /// Any thread: the observer's least slack, in ns of capture frames: `W - P`
@@ -915,16 +1073,19 @@ pub unsafe extern "C" fn asc_renderer_least_slack_ns(
     renderer: *const AscRenderer,
     slack_ns: *mut i64,
 ) -> bool {
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some(slack) = unsafe { control_side(renderer) }.and_then(RendererControl::least_slack_ns)
-    else {
-        return false;
-    };
-    if !slack_ns.is_null() {
-        // SAFETY: non-null, and writable by the caller's contract.
-        unsafe { slack_ns.write(slack) };
-    }
-    true
+    guard(false, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some(slack) =
+            unsafe { control_side(renderer) }.and_then(RendererControl::least_slack_ns)
+        else {
+            return false;
+        };
+        if !slack_ns.is_null() {
+            // SAFETY: non-null, and writable by the caller's contract.
+            unsafe { slack_ns.write(slack) };
+        }
+        true
+    })
 }
 
 /// Any thread: the observer's largest drop of the lateness floor below the
@@ -936,8 +1097,10 @@ pub unsafe extern "C" fn asc_renderer_least_slack_ns(
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_floor_drop_ns(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::floor_drop_ns)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::floor_drop_ns)
+    })
 }
 
 /// Any thread: the observer's steps in the device's output times, callbacks
@@ -949,8 +1112,10 @@ pub unsafe extern "C" fn asc_renderer_floor_drop_ns(renderer: *const AscRenderer
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_time_steps(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::time_steps)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::time_steps)
+    })
 }
 
 /// Any thread: the times the reader re-anchored at its delay after a stall
@@ -961,8 +1126,10 @@ pub unsafe extern "C" fn asc_renderer_time_steps(renderer: *const AscRenderer) -
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_stall_reanchors(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::stall_reanchors)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::stall_reanchors)
+    })
 }
 
 /// The times the reader re-anchored at its delay after a lasting lateness
@@ -973,8 +1140,10 @@ pub unsafe extern "C" fn asc_renderer_stall_reanchors(renderer: *const AscRender
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_late_reanchors(renderer: *const AscRenderer) -> u64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::late_reanchors)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::late_reanchors)
+    })
 }
 
 /// The clock rate the renderer follows beside its trim, in ppm (S207):
@@ -986,8 +1155,10 @@ pub unsafe extern "C" fn asc_renderer_late_reanchors(renderer: *const AscRendere
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_followed_ppm(renderer: *const AscRenderer) -> i64 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::followed_ppm)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::followed_ppm)
+    })
 }
 
 /// The share of the renderer's callbacks, in percent, that starved while
@@ -999,8 +1170,10 @@ pub unsafe extern "C" fn asc_renderer_followed_ppm(renderer: *const AscRenderer)
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_starved_percent(renderer: *const AscRenderer) -> u32 {
-    // SAFETY: by the caller's contract the handle is null or live.
-    unsafe { control_side(renderer) }.map_or(0, RendererControl::starved_percent)
+    guard(0, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        unsafe { control_side(renderer) }.map_or(0, RendererControl::starved_percent)
+    })
 }
 
 /// Any thread: the start lead `renderer` published for the session lead
@@ -1016,17 +1189,20 @@ pub unsafe extern "C" fn asc_renderer_start_lead_frames(
     renderer: *const AscRenderer,
     frames: *mut i64,
 ) -> bool {
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some(lead) = unsafe { control_side(renderer) }.and_then(RendererControl::start_lead_frames)
-    else {
-        return false;
-    };
-    if frames.is_null() {
-        return false;
-    }
-    // SAFETY: non-null, and by the caller's contract valid for a write.
-    unsafe { frames.write(lead) };
-    true
+    guard(false, || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some(lead) =
+            unsafe { control_side(renderer) }.and_then(RendererControl::start_lead_frames)
+        else {
+            return false;
+        };
+        if frames.is_null() {
+            return false;
+        }
+        // SAFETY: non-null, and by the caller's contract valid for a write.
+        unsafe { frames.write(lead) };
+        true
+    })
 }
 
 /// A renderer's start lead kept counting in its ring's session lead after
@@ -1046,11 +1222,14 @@ pub struct AscHeldLead {
 /// `renderer` is null or a live renderer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_renderer_hold_lead(renderer: *const AscRenderer) -> *mut AscHeldLead {
-    // SAFETY: by the caller's contract the handle is null or live.
-    let Some(lead) = unsafe { control_side(renderer) }.and_then(RendererControl::hold_lead) else {
-        return ptr::null_mut();
-    };
-    Box::into_raw(Box::new(AscHeldLead { lead }))
+    guard(ptr::null_mut(), || {
+        // SAFETY: by the caller's contract the handle is null or live.
+        let Some(lead) = unsafe { control_side(renderer) }.and_then(RendererControl::hold_lead)
+        else {
+            return ptr::null_mut();
+        };
+        Box::into_raw(Box::new(AscHeldLead { lead }))
+    })
 }
 
 /// Any thread: the hold-back the host now counts for the lost output, in
@@ -1061,11 +1240,13 @@ pub unsafe extern "C" fn asc_renderer_hold_lead(renderer: *const AscRenderer) ->
 /// `held` is null or a live held lead.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_held_lead_set_hold_back_frames(held: *mut AscHeldLead, frames: i64) {
-    if held.is_null() {
-        return;
-    }
-    // SAFETY: the handle is live; set_hold_back is an atomic store.
-    unsafe { &(*held).lead }.set_hold_back(frames);
+    guard((), || {
+        if held.is_null() {
+            return;
+        }
+        // SAFETY: the handle is live; set_hold_back is an atomic store.
+        unsafe { &(*held).lead }.set_hold_back(frames);
+    })
 }
 
 /// Ends a held lead: it no longer counts.
@@ -1076,22 +1257,24 @@ pub unsafe extern "C" fn asc_held_lead_set_hold_back_frames(held: *mut AscHeldLe
 /// was not destroyed yet, and no other call on it runs now or later.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_held_lead_destroy(held: *mut AscHeldLead) {
-    if held.is_null() {
-        return;
-    }
-    // SAFETY: the pointer came from Box::into_raw in asc_renderer_hold_lead,
-    // and by the caller's contract it is destroyed once, with no call in
-    // progress.
-    drop(unsafe { Box::from_raw(held) });
+    guard((), || {
+        if held.is_null() {
+            return;
+        }
+        // SAFETY: the pointer came from Box::into_raw in asc_renderer_hold_lead,
+        // and by the caller's contract it is destroyed once, with no call in
+        // progress.
+        drop(unsafe { Box::from_raw(held) });
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ffi::ring::{
-        AscRingWriter, asc_reader_create, asc_reader_destroy, asc_ring_capacity_for_rate,
-        asc_ring_create, asc_ring_destroy, asc_ring_write, asc_ring_writer_create,
-        asc_ring_writer_destroy,
+        AscReadReport, AscRingWriter, asc_reader_create, asc_reader_destroy, asc_reader_read,
+        asc_ring_capacity_for_rate, asc_ring_create, asc_ring_destroy, asc_ring_write,
+        asc_ring_writer_create, asc_ring_writer_destroy,
     };
 
     fn wave(frames: usize, seed: u32) -> Vec<f32> {
@@ -1420,6 +1603,55 @@ mod tests {
         let writer = unsafe { asc_ring_writer_create(ring) };
         assert!(!ring.is_null() && !writer.is_null());
         (ring, writer)
+    }
+
+    // covers: S205
+    #[test]
+    fn a_panic_inside_a_call_returns_its_failure_value_and_a_render_call_silences() {
+        use crate::ffi::tests::{panic_next, panic_still_pending};
+        use crate::ffi::{asc_eq_create, asc_eq_destroy, asc_eq_process};
+        let (ring, writer) = c_ring();
+        let mut out = vec![0.5f32; 512 * 2];
+        let mut report = AscReadReport::default();
+        // SAFETY: the handles are live and used from this one thread; the
+        // buffers hold the frames passed with them.
+        unsafe {
+            panic_next();
+            assert!(asc_renderer_create(ring, 48_000, 48_000, 2, 1.0).is_null());
+            let renderer = asc_renderer_create(ring, 48_000, 48_000, 2, 1.0);
+            let reader = asc_reader_create(ring, 48_000);
+            let eq = asc_eq_create(48_000.0);
+            assert!(!renderer.is_null() && !reader.is_null() && !eq.is_null());
+            for call in 0..2 {
+                panic_next();
+                asc_eq_process(eq, out.as_mut_ptr(), 512);
+                assert!(out.iter().all(|&sample| sample == 0.0));
+                assert_eq!(
+                    panic_still_pending(),
+                    call == 1,
+                    "equalizes after its panic"
+                );
+                out.fill(0.5);
+                panic_next();
+                asc_ring_write(writer, out.as_ptr(), 512);
+                assert_eq!(panic_still_pending(), call == 1, "writes after its panic");
+                panic_next();
+                asc_renderer_render(renderer, out.as_mut_ptr(), 512);
+                assert!(out.iter().all(|&sample| sample == 0.0));
+                assert_eq!(panic_still_pending(), call == 1, "renders after its panic");
+                out.fill(0.5);
+                panic_next();
+                asc_reader_read(reader, out.as_mut_ptr(), 512, &mut report);
+                assert!(out.iter().all(|&sample| sample == 0.0));
+                assert_eq!(panic_still_pending(), call == 1, "reads after its panic");
+                out.fill(0.5);
+            }
+            asc_eq_destroy(eq);
+            asc_reader_destroy(reader);
+            asc_renderer_destroy(renderer);
+            asc_ring_writer_destroy(writer);
+            asc_ring_destroy(ring);
+        }
     }
 
     // covers: S36
