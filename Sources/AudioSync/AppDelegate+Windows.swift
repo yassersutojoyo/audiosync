@@ -384,11 +384,13 @@ extension AppDelegate {
             self.nowPlayingOnScreen = visible   // Now Playing polls only while someone sees it
             self.syncTrackInfo()
             self.appModel.inputLevel.setVisible(visible)
+            MarkBreath.shared.mainOnScreen = visible
             self.followSoundTide()
         }
         a.panelVisible = { [weak self] visible in
             guard let self, visible != self.panelOnScreen else { return }
             self.panelOnScreen = visible
+            MarkBreath.shared.panelOnScreen = visible
             self.syncTrackInfo()
             self.followSoundTide()
         }

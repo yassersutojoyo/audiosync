@@ -17439,5 +17439,71 @@ do {
           "menu bar panel: apps and inputs read before the source picker was refreshed never bring back a gone app or input")
 }
 
+// MARK: Motion in the headers and the meter: the meter's glide, the volume number, the breathing mark
+do {
+    let poll = Double(ASC_METER_POLL_MS) / 1000
+    check(InputLevel.glide(from: 0.6, to: 0.4, reduceMotion: false) == poll,
+          "input level motion: a fall glides over one poll")
+    check(InputLevel.glide(from: 0.4, to: 0.6, reduceMotion: false) == nil
+            && InputLevel.glide(from: 0.5, to: 0.5, reduceMotion: false) == nil,
+          "input level motion: a rise shows at once")
+    check(InputLevel.glide(from: 0.6, to: 0.4, reduceMotion: true) == nil,
+          "input level motion: Reduce Motion steps a fall too")
+    let falling = InputLevel()
+    falling.update(peak: 1)
+    falling.update(peak: 0)
+    check(falling.previous == 1 && falling.level < falling.previous,
+          "input level motion: the meter keeps the length it fell from", "\(falling.previous) -> \(falling.level)")
+
+    check(MarkBreath.breathes(networkSpeakers: 0, localNetworkRefused: false, reduceMotion: false, onScreen: true),
+          "breathing mark: it breathes while no network speaker is found")
+    check(!MarkBreath.breathes(networkSpeakers: 1, localNetworkRefused: false, reduceMotion: false, onScreen: true),
+          "breathing mark: it rests once a speaker is found")
+    check(!MarkBreath.breathes(networkSpeakers: 0, localNetworkRefused: true, reduceMotion: false, onScreen: true),
+          "breathing mark: it rests while Local Network access is refused")
+    check(!MarkBreath.breathes(networkSpeakers: 0, localNetworkRefused: false, reduceMotion: true, onScreen: true),
+          "breathing mark: it rests with Reduce Motion")
+    check(!MarkBreath.breathes(networkSpeakers: 0, localNetworkRefused: false, reduceMotion: false, onScreen: false),
+          "breathing mark: it rests while its window is hidden")
+    let top = MarkBreath.depth(sinceStart: MarkBreath.period / 2)
+    check(MarkBreath.depth(sinceStart: 0) == 0 && MarkBreath.depth(sinceStart: -1) == 0 && abs(top - 1) < 1e-9
+            && abs(MarkBreath.depth(sinceStart: MarkBreath.period)) < 1e-9,
+          "breathing mark: a breath starts and ends at rest", "top \(top)")
+    check(MarkBreath.scale(depth: 0) == 1 && abs(MarkBreath.scale(depth: 1) - 1.04) < 1e-9
+            && MarkBreath.opacity(depth: 0) == 1 && abs(MarkBreath.opacity(depth: 1) - 0.8) < 1e-9,
+          "breathing mark: at most 4 percent larger and 20 percent fainter")
+    let breathStart = BreathStart()
+    let firstBreath = Date(timeIntervalSinceReferenceDate: 100)
+    check(breathStart.since(firstBreath) == firstBreath
+            && breathStart.since(firstBreath.addingTimeInterval(5)) == firstBreath,
+          "breathing mark: a breathing spell keeps the time it began")
+
+    func motionRead(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
+    func motionPart(_ source: String, _ start: String) -> String {
+        source.components(separatedBy: start).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
+    }
+    let motionWindow = motionRead("Sources/AudioSync/MainWindow.swift")
+    let motionBar = motionRead("Sources/AudioSync/MenuBar.swift")
+    let markView = motionPart(motionWindow, "struct BreathingMark: View")
+    check(markView.contains("reduceMotion: reduceMotion, onScreen: breath[keyPath: onScreen]")
+            && markView.contains("paused: !breathes")
+            && markView.contains(".animation(reduceMotion ? nil :"),
+          "breathing mark source: Reduce Motion and a hidden window pause it, and it comes to rest without motion")
+    check(motionWindow.contains("BreathingMark(model: model, onScreen: \\.mainOnScreen)")
+            && motionBar.contains("BreathingMark(model: model, onScreen: \\.panelOnScreen)"),
+          "breathing mark source: both headers show the breathing mark")
+    let windowsWiring = motionRead("Sources/AudioSync/AppDelegate+Windows.swift")
+    check(windowsWiring.contains("MarkBreath.shared.mainOnScreen = visible")
+            && windowsWiring.contains("MarkBreath.shared.panelOnScreen = visible"),
+          "breathing mark source: it follows whether the main window and the panel are on screen")
+    let meterView = motionPart(motionBar, "struct InputLevelMeter: View")
+    check(meterView.contains("InputLevel.glide(from: level.previous, to: level.level, reduceMotion: reduceMotion)"),
+          "input level motion source: the meter glides only as InputLevel.glide allows")
+    check(motionWindow.contains(".foregroundStyle(masterDrag.held ? Color.primary : Brand.secondaryText)")
+            && motionWindow.contains(".foregroundStyle(volumeDrag.held ? Color.primary : Brand.secondaryText)")
+            && motionWindow.contains("onEditingChanged: { masterDrag.held = $0 }"),
+          "volume number source: the master's and each speaker's number brighten while the slider is held")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

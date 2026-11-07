@@ -1625,8 +1625,7 @@ struct MenuBarView: View {
             // The brand opens the main window too, for those who know.
             Button { model.actions.openMainWindow() } label: {
                 HStack(spacing: 9) {
-                    BrandMark()
-                        .fill(model.running ? Brand.logo : Color.secondary)
+                    BreathingMark(model: model, onScreen: \.panelOnScreen)
                         .frame(width: 22, height: 22)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 1) {
@@ -2353,6 +2352,7 @@ struct PresetPicker: View {
 struct InputLevelMeter: View {
     @ObservedObject var level: InputLevel
     let text: UIStrings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geometry in
@@ -2360,6 +2360,8 @@ struct InputLevelMeter: View {
                 Capsule().fill(Brand.meterTrack)
                 Capsule().fill(Brand.tealText)
                     .frame(width: geometry.size.width * CGFloat(min(max(level.level, 0), 1)))
+                    .animation(InputLevel.glide(from: level.previous, to: level.level, reduceMotion: reduceMotion)
+                                   .map { Animation.linear(duration: $0) }, value: level.level)
             }
         }
         .frame(height: 4)

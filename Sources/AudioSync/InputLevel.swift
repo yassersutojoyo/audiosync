@@ -8,13 +8,24 @@ import CAudioSyncCore
 /// the fall-back are the core's (`asc_meter_level`).
 final class InputLevel: ObservableObject {
     /// The bar's length, 0 to 1.
-    @Published private(set) var level: Float = 0
+    @Published private(set) var level: Float = 0 {
+        didSet { previous = oldValue }
+    }
+    /// The length before the last change, which tells a fall from a rise.
+    private(set) var previous: Float = 0
     @Published private(set) var shown = false
     private var timer: Timer?
     private var peak: (() -> Float?)?
     private var visible = false
 
     var isPolling: Bool { timer?.isValid == true }
+
+    /// Seconds the bar takes to reach a new length; nil for at once. A fall
+    /// glides over one poll, landing as the next reading comes; a rise is
+    /// instant so a peak never shows late. Reduce Motion steps both.
+    static func glide(from old: Float, to new: Float, reduceMotion: Bool) -> Double? {
+        new < old && !reduceMotion ? Double(ASC_METER_POLL_MS) / 1000 : nil
+    }
 
     /// The level as VoiceOver reads it, in steps of 10 percent (the core's
     /// rule, shared with the Windows app).

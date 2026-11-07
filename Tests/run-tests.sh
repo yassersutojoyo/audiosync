@@ -45,7 +45,7 @@ ENGINE_PARTS=(EngineParts.swift CoreEngine.swift OutputRenderer.swift OutputFade
 APP_PARTS=(TrackMetadata.swift ReceiverInfo.swift NowPlaying.swift Volume.swift AudioSource.swift SpeakerGroups.swift
   AirPlayPairing.swift Notices.swift PermissionFlow.swift SpeakerState.swift CaptureCheck.swift CaptureSupport.swift
   AudioDevices.swift LocalNetworkProbe.swift SpeakerLayout.swift Appearance.swift PanelColors.swift
-  NativeReceiver.swift NativeAirPlayModel.swift NativeAirPlay.swift CastModel.swift CastSender.swift WindowRules.swift FieldEditor.swift AppSettings.swift Zones.swift Presets.swift HiddenSpeakers.swift SpeakerNames.swift AppLifecycle.swift UpdateGate.swift MicrophoneRequestGate.swift LocalDelay.swift InputLevel.swift DeviceVolume.swift
+  NativeReceiver.swift NativeAirPlayModel.swift NativeAirPlay.swift CastModel.swift CastSender.swift WindowRules.swift FieldEditor.swift AppSettings.swift Zones.swift Presets.swift HiddenSpeakers.swift SpeakerNames.swift AppLifecycle.swift UpdateGate.swift MicrophoneRequestGate.swift LocalDelay.swift InputLevel.swift MarkBreath.swift DeviceVolume.swift
   Localization.swift AboutPanel.swift MenuActions.swift BrandTokens.swift WebRemoteModel.swift CalibrationFlow.swift CalibrateAllFlow.swift GuideArtwork.swift GuideLayout.swift ProcessTapCapture.swift SyncEngine.swift OutputStall.swift)
 
 build() {   # [SWIFT_OPT=-Onone] build <name> <test file> <source files…> [-- <more swiftc arguments…>]

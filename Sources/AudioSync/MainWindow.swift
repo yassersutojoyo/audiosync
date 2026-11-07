@@ -151,6 +151,7 @@ struct MainView: View {
     @StateObject private var windowWidth = WindowWidth()
     @StateObject private var noticeCount = NoticeCount()
     @StateObject private var heroHover = HoverState()
+    @StateObject private var masterDrag = VolumeDrag()
     @FocusState private var modeFocus: TransportMode?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -253,8 +254,7 @@ struct MainView: View {
 
     private func header(_ t: UIStrings) -> some View {
         HStack(spacing: 12) {
-            BrandMark()
-                .fill(model.running ? Brand.logo : Color.secondary)
+            BreathingMark(model: model, onScreen: \.mainOnScreen)
                 .frame(width: 32, height: 32)
                 .accessibilityHidden(true)
                 .allowsHitTesting(false)
@@ -410,13 +410,13 @@ struct MainView: View {
             HStack(spacing: 8) {
                 MasterMuteButton(model: model, text: t)
                 Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }),
-                       in: 0...100)
+                       in: 0...100, onEditingChanged: { masterDrag.held = $0 })
                     .controlSize(.small)
                     .accessibilityLabel(t.masterVolume)
                     .accessibilityValue(t.volumeValue(model.master))
                 Text(t.volumeValue(model.master))
                     .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(Brand.secondaryText)
+                    .foregroundStyle(masterDrag.held ? Color.primary : Brand.secondaryText)
                     .frame(width: 26, alignment: .trailing)
                     .accessibilityHidden(true)
             }
@@ -810,10 +810,40 @@ final class ZoneDisclosure: ObservableObject {
     }
 }
 
-/// Whether a speaker row's volume slider is held. An object rather than
-/// @State, for the same reason as ZoneDisclosure; nothing redraws on it.
+/// Whether a volume slider is held. An object rather than @State, for the
+/// same reason as ZoneDisclosure; the number beside the slider brightens
+/// while it is.
 final class VolumeDrag: ObservableObject {
-    var held = false
+    @Published var held = false
+}
+
+/// The brand mark in a header, breathing (`MarkBreath`) while no network
+/// speaker has been found.
+struct BreathingMark: View {
+    @ObservedObject var model: AppModel
+    let onScreen: KeyPath<MarkBreath, Bool>
+    @ObservedObject private var breath = MarkBreath.shared
+    @StateObject private var start = BreathStart()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let breathes = MarkBreath.breathes(networkSpeakers: model.airplay.count + model.cast.count,
+                                           localNetworkRefused: model.localNetworkHint.accessRefused,
+                                           reduceMotion: reduceMotion, onScreen: breath[keyPath: onScreen])
+        // 30 frames a second is plenty for a 4.5 s breath; paused, it asks for no frames.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !breathes)) { context in
+            let depth = breathes
+                ? MarkBreath.depth(sinceStart: context.date.timeIntervalSince(start.since(context.date))) : 0
+            BrandMark()
+                .fill(model.running ? Brand.logo : Color.secondary)
+                .scaleEffect(MarkBreath.scale(depth: depth))
+                .opacity(MarkBreath.opacity(depth: depth))
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: MarkBreath.settle), value: breathes)
+        .onChange(of: breathes) { _, now in
+            if !now { start.date = nil }
+        }
+    }
 }
 
 /// One zone: its header (disclosure, switch, volume, options), then its
@@ -1312,7 +1342,7 @@ struct SpeakerRow: View {
                             .focused($volumeFocused)
                         Text(t.volumeValue(speaker.volume))
                             .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(Brand.secondaryText)
+                            .foregroundStyle(volumeDrag.held ? Color.primary : Brand.secondaryText)
                             .frame(width: 26, alignment: .trailing)
                             .accessibilityHidden(true)
                     }
