@@ -4,6 +4,3 @@
 # test, so this list only shrinks. "Partly done" names what already exists.
 
 # AirPlay 2 (behind its flag until the real-receiver checks of G17).
-
-# Several AirPlay 2 receivers at once, specified for a later stage.
-P212 Hardware: two or more AirPlay 2 receivers on one PTP timeline (G20).

@@ -130,6 +130,49 @@ pub fn fit_timeline(reads: &[(u64, f64)], first_onset: u64) -> Option<Timeline> 
     })
 }
 
+/// When frame `frame` plays, from the reads in the second before it: the
+/// earliest arrival minus frames there, plus the frame's own time. A pipe
+/// receiver's pace wanders by tens of ms and slips by whole packets, alike on
+/// every receiver at one moment, so timing each click from its own second
+/// compares the receivers at the same instant, a joiner's first clicks too.
+pub fn local_seconds(reads: &[(u64, f64)], frame: u64) -> Option<f64> {
+    let window = frame.saturating_sub(RATE as u64)..frame;
+    reads
+        .iter()
+        .filter(|(end, _)| window.contains(end))
+        .map(|&(_, offset)| offset)
+        .min_by(f64::total_cmp)
+        .map(|offset| offset + frame as f64 / RATE)
+}
+
+/// Onset times per stream, the first stream heard from the start: a click is
+/// one of its onsets and every other stream's within half a period of it.
+/// Gives the largest spread of one click's times, the clicks two or more
+/// streams heard and the clicks every stream heard.
+pub fn click_spread(streams: &[Vec<f64>]) -> (f64, usize, usize) {
+    let half = CLICK_PERIOD_FRAMES as f64 / 2.0 / RATE;
+    let (mut worst, mut clicks, mut everywhere) = (0.0f64, 0, 0);
+    let Some((first, others)) = streams.split_first() else {
+        return (worst, clicks, everywhere);
+    };
+    for &time in first {
+        let heard: Vec<f64> = others
+            .iter()
+            .filter_map(|onsets| onsets.iter().copied().find(|t| (t - time).abs() < half))
+            .chain([time])
+            .collect();
+        if heard.len() < 2 {
+            continue;
+        }
+        clicks += 1;
+        everywhere += usize::from(heard.len() == streams.len());
+        let low = heard.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = heard.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        worst = worst.max(high - low);
+    }
+    (worst, clicks, everywhere)
+}
+
 /// Finds click onsets in one receiver's 16-bit little-endian stereo PCM and
 /// times them on the receiver's play timeline, fitted to when reads arrived.
 pub struct Detector {

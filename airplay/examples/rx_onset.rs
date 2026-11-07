@@ -22,7 +22,12 @@
 //! receiver's play timeline, frame f at `anchor + f / 44 100`, anchored on
 //! the reads before the first click, not by the read that carried it. A
 //! `drift` line per stream pair checks the onsets' frame offset holds within
-//! one packet across the clicks.
+//! one packet across the clicks. A last `SPREAD` line times each click
+//! from the reads in the second before it instead and gives the largest
+//! spread of one click across every stream that heard it from
+//! `SETTLE_S` after its first read, so a receiver turned on later is judged
+//! too; a `SETTLING` line gives the same over every click, the first
+//! `SETTLE_S` of each stream included.
 
 #[path = "rx_pair/sync_check.rs"]
 mod sync_check;
@@ -35,7 +40,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use sync_check::{DEFAULT_THRESHOLD, Detector, MAX_DELAY_MS, RATE, verdict};
+use sync_check::{
+    DEFAULT_THRESHOLD, Detector, MAX_DELAY_MS, RATE, click_spread, local_seconds, verdict,
+};
+
+/// An AirPlay 2 test receiver's PTP helper takes seconds to line up after it
+/// starts, and in WSL the clock it reads steps back about 0.6 s every 30 s;
+/// a receiver that just started lines up from a different state than one
+/// already playing (WSL runs, 8 Nov 2026: a joiner was off by 40 ms 1 s
+/// after its first read, 8 ms at 5 s, up to 5 ms at 9 to 13 s, then within
+/// 0.2 ms).
+const SETTLE_S: f64 = 20.0;
 
 struct Stream {
     path: String,
@@ -184,6 +199,8 @@ fn main() -> ExitCode {
     }
 
     let mut results = Vec::new();
+    let mut local = Vec::new();
+    let mut settled = Vec::new();
     for stream in &streams {
         let mut detector = stream.detector.lock().unwrap();
         detector.finish();
@@ -218,6 +235,20 @@ fn main() -> ExitCode {
                 onset.seconds
             );
         }
+        let times: Vec<f64> = detector
+            .onsets()
+            .iter()
+            .filter_map(|onset| local_seconds(detector.reads(), onset.frame))
+            .collect();
+        let delay = stream.delay.as_secs_f64();
+        settled.push(
+            times
+                .iter()
+                .filter(|&&seconds| first.is_some_and(|first| seconds >= first + SETTLE_S))
+                .map(|seconds| seconds - delay)
+                .collect(),
+        );
+        local.push(times.iter().map(|seconds| seconds - delay).collect());
         results.push((
             stream.path.clone(),
             stream.delay,
@@ -269,6 +300,16 @@ fn main() -> ExitCode {
         );
         pass &= judged.pass;
     }
+    let (worst, clicks, _) = click_spread(&local);
+    println!(
+        "SETTLING {:.3} ms over {clicks} clicks (every click, each timed from the second before it)",
+        worst * 1000.0
+    );
+    let (worst, clicks, everywhere) = click_spread(&settled);
+    println!(
+        "SPREAD {:.3} ms over {clicks} clicks, {everywhere} heard on every stream (each timed from the second before it, from {SETTLE_S} s after the stream's first read)",
+        worst * 1000.0
+    );
     if pass {
         ExitCode::SUCCESS
     } else {

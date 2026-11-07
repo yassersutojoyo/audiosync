@@ -16,8 +16,8 @@ use audiosync_airplay::volume::Volume;
 use common::net::{Behavior, Events, HostAudio, NetReceiver, serial, wait_until};
 use sync_check::{
     CLICK_FIRST_FRAME, CLICK_FRAMES, CLICK_PERIOD_FRAMES, ClickPair, DEFAULT_THRESHOLD, Detector,
-    Onset, RATE, WireClick, WireLog, click_sample, fit_timeline, pair_clicks, parse_rx_spec,
-    stated_play, trace_field, verdict,
+    Onset, RATE, WireClick, WireLog, click_sample, click_spread, fit_timeline, local_seconds,
+    pair_clicks, parse_rx_spec, stated_play, trace_field, verdict,
 };
 
 const PACKET: usize = 352;
@@ -480,6 +480,33 @@ fn clicks_pair_by_frame_when_a_speaker_lost_one_and_has_an_extra() {
         diffs.iter().all(|diff| (diff - 0.5).abs() * RATE < 0.01),
         "{diffs:?}"
     );
+}
+
+// The receivers' half of P212 is the WSL check
+// scripts/several_ap2_receivers_wsl.sh runs on this timing.
+// covers: P212
+#[test]
+fn each_click_is_timed_from_its_own_second_and_a_joiner_matches_by_time() {
+    // One read per packet, 2 ms late, then 30 ms late from frame 100 000.
+    let reads: Vec<(u64, f64)> = (1..=500u64)
+        .map(|i| i * PACKET as u64)
+        .map(|end| (end, if end < 100_000 { 0.002 } else { 0.032 }))
+        .collect();
+    assert_eq!(local_seconds(&reads, 50_000), Some(0.002 + 50_000.0 / RATE));
+    assert_eq!(
+        local_seconds(&reads, 150_000),
+        Some(0.032 + 150_000.0 / RATE)
+    );
+    assert_eq!(local_seconds(&reads, 300_000), None, "nothing read before");
+
+    let first = vec![10.0, 14.0, 18.0, 22.0];
+    let second = vec![10.001, 14.0, 18.0, 22.0];
+    let joiner = vec![18.002, 22.0005];
+    let (worst, clicks, everywhere) = click_spread(&[first.clone(), second, joiner]);
+    assert!((worst - 0.002).abs() < 1e-9, "{worst}");
+    assert_eq!((clicks, everywhere), (4, 2));
+    let (_, clicks, everywhere) = click_spread(&[first, Vec::new()]);
+    assert_eq!((clicks, everywhere), (0, 0), "one stream alone is no click");
 }
 
 /// A receiver that takes PCM only.

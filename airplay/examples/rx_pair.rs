@@ -4,7 +4,9 @@
 //! a 440 Hz sine at -30 dBFS, or with `--click` a short burst every 4 s from
 //! 6 s on, for `--seconds` (20 by default), then prints one summary line per
 //! receiver. Exits 1 when a receiver never started playing or reported an
-//! error, 2 on bad arguments.
+//! error, 2 on bad arguments. With `--join <s>` the last receiver is turned
+//! on that many seconds into the run, while the others play, and with
+//! `--leave <s>` off again.
 //!
 //! With `--click` it sends PCM and also prints, per receiver and click, the
 //! click's RTP timestamp and the play time the sender's sync packets state
@@ -18,7 +20,7 @@
 //!
 //! ```text
 //! cargo run --release -p audiosync-airplay --example rx_pair -- \
-//!     --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose] [--auto]
+//!     --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--join <s> [--leave <s>]] [--tone|--click] [--verbose] [--auto]
 //! ```
 //!
 //! `ap2` (the default) offers the receiver's AirPlay 2 service only, `ap1`
@@ -93,6 +95,8 @@ enum Source {
 struct Args {
     receivers: Vec<Rx>,
     seconds: u64,
+    join: Option<Duration>,
+    leave: Option<Duration>,
     source: Source,
     verbose: bool,
     auto: bool,
@@ -114,7 +118,7 @@ struct Outcome {
 }
 
 fn usage() -> &'static str {
-    "usage: rx_pair --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--tone|--click] [--verbose] [--auto]"
+    "usage: rx_pair --rx <host:port>[,ap1|ap2|both][,delay=<ms>] [--rx ...] [--seconds <n>] [--join <s> [--leave <s>]] [--tone|--click] [--verbose] [--auto]"
 }
 
 fn parse_rx(text: &str) -> Result<Rx, String> {
@@ -140,6 +144,8 @@ fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         receivers: Vec::new(),
         seconds: 20,
+        join: None,
+        leave: None,
         source: Source::Silence,
         verbose: false,
         auto: false,
@@ -157,6 +163,20 @@ fn parse_args() -> Result<Args, String> {
                     .parse()
                     .map_err(|_| format!("--seconds {value}: not a whole number"))?;
             }
+            "--join" => {
+                let value = items.next().ok_or("--join needs a number")?;
+                let seconds: u64 = value
+                    .parse()
+                    .map_err(|_| format!("--join {value}: not a whole number"))?;
+                args.join = Some(Duration::from_secs(seconds));
+            }
+            "--leave" => {
+                let value = items.next().ok_or("--leave needs a number")?;
+                let seconds: u64 = value
+                    .parse()
+                    .map_err(|_| format!("--leave {value}: not a whole number"))?;
+                args.leave = Some(Duration::from_secs(seconds));
+            }
             "--tone" | "--click" if args.source != Source::Silence => {
                 return Err("--tone and --click exclude each other".to_owned());
             }
@@ -169,6 +189,17 @@ fn parse_args() -> Result<Args, String> {
     }
     if args.receivers.is_empty() {
         return Err("at least one --rx is needed".to_owned());
+    }
+    if args
+        .join
+        .is_some_and(|join| args.receivers.len() < 2 || join.as_secs() >= args.seconds)
+    {
+        return Err("--join needs two --rx and a time before --seconds ends".to_owned());
+    }
+    if args.leave.is_some_and(|leave| {
+        args.join.is_none_or(|join| leave <= join) || leave.as_secs() >= args.seconds
+    }) {
+        return Err("--leave needs --join and a time between it and the end".to_owned());
     }
     if args.receivers.len() > 200 {
         return Err("at most 200 receivers".to_owned());
@@ -421,6 +452,7 @@ fn main() -> ExitCode {
     let mut outcomes: BTreeMap<DeviceKey, Outcome> = BTreeMap::new();
     let mut counters = Vec::new();
     let mut choices = Vec::new();
+    let mut joiner = None;
     for (index, rx) in args.receivers.iter().enumerate() {
         let device = auto_choice::device(rx.address, rx.services, index as u8 + 1);
         choices.push(auto.map(|mode| mode.choice(&device)));
@@ -431,14 +463,41 @@ fn main() -> ExitCode {
         options.trace_timing = args.source == Source::Click;
         // The traces find a click by its first non-zero payload byte.
         options.pcm = args.source == Source::Click;
-        counters.push(sender.add_speaker(device, options));
+        if args.join.is_some() && index + 1 == args.receivers.len() {
+            joiner = Some((device, options));
+        } else {
+            counters.push(sender.add_speaker(device, options));
+        }
         keys.insert(key.clone(), rx.address);
         outcomes.insert(key.clone(), Outcome::default());
         order.push(key);
     }
 
+    let join_at = args.join.map(|join| Instant::now() + join);
+    let mut leave_at = args.leave.map(|leave| Instant::now() + leave);
+    let last = args.receivers.len() - 1;
     let end = Instant::now() + Duration::from_secs(args.seconds);
-    while let Some(left) = end.checked_duration_since(Instant::now()) {
+    while let Some(mut left) = end.checked_duration_since(Instant::now()) {
+        if let Some(at) = join_at.filter(|_| joiner.is_some()) {
+            match at.checked_duration_since(Instant::now()) {
+                Some(wait) => left = left.min(wait),
+                None => {
+                    let (device, options) = joiner.take().expect("checked above");
+                    eprintln!("{}: joins", args.receivers[last].address);
+                    counters.push(sender.add_speaker(device, options));
+                }
+            }
+        }
+        if let Some(at) = leave_at.filter(|_| joiner.is_none()) {
+            match at.checked_duration_since(Instant::now()) {
+                Some(wait) => left = left.min(wait),
+                None => {
+                    leave_at = None;
+                    eprintln!("{}: leaves", args.receivers[last].address);
+                    sender.remove_speaker(&order[last]);
+                }
+            }
+        }
         // A dead driver thread makes wait_event return at once, every time.
         if !sender.is_running() {
             eprintln!("the sender's driver thread stopped");
