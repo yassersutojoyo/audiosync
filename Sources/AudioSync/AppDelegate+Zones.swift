@@ -424,6 +424,7 @@ extension AppDelegate {
 
     func setLaunchAtLogin(_ on: Bool) {
         let service = SMAppService.mainApp
+        externalReads.loginChanged()
         clearNotices([Notice.login])   // a new attempt
         do {
             if on { try service.register() } else { try service.unregister() }

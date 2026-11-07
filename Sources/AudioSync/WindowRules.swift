@@ -573,29 +573,31 @@ struct PanelFold: Equatable {
 
 /// Which answers of a background read of macOS's state still hold when they
 /// reach the main thread: only the newest read's, and its login item status
-/// only if Launch at Login wasn't switched while it ran.
+/// only if Launch at Login wasn't switched while it ran, and its apps and
+/// inputs only if the source picker wasn't refreshed meanwhile.
 struct ExternalReads: Equatable {
     struct Ticket: Equatable {
-        let read: Int, loginChanges: Int
+        let read: Int, loginChanges: Int, sourcePushes: Int
     }
 
     private(set) var reads = 0
     private(set) var loginChanges = 0
+    private(set) var sourcePushes = 0
 
     mutating func begin() -> Ticket {
         reads += 1
-        return Ticket(read: reads, loginChanges: loginChanges)
+        return Ticket(read: reads, loginChanges: loginChanges, sourcePushes: sourcePushes)
     }
 
     mutating func loginChanged() { loginChanges += 1 }
 
-    mutating func sourcesPushed() {}
+    mutating func sourcesPushed() { sourcePushes += 1 }
 
-    func applies(_ ticket: Ticket) -> Bool { true }
+    func applies(_ ticket: Ticket) -> Bool { ticket.read == reads }
 
-    func loginApplies(_ ticket: Ticket) -> Bool { true }
+    func loginApplies(_ ticket: Ticket) -> Bool { applies(ticket) && ticket.loginChanges == loginChanges }
 
-    func sourcesApply(_ ticket: Ticket) -> Bool { true }
+    func sourcesApply(_ ticket: Ticket) -> Bool { applies(ticket) && ticket.sourcePushes == sourcePushes }
 }
 
 /// When work that follows a menu bar panel open or close may run: once its

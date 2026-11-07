@@ -17407,7 +17407,7 @@ do {
     let windowsSource = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
     let rereadBody = windowsSource.components(separatedBy: "private func rereadExternalState(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
-    let offMainReads = rereadBody.components(separatedBy: "DispatchQueue.global(").dropFirst().first?
+    let offMainReads = rereadBody.components(separatedBy: "Self.externalReadQueue.async").dropFirst().first?
         .components(separatedBy: "DispatchQueue.main.async").first ?? ""
     // covers: S406
     check(["SMAppService.mainApp.status", "SourceApps.running()", "allInputDevices()"].allSatisfy(offMainReads.contains),
@@ -17421,14 +17421,17 @@ do {
           "menu bar panel: only the newest background read of macOS's state applies when it lands")
     let switchedDuring = reads.begin()
     reads.loginChanged()
+    let switchKept = reads.applies(switchedDuring) && !reads.loginApplies(switchedDuring)
+    let afterSwitch = reads.begin()
     // covers: S406
-    check(reads.applies(switchedDuring) && !reads.loginApplies(switchedDuring) && reads.loginApplies(reads.begin()),
+    check(switchKept && reads.loginApplies(afterSwitch),
           "menu bar panel: a login item status read before Launch at Login was switched never undoes the switch")
     let pushedDuring = reads.begin()
     reads.sourcesPushed()
+    let pushKept = reads.applies(pushedDuring) && !reads.sourcesApply(pushedDuring) && reads.loginApplies(pushedDuring)
+    let afterPush = reads.begin()
     // covers: S406
-    check(reads.applies(pushedDuring) && !reads.sourcesApply(pushedDuring) && reads.loginApplies(pushedDuring)
-            && reads.sourcesApply(reads.begin()),
+    check(pushKept && reads.sourcesApply(afterPush),
           "menu bar panel: apps and inputs read before the source picker was refreshed never bring back a gone app or input")
 }
 

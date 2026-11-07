@@ -492,24 +492,33 @@ extension AppDelegate {
     /// through the menu bar icon.
     private func rereadExternalState(then done: @escaping () -> Void) {
         let devices = self.devices
+        let ticket = externalReads.begin()
         // Each read waits on another process; on the main thread they held the panel's scrolling title for 56-63 ms.
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        Self.externalReadQueue.async { [weak self] in
             let login = SMAppService.mainApp.status == .enabled
             let running = SourceApps.running()
             let inputDevices = devices.allInputDevices()
             DispatchQueue.main.async {
                 guard let self else { return }
-                self.launchAtLogin = login
-                if Notice.loginSettled(in: self.appModel.notices, enabled: login, self.text) {
-                    self.clearNotices([Notice.login])   // changed in System Settings meanwhile
+                if self.externalReads.applies(ticket) {
+                    if self.externalReads.loginApplies(ticket) {
+                        self.launchAtLogin = login
+                        if Notice.loginSettled(in: self.appModel.notices, enabled: login, self.text) {
+                            self.clearNotices([Notice.login])   // changed in System Settings meanwhile
+                        }
+                    }
+                    self.recheckLocalNetwork()
+                    if self.externalReads.sourcesApply(ticket) {
+                        self.pushSources(running: running, inputDevices: inputDevices)
+                    }
+                    self.pushModel()
                 }
-                self.recheckLocalNetwork()
-                self.pushSources(running: running, inputDevices: inputDevices)
-                self.pushModel()
                 done()
             }
         }
     }
+
+    private static let externalReadQueue = DispatchQueue(label: "AudioSync.externalReads", qos: .userInitiated)
 
     private func setAutoConnect(_ key: String, _ on: Bool) {
         if on { autoConnect.insert(key) } else { autoConnect.remove(key) }
@@ -611,6 +620,7 @@ extension AppDelegate {
     /// Refreshes the source picker: apps come and go, input devices are
     /// plugged in and out.
     func pushSources(running: [SourceApps.Entry] = SourceApps.running(), inputDevices: [AudioDevices.Device]? = nil) {
+        externalReads.sourcesPushed()
         let inputDevices = inputDevices ?? devices.allInputDevices()
         let inputs = inputDevices.map {
             SourceList.Input(uid: $0.uid, name: text.deviceName($0.name), transport: $0.transport,
