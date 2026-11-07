@@ -1,12 +1,14 @@
 //! The realtime stream (type 96, UDP) as a measurement reads it: packet loss
 //! induced on the data port with a resend request for each drop (P86), and
 //! the latency the sender declares in its sync packets (P93). In its own
-//! file so a test includes it.
+//! file so a test includes it. fake_tv plays nothing, so a dropped packet
+//! is only counted and asked for again; nothing is held back from playout.
 
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Mutex;
 
-/// Audio frames per second on the realtime path, for the milliseconds.
+/// Audio frames per second for the milliseconds, assumed: the stream's own
+/// rate is not read from its SETUP.
 pub const RATE: f64 = 44_100.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -64,14 +66,21 @@ impl Loss {
         self.state().counts
     }
 
-    /// A datagram on the control port. As a receiver does (P86), the first
-    /// one's source is where resend requests go; a resent packet is counted.
-    pub fn on_control(&self, packet: &[u8], from: SocketAddr) {
+    /// A datagram on the control port: a sync packet's source is where
+    /// resend requests go (P86), and a sender's next session sends from a
+    /// new port, so a new source gives the line to log; a resent packet is
+    /// counted.
+    pub fn on_control(&self, packet: &[u8], from: SocketAddr) -> Option<String> {
         let mut state = self.state();
-        state.sender.get_or_insert(from);
-        if packet.get(1).map(|kind| kind & 0x7f) == Some(0x56) {
-            state.counts.resent += 1;
+        match packet.get(1).map(|kind| kind & 0x7f) {
+            Some(0x56) => state.counts.resent += 1,
+            Some(0x54) if state.sender != Some(from) => {
+                state.sender = Some(from);
+                return Some(format!("session: resend requests go to {from}"));
+            }
+            _ => {}
         }
+        None
     }
 
     /// An audio packet on the data port: when it falls in the lost share,

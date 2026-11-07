@@ -43,6 +43,9 @@
 //! only one plain line per event a dry-run sheet judges, with its running
 //! count (the `summary` module).
 //!
+//! It binds its own data and control ports and names them in every stream
+//! SETUP answer, with or without `--dump`.
+//!
 //! On the realtime stream (type 96, UDP), which both the television and
 //! `--homepod` answer when a sender asks for it, every sync packet on the
 //! control port shows the latency the sender declares, its next-packet RTP
@@ -50,7 +53,8 @@
 //! the stream start, one on each change (old -> new, in samples and ms at
 //! 44.1 kHz) and one a minute, each with the unix time. `--loss <percent>`
 //! drops that share of the audio packets, spread evenly, and asks the sender
-//! for each one again on the control port as a receiver does; `loss:` lines
+//! for each one again on the control port as a receiver does, at the
+//! source of the latest sync (a `session:` line when it moves); `loss:` lines
 //! give each switch and, every 5 s while they move, the dropped packets,
 //! resend requests and resends received. A buffered stream (type 103, TCP)
 //! is reliable and has no resend requests, so loss leaves it alone.

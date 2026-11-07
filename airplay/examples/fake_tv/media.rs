@@ -2,7 +2,7 @@
 //! receiver's clock when it arrived, so the RTP time can be set against an
 //! anchor (a sync packet or SETRATEANCHORTIME) and the arrival.
 
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::net::{TcpListener, UdpSocket};
 use std::sync::Arc;
 use std::thread;
@@ -58,14 +58,32 @@ pub fn watch_udp(socket: UdpSocket, control: bool, start: Instant, first: bool, 
         let mut buffer = [0u8; 2048];
         let mut first = first;
         let mut declared = Declared::default();
-        while let Ok((count, from)) = socket.recv_from(&mut buffer) {
+        loop {
+            let (count, from) = match socket.recv_from(&mut buffer) {
+                Ok(datagram) => datagram,
+                // On Windows a resend request to a closed port makes the next
+                // receive fail with ConnectionReset; the socket still works.
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::ConnectionReset | ErrorKind::Interrupted
+                    ) =>
+                {
+                    continue;
+                }
+                Err(_) => break,
+            };
             let packet = &buffer[..count];
             if control {
-                loss.on_control(packet, from);
-                if let Some(line) = declared.sync(packet, start.elapsed().as_secs_f64()) {
+                let seconds = start.elapsed().as_secs_f64();
+                let lines = [
+                    loss.on_control(packet, from),
+                    declared.sync(packet, seconds),
+                ];
+                for line in lines.into_iter().flatten() {
                     println!(
                         "{} {line}, unix {:.6}",
-                        summary::stamp(start.elapsed().as_secs_f64()),
+                        summary::stamp(seconds),
                         unix(SystemTime::now())
                     );
                 }

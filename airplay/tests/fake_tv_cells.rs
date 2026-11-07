@@ -659,7 +659,10 @@ fn the_loss_switch_drops_its_share_and_asks_the_sender_for_each_drop() {
         .expect("a read timeout");
     let loss = realtime::Loss::new(receiver.try_clone().expect("a socket clone"));
     let from = sender.local_addr().expect("address");
-    loss.on_control(&sync_packet(true, 0, 4410), from);
+    assert_eq!(
+        loss.on_control(&sync_packet(true, 0, 4410), from),
+        Some(format!("session: resend requests go to {from}"))
+    );
     let audio = |seq: u16| {
         let mut packet = [0u8; 12];
         packet[0] = 0x80;
@@ -698,8 +701,35 @@ fn the_loss_switch_drops_its_share_and_asks_the_sender_for_each_drop() {
 
     let mut resent = [0u8; 16];
     resent[..2].copy_from_slice(&[0x80, 0xd6]);
-    loss.on_control(&resent, from);
+    assert_eq!(loss.on_control(&resent, from), None);
     assert_eq!(loss.counts().resent, 1);
+}
+
+#[test]
+fn resend_requests_follow_the_sync_source_of_each_new_session() {
+    let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let receiver = UdpSocket::bind((loopback, 0)).expect("a receiver control socket");
+    let loss = realtime::Loss::new(receiver);
+    let first = UdpSocket::bind((loopback, 0)).expect("a first session's control socket");
+    let second = UdpSocket::bind((loopback, 0)).expect("a second session's control socket");
+    second
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("a read timeout");
+    let sync = sync_packet(false, 0, 4410);
+    let first_address = first.local_addr().expect("address");
+    let second_address = second.local_addr().expect("address");
+    assert!(loss.on_control(&sync, first_address).is_some());
+    assert_eq!(loss.on_control(&sync, first_address), None);
+    assert_eq!(
+        loss.on_control(&sync, second_address),
+        Some(format!("session: resend requests go to {second_address}"))
+    );
+
+    loss.set(100.0);
+    loss.on_data(&[0x80, 0x60, 0, 9]);
+    let mut buffer = [0u8; 16];
+    let (count, _) = second.recv_from(&mut buffer).expect("a resend request");
+    assert_eq!(&buffer[..count], &[0x80, 0xd5, 0, 0, 0, 9, 0, 1]);
 }
 
 #[test]
