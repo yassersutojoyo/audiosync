@@ -224,15 +224,15 @@ func airPlaySender() {
           "no receiver before discovery, the out struct untouched")
     check(!asc_airplay_next_receiver(nil, &receiver) && !asc_airplay_start_discovery(nil),
           "a NULL sender does nothing")
-    // Its first event is the timeline, with the base latency L (1.75 s).
+    // Its first event is the timeline, with the base latency L (0.1 s, P98).
     var event = AscAirPlayEvent()
     var taken = false
     for _ in 0..<500 where !taken {
         taken = asc_airplay_next_event(handle, &event)
         if !taken { usleep(10_000) }
     }
-    check(taken && event.kind == ASC_AIRPLAY_EVENT_TIMELINE && abs(event.latency_ms - 1750) < 0.01
-              && abs(asc_airplay_latency_ms(handle) - 1750) < 0.01 && String(cString: event.id).isEmpty,
+    check(taken && event.kind == ASC_AIRPLAY_EVENT_TIMELINE && abs(event.latency_ms - 100) < 0.01
+              && abs(asc_airplay_latency_ms(handle) - 100) < 0.01 && String(cString: event.id).isEmpty,
           "the first event is the timeline, L = \(event.latency_ms) ms")
     check(!asc_airplay_next_event(handle, &event), "a working sender reports nothing more, no failure")
     check(!asc_airplay_add_speaker(handle, "02005E005301", 50), "only a listed receiver can be added")
