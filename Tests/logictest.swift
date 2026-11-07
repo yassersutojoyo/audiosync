@@ -17424,6 +17424,12 @@ do {
     // covers: S406
     check(reads.applies(switchedDuring) && !reads.loginApplies(switchedDuring) && reads.loginApplies(reads.begin()),
           "menu bar panel: a login item status read before Launch at Login was switched never undoes the switch")
+    let pushedDuring = reads.begin()
+    reads.sourcesPushed()
+    // covers: S406
+    check(reads.applies(pushedDuring) && !reads.sourcesApply(pushedDuring) && reads.loginApplies(pushedDuring)
+            && reads.sourcesApply(reads.begin()),
+          "menu bar panel: apps and inputs read before the source picker was refreshed never bring back a gone app or input")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

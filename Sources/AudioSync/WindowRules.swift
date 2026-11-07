@@ -589,9 +589,13 @@ struct ExternalReads: Equatable {
 
     mutating func loginChanged() { loginChanges += 1 }
 
+    mutating func sourcesPushed() {}
+
     func applies(_ ticket: Ticket) -> Bool { true }
 
     func loginApplies(_ ticket: Ticket) -> Bool { true }
+
+    func sourcesApply(_ ticket: Ticket) -> Bool { true }
 }
 
 /// When work that follows a menu bar panel open or close may run: once its
