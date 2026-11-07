@@ -43,6 +43,17 @@ fn the_c_session_latency_matches_the_crate() {
     assert_eq!(c_rule(&[1_600_000]), 74_970);
 }
 
+// covers: P202
+#[test]
+fn a_count_no_array_can_hold_gives_the_floor() {
+    let dangling = ptr::NonNull::<i64>::dangling().as_ptr();
+    // SAFETY: the count is refused before anything is read.
+    assert_eq!(
+        unsafe { asc_airplay_session_latency_frames(dangling, usize::MAX) },
+        4_410
+    );
+}
+
 /// Waits up to 5 s for the sender's L to read `ms`.
 fn latency_becomes(handle: *mut audiosync_core::ffi::airplay::AscAirPlay, ms: f64) -> bool {
     let until = Instant::now() + Duration::from_secs(5);
