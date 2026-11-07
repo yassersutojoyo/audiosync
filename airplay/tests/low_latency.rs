@@ -521,11 +521,35 @@ fn a_sender_set_to_a_tenth_of_a_second_states_it_and_serves_resends_over_loopbac
     let counters = sender.add_speaker(device, SpeakerOptions::new(Volume::Db(-20.0)));
     let playing = events.wait_state(&sender, &key, 1, LONG, |s| *s == SpeakerState::Playing);
     assert!(playing.is_some(), "never played: {:?}", events.of(&key));
-    assert!(wait_until(LONG, || receiver.log().audio.len() >= 100
-        && receiver.log().syncs.len() >= 2));
-    for (_, _, sync) in &receiver.log().syncs {
-        assert_eq!(sync.next_rtp.wrapping_sub(sync.rtp_heard), LOW);
+    assert!(wait_until(LONG, || receiver.log().audio.len() >= 100));
+    // A burst of resend requests steps Lf (P200) as a late send on a loaded
+    // runner does, so the step is certain; five, as loopback can lose one.
+    let newest = receiver.log().audio.last().expect("a packet").header.seq;
+    for _ in 0..5 {
+        receiver.request_resend(newest, 1);
     }
+    let lead = |sync: &SyncPacket| sync.next_rtp.wrapping_sub(sync.rtp_heard);
+    assert!(wait_until(LONG, || receiver
+        .log()
+        .syncs
+        .iter()
+        .any(|(_, _, sync)| lead(sync) == 2 * LOW)));
+    // A wrong second step would state its L about one L later.
+    std::thread::sleep(Duration::from_secs(1));
+    let stated: Vec<u32> = receiver
+        .log()
+        .syncs
+        .iter()
+        .map(|(_, _, s)| lead(s))
+        .collect();
+    let step = stated
+        .iter()
+        .position(|&lf| lf != LOW)
+        .expect("a stepped sync");
+    assert!(
+        step > 0 && stated[step..].iter().all(|&lf| lf == 2 * LOW),
+        "Lf 4410 until the one step, 8820 after: {stated:?}"
+    );
 
     // Asked again for the newest packet each time, as the loopback resend
     // of the transport tests is, since a loaded runner can lose a datagram.
