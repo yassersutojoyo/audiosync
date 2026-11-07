@@ -4,10 +4,12 @@
 
 use std::io::Read;
 use std::net::{TcpListener, UdpSocket};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Instant, SystemTime};
 
 use crate::dump::unix;
+use crate::realtime::{Declared, Loss};
 use crate::summary;
 
 fn u32_at(bytes: &[u8], at: usize) -> Option<u32> {
@@ -48,16 +50,30 @@ fn sync(packet: &[u8]) -> String {
     )
 }
 
-/// Reads `socket` for good, logging its first datagram, the audio on the
-/// data port or a sync packet on the control port.
-pub fn watch_udp(socket: UdpSocket, control: bool, start: Instant) {
+/// Reads `socket` for good: the audio on the data port, which `loss` may
+/// drop, or the control port, whose sync packets show the latency the
+/// sender declares. With `first`, it logs the first datagram.
+pub fn watch_udp(socket: UdpSocket, control: bool, start: Instant, first: bool, loss: Arc<Loss>) {
     thread::spawn(move || {
         let mut buffer = [0u8; 2048];
-        let mut first = true;
-        while let Ok(count) = socket.recv(&mut buffer) {
+        let mut first = first;
+        let mut declared = Declared::default();
+        while let Ok((count, from)) = socket.recv_from(&mut buffer) {
+            let packet = &buffer[..count];
+            if control {
+                loss.on_control(packet, from);
+                if let Some(line) = declared.sync(packet, start.elapsed().as_secs_f64()) {
+                    println!(
+                        "{} {line}, unix {:.6}",
+                        summary::stamp(start.elapsed().as_secs_f64()),
+                        unix(SystemTime::now())
+                    );
+                }
+            } else {
+                loss.on_data(packet);
+            }
             if first {
                 first = false;
-                let packet = &buffer[..count];
                 let (port, fields) = if control {
                     ("control", sync(packet))
                 } else {

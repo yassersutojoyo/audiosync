@@ -10,7 +10,7 @@
 //! cargo run -p audiosync-airplay --example fake_tv -- [--lan] [--name <text>]
 //!     [--deviceid <XX:XX:XX:XX:XX:XX>] [--port <n>] [--pin every|once]
 //!     [--code <digits>] [--password <text>] [--ptp-only] [--summary]
-//!     [--homepod] [--dump <dir>]
+//!     [--homepod] [--dump <dir>] [--loss <percent>]
 //! ```
 //!
 //! `--homepod` advertises and answers `/info` as a HomePod mini (model
@@ -41,8 +41,22 @@
 //!
 //! Every request line and its answer status goes to stdout; with `--summary`
 //! only one plain line per event a dry-run sheet judges, with its running
-//! count (the `summary` module). On stdin,
-//! `vol <dB>` moves the level as the television's remote does, `hide` sends
+//! count (the `summary` module).
+//!
+//! On the realtime stream (type 96, UDP), which both the television and
+//! `--homepod` answer when a sender asks for it, every sync packet on the
+//! control port shows the latency the sender declares, its next-packet RTP
+//! time minus the RTP time it says is heard now: one `latency:` line at
+//! the stream start, one on each change (old -> new, in samples and ms at
+//! 44.1 kHz) and one a minute, each with the unix time. `--loss <percent>`
+//! drops that share of the audio packets, spread evenly, and asks the sender
+//! for each one again on the control port as a receiver does; `loss:` lines
+//! give each switch and, every 5 s while they move, the dropped packets,
+//! resend requests and resends received. A buffered stream (type 103, TCP)
+//! is reliable and has no resend requests, so loss leaves it alone.
+//!
+//! On stdin, `vol <dB>` moves the level as the television's remote does,
+//! `loss <percent>` and `loss off` switch the packet loss, `hide` sends
 //! the mDNS goodbye while the session already playing goes on, `show`
 //! advertises it again, and `quit` stops it, goodbye included, as Ctrl+C does.
 
@@ -54,6 +68,8 @@ mod dump;
 mod media;
 #[path = "fake_tv/options.rs"]
 mod options;
+#[path = "fake_tv/realtime.rs"]
+mod realtime;
 #[path = "fake_tv/stdin.rs"]
 mod stdin;
 #[path = "fake_tv/summary.rs"]
@@ -67,13 +83,14 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use audiosync_airplay::rtsp::Request;
 use common::ap2::{Ap2Server, FakeAp2, OTHER_METHOD, request_key};
 use dump::Dump;
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo, UnregisterStatus};
 use options::{Options, parse};
+use realtime::{Counts, Loss};
 use stdin::Line;
 use summary::Summary;
 use television::{Pin, television};
@@ -138,6 +155,45 @@ fn watch_advertisement(daemon: &ServiceDaemon, fullname: String, start: Instant)
                     addresses.join(", ")
                 );
                 return;
+            }
+        }
+    });
+}
+
+/// A loss switch line, with the wall clock to set against a sender's own
+/// latency readout.
+fn loss_line(start: Instant, percent: f64, counts: Counts) -> String {
+    let state = if percent > 0.0 {
+        format!("on, {percent}% of realtime audio packets dropped and asked for again")
+    } else {
+        "off".to_owned()
+    };
+    format!(
+        "{} loss: {state}, unix {:.6}; so far {} dropped, {} resend requests, {} resends received",
+        stamp(start),
+        dump::unix(SystemTime::now()),
+        counts.dropped,
+        counts.requested,
+        counts.resent
+    )
+}
+
+/// Every 5 s in which a loss count moved, one line with the counts.
+fn report_loss(loss: Arc<Loss>, start: Instant) {
+    thread::spawn(move || {
+        let mut last = Counts::default();
+        loop {
+            thread::sleep(Duration::from_secs(5));
+            let counts = loss.counts();
+            if counts != last {
+                last = counts;
+                println!(
+                    "{} loss: {} dropped, {} resend requests, {} resends received",
+                    stamp(start),
+                    counts.dropped,
+                    counts.requested,
+                    counts.resent
+                );
             }
         }
     });
@@ -326,24 +382,27 @@ fn main() -> ExitCode {
         },
         None => None,
     };
-    if dump.is_some() {
-        for control in [false, true] {
-            let socket = match UdpSocket::bind((ip, 0)) {
-                Ok(socket) => socket,
-                Err(error) => {
-                    eprintln!("fake_tv: audio port: {error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            let port = socket.local_addr().map(|address| address.port()).ok();
-            if control {
-                fake.control_port = port;
-            } else {
-                fake.data_port = port;
+    let sockets = (UdpSocket::bind((ip, 0)), UdpSocket::bind((ip, 0)));
+    let (data, control, requests) = match sockets {
+        (Ok(data), Ok(control)) => match control.try_clone() {
+            Ok(requests) => (data, control, requests),
+            Err(error) => {
+                eprintln!("fake_tv: audio port: {error}");
+                return ExitCode::FAILURE;
             }
-            media::watch_udp(socket, control, start);
+        },
+        (Err(error), _) | (_, Err(error)) => {
+            eprintln!("fake_tv: audio port: {error}");
+            return ExitCode::FAILURE;
         }
-    }
+    };
+    fake.data_port = data.local_addr().map(|address| address.port()).ok();
+    fake.control_port = control.local_addr().map(|address| address.port()).ok();
+    let loss = Arc::new(Loss::new(requests));
+    loss.set(options.loss);
+    media::watch_udp(data, false, start, dump.is_some(), loss.clone());
+    media::watch_udp(control, true, start, dump.is_some(), loss.clone());
+    report_loss(loss.clone(), start);
     if let Some(listener) = buffered {
         media::watch_tcp(listener, start);
     }
@@ -421,8 +480,11 @@ fn main() -> ExitCode {
             television::LATENCY_VAR
         );
     }
+    if options.loss > 0.0 {
+        println!("{}", loss_line(start, options.loss, loss.counts()));
+    }
     println!(
-        "{} stdin: vol <dB> moves the level, hide and show the mDNS record, quit or Ctrl+C stops",
+        "{} stdin: vol <dB> moves the level, loss <percent> and loss off switch packet loss, hide and show the mDNS record, quit or Ctrl+C stops",
         stamp(start)
     );
     if let Some((daemon, info)) = &advertised {
@@ -478,6 +540,14 @@ fn main() -> ExitCode {
                 }
             }
             Line::BadVol => println!("{} vol takes a number in dB", stamp(start)),
+            Line::Loss(percent) => {
+                loss.set(percent);
+                println!("{}", loss_line(start, percent, loss.counts()));
+            }
+            Line::BadLoss => println!(
+                "{} loss takes a percent from 0 to 100, or off",
+                stamp(start)
+            ),
             command @ (Line::Hide | Line::Show) => match &advertised {
                 None => println!(
                     "{} hide and show need --lan: loopback advertises nothing",

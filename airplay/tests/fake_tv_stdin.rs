@@ -12,6 +12,9 @@ fn hide_and_show_are_commands_next_to_vol_and_quit() {
     assert_eq!(read(" show "), Line::Show);
     assert_eq!(read("quit"), Line::Quit);
     assert_eq!(read("vol -24.5"), Line::Vol(-24.5));
+    assert_eq!(read("loss 2.5"), Line::Loss(2.5));
+    assert_eq!(read("loss off"), Line::Loss(0.0));
+    assert_eq!(read("loss 101"), Line::BadLoss);
 }
 
 #[test]

@@ -3,10 +3,12 @@
 #[path = "../examples/fake_tv/cells.rs"]
 mod cells;
 mod common;
+#[path = "../examples/fake_tv/realtime.rs"]
+mod realtime;
 #[path = "../examples/fake_tv/television.rs"]
 mod television;
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -636,4 +638,93 @@ fn d6_flags_host_warnings_but_not_a_traced_500() {
     assert!(cells::d6_flags(
         "AirPlay speaker Living Room TV error: no answer (Timeout); it is turned off"
     ));
+}
+
+fn sync_packet(first: bool, heard: u32, next: u32) -> [u8; 20] {
+    let mut packet = [0u8; 20];
+    packet[0] = if first { 0x90 } else { 0x80 };
+    packet[1] = 0xd4;
+    packet[4..8].copy_from_slice(&heard.to_be_bytes());
+    packet[16..20].copy_from_slice(&next.to_be_bytes());
+    packet
+}
+
+#[test]
+fn the_loss_switch_drops_its_share_and_asks_the_sender_for_each_drop() {
+    let loopback = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let receiver = UdpSocket::bind((loopback, 0)).expect("a receiver control socket");
+    let sender = UdpSocket::bind((loopback, 0)).expect("a sender control socket");
+    sender
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("a read timeout");
+    let loss = realtime::Loss::new(receiver.try_clone().expect("a socket clone"));
+    let from = sender.local_addr().expect("address");
+    loss.on_control(&sync_packet(true, 0, 4410), from);
+    let audio = |seq: u16| {
+        let mut packet = [0u8; 12];
+        packet[0] = 0x80;
+        packet[2..4].copy_from_slice(&seq.to_be_bytes());
+        packet
+    };
+
+    loss.set(25.0);
+    (100..108).for_each(|seq| loss.on_data(&audio(seq)));
+    let mut buffer = [0u8; 64];
+    for (request, missing) in [(0u16, 103u16), (1, 107)] {
+        let (count, source) = sender.recv_from(&mut buffer).expect("a resend request");
+        assert_eq!(source, receiver.local_addr().expect("address"));
+        let mut expected = [0x80, 0xd5, 0, 0, 0, 0, 0, 1];
+        expected[2..4].copy_from_slice(&request.to_be_bytes());
+        expected[4..6].copy_from_slice(&missing.to_be_bytes());
+        assert_eq!(&buffer[..count], &expected);
+    }
+    let asked = realtime::Counts {
+        dropped: 2,
+        requested: 2,
+        resent: 0,
+    };
+    assert_eq!(loss.counts(), asked);
+
+    loss.set(0.0);
+    (108..140).for_each(|seq| loss.on_data(&audio(seq)));
+    assert_eq!(loss.counts(), asked);
+    sender
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .expect("a read timeout");
+    assert!(
+        sender.recv_from(&mut buffer).is_err(),
+        "no request once off"
+    );
+
+    let mut resent = [0u8; 16];
+    resent[..2].copy_from_slice(&[0x80, 0xd6]);
+    loss.on_control(&resent, from);
+    assert_eq!(loss.counts().resent, 1);
+}
+
+#[test]
+fn the_declared_latency_is_logged_at_the_start_on_each_change_and_each_minute() {
+    let mut declared = realtime::Declared::default();
+    let mut at = |first, heard: u32, next: u32, seconds| {
+        declared.sync(&sync_packet(first, heard, next), seconds)
+    };
+    assert_eq!(
+        at(true, 1000, 5410, 1.0).as_deref(),
+        Some("latency: start, 4410 samples (100.0 ms)")
+    );
+    assert_eq!(at(false, 2000, 6410, 2.0), None);
+    assert_eq!(
+        at(false, u32::MAX - 100, 8719, 3.0).as_deref(),
+        Some("latency: 4410 -> 8820 samples (100.0 -> 200.0 ms)")
+    );
+    assert_eq!(at(false, 0, 8820, 62.9), None);
+    assert_eq!(
+        at(false, 0, 8820, 63.0).as_deref(),
+        Some("latency: 8820 samples (200.0 ms)")
+    );
+    assert_eq!(
+        at(true, 0, 8820, 64.0).as_deref(),
+        Some("latency: start, 8820 samples (200.0 ms)")
+    );
+    assert_eq!(at(false, 0, 8820, 65.0), None);
 }
