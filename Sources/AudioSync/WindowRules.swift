@@ -349,10 +349,21 @@ enum PanelRowMotion {
     static let stagger: TimeInterval = 0.035
 }
 
+/// How the panel's parts fade in and rise as it opens (`PanelIntro`), each a
+/// stagger after the one above it.
+enum PanelIntroMotion {
+    static let duration: TimeInterval = 0.44
+    static let lastPart = 6
+
+    static func delay(_ index: Int) -> TimeInterval { 0.09 + Double(index) * PanelRowMotion.stagger }
+
+    static var end: TimeInterval { delay(lastPart) + duration }
+}
+
 /// When the open panel takes a new size from its content, on the rows' own
 /// curve. A grow starts at once, so the panel opens room as a row comes in; a
 /// shrink waits until the rows have settled, gathering the changes that come
-/// meanwhile into one step. Both wait for the panel to finish growing in. The
+/// meanwhile into one step. Both wait for the panel to finish opening. The
 /// latest size wins.
 struct PanelResize: Equatable {
     static let gather = PanelRowMotion.duration
@@ -567,12 +578,13 @@ struct PanelQuiet: Equatable {
 
     /// The popover's own grow and fade (`system`), from the click to the end
     /// of its bounce and of its fade as measured on the Mac; else the
-    /// panel's own motion (`PanelMotion`), an open's until its last step has shown (`PanelReveal`).
-    static func duration(_ animation: Animation, system: Bool) -> TimeInterval {
+    /// panel's own motion (`PanelMotion`), an open's until its last step has shown (`PanelReveal`)
+    /// and, unless Reduce Motion skips them (`intro`), its parts have faded in (`PanelIntroMotion`).
+    static func duration(_ animation: Animation, system: Bool, intro: Bool = true) -> TimeInterval {
         switch (animation, system) {
         case (.open, true): return 0.6
         case (.close, true): return 0.25
-        case (.open, false): return PanelReveal.duration(.open(reduceMotion: false))
+        case (.open, false): return max(PanelReveal.duration(.open(reduceMotion: false)), intro ? PanelIntroMotion.end : 0)
         case (.close, false): return PanelMotion.close(reduceMotion: false).duration
         }
     }
@@ -584,8 +596,8 @@ struct PanelQuiet: Equatable {
 
     init(system: Bool = false) { self.system = system }
 
-    mutating func began(_ animation: Animation, at now: TimeInterval) {
-        busyUntil = max(busyUntil, now + Self.duration(animation, system: system))
+    mutating func began(_ animation: Animation, at now: TimeInterval, intro: Bool = true) {
+        busyUntil = max(busyUntil, now + Self.duration(animation, system: system, intro: intro))
     }
 
     func wait(at now: TimeInterval) -> TimeInterval { max(0, busyUntil - now) }

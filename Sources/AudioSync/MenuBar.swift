@@ -846,7 +846,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         host.view.window?.ignoresMouseEvents = false
         if !PanelSwitches.systemAnimation { animateOpen(PanelMotion.open(reduceMotion: reduceMotion)) }
         // From when the steps start, not the press: the refresh and layout above take part of the open's time.
-        quietQueue.quiet.began(.open, at: Self.uptime)
+        quietQueue.quiet.began(.open, at: Self.uptime, intro: !reduceMotion)
         if finishNow { finishOpenWhenQuiet() }
         let shown = Self.uptime
         // At once: a control draws in its accent color only in the key window.
@@ -1635,7 +1635,7 @@ struct MenuBarView: View {
                             .foregroundStyle(Brand.secondaryText)
                             .lineLimit(1)
                             // The new status shows at once, never cross-faded with the old one.
-                            .transaction { $0.animation = nil }
+                            .transaction(value: model.statusText) { $0.animation = nil }
                     }
                 }
                 .contentShape(Rectangle())
@@ -2046,8 +2046,8 @@ private struct IntroPart: ViewModifier {
         content
             .opacity(intro.hidden ? 0 : 1)
             .offset(y: intro.hidden ? 6 : 0)
-            .animation(intro.hidden ? nil : .timingCurve(0.22, 0.61, 0.36, 1, duration: 0.44)
-                .delay(0.09 + Double(min(index, 14)) * PanelRowMotion.stagger), value: intro.hidden)
+            .animation(intro.hidden ? nil : .timingCurve(0.22, 0.61, 0.36, 1, duration: PanelIntroMotion.duration)
+                .delay(PanelIntroMotion.delay(index)), value: intro.hidden)
     }
 }
 

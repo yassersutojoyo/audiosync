@@ -8372,8 +8372,22 @@ do {
     // The open's last 120 Hz step.
     let lastStepShown = Double(PanelReveal.scales(grow, step: 1.0 / 120).count) / 120
     // covers: S406
-    check(near(openQuiet, lastStepShown) && shrink == shrinkBack.duration,
+    check(near(openQuiet, max(lastStepShown, PanelIntroMotion.end)) && shrink == shrinkBack.duration,
           "menu bar panel: deferred work waits exactly for the panel's own motion", "\(openQuiet)")
+    // IntroPart in MenuBar.swift: the last of the panel's 7 parts starts 0.09 s plus 6 staggers in and fades for 0.44 s.
+    let introEnd = 0.09 + 6 * PanelRowMotion.stagger + 0.44
+    // covers: S406
+    check(openQuiet >= introEnd - 1e-9,
+          "menu bar panel: the open's refresh waits until the panel's parts have faded in, so it never freezes them",
+          "quiet \(openQuiet) s, parts in at \(introEnd) s")
+    let introParts = ((try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? "")
+        .components(separatedBy: "IntroPart(intro: intro, index: ").dropFirst().compactMap { part in Int(part.prefix { $0.isNumber }) }
+    // covers: S406
+    check(introParts.max() == PanelIntroMotion.lastPart,
+          "menu bar panel: the open's quiet wait counts the panel's last intro part", "\(introParts)")
+    // covers: S406
+    check(near(PanelQuiet.duration(.open, system: false, intro: false), lastStepShown),
+          "menu bar panel: with Reduce Motion, which skips the parts' fade-in, work after an open waits only for the panel itself")
     // covers: S405
     check(PanelMotion.tail * (1 - grow.scale) * 600 < 0.5,
           "menu bar panel: ending the spring at its settle time moves even a 600 pt panel's far edge under half a point")
@@ -8437,6 +8451,14 @@ do {
     let showBody = menuBar.components(separatedBy: "    func show(pressedAt press: TimeInterval? = nil) {").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
     func inShow(_ needle: String) -> Int { showBody.components(separatedBy: needle).count - 1 }
+    // A transaction that drops every animation also drops the intro's fade and rise on the status line.
+    let statusLine = menuBar.components(separatedBy: "Text(model.statusText)").dropFirst().first?
+        .components(separatedBy: "\n                    }\n").first ?? ""
+    // covers: S405
+    check(statusLine.contains(".transaction(value: model.statusText) { $0.animation = nil }")
+            && !statusLine.contains(".transaction {") && !statusLine.contains(".animation(nil"),
+          "menu bar panel: the status line under the wordmark fades in with the header, only a new status shows at once",
+          statusLine)
     // covers: S403
     check(!showBody.isEmpty && inShow("let finishNow = host.sizing.show(onScreen: popover.isShown)") == 1
           && inShow("if finishNow { finishOpenWhenQuiet() }") == 1,
@@ -8457,8 +8479,8 @@ do {
     var own = PanelQuiet()
     own.began(.open, at: 40)
     // covers: S406
-    check(near(own.wait(at: 40.1), openQuiet - 0.1) && own.wait(at: 40 + openQuiet) == 0 && openQuiet < 0.6,
-          "menu bar panel: with the panel's own grow, work after an open waits less than for the system's bounce")
+    check(near(own.wait(at: 40.1), openQuiet - 0.1) && own.wait(at: 40 + openQuiet) == 0,
+          "menu bar panel: with the panel's own grow, work after an open waits only for its motion")
     own.began(.close, at: 41)
     // covers: S406
     check(near(own.wait(at: 41), shrinkBack.duration) && own.wait(at: 41 + shrinkBack.duration) == 0,
@@ -17053,7 +17075,7 @@ do {
             && panelView.contains(".help(t.openApp)") && panelView.contains("SourcePicker(model: model, hero: true)"),
           "menu bar panel source: Open AudioSync is gone; the header still opens the main window; the source sits in the hero")
     check(panelView.contains(".animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: rowPlaces)")
-            && panelView.contains("Text(model.statusText)") && panelView.contains(".transaction { $0.animation = nil }"),
+            && panelView.contains("Text(model.statusText)") && panelView.contains(".transaction(value: model.statusText) { $0.animation = nil }"),
           "menu bar panel source: rows move on one ease-out, at once with Reduce Motion; the status text changes at once")
     let polling = read("Sources/AudioSync/AppDelegate+AirPlay.swift")
     let showBody = panelSource.components(separatedBy: "    func show(pressedAt press: TimeInterval? = nil) {").dropFirst().first?
