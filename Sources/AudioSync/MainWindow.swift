@@ -12,6 +12,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// only fires on a change.
     private var onScreen = false
     private var clickMonitor: Any?
+    private var appearanceWatch: NSKeyValueObservation?
 
     init(model: AppModel) {
         self.model = model
@@ -28,6 +29,12 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.isExcludedFromWindowsMenu = true   // the Window menu has its own AudioSync item
         window.delegate = self
+        // A white page in light appearance, so the hero's 5% ink reads #F4F4F4
+        // over it; dark keeps the system window color exactly.
+        appearanceWatch = window.observe(\.effectiveAppearance, options: [.initial]) { window, _ in
+            let dark = window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            window.backgroundColor = dark ? .windowBackgroundColor : .white
+        }
         window.setContentSize(NSSize(width: 696, height: 600))
         // Past this the speaker column stops widening and the header would stretch alone.
         window.contentMaxSize = NSSize(width: 860, height: CGFloat.greatestFiniteMagnitude)
@@ -1845,7 +1852,8 @@ private struct MenuAnchor: NSViewRepresentable {
 
 /// A main-window column that scrolls when the window is too short for it.
 /// Cards scrolling under the header fade out instead of meeting a hard edge;
-/// the fade lies in the gap above the column and in the window's bottom margin.
+/// the top fade lies inside the column, so nothing scrolls into the gap under
+/// the header, and the bottom one in the window's bottom margin.
 /// An edge fades only while content lies past it.
 private struct FadingScroll<Content: View>: View {
     let onBlankTap: () -> Void
@@ -1857,16 +1865,15 @@ private struct FadingScroll<Content: View>: View {
         self.content = content()
     }
 
-    /// Shorter than the gap between the header and the columns (14 pt) and
-    /// the window's bottom margin.
+    /// Shorter than the window's bottom margin.
     private static var fade: CGFloat { 12 }
 
     var body: some View {
         GeometryReader { viewport in
             ScrollView {
                 content
-                    // At rest the cards sit clear of the faded edges.
-                    .padding(.vertical, Self.fade)
+                    // At rest the cards sit clear of the faded bottom edge.
+                    .padding(.bottom, Self.fade)
                     // Blank space under a short column is outside every control too.
                     .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .topLeading)
                     // The scroll geometry callback may not run before the first
@@ -1893,7 +1900,7 @@ private struct FadingScroll<Content: View>: View {
             }
         }
         .mask(ScrollEdgeFade(height: Self.fade, fades: edges.fades))
-        .padding(.vertical, -Self.fade)
+        .padding(.bottom, -Self.fade)
     }
 }
 

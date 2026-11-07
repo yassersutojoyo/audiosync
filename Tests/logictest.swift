@@ -17382,5 +17382,25 @@ do {
           "master mute: a master under 0.5 is kept as exactly 0, the level the struck speaker shows")
 }
 
+// MARK: The main window's white light page and its columns' top edge (MainWindow.swift)
+do {
+    let mainWindowSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let controllerSource = mainWindowSource.components(separatedBy: "final class MainWindowController").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(controllerSource.contains("observe(\\.effectiveAppearance, options: [.initial])")
+            && controllerSource.contains("window.backgroundColor = dark ? .windowBackgroundColor : .white"),
+          "main window source: the page is white in light appearance and the system window color in dark")
+    let scrollSource = mainWindowSource.components(separatedBy: "private struct FadingScroll").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    // covers: S402
+    check(scrollSource.contains("private static var fade: CGFloat { 12 }")
+            && scrollSource.contains(".padding(.bottom, Self.fade)")
+            && scrollSource.contains(".padding(.bottom, -Self.fade)")
+            && !scrollSource.contains(".padding(.vertical, Self.fade)")
+            && !scrollSource.contains(".padding(.vertical, -Self.fade)")
+            && mainWindowSource.contains(".padding(.top, NoticeStack.windowGap)"),
+          "main window source: a column starts at the gap under the header and fades its top 12 pt inside itself")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

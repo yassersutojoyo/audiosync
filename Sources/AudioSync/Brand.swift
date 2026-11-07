@@ -16,7 +16,8 @@ enum Brand {
     /// Teal for small text (WCAG AA needs 4.5:1), same hue as the brand teal.
     /// #1C9F91 itself is only 3.27:1 on white and 3.92:1 on the dark window
     /// background (#323232), so each appearance gets its own shade:
-    /// - light: #147167, 5.85:1 on white, 4.95:1 on the light window background (#ECECEC)
+    /// - light: #147167, 5.85:1 on white (the main window's page), 5.32:1 on its
+    ///   hero card (#F4F4F4), 4.95:1 on the other windows' background (#ECECEC)
     /// - dark: #3CCBB9, 6.37:1 on #323232, 8.28:1 on #1E1E1E
     static let tealText = dynamic("AudioSyncTealText",
                                   light: BrandTokens.Light.tealText, dark: BrandTokens.Dark.tealText)
