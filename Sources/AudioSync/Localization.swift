@@ -69,6 +69,7 @@ struct UIStrings {
     let waitingForAudioNoticeName = "waiting for audio"
     func speakerFailedNoticeName(_ speaker: String) -> String { "\(speaker) didn't start, turned off" }
     func speakerLostNoticeName(_ speaker: String) -> String { "\(speaker) disconnected" }
+    func speakerBusyNoticeName(_ speaker: String) -> String { "\(speaker) in use" }
     func speakerStrugglingNoticeName(_ speaker: String) -> String { "\(speaker) is struggling" }
     func pairFirstNoticeName(_ speaker: String) -> String { "\(speaker) stayed off" }
     /// An AirPlay or Google Cast speaker that is off.
@@ -1005,6 +1006,12 @@ struct UIStrings {
 
     /// A local output that stalled again before playing 5 s; it stays on (S334).
     func outputLost(name: String) -> String { "\(name) was disconnected. It plays again as soon as it's back." }
+
+    /// A local output another process holds in hog mode; it stays on (S331). Windows' words
+    /// without its Sound settings step: hog mode is the holding app's choice, with no Mac setting.
+    func outputBusy(name: String) -> String {
+        "\(name) is in use by another app. Close that app. AudioSync plays to it as soon as it's free."
+    }
 
     /// A local output that ran away again within 30 s of its reopen; it plays on (S347).
     func outputLinkStruggling(name: String) -> String {

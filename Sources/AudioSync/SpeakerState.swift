@@ -197,6 +197,8 @@ extension LocalOutputSync {
         /// What the device said when it refused the start while still listed
         /// (S331), for the debug log; nil for a hard failure (S69).
         var refusal: String? = nil
+        /// Another process holds the device in hog mode (S331).
+        var busy = false
     }
 
     /// What one sync did to the engine.
@@ -252,6 +254,7 @@ extension LocalOutputSync {
                 }
                 if known?.isRefusal == true {
                     failure.refusal = String(describing: startError)   // the host logs it once, not every 3 s
+                    failure.busy = known?.isBusy == true
                 } else {
                     DebugTrace.log("[AudioSync] local output \(uid) failed to start: \(startError)")
                 }

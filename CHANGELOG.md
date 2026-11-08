@@ -22,6 +22,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, when calibration can't use the microphone's sample rate, it says to set the microphone to 48 kHz in Audio MIDI Setup, as on Windows. When it's the streamed audio's rate it can't use, it says so and says to set the Mac's output device or the input you stream from to 48 kHz, instead of blaming the microphone.
 - On the Mac, a menu bar panel with no speakers says "Looking for speakers…" for the first 20 seconds of the AirPlay search and "No speakers found" only after that, as on Windows. Before, it said "No speakers found" right away.
 - The help no longer says AirPlay adds about 2 seconds. It now says AirPlay adds at most 0.2 s on top of what the speaker needs, as it has since 0.9.1.
+- On the Mac, a speaker another app is using now says at once that it's in use by another app, as on Windows. Before, it stayed quiet for 30 seconds and then said the speaker was disconnected while it was still plugged in.
 
 ## [0.9.1] - 2026-11-08
 

@@ -122,7 +122,8 @@ enum OutputLoss: Equatable {
 /// Local outputs whose device went while they played (S68): each gets the
 /// disconnected notice at the next sync that no longer lists its device, so
 /// one listed again at once (a Core Audio restart) gets none. An output
-/// refused for 30 s (S331) gets it too. Main queue only.
+/// refused for 30 s (S331) gets it too; a busy one's notice is kept here so
+/// that a switch-off or a stop ends it. Main queue only.
 struct OutputGoneNotices {
     private var gone: Set<String> = []
     /// The outputs whose disconnected notice is up.
@@ -144,7 +145,7 @@ struct OutputGoneNotices {
         shown.insert(uid)
     }
 
-    /// Output `uid` started, and the sync clears its notice.
+    /// Output `uid` started, or its busy device left the list, and the sync clears its notice.
     mutating func started(_ uid: String) {
         shown.remove(uid)
     }
@@ -354,7 +355,8 @@ struct OutputRunawayReports {
 
 /// A listed output whose device refuses its start (S331): it stays on and is
 /// tried again every 3 s for as long as the user leaves it on; refused for
-/// 30 s, it counts as lost. Uptime, which stands still while the Mac sleeps.
+/// 30 s, it counts as lost, unless another process holds the device, which
+/// gets the busy notice at once instead. Uptime, which stands still while the Mac sleeps.
 /// Main queue only.
 struct OutputRefusalRetry {
     static let retryEveryS = 3.0
@@ -364,6 +366,8 @@ struct OutputRefusalRetry {
     enum Tell: Equatable {
         case refused
         case lost
+        /// Another process holds the device in hog mode.
+        case busy
     }
 
     struct Step: Equatable {
@@ -376,18 +380,21 @@ struct OutputRefusalRetry {
         var sinceS: Double
         var retryAtS: Double
         var lost: Bool
+        var busy: Bool
     }
 
     private var entries: [String: Entry] = [:]
 
-    mutating func refused(_ uid: String, nowS: Double) -> Step {
+    mutating func refused(_ uid: String, nowS: Double, busy: Bool = false) -> Step {
         let at = nowS + Self.retryEveryS
-        guard let was = entries[uid] else {
-            entries[uid] = Entry(sinceS: nowS, retryAtS: at, lost: false)
-            return Step(retryAtS: at, tell: .refused)
+        // A device no longer busy but still refusing starts its 30 s as a refusal.
+        guard let was = entries[uid], busy || !was.busy else {
+            entries[uid] = Entry(sinceS: nowS, retryAtS: at, lost: false, busy: busy)
+            return Step(retryAtS: at, tell: busy ? .busy : .refused)
         }
-        let lost = nowS - was.sinceS >= Self.lostAfterS
-        entries[uid] = Entry(sinceS: was.sinceS, retryAtS: at, lost: lost)
+        let lost = !busy && nowS - was.sinceS >= Self.lostAfterS
+        entries[uid] = Entry(sinceS: was.sinceS, retryAtS: at, lost: lost, busy: busy)
+        if busy { return Step(retryAtS: at, tell: was.busy ? nil : .busy) }
         return Step(retryAtS: at, tell: lost && !was.lost ? .lost : nil)
     }
 
@@ -396,15 +403,24 @@ struct OutputRefusalRetry {
         entries.removeValue(forKey: uid).map { nowS - $0.sinceS }
     }
 
+    /// Whether output `uid`'s last refusal came from another process holding its device.
+    func busy(_ uid: String) -> Bool {
+        entries[uid]?.busy == true
+    }
+
     /// The outputs waiting for their next try, which no sync starts yet.
     func held(nowS: Double) -> Set<String> {
         Set(entries.filter { $0.value.retryAtS > nowS }.keys)
     }
 
     /// Forgets the outputs switched off, and those whose device left the list,
-    /// which S68 covers; listed again, a refusal starts its 30 s over.
-    mutating func settle(enabled: Set<String>, listed: Set<String>) {
+    /// which S68 covers; listed again, a refusal starts its 30 s over. Returns
+    /// the busy ones whose device left the list: their busy notice ends.
+    @discardableResult
+    mutating func settle(enabled: Set<String>, listed: Set<String>) -> Set<String> {
+        let unlistedBusy = Set(entries.filter { $0.value.busy && !listed.contains($0.key) }.keys)
         entries = entries.filter { enabled.contains($0.key) && listed.contains($0.key) }
+        return unlistedBusy
     }
 
     mutating func reset() {

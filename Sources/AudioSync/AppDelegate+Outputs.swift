@@ -438,7 +438,9 @@ extension AppDelegate {
         let listed = Set(listing.map(\.uid))
         clearNotices(stallRetry.settle(enabled: enabledLocal, listed: listed, nowS: now)
             .map { SpeakerKey.make(id: $0, airplay: false) })
-        refusalRetry.settle(enabled: enabledLocal, listed: listed)
+        let unlistedBusy = refusalRetry.settle(enabled: enabledLocal, listed: listed)
+        unlistedBusy.forEach { goneNotices.started($0) }
+        clearNotices(unlistedBusy.map { SpeakerKey.make(id: $0, airplay: false) })
         clearNotices(runawayRetry.settle(enabled: enabledLocal, listed: listed)
             .map { SpeakerKey.make(id: $0, airplay: false) })
         let gone = goneNotices.settle(enabled: enabledLocal, listed: listed)   // after the stall settle, which would clear it
@@ -487,7 +489,7 @@ extension AppDelegate {
                     + "its device refused the start; trying again in \(Int(OutputStallRetry.retryEveryS)) s")
                 scheduleStallRetry(atS: retryAt)
             case .refused(let refusal):
-                outputRefused(failure.uid, refusal, nowS: now)
+                outputRefused(failure.uid, refusal, busy: failure.busy, nowS: now)
             case .hard:
                 failures.append(failure)
             }
@@ -562,12 +564,18 @@ extension AppDelegate {
 
     /// The listed device of output `uid` refused its start (S331): the speaker
     /// stays on and is tried again every 3 s; past 30 s it gets the notice of
-    /// a speaker whose device left the list (S68).
-    private func outputRefused(_ uid: String, _ refusal: String, nowS: Double) {
-        let step = refusalRetry.refused(uid, nowS: nowS)
+    /// a speaker whose device left the list (S68); one another process holds
+    /// gets the busy notice at once instead.
+    private func outputRefused(_ uid: String, _ refusal: String, busy: Bool, nowS: Double) {
+        let wasBusy = refusalRetry.busy(uid)
+        let step = refusalRetry.refused(uid, nowS: nowS, busy: busy)
         let number = engine.outputNumber(uid)
         switch step.tell {
         case .refused?:
+            if wasBusy {
+                goneNotices.started(uid)
+                clearNotices([SpeakerKey.make(id: uid, airplay: false)])
+            }
             DebugTrace.log("[AudioSync] output \(number) refused by its device (\(refusal)); "
                 + "trying again every \(Int(OutputRefusalRetry.retryEveryS)) s")
         case .lost?:
@@ -577,6 +585,13 @@ extension AppDelegate {
                        shortName: text.speakerLostNoticeName(shownName(local: uid, system: localDevices[uid]?.name ?? "")))
             DebugTrace.log("[AudioSync] output \(number) still refused after \(Int(OutputRefusalRetry.lostAfterS)) s; "
                 + "counted as lost, still trying every \(Int(OutputRefusalRetry.retryEveryS)) s")
+        case .busy?:
+            goneNotices.refusedLost(uid)
+            postNotice(text.outputBusy(name: shownName(local: uid, system: localDevices[uid]?.name ?? "")),
+                       subject: SpeakerKey.make(id: uid, airplay: false),
+                       shortName: text.speakerBusyNoticeName(shownName(local: uid, system: localDevices[uid]?.name ?? "")))
+            DebugTrace.log("[AudioSync] output \(number) refused: another process holds its device (\(refusal)); "
+                + "busy notice up, trying again every \(Int(OutputRefusalRetry.retryEveryS)) s")
         case nil:
             break
         }

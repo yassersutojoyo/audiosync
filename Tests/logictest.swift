@@ -11070,6 +11070,44 @@ do {
     check(backAfterLeaving == OutputRefusalRetry.Step(retryAtS: 343, tell: .refused) && notYetLost.tell == nil,
           "S331 refused start: a refused device that leaves the list and comes back starts a fresh 30 s, not counted as lost",
           "\(backAfterLeaving) \(notYetLost)")
+    let hogEngine = RefusingEngine(active: [], refusing: ["usb", "bt"],
+                                   refusal: SF.deviceDidNotStart(OSStatus(kAudioDevicePermissionsError)))
+    hogEngine.errors["bt"] = SF.deviceDidNotStart(OSStatus(kAudioHardwareBadDeviceError))
+    let hogStart = LocalOutputSync.apply(enabled: ["usb", "bt"], listing: [usb, bt], to: hogEngine,
+                                         holdBacks: [:], gain: { _ in 1 })
+    var hogRefusals = OutputRefusalRetry()
+    let hogFirst = hogRefusals.refused("usb", nowS: 100, busy: true)
+    let hogQuiet = hogRefusals.refused("usb", nowS: 103, busy: true)
+    let hogAt30 = hogRefusals.refused("usb", nowS: 130, busy: true)
+    // covers: S331
+    check(hogStart.failures.first(where: { $0.uid == "usb" })?.busy == true
+            && hogStart.failures.first(where: { $0.uid == "bt" })?.busy == false
+            && SF.deviceHogged(OSStatus(EAGAIN)).isBusy
+            && hogFirst == OutputRefusalRetry.Step(retryAtS: 103, tell: .busy) && hogQuiet.tell == nil
+            && hogAt30.tell == nil && hogRefusals.held(nowS: 132.9) == ["usb"],
+          "S331 refused start: a device another process hogs gets the busy notice at once and never the disconnected one",
+          "\(hogStart.failures) \(hogFirst) \(hogQuiet) \(hogAt30)")
+    _ = hogRefusals.refused("bt", nowS: 130)
+    var hogNotices = OutputGoneNotices()
+    hogNotices.refusedLost("usb")
+    hogNotices.refusedLost("bt")
+    let hogUnlisted = hogRefusals.settle(enabled: ["usb", "bt"], listed: [])
+    hogUnlisted.forEach { hogNotices.started($0) }
+    let hogSwitchedOff = hogNotices.settle(enabled: [], listed: [])
+    // covers: S331
+    check(hogUnlisted == ["usb"] && hogSwitchedOff.clear == ["bt"] && hogRefusals.held(nowS: 131).isEmpty,
+          "S331 refused start: a busy device that leaves the list ends its busy notice; a refused one that isn't busy keeps its own",
+          "\(hogUnlisted) \(hogSwitchedOff)")
+    var freedRefusals = OutputRefusalRetry()
+    _ = freedRefusals.refused("usb", nowS: 100, busy: true)
+    let freedStillRefused = freedRefusals.refused("usb", nowS: 103)
+    let freedQuiet = freedRefusals.refused("usb", nowS: 106)
+    let freedLost = freedRefusals.refused("usb", nowS: 133)
+    // covers: S331
+    check(freedStillRefused.tell == .refused && !freedRefusals.busy("usb") && freedQuiet.tell == nil
+            && freedLost.tell == .lost,
+          "S331 refused start: a busy device that still refuses once free ends its busy notice and counts its 30 s from there",
+          "\(freedStillRefused) \(freedQuiet) \(freedLost)")
 
     // covers: S72
     // S72: a master change gives each running local speaker its gain again;
