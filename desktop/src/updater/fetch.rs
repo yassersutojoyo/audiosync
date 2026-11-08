@@ -21,6 +21,8 @@ pub enum FetchError {
     /// No answer, a TLS failure, a timeout or a redirect it won't follow.
     Failed(String),
     Status(u16),
+    /// The appcast ran past [`MAX_APPCAST`].
+    TooLarge,
     /// The sink asked to stop.
     Stopped,
 }
@@ -95,19 +97,17 @@ pub fn user_agent(os: &str, version: &str, arch: &str) -> String {
 /// bytes; the fetch itself keeps [`APPCAST_TIMEOUT`].
 pub fn appcast(fetch: &dyn Fetch, url: &str) -> Result<Vec<u8>, FetchError> {
     let mut body = Vec::new();
-    let mut over = None;
+    let mut over = false;
     let result = fetch.get(url, Kind::Appcast, &mut |bytes| {
         if body.len() + bytes.len() > MAX_APPCAST {
-            over = Some("over 1 MiB");
+            over = true;
             return false;
         }
         body.extend_from_slice(bytes);
         true
     });
     match (result, over) {
-        (Err(FetchError::Stopped), Some(why)) => {
-            Err(FetchError::Failed(format!("the appcast is {why}")))
-        }
+        (Err(FetchError::Stopped), true) => Err(FetchError::TooLarge),
         (Err(error), _) => Err(error),
         (Ok(()), _) => Ok(body),
     }
@@ -550,10 +550,10 @@ pub mod tests {
         fetch
             .files
             .insert("https://f.invalid/ok".to_owned(), vec![b' '; MAX_APPCAST]);
-        assert!(matches!(
+        assert_eq!(
             appcast(&fetch, "https://f.invalid/big"),
-            Err(FetchError::Failed(_))
-        ));
+            Err(FetchError::TooLarge)
+        );
         assert_eq!(
             appcast(&fetch, "https://f.invalid/ok").map(|b| b.len()),
             Ok(MAX_APPCAST)

@@ -78,6 +78,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Changed
 
 - On Windows, AirPlay speakers that AudioSync can't play to are no longer listed, as on the Mac. Before, they showed with a note such as "Not supported".
+- On Windows, a manual update check that reaches the server but gets no update information it can read now says so, instead of saying AudioSync couldn't reach the update server.
 
 ## [0.9.1] - 2026-11-08
 

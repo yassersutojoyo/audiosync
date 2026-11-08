@@ -588,6 +588,8 @@ pub enum UpdaterNotice {
         running: String,
     },
     Unreachable,
+    /// The server answered a manual check with no feed AudioSync can read.
+    Unreadable,
     DownloadFailed,
     BadSignature,
     BrokenDownload,
@@ -655,6 +657,7 @@ impl UpdaterNotice {
             | UpdaterNotice::Failed
             | UpdaterNotice::NotAppImage => &[OpenReleasePage],
             UpdaterNotice::Unreachable
+            | UpdaterNotice::Unreadable
             | UpdaterNotice::DownloadFailed
             | UpdaterNotice::DiskFull
             | UpdaterNotice::InUse => &[TryAgain],

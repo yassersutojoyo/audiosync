@@ -362,10 +362,13 @@ impl Updater {
                             }));
                         }
                     }
-                    Checked::Failed if manual => {
+                    Checked::Unreachable if manual => {
                         self.set_notice(Some(UpdaterNotice::Unreachable));
                     }
-                    Checked::Failed => {}
+                    Checked::Unreadable if manual => {
+                        self.set_notice(Some(UpdaterNotice::Unreadable));
+                    }
+                    Checked::Unreachable | Checked::Unreadable => {}
                 }
             }
             Event::Progress(percent) => {
@@ -461,7 +464,12 @@ impl Updater {
     pub fn press(&mut self, button: UpdaterButton) -> Action {
         self.env.log.log(|| format!("updater: {button:?} pressed"));
         match button {
-            UpdaterButton::TryAgain if self.notice == Some(UpdaterNotice::Unreachable) => {
+            UpdaterButton::TryAgain
+                if matches!(
+                    self.notice,
+                    Some(UpdaterNotice::Unreachable | UpdaterNotice::Unreadable)
+                ) =>
+            {
                 self.check(Trigger::Manual);
                 Action::Nothing
             }
@@ -1175,6 +1183,30 @@ pub mod tests {
         assert_eq!(updater.work, Work::Checking, "Try Again checks again");
         updater.wait();
         assert_eq!(updater.notice(), Some(&UpdaterNotice::Unreachable));
+    }
+
+    // covers: S305
+    #[test]
+    fn a_manual_check_that_reaches_the_server_but_cant_read_the_feed_says_so() {
+        let (mut updater, _) = updater("unreadable-feed");
+        let env = Arc::get_mut(&mut updater.env).unwrap();
+        let mut broken = MemoryFetch::default();
+        broken
+            .files
+            .insert(env.feed.clone(), b"<html>not a feed</html>".to_vec());
+        env.fetch = Arc::new(broken);
+        updater.check(Trigger::Launch);
+        updater.wait();
+        assert_eq!(updater.notice(), None, "quiet at launch");
+        updater.check(Trigger::Manual);
+        updater.wait();
+        assert_eq!(updater.notice(), Some(&UpdaterNotice::Unreadable));
+        assert_eq!(
+            updater.notice().unwrap().buttons(),
+            [UpdaterButton::TryAgain]
+        );
+        updater.press(UpdaterButton::TryAgain);
+        assert_eq!(updater.work, Work::Checking, "Try Again checks again");
     }
 
     // covers: S305

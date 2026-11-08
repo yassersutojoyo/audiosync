@@ -60,7 +60,10 @@ pub struct Env {
 pub enum Checked {
     Update(Update),
     UpToDate,
-    Failed,
+    /// No answer from the server (spec S305).
+    Unreachable,
+    /// The server answered, but not with a feed AudioSync can read.
+    Unreadable,
 }
 
 /// Fetches and reads the appcast and picks the update in it.
@@ -70,7 +73,10 @@ pub fn check(env: &Env) -> Checked {
         Err(error) => {
             env.log
                 .log(|| format!("updater: the appcast fetch failed ({error:?})"));
-            return Checked::Failed;
+            return match error {
+                FetchError::Status(_) | FetchError::TooLarge => Checked::Unreadable,
+                _ => Checked::Unreachable,
+            };
         }
     };
     let text = String::from_utf8_lossy(&body);
@@ -79,7 +85,7 @@ pub fn check(env: &Env) -> Checked {
         Err(error) => {
             env.log
                 .log(|| format!("updater: the appcast can't be read ({error:?})"));
-            return Checked::Failed;
+            return Checked::Unreadable;
         }
     };
     env.log.log(|| {
@@ -860,7 +866,7 @@ pub mod tests {
         assert_eq!(check(&same.env), Checked::UpToDate);
         assert_eq!(
             check(&setup("loopback-404", "missing.xml").env),
-            Checked::Failed
+            Checked::Unreadable
         );
 
         let plain = fetch::WinHttp {
@@ -1429,7 +1435,26 @@ pub mod tests {
         ));
         let mut offline = fixture("offline", false, Arc::new(RealFiles), DebugLog::default());
         offline.env.feed = "https://unreachable.invalid/appcast.xml".to_owned();
-        assert_eq!(check(&offline.env), Checked::Failed);
+        assert_eq!(check(&offline.env), Checked::Unreachable);
+    }
+
+    // covers: S305
+    #[test]
+    fn a_server_that_answers_without_the_feed_is_unreadable_not_unreachable() {
+        struct Answers(u16);
+        impl Fetch for Answers {
+            fn get(&self, _: &str, _: Kind, _: &mut fetch::Sink<'_>) -> Result<(), FetchError> {
+                Err(FetchError::Status(self.0))
+            }
+        }
+        let mut missing = fixture("feed-404", false, Arc::new(RealFiles), DebugLog::default());
+        missing.env.fetch = Arc::new(Answers(404));
+        assert_eq!(check(&missing.env), Checked::Unreadable);
+        let mut big = MemoryFetch::default();
+        big.files
+            .insert(FEED.to_owned(), vec![b' '; fetch::MAX_APPCAST + 1]);
+        missing.env.fetch = Arc::new(big);
+        assert_eq!(check(&missing.env), Checked::Unreadable, "over 1 MiB");
     }
 
     // covers: S305
