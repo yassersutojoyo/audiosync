@@ -7696,12 +7696,14 @@ do {
         window.components(separatedBy: marker).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
     }
     func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
-    let presets = part(after: "private struct PresetsRow")
-    check(count(presets, "model.actions.recallPreset(row.id)") == 1 && count(presets, "model.actions.savePreset()") == 1
+    let presets = part(after: "private enum PresetsRowMenu")
+    check(count(part(after: "private struct PresetsRow"), "PresetsRowMenu.make(") == 1
+            && count(presets, "model.actions.recallPreset(row.id)") == 1 && count(presets, "row.current ? .on : .off") == 1
+            && count(presets, "model.actions.savePreset()") == 1
             && count(presets, "model.actions.renamePreset(row.id)") == 1 && count(presets, "model.actions.updatePreset(row.id)") == 1
             && count(presets, "model.actions.deletePreset(row.id)") == 1 && count(presets, "PresetEdit.canUpdate(row)") == 1,
           "main window presets: one row whose menu still recalls, saves, renames, updates and deletes every preset")
-    check(count(presets, "currentRow") == 0 && count(presets, "ForEach(model.presets) { row in") == 2,
+    check(count(presets, "currentRow") == 0 && count(presets, "for row in model.presets {") == 2,
           "main window presets: every preset has its own Rename…, Update to Current Settings and Delete, so a preset that isn't current can be updated")
     let speakerRow = part(after: "struct SpeakerRow: View")
     check(count(speakerRow, ".modifier(Reveal(shown: oneStepShown || optionsFocused))") == 1
