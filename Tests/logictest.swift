@@ -8351,6 +8351,11 @@ do {
                 == "Streaming on, 3 speakers on, 2 notices",
           "menu bar icon: VoiceOver hears streaming on/off, the speakers on, then the notice count",
           UIStrings().statusItemValue(running: true, speakers: 3, notices: 2))
+    // covers: S357 (the tooltip)
+    check(UIStrings().statusItemTooltip(running: true, speakers: 3, notices: 2)
+            == "AudioSync: " + UIStrings().statusItemValue(running: true, speakers: 3, notices: 2),
+          "menu bar icon: the tooltip is the app's name, then the value VoiceOver reads",
+          UIStrings().statusItemTooltip(running: true, speakers: 3, notices: 2))
     let addRow = CastAddRow.state
     // covers: S406
     check(addRow(true, .searching) == .reserved && addRow(true, .noneFound) == .shown,

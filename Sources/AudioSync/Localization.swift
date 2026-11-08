@@ -177,6 +177,12 @@ struct UIStrings {
         return notices > 0 ? streaming + ", " + noticesWaiting(notices) : streaming
     }
 
+    /// The menu bar icon's tooltip: the app's name, then what VoiceOver reads
+    /// as its value, as the Windows tray tooltip does.
+    func statusItemTooltip(running: Bool, speakers: Int, notices: Int) -> String {
+        appName + ": " + statusItemValue(running: running, speakers: speakers, notices: notices)
+    }
+
     func speakerOptions(name: String) -> String { "Options for \(name)" }
 
     /// A speaker's (or group's) accessibility value.

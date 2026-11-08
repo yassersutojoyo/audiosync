@@ -4,6 +4,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Added
+
+- On the Mac, hovering over the menu bar icon shows whether streaming is on, how many speakers are on and how many notices wait, as the tray icon's tooltip does on Windows.
+
 ### Changed
 
 - On the Mac, the Guide says that Bluetooth speakers and headphones often need a delay below 0, and explains the line under a local speaker's slider when macOS has it turned down or muted. The notice that AirPlay stopped or couldn't start now says AudioSync tries again every 10 seconds when it couldn't start.

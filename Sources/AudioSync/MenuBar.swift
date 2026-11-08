@@ -773,6 +773,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         button.image = Self.statusImage(running: running, badge: badge)
         button.setAccessibilityValue(model.text.statusItemValue(running: running, speakers: speakerCount,
                                                                      notices: noticeCount))
+        button.toolTip = model.text.statusItemTooltip(running: running, speakers: speakerCount, notices: noticeCount)
     }
 
     /// The brand mark as a template image (the menu bar tints it), dimmed while
