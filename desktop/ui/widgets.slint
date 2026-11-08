@@ -3514,8 +3514,9 @@ export component NoticeStack inherits VerticalLayout {
                             property <length> three-lines: 3 * line.preferred-height;
                             height: self.cut ? self.three-lines : message.preferred-height;
 
+                            // Any one line of text: its height.
                             line := Text {
-                                text: " ";
+                                text: Strings.app-name;
                                 font-size: Tokens.font-size-caption;
                                 opacity: 0;
                                 accessible-role: none;
