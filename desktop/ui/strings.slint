@@ -425,6 +425,8 @@ export global Strings {
     out property <string> remote-address-title: @tr("Address");
     out property <string> remote-address-label: @tr("On the phone, open");
     out property <string> remote-ip-label: @tr("If that doesn't open, use");
+    // S430: under the address, so a phone the firewall blocks gets a next step.
+    out property <string> remote-firewall: @tr("Phone can't open it? Allow AudioSync in Windows Firewall.");
     out property <string> remote-no-address: @tr("This PC has no address on a home network right now. Connect it to your Wi-Fi or Ethernet network.");
     public pure function remote-qr-label(address: string) -> string {
         return @tr("QR code for {}", address);

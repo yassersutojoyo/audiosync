@@ -264,6 +264,11 @@ export component RemoteWindow inherits Window {
                                 value: root.ip-address;
                             }
 
+                            if (root.local-address != "" || root.ip-address != "") && Platform.os != OperatingSystemType.linux: SecondaryText {
+                                text: Strings.remote-firewall;
+                                min-height: self.preferred-height;
+                            }
+
                             if root.local-address == "" && root.ip-address == "": SecondaryText {
                                 text: Strings.remote-no-address;
                                 min-height: self.preferred-height;
