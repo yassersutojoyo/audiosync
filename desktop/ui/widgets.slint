@@ -3224,9 +3224,9 @@ export component ZoneHeader inherits Rectangle {
                                             }
                                         }
 
-                                        if root.tip-allowed && name-text.preferred-width > name-text.width: Tooltip {
+                                        if root.tip-allowed: Tooltip {
                                             name-tip := LabelTip {
-                                                text: root.item.name;
+                                                text: Strings.speaker-name-tooltip(root.item.name, "");
                                                 max-tip-width: root.width;
                                             }
                                         }

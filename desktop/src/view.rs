@@ -10275,24 +10275,22 @@ mod tests {
         shows_in_full(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
     }
 
-    /// A zone name or zone count line that fits shows no tooltip: only one
-    /// cut to "…" does. An In zones name keeps its tip, the only place with
-    /// its device name and the rename hint.
+    /// A zone count line that fits shows no tooltip: only one cut to "…"
+    /// does. A zone name keeps its tip for the rename hint, and an In zones
+    /// name keeps its tip, the only place with its device name.
     // covers: S420
     #[test]
-    fn a_zone_name_that_fits_shows_no_tooltip() {
+    fn a_zone_count_that_fits_shows_no_tooltip_but_a_zone_name_has_its_rename_hint() {
         let mut backend = MockBackend::new();
         let mut den = long_named_speaker(&backend, "airplay:den");
         den.name = "Den".into();
         backend.add_speaker(den);
         backend.add_zone("zone:den", "Den", &["airplay:den"]);
         let app = narrow_app(backend);
-        for (label, tip) in [
-            ("ZoneHeader::name-text", "ZoneHeader::name-tip"),
-            ("ZoneHeader::count-text", "ZoneHeader::count-tip"),
-        ] {
-            assert!(rest_on(&app, label, tip).1.is_none(), "{label}");
-        }
+        let (_, count_tip) = rest_on(&app, "ZoneHeader::count-text", "ZoneHeader::count-tip");
+        assert!(count_tip.is_none(), "the count line");
+        let (_, name_tip) = rest_on(&app, "ZoneHeader::name-text", "ZoneHeader::name-tip");
+        assert!(name_tip.is_some(), "the zone name");
         scroll_to_end(&app);
         let (_, tip) = rest_on(&app, "ZoneMemberRow::name-label", "ZoneMemberRow::tip-text");
         assert!(tip.is_some(), "the In zones name");

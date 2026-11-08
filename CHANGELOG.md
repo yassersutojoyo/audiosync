@@ -54,6 +54,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, pointing at a zone's name shows a tooltip that says to double-click it to rename, as a speaker's name does.
 - On Windows, the Web Remote window says under the address to allow AudioSync in Windows Firewall when the phone can't open the page.
 - On Windows and Linux, the Calibrate All results' Close button reads Done once you've applied the new delays, as on the Mac.
+- On Windows and Linux, pointing at a zone's name shows a tooltip that says to double-click it to rename, as a speaker's name does.
 
 ### Fixed
 
