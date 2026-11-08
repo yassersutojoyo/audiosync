@@ -17378,6 +17378,11 @@ do {
             && flatGuide.contains("every speaker at once. Option-Command-E opens it too.")
             && flatGuide.contains("choose Refresh Devices in the gear menu or press Command-R."),
           "guide: names the New Zone, Equalizer and Refresh Devices shortcuts of the main menu, as on Windows")
+    // covers: S407
+    check(flatGuide.contains("update or delete the preset in use, choose Rename…, Update to Current Settings or Delete under its name in the Presets menu in the window.")
+            && flatGuide.contains("Leave it empty to go back to the device's own name; while a speaker is renamed, its tooltip also shows the device's own name.")
+            && !flatGuide.contains("Presets card") && !flatGuide.contains("tooltip keeps showing"),
+          "guide: the Presets line names the Presets menu's items, and the tooltip shows the device's name only while renamed")
 }
 
 // MARK: Equalizer band keyboard focus and accessibility role (VerticalSlider)

@@ -1823,20 +1823,23 @@ struct UIStrings {
           right-click it or use its ⋯ button. Deleting a zone gives its speakers
           their full rows back.
         - Presets: turn on the speakers you want and set their volumes, the
-          zone volumes, Master Volume and the equalizer curve, then click
-          Save as Preset… in the Presets card. Delays and the preamp aren't
-          saved. To recall a preset, click it in the card, pick it in the
-          menu bar panel, or press Control-Command-1 to 9 for the first nine
-          (they're also in Window > Presets). Speakers you hid are never
+          zone volumes, Master Volume and the equalizer curve, then choose
+          Save as Preset… in the Presets menu in the window. Delays and the
+          preamp aren't saved. To recall a preset, pick it in that menu or in
+          the menu bar panel, or press Control-Command-1 to 9 for the first
+          nine (they're also in Window > Presets). Speakers you hid are never
           saved in a preset, and recalling one leaves them hidden. To rename,
-          update or delete a preset, use its ⋯ button.
+          update or delete the preset in use, choose Rename…, Update to
+          Current Settings or Delete under its name in the Presets menu in the
+          window.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           Auto-Connect When Available. AudioSync then turns it on whenever it
           appears. At launch, AudioSync starts streaming only when such a speaker
           is there.
         - Rename: double-click a speaker's name, or right-click it or use its ⋯
           button and choose Rename…; type a name and press Return. Leave it empty
-          to go back to the device's own name, which its tooltip keeps showing.
+          to go back to the device's own name; while a speaker is renamed, its
+          tooltip also shows the device's own name.
         - Hide: to keep a speaker you never use out of the lists, right-click it
           or use its ⋯ button and choose “Hide Speaker”. A speaker that is on
           turns off first.
