@@ -182,9 +182,12 @@ impl ListedVirtual {
 /// leaving the field applies it; Escape drops it.
 #[derive(Default)]
 struct TypedDelay {
-    /// The text, and the value the field showed when it was typed: the
-    /// field follows a new value (a new sender latency) instead.
+    /// The text, and the value the field showed when it was typed.
     draft: Option<(String, Option<f64>)>,
+    /// A speaker's field keeps the text when its delay is set elsewhere
+    /// (the phone remote, a calibration), as on the Mac (S181); the AirPlay
+    /// delay field follows a new value (a new sender latency) instead.
+    survives: bool,
 }
 
 impl TypedDelay {
@@ -203,7 +206,7 @@ impl TypedDelay {
     fn text(&self, shown: Option<f64>) -> Option<&str> {
         self.draft
             .as_ref()
-            .filter(|(_, typed_at)| *typed_at == shown)
+            .filter(|(_, typed_at)| self.survives || *typed_at == shown)
             .map(|(text, _)| text.as_str())
     }
 
@@ -4038,7 +4041,10 @@ impl App {
             .borrow_mut()
             .delay_drafts
             .entry(id.to_string())
-            .or_default()
+            .or_insert_with(|| TypedDelay {
+                survives: true,
+                ..TypedDelay::default()
+            })
             .edit(text, shown);
         self.refresh();
         if !taken {
@@ -8632,6 +8638,24 @@ mod tests {
         assert!(ui.delay_drafts.contains_key("local:bt"), "with its draft");
         drop(ui);
         assert_eq!(delay_of(&app, "local:bt"), Some(-250.0));
+    }
+
+    // covers: S181 (typing in a speaker's delay field survives a delay set elsewhere)
+    #[test]
+    fn a_typed_speaker_delay_survives_a_delay_set_elsewhere() {
+        let app = app_over(MockBackend::new());
+        app.main.invoke_sync_toggled("local:desk".into());
+        app.main
+            .invoke_delay_edited("local:desk".into(), "300".into());
+        // The phone remote or a calibration sets the delay before Enter.
+        app.update(|b| b.set_speaker_delay("local:desk", 100.0));
+        assert_eq!(delay_of(&app, "local:desk"), Some(100.0));
+        app.main.invoke_delay_committed("local:desk".into());
+        assert_eq!(
+            delay_of(&app, "local:desk"),
+            Some(300.0),
+            "Enter applies the typing"
+        );
     }
 
     // covers: S221

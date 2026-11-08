@@ -53,6 +53,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, when the AirPlay pairings file can't be read at startup, a notice now says the speakers you paired will ask for a code again, as on Windows. Before, an Apple TV just asked for its code with no explanation.
 - On the Mac, the notice for a source switch that couldn't start no longer tells you to pick the new source again to retry, which doesn't help while another app holds that input.
 - On Windows, a Bluetooth headset's hands-free microphone that you picked as the input now shows under its name in the source list, and starting says AudioSync doesn't record from it, as on the Mac. Before, it showed as not connected even while plugged in.
+- On Windows, a delay you're typing for a speaker now stays in its field when the phone remote or a calibration changes that delay, and Enter applies it, as on the Mac. Before, the typing was dropped.
 
 ## [0.9.1] - 2026-11-08
 
