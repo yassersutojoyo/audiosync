@@ -202,4 +202,8 @@ S432 Mac host only: the Setup window's rows and summary; the Mac logic suite che
 S434 Mac host only: the note in an empty Connected Speakers when only hidden virtual outputs exist; the Mac logic suite checks it.
 S435 Windows host only: the Check Setup window's rows and summary; the desktop tests marked S435 check it.
 S436 Mac host only: where the app runs from and its login item; the Mac logic suite named in the test map checks it.
+S437 Windows host only: a Cast row's look when the speaker is paused on the device; the desktop tests marked S437 check it.
+S438 Windows host only: the tray panel's notice; the desktop tests marked S438 check it.
+S439 Windows host only: the tray panel's look; the desktop tests marked S439 check it.
+S440 Windows host only: the tray icon and its notice mark; the desktop tests marked S440 check it.
 S441 Hosts only: the Mac's signed appcast requirement and the release side that signs it; scripts/check_appcast.py checks the feed signature block (a Python marker the core's coverage rule doesn't count), and the Mac app enforces it.
