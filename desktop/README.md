@@ -74,7 +74,7 @@ build you make yourself, you write that file as shown below), and run it.
   one, and listens with the default microphone, so streaming and that speaker
   need to be on. If Windows blocks the microphone for desktop apps, AudioSync
   says so and offers the privacy settings.
-- **Calibrate All Speakers:** the button in the Calibration card of the main
+- **Calibrate All Speakers:** the row under Equalizer in the main
   window does the same for every speaker that's on, one at a time, then lists
   the results. Apply sets them all, Undo puts them all back, and Measure Again
   repeats one speaker.
@@ -247,7 +247,7 @@ since recording from it switches the headset to call mode.
 
 ### Calibrate All Speakers
 
-The Calibration card in the main window measures every speaker that's on
+The Calibrate All Speakers row in the main window measures every speaker that's on
 against the PC's own speakers, AirPlay and Google Cast included: it fades
 the music out, plays a short sweep on each one in turn, twice, and fades
 the music back in. A Cast speaker without a stored offset takes longer to

@@ -364,6 +364,7 @@ fn custom_controls_are_accessible_and_show_focus() {
         (widgets, "SpeakerBadge"),
         (widgets, "LinkButton"),
         (main, "EqualizerCard"),
+        (main, "QuickRow"),
     ] {
         let start = source
             .find(&format!("component {component} "))
@@ -1606,14 +1607,13 @@ fn the_updater_notice_uses_strings_and_tokens() {
 
 // covers: S268 (the Windows host)
 /// The preset controls (spec S267, S268): token colors only, a focus ring,
-/// Narrator's label, value and hint on each row, F2 for Rename, and the
-/// Menu key and Shift+F10 through the row's context menu area.
+/// Narrator's label and value on the Presets row, and the Menu key and
+/// Shift+F10 through the row's context menu area.
 #[test]
 fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
     let main = include_str!("../ui/main.slint");
     let flyout = include_str!("../ui/flyout.slint");
     let parts = [
-        component_body(main, "PresetRow"),
         component_body(main, "PresetsCard"),
         component_body(flyout, "PresetPicker"),
     ];
@@ -1627,29 +1627,24 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
             }
         }
     }
-    let [row, card, picker] = parts;
+    let [card, picker] = parts;
     for needle in [
-        "accessible-role: button;",
-        "accessible-label: root.item.name;",
-        "accessible-value: root.item.current ? Strings.preset-current : \"\";",
-        "accessible-description: Strings.preset-recall-hint;",
-        "if event.text == Key.F2 {",
         "menu := ContextMenuArea {",
-        "border-color: Tokens.focus;",
-        "label: Strings.speaker-options(root.item.name);",
-        "color: Tokens.teal-text;",
+        "title: Strings.no-presets;",
+        "title: Strings.save-preset;",
+        "title: Strings.rename-preset;",
+        "enabled: !preset.current;",
+        "title: Strings.delete-preset;",
     ] {
-        assert!(row.contains(needle), "PresetRow has {needle}");
+        assert!(card.contains(needle), "PresetsCard has {needle}");
     }
-    assert!(card.contains("accessible-role: groupbox;"));
-    assert!(card.contains("text: Strings.presets-empty;"));
-    assert!(card.contains("text: Strings.save-preset;"));
     for needle in [
         "accessible-role: button;",
         "accessible-label: Strings.presets;",
         "border-color: Tokens.focus;",
         "if event.text == \" \" || event.text == Key.Return {",
     ] {
+        assert!(card.contains(needle), "PresetsCard has {needle}");
         assert!(picker.contains(needle), "PresetPicker has {needle}");
     }
     assert!(flyout.contains("if root.presets.length > 0: PresetPicker {"));

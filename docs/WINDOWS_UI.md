@@ -154,7 +154,7 @@ one, with a notice that names it.
 | F5 | Refresh devices, also from the equalizer, either Guide or Web Remote |
 | Ctrl+E | Equalizer |
 | Ctrl+1 to Ctrl+9 | Recall the first nine presets, in the order View > Presets lists them, also from the equalizer, either Guide, Web Remote or the tray panel |
-| F2 | Rename the focused preset, speaker or zone |
+| F2 | Rename the focused speaker or zone |
 | Ctrl+W | Close the window (AudioSync stays in the tray); in the equalizer, the AudioSync Guide, the double-audio guide, Web Remote or About, close that window; in a dialog, cancel it as Escape does |
 | Ctrl+Q | Exit AudioSync, from the main window, the equalizer, either Guide, Web Remote or About |
 | F1 | AudioSync Guide, also from the equalizer, either Guide or Web Remote |

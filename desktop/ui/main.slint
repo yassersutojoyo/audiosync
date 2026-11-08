@@ -9,7 +9,7 @@ import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerRow, ToggleSwitch, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -341,17 +341,16 @@ component SpeakerSection inherits VerticalLayout {
     in-out property <string> focus-id <=> rows.focus-id;
     in-out property <RowPart> focus-part <=> rows.focus-part;
 
-    spacing: 8px;
+    spacing: 4px;
     accessible-role: groupbox;
     accessible-label: root.title;
 
-    CardTitle {
+    SectionTitle {
         text: root.title;
     }
 
-    card := Card {
-        inner-padding: 4px;
-
+    // Rows on the window, split by hairlines, not in a card.
+    card := VerticalLayout {
         rows := SpeakerRows {
             speakers: root.speakers;
         }
@@ -475,110 +474,104 @@ component SpeakerSection inherits VerticalLayout {
     }
 }
 
-// One preset in the Presets card (spec S259, S267): a click, Space or
-// Return recalls it, F2 renames it, and its … button, a right-click, the
-// Menu key or Shift+F10 open its menu.
-component PresetRow inherits Rectangle {
-    in property <PresetItem> item;
-    // The app asks the row for the keyboard focus after a delete.
-    in property <bool> focus-wanted;
-    callback recall();
-    callback rename();
-    callback update();
-    callback delete();
-    callback focus-taken();
+// The Presets row (spec S259, S267): the current preset's name, and a menu
+// that recalls a preset, saves one, and renames, updates or deletes one
+// through its submenu. A click, Space, Return, the Menu key or Shift+F10
+// open it.
+component PresetsCard inherits Rectangle {
+    in property <[PresetItem]> presets;
+    // The current preset's name; empty while none is current.
+    in property <string> current;
+    // False at the most presets the app keeps (spec S251).
+    in property <bool> can-save: true;
+    // The app asks for the focus after a delete; the row clears the request.
+    in-out property <bool> focus-wanted;
+    callback recall(string);
+    callback rename(string);
+    callback update(string);
+    callback delete(string);
+    callback save();
 
-    function take-focus() {
-        focus.focus();
-        root.focus-taken();
-    }
-    init => {
-        if root.focus-wanted {
-            root.take-focus();
-        }
+    function open-menu() {
+        menu.show({ x: 0, y: root.height });
     }
     changed focus-wanted => {
         if root.focus-wanted {
-            root.take-focus();
+            root.focus-wanted = false;
+            focus.focus();
         }
     }
 
-    property <bool> tip-allowed: true;
+    min-height: 36px;
     border-radius: Fluent.radius-control;
     background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
+    forward-focus: focus;
     accessible-role: button;
-    accessible-label: root.item.name;
-    accessible-value: root.item.current ? Strings.preset-current : "";
-    accessible-description: Strings.preset-recall-hint;
+    accessible-label: Strings.presets;
+    accessible-value: root.presets.length == 0 ? Strings.no-presets : root.current != "" ? root.current : Strings.choose-preset;
     accessible-action-default => {
-        root.recall();
+        root.open-menu();
     }
 
     touch := TouchArea {
-        changed has-hover => {
-            if !self.has-hover {
-                root.tip-allowed = true;
-            }
-        }
-        pointer-event(event) => {
-            if event.kind == PointerEventKind.down {
-                root.tip-allowed = false;
-            }
-        }
         clicked => {
-            root.recall();
-        }
-
-        if root.tip-allowed: Tooltip {
-            Rectangle {
-                width: min(tip-text.preferred-width + 16px, root.width);
-                height: tip-text.preferred-height + 10px;
-                border-radius: Fluent.radius-control;
-                border-width: 1px;
-                border-color: Fluent.stroke;
-                background: Tokens.surface;
-                drop-shadow-blur: 8px;
-                drop-shadow-offset-y: 2px;
-                drop-shadow-color: Tokens.text.with-alpha(0.18);
-                accessible-role: none;
-
-                tip-text := Text {
-                    x: 8px;
-                    width: parent.width - 16px;
-                    text: root.item.name;
-                    font-size: Tokens.font-size-caption;
-                    color: Tokens.text;
-                    vertical-alignment: center;
-                    wrap: word-wrap;
-                    accessible-role: none;
-                }
-            }
+            root.open-menu();
         }
 
         menu := ContextMenuArea {
             Menu {
-                MenuItem {
-                    title: Strings.rename-preset;
-                    activated => {
-                        root.rename();
-                    }
+                if root.presets.length == 0: MenuItem {
+                    title: Strings.no-presets;
+                    enabled: false;
                 }
 
-                MenuItem {
-                    title: Strings.update-preset;
-                    enabled: !root.item.current;
+                for preset in root.presets: MenuItem {
+                    title: preset.name;
+                    checkable: true;
+                    checked: preset.current;
                     activated => {
-                        root.update();
+                        root.recall(preset.id);
                     }
                 }
 
                 MenuSeparator { }
 
                 MenuItem {
-                    title: Strings.delete-preset;
+                    title: Strings.save-preset;
+                    enabled: root.can-save;
                     activated => {
-                        root.delete();
+                        root.save();
+                    }
+                }
+
+                if root.presets.length > 0: MenuSeparator { }
+
+                for preset in root.presets: Menu {
+                    title: preset.name;
+
+                    MenuItem {
+                        title: Strings.rename-preset;
+                        activated => {
+                            root.rename(preset.id);
+                        }
+                    }
+
+                    MenuItem {
+                        title: Strings.update-preset;
+                        enabled: !preset.current;
+                        activated => {
+                            root.update(preset.id);
+                        }
+                    }
+
+                    MenuSeparator { }
+
+                    MenuItem {
+                        title: Strings.delete-preset;
+                        activated => {
+                            root.delete(preset.id);
+                        }
                     }
                 }
             }
@@ -587,51 +580,43 @@ component PresetRow inherits Rectangle {
                 focus-on-click: false;
                 key-pressed(event) => {
                     if event.text == " " || event.text == Key.Return {
-                        root.recall();
-                        return accept;
-                    }
-                    if event.text == Key.F2 {
-                        root.rename();
+                        root.open-menu();
                         return accept;
                     }
                     return reject;
                 }
 
                 HorizontalLayout {
-                    padding-left: 6px;
-                    spacing: 6px;
-                    min-height: 36px;
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    spacing: 8px;
 
-                    // Kept in place while hidden, so the names line up.
                     Glyph {
-                        glyph: Glyphs.check;
-                        color: Tokens.teal-text;
-                        font-size: 12px;
+                        glyph: Glyphs.presets;
+                        color: Tokens.text;
                         width: 16px;
-                        opacity: root.item.current ? 1 : 0;
                     }
 
+                    Text {
+                        text: Strings.presets;
+                        color: Tokens.text;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
+
+                    // Blank while none is current, so no fixed text is cut.
                     MarqueeText {
-                        text: root.item.name;
-                        font-weight: root.item.current ? 600 : 400;
+                        text: root.presets.length == 0 ? Strings.no-presets : root.current;
+                        text-color: Tokens.secondary-text;
+                        font-size: Tokens.font-size-caption;
                         horizontal-stretch: 1;
                         accessible-role: none;
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        IconButton {
-                            glyph: Glyphs.more;
-                            label: Strings.speaker-options(root.item.name);
-                            glyph-color: Tokens.teal-text;
-                            clicked => {
-                                // show() takes a point in the menu area, not in this button's layout.
-                                menu.show({
-                                    x: self.absolute-position.x - menu.absolute-position.x,
-                                    y: self.absolute-position.y - menu.absolute-position.y + self.height,
-                                });
-                            }
-                        }
+                    Glyph {
+                        glyph: Glyphs.chevron-down;
+                        font-size: Tokens.font-size-caption;
+                        color: Tokens.secondary-text;
                     }
                 }
             }
@@ -645,81 +630,6 @@ component PresetRow inherits Rectangle {
     }
 }
 
-// The Presets card (spec S259, S263): the presets in list order, or the
-// empty line, then Save as Preset….
-component PresetsCard inherits Card {
-    in property <[PresetItem]> presets;
-    // False at the most presets the app keeps (spec S251).
-    in property <bool> can-save: true;
-    // The app asks for the focus on this preset's row, or on Save as Preset…,
-    // after a delete; whoever takes it clears the request.
-    in-out property <string> focus-id;
-    in-out property <bool> focus-save;
-    callback recall(string);
-    callback rename(string);
-    callback update(string);
-    callback delete(string);
-    callback save();
-
-    changed focus-save => {
-        if root.focus-save {
-            root.focus-save = false;
-            save.focus();
-        }
-    }
-
-    accessible-role: groupbox;
-    accessible-label: Strings.presets;
-
-    VerticalLayout {
-        spacing: 8px;
-
-        CardTitle {
-            text: Strings.presets;
-        }
-
-        if root.presets.length == 0: SecondaryText {
-            text: Strings.presets-empty;
-            accessible-role: text;
-            accessible-label: self.text;
-        }
-
-        if root.presets.length > 0: VerticalLayout {
-            for preset in root.presets: PresetRow {
-                item: preset;
-                focus-wanted: root.focus-id != "" && root.focus-id == preset.id;
-                focus-taken => {
-                    root.focus-id = "";
-                }
-                recall => {
-                    root.recall(preset.id);
-                }
-                rename => {
-                    root.rename(preset.id);
-                }
-                update => {
-                    root.update(preset.id);
-                }
-                delete => {
-                    root.delete(preset.id);
-                }
-            }
-        }
-
-        HorizontalLayout {
-            alignment: start;
-            save := Button {
-                text: Strings.save-preset;
-                enabled: root.can-save;
-                accessible-label: Strings.save-preset;
-                clicked => {
-                    root.save();
-                }
-            }
-        }
-    }
-}
-
 // The Equalizer card: opens the equalizer window and says whether it is on.
 component EqualizerCard inherits Rectangle {
     in property <bool> on;
@@ -728,12 +638,11 @@ component EqualizerCard inherits Rectangle {
     callback clicked();
     callback focus-changed(bool);
 
-    // A Windows 11 settings card: the whole card is the button.
-    background: touch.pressed ? Tokens.surface.mix(Tokens.text, 0.97) : touch.has-hover ? Tokens.surface.mix(Tokens.text, 0.95) : Tokens.surface;
+    // A row on the window: the whole row is the button.
+    min-height: 36px;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
-    border-radius: Fluent.radius-card;
-    border-width: 1px;
-    border-color: Fluent.stroke;
+    border-radius: Fluent.radius-control;
     forward-focus: focus;
     accessible-role: button;
     accessible-label: Strings.equalizer;
@@ -763,50 +672,158 @@ component EqualizerCard inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding: Fluent.card-padding;
-        padding-top: 10px;
-        padding-bottom: 10px;
-        spacing: 12px;
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 8px;
 
         Glyph {
             glyph: Glyphs.equalizer;
-            color: Tokens.teal-text;
-            width: 20px;
+            color: Tokens.text;
+            width: 16px;
         }
 
-        // The name, and under it the preset, so the narrow column fits both.
-        VerticalLayout {
-            alignment: center;
-            spacing: 2px;
+        label := Text {
+            text: Strings.equalizer;
+            color: Tokens.text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        // The preset after the name, on the same line, as on the Mac.
+        HorizontalLayout {
+            spacing: 6px;
             horizontal-stretch: 1;
 
-            label := Text {
-                text: Strings.equalizer;
-                color: Tokens.text;
-                accessible-role: none;
+            if root.on: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: Tokens.teal;
+                }
             }
 
-            HorizontalLayout {
-                spacing: 6px;
+            curve := MarqueeText {
+                text: root.on ? root.curve : Strings.off;
+                text-color: Tokens.secondary-text;
+                font-size: Tokens.font-size-caption;
+                horizontal-stretch: 1;
+                accessible-role: none;
+            }
+        }
 
-                if root.on: VerticalLayout {
-                    alignment: center;
-                    Rectangle {
-                        width: 6px;
-                        height: 6px;
-                        border-radius: 3px;
-                        background: Tokens.teal;
-                    }
-                }
+        Glyph {
+            glyph: Glyphs.chevron-right;
+            font-size: Tokens.font-size-caption;
+            color: Tokens.secondary-text;
+        }
+    }
 
-                curve := MarqueeText {
-                    text: root.on ? root.curve : Strings.off;
-                    text-color: Tokens.secondary-text;
+    Rectangle {
+        border-width: focus.has-focus ? 2px : 0px;
+        border-color: Tokens.focus;
+        border-radius: root.border-radius;
+    }
+}
+
+// A row on the window that starts something, as the Mac's quick rows: a
+// glyph, the name and a chevron. The whole row is the button.
+component QuickRow inherits Rectangle {
+    in property <string> glyph;
+    in property <string> text;
+    in property <string> description;
+    // Shown on hover; empty for none.
+    in property <string> tip;
+    in property <bool> enabled: true;
+    callback clicked();
+    callback focus-changed(bool);
+
+    min-height: 36px;
+    border-radius: Fluent.radius-control;
+    background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    animate background { duration: Fluent.fast; }
+    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-description: root.description;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        changed has-focus => {
+            root.focus-changed(self.has-focus);
+        }
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            if root.enabled {
+                root.clicked();
+            }
+        }
+
+        if root.tip != "": Tooltip {
+            Rectangle {
+                width: min(tip-text.preferred-width + 16px, max(root.width, 280px));
+                height: tip-text.preferred-height + 10px;
+                border-radius: Fluent.radius-control;
+                border-width: 1px;
+                border-color: Fluent.stroke;
+                background: Tokens.surface;
+                drop-shadow-blur: 8px;
+                drop-shadow-offset-y: 2px;
+                drop-shadow-color: Tokens.text.with-alpha(0.18);
+                accessible-role: none;
+
+                tip-text := Text {
+                    x: 8px;
+                    width: parent.width - 16px;
+                    text: root.tip;
                     font-size: Tokens.font-size-caption;
-                    horizontal-stretch: 1;
+                    color: Tokens.text;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
                     accessible-role: none;
                 }
             }
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+
+        Glyph {
+            glyph: root.glyph;
+            color: Tokens.text;
+            width: 16px;
+        }
+
+        Text {
+            text: root.text;
+            color: Tokens.text;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+            accessible-role: none;
         }
 
         Glyph {
@@ -827,11 +844,13 @@ component EqualizerCard inherits Rectangle {
 // run under way, what the run does, the outputs left out by kind with
 // Include Anyway, and the results with Measure Again on each row, Apply,
 // Undo and Close.
-component CalibrationCard inherits Card {
+component CalibrationCard inherits VerticalLayout {
     in property <bool> running;
     in property <bool> can-start;
     // What the run does, how it ended, or why it can't start.
     in property <string> status;
+    // The status only says what a run does: it shows as the row's tooltip.
+    in property <bool> status-is-hint;
     // The microphone was blocked: Open Privacy Settings.
     in property <bool> privacy;
     in property <bool> results-shown;
@@ -871,27 +890,23 @@ component CalibrationCard inherits Card {
     VerticalLayout {
         spacing: 8px;
 
-        // No title above the button, as on the Mac: the button names the
-        // card. One button for both, so the keyboard focus stays on it when
-        // a run starts or ends.
-        HorizontalLayout {
-            alignment: LayoutAlignment.start;
-
-            calibrate-button := Button {
-                changed has-focus => {
-                    root.focus-changed(self.has-focus);
-                }
-                // After a zone run it runs that zone again.
-                text: root.running ? Strings.calibration-cancel : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
-                enabled: root.running || root.can-start;
-                accessible-label: root.running ? Strings.calibration-cancel : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
-                accessible-description: root.status;
-                clicked => {
-                    if root.running {
-                        root.cancel();
-                    } else {
-                        root.start();
-                    }
+        // A row, as on the Mac; its results show under it. One row for both,
+        // so the keyboard focus stays on it when a run starts or ends.
+        calibrate-button := QuickRow {
+            focus-changed(has) => {
+                root.focus-changed(has);
+            }
+            glyph: Glyphs.microphone;
+            // After a zone run it runs that zone again.
+            text: root.running ? Strings.calibration-cancel : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
+            enabled: root.running || root.can-start;
+            description: root.status;
+            tip: root.status-is-hint ? root.status : "";
+            clicked => {
+                if root.running {
+                    root.cancel();
+                } else {
+                    root.start();
                 }
             }
         }
@@ -919,7 +934,7 @@ component CalibrationCard inherits Card {
         }
 
         // The button's description says it already.
-        QuietText {
+        if !root.status-is-hint: status-line := QuietText {
             text: root.status;
         }
 
@@ -1138,7 +1153,12 @@ component CalibrationCard inherits Card {
 
 // The Now Playing card: the track of the media session that counts for the
 // chosen source, with Previous, Play or Pause, and Next, as on the Mac.
-component NowPlayingCard inherits Card {
+component NowPlayingCard inherits VerticalLayout {
+    // The cover's side, the column's inside width.
+    in property <length> cover-size;
+    // The pointer is over the block: Shuffle and Repeat show, as they do
+    // while one of the buttons has the keyboard focus.
+    in property <bool> revealed;
     in property <string> title;
     in property <string> subtitle;
     in property <bool> playing;
@@ -1171,40 +1191,39 @@ component NowPlayingCard inherits Card {
     VerticalLayout {
         spacing: 10px;
 
-        HorizontalLayout {
-            spacing: 12px;
+        Rectangle {
+            width: root.cover-size;
+            height: root.cover-size;
+            border-radius: 6px;
+            clip: true;
+            background: Tokens.text.with-alpha(0.06);
 
-            Rectangle {
-                width: 48px;
-                height: 48px;
-                border-radius: Fluent.radius-card;
-                clip: true;
-                background: Tokens.text.with-alpha(0.06);
-
-                if root.has-artwork: Image {
-                    width: parent.width;
-                    height: parent.height;
-                    source: root.artwork;
-                    image-fit: cover;
-                    accessible-role: none;
-                }
-
-                if !root.has-artwork: Glyph {
-                    width: parent.width;
-                    height: parent.height;
-                    glyph: Glyphs.music-note;
-                    color: Tokens.secondary-text;
-                    font-size: 20px;
-                }
+            if root.has-artwork: Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.artwork;
+                image-fit: cover;
+                accessible-role: none;
             }
 
+            if !root.has-artwork: Glyph {
+                width: parent.width;
+                height: parent.height;
+                glyph: Glyphs.music-note;
+                color: Tokens.secondary-text;
+                font-size: root.cover-size / 5;
+            }
+        }
+
+        HorizontalLayout {
             VerticalLayout {
                 alignment: center;
-                spacing: 3px;
+                spacing: 2px;
                 horizontal-stretch: 1;
 
                 MarqueeText {
                     text: root.title;
+                    font-size: 16px;
                     font-weight: 600;
                 }
 
@@ -1222,6 +1241,8 @@ component NowPlayingCard inherits Card {
             spacing: root.shuffle >= 0 || root.repeat >= 0 ? 2px : 20px;
 
             if root.shuffle >= 0: IconButton {
+                opacity: root.revealed || root.focused-button >= 0 ? 1 : 0;
+                animate opacity { duration: 120ms; }
                 glyph: Glyphs.shuffle;
                 glyph-color: root.shuffle == 1 ? Tokens.teal-text : Tokens.secondary-text;
                 active: root.shuffle == 1;
@@ -1272,6 +1293,8 @@ component NowPlayingCard inherits Card {
             }
 
             if root.repeat >= 0: IconButton {
+                opacity: root.revealed || root.focused-button >= 0 ? 1 : 0;
+                animate opacity { duration: 120ms; }
                 glyph: root.repeat == 2 ? Glyphs.repeat-one : Glyphs.repeat-all;
                 glyph-color: root.repeat > 0 ? Tokens.teal-text : Tokens.secondary-text;
                 active: root.repeat > 0;
@@ -1356,9 +1379,10 @@ export component MainWindow inherits Window {
     in property <int> notices-staying;
     in property <[PresetItem]> presets;
     in property <bool> can-save-preset: true;
-    // After a delete: the preset row, or Save as Preset…, that takes the focus.
-    in-out property <string> focus-preset-id;
-    in-out property <bool> focus-save-preset;
+    // The current preset's name; empty while none is current.
+    in property <string> current-preset;
+    // After a delete the Presets row takes the focus back.
+    in-out property <bool> focus-presets;
     // What Narrator says about a new notice, while the app wants it said
     // here (empty otherwise).
     in property <string> notice-announcement;
@@ -1419,6 +1443,7 @@ export component MainWindow inherits Window {
     in property <bool> calibrate-all-running;
     in property <bool> calibrate-all-can-start;
     in property <string> calibrate-all-status;
+    in property <bool> calibrate-all-status-is-hint;
     in property <bool> calibrate-all-privacy;
     in property <bool> calibrate-all-results-shown;
     in property <[CalibrationRowItem]> calibrate-all-rows;
@@ -1600,7 +1625,8 @@ export component MainWindow inherits Window {
     min-height: 440px;
     preferred-width: 776px;
     preferred-height: 680px;
-    background: Tokens.background;
+    // White in light mode, as the Mac's window.
+    background: Tokens.dark ? Tokens.background : Tokens.surface;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
 
@@ -2002,161 +2028,178 @@ export component MainWindow inherits Window {
                     spacing: 8px;
                     alignment: start;
 
-                    Card {
-                        VerticalLayout {
-                            spacing: 8px;
+                    // One block on a faint fill holds the source and what plays.
+                    Rectangle {
+                        // Its own height, which the touch area under it doesn't pass on.
+                        height: hero-content.preferred-height;
+                        background: Fluent.hero;
+                        border-radius: Fluent.radius-card;
 
-                            CardTitle {
-                                text: Strings.source-label;
-                            }
-
-                            // An input device carries a microphone, as the Mac's picker shows its icon (S448).
-                            HorizontalLayout {
+                        hero-touch := TouchArea {
+                            hero-content := VerticalLayout {
+                                padding: 12px;
                                 spacing: 8px;
 
-                                if root.source-is-input: input-marker := Glyph {
-                                    glyph: Glyphs.microphone;
-                                    color: Tokens.secondary-text;
-                                }
+                                // An input device carries a microphone, as the Mac's picker shows its icon (S448).
+                                HorizontalLayout {
+                                    spacing: 8px;
 
-                                source := ComboBox {
-                                    model: root.sources;
-                                    current-index: root.source-index;
-                                    accessible-label: Strings.source-label;
-                                    changed has-focus => {
-                                        root.control-focus-changed(MainControl.source, self.has-focus);
+                                    if root.source-is-input: input-marker := Glyph {
+                                        glyph: Glyphs.microphone;
+                                        color: Tokens.secondary-text;
                                     }
-                                    selected => {
-                                        root.source-selected(self.current-index);
-                                        self.current-index = root.source-index;
-                                    }
-                                }
-                            }
 
-                            // Right under the sources, where the Mac's source
-                            // menu ends in its Several Apps submenu; a
-                            // drop-down can't hold one, so it unfolds here.
-                            HorizontalLayout {
-                                alignment: start;
-
-                                Disclosure {
-                                    text: Strings.source-mix-title;
-                                    expanded: root.mix-open;
-                                    toggled => {
-                                        root.mix-open = !root.mix-open;
-                                    }
-                                }
-                            }
-
-                            if root.mix-open: VerticalLayout {
-                                spacing: 6px;
-
-                                if root.mix-apps.length == 0: SecondaryText {
-                                    text: Strings.source-mix-empty;
-                                }
-
-                                if root.mix-apps.length > 0: ComboBox {
-                                    model: [Strings.source-mix-only, Strings.source-mix-all-except];
-                                    current-index: root.mix-all-except ? 1 : 0;
-                                    accessible-label: Strings.source-mix-mode;
-                                    selected => {
-                                        root.mix-mode-selected(self.current-index == 1);
-                                        self.current-index = root.mix-all-except ? 1 : 0;
+                                    source := ComboBox {
+                                        model: root.sources;
+                                        current-index: root.source-index;
+                                        accessible-label: Strings.source-label;
+                                        changed has-focus => {
+                                            root.control-focus-changed(MainControl.source, self.has-focus);
+                                        }
+                                        selected => {
+                                            root.source-selected(self.current-index);
+                                            self.current-index = root.source-index;
+                                        }
                                     }
                                 }
 
-                                for app[index] in root.mix-apps: MixAppBox {
-                                    text: app.name;
-                                    on: app.checked;
-                                    flip => {
-                                        root.mix-app-toggled(index);
+                                // Right under the sources, where the Mac's source
+                                // menu ends in its Several Apps submenu; a
+                                // drop-down can't hold one, so it unfolds here.
+                                HorizontalLayout {
+                                    alignment: start;
+
+                                    Disclosure {
+                                        text: Strings.source-mix-title;
+                                        expanded: root.mix-open;
+                                        toggled => {
+                                            root.mix-open = !root.mix-open;
+                                        }
                                     }
                                 }
 
-                                if root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": SecondaryText {
-                                    text: Strings.source-mix-all-except-note;
-                                }
-                            }
+                                if root.mix-open: VerticalLayout {
+                                    spacing: 6px;
 
-                            if root.input-pairs.length > 0: VerticalLayout {
-                                spacing: 4px;
-
-                                SecondaryText {
-                                    text: Strings.input-channels-label;
-                                }
-
-                                PairPicker {
-                                    model: root.input-pairs;
-                                    chosen: root.input-pair-index;
-                                    changed has-focus => {
-                                        root.control-focus-changed(MainControl.input-pair, self.has-focus);
+                                    if root.mix-apps.length == 0: SecondaryText {
+                                        text: Strings.source-mix-empty;
                                     }
-                                    picked(index) => {
-                                        root.input-pair-selected(index);
+
+                                    if root.mix-apps.length > 0: ComboBox {
+                                        model: [Strings.source-mix-only, Strings.source-mix-all-except];
+                                        current-index: root.mix-all-except ? 1 : 0;
+                                        accessible-label: Strings.source-mix-mode;
+                                        selected => {
+                                            root.mix-mode-selected(self.current-index == 1);
+                                            self.current-index = root.mix-all-except ? 1 : 0;
+                                        }
+                                    }
+
+                                    for app[index] in root.mix-apps: MixAppBox {
+                                        text: app.name;
+                                        on: app.checked;
+                                        flip => {
+                                            root.mix-app-toggled(index);
+                                        }
+                                    }
+
+                                    if root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": SecondaryText {
+                                        text: Strings.source-mix-all-except-note;
                                     }
                                 }
-                            }
 
-                            // Always laid out, so nothing below moves when it shows.
-                            LevelMeter {
-                                visible: root.input-meter-shown;
-                                level: root.input-level;
-                                spoken-percent: root.input-level-spoken;
-                                label: Strings.input-level;
-                            }
+                                if root.input-pairs.length > 0: VerticalLayout {
+                                    spacing: 4px;
 
-                            if root.live-input-hint != "": SecondaryText {
-                                text: root.live-input-hint;
+                                    SecondaryText {
+                                        text: Strings.input-channels-label;
+                                    }
+
+                                    PairPicker {
+                                        model: root.input-pairs;
+                                        chosen: root.input-pair-index;
+                                        changed has-focus => {
+                                            root.control-focus-changed(MainControl.input-pair, self.has-focus);
+                                        }
+                                        picked(index) => {
+                                            root.input-pair-selected(index);
+                                        }
+                                    }
+                                }
+
+                                // Always laid out, so nothing below moves when it shows.
+                                LevelMeter {
+                                    visible: root.input-meter-shown;
+                                    level: root.input-level;
+                                    spoken-percent: root.input-level-spoken;
+                                    label: Strings.input-level;
+                                }
+
+                                if root.live-input-hint != "": SecondaryText {
+                                    text: root.live-input-hint;
+                                }
+
+                                if root.now-playing-shown: NowPlayingCard {
+                                    cover-size: MainColumns.left(root.columns-width) - 28px;
+                                    revealed: hero-touch.has-hover;
+                                    title: root.now-playing-title;
+                                    subtitle: root.now-playing-subtitle;
+                                    playing: root.now-playing-playing;
+                                    has-artwork: root.now-playing-has-artwork;
+                                    artwork: root.now-playing-artwork;
+                                    shuffle: root.now-playing-shuffle;
+                                    repeat: root.now-playing-repeat;
+                                    focused-button <=> root.now-playing-focused-button;
+                                    changed focused-button => {
+                                        root.control-focus-changed(MainControl.transport, self.focused-button >= 0);
+                                    }
+                                    transport(button) => {
+                                        root.now-playing-transport(button);
+                                    }
+                                }
                             }
                         }
                     }
 
-                    if root.now-playing-shown: NowPlayingCard {
-                        title: root.now-playing-title;
-                        subtitle: root.now-playing-subtitle;
-                        playing: root.now-playing-playing;
-                        has-artwork: root.now-playing-has-artwork;
-                        artwork: root.now-playing-artwork;
-                        shuffle: root.now-playing-shuffle;
-                        repeat: root.now-playing-repeat;
-                        focused-button <=> root.now-playing-focused-button;
-                        changed focused-button => {
-                            root.control-focus-changed(MainControl.transport, self.focused-button >= 0);
-                        }
-                        transport(button) => {
-                            root.now-playing-transport(button);
-                        }
-                    }
+                    // Master Volume on the window, then a hairline over the rows.
+                    VerticalLayout {
+                        padding-top: 8px;
+                        // Clear of the scroll bar.
+                        padding-right: 8px;
+                        spacing: 2px;
 
-                    Card {
-                        VerticalLayout {
-                            spacing: 6px;
-
-                            CardTitle {
+                        // The slider's own label names it for Narrator.
+                        HorizontalLayout {
+                            Text {
                                 text: Strings.master-volume-title;
+                                font-size: Tokens.font-size-caption;
+                                color: Tokens.secondary-text;
+                                accessible-role: none;
                             }
+                        }
 
-                            MasterVolume {
-                                volume: root.master-volume;
-                                waves: root.master-volume-waves;
-                                mute-toggled => {
-                                    root.master-mute-toggled();
-                                }
-                                changed slider-focused => {
-                                    root.control-focus-changed(MainControl.master-volume, self.slider-focused);
-                                }
-                                changed(value) => {
-                                    root.master-volume-changed(value);
-                                }
+                        MasterVolume {
+                            volume: root.master-volume;
+                            waves: root.master-volume-waves;
+                            mute-toggled => {
+                                root.master-mute-toggled();
+                            }
+                            changed slider-focused => {
+                                root.control-focus-changed(MainControl.master-volume, self.slider-focused);
+                            }
+                            changed(value) => {
+                                root.master-volume-changed(value);
                             }
                         }
                     }
+
+                    Divider { }
 
                     PresetsCard {
                         presets: root.presets;
+                        current: root.current-preset;
                         can-save: root.can-save-preset;
-                        focus-id <=> root.focus-preset-id;
-                        focus-save <=> root.focus-save-preset;
+                        focus-wanted <=> root.focus-presets;
                         recall(id) => {
                             root.preset-recall-requested(id);
                         }
@@ -2189,6 +2232,7 @@ export component MainWindow inherits Window {
                         running: root.calibrate-all-running;
                         can-start: root.calibrate-all-can-start;
                         status: root.calibrate-all-status;
+                        status-is-hint: root.calibrate-all-status-is-hint;
                         privacy: root.calibrate-all-privacy;
                         results-shown: root.calibrate-all-results-shown;
                         rows: root.calibrate-all-rows;
@@ -2368,11 +2412,11 @@ export component MainWindow inherits Window {
                     }
 
                     if root.zones.length > 0: VerticalLayout {
-                        spacing: 8px;
+                        spacing: 4px;
                         accessible-role: groupbox;
                         accessible-label: Strings.zones;
 
-                        CardTitle {
+                        SectionTitle {
                             text: Strings.zones;
                         }
 

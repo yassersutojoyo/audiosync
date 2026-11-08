@@ -215,3 +215,4 @@ S446 Windows host only: the In zones link's tooltip; the desktop tests marked S4
 S447 Windows host only: a speaker's name tooltip while its switch has the keyboard focus; the desktop tests marked S447 check it.
 S448 Windows host only: the source picker's input marker; the desktop tests marked S448 check it.
 S449 Windows host only: Web Remote in the View menu; the desktop tests marked S449 check it.
+S450 Windows host only: the main window's look; the desktop tests marked S450 check it.

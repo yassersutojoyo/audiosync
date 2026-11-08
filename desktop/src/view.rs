@@ -2171,8 +2171,9 @@ impl App {
         sync_model(&self.models.speaker_presets, preset_items(&state));
         self.main
             .set_can_save_preset(state.presets.len() < MAX_PRESETS);
-        self.flyout
-            .set_current_preset(current_preset_name(&state).into());
+        let current_preset: SharedString = current_preset_name(&state).into();
+        self.main.set_current_preset(current_preset.clone());
+        self.flyout.set_current_preset(current_preset);
         let all: Vec<SpeakerItem> = this_pc
             .iter()
             .chain(&connected)
@@ -2552,6 +2553,7 @@ impl App {
         main.set_calibrate_all_running(card.running);
         main.set_calibrate_all_can_start(card.can_start);
         main.set_calibrate_all_status(card.status);
+        main.set_calibrate_all_status_is_hint(card.status_is_hint);
         main.set_calibrate_all_privacy(card.privacy);
         main.set_calibrate_all_results_shown(card.results_shown);
         main.set_calibrate_all_airplay(card.airplay);
@@ -4710,22 +4712,15 @@ impl App {
         }
     }
 
-    /// Delete; it asks nothing (spec S262). The focus goes to the next row,
-    /// else the previous one, else Save as Preset… (S267).
+    /// Delete; it asks nothing (spec S262). The focus goes back to the
+    /// Presets row (S267).
     fn delete_preset(&self, id: &str) {
         let presets = self.snapshot().presets;
         let Some(index) = presets.iter().position(|p| p.id == id) else {
             return;
         };
-        let neighbour = presets
-            .get(index + 1)
-            .or_else(|| index.checked_sub(1).and_then(|i| presets.get(i)))
-            .map(|p| p.id.clone());
         self.update(|b| b.delete_preset(id));
-        match neighbour {
-            Some(next) => self.main.set_focus_preset_id(next.into()),
-            None => self.main.set_focus_save_preset(true),
-        }
+        self.main.set_focus_presets(true);
         let said = self
             .strings()
             .invoke_preset_deleted(presets[index].name.as_str().into());
@@ -5674,6 +5669,8 @@ struct CalibrateAllCard {
     running: bool,
     can_start: bool,
     status: SharedString,
+    /// The status only says what a run does, so it is the row's tooltip.
+    status_is_hint: bool,
     privacy: bool,
     results_shown: bool,
     rows: Vec<CalibrationRowItem>,
@@ -5745,6 +5742,7 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
         outcome.clone()
     };
     CalibrateAllCard {
+        status_is_hint: all.phase == AllPhase::Idle && !all.other_running && all.blocked.is_none(),
         running: matches!(all.phase, AllPhase::Running(_)),
         can_start: !busy && all.blocked.is_none(),
         privacy: offers_privacy(
@@ -7076,7 +7074,8 @@ mod tests {
     }
 
     /// With Shuffle and Repeat showing, all five buttons keep their size
-    /// and fit inside the card at the default 776 px window.
+    /// and fit inside the source block at the default 776 px window.
+    // covers: S450
     #[test]
     fn the_five_transport_buttons_fit_the_narrow_left_column() {
         use crate::now_playing_card::fake::{FakeControls, track};
@@ -7114,10 +7113,10 @@ mod tests {
             element(&app, "MainWindow::left-column").map_or(0.0, |column| column.size().width);
         assert_eq!(
             card.1 - card.0,
-            column - 4.0,
-            "the card stays inside the column's scroll gutter"
+            column - 4.0 - 24.0,
+            "it fills the block inside its padding, clear of the column's scroll gutter"
         );
-        let inner = (card.0 + 12.0, card.1 - 12.0);
+        let inner = card;
         let shown = ["Shuffle", "Previous Track", "Pause", "Next Track", "Repeat"].map(span);
         assert!(
             shown.iter().all(Option::is_some),
@@ -7188,10 +7187,11 @@ mod tests {
         assert_eq!(text().absolute_position().x, start, "cut, not scrolled");
     }
 
-    /// The Equalizer card names its preset on a line of its own under
-    /// "Equalizer", so the narrow left column has room for "Electronic".
+    /// The Equalizer row names its preset after "Equalizer" on the same
+    /// line, with room for "Electronic" in the narrow left column.
+    // covers: S450
     #[test]
-    fn the_equalizer_card_shows_its_preset_under_its_name() {
+    fn the_equalizer_row_shows_its_preset_after_its_name() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
@@ -7210,21 +7210,24 @@ mod tests {
             element("EqualizerCard::label"),
             element("EqualizerCard::curve"),
         );
-        let under = label.absolute_position().y + label.size().height;
+        let after = label.absolute_position().x + label.size().width;
         assert!(
-            curve.absolute_position().y >= under - 0.5,
-            "the preset at {} sits under the name, which ends at {under}",
-            curve.absolute_position().y
+            curve.absolute_position().x >= after,
+            "the preset at {} sits after the name, which ends at {after}",
+            curve.absolute_position().x
         );
+        let middle = |e: &ElementHandle| e.absolute_position().y + e.size().height / 2.0;
+        assert!((middle(&curve) - middle(&label)).abs() <= 1.0, "one line");
         assert!(
-            curve.size().width >= 100.0,
-            "the preset's line is {} px wide",
+            curve.size().width >= 60.0,
+            "the preset has {} px",
             curve.size().width
         );
     }
 
-    /// Calibrate All Speakers shows in full on one line inside its card in
-    /// the narrow left column.
+    /// Calibrate All Speakers shows in full on one line in the narrow left
+    /// column.
+    // covers: S450
     #[test]
     fn calibrate_all_speakers_shows_in_full_in_the_narrow_column() {
         use i_slint_backend_testing::ElementHandle;
@@ -7244,8 +7247,8 @@ mod tests {
             element("MainWindow::left-column"),
         );
         let end = |e: &ElementHandle| e.absolute_position().x + e.size().width;
-        // The scroll bar's room and the card's padding.
-        let inside = end(&column) - 4.0 - 12.0;
+        // The scroll bar's room.
+        let inside = end(&column) - 4.0;
         assert!(
             button.size().height < 40.0,
             "one line, {} px high",
@@ -7256,6 +7259,19 @@ mod tests {
             "the button ends at {}, the card's inside at {inside}",
             end(&button)
         );
+
+        // What a run does is the row's tooltip; why it stopped or can't
+        // start stays under the row.
+        let lines =
+            || ElementHandle::find_by_element_id(&app.main, "CalibrationCard::status-line").count();
+        app.main
+            .set_calibrate_all_status("Plays a short sound on each speaker.".into());
+        app.main.set_calibrate_all_status_is_hint(true);
+        slint::platform::update_timers_and_animations();
+        assert_eq!(lines(), 0, "the hint is not a paragraph in the column");
+        app.main.set_calibrate_all_status_is_hint(false);
+        slint::platform::update_timers_and_animations();
+        assert_eq!(lines(), 1, "a reason shows under the row");
     }
 
     /// A speaker name too long for its row scrolls like the Now Playing
@@ -16342,7 +16358,7 @@ mod tests {
 
     // covers: S267
     #[test]
-    fn after_a_delete_the_focus_goes_to_the_next_row_then_to_save_as_preset() {
+    fn after_a_delete_the_focus_goes_back_to_the_presets_row() {
         let app = main_window_over(MockBackend::new());
         app.save_preset("Evening");
         app.save_preset("Party");
@@ -16352,22 +16368,31 @@ mod tests {
 
         app.delete_preset(&ids[0]);
         draw_frames();
-        assert_eq!(app.main.get_focus_preset_id(), "", "the row took it");
-        press(window, Key::F2);
+        assert!(!app.main.get_focus_presets(), "the row took it");
+        app.update(|b| b.set_master_volume(12.0));
+        assert!(!preset_rows(&app)[0].1);
+        press(window, " ");
+        draw_frames();
+        press(window, Key::DownArrow);
+        press(window, Key::Return);
         assert_eq!(
-            *app.dialog_purpose.borrow(),
-            DialogPurpose::RenamePreset(ids[1].clone()),
-            "F2 on the focused row, the next one, renames it"
+            preset_rows(&app),
+            [("Party".into(), true)],
+            "Space on the focused row opened its menu, and its first item recalls Party"
         );
-        app.zone_dialog.hide().unwrap();
 
         app.delete_preset(&ids[1]);
         draw_frames();
         press(window, " ");
+        draw_frames();
+        // Past the empty line, which can't be chosen.
+        press(window, Key::DownArrow);
+        press(window, Key::DownArrow);
+        press(window, Key::Return);
         assert_eq!(
             *app.dialog_purpose.borrow(),
             DialogPurpose::SavePreset,
-            "with no row left, Save as Preset… has the focus"
+            "with no preset left, the menu still offers Save as Preset…"
         );
     }
 
@@ -16493,8 +16518,6 @@ mod tests {
         assert_eq!(strings.get_save_preset(), "Save as Preset…");
         assert_eq!(strings.get_no_presets(), "No Presets");
         assert_eq!(strings.get_choose_preset(), "Choose a Preset");
-        assert_eq!(strings.get_preset_current(), "Current");
-        assert_eq!(strings.get_preset_recall_hint(), "Recalls this preset");
         assert_eq!(strings.get_update_preset(), "Update to Current Settings");
         assert_eq!(strings.get_rename_preset(), "Rename…");
         assert_eq!(strings.get_delete_preset(), "Delete");
@@ -16503,11 +16526,6 @@ mod tests {
         assert_eq!(
             preset_left_off(&strings, &PresetLeftOff::Offline),
             "Not on the network"
-        );
-        assert_eq!(
-            strings.get_presets_empty(),
-            "No presets yet. Turn on the speakers you want, set the volumes and the curve, \
-             then save them as a preset."
         );
     }
 
@@ -16585,24 +16603,27 @@ mod tests {
         let_notice_close();
         assert_eq!(app.snapshot().notices.len(), 1, "Space dismissed it");
 
-        app.main.set_focus_preset_id(ids[1].clone().into());
+        app.main.set_focus_presets(true);
         draw_frames();
         app.recall_preset(&ids[0]);
-        press(window, Key::F2);
+        press(window, " ");
+        draw_frames();
+        press(window, Key::DownArrow);
+        press(window, Key::DownArrow);
+        press(window, Key::Return);
         assert_eq!(
-            *app.dialog_purpose.borrow(),
-            DialogPurpose::RenamePreset(ids[1].clone()),
-            "Party's row kept the focus"
+            preset_rows(&app)[1],
+            ("Party".into(), true),
+            "the Presets row kept the focus and opened its menu"
         );
     }
 
     // covers: S267
     #[test]
-    fn the_menu_key_and_shift_f10_open_a_preset_rows_menu() {
+    fn the_menu_key_and_shift_f10_open_the_presets_menu() {
         let app = main_window_over(MockBackend::new());
         app.save_preset("Evening");
         draw_frames();
-        let id = preset_ids(&app)[0].clone();
         let window = app.main.window();
 
         // Slint maps Shift+F10 to the menu on Windows only.
@@ -16612,7 +16633,9 @@ mod tests {
             &[&[Key::Menu]]
         };
         for &open in opens {
-            app.main.set_focus_preset_id(id.clone().into());
+            app.update(|b| b.set_master_volume(12.0));
+            assert!(!preset_rows(&app)[0].1);
+            app.main.set_focus_presets(true);
             draw_frames();
             for key in open {
                 window.dispatch_event(WindowEvent::KeyPressed {
@@ -16628,12 +16651,11 @@ mod tests {
             press(window, Key::DownArrow);
             press(window, Key::Return);
             assert_eq!(
-                *app.dialog_purpose.borrow(),
-                DialogPurpose::RenamePreset(id.clone()),
-                "{open:?}: the menu opened, and its first item is Rename…"
+                preset_rows(&app)[0],
+                ("Evening".into(), true),
+                "{open:?}: the menu opened, and its first item recalls Evening"
             );
-            app.zone_dialog.hide().unwrap();
-            *app.dialog_purpose.borrow_mut() = DialogPurpose::Message;
+            app.update(|b| b.set_master_volume(40.0));
         }
     }
 
@@ -17399,7 +17421,6 @@ mod tests {
         assert!(tooltip(&state).starts_with("AudioSync: Streaming on, 2 speakers on, 2 notices\n"));
     }
 
-
     /// A speaker that asks for a code and is reconnecting says both, its
     /// state first, as on the Mac (S442).
     // covers: S442
@@ -17422,7 +17443,6 @@ mod tests {
         let note = app.strings().invoke_speaker_note(item).to_string();
         assert_eq!(note, "Asks for a code", "off, the code note alone");
     }
-
 
     /// Add by Address… sits under Connected Speakers whenever a Google Cast
     /// sender runs, with Cast speakers listed or not, as on the Mac (S443).
@@ -17449,7 +17469,6 @@ mod tests {
             );
         }
     }
-
 
     /// Connected Speakers reads as on the Mac: its rows, the AirPlay delay,
     /// the In zones rows, then Add by Address… (S444).
@@ -17490,7 +17509,6 @@ mod tests {
         );
     }
 
-
     /// The AirPlay Delay row shows while an AirPlay speaker is listed, and
     /// goes with the last one even though the sender still runs (S445).
     // covers: S445
@@ -17498,7 +17516,10 @@ mod tests {
     fn the_airplay_delay_row_shows_only_with_an_airplay_speaker() {
         let app = app_over(MockBackend::new());
         app.refresh();
-        assert!(app.main.get_airplay_delay_shown(), "the mock lists AirPlay speakers");
+        assert!(
+            app.main.get_airplay_delay_shown(),
+            "the mock lists AirPlay speakers"
+        );
 
         let mut backend = MockBackend::new();
         backend.retain_speakers(|s| {
@@ -17507,12 +17528,14 @@ mod tests {
                 ui_model::SpeakerKind::AirPlay | ui_model::SpeakerKind::AirPlay2
             )
         });
-        assert!(backend.snapshot().airplay_delay_ms.is_some(), "the sender runs");
+        assert!(
+            backend.snapshot().airplay_delay_ms.is_some(),
+            "the sender runs"
+        );
         let app = app_over(backend);
         app.refresh();
         assert!(!app.main.get_airplay_delay_shown());
     }
-
 
     /// An In zones row's "In <zone>" link cut to "…" shows the whole zone
     /// name in a tooltip while the pointer rests on it (S446).
@@ -17558,7 +17581,6 @@ mod tests {
         );
     }
 
-
     /// While a speaker row's round switch has the keyboard focus, its name
     /// tooltip shows, so a keyboard user can read a cut name; it goes with
     /// the focus (S447).
@@ -17586,7 +17608,6 @@ mod tests {
         assert!(element(&app, "SpeakerRow::focus-tip").is_none());
     }
 
-
     /// With an input device chosen as the source, the source picker carries
     /// a microphone marker, as the Mac's does; with an app or the whole
     /// system it carries none (S448).
@@ -17609,7 +17630,6 @@ mod tests {
         assert!(element(&app, "MainWindow::input-marker").is_some());
     }
 
-
     /// Web Remote… sits under View, right after Presets, with the other
     /// items that open a window, not under File (S449).
     // covers: S449
@@ -17624,7 +17644,10 @@ mod tests {
         let view = at("title: Strings.menu-view;");
         let help = at("title: Strings.menu-help;");
         let remote = at("title: Strings.menu-remote;");
-        let presets = view + source[view..].find("title: Strings.presets;").expect("View > Presets");
+        let presets = view
+            + source[view..]
+                .find("title: Strings.presets;")
+                .expect("View > Presets");
         let virtual_devices = at("title: Strings.show-virtual-devices;");
         assert!(view < remote && remote < help, "under View");
         assert!(

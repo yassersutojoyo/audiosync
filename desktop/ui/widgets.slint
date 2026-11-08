@@ -964,12 +964,19 @@ export component SpeakerBadge inherits Rectangle {
     width: root.size;
     height: root.size;
     border-radius: root.size / 2;
-    // Hover and press deepen the fill a little; the state stays readable.
+    // As the tray panel's marks: a teal disc while it plays, a teal ring
+    // while it is on and waits, a grey ring while off. The disc grows in;
+    // with animation effects off it fades in.
     property <bool> hovered: touch.has-hover && root.enabled;
-    background: root.bare ? transparent : root.plays ? Tokens.teal.with-alpha(root.hovered ? 0.22 : 0.14) : root.state == RowState.off ? Tokens.text.with-alpha(touch.pressed ? 0.05 : root.hovered ? 0.12 : 0.08) : root.hovered ? Fluent.hover : transparent;
+    property <float> fill: root.plays ? 1 : 0;
+    animate fill {
+        duration: Motion.on ? 440ms : 150ms;
+        easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    background: root.bare || root.plays ? transparent : root.hovered ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
-    border-width: root.bare || root.state == RowState.off ? 0px : max(1.5px, root.size / 18);
-    border-color: Tokens.teal-text;
+    border-width: root.bare || root.plays ? 0px : root.state == RowState.off ? 1.5px : max(2px, root.size / 13);
+    border-color: root.state == RowState.off ? Tokens.secondary-text : Tokens.teal;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     forward-focus: focus;
     // A toggle button, not a switch: see ToggleSwitch.
@@ -1025,10 +1032,18 @@ export component SpeakerBadge inherits Rectangle {
         }
     }
 
+    if !root.bare: Rectangle {
+        width: root.width * (Motion.on ? root.fill : 1);
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.hovered ? Tokens.teal.darker(0.15) : Tokens.teal;
+        opacity: Motion.on ? 1 : root.fill;
+    }
+
     if !root.bare: Glyph {
         glyph: root.glyph;
         font-size: root.size * 0.45;
-        color: root.state == RowState.off ? Tokens.secondary-text : Tokens.teal-text;
+        color: root.plays ? #ffffff : root.state == RowState.off ? Tokens.secondary-text : Tokens.teal-text;
     }
 
     FocusRing {
@@ -2083,8 +2098,11 @@ export component SpeakerRow inherits Rectangle {
     }
 
     border-radius: Fluent.radius-control;
-    background: root.grouped ? transparent : root.item.plays ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
+    background: !root.grouped && hover.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
+    // The options button and a delay of 0 ms show under the pointer or the
+    // keyboard focus; Narrator finds them either way.
+    property <bool> revealed: hover.has-hover || root.focused-part != RowPart.none || root.item.sync-open;
 
     // Around the row's content, so the hover fill stays on over the row's
     // own controls (they still get their clicks and drags first). The delay
@@ -2446,6 +2464,8 @@ export component SpeakerRow inherits Rectangle {
                                 if root.item.has-delay: Rectangle {
                                     min-width: delay-row.preferred-width + 12px;
                                     height: 32px;
+                                    opacity: root.revealed || root.item.delay-ms != 0 ? 1 : 0;
+                                    animate opacity { duration: 120ms; }
                                     border-radius: Fluent.radius-control;
                                     background: delay-touch.pressed ? Fluent.pressed : delay-touch.has-hover ? Fluent.hover : transparent;
                                     animate background { duration: Fluent.fast; }
@@ -2525,7 +2545,9 @@ export component SpeakerRow inherits Rectangle {
                                 options := IconButton {
                                     glyph: Glyphs.more;
                                     label: Strings.speaker-options(root.item.name);
-                                    glyph-color: Tokens.teal-text;
+                                    glyph-color: Tokens.text;
+                                    opacity: root.revealed ? 1 : 0;
+                                    animate opacity { duration: 120ms; }
                                     clicked => {
                                         // show() takes a point in the menu area, not in this button's layout.
                                         menu.show({
