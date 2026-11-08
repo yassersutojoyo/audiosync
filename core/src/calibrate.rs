@@ -105,8 +105,9 @@ pub struct Arrival {
     /// The peak over the median of the correlation's magnitude.
     pub peak_over_floor: f64,
     /// The strongest lag outside the arrival's guard window as a share of the
-    /// peak, leaving out the peak's window too when an earlier arrival is
-    /// under [`MAX_ARRIVAL_SHARE`] of it, the peak then being its reflection.
+    /// peak, leaving out its reflection's window too: the peak after an
+    /// earlier arrival, else the strongest later lag, when the weaker of the
+    /// two is at most [`MAX_ARRIVAL_SHARE`] of the peak.
     pub echo_share: f64,
     /// The lag of that strongest lag.
     pub echo_frame: usize,
@@ -212,12 +213,22 @@ pub fn measure(signal: &[f32], recording: &[f32], rate: u32) -> Result<Arrival, 
     let guard = (GUARD_MS * f64::from(rate) / 1000.0).ceil() as usize;
     let lookback = (LOOKBACK_MS * f64::from(rate) / 1000.0).ceil() as usize;
     let first = first_arrival(&magnitude, frame, floor, guard, lookback);
-    let reflection = first != frame && magnitude[first] <= MAX_ARRIVAL_SHARE * peak;
+    // The arrival and its strongest later lobe are one direct path and its
+    // reflection whichever of the two is the peak.
+    let later = if first == frame {
+        (first + guard + 1..magnitude.len()).max_by(|&a, &b| magnitude[a].total_cmp(&magnitude[b]))
+    } else {
+        Some(frame)
+    };
+    let reflection =
+        later.filter(|&i| magnitude[first].min(magnitude[i]) <= MAX_ARRIVAL_SHARE * peak);
     let (echo_frame, echo) = magnitude
         .iter()
         .copied()
         .enumerate()
-        .filter(|(i, _)| i.abs_diff(first) > guard && !(reflection && i.abs_diff(frame) <= guard))
+        .filter(|(i, _)| {
+            i.abs_diff(first) > guard && reflection.is_none_or(|r| i.abs_diff(r) > guard)
+        })
         .fold(
             (0, 0.0),
             |best, (i, m)| if m > best.1 { (i, m) } else { best },

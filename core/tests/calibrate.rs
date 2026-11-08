@@ -274,7 +274,7 @@ fn an_echo_nearly_as_strong_as_the_first_arrival_is_ambiguous() {
         )
     };
     assert_eq!(
-        arrival(&with_echo(0.9, 40.0), RATE),
+        arrival(&with_echo(0.95, 40.0), RATE),
         Err(Refusal::AmbiguousEcho)
     );
     assert_eq!(
@@ -283,7 +283,8 @@ fn an_echo_nearly_as_strong_as_the_first_arrival_is_ambiguous() {
     );
     let clear = arrival(&with_echo(0.6, 40.0), RATE).expect("accepted");
     assert_eq!(clear.frame, 80 * RATE as usize / 1000);
-    assert!((clear.echo_share - 0.6).abs() < 0.05, "{clear:?}");
+    // A weaker later lobe is the reflection, left out as the peak is when it is one.
+    assert!(clear.echo_share < 0.1, "{clear:?}");
     // Inside the guard window a reflection is part of the arrival itself.
     let close = arrival(&with_echo(0.95, GUARD_MS / 2.0), RATE).expect("accepted");
     assert_eq!(close.frame, 80 * RATE as usize / 1000);
@@ -344,6 +345,38 @@ fn a_direct_path_close_under_its_reflection_is_timed_not_refused() {
     assert_eq!(found.peak_frame, 102 * RATE as usize / 1000, "{found:?}");
     assert_eq!(
         arrival(&with_direct(0.95), RATE),
+        Err(Refusal::AmbiguousEcho)
+    );
+}
+
+// The mirror of the test above: a reflection over 0.7 of a stronger direct
+// path is judged as the direct path under its reflection is.
+// covers: S234
+#[test]
+fn a_reflection_close_under_the_direct_path_is_timed_not_refused() {
+    let with_reflection = |share: f32| {
+        room(
+            RATE,
+            2.0,
+            &[
+                Path {
+                    at_ms: 80.0,
+                    gain: 0.5,
+                },
+                Path {
+                    at_ms: 102.0,
+                    gain: 0.5 * share,
+                },
+            ],
+            1e-4,
+            5,
+        )
+    };
+    let found = arrival(&with_reflection(0.8), RATE).expect("accepted");
+    assert_eq!(found.frame, 80 * RATE as usize / 1000, "{found:?}");
+    assert_eq!(found.peak_frame, 80 * RATE as usize / 1000, "{found:?}");
+    assert_eq!(
+        arrival(&with_reflection(0.95), RATE),
         Err(Refusal::AmbiguousEcho)
     );
 }
