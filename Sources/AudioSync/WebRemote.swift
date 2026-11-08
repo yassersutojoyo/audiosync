@@ -257,7 +257,8 @@ final class WebRemote {
                               zones: host.zones().map { RemoteZoneRow($0, listed: listed) }, presets: host.presets(),
                               calibrating: RemoteSnapshot.calibrating(model.calibration, model.calibrateAll),
                               sources: sources, sourceID: current,
-                              mixApps: model.mixApps.map { RemoteMixApp(id: $0.id, name: $0.name, running: $0.available) })
+                              mixApps: model.mixApps.map { RemoteMixApp(id: $0.id, name: $0.name, running: $0.available) },
+                              notices: model.notices.items.map { notice in notice.title.map { "\($0): \(notice.text)" } ?? notice.text })
     }
 
     /// The picker's entries and the page ID of the one in use, if it is listed.

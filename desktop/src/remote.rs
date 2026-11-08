@@ -18,7 +18,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::now_playing_card::{CardTrack, app_name};
 use crate::ui_model::{
-    AppState, Availability, MAX_DELAY_MS, MIN_DELAY_MS, SourceKind, Speaker, SpeakerKind, Waiting,
+    AppState, Availability, MAX_DELAY_MS, MIN_DELAY_MS, NoticeMessage, SourceKind, Speaker,
+    SpeakerKind, Waiting,
 };
 
 /// The lowest port the setting takes: below it are the well-known services.
@@ -122,6 +123,8 @@ pub trait RowText {
     fn list_separator(&self) -> String;
     /// The note of an unplugged input, which the page shows after its name.
     fn source_not_connected(&self) -> String;
+    /// A notice's text as the window shows it.
+    fn notice(&self, message: &NoticeMessage) -> String;
 }
 
 /// A speaker that would ask for a PIN or password when turned on, or was
@@ -203,7 +206,7 @@ fn page_id(id: &str) -> String {
 
 /// What the page shows for `state`: the speakers the window lists, the
 /// master volume, the track on the Now Playing card, the source picker's
-/// entries in its order, and the computer's name.
+/// entries in its order, the computer's name and the window's notices.
 pub fn snapshot(
     state: &AppState,
     shown: impl Fn(&Speaker) -> bool,
@@ -302,6 +305,11 @@ pub fn snapshot(
                 name: app.name.clone(),
                 running: app.running,
             })
+            .collect(),
+        notices: state
+            .notices
+            .iter()
+            .map(|notice| text.notice(&notice.message))
             .collect(),
     }
 }
@@ -818,6 +826,9 @@ pub(crate) mod tests {
         fn source_not_connected(&self) -> String {
             "not connected".to_owned()
         }
+        fn notice(&self, message: &NoticeMessage) -> String {
+            format!("{message:?}")
+        }
     }
 
     fn with_sources() -> AppState {
@@ -1051,6 +1062,32 @@ pub(crate) mod tests {
                 playing.source.as_str()
             ),
             ("Song", "Band", "Spotify")
+        );
+    }
+
+    // covers: S454
+    #[test]
+    fn the_snapshot_carries_the_apps_notices_in_its_order() {
+        use crate::ui_model::{Notice, NoticeMessage};
+        let mut state = state();
+        for (id, message) in [
+            (2, NoticeMessage::AirPlayStopped),
+            (1, NoticeMessage::NoSpeaker),
+        ] {
+            state.notices.push(Notice {
+                id,
+                subject: format!("subject {id}"),
+                message,
+                time: String::new(),
+                post: 0,
+            });
+        }
+        let phone: serde_json::Value =
+            serde_json::from_str(&snapshot(&state, not_virtual, None, "pc", &Text).to_json(1))
+                .unwrap();
+        assert_eq!(
+            phone["notices"],
+            serde_json::json!(["AirPlayStopped", "NoSpeaker"])
         );
     }
 

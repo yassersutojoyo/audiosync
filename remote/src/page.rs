@@ -383,6 +383,32 @@ mod tests {
         ));
     }
 
+    // covers: S454
+    #[test]
+    fn the_apps_notices_show_above_now_playing_as_banners_without_a_button() {
+        let remote = &PAGE[PAGE.find("<section id=\"remote\"").unwrap()..];
+        let place = remote
+            .find("<div id=\"notices\"></div>")
+            .expect("a place for the notices");
+        assert!(place < remote.find("<section class=\"playing card\"").unwrap());
+        let style = only_element(PAGE, "style").unwrap();
+        assert!(style.contains(".banner.app { padding: 12px 16px; }"));
+        let script = only_element(PAGE, "script").unwrap();
+        let start = script
+            .find("function showNotices(")
+            .expect("function showNotices");
+        let show = &script[start..start + script[start..].find("\n}\n").unwrap()];
+        assert!(show.contains("banner.className = \"banner app\";"));
+        assert!(show.contains("line.textContent = text;"));
+        assert!(show.contains("announce(fresh.join(\" \"));"));
+        assert!(
+            !show.contains("button"),
+            "the phone never dismisses a notice"
+        );
+        assert!(script.contains("\n  showNotices(next.notices);\n"));
+        assert!(PAGE.contains("<p id=\"live\" class=\"sr-only\" aria-live=\"polite\"></p>"));
+    }
+
     fn line_with<'a>(needle: &str) -> &'a str {
         PAGE.lines()
             .find(|line| line.contains(needle))

@@ -16415,6 +16415,12 @@ do {
     // covers: S343, S360
     check(snapshot.json.contains("\"hidden_speakers\":0"),
           "web remote: the snapshot carries the hidden speaker count, 0 when none is hidden", snapshot.json)
+    // covers: S454
+    check(snapshot.json.contains("\"notices\":[]"),
+          "web remote: the snapshot carries the app's notices, an empty list when there are none", snapshot.json)
+    let noticed = RemoteSnapshot(computerName: "Mac", master: 100, nowPlaying: nil, rows: [], notices: ["Newest", "Older"])
+    check(noticed.json.contains("\"notices\":[\"Newest\",\"Older\"]"),
+          "web remote: the snapshot lists the notices' texts in the window's order", noticed.json)
 
     // Rediscovery: the same key comes back in a new list and stays hidden.
     hidden.hide(key: "cast:nest-1", name: "Nest", kind: "Google Cast")

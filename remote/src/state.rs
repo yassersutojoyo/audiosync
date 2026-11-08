@@ -33,6 +33,8 @@ pub struct State {
     /// The apps the app's several-apps list offers, in its order; empty
     /// when the snapshot leaves them out.
     pub mix_apps: Vec<MixApp>,
+    /// The text of each notice the app's window shows, in its order.
+    pub notices: Vec<String>,
 }
 
 /// An app the several-apps list offers.
@@ -350,6 +352,18 @@ fn mix_apps_field(root: &Map<String, Value>) -> Result<Vec<MixApp>, StateError> 
     Ok(apps)
 }
 
+fn notices_field(root: &Map<String, Value>) -> Result<Vec<String>, StateError> {
+    optional_list(root, "notices")?
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            item.as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| invalid(format!("notices[{index}] is not a string")))
+        })
+        .collect()
+}
+
 fn step_field(object: &Map<String, Value>, at: &str) -> Result<f64, StateError> {
     match object.get("volume_step") {
         None => Ok(1.0),
@@ -494,6 +508,7 @@ impl State {
             sources,
             source_id,
             mix_apps: mix_apps_field(root)?,
+            notices: notices_field(root)?,
         })
     }
 
@@ -586,6 +601,7 @@ impl State {
             "sources": sources,
             "source_id": self.source_id,
             "mix_apps": mix_apps,
+            "notices": self.notices,
         })
         .to_string()
     }
@@ -1020,6 +1036,27 @@ mod tests {
         assert_eq!(written(&with("3"))["hidden_speakers"], 3);
         assert_eq!(written(SAMPLE)["hidden_speakers"], 0);
         for bad in ["-1", "1.5", "\"3\"", "null"] {
+            assert!(State::from_json(&with(bad)).is_err(), "{bad}");
+        }
+    }
+
+    // covers: S454
+    #[test]
+    fn the_apps_notices_go_out_in_its_order_and_none_without_the_field() {
+        let with = |list: &str| {
+            SAMPLE.replacen(
+                "\"speakers\"",
+                &format!("\"notices\": {list}, \"speakers\""),
+                1,
+            )
+        };
+        let written = |json: &str| -> Value {
+            serde_json::from_str(&State::from_json(json).unwrap().to_json(1)).unwrap()
+        };
+        let notices = json!(["Newest", "Older"]);
+        assert_eq!(written(&with(&notices.to_string()))["notices"], notices);
+        assert_eq!(written(SAMPLE)["notices"], json!([]));
+        for bad in [r#"{}"#, r#"[1]"#, r#"[null]"#] {
             assert!(State::from_json(&with(bad)).is_err(), "{bad}");
         }
     }

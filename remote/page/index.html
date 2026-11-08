@@ -131,6 +131,7 @@ input[type=range] { width: 100%; min-width: 0; height: 44px; margin: 0; backgrou
   margin-bottom: 12px;
 }
 .banner p { flex: 1; }
+.banner.app { padding: 12px 16px; }
 .playing { margin-bottom: 12px; }
 .playing .title { font-weight: 600; overflow-wrap: anywhere; }
 .playing .detail { overflow-wrap: anywhere; }
@@ -222,6 +223,7 @@ footer .error { flex-basis: 100%; margin-top: 0; }
 <p id="loading" class="state-text muted" data-text="connecting"></p>
 <fieldset id="controls" hidden>
 <p id="calibrating" class="calibrating" tabindex="-1" data-text="calibrating" hidden></p>
+<div id="notices"></div>
 <fieldset id="writes">
 <section class="playing card" aria-labelledby="playing-label">
 <h2 id="playing-label" class="sr-only" data-text="nowPlaying"></h2>
@@ -373,6 +375,7 @@ const ui = {
   remote: byId("remote"),
   banner: byId("banner"),
   bannerText: byId("banner-text"),
+  notices: byId("notices"),
   retry: byId("retry"),
   loading: byId("loading"),
   controls: byId("controls"),
@@ -942,6 +945,23 @@ function focusNeighbor(order, gone) {
   (row ? row.name : ui.title).focus();
 }
 
+// The phone never dismisses one: it goes when the app clears it (S454).
+function showNotices(list) {
+  const texts = Array.isArray(list) ? list.filter((text) => typeof text === "string" && text) : [];
+  const shown = Array.from(ui.notices.children, (banner) => banner.textContent);
+  if (JSON.stringify(texts) === JSON.stringify(shown)) { return; }
+  const fresh = texts.filter((text) => !shown.includes(text));
+  ui.notices.replaceChildren(...texts.map((text) => {
+    const banner = document.createElement("div");
+    banner.className = "banner app";
+    const line = document.createElement("p");
+    line.textContent = text;
+    banner.append(line);
+    return banner;
+  }));
+  if (fresh.length > 0) { announce(fresh.join(" ")); }
+}
+
 function showComputer(name) {
   const shown = (typeof name === "string" && name.trim()) || localName;
   ui.computer.textContent = shown ? TEXT.computer(shown) : "";
@@ -1338,6 +1358,7 @@ function render(next) {
   snapshot = next;
   showRemote();
   showComputer(next.computer_name);
+  showNotices(next.notices);
 
   const playing = next.now_playing;
   const paused = playing && playing.playing === false;

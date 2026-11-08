@@ -262,6 +262,8 @@ struct RemoteSnapshot: Equatable {
     var sourceID: String? = nil
     /// In the several-apps menu's order.
     var mixApps: [RemoteMixApp] = []
+    /// The text of each notice the window shows, newest first (S454).
+    var notices: [String] = []
 
     /// One line, keys sorted, so an unchanged snapshot gives the same text.
     var json: String {
@@ -278,6 +280,7 @@ struct RemoteSnapshot: Equatable {
             "sources": sources.map(\.json),
             "source_id": sourceID.map { $0 as Any } ?? NSNull(),
             "mix_apps": mixApps.map(\.json),
+            "notices": notices,
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]) else { return "" }
         return String(decoding: data, as: UTF8.self)

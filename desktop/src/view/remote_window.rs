@@ -195,6 +195,10 @@ impl RowText for StringsText<'_> {
         self.0.get_remote_source_not_connected().into()
     }
 
+    fn notice(&self, message: &NoticeMessage) -> String {
+        super::notice_text(&self.0, message).into()
+    }
+
     fn kind(&self, speaker: &Speaker) -> String {
         self.0
             .invoke_speaker_kind(speaker_kind(speaker.kind))
