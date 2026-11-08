@@ -5318,6 +5318,11 @@ pub fn speaker_item(
         kind: speaker_kind(speaker.kind),
         show_kind,
         state: row_state(state.speaker_state(speaker)),
+        plays: state.speaker_state(speaker) == SpeakerState::Playing
+            && speaker
+                .cast
+                .as_ref()
+                .is_none_or(|cast| cast.state != ui_model::CastState::Paused),
         volume: speaker.volume as f32,
         has_delay: speaker.delay_ms.is_some(),
         delay_ms: speaker.delay_ms.unwrap_or(0.0).round() as i32,
@@ -11316,6 +11321,35 @@ mod tests {
         );
     }
 
+    /// A Cast speaker paused on the device is on, but nothing reaches it:
+    /// its row keeps its state and loses the playing look (S437).
+    // covers: S437
+    #[test]
+    fn a_paused_cast_row_does_not_look_playing() {
+        let mut backend = MockBackend::new();
+        backend.set_running(true);
+        let state = backend.snapshot();
+        let mut speaker = state.speaker("airplay:kitchen").unwrap().clone();
+        speaker.kind = ui_model::SpeakerKind::Cast;
+        speaker.cast = Some(ui_model::CastRow {
+            state: ui_model::CastState::Paused,
+            muted: false,
+            volume_fixed: false,
+            volume_step: 0.01,
+            group: None,
+            added_by_address: false,
+            offline: false,
+            taken_over: false,
+        });
+        let row = speaker_item(&state, &speaker, true, false, None);
+        assert_eq!(row.state, RowState::Playing);
+        assert!(!row.plays, "paused on the device");
+        if let Some(cast) = speaker.cast.as_mut() {
+            cast.state = ui_model::CastState::Playing;
+        }
+        assert!(speaker_item(&state, &speaker, true, false, None).plays);
+    }
+
     #[test]
     fn a_cast_row_names_its_kind_and_says_where_it_is() {
         let app = app_over(MockBackend::new());
@@ -11953,6 +11987,31 @@ mod tests {
             0.0,
             "with Animation effects off it opens in place"
         );
+    }
+
+    /// The flyout shows the newest notice as the Mac's panel does: no time,
+    /// and cut to three lines while other notices wait (S438).
+    // covers: S438
+    #[test]
+    fn the_flyout_cuts_its_notice_to_three_lines_while_others_wait() {
+        let _ = slint::platform::set_platform(Box::new(Headless));
+        let flyout = TrayFlyout::new().expect("the flyout builds headless");
+        flyout.show().expect("the flyout shows headless");
+        let fit = |words: usize, count: i32| {
+            let notice = NoticeItem {
+                id: 1,
+                message: vec!["word"; words].join(" ").into(),
+                time: "10.42".into(),
+                title: "test".into(),
+                ..NoticeItem::default()
+            };
+            flyout.set_notices(ModelRc::new(VecModel::from(vec![notice])));
+            flyout.set_notice_count(count);
+            draw_frames();
+            flyout.get_fit_height()
+        };
+        assert_eq!(fit(80, 2), fit(160, 2), "cut to three lines");
+        assert!(fit(160, 1) > fit(80, 1), "alone, it shows in full");
     }
 
     /// Windows made the flyout at Slint's preferred height, which counts the

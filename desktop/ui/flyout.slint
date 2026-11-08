@@ -111,6 +111,7 @@ component FlyoutRow inherits HorizontalLayout {
     in property <string> label;
     in property <string> description;
     in property <RowState> state;
+    in property <bool> plays;
     in property <bool> enabled: true;
     in property <DeviceVolumeHint> device-volume;
     // A zone's count, before the note; and what Narrator reads as the
@@ -136,6 +137,7 @@ component FlyoutRow inherits HorizontalLayout {
         size: 28px;
         glyph: root.glyph;
         state: root.state;
+        plays: root.plays;
         enabled: root.enabled;
         name: root.name;
         label: root.label;
@@ -170,7 +172,7 @@ component FlyoutRow inherits HorizontalLayout {
                 height: 100%;
                 text: root.name;
                 text-color: Tokens.text;
-                font-weight: root.state == RowState.playing ? 600 : 400;
+                font-weight: root.plays ? 600 : 400;
                 accessible-role: none;
             }
 
@@ -596,6 +598,8 @@ export component TrayFlyout inherits Window {
 
                     if root.notices.length > 0: NoticeStack {
                         notices: root.notices;
+                        compact: true;
+                        capped: root.notice-count > 1;
                         dismissed(id) => {
                             root.notice-dismissed(id);
                         }
@@ -730,6 +734,7 @@ export component TrayFlyout inherits Window {
                                     note: Strings.speaker-note(speaker);
                                     system-name: speaker.system-name;
                                     state: speaker.state;
+                                    plays: speaker.plays;
                                     device-volume: speaker.device-volume;
 
                                     toggled => {
@@ -811,6 +816,7 @@ export component TrayFlyout inherits Window {
                                     kind: speaker.kind;
                                     show-kind: speaker.show-kind && !speaker.cast-group;
                                     state: speaker.state;
+                                    plays: speaker.plays;
                                     enabled: !speaker.missing;
                                     device-volume: speaker.device-volume;
                                     toggled => {
@@ -832,6 +838,7 @@ export component TrayFlyout inherits Window {
                                 kind: speaker.kind;
                                 show-kind: speaker.show-kind && !speaker.cast-group;
                                 state: speaker.state;
+                                plays: speaker.plays;
                                 device-volume: speaker.device-volume;
 
                                 toggled => {

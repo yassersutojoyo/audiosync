@@ -125,6 +125,9 @@ export struct SpeakerItem {
     // Connected speakers show their kind; the PC's own outputs don't.
     show-kind: bool,
     state: RowState,
+    // Sound reaches it: it plays, and it isn't a Google Cast speaker paused
+    // on the device. Its row looks playing only then.
+    plays: bool,
     volume: float,
     // Local outputs have a sync delay, an offset relative to the reference
     // output; the reference has none, and neither do AirPlay speakers (local

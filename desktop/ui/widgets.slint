@@ -920,6 +920,8 @@ export component DialogButton inherits FocusScope {
 export component SpeakerBadge inherits Rectangle {
     in property <string> glyph;
     in property <RowState> state;
+    // Filled: a speaker row passes its item's `plays`.
+    in property <bool> plays: root.state == RowState.playing;
     in property <string> name;
     in property <string> label;
     in property <string> description;
@@ -946,7 +948,7 @@ export component SpeakerBadge inherits Rectangle {
     border-radius: root.size / 2;
     // Hover and press deepen the fill a little; the state stays readable.
     property <bool> hovered: touch.has-hover && root.enabled;
-    background: root.state == RowState.playing ? Tokens.teal.with-alpha(root.hovered ? 0.22 : 0.14) : root.state == RowState.off ? Tokens.text.with-alpha(touch.pressed ? 0.05 : root.hovered ? 0.12 : 0.08) : root.hovered ? Fluent.hover : transparent;
+    background: root.plays ? Tokens.teal.with-alpha(root.hovered ? 0.22 : 0.14) : root.state == RowState.off ? Tokens.text.with-alpha(touch.pressed ? 0.05 : root.hovered ? 0.12 : 0.08) : root.hovered ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
     border-width: root.state == RowState.off ? 0px : max(1.5px, root.size / 18);
     border-color: Tokens.teal-text;
@@ -2063,7 +2065,7 @@ export component SpeakerRow inherits Rectangle {
     }
 
     border-radius: Fluent.radius-control;
-    background: root.grouped ? transparent : root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
+    background: root.grouped ? transparent : root.item.plays ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
 
     // Around the row's content, so the hover fill stays on over the row's
@@ -2193,6 +2195,7 @@ export component SpeakerRow inherits Rectangle {
                         badge := SpeakerBadge {
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
+                            plays: root.item.plays;
                             enabled: !root.item.missing;
                             name: root.item.name;
                             label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
@@ -2245,7 +2248,7 @@ export component SpeakerRow inherits Rectangle {
                                             height: 100%;
                                             text: root.item.name;
                                             font-size: Tokens.font-size-body;
-                                            font-weight: root.item.state == RowState.playing ? 600 : 400;
+                                            font-weight: root.item.plays ? 600 : 400;
                                             text-color: root.item.zone-dimmed ? Tokens.secondary-text : Tokens.text;
                                             accessible-role: none;
                                         }
@@ -2816,6 +2819,7 @@ export component ZoneMemberRow inherits Rectangle {
                             size: 24px;
                             glyph: Glyphs.speaker(root.item.kind);
                             state: root.item.state;
+                            plays: root.item.plays;
                             name: root.item.name;
                             label: Strings.in-zone-label(root.item.name, root.item.zone-name);
                             description: root.note != "" ? root.note : Strings.help(root.item.state);
@@ -2855,7 +2859,7 @@ export component ZoneMemberRow inherits Rectangle {
                                 height: 100%;
                                 text: root.item.name;
                                 font-size: Tokens.font-size-body;
-                                font-weight: root.item.state == RowState.playing ? 600 : 400;
+                                font-weight: root.item.plays ? 600 : 400;
                                 text-color: Tokens.text;
                                 accessible-role: none;
                             }
@@ -3412,6 +3416,10 @@ export component NoticeStack inherits VerticalLayout {
     // While eased: the notices not closing, which the Dismiss All row needs
     // two of.
     in property <int> staying;
+    // The tray panel's look, as on the Mac: no time, and each message cut
+    // to three lines while `capped` (others wait), the full text on hover.
+    in property <bool> compact;
+    in property <bool> capped;
 
     accessible-role: groupbox;
     accessible-label: Strings.notices;
@@ -3501,15 +3509,40 @@ export component NoticeStack inherits VerticalLayout {
                         accessible-role: text;
                         accessible-label: notice.message;
 
-                        Text {
-                            text: notice.message;
-                            color: Tokens.text;
-                            font-size: Tokens.font-size-caption;
-                            wrap: word-wrap;
-                            accessible-role: none;
+                        message-box := Rectangle {
+                            property <bool> cut: root.capped && message.preferred-height > self.three-lines;
+                            property <length> three-lines: 3 * line.preferred-height;
+                            height: self.cut ? self.three-lines : message.preferred-height;
+
+                            line := Text {
+                                text: " ";
+                                font-size: Tokens.font-size-caption;
+                                opacity: 0;
+                                accessible-role: none;
+                            }
+
+                            message := Text {
+                                width: parent.width;
+                                height: parent.height;
+                                text: notice.message;
+                                color: Tokens.text;
+                                font-size: Tokens.font-size-caption;
+                                wrap: word-wrap;
+                                overflow: elide;
+                                accessible-role: none;
+                            }
+
+                            if message-box.cut: TouchArea {
+                                Tooltip {
+                                    LabelTip {
+                                        text: notice.message;
+                                        max-tip-width: message-box.width;
+                                    }
+                                }
+                            }
                         }
 
-                        QuietText {
+                        if !root.compact: QuietText {
                             text: notice.time;
                         }
                     }
