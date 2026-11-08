@@ -33,15 +33,22 @@
 
 AirPlay speakers play a little late and local speakers don't, so the same song on both turns into an echo. AudioSync grabs your computer's audio once, sends it to the AirPlay speakers and plays a delayed copy on each local speaker, so everything lines up. It's free, and it's a beta, so expect rough edges.
 
+It's one app on the Mac, Windows and Linux. All three run the same Rust core for the audio, the sync and the AirPlay and Google Cast senders; only the window around it differs.
+
+You don't have to find each delay by ear. Calibrate with Microphone plays a short sweep on each speaker, hears when it arrives and sets the delay. On a Mac, 12 runs on one Bluetooth speaker gave offsets within ±1.6 ms of each other.
+
+On AirPlay, AudioSync adds 0.1 s to the wait the speaker asks for, and never more than 0.2 s. It steps up to 0.2 s after a speaker had to skip a bit of audio, in a quiet moment such as the gap between two songs, and comes back to 0.1 s by itself.
+
 ## What it does
 
+- A delay per local speaker, from −2 to +20 s, and one for AirPlay, set by hand or by Calibrate with Microphone.
 - Source: all system audio, one app, several apps (or every app except a few), or an input like a mic.
+- Zones, presets, and a Web Remote that runs in your phone's browser.
 - Outputs: AirPlay speakers and Apple TVs, Google Cast speakers, and whatever your computer plays to: built-in, headphones, HDMI, USB, Bluetooth.
-- A delay per local speaker (−2 to +20 s) and one for AirPlay, or let Calibrate with Microphone set them.
-- Volume per speaker and master, a 10-band EQ, zones, presets, Now Playing, and a Web Remote for your phone.
-- AirPlay adds at most 0.2 s to what the speaker asks for. It starts every stream at 0.1 s, steps up only after a speaker had to skip a bit of audio, in a quiet moment such as the gap between two songs, and comes back to 0.1 s by itself.
+- Volume per speaker and master, a 10-band EQ and Now Playing.
+- Free and GPL-3.0-or-later. The engine and the senders are my own code; the libraries it uses are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-It's the same app on all three systems. On the Mac it lives in the menu bar, on Windows it's a window with a tray icon, and on Linux it sits in the tray when your desktop has one (it plays through PipeWire).
+On the Mac it lives in the menu bar, on Windows it's a window with a tray icon, and on Linux it sits in the tray when your desktop has one (it plays through PipeWire).
 
 Up to 16 AirPlay 2 speakers play at once, and a stereo pair or an Apple TV with its HomePods shows up as one row. Google Cast plays one speaker or Google Home group at a time. Cast has no shared clock, so you set its offset by ear once and it's remembered; Resync under its volume fixes drift.
 

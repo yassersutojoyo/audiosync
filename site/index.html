@@ -269,6 +269,7 @@
   .get .appicon { width: 72px; height: 72px; margin-bottom: 14px; }
   .get p { color: var(--text-2); }
   .get .btn { align-self: flex-start; margin-top: auto; }
+  .get .btn-main + p { margin-top: 1.5em; }
   .get ul, .get ol { color: var(--text-2); padding-left: 1.2em; margin: 0 0 1em; }
   .get ol li + li { margin-top: 4px; }
   pre {
@@ -325,7 +326,7 @@
     <div class="wrap">
       <p class="tag">Free and open source &middot; for macOS 15, Windows 11 and Linux</p>
       <h1>Every speaker in the house, <span>on the same beat.</span></h1>
-      <p class="lede">AudioSync takes your computer's audio, on a Mac, a Windows PC or Linux, and plays it on AirPlay speakers, Google Cast speakers and the computer's own outputs, Bluetooth included, all at once. It lines them up, so you hear one song instead of an echo. Think of it as a free Airfoil alternative that does less, on purpose.</p>
+      <p class="lede">One app for a Mac, a Windows PC or Linux. AudioSync plays your computer's audio on AirPlay speakers, Google Cast speakers and the computer's own outputs, Bluetooth included, all at once, and lines them up so you hear one song instead of an echo. Calibrate with Microphone sets each speaker's delay for you. Think of it as a free Airfoil alternative.</p>
       <div class="actions">
         <a class="btn btn-main" href="https://github.com/yassersutojoyo/audiosync/releases/latest">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></svg>
@@ -347,7 +348,7 @@
     <div class="wrap">
       <div class="head reveal">
         <h2 id="what-title">One computer, every speaker</h2>
-        <p>I wanted the music on my desk speakers and the HomePod in the next room at the same time. That's really all this does: it grabs the audio once and sends it everywhere you switch on.</p>
+        <p>I wanted the music on my desk speakers and the HomePod in the next room at the same time. That's really all this does: it grabs the audio once and sends it everywhere you switch on. The Mac, Windows and Linux apps run the same Rust core for the audio, the sync and the AirPlay and Google Cast senders. On AirPlay it adds 0.1 s to the wait the speaker asks for, and never more than 0.2 s.</p>
       </div>
       <div class="flow reveal">
         <div class="card">
@@ -415,7 +416,7 @@
         <article class="card feature reveal">
           <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="12" y="4" width="8" height="14" rx="4"/><path d="M7 15a9 9 0 0 0 18 0M16 24v4"/></svg>
           <h3>Calibrate with the mic</h3>
-          <p>Put the microphone where you listen. AudioSync plays a short sweep on the built-in speakers and then on a local speaker, and sets that speaker's delay from the difference. Calibrate All Speakers measures every speaker that's on, apart from headphones and virtual outputs, one after another, and nothing changes until you click Apply.</p>
+          <p>Put the microphone where you listen. AudioSync plays a short sweep on the built-in speakers and then on a local speaker, and sets that speaker's delay from the difference. Calibrate All Speakers measures every speaker that's on, apart from headphones and virtual outputs, one after another, and nothing changes until you click Apply. On a Mac, 12 runs on one Bluetooth speaker gave offsets within &plusmn;1.6 ms of each other.</p>
         </article>
         <article class="card feature reveal">
           <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="9" y="3" width="14" height="26" rx="3"/><path d="M14 24h4"/></svg>
@@ -485,7 +486,7 @@
       </div>
       <div class="card note reveal">
         <h3>Coming from Airfoil?</h3>
-        <p>The idea is the same: send the whole computer, or one app, to AirPlay speakers and local outputs together. AudioSync just does less. It plays to AirPlay receivers, Google Cast speakers (one at a time, with an offset you set by ear) and the outputs your computer already knows about, on macOS 15 or later and on Windows 11.</p>
+        <p>The idea is the same: send the whole computer, or one app, to AirPlay speakers and local outputs together. AudioSync just does less. It plays to AirPlay receivers, Google Cast speakers (one at a time, with an offset you set by ear) and the outputs your computer already knows about, on macOS 15 or later, Windows 11 and Linux.</p>
       </div>
     </div>
   </section>
