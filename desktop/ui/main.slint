@@ -841,6 +841,7 @@ component CalibrationCard inherits Card {
     // How the run or the last action on its results ended.
     in property <string> outcome;
     in property <bool> can-apply;
+    in property <bool> applied;
     in property <bool> can-undo;
     // Before a run: the reference's device volume when it is low or muted
     // (spec S197), and the reference's name for Narrator.
@@ -1115,9 +1116,9 @@ component CalibrationCard inherits Card {
                     changed has-focus => {
                         root.focus-changed(self.has-focus);
                     }
-                    text: Strings.calibrate-all-close;
+                    text: root.applied ? Strings.calibrate-all-done : Strings.calibrate-all-close;
                     enabled: !root.running;
-                    accessible-label: Strings.calibrate-all-close-label;
+                    accessible-label: root.applied ? Strings.calibrate-all-done-label : Strings.calibrate-all-close-label;
                     accessible-description: root.outcome;
                     // Close removes itself; the window places the focus when Calibrate All is disabled.
                     clicked => {
@@ -1422,6 +1423,7 @@ export component MainWindow inherits Window {
     in property <string> calibrate-all-zone;
     in property <string> calibrate-all-outcome;
     in property <bool> calibrate-all-can-apply;
+    in property <bool> calibrate-all-applied;
     in property <bool> calibrate-all-can-undo;
     in property <DeviceVolumeHint> calibrate-all-volume;
     in property <int> calibrate-all-volume-percent;
@@ -2172,6 +2174,7 @@ export component MainWindow inherits Window {
                         zone: root.calibrate-all-zone;
                         outcome: root.calibrate-all-outcome;
                         can-apply: root.calibrate-all-can-apply;
+                        applied: root.calibrate-all-applied;
                         can-undo: root.calibrate-all-can-undo;
                         volume: root.calibrate-all-volume;
                         volume-percent: root.calibrate-all-volume-percent;

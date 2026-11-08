@@ -2513,6 +2513,7 @@ impl App {
         main.set_calibrate_all_zone(card.zone);
         main.set_calibrate_all_outcome(card.outcome);
         main.set_calibrate_all_can_apply(card.can_apply);
+        main.set_calibrate_all_applied(card.applied);
         main.set_calibrate_all_can_undo(card.can_undo);
         main.set_calibrate_all_volume(card.volume.0);
         main.set_calibrate_all_volume_percent(card.volume.1);
@@ -5622,6 +5623,8 @@ struct CalibrateAllCard {
     zone: SharedString,
     outcome: SharedString,
     can_apply: bool,
+    /// Apply set the new delays: Close reads Done, as on the Mac.
+    applied: bool,
     can_undo: bool,
     /// What Narrator hears when the run, Apply or Undo ends.
     said: SharedString,
@@ -5743,6 +5746,7 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
             }),
         outcome,
         can_apply: sheet.is_some_and(|sheet| sheet.can_apply),
+        applied: sheet.is_some_and(|sheet| sheet.applied),
         can_undo: sheet.is_some_and(|sheet| sheet.can_undo),
         status,
         said,
@@ -8402,7 +8406,7 @@ mod tests {
             undone: false,
         });
         let card = calibrate_all_card(&strings, &state);
-        assert!(card.results_shown && card.can_apply);
+        assert!(card.results_shown && card.can_apply && !card.applied);
         assert!(
             card.rows[1].detail.contains("2040"),
             "{}",
@@ -8426,7 +8430,13 @@ mod tests {
         assert!(!card.airplay.contains("differ by"));
         assert_eq!(card.said, strings.invoke_calibrate_all_finished(1, 2));
 
+        // Busy after Apply: Undo is off, but Close still reads Done.
         let sheet = state.calibrate_all.sheet.as_mut().unwrap();
+        sheet.applied = true;
+        sheet.can_undo = false;
+        assert!(calibrate_all_card(&strings, &state).applied);
+        let sheet = state.calibrate_all.sheet.as_mut().unwrap();
+        sheet.applied = false;
         sheet.ended = Some(EndReason::SpeakerTurnedOff);
         sheet.can_apply = false;
         sheet.failure = None;
