@@ -1419,7 +1419,9 @@ mod tests {
         let mut group = AirPlayGroup {
             kind: AirPlayGroupKind::StereoPair,
             members: vec!["Left".into(), "Right".into()],
+            member_ids: Vec::new(),
             missing: Vec::new(),
+            missing_ids: Vec::new(),
             incomplete: false,
         };
         speaker.group = Some(group.clone());

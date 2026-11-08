@@ -1763,7 +1763,9 @@ pub(crate) mod tests {
         pair.group = Some(AirPlayGroup {
             kind: AirPlayGroupKind::StereoPair,
             members: vec!["Left".into(), "Right".into()],
+            member_ids: Vec::new(),
             missing: Vec::new(),
+            missing_ids: Vec::new(),
             incomplete: false,
         });
         state.speakers.push(pair);

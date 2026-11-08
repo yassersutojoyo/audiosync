@@ -224,8 +224,12 @@ pub struct AirPlayGroup {
     pub kind: AirPlayGroupKind,
     /// Every member's name, in view or not.
     pub members: Vec<String>,
+    /// The speaker ID of each of `members`, in the same order.
+    pub member_ids: Vec<String>,
     /// The members out of view or playing nothing now (P181).
     pub missing: Vec<String>,
+    /// The speaker ID of each of `missing`, in the same order.
+    pub missing_ids: Vec<String>,
     /// A member is missing, or reports its partner unreachable, even when
     /// no name is known for it.
     pub incomplete: bool,

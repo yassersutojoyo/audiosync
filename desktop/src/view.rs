@@ -10325,7 +10325,9 @@ mod tests {
         speaker.group = Some(AirPlayGroup {
             kind: AirPlayGroupKind::StereoPair,
             members: vec![member.to_owned(), "Right".to_owned()],
+            member_ids: Vec::new(),
             missing: Vec::new(),
+            missing_ids: Vec::new(),
             incomplete: false,
         });
         backend.add_speaker(speaker);
@@ -14736,7 +14738,9 @@ mod tests {
             row.group = Some(AirPlayGroup {
                 kind,
                 members: members.iter().map(|name| (*name).to_owned()).collect(),
+                member_ids: Vec::new(),
                 missing: missing.iter().map(|name| (*name).to_owned()).collect(),
+                missing_ids: Vec::new(),
                 incomplete,
             });
             group_note(&strings, &row).to_string()

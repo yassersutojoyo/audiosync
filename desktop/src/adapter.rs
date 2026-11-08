@@ -4826,7 +4826,16 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .or_else(|| self.reconnecting.get(&speaker.id).copied())
                 .filter(|_| speaker.enabled),
             cast: None,
-            group: speaker.group,
+            // Members go by their given names, as a Cast group's do (S228).
+            group: speaker.group.map(|mut group| {
+                let named = group.members.iter_mut().zip(&group.member_ids);
+                for (name, id) in named.chain(group.missing.iter_mut().zip(&group.missing_ids)) {
+                    *name = self.custom_names.shown(&airplay_key(id), name);
+                }
+                group.members.sort_by_key(|name| name.to_lowercase());
+                group.missing.sort_by_key(|name| name.to_lowercase());
+                group
+            }),
             mic_left_out: None,
             in_target,
         }
@@ -19226,6 +19235,28 @@ mod tests {
                 &[("Left", PresetLeftOff::InTarget("Living Room".to_owned()))]
             )]
         );
+    }
+
+    // covers: S228 (a pair's note names its members by their given names)
+    #[test]
+    fn a_stereo_pairs_note_names_its_members_by_their_given_names() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        let (pair, left, right) = stereo_pair();
+        fake.appear(&left);
+        adapter.poll();
+        adapter.rename_speaker(&ap(&left), "Window");
+        fake.appear_in(&left, &pair);
+        fake.appear_in(&right, &pair);
+        fake.target(&pair);
+        adapter.poll();
+        let state = adapter.snapshot();
+        let group = state
+            .speaker("ap:pair:5f0c")
+            .and_then(|row| row.group.clone())
+            .expect("the pair's row");
+        assert_eq!(group.members, ["Right", "Window"]);
     }
 
     // covers: S228

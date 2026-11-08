@@ -2103,9 +2103,12 @@ impl AirPlaySpeakers {
                 .map(|known| known.name.clone())
                 .or_else(|| self.names.get(member).cloned())
         };
-        let mut missing: Vec<String> = target
+        let mut missing: Vec<(String, String)> = target
             .missing()
-            .filter_map(|key| name_of(&speaker_id(key)))
+            .filter_map(|key| {
+                let member = speaker_id(key);
+                name_of(&member).map(|name| (member, name))
+            })
             .collect();
         let silent = self
             .target_missing
@@ -2114,25 +2117,29 @@ impl AirPlaySpeakers {
             .unwrap_or(&[]);
         for member in silent {
             if let Some(name) = name_of(member)
-                && !missing.contains(&name)
+                && !missing.iter().any(|(_, listed)| *listed == name)
             {
-                missing.push(name);
+                missing.push((member.clone(), name));
             }
         }
-        missing.sort_by_key(|name| name.to_lowercase());
-        let mut members: Vec<String> = target
+        missing.sort_by_key(|(_, name)| name.to_lowercase());
+        let mut members: Vec<(String, String)> = target
             .members
             .iter()
-            .map(|member| member.name.clone())
+            .map(|member| (speaker_id(&member.key), member.name.clone()))
             .collect();
-        members.sort_by_key(|name| name.to_lowercase());
+        members.sort_by_key(|(_, name)| name.to_lowercase());
+        let (member_ids, members) = members.into_iter().unzip();
+        let (missing_ids, missing) = missing.into_iter().unzip();
         AirPlayGroup {
             kind: match target.id.kind {
                 TargetKind::StereoPair => AirPlayGroupKind::StereoPair,
                 TargetKind::HomeTheater => AirPlayGroupKind::HomeTheater,
             },
             members,
+            member_ids,
             missing,
+            missing_ids,
             incomplete: !target.complete() || !silent.is_empty(),
         }
     }
@@ -10648,7 +10655,9 @@ pub mod tests {
             Some(AirPlayGroup {
                 kind: AirPlayGroupKind::StereoPair,
                 members: vec!["Left".to_owned(), "Right".to_owned()],
+                member_ids: vec![speaker_id(&left.key), speaker_id(&right.key)],
                 missing: Vec::new(),
+                missing_ids: Vec::new(),
                 incomplete: false,
             })
         );

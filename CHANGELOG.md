@@ -55,6 +55,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a Bluetooth headset's hands-free microphone that you picked as the input now shows under its name in the source list, and starting says AudioSync doesn't record from it, as on the Mac. Before, it showed as not connected even while plugged in.
 - On Windows, a delay you're typing for a speaker now stays in its field when the phone remote or a calibration changes that delay, and Enter applies it, as on the Mac. Before, the typing was dropped.
 - On Windows, when the apps of an "only these apps" mix have all quit, the notice names the app that ran last, as on the Mac. Before, it named every app in the mix, even ones that never ran.
+- On Windows, a stereo pair's or home theater group's note now names its speakers by the names you gave them.
 
 ## [0.9.1] - 2026-11-08
 

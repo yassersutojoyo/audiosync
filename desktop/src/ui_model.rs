@@ -2376,7 +2376,9 @@ impl MockBackend {
             group: Some(crate::audio::backend::AirPlayGroup {
                 kind: crate::audio::backend::AirPlayGroupKind::StereoPair,
                 members: vec!["Left".into(), "Right".into()],
+                member_ids: Vec::new(),
                 missing: Vec::new(),
+                missing_ids: Vec::new(),
                 incomplete: false,
             }),
             ..template.clone()
