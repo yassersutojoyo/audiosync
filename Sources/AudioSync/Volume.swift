@@ -57,6 +57,32 @@ enum MasterMute {
     }
 }
 
+/// The keyboard's volume keys moving the master (S429).
+enum VolumeKeys {
+    enum Key { case up, down, mute }
+
+    /// How far volume up and volume down move the master, as macOS steps its own volume.
+    static let step: Double = 100.0 / 16
+
+    /// The master after `key`, from `level`; `remembered` is what unmuting returns to.
+    static func master(after key: Key, level: Double, remembered: Double) -> Double {
+        let muted = MasterMute.isMuted(level)
+        let next: Double
+        switch key {
+        case .up where muted, .mute where muted: next = remembered
+        case .mute: next = 0
+        case .up: next = level + step
+        case .down: next = level - step
+        }
+        return MasterMute.snapped(min(max(next, 0), 100))
+    }
+
+    /// Whether the keys move the master rather than the system's volume.
+    static func taken(switchOn: Bool, streaming: Bool) -> Bool {
+        switchOn && streaming
+    }
+}
+
 enum LocalOutputGain {
     /// A local speaker's linear gain through its zone, on the core's volume
     /// curve (S71, S249); 0 while a calibration plays its signal through

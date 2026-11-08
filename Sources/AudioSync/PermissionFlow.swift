@@ -11,6 +11,8 @@ enum Permission: String, CaseIterable {
     case microphone
     /// Now Playing reading and controlling Spotify and Music.
     case automation
+    /// The volume keys moving the master (an event tap, S429).
+    case accessibility
 
     var pane: PrivacyPane {
         switch self {
@@ -18,6 +20,7 @@ enum Permission: String, CaseIterable {
         case .audioCapture: return .screenCapture
         case .microphone: return .microphone
         case .automation: return .automation
+        case .accessibility: return .accessibility
         }
     }
 
@@ -150,7 +153,7 @@ enum PermissionSetup {
     /// What the Allow button asks for, in this order.
     static let required: [Permission] = [.localNetwork, .audioCapture]
     /// Asked when their feature is first used.
-    static let optional: [Permission] = [.microphone, .automation]
+    static let optional: [Permission] = [.microphone, .automation, .accessibility]
 
     /// A first install that hasn't been through the explanations of what
     /// streaming needs.
@@ -180,6 +183,12 @@ enum PermissionSetup {
         case .denied: return .denied
         case .notAsked, .unknown: return asking ? .waiting : .notAsked
         }
+    }
+
+    /// `asked`: the explanation was accepted, so macOS's prompt went up. macOS
+    /// reports only whether access is on, not whether it was refused.
+    static func accessibility(trusted: Bool, asked: Bool) -> SetupRowState {
+        trusted ? .allowed : asked ? .askedUnknown : .notAsked
     }
 
     /// The next permission the Allow button asks for; nil once each was asked.

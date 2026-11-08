@@ -6845,6 +6845,43 @@ do {
           "explicit pause: sound never pauses")
 }
 
+// MARK: The keyboard's volume keys moving the master
+// covers: S429
+do {
+    check(VolumeKeys.master(after: .up, level: 40, remembered: 50) == 46.25,
+          "volume keys: volume up raises the master by a sixteenth")
+    check(VolumeKeys.master(after: .down, level: 40, remembered: 50) == 33.75,
+          "volume keys: volume down lowers the master by a sixteenth")
+    check(VolumeKeys.master(after: .up, level: 97, remembered: 50) == 100
+          && VolumeKeys.master(after: .up, level: 100, remembered: 50) == 100
+          && VolumeKeys.master(after: .down, level: 3, remembered: 50) == 0
+          && VolumeKeys.master(after: .down, level: 6.5, remembered: 50) == 0,
+          "volume keys: the master stays within 0 and 100, and a trace becomes 0")
+    check(VolumeKeys.master(after: .mute, level: 40, remembered: 40) == 0
+          && VolumeKeys.master(after: .mute, level: 0, remembered: 40) == 40,
+          "volume keys: mute goes to 0 and back to the remembered level")
+    check(VolumeKeys.master(after: .up, level: 0, remembered: 64) == 64
+          && VolumeKeys.master(after: .down, level: 0, remembered: 64) == 0,
+          "volume keys: volume up at 0 brings back the remembered level, volume down stays at 0")
+    check(VolumeKeys.taken(switchOn: true, streaming: true)
+          && !VolumeKeys.taken(switchOn: true, streaming: false)
+          && !VolumeKeys.taken(switchOn: false, streaming: true)
+          && !VolumeKeys.taken(switchOn: false, streaming: false),
+          "volume keys: the keys are taken only while streaming with the switch on")
+    check(AppSettings.load { _ in nil }.volumeKeys
+            && !AppSettings.load { key -> Any? in key == AppSettings.Keys.volumeKeys ? false : nil }.volumeKeys,
+          "volume keys: the switch is on unless turned off")
+    check(Permission.accessibility.pane == .accessibility
+            && PermissionSetup.accessibility(trusted: false, asked: false) == .notAsked
+            && PermissionSetup.accessibility(trusted: false, asked: true) == .askedUnknown
+            && PermissionSetup.accessibility(trusted: true, asked: false) == .allowed,
+          "volume keys: the Accessibility row is allowed once macOS trusts AudioSync, and offers its pane after the ask")
+    check(PermissionAsks(explained: [], usedBefore: true).step(.accessibility, state: .notAsked, userAction: false) == .offer
+            && PermissionAsks(explained: ["accessibility"], usedBefore: false)
+                .step(.accessibility, state: .notAsked, userAction: false) == .go,
+          "volume keys: a stream start offers the Accessibility explanation once, as a card, also after an update")
+}
+
 // MARK: Track info — what AirPlay receivers with a screen show
 // covers: S218
 do {
@@ -16803,8 +16840,8 @@ do {
                                          seen: false),
           "setup: a user who already went through both explanations doesn't get it")
     check(PermissionSetup.required == [.localNetwork, .audioCapture]
-            && PermissionSetup.optional == [.microphone, .automation],
-          "setup: Local Network and audio capture are asked together; microphone and Automation wait for their feature")
+            && PermissionSetup.optional == [.microphone, .automation, .accessibility],
+          "setup: Local Network and audio capture are asked together; microphone, Automation and Accessibility wait for their feature")
 
     check(PermissionSetup.localNetwork(.unknown, asked: false) == .notAsked
             && PermissionSetup.localNetwork(.unknown, asked: true) == .waiting

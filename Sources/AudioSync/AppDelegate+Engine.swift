@@ -114,6 +114,7 @@ extension AppDelegate {
         logSessionLead(session: session)
         startInputLevel()
         verifyAudioFlowing(origin: origin)
+        offerVolumeKeysAccess()
         if let switching { finishSwitch(switching, outcome, fromRate: fromRate, origin: origin) }
     }
 

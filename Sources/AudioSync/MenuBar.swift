@@ -222,6 +222,8 @@ final class AppModel: ObservableObject {
         var unhideSpeaker: (String) -> Void = { _ in }
         var setLaunchAtLogin: (Bool) -> Void = { _ in }
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
+        var setVolumeKeys: (Bool) -> Void = { _ in }
+        var openAccessibilitySettings: () -> Void = {}
         var setSwitchWhenSourceQuits: (Bool) -> Void = { _ in }
         var setAppearance: (AppAppearance) -> Void = { _ in }
         var transport: (NowPlayingMonitor.Command) -> Void = { _ in }
@@ -263,6 +265,11 @@ final class AppModel: ObservableObject {
     }
     /// Shared by the main window and the panel, so either one unmutes what the other muted.
     private var masterBeforeMute = MasterMute.fallback
+    /// A volume key moved the master (S429), with the unmute level the speaker button uses.
+    func volumeKey(_ key: VolumeKeys.Key) {
+        masterBeforeMute = MasterMute.remembered(level: master, previous: masterBeforeMute)
+        actions.setMaster(VolumeKeys.master(after: key, level: master, remembered: masterBeforeMute))
+    }
     func toggleMasterMute() {
         // The level the app started at never passed through didSet.
         masterBeforeMute = MasterMute.remembered(level: master, previous: masterBeforeMute)
@@ -327,6 +334,9 @@ final class AppModel: ObservableObject {
     @Published var focusZone: String?
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
+    @Published var volumeKeys = true
+    /// The switch is on, but macOS hasn't given AudioSync Accessibility access.
+    @Published var volumeKeysNeedAccess = false
     @Published var switchWhenSourceQuits = false
     @Published var appearance = AppAppearance.system
     /// Rows whose sync controls are expanded. Lives here rather than in view

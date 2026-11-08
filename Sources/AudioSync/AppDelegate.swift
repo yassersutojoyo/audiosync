@@ -198,6 +198,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var showVirtualDevices: Bool {
         didSet { if showVirtualDevices != oldValue { store.save(showVirtualDevices: showVirtualDevices) } }
     }
+    var volumeKeys: Bool {
+        didSet { if volumeKeys != oldValue { store.save(volumeKeys: volumeKeys) } }
+    }
+    /// Set exactly while the volume keys move the master (`followVolumeKeys`).
+    var volumeKeyTap: VolumeKeyTap?
+    /// macOS refused the tap while the keys were wanted; tried again once they aren't.
+    var volumeKeyTapRefused = false
+    lazy var levelPopup = LevelPopup(text: text)
     var appearance: AppAppearance {
         didSet {
             guard appearance != oldValue else { return }
@@ -363,6 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         autoConnect = saved.autoConnect
         speakerNames = saved.speakerNames.castKeysMoved()
         showVirtualDevices = saved.showVirtualDevices
+        volumeKeys = saved.volumeKeys
         appearance = saved.appearance
         whenSourceQuits = saved.whenSourceQuits
         inputPairs = saved.inputPairs

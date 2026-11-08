@@ -168,6 +168,8 @@ struct SettingsView: View {
                                         set: { model.actions.setSwitchWhenSourceQuits($0) }))
             }
             SettingsBox(title: t.menuSpeakers) {
+                volumeKeysRow(t)
+                Divider()
                 SwitchRow(title: t.showVirtualDevices, isOn: Binding(get: { model.showVirtualDevices },
                                                                      set: { model.actions.setShowVirtualDevices($0) }))
                 Divider()
@@ -204,6 +206,33 @@ struct SettingsView: View {
         .offset(y: motion.atRest ? 0 : 8)
         .frame(maxHeight: .infinity, alignment: .top)
         .tint(Brand.teal)
+    }
+
+    /// The switch, what it does, and while macOS keeps the keys, why and where to change it.
+    private func volumeKeysRow(_ t: UIStrings) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SwitchRow(title: t.volumeKeys, isOn: Binding(get: { model.volumeKeys },
+                                                         set: { model.actions.setVolumeKeys($0) }))
+            Text(t.volumeKeysOn + " " + t.volumeKeysOff)
+                .font(.subheadline)
+                .foregroundStyle(Brand.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if model.volumeKeysNeedAccess {
+                HStack(spacing: 12) {
+                    Text(t.volumeKeysNeedAccess)
+                        .font(.subheadline)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button(t.openSettings) { model.actions.openAccessibilitySettings() }
+                        .controlSize(.small)
+                        .accessibilityLabel(t.setupOpenSettings(.accessibility))
+                        .accessibilityHint(t.openSettingsHint)
+                        .help(t.openSettingsHint)
+                }
+                .padding(.top, 4)
+            }
+        }
+        .padding(.bottom, 10)
     }
 
     @ViewBuilder

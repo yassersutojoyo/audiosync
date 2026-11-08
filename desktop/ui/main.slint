@@ -1366,6 +1366,9 @@ export component MainWindow inherits Window {
     // A release build that updates itself shows the updater's menu items.
     in property <bool> updater-available;
     in property <bool> check-updates-automatically;
+    // Speakers > Volume Keys Control AudioSync (spec S429); Windows only.
+    in property <bool> volume-keys-available;
+    in property <bool> volume-keys;
     // The AirPlay delay, shown while an AirPlay sender runs: what its field
     // shows (the applied value, or what is being typed).
     in property <bool> airplay-delay-shown;
@@ -1528,6 +1531,7 @@ export component MainWindow inherits Window {
     callback switch-source-on-quit-toggled(bool);
     callback launch-at-login-toggled(bool);
     callback check-updates-automatically-toggled(bool);
+    callback volume-keys-toggled(bool);
     callback check-for-updates-requested();
     // File > Web Remote…
     callback remote-requested();
@@ -1690,6 +1694,15 @@ export component MainWindow inherits Window {
                 title: root.running ? Strings.menu-turn-streaming-off : Strings.menu-turn-streaming-on;
                 activated => {
                     root.power-toggled(!root.running);
+                }
+            }
+
+            if root.volume-keys-available: MenuItem {
+                title: Strings.volume-keys;
+                checkable: true;
+                checked: root.volume-keys;
+                activated => {
+                    root.volume-keys-toggled(!root.volume-keys);
                 }
             }
 

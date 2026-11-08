@@ -45,6 +45,7 @@ use crate::ui_model::{
     MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
     SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame,
 };
+use crate::volume_keys::{self, VolumeKey};
 use crate::{
     AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
     CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GuidePage, GuideStepItem,
@@ -115,6 +116,8 @@ struct UiState {
     remote: crate::remote::RemoteSettings,
     /// File > Check for Updates Automatically, as saved.
     check_updates_automatically: bool,
+    /// Speakers > Volume Keys Control AudioSync, as saved (spec S429).
+    volume_keys: bool,
     /// The last update check that read the appcast, Unix seconds.
     last_update_check: Option<u64>,
     /// The version the updater stopped offering at launch (spec S316).
@@ -856,6 +859,23 @@ pub struct App {
     /// The last master level of at least `UNMUTE_FLOOR`, which Unmute
     /// brings back; 50 until one is seen.
     unmute_to: Cell<f64>,
+    /// The keyboard hook while the volume keys move the master (spec S429).
+    #[cfg(all(windows, not(test)))]
+    volume_key_hook: RefCell<Option<crate::volume_keys::KeyHook>>,
+}
+
+#[cfg(all(windows, not(test)))]
+thread_local! {
+    /// The app the keyboard hook's keys go to.
+    static VOLUME_KEY_APP: RefCell<Weak<App>> = const { RefCell::new(Weak::new()) };
+}
+
+/// Runs on the keyboard hook's thread: hands the key to the UI thread.
+#[cfg(all(windows, not(test)))]
+fn deliver_volume_key(key: VolumeKey) {
+    let _ = slint::invoke_from_event_loop(move || {
+        VOLUME_KEY_APP.with(|app| with_app(&app.borrow(), |app| app.volume_key(key)));
+    });
 }
 
 /// The main window's native window and the menu bar theme last sent to it.
@@ -1167,7 +1187,11 @@ impl App {
             now_playing_source: RefCell::default(),
             network_watch: RefCell::default(),
             unmute_to: Cell::new(50.0),
+            #[cfg(all(windows, not(test)))]
+            volume_key_hook: RefCell::default(),
         });
+        #[cfg(all(windows, not(test)))]
+        VOLUME_KEY_APP.with(|slot| *slot.borrow_mut() = Rc::downgrade(&app));
         let sessions = i32::try_from(audiosync_airplay::sender::AIRPLAY2_SESSIONS);
         app.main
             .global::<Strings>()
@@ -2079,6 +2103,7 @@ impl App {
             .collect();
         let show_virtual = ui.show_virtual;
         let check_updates_automatically = ui.check_updates_automatically;
+        let keys_switch = ui.volume_keys;
         let airplay_typed = ui
             .airplay_delay_draft
             .text(state.airplay_delay_ms)
@@ -2370,6 +2395,12 @@ impl App {
         self.help.set_updater_available(self.has_updater());
         self.main
             .set_check_updates_automatically(check_updates_automatically);
+        self.main.set_volume_keys_available(cfg!(windows));
+        self.main.set_volume_keys(keys_switch);
+        self.take_volume_keys(volume_keys::keys_taken(
+            keys_switch,
+            state.running && !state.no_speaker_on,
+        ));
         self.main
             .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
@@ -3003,6 +3034,8 @@ impl App {
         main.on_check_updates_automatically_toggled(move |on| {
             with_app(&w, |app| app.set_check_updates_automatically(on))
         });
+        let w = weak.clone();
+        main.on_volume_keys_toggled(move |on| with_app(&w, |app| app.set_volume_keys(on)));
         let w = weak.clone();
         main.on_check_for_updates_requested(move || with_app(&w, App::check_for_updates));
         let w = weak.clone();
@@ -3727,6 +3760,54 @@ impl App {
         }
     }
 
+    /// Speakers > Volume Keys Control AudioSync (spec S429).
+    fn set_volume_keys(&self, on: bool) {
+        self.ui.borrow_mut().volume_keys = on;
+        self.log.log(|| {
+            format!(
+                "volume keys: Volume Keys Control AudioSync turned {}",
+                if on { "on" } else { "off" }
+            )
+        });
+        self.remember_view();
+        self.refresh();
+    }
+
+    /// Takes the volume keys from the system while `taken`, and gives them
+    /// back at once otherwise (spec S429).
+    fn take_volume_keys(&self, taken: bool) {
+        #[cfg(all(windows, not(test)))]
+        {
+            let mut hook = self.volume_key_hook.borrow_mut();
+            if !taken {
+                *hook = None;
+            } else if hook.is_none() {
+                *hook = crate::volume_keys::KeyHook::start(deliver_volume_key, self.log.clone());
+            }
+        }
+        #[cfg(not(all(windows, not(test))))]
+        let _ = taken;
+    }
+
+    /// A volume key the hook took: the master moves (spec S429) and the
+    /// level pop-up shows where it is.
+    #[cfg_attr(
+        all(not(windows), not(test)),
+        expect(dead_code, reason = "only the Windows keyboard hook takes the keys")
+    )]
+    fn volume_key(&self, key: VolumeKey) {
+        let master = self.snapshot().master_volume;
+        let level = volume_keys::master_after(key, master, self.unmute_to.get());
+        self.update(|b| b.set_master_volume(level));
+        #[cfg(all(windows, not(test)))]
+        crate::volume_keys::show_level(
+            level,
+            self.shows_dark(),
+            &self.main.global::<Strings>().get_volume_popup_name(),
+            crate::platform::animation_effects(),
+        );
+    }
+
     fn set_check_updates_automatically(&self, on: bool) {
         self.ui.borrow_mut().check_updates_automatically = on;
         self.log.log(|| {
@@ -3829,6 +3910,7 @@ impl App {
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
             remote: self.ui.borrow().remote,
             check_updates_automatically: self.ui.borrow().check_updates_automatically,
+            volume_keys: self.ui.borrow().volume_keys,
             last_update_check: self.ui.borrow().last_update_check,
             update_record: self.ui.borrow().update_record.clone(),
         };
@@ -3848,6 +3930,7 @@ impl App {
         self.ui.borrow_mut().appearance = saved.appearance;
         self.ui.borrow_mut().remote = saved.remote;
         self.ui.borrow_mut().check_updates_automatically = saved.check_updates_automatically;
+        self.ui.borrow_mut().volume_keys = saved.volume_keys;
         self.ui.borrow_mut().last_update_check = saved.last_update_check;
         self.ui.borrow_mut().update_record = saved.update_record.clone();
         self.apply_appearance(saved.appearance);
@@ -14076,6 +14159,29 @@ mod tests {
         assert_eq!(app.snapshot().master_volume, 0.0, "a trace snaps to 0");
         assert_eq!(app.main.get_master_volume_waves(), 0);
         assert_eq!(app.flyout.get_master_volume_waves(), 0);
+    }
+
+    // covers: S429
+    #[test]
+    fn a_volume_key_moves_the_master_and_the_switch_is_kept() {
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_master_volume(40.0));
+        app.volume_key(VolumeKey::Up);
+        assert_eq!(app.snapshot().master_volume, 42.0);
+        app.volume_key(VolumeKey::Mute);
+        assert_eq!(app.snapshot().master_volume, 0.0);
+        app.volume_key(VolumeKey::Up);
+        assert_eq!(
+            app.snapshot().master_volume,
+            42.0,
+            "up at 0 brings the level back"
+        );
+        assert_eq!(app.main.get_volume_keys_available(), cfg!(windows));
+        app.main.invoke_volume_keys_toggled(true);
+        assert!(app.main.get_volume_keys());
+        app.main.invoke_volume_keys_toggled(false);
+        assert!(!app.main.get_volume_keys());
+        assert!(!app.backend.borrow().view_settings().volume_keys);
     }
 
     #[test]

@@ -17,7 +17,7 @@ mod loopback;
 mod media;
 mod media_sessions;
 mod microphone;
-mod power;
+pub(crate) mod power;
 mod processes;
 mod routing;
 mod volume;

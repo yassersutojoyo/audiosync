@@ -73,6 +73,11 @@ mod ui_model;
 #[cfg_attr(all(test, not(windows)), allow(dead_code))]
 mod updater;
 mod view;
+#[cfg_attr(
+    all(not(windows), not(test)),
+    expect(dead_code, reason = "only the Windows keyboard hook takes the keys")
+)]
+mod volume_keys;
 
 use std::process::ExitCode;
 use std::time::Duration;

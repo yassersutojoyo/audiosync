@@ -857,6 +857,9 @@ pub struct Settings {
     /// File > Check for Updates Automatically (spec S305), on by default.
     #[serde(deserialize_with = "bool_or_true")]
     pub check_updates_automatically: bool,
+    /// Speakers > Volume Keys Control AudioSync (spec S429), on by default.
+    #[serde(deserialize_with = "bool_or_true")]
+    pub volume_keys: bool,
     /// The last update check that read the appcast, in seconds since the
     /// Unix epoch (spec S305).
     #[serde(deserialize_with = "or_default")]
@@ -1006,6 +1009,7 @@ impl Default for Settings {
             cast_found_ids: BTreeMap::new(),
             cast_on: None,
             check_updates_automatically: true,
+            volume_keys: true,
             last_update_check: None,
             update_record: None,
             other_fields: BTreeMap::new(),
@@ -1313,6 +1317,7 @@ impl Settings {
                 .collect(),
             cast_on: self.cast_on.filter(|id| usable_id(id)),
             check_updates_automatically: self.check_updates_automatically,
+            volume_keys: self.volume_keys,
             last_update_check: self.last_update_check,
             update_record: self.update_record,
             // Capped as every list is, so a damaged file's thousands of stray keys aren't carried on.
@@ -1510,6 +1515,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("cast_found_ids", Value::is_object),
         ("cast_on", reads::<Option<String>>),
         ("check_updates_automatically", Value::is_boolean),
+        ("volume_keys", Value::is_boolean),
         ("last_update_check", reads::<Option<u64>>),
         ("update_record", reads::<Option<UpdateRecord>>),
     ];
@@ -1989,6 +1995,7 @@ mod tests {
             )]),
             cast_on: Some("4a1f9d2e-7b3c-4e8a-9f60-1c2d3e4f5a6b".to_owned()),
             check_updates_automatically: false,
+            volume_keys: false,
             last_update_check: Some(1_800_000_000),
             update_record: Some(UpdateRecord {
                 version: "9.9.9".to_owned(),
@@ -2489,6 +2496,7 @@ mod tests {
             cast_found_ids,
             cast_on,
             check_updates_automatically,
+            volume_keys,
             last_update_check,
             update_record,
             other_fields: _,
@@ -2525,6 +2533,7 @@ mod tests {
             check_updates_automatically,
             default.check_updates_automatically
         );
+        assert_ne!(volume_keys, default.volume_keys);
         assert_ne!(last_update_check, default.last_update_check);
         assert_ne!(update_record, default.update_record);
     }
@@ -2686,6 +2695,8 @@ mod tests {
         let read = |json: &str| Settings::from_json(json).expect("read").0;
         assert!(Settings::default().check_updates_automatically);
         assert!(read(r#"{"version": 2}"#).check_updates_automatically);
+        assert!(Settings::default().volume_keys);
+        assert!(read(r#"{"version": 2}"#).volume_keys);
         let off = read(
             r#"{"version": 2, "check_updates_automatically": false, "last_update_check": 1800000000}"#,
         );

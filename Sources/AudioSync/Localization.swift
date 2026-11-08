@@ -45,6 +45,13 @@ struct UIStrings {
     let guideTitle = "AudioSync Guide"
     let refreshDevices = "Refresh Devices"
     let showVirtualDevices = "Show Virtual Devices"
+    let volumeKeys = "Volume Keys Control AudioSync"
+    let volumeKeysOn = "While streaming is on, the volume keys change AudioSync's master volume."
+    let volumeKeysOff = "When this is off, they change the Mac's volume as usual."
+    let volumeKeysNeedAccess = "The keys stay with macOS until AudioSync has Accessibility access."
+    /// The label of the level pop-up a volume key shows.
+    let volumePopupName = "AudioSync master volume"
+    func volumePopupLevel(_ level: Double) -> String { "\(Int(level.rounded()))%" }
     let appearance = "Appearance"
     func appearanceName(_ choice: AppAppearance) -> String {
         switch choice {
@@ -1359,6 +1366,7 @@ struct UIStrings {
         case .audioCapture: return "Capture your Mac's audio"
         case .microphone: return "Use the microphone or an input"
         case .automation: return "Show Now Playing for Spotify and Music"
+        case .accessibility: return "Let the volume keys control AudioSync"
         }
     }
     func permissionReason(_ permission: Permission) -> String {
@@ -1371,6 +1379,8 @@ struct UIStrings {
             return "AudioSync listens to the input you pick to play it on your speakers, or to the microphone when you calibrate a speaker. macOS asks you to allow this next."
         case .automation:
             return "Now Playing reads the track from Spotify and Music and gives you their play controls. macOS asks once for each app."
+        case .accessibility:
+            return "While streaming is on, the volume keys change AudioSync's master volume. macOS asks you to allow AudioSync under Accessibility next."
         }
     }
     let permissionContinue = "Continue"
@@ -1393,6 +1403,8 @@ struct UIStrings {
             return "For an input device as the source, or to calibrate a speaker with the microphone."
         case .automation:
             return "Shows the track playing in Spotify or Music. macOS asks the first time Now Playing reads one."
+        case .accessibility:
+            return "Lets the volume keys change AudioSync's master volume while streaming. In System Settings → Privacy & Security → Accessibility."
         }
     }
     func setupState(_ state: SetupRowState) -> String {
@@ -1419,6 +1431,7 @@ struct UIStrings {
         case .audioCapture: return "\(openSettings), Screen & System Audio Recording"
         case .microphone: return "\(openSettings), Microphone"
         case .automation: return "\(openSettings), Automation"
+        case .accessibility: return "\(openSettings), Accessibility"
         }
     }
     /// The app menu item that opens the window again.

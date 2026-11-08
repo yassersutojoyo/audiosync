@@ -1917,6 +1917,8 @@ pub struct ViewSettings {
     pub remote: crate::remote::RemoteSettings,
     /// File > Check for Updates Automatically.
     pub check_updates_automatically: bool,
+    /// Speakers > Volume Keys Control AudioSync.
+    pub volume_keys: bool,
     /// The last update check that read the appcast, Unix seconds.
     pub last_update_check: Option<u64>,
     pub update_record: Option<UpdateRecord>,

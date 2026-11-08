@@ -163,6 +163,7 @@ struct PermissionSetupView: View {
         case .audioCapture: return "waveform"
         case .microphone: return "mic"
         case .automation: return "music.note"
+        case .accessibility: return "keyboard"
         }
     }
 

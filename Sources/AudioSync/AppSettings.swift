@@ -60,6 +60,8 @@ struct AppSettings: Equatable {
         /// an array of key, name and kind.
         static let hiddenSpeakers = "hiddenSpeakers"
         static let showVirtualDevices = "showVirtualOutputDevices"
+        /// Volume Keys Control AudioSync (S429), on unless turned off.
+        static let volumeKeys = "volumeKeysControlAudioSync"
         /// `AppAppearance.defaultsValue` (S155).
         static let appearance = "appearance"
         /// `WhenSourceQuits.defaultsValue` (S227): "stop", or "system" to switch.
@@ -141,6 +143,7 @@ struct AppSettings: Equatable {
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
     var showVirtualDevices = false
+    var volumeKeys = true
     var appearance = AppAppearance.system
     var whenSourceQuits = WhenSourceQuits.system
     var inputPairs: [String: Int] = [:]
@@ -199,6 +202,7 @@ struct AppSettings: Equatable {
         s.zonesNoticeDue = read(Keys.zonesNoticeDue) as? Bool ?? false
         s.presets = decodePresets(read(Keys.presets) as? Data)
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
+        s.volumeKeys = read(Keys.volumeKeys) as? Bool ?? true
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
         s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
         s.inputPairs = channelPairs(read(Keys.inputChannelPairs))
@@ -499,6 +503,8 @@ struct SettingsStore {
     }
 
     func save(showVirtualDevices: Bool) { write(showVirtualDevices, Keys.showVirtualDevices) }
+
+    func save(volumeKeys: Bool) { write(volumeKeys, Keys.volumeKeys) }
 
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
 

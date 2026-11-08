@@ -79,6 +79,7 @@ enum PrivacyPane: String, Equatable {
     case localNetwork = "Privacy_LocalNetwork"
     case automation = "Privacy_Automation"
     case microphone = "Privacy_Microphone"
+    case accessibility = "Privacy_Accessibility"
     /// Screen & System Audio Recording, whose "System Audio Recording Only"
     /// list holds the process tap permission.
     case screenCapture = "Privacy_ScreenCapture"

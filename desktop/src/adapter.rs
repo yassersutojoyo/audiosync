@@ -1007,6 +1007,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             window: saved.window,
             remote: saved.remote,
             check_updates_automatically: saved.check_updates_automatically,
+            volume_keys: saved.volume_keys,
             last_update_check: saved.last_update_check,
             update_record: saved.update_record.clone(),
         };
@@ -1160,6 +1161,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .cast_on_to_save()
                 .or_else(|| self.cast_unrestored.clone()),
             check_updates_automatically: self.view.check_updates_automatically,
+            volume_keys: self.view.volume_keys,
             last_update_check: self.view.last_update_check,
             update_record: self.view.update_record.clone(),
             other_fields: self.saved.other_fields.clone(),
@@ -14222,6 +14224,7 @@ mod tests {
                 port: 8123,
             },
             check_updates_automatically: false,
+            volume_keys: false,
             last_update_check: Some(1_800_000_000),
             update_record: None,
         });

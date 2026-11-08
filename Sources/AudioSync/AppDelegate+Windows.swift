@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import AVFoundation
 import ServiceManagement
 
@@ -181,6 +182,8 @@ extension AppDelegate {
             if !engine.isRunning { startEngine(origin: .user) }
         case .automation:
             nowPlaying.refresh()
+        case .accessibility:
+            askAccessibility()
         }
     }
 
@@ -243,6 +246,8 @@ extension AppDelegate {
             .localNetwork: PermissionSetup.localNetwork(localNetworkProbe.access, asked: asked(.localNetwork)),
             .audioCapture: PermissionSetup.audioCapture(heard: SourceCapture.runHeard, asked: asked(.audioCapture)),
             .microphone: PermissionSetup.microphone(microphonePermission(), asking: setupMicrophoneAsking),
+            .accessibility: PermissionSetup.accessibility(trusted: AXIsProcessTrusted(),
+                                                          asked: permissions.explained.contains(.accessibility)),
         ]
     }
 
@@ -423,6 +428,8 @@ extension AppDelegate {
         a.unhideSpeaker = { [weak self] key in self?.unhideSpeaker(key) }
         a.setLaunchAtLogin = { [weak self] on in self?.setLaunchAtLogin(on) }
         a.setShowVirtualDevices = { [weak self] on in self?.setShowVirtualDevices(on) }
+        a.setVolumeKeys = { [weak self] on in self?.setVolumeKeys(on) }
+        a.openAccessibilitySettings = { NSWorkspace.shared.open(PrivacyPane.accessibility.url) }
         a.setSwitchWhenSourceQuits = { [weak self] on in
             self?.whenSourceQuits = on ? .system : .stop
             self?.pushModel()
@@ -611,6 +618,8 @@ extension AppDelegate {
         publishPresets()
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
+        publish(\.volumeKeys, volumeKeys)
+        publish(\.volumeKeysNeedAccess, followVolumeKeys())
         publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
