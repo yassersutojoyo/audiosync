@@ -65,6 +65,14 @@ Write your release notes file before tagging. Start from the CHANGELOG entry, ke
 
 Publish it as a normal release, not a pre-release. The README and the site link to `/releases/latest`, which skips pre-releases, so the download link would keep pointing at the old version.
 
+### Homebrew and winget
+
+Every release also updates the Homebrew tap and the winget listing. Do both after the release is published and its confirmation check passed, and take every hash from the published `SHA256SUMS.txt`, so they match the files GitHub serves.
+
+The tap is `yassersutojoyo/homebrew-audiosync`, and the cask is `Casks/audiosync.rb`. Its url builds the download from `#{version}`, so a release changes only two lines: `version` and `sha256`, the hash of the release's `AudioSync.dmg`. Commit that as "Update AudioSync to x.y.z".
+
+The winget package is `yassersutojoyo.AudioSync` in `microsoft/winget-pkgs`. Each version is a folder `manifests/y/yassersutojoyo/AudioSync/<version>/` with three manifests (version, installer and defaultLocale, ManifestVersion 1.12.0). The installer manifest has InstallerType zip with NestedInstallerType portable (`audiosync.exe`), and one installer for x64 and one for arm64, each pointing at that release's Windows zip with its InstallerSha256 in uppercase. A new version goes in as a pull request from my fork that adds the new version folder. While the first pull request (#471167) is still unmerged, replace the version folder in that pull request instead of opening another one.
+
 ### Signed checksums (not active yet)
 
 Once a release key exists, sign `SHA256SUMS.txt` on the release Mac before `gh release create`, never in CI and never with the key stored as a secret: `ssh-keygen -Y sign -f ~/.ssh/audiosync-release -n file SHA256SUMS.txt` writes `SHA256SUMS.txt.sig`; add it to the upload next to `SHA256SUMS.txt`. Put the key's public half (the one line of `~/.ssh/audiosync-release.pub`) in `RELEASE_KEY` in `scripts/install.sh` and `scripts/install-linux.sh` and in `$releaseKey` in `scripts/install.ps1`, set `KEY_SINCE` and `$keySince` beside them to the first version you sign, commit that, and change this heading to say the step is active. From then on the scripts refuse a `SHA256SUMS.txt` whose signature on that tag doesn't verify, and a release from that version on that has no `.sig`; an older tag still installs on the checksum alone.
@@ -113,6 +121,6 @@ Then zip the stapled app again for the release, or build the DMG with the same `
 
 ## Other ways to distribute
 
-Building from source with `./setup.sh` works today and needs no developer account, since an app built on your own Mac isn't quarantined. A Homebrew cask would be possible later, but it needs a separate `yassersutojoyo/homebrew-tap` repository, and none exists yet.
+Building from source with `./setup.sh` works today and needs no developer account, since an app built on your own Mac isn't quarantined. The Homebrew cask lives in the `yassersutojoyo/homebrew-audiosync` tap, and the Windows build goes to winget as `yassersutojoyo.AudioSync`; [Homebrew and winget](#homebrew-and-winget) above says how each release updates them.
 
 AudioSync uses four privacy permissions (Screen & System Audio Recording and Microphone for capture, Local Network for AirPlay, Automation for Now Playing), driven by the usage strings in `Info.plist`. Under the Hardened Runtime, the microphone and Apple Events also need the entitlements in `AudioSync.entitlements`.

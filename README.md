@@ -53,6 +53,7 @@ macOS 15 or later, Apple silicon:
 
 - Get `AudioSync.dmg` from the [latest release](https://github.com/yassersutojoyo/audiosync/releases/latest) and drag it to Applications. It isn't notarized, so on the first launch click Done, then System Settings → Privacy & Security → Open Anyway.
 - Or from Terminal, with no Open Anyway step: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install.sh | bash`
+- Or with Homebrew, which installs the same DMG: `brew install --cask yassersutojoyo/audiosync/audiosync`
 
 Windows 11, x64 or ARM64:
 
