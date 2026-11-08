@@ -67,6 +67,12 @@ enum StreamingPolicy {
     /// joins. AudioSync on its own still waits for a speaker.
     static func startsWithoutSpeaker(origin: StartOrigin) -> Bool { origin != .automatic }
 
+    /// Whether auto-connect starts streaming once its speakers are switched on:
+    /// only with one on, so a refused speaker posts no start notice (S162, S383).
+    static func autoConnectStarts(hasSpeaker: Bool, streaming: Bool, userStopped: Bool, autoStartFailed: Bool) -> Bool {
+        hasSpeaker && !streaming && !userStopped && !autoStartFailed
+    }
+
     /// Whether a start goes ahead. `continuing`: a rebuild or a source switch
     /// of the session; `hadSpeaker`: a speaker was on in that session. Only a
     /// session that began with every speaker off carries on without one: once

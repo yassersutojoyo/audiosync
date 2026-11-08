@@ -16555,6 +16555,10 @@ do {
             && !StreamingPolicy.startsWithoutSpeaker(origin: .automatic),
           "no speaker on: the power switch starts streaming anyway, with no alert; an automatic start still waits")
     // covers: S162
+    check(!StreamingPolicy.autoConnectStarts(hasSpeaker: false, streaming: false, userStopped: false, autoStartFailed: false)
+            && StreamingPolicy.autoConnectStarts(hasSpeaker: true, streaming: false, userStopped: false, autoStartFailed: false),
+          "no speaker on: auto-connect with its marked speaker refused and nothing else on starts nothing, so no start notice, as on Windows")
+    // covers: S162
     check(StreamingPolicy.starts(hasSpeaker: false, continuing: true, hadSpeaker: false, origin: .automatic),
           "no speaker on: a rebuild or switch of a session started with every speaker off carries on")
     // covers: S162

@@ -412,7 +412,10 @@ extension AppDelegate {
             // Switched on automatically: an AirPlay speaker's code request becomes a notice.
             if airplay { enabledAirPlay.insert(id) } else { enabledLocal.insert(id) }
         }
-        if !engine.isRunning, !userStopped, !autoStartFailed {
+        let hasSpeaker = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
+                                                    enabledLocal: enabledLocal)
+        if StreamingPolicy.autoConnectStarts(hasSpeaker: hasSpeaker, streaming: engine.isRunning,
+                                             userStopped: userStopped, autoStartFailed: autoStartFailed) {
             startEngine(origin: .automatic)
         } else if engine.isRunning {
             applyAirPlaySelection()   // the speakers just switched on join the session under way
