@@ -440,19 +440,23 @@ extension AppDelegate {
             DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(NativeAirPlayID.receiver(id) ?? id)) stays off, it asks for a code every time")
         }
         airplayOrder = rows
+        nativeAirPlay?.model.appearanceSeen(adoption.asking.map(\.id))
         updatePtpPortNotice { $0.listed(rows) }
         airplayEmptySince = rows.isEmpty ? (airplayEmptySince ?? Date()) : nil
         return adoption
     }
 
     /// Auto-connect switches on a speaker that appeared asking for a PIN or
-    /// a password, and it goes off at once with why, as on Windows (S349).
+    /// a password, or unable to play, and it goes off at once with why, as
+    /// on Windows (S349).
     private func turnOffAppearedAsking(_ asking: [NativeAirPlayPlan.TurnOff]) {
         guard !LaunchAutoConnect.skipped else { return }
         for off in asking {
             let id = NativeAirPlayID.app(off.id)
             guard !hiddenSpeakers.autoConnecting([SpeakerKey.make(id: id, airplay: true)], marked: autoConnect).isEmpty
             else { continue }
+            // One that can't play has no row, which would have named it.
+            if let name = nativeAirPlay?.model.names[off.id] { airplayNames[id] = name }
             enabledAirPlay.insert(id)
             turnOffNativeSpeaker(id, reason: off.reason, origin: .automatic)
         }

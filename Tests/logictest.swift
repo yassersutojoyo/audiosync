@@ -3570,9 +3570,12 @@ do {
     // covers: S349
     var appearing = EveryTimeGuard()
     let firstListing = model.adopt(enabled: ["native:B2"], known: [], stopped: false, everyTime: &appearing)
+    model.appearanceSeen(firstListing.asking.map(\.id))
     let listedAgain = model.adopt(enabled: [], known: firstListing.rows, stopped: false, everyTime: &appearing)
     // covers: S349
-    check(firstListing.asking == [.init(id: "B2", reason: .needsCode), .init(id: "C3", reason: .needsPassword)]
+    check(firstListing.asking == [.init(id: "B2", reason: .needsCode), .init(id: "C3", reason: .needsPassword),
+                                  .init(id: "D4", reason: .needsAirPlay2), .init(id: "E5", reason: .cantPlay),
+                                  .init(id: "F6", reason: .cantPlay)]
             && listedAgain.asking.isEmpty
             && model.adopt(enabled: [], known: [], stopped: true, everyTime: &appearing).asking.isEmpty,
           "native airplay: a new row asking for a PIN or password is one auto-connect turns off with why",
@@ -3606,6 +3609,32 @@ do {
     check(returned.joinable(returned.rows(enabled: []), after: ["native:A1"], stopped: false) == ["native:C3"],
           "native airplay: a new auto-connect row asking for a password given this run is joinable",
           "\(returned.joinable(returned.rows(enabled: []), after: ["native:A1"], stopped: false))")
+    var cantPlayModel = NativeAirPlayModel()
+    for r in [receiver("A1", "kitchen", .available), receiver("D4", "HomePod", .airPlay2Only),
+              receiver("E5", "Old", .unsupported), receiver("F6", "Attic", .needsPairing)] {
+        cantPlayModel.apply(.appeared(r))
+    }
+    var cantPlayGuard = EveryTimeGuard()
+    let cantPlayFirst = cantPlayModel.adopt(enabled: [], known: [], stopped: false, everyTime: &cantPlayGuard)
+    cantPlayModel.appearanceSeen(cantPlayFirst.asking.map(\.id))
+    let cantPlayAgain = cantPlayModel.adopt(enabled: [], known: cantPlayFirst.rows, stopped: false, everyTime: &cantPlayGuard)
+    cantPlayModel.apply(.gone(id: "E5", name: nil))
+    cantPlayModel.apply(.appeared(receiver("E5", "Old", .unsupported)))
+    let cantPlayBack = cantPlayModel.adopt(enabled: [], known: cantPlayFirst.rows, stopped: false, everyTime: &cantPlayGuard)
+    // covers: S349
+    check(cantPlayFirst.asking == [.init(id: "D4", reason: .needsAirPlay2), .init(id: "E5", reason: .cantPlay),
+                                   .init(id: "F6", reason: .cantPlay)]
+            && cantPlayAgain.asking.isEmpty && cantPlayBack.asking == [.init(id: "E5", reason: .cantPlay)],
+          "native airplay: an auto-connect speaker that appears unable to play stays off with its can't-play notice, once per appearance",
+          "\(cantPlayFirst.asking) \(cantPlayAgain.asking) \(cantPlayBack.asking)")
+    cantPlayModel.appearanceSeen(cantPlayBack.asking.map(\.id))
+    cantPlayModel.apply(.gone(id: "F6", name: nil))
+    cantPlayModel.apply(.appeared(receiver("F6", "Attic", .needsPairing)))
+    let cantPlayStopped = cantPlayModel.adopt(enabled: [], known: cantPlayFirst.rows, stopped: true, everyTime: &cantPlayGuard)
+    // covers: S349
+    check(cantPlayStopped.asking == [.init(id: "F6", reason: .cantPlay)],
+          "native airplay: a speaker that appears unable to play while a stop rebuilds the rows gets its can't-play notice then, as on Windows",
+          "\(cantPlayStopped.asking)")
     // covers: S79
     check(passwordGiven.soundingIDs == ["native:A1", "native:C3"],
           "native airplay: a password receiver given its password this run holds local outputs back, as on Windows",

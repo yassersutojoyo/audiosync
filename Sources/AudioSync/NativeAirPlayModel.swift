@@ -195,8 +195,9 @@ struct NativeRowsAdoption: Equatable {
     /// The rows that go off, as they ask for a code every time
     /// (`EveryTimeGuard.turnsOff`).
     let turnOff: [String]
-    /// The new rows asking for a PIN or a password, by receiver ID
-    /// (`NativeAirPlayModel.appearedAsking`).
+    /// The new rows asking for a PIN or a password, then the receivers that
+    /// appeared unable to play, by receiver ID (`NativeAirPlayModel.appearedAsking`,
+    /// `appearedCantPlay`).
     let asking: [NativeAirPlayPlan.TurnOff]
 }
 
@@ -209,7 +210,8 @@ extension NativeAirPlayModel {
         return NativeRowsAdoption(rows: rows,
                                   joinable: joinable(rows, after: Set(known), stopped: stopped),
                                   turnOff: everyTime.turnsOff(askingEveryTime(rows), enabled: enabled),
-                                  asking: appearedAsking(rows, after: Set(known), stopped: stopped))
+                                  asking: appearedAsking(rows, after: Set(known), stopped: stopped)
+                                      + appearedCantPlay())
     }
 }
 
@@ -619,6 +621,9 @@ struct NativeAirPlayModel {
     /// The receivers last listed with stored credentials an answer turned
     /// down (P154), kept while they are gone, as for a Retry's new sender.
     private(set) var credentialsTurnedDown: Set<String> = []
+    /// The receivers that appeared unable to play, until auto-connect saw
+    /// them (`appearedCantPlay`), so their notice comes once per appearance.
+    private(set) var cantPlayAppeared: Set<String> = []
 
     mutating func apply(_ change: NativeReceiverChange) {
         switch change {
@@ -640,8 +645,14 @@ struct NativeAirPlayModel {
                     credentialsTurnedDown.remove(receiver.id)
                 }
             }
+            if receiver.access != nil {
+                cantPlayAppeared.remove(receiver.id)
+            } else if case .appeared = change, !receiver.isTarget {
+                cantPlayAppeared.insert(receiver.id)
+            }
         case .gone(let id, _):
             receivers.removeValue(forKey: id)
+            cantPlayAppeared.remove(id)
             if states[id] == nil, memberOf[id].map({ states[$0] != nil }) != true { receiverLatency.forget(id) }
         }
         pruneMembers()
@@ -825,6 +836,24 @@ struct NativeAirPlayModel {
             }
         }
     }
+
+    /// The receivers that appeared unable to play (`cantPlayAppeared`), by
+    /// ID: marked auto-connect, they stay off with the can't-play notice, as
+    /// on Windows (S349), also in rows a stop rebuilt: a turn-off starts
+    /// no stream, and Windows says so whether or not it streams.
+    func appearedCantPlay() -> [NativeAirPlayPlan.TurnOff] {
+        return cantPlayAppeared.sorted().compactMap { id -> NativeAirPlayPlan.TurnOff? in
+            switch receivers[id]?.availability {
+            case .airPlay2Only?: return .init(id: id, reason: .needsAirPlay2)
+            case .unsupported?, .needsPairing?: return .init(id: id, reason: .cantPlay)
+            default: return nil
+            }
+        }
+    }
+
+    /// Auto-connect saw the receivers `ids` appear: no notice comes again
+    /// until they leave and appear again.
+    mutating func appearanceSeen(_ ids: [String]) { cantPlayAppeared.subtract(ids) }
 
     /// Whether the listed receiver asks for a code every time it connects.
     func asksEveryTime(_ receiver: String) -> Bool {
