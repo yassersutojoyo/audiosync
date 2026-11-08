@@ -400,6 +400,10 @@ export global Strings {
     // the level pop-up a volume key shows.
     out property <string> volume-keys: @tr("Volume Keys Control AudioSync");
     out property <string> volume-popup-name: @tr("AudioSync");
+    // What Narrator reads as the pop-up shows: the level in percent.
+    public pure function volume-popup-announcement(percent: int) -> string {
+        return @tr("{}%", percent);
+    }
     out property <string> menu-check-for-updates: @tr("Check for Updates…");
 
     // File > Web Remote… and its window: a page on the home network that a

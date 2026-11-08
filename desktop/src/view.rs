@@ -3808,6 +3808,10 @@ impl App {
             level,
             self.shows_dark(),
             &self.main.global::<Strings>().get_volume_popup_name(),
+            &self
+                .main
+                .global::<Strings>()
+                .invoke_volume_popup_announcement(level.round() as i32),
             crate::platform::animation_effects(),
         );
     }

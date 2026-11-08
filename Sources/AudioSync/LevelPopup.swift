@@ -24,6 +24,10 @@ final class LevelPopup {
 
     func show(_ level: Double) {
         model.level = level
+        // The card is never focused, so VoiceOver hears the level only through an announcement.
+        NSAccessibility.post(element: NSApplication.shared, notification: .announcementRequested,
+                             userInfo: [.announcement: model.text.volumePopupLevel(level),
+                                        .priority: NSAccessibilityPriorityLevel.high.rawValue])
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main
         guard let area = screen?.visibleFrame else { return }

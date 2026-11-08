@@ -84,6 +84,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, an app source streamed only to local speakers with the window closed now has its capture watched too: if it stops after a wake, AudioSync opens it again instead of playing silence with no notice.
 - On the Mac, a new track's cover is now prepared for AirPlay speakers apart from their volume and pause, so a large cover can't hold up a volume change or a pause.
 - On the Mac, turning on Launch at Login while AudioSync runs from its disk image or from Downloads now says to move it to the Applications folder first, instead of adding a login item that stops working once that copy is gone.
+- The level pop-up a volume key shows now tells VoiceOver on the Mac and Narrator on Windows the new level.
 
 ## [0.9.1] - 2026-11-08
 

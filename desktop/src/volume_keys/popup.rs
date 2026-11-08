@@ -13,6 +13,10 @@ use windows::Win32::Graphics::Gdi::{
     MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint, PAINTSTRUCT, PS_SOLID, RoundRect,
     SelectObject, SetBkMode, SetTextColor, SetWindowRgn, TRANSPARENT,
 };
+use windows::Win32::UI::Accessibility::{
+    NotificationKind_ActionCompleted, NotificationProcessing_MostRecent, UiaClientsAreListening,
+    UiaHostProviderFromHwnd, UiaRaiseNotificationEvent,
+};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, GetCursorPos, HWND_TOPMOST, KillTimer, LWA_ALPHA,
@@ -20,7 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetTimer, SetWindowPos, ShowWindow, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{BSTR, PCWSTR, w};
 
 /// The whole show: in for 6 %, held until 80 %, then out.
 const SHOWN: Duration = Duration::from_millis(2100);
@@ -84,11 +88,12 @@ thread_local! {
 }
 
 /// Shows `level` (0 to 100) under `name`, or moves the one showing to it and
-/// keeps it up for another 2 s.
-pub fn show(level: f64, dark: bool, name: &str, animations: bool) {
+/// keeps it up for another 2 s; Narrator reads `announcement`.
+pub fn show(level: f64, dark: bool, name: &str, announcement: &str, animations: bool) {
     let Some(hwnd) = window() else {
         return;
     };
+    announce(hwnd, announcement);
     let (left, top, scale) = place();
     let size = (
         (WIDTH * scale).round() as i32,
@@ -137,6 +142,28 @@ pub fn show(level: f64, dark: bool, name: &str, animations: bool) {
         let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(hwnd), None, true);
     }
     frame(hwnd);
+}
+
+/// Raises a UIA notification on the pop-up's window: it never takes the
+/// focus, so nothing else tells a screen reader the level. Each one replaces
+/// the last one not yet read.
+fn announce(hwnd: HWND, text: &str) {
+    // SAFETY: `hwnd` is this thread's live pop-up window; the provider and
+    // both strings outlive the call.
+    unsafe {
+        if !UiaClientsAreListening().as_bool() {
+            return;
+        }
+        if let Ok(provider) = UiaHostProviderFromHwnd(hwnd) {
+            let _ = UiaRaiseNotificationEvent(
+                &provider,
+                NotificationKind_ActionCompleted,
+                NotificationProcessing_MostRecent,
+                &BSTR::from(text),
+                &BSTR::from("AudioSync.VolumeLevel"),
+            );
+        }
+    }
 }
 
 /// The pop-up's window, made the first time.
