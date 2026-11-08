@@ -65,14 +65,14 @@ struct PanelZoneHeader: View {
                         .opacity(nonePresent ? 0.45 : 1)
                         .layoutPriority(1)
                     Spacer(minLength: 4)
-                    // Placed and styled as a panel row's note; VoiceOver reads it in the icon's hint.
-                    if let waitNote {
-                        Text(waitNote)
-                            .font(.subheadline)
-                            .foregroundStyle(Brand.secondaryText)
-                            .lineLimit(1)
-                            .help(waitNote)
-                    }
+                    // Placed and styled as a panel row's note; VoiceOver reads the count in the
+                    // icon's value and the wait note in its hint. It ends in "…" before the name does.
+                    let caption = ZoneLayout.panelCaption(count: model.countText(of: zone), waitNote: waitNote, text: t)
+                    Text(caption)
+                        .font(.subheadline)
+                        .foregroundStyle(Brand.secondaryText)
+                        .lineLimit(1)
+                        .help(caption)
                 }
                 .padding(.leading, 9)
                 .padding(.trailing, 6)

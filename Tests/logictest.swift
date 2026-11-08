@@ -7883,6 +7883,12 @@ do {
             && ZoneLayout.waitNote(state: .willPlay, on: 2, waiting: 2, note: airPlay2Wait) == nil
             && ZoneLayout.waitNote(state: .playing, on: 0, waiting: 0, note: nil) == nil,
           "zones: a zone with a member still playing, with streaming off or with no member on shows no wait")
+    // covers: S359
+    check(ZoneLayout.panelCaption(count: "2 of 3 on", waitNote: nil, text: zoneText) == "2 of 3 on"
+            && ZoneLayout.panelCaption(count: "2 of 2 on, 2 waiting", waitNote: airPlay2Wait, text: zoneText)
+                == "2 of 2 on, 2 waiting · \(airPlay2Wait)",
+          "panel zone header: the count reads as in the main window, the wait note after it",
+          ZoneLayout.panelCaption(count: "2 of 3 on", waitNote: nil, text: zoneText))
 
     let zoned: Set<String> = ["lc:usb", "ap:native:den"]
     // covers: S404

@@ -441,6 +441,12 @@ enum ZoneLayout {
         state == .playing && on > 0 && waiting == on ? note : nil
     }
 
+    /// What the menu bar panel shows after a zone's name: its count, as the
+    /// main window's header reads it, then its wait note (S359).
+    static func panelCaption(count: String, waitNote: String?, text: UIStrings) -> String {
+        count + (waitNote.map(text.zoneWaitNote) ?? "")
+    }
+
     /// The menu bar panel's rows for `zones`: a header each, plus the members
     /// of every zone not in `collapsed`.
     static func panelRows<Z>(_ zones: [Z], id: (Z) -> String, members: (Z) -> Int,
