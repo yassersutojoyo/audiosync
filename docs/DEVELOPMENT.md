@@ -108,7 +108,7 @@ The Windows app keeps the user's choices in `%LOCALAPPDATA%\AudioSync\settings.j
 
 The double-audio notice only shows up while streaming. To look at its guide without playing anything, also set `$env:AUDIOSYNC_PREVIEW_GUIDE="app"` (one app captured) or `"system"` (the whole system) before starting it: with the debug log on, the guide opens at launch for a made-up notice.
 
-To look at the AudioSync Guide without the menu, set `$env:AUDIOSYNC_PREVIEW_HELP="1"`: with the debug log on, it opens at launch.
+To look at the AudioSync Guide without the menu, set `$env:AUDIOSYNC_PREVIEW_HELP="1"`: with the debug log on, it opens at launch. `$env:AUDIOSYNC_PREVIEW_SETUP="1"` does the same for Check Setup.
 
 To look at the code prompt of an Apple TV pairing without an Apple TV, set `$env:AUDIOSYNC_PREVIEW_PIN="code"` (the TV shows a code) or `"wrong"` (after a wrong code): with the debug log on, the dialog opens at launch for a made-up Apple TV, and nothing is paired.
 

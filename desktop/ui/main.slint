@@ -18,13 +18,14 @@ export { CastAddressDialog, ZoneNameDialog, PasswordDialog, PinDialog } from "di
 export { GuideWindow } from "guide.slint";
 export { HelpWindow } from "help.slint";
 export { RemoteWindow } from "remote.slint";
+export { SetupWindow } from "setup.slint";
 export { Strings } from "strings.slint";
 export { Motion, NameField } from "widgets.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
 export { Tokens } from "tokens.slint";
-export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, GuideStepItem, MixAppItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, ZoneChoice, ZoneItem, ZoneTarget } from "types.slint";
+export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, GuideStepItem, MixAppItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SetupMicrophone, SetupNetwork, SpeakerGroup, SpeakerItem, SpeakerKind, ZoneChoice, ZoneItem, ZoneTarget } from "types.slint";
 
 // The main window's left column: the speaker list widens first, to its full
 // width, then the left column, from narrow to wide.
@@ -1537,6 +1538,8 @@ export component MainWindow inherits Window {
     callback check-for-updates-requested();
     // File > Web Remote…
     callback remote-requested();
+    // File > Check Setup… (Windows only: its rows name Windows settings).
+    callback setup-requested();
     callback notice-dismissed(int);
     callback notices-dismissed-all();
     // Show How on a notice: open its guide.
@@ -1675,6 +1678,13 @@ export component MainWindow inherits Window {
                 title: Strings.menu-remote;
                 activated => {
                     root.remote-requested();
+                }
+            }
+
+            if Platform.os == OperatingSystemType.windows: MenuItem {
+                title: Strings.menu-check-setup;
+                activated => {
+                    root.setup-requested();
                 }
             }
 

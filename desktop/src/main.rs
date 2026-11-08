@@ -59,6 +59,7 @@ mod placement;
 mod platform;
 mod remote;
 mod settings;
+mod setup_check;
 #[cfg(any(os_backend, target_os = "linux", test))]
 mod single_instance;
 mod speaker_names;
@@ -103,6 +104,10 @@ const PREVIEW_GUIDE_VAR: &str = "AUDIOSYNC_PREVIEW_GUIDE";
 /// With the debug log on, `1` here opens the AudioSync Guide at launch, to
 /// look at it without the menu.
 const PREVIEW_HELP_VAR: &str = "AUDIOSYNC_PREVIEW_HELP";
+
+/// With the debug log on, `1` here opens Check Setup at launch, to look at it
+/// without the menu.
+const PREVIEW_SETUP_VAR: &str = "AUDIOSYNC_PREVIEW_SETUP";
 
 /// With the debug log on, `light` or `dark` here shows every window in that
 /// appearance, whatever Windows uses, without saving it
@@ -340,6 +345,10 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     if log.enabled() && std::env::var(PREVIEW_HELP_VAR).as_deref() == Ok("1") {
         log.log(|| format!("AudioSync Guide: opened at launch ({PREVIEW_HELP_VAR})"));
         app.show_help();
+    }
+    if log.enabled() && std::env::var(PREVIEW_SETUP_VAR).as_deref() == Ok("1") {
+        log.log(|| format!("Check Setup: opened at launch ({PREVIEW_SETUP_VAR})"));
+        app.show_setup();
     }
     // To look at the PIN dialog without an Apple TV: a made-up pairing, only
     // while the debug log is on.

@@ -9,6 +9,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, hovering over the menu bar icon shows whether streaming is on, how many speakers are on and how many notices wait, as the tray icon's tooltip does on Windows.
 - On the Mac, right-clicking the menu bar icon opens a menu with Open AudioSync, Turn Streaming On or Off, Launch at Login and Quit AudioSync, as right-clicking the tray icon does on Windows. A left click still opens the panel.
 - On the Mac, while an AirPlay speaker plays, the status line in the main window ends with the AirPlay delay in use, such as "AirPlay delay 2.0 s", so you can see when AudioSync changes it by itself.
+- On Windows, File > Check Setup… shows what AudioSync needs from Windows and whether anything needs your attention: whether the network is set to Private, whether Windows blocks the microphone once an input device is used, and that Windows Firewall isn't checked. The rows update by themselves while the window is open.
 
 ### Changed
 

@@ -50,6 +50,13 @@ export enum PinPhase { starting, ready, checking }
 // or the hint under its volume slider (low, muted, or both).
 export enum DeviceVolumeHint { none, low, muted, muted-low }
 
+// Check Setup's Network type row (setup_check.rs): unknown until the first
+// reading of the connected networks.
+export enum SetupNetwork { unknown, private, public, offline }
+
+// Check Setup's Microphone row (setup_check.rs).
+export enum SetupMicrophone { not-used, working, blocked }
+
 // An app of the several-apps list under the source menu.
 export struct MixAppItem {
     name: string,

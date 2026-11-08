@@ -50,7 +50,7 @@ enum BrandTokens {
         /// 6.97:1 on #2B2B2B.
         static let errorText = BrandRGB(red: 196 / 255, green: 43 / 255, blue: 28 / 255)
         /// A warning's icon, left bar and meter fill on the Mac: 5.37:1 on warnBackground in light
-        /// appearance.
+        /// appearance. On Windows, the warning line of a Check Setup row.
         static let warn = BrandRGB(red: 154 / 255, green: 82 / 255, blue: 0 / 255)
         /// A warning row's background and the glyph on a filled warn icon.
         static let warnBackground = BrandRGB(red: 255 / 255, green: 244 / 255, blue: 221 / 255)
@@ -98,7 +98,7 @@ enum BrandTokens {
         /// 6.97:1 on #2B2B2B.
         static let errorText = BrandRGB(red: 255 / 255, green: 153 / 255, blue: 164 / 255)
         /// A warning's icon, left bar and meter fill on the Mac: 5.37:1 on warnBackground in light
-        /// appearance.
+        /// appearance. On Windows, the warning line of a Check Setup row.
         static let warn = BrandRGB(red: 255 / 255, green: 181 / 255, blue: 71 / 255)
         /// A warning row's background and the glyph on a filled warn icon.
         static let warnBackground = BrandRGB(red: 58 / 255, green: 44 / 255, blue: 18 / 255)

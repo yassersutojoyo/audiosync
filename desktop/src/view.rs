@@ -57,6 +57,7 @@ use crate::{
 
 mod help_window;
 mod remote_window;
+mod setup_window;
 
 /// The digits the PIN field keeps of what was typed: four at most.
 fn pin_digits(text: &str) -> String {
@@ -801,6 +802,9 @@ pub struct App {
     help: crate::HelpWindow,
     /// File > Web Remote, `remote_window.rs`.
     remote_window: crate::RemoteWindow,
+    /// File > Check Setup…, `setup_window.rs`.
+    setup: crate::SetupWindow,
+    setup_check: RefCell<setup_window::SetupCheck>,
     remote: RefCell<remote_window::RemoteHost>,
     log: DebugLog,
     ui: RefCell<UiState>,
@@ -1156,6 +1160,8 @@ impl App {
             guide_follows_notice: Cell::new(false),
             help: crate::HelpWindow::new()?,
             remote_window: crate::RemoteWindow::new()?,
+            setup: crate::SetupWindow::new()?,
+            setup_check: RefCell::default(),
             remote: RefCell::default(),
             log,
             ui: RefCell::default(),
@@ -1209,6 +1215,7 @@ impl App {
         app.connect_guide();
         app.connect_help();
         app.connect_remote();
+        app.connect_setup();
         app.restore_view(true);
         app.restore_remote();
         app.launch_update_check();
@@ -1452,6 +1459,7 @@ impl App {
             self.publish_remote(&self.snapshot());
         }
         self.read_none_found_network();
+        self.read_setup_network();
         self.poll_remote();
     }
 
@@ -1681,6 +1689,7 @@ impl App {
         self.remote_window
             .global::<Palette>()
             .set_color_scheme(scheme);
+        self.setup.global::<Palette>().set_color_scheme(scheme);
         for window in [
             self.main.window(),
             self.flyout.window(),
@@ -1693,6 +1702,7 @@ impl App {
             self.guide.window(),
             self.help.window(),
             self.remote_window.window(),
+            self.setup.window(),
         ] {
             self.theme_frame(window);
             if std::ptr::eq(window, self.main.window()) {
@@ -2369,6 +2379,7 @@ impl App {
         }
         self.refresh_guide(&state);
         self.refresh_help(&state);
+        self.refresh_setup(&state);
         let every_time = state.pin_prompt.as_ref().is_some_and(|prompt| {
             state
                 .speaker(&prompt.speaker_id)

@@ -91,6 +91,11 @@ pub const COLORS: &[ColorToken] = &[
         light: [196, 43, 28],
         dark: [255, 153, 164],
     },
+    ColorToken {
+        name: "warn",
+        light: [154, 82, 0],
+        dark: [255, 181, 71],
+    },
 ];
 
 /// Opacities by name (brand/tokens.json `opacity`).
@@ -119,5 +124,7 @@ pub const CONTRAST_PAIRS: &[(&str, &str)] = &[
     ("errorText", "background"),
     ("errorText", "surface"),
     ("errorText", "playingRow"),
+    ("warn", "surface"),
+    ("warn", "playingRow"),
     ("surface", "tealText"),
 ];

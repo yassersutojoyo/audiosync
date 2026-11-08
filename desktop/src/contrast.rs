@@ -216,6 +216,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("guide.slint", include_str!("../ui/guide.slint")),
     ("help.slint", include_str!("../ui/help.slint")),
     ("remote.slint", include_str!("../ui/remote.slint")),
+    ("setup.slint", include_str!("../ui/setup.slint")),
 ];
 
 /// Token colors that are not text on a token background: the wordmark's
@@ -642,7 +643,8 @@ fn keyboard_shortcuts_are_declared() {
 /// An empty Connected Speakers list otherwise says just that it's empty, or
 /// that its virtual outputs are hidden. Seven strings of the AudioSync Guide
 /// name AirPlay too, with the receivers the sender plays, the ones it can't
-/// yet, and the track info it sends.
+/// yet, and the track info it sends. Check Setup's Network type row says only
+/// that AudioSync finds AirPlay speakers on the network.
 #[test]
 fn no_text_promises_airplay() {
     let strings = include_str!("../ui/strings.slint");
@@ -691,6 +693,9 @@ fn no_text_promises_airplay() {
                 )
                 || line.contains("@tr(\"Waiting: AirPlay 2 speakers on another network\")")
                 || line.contains("needs-airplay2: @tr(\"Needs AirPlay 2\")")
+                || line.contains(
+                    "setup-network-detail: @tr(\"AudioSync finds AirPlay and Google Cast speakers on your network.\")"
+                )
                 || line.contains(
                     "network-none-found: root.public-network ? \
                      @tr(\"No AirPlay or Google Cast speakers found yet.",

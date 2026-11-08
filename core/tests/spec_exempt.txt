@@ -200,4 +200,5 @@ S430 Host only: the firewall line under the web remote's address is window text;
 S431 Hosts only: what a running capture does when its permission is taken away is host capture code; the core has no part in it.
 S432 Mac host only: the Setup window's rows and summary; the Mac logic suite checks them.
 S434 Mac host only: the note in an empty Connected Speakers when only hidden virtual outputs exist; the Mac logic suite checks it.
+S435 Windows host only: the Check Setup window's rows and summary; the desktop tests marked S435 check it.
 S436 Mac host only: where the app runs from and its login item; the Mac logic suite named in the test map checks it.

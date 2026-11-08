@@ -2200,4 +2200,37 @@ export global Strings {
     public pure function equalizer-gain-value(db: float) -> string {
         return @tr("{} dB", root.equalizer-gain(db));
     }
+
+    // File > Check Setup… (setup.slint, S435).
+    out property <string> menu-check-setup: @tr("Check Setup…");
+    out property <string> setup-title: @tr("Check Setup");
+    out property <string> setup-capture: @tr("Capture what this PC plays");
+    out property <string> setup-capture-detail: @tr("Windows lets apps capture audio without asking.");
+    out property <string> setup-capture-status: @tr("No permission needed");
+    out property <string> setup-network: @tr("Network type");
+    out property <string> setup-network-detail: @tr("AudioSync finds AirPlay and Google Cast speakers on your network.");
+    out property <string> setup-network-private: @tr("Private network");
+    out property <string> setup-network-public: @tr("Windows calls this network Public. Windows Firewall may block speakers here, and anyone on it can reach the web remote. At home, set it to Private.");
+    out property <string> setup-network-offline: @tr("Not connected to a network");
+    out property <string> setup-firewall: @tr("Windows Firewall");
+    out property <string> setup-firewall-detail: @tr("Windows Firewall can block speakers on a network.");
+    out property <string> setup-firewall-status: @tr("Not checked. AudioSync can't read firewall rules. If no speakers show up, allow AudioSync in Windows Firewall.");
+    out property <string> setup-microphone: @tr("Microphone");
+    out property <string> setup-microphone-detail: @tr("For an input device as the source, or to calibrate a speaker with the microphone.");
+    out property <string> setup-microphone-not-used: @tr("Not used yet. Checked when AudioSync opens an input.");
+    out property <string> setup-microphone-working: @tr("Working");
+    out property <string> setup-microphone-blocked: @tr("Windows is blocking microphone access for desktop apps.");
+    out property <string> setup-close: @tr("Close");
+
+    // The line under the heading: the rows that need the user, in the
+    // window's order.
+    public pure function setup-summary(network: bool, microphone: bool) -> string {
+        if network && microphone {
+            return @tr("2 items need your attention: {}, {}.", root.setup-network, root.setup-microphone);
+        }
+        if network || microphone {
+            return @tr("1 item needs your attention: {}.", network ? root.setup-network : root.setup-microphone);
+        }
+        return @tr("Windows doesn't ask AudioSync for permissions. Nothing here needs your attention.");
+    }
 }
