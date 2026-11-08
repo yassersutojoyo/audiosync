@@ -397,7 +397,8 @@ mod tests {
         let start = script
             .find("function showNotices(")
             .expect("function showNotices");
-        let show = &script[start..start + script[start..].find("\n}\n").unwrap()];
+        // A Windows checkout may end lines with CRLF, so match the closing brace without its newline.
+        let show = &script[start..start + script[start..].find("\n}").unwrap()];
         assert!(show.contains("banner.className = \"banner app\";"));
         assert!(show.contains("line.textContent = text;"));
         assert!(show.contains("announce(fresh.join(\" \"));"));
@@ -405,7 +406,11 @@ mod tests {
             !show.contains("button"),
             "the phone never dismisses a notice"
         );
-        assert!(script.contains("\n  showNotices(next.notices);\n"));
+        assert!(
+            script
+                .lines()
+                .any(|line| line.trim_end() == "  showNotices(next.notices);")
+        );
         assert!(PAGE.contains("<p id=\"live\" class=\"sr-only\" aria-live=\"polite\"></p>"));
     }
 
