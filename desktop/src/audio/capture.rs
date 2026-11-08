@@ -329,6 +329,7 @@ pub fn source_list(
             name: display_name(&executable),
             executable,
             channels: 0,
+            hands_free: false,
         });
     }
     apps.sort_by(|a, b| {
@@ -343,6 +344,7 @@ pub fn source_list(
         name: WHOLE_SYSTEM_NAME.to_owned(),
         executable: String::new(),
         channels: 0,
+        hands_free: false,
     });
     sources.extend(apps);
     sources
@@ -350,18 +352,15 @@ pub fn source_list(
 
 /// The input devices to offer, from the active capture endpoints Windows
 /// listed, by name, then endpoint ID. An endpoint without an ID can't be
-/// opened, and a Bluetooth hands-free one is left out as it is for outputs
-/// ([`is_hands_free`]): opening it switches the headset to call mode, which
-/// interrupts its stereo sound. One without a readable name shows its ID.
+/// opened. A Bluetooth hands-free one ([`is_hands_free`]) is marked: opening
+/// it switches the headset to call mode, which interrupts its stereo sound.
+/// One without a readable name shows its ID.
 pub fn input_sources(readings: Vec<EndpointReading>) -> Vec<SourceInfo> {
     let mut inputs: Vec<SourceInfo> = readings
         .into_iter()
         .filter_map(|reading| {
             let endpoint_id = reading.id.ok()?;
             let properties = reading.properties.unwrap_or_default();
-            if is_hands_free(properties.enumerator.as_deref().unwrap_or_default()) {
-                return None;
-            }
             let name = properties
                 .name
                 .filter(|name| !name.trim().is_empty())
@@ -371,6 +370,7 @@ pub fn input_sources(readings: Vec<EndpointReading>) -> Vec<SourceInfo> {
                 name,
                 executable: String::new(),
                 channels: properties.channels.unwrap_or(0),
+                hands_free: is_hands_free(properties.enumerator.as_deref().unwrap_or_default()),
             })
         })
         .collect();
@@ -416,6 +416,7 @@ pub fn running_app(
         name: display_name(&executable),
         executable,
         channels: 0,
+        hands_free: false,
     })
 }
 
@@ -1309,7 +1310,7 @@ mod tests {
 
     // covers: S355
     #[test]
-    fn input_devices_are_offered_by_name_without_hands_free_or_unreadable_ones() {
+    fn input_devices_are_offered_by_name_with_hands_free_ones_marked() {
         let readings = vec![
             input_reading(0, "usb", Some("Microphone (USB Audio)"), "USB"),
             input_reading(
@@ -1332,11 +1333,11 @@ mod tests {
                 properties: Err("IMMDevice::OpenPropertyStore failed".to_owned()),
             },
         ];
-        let offered: Vec<(SourceId, String)> = input_sources(readings)
+        let offered: Vec<(SourceId, String, bool)> = input_sources(readings)
             .into_iter()
             .map(|source| {
                 assert!(source.executable.is_empty());
-                (source.id, source.name)
+                (source.id, source.name, source.hands_free)
             })
             .collect();
         let input = |id: &str, name: &str| {
@@ -1345,6 +1346,7 @@ mod tests {
                     endpoint_id: id.to_owned(),
                 },
                 name.to_owned(),
+                id == "hf",
             )
         };
         assert_eq!(
@@ -1352,6 +1354,7 @@ mod tests {
             [
                 input("array", "array"),
                 input("blank", "blank"),
+                input("hf", "Headset (Example Buds Hands-Free)"),
                 input("line", "Line In (Realtek Audio)"),
                 input("usb", "Microphone (USB Audio)"),
                 input("nameless", "nameless"),
@@ -1710,6 +1713,7 @@ mod tests {
                 name: WHOLE_SYSTEM_NAME.to_owned(),
                 executable: String::new(),
                 channels: 0,
+                hands_free: false,
             }]
         );
     }
@@ -1879,6 +1883,7 @@ mod tests {
             name: "Browser".to_owned(),
             executable: "browser.exe".to_owned(),
             channels: 0,
+            hands_free: false,
         };
         let table = desktop();
         assert_eq!(

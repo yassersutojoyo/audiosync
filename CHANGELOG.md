@@ -52,6 +52,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a speaker another app is using now says at once that it's in use by another app, as on Windows. Before, it stayed quiet for 30 seconds and then said the speaker was disconnected while it was still plugged in.
 - On the Mac, when the AirPlay pairings file can't be read at startup, a notice now says the speakers you paired will ask for a code again, as on Windows. Before, an Apple TV just asked for its code with no explanation.
 - On the Mac, the notice for a source switch that couldn't start no longer tells you to pick the new source again to retry, which doesn't help while another app holds that input.
+- On Windows, a Bluetooth headset's hands-free microphone that you picked as the input now shows under its name in the source list, and starting says AudioSync doesn't record from it, as on the Mac. Before, it showed as not connected even while plugged in.
 
 ## [0.9.1] - 2026-11-08
 

@@ -546,9 +546,10 @@ fn activate_input(endpoint_id: &str) -> Result<IAudioClient, BackendError> {
 /// Why a capture endpoint in `state`, listed by device enumerator
 /// `enumerator`, can't be opened as the input source, if it can't.
 fn input_refusal(state: DEVICE_STATE, enumerator: Option<&str>) -> Option<BackendError> {
-    // The listing leaves a hands-free endpoint out, so one saved anyway counts as not connected.
-    (state != DEVICE_STATE_ACTIVE || is_hands_free(enumerator.unwrap_or_default()))
-        .then_some(BackendError::InputGone)
+    if state != DEVICE_STATE_ACTIVE {
+        return Some(BackendError::InputGone);
+    }
+    is_hands_free(enumerator.unwrap_or_default()).then_some(BackendError::InputHandsFree)
 }
 
 /// The activation parameters and the PROPVARIANT that carries them, kept
@@ -1560,14 +1561,14 @@ mod tests {
 
     // covers: S355
     #[test]
-    fn a_hands_free_input_is_refused_as_not_connected_even_when_saved() {
+    fn a_hands_free_input_is_refused_even_when_saved() {
         use crate::audio::outputs::HANDS_FREE_ENUMERATOR;
         use windows::Win32::Media::Audio::DEVICE_STATE_UNPLUGGED;
         assert_eq!(input_refusal(DEVICE_STATE_ACTIVE, Some("USB")), None);
         assert_eq!(input_refusal(DEVICE_STATE_ACTIVE, None), None);
         assert_eq!(
             input_refusal(DEVICE_STATE_ACTIVE, Some(HANDS_FREE_ENUMERATOR)),
-            Some(BackendError::InputGone)
+            Some(BackendError::InputHandsFree)
         );
         assert_eq!(
             input_refusal(DEVICE_STATE_UNPLUGGED, Some("USB")),

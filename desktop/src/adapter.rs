@@ -750,6 +750,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 name: WHOLE_SYSTEM_NAME.to_owned(),
                 executable: String::new(),
                 channels: 0,
+                hands_free: false,
             }],
             chosen: Chosen::WholeSystem,
             mix_mode: MixMode::Only,
@@ -3740,6 +3741,13 @@ impl<A: AudioBackend> AudioAdapter<A> {
         {
             return Err(BackendError::InputGone);
         }
+        if self
+            .sources
+            .iter()
+            .any(|source| source.hands_free && source_key(source) == key)
+        {
+            return Err(BackendError::InputHandsFree);
+        }
         if let Chosen::App {
             root_pid,
             executable,
@@ -3839,6 +3847,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             BackendError::InputGone => NoticeMessage::InputNotConnected {
                 source: self.chosen_name(),
             },
+            BackendError::InputHandsFree => NoticeMessage::InputHandsFree,
             BackendError::MicrophoneBlocked => NoticeMessage::MicrophoneBlocked {
                 source: self.chosen_name(),
             },
@@ -4624,6 +4633,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let mut rows: Vec<Source> = self
             .sources
             .iter()
+            .filter(|source| !source.hands_free)
             .map(|source| Source {
                 id: source_key(source),
                 name: source.name.clone(),
@@ -4675,6 +4685,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     })
                     .unwrap_or(rows.len()),
             };
+            // A chosen hands-free input shows under its name, last, as on the Mac (S355).
+            let listed = self
+                .sources
+                .iter()
+                .any(|source| source_key(source) == chosen);
             rows.insert(
                 at,
                 Source {
@@ -4683,7 +4698,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                     kind,
                     channels: 0,
                     apps,
-                    unplugged: kind == SourceKind::Input,
+                    unplugged: kind == SourceKind::Input && !listed,
                 },
             );
         }
@@ -6619,6 +6634,43 @@ mod tests {
         restored.set_running(true);
         assert!(restored.snapshot().running);
         assert_eq!(input_captures(&restored), [MIC]);
+    }
+
+    // covers: S355 (a chosen hands-free input that is plugged in is listed and refused)
+    #[test]
+    fn a_chosen_hands_free_input_is_listed_last_by_name_and_refused() {
+        let mut audio = MockBackend::empty();
+        audio.connect_output(SPEAKERS, "Speakers");
+        audio.connect_input(MIC, "Microphone (USB Audio)", "USB");
+        audio.connect_input("hf", "Headset (Example Buds Hands-Free)", "BTHHFENUM");
+        let mut adapter = AudioAdapter::new(audio, || "09.41".to_owned(), DebugLog::default());
+        let mut saved = adapter.current_settings();
+        saved.input_device = Some(SavedInput {
+            id: "hf".to_owned(),
+            name: "Headset (Example Buds Hands-Free)".to_owned(),
+        });
+        adapter.restore(saved);
+        adapter.refresh_sources();
+        let state = adapter.snapshot();
+        let inputs: Vec<(&str, bool)> = state
+            .sources
+            .iter()
+            .filter(|s| s.kind == SourceKind::Input)
+            .map(|s| (s.name.as_str(), s.unplugged))
+            .collect();
+        assert_eq!(
+            inputs,
+            [
+                ("Microphone (USB Audio)", false),
+                ("Headset (Example Buds Hands-Free)", false)
+            ]
+        );
+
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.set_running(true);
+        assert!(!adapter.snapshot().running);
+        assert_eq!(messages(&adapter), [NoticeMessage::InputHandsFree]);
+        assert!(input_captures(&adapter).is_empty());
     }
 
     /// The input devices captured and the pair each played, in order.

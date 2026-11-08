@@ -88,6 +88,9 @@ pub struct SourceInfo {
     /// decide the channel pairs it offers; 0 for other sources and when
     /// Windows doesn't say.
     pub channels: u16,
+    /// A Bluetooth hands-free input, which is never captured: the picker
+    /// lists it only while it is the chosen input (S355).
+    pub hands_free: bool,
 }
 
 /// What kind of device an output is, as Windows describes its endpoint.
@@ -757,6 +760,9 @@ pub enum BackendError {
     /// The chosen input device isn't connected (unplugged, disabled or
     /// removed). Unlike [`BackendError::DeviceGone`], waiting doesn't help.
     InputGone,
+    /// The chosen input device is a Bluetooth hands-free one, which
+    /// AudioSync doesn't capture (S355).
+    InputHandsFree,
     /// Windows denies AudioSync the input device (`E_ACCESSDENIED`): its
     /// privacy settings block microphone access for desktop apps.
     MicrophoneBlocked,
@@ -810,6 +816,9 @@ impl fmt::Display for BackendError {
             ),
             BackendError::SourceGone => f.write_str("The app isn't running anymore."),
             BackendError::InputGone => f.write_str("The input device isn't connected."),
+            BackendError::InputHandsFree => {
+                f.write_str("The input device is a Bluetooth hands-free microphone.")
+            }
             BackendError::MicrophoneBlocked => f.write_str(
                 "Windows blocks microphone access for desktop apps in its privacy settings.",
             ),

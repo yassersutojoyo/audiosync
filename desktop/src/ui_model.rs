@@ -688,6 +688,10 @@ pub enum NoticeMessage {
     SourceRefused { source: SourceName },
     /// The chosen input device isn't connected, so streaming didn't start.
     InputNotConnected { source: String },
+    /// The chosen input device is a Bluetooth headset's hands-free
+    /// microphone, which AudioSync doesn't capture, so streaming didn't
+    /// start.
+    InputHandsFree,
     /// The input device being captured was disconnected, so streaming
     /// stopped.
     InputDisconnected { source: String },

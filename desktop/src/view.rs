@@ -6083,6 +6083,7 @@ fn notice_text(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString {
         NoticeMessage::InputNotConnected { source } => {
             strings.invoke_notice_input_not_connected(name_or_unknown(strings, source))
         }
+        NoticeMessage::InputHandsFree => strings.get_notice_input_hands_free(),
         NoticeMessage::InputDisconnected { source } => {
             strings.invoke_notice_input_disconnected(name_or_unknown(strings, source))
         }
@@ -6288,6 +6289,7 @@ fn notice_title(strings: &Strings<'_>, message: &NoticeMessage) -> SharedString 
                 name_or_unknown(strings, source),
             );
         }
+        NoticeMessage::InputHandsFree => (NoticeKind::InputHandsFree, ""),
         NoticeMessage::MicrophoneBlocked { .. } => (NoticeKind::MicrophoneBlocked, ""),
         NoticeMessage::CaptureFailed => (NoticeKind::CaptureFailed, ""),
         NoticeMessage::CaptureLost => (NoticeKind::CaptureLost, ""),
