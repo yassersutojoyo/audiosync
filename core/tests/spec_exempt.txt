@@ -197,3 +197,4 @@ S427 Web remote only: a replaced token that comes back unpairs its device; the r
 S428 Windows host only: the web remote's IP address on Wi-Fi or Ethernet, never a VPN tunnel's; the Windows tests named in the test map check it.
 S429 Hosts only: the keyboard's volume keys moving the master; the Windows tests and the Mac logic suite named in the test map check it.
 S430 Host only: the firewall line under the web remote's address is window text; the core has no part in it.
+S431 Hosts only: what a running capture does when its permission is taken away is host capture code; the core has no part in it.
