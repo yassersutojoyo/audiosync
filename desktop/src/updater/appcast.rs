@@ -316,6 +316,20 @@ mod tests {
 
     // covers: S295
     #[test]
+    fn a_feed_signed_by_sparkle_still_reads() {
+        let text = feed(&format!(
+            "<!-- sparkle-sign-warning:\nIMPORTANT: This file was signed by Sparkle.\n-->{}{}",
+            windows_item("0.9.1", "windows-x64"),
+            windows_item("0.9.2", "windows-x64")
+        )) + "\n<!-- sparkle-signatures:\nedSignature: c2ln\nlength: 512\n-->\n";
+        let appcast = parse(&text).expect("the feed reads");
+        let update =
+            pick(&appcast, Os::Windows, Arch::X64, &v("0.9"), &win11()).expect("an update");
+        assert_eq!(update.version_text, "0.9.2");
+    }
+
+    // covers: S295
+    #[test]
     fn version_elements_win_over_enclosure_attributes() {
         let text = feed(
             r#"<item><sparkle:shortVersionString>0.9.1</sparkle:shortVersionString>

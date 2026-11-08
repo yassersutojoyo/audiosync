@@ -44,20 +44,25 @@ architecture. With the gh output, each item's length must also be its file's
 attached size. An appcast with Windows or Linux items also needs the S310
 Mac check on record: the
 date it passed in S310_MAC_CHECK_PASSED below or in the
-AUDIOSYNC_S310_MAC_CHECK environment variable (YYYY-MM-DD).
+AUDIOSYNC_S310_MAC_CHECK environment variable (YYYY-MM-DD). The appcast must
+carry exactly one feed signature block, the one Sparkle's sign_update
+appends, whose length is the byte count before it, and its sha256 must be
+the one scripts/sign_appcast.sh recorded (--signed-sha256), since the Mac
+app sets SURequireSignedFeed.
 
 Usage:
     scripts/check_appcast.py [--mac-only] APPCAST VERSION [ZIP...]
     scripts/check_appcast.py APPCAST VERSION ZIP... --add ZIP SIGNATURE [--add ZIP SIGNATURE]
     scripts/check_appcast.py --strays FOLDER VERSION
-    scripts/check_appcast.py --assets [--mac-only] APPCAST VERSION NAME...
-    scripts/check_appcast.py --assets [--mac-only] APPCAST VERSION --assets-file FILE
+    scripts/check_appcast.py --assets [--mac-only] APPCAST VERSION NAME... --signed-sha256 FILE
+    scripts/check_appcast.py --assets [--mac-only] APPCAST VERSION --assets-file FILE --signed-sha256 FILE
     scripts/check_appcast.py --self-test
 """
 
 import argparse
 import base64
 import contextlib
+import hashlib
 import datetime
 import io
 import json
@@ -82,6 +87,7 @@ MAC_OS = ("", "macos")
 MAC_ONLY_HINT = "pass --mac-only for a release without Windows and Linux"
 WINDOWS_ZIP_FILES = {"audiosync.exe", "THIRD-PARTY-NOTICES.txt"}
 ED25519_SIGNATURE_BYTES = 64
+FEED_SIGNATURE_PREFIX = b"<!-- sparkle-signatures:\n"
 # The S310 check runs once: set this to the date it passed, so later releases need no variable.
 S310_MAC_CHECK_PASSED = "2026-11-04"
 S310_VARIABLE = "AUDIOSYNC_S310_MAC_CHECK"
@@ -379,7 +385,7 @@ def read_assets(path):
     return {line.strip(): None for line in text.splitlines() if line.strip()}
 
 
-def asset_problems(appcast, version, assets, mac_only=False):
+def asset_problems(appcast, version, assets, mac_only=False, signed_sha256=None):
     """One line per release zip without an appcast item, per item whose zip is not attached
     or whose length is not the attached size (when assets maps a name to one), and per OS the
     release must reach that has no item."""
@@ -433,7 +439,35 @@ def asset_problems(appcast, version, assets, mac_only=False):
                      f"({MAC_ONLY_HINT})" for arch in OTHER_ARCHES if arch not in item_oses]
     if item_oses & set(OTHER_ARCHES) and s310_mac_check() is None:
         problems.append(S310_REFUSAL)
-    return problems
+    return problems + feed_signature_problems(appcast, signed_sha256)
+
+
+def feed_signature_problems(appcast, signed_sha256=None):
+    """One line when the appcast lacks the one signing block Sparkle's sign_update appends,
+    the block's length is not the byte count before it, or its sha256 is not signed_sha256."""
+    # covers: S441
+    with open(appcast, "rb") as f:
+        data = f.read()
+    if data.count(FEED_SIGNATURE_PREFIX) > 1:
+        return [f"{appcast} carries {data.count(FEED_SIGNATURE_PREFIX)} feed signature blocks, "
+                f"where sign_update writes one: run scripts/sign_appcast.sh again"]
+    start = data.rfind(FEED_SIGNATURE_PREFIX)
+    end = data.find(b"-->", start + len(FEED_SIGNATURE_PREFIX))
+    if start < 0 or end < 0:
+        return [f"{appcast} carries no feed signature, and the app (SURequireSignedFeed) refuses "
+                f"an unsigned appcast: sign it with scripts/sign_appcast.sh (RELEASE.md)"]
+    fields = dict(line.partition(":")[::2] for line in
+                  data[start + len(FEED_SIGNATURE_PREFIX):end].decode("utf-8", "replace").splitlines())
+    if not is_signature(fields.get("edSignature", "").strip()):
+        return [f"{appcast}: the feed signature is not a base64 Ed25519 signature"]
+    if fields.get("length", "").strip() != str(start):
+        return [f"{appcast} was edited after it was signed (signed length "
+                f"{fields.get('length', '').strip()!r}, {start} bytes now): run "
+                f"scripts/sign_appcast.sh again"]
+    if signed_sha256 is not None and hashlib.sha256(data).hexdigest() != signed_sha256.lower():
+        return [f"{appcast} was edited after it was signed (its sha256 is not the one "
+                f"scripts/sign_appcast.sh recorded): run scripts/sign_appcast.sh again"]
+    return []
 
 
 def add_windows(text, version, signed):
@@ -443,8 +477,7 @@ def add_windows(text, version, signed):
     Each item takes the Mac item's versions and publication date, and its URL
     sits in the Mac item's download folder.
     """
-    # Edits the feed after generate_appcast: fine only while SURequireSignedFeed is
-    # off, since turning it on would make these edits break the feed's signature.
+    # Breaks the feed signature generate_appcast made; sign_appcast.sh signs the feed again after.
     version = version[1:] if version.startswith("v") else version
     root = ET.fromstring(text)
     macs = [item for item in root.iter("item")
@@ -513,7 +546,7 @@ def fake_exe(version="0.8.0", release=True):
     return b"MZ\0\0" + version_node("VS_VERSION_INFO", bytes(52), [table])
 
 
-def write_appcast(path, items):
+def write_appcast(path, items, feed="signed"):
     body = "".join(
         "<item><title>{v}</title>"
         "<sparkle:version>{build}</sparkle:version>"
@@ -522,10 +555,16 @@ def write_appcast(path, items):
         "</item>".format(**item)
         for item in items
     )
-    with open(path, "w", encoding="utf-8") as f:
-        f.write('<?xml version="1.0" encoding="utf-8"?>\n'
-                f'<rss version="2.0" xmlns:sparkle="{SPARKLE}"><channel>'
-                f"<title>AudioSync</title>{body}</channel></rss>\n")
+    content = ('<?xml version="1.0" encoding="utf-8"?>\n'
+               f'<rss version="2.0" xmlns:sparkle="{SPARKLE}"><channel>'
+               f"<title>AudioSync</title>{body}</channel></rss>\n").encode()
+    for _ in range((feed != "unsigned") + (feed == "twice")):
+        signed = len(content) - (feed == "edited")
+        content += (f"<!-- sparkle-signatures:\nedSignature: {FIXTURE_SIGNATURE}\n"
+                    f"length: {signed}\n-->\n").encode()
+    with open(path, "wb") as f:
+        f.write(content)
+    return hashlib.sha256(content).hexdigest()
 
 
 FIXTURE_SIGNATURE = base64.b64encode(bytes(range(ED25519_SIGNATURE_BYTES))).decode()
@@ -730,12 +769,16 @@ def self_test():
             if got != want:
                 failures.append(f"--strays on {name}: exit {got}, expected {want}")
 
-        def against_assets(name, items, assets, want, use_file=None, mac_only=False):
+        def against_assets(name, items, assets, want, use_file=None, mac_only=False, feed="signed",
+                           recorded=None):
             nonlocal cases
             cases += 1
             appcast = os.path.join(folder, f"{name}.xml")
-            write_appcast(appcast, items)
-            argv = ["--assets", appcast, "0.8.0"] + (["--mac-only"] if mac_only else [])
+            digest = write_appcast(appcast, items, feed)
+            with open(f"{appcast}.sha256", "w", encoding="utf-8") as f:
+                f.write(f"{recorded or digest}  appcast.xml\n")
+            argv = ["--assets", appcast, "0.8.0", "--signed-sha256", f"{appcast}.sha256"]
+            argv += ["--mac-only"] if mac_only else []
             if use_file is None:
                 argv += assets
             else:
@@ -777,6 +820,15 @@ def self_test():
         against_assets("assets of a full release", good(), names + other_assets, None)
         against_assets("assets of a Mac-only release", good()[:1], names[:1] + other_assets, None,
                        mac_only=True)
+        against_assets("an unsigned appcast", good(), names + other_assets, "carries no feed signature",
+                       feed="unsigned")
+        against_assets("an appcast edited after signing", good(), names + other_assets,
+                       "edited after it was signed", feed="edited")
+        against_assets("an appcast with two feed signature blocks", good(), names + other_assets,
+                       "carries 2 feed signature blocks", feed="twice")
+        against_assets("an appcast edited after signing, same length", good(), names + other_assets,
+                       "is not the one scripts/sign_appcast.sh recorded",
+                       recorded=hashlib.sha256(b"another appcast").hexdigest())
         against_assets("Windows items with --mac-only", good(), names + other_assets,
                        "a windows-x64 item, but --mac-only", mac_only=True)
         against_assets("no Mac item", good()[1:], names[1:] + other_assets, "no Mac item")
@@ -857,6 +909,9 @@ def main(argv):
     parser.add_argument("--assets-file", metavar="FILE",
                         help="with --assets: read the names from FILE (gh release view --json "
                              "assets output, or one per line; - is stdin)")
+    parser.add_argument("--signed-sha256", metavar="FILE",
+                        help="with --assets: the sha256 scripts/sign_appcast.sh recorded for the "
+                             "appcast it signed (.build/appcast.xml.sha256)")
     parser.add_argument("appcast", nargs="?", help="the release's appcast.xml")
     parser.add_argument("version", nargs="?", help="the release version, such as 0.8.0 or v0.8.0")
     parser.add_argument("zips", nargs="*", help="the release's zips (Mac and Windows) and AppImages")
@@ -873,11 +928,19 @@ def main(argv):
         return 1 if strays else 0
     if not args.appcast or not args.version:
         parser.error("APPCAST and VERSION are required")
-    if args.assets_file and not args.assets:
-        parser.error("--assets-file needs --assets")
+    if (args.assets_file or args.signed_sha256) and not args.assets:
+        parser.error("--assets-file and --signed-sha256 need --assets")
     if args.assets:
         if args.add:
             parser.error("--assets checks a finished appcast; it takes no --add")
+        if not args.signed_sha256:
+            parser.error("--assets needs --signed-sha256, the file scripts/sign_appcast.sh wrote")
+        try:
+            with open(args.signed_sha256, encoding="utf-8") as f:
+                signed_sha256 = (f.read().split() or [""])[0]
+        except OSError as error:
+            print(f"{args.signed_sha256}: not readable ({error}); run scripts/sign_appcast.sh again")
+            return 1
         names = {os.path.basename(name): None for name in args.zips}
         if args.assets_file:
             try:
@@ -887,7 +950,7 @@ def main(argv):
                 return 1
         if not names:
             parser.error("--assets needs the asset names, as arguments or with --assets-file")
-        problems = asset_problems(args.appcast, args.version, names, args.mac_only)
+        problems = asset_problems(args.appcast, args.version, names, args.mac_only, signed_sha256)
         for problem in problems:
             print(problem)
         return 1 if problems else 0

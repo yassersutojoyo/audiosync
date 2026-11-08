@@ -26,15 +26,17 @@ ditto -c -k --keepParent /Applications/AudioSync.app "AudioSync-$VERSION.zip"
 # Windows and Linux below: put both Windows zips and both AppImages here first;
 # a release without them sets ONLY=--mac-only
 ONLY=
-scripts/sign_appcast.sh $ONLY "$VERSION"    # → appcast.xml, for the app's updater
+scripts/sign_appcast.sh $ONLY "$VERSION"    # → appcast.xml, signed, for the app's updater
 cp scripts/install.sh scripts/install-linux.sh scripts/install.ps1 .   # each release carries its own installers
 ASSETS=(AudioSync.dmg "AudioSync-$VERSION.zip" appcast.xml install.sh install-linux.sh install.ps1 THIRD_PARTY_NOTICES.md)
 shasum -a 256 "${ASSETS[@]}" > SHA256SUMS.txt
 # the zips and AppImages (*[pe]: .zip and .AppImage) must still be the ones signed (same
 # length), and every one that goes on the release needs its appcast item, under the right
-# sparkle:os (joined with &&, so a failed check stops before the tag)
+# sparkle:os, and appcast.xml must carry its feed signature (joined with &&, so a failed
+# check stops before the tag)
 python3 -I scripts/check_appcast.py $ONLY appcast.xml "$VERSION" AudioSync-"$VERSION"*[pe] \
   && python3 -I scripts/check_appcast.py --assets $ONLY appcast.xml "$VERSION" "${ASSETS[@]}" SHA256SUMS.txt \
+     --signed-sha256 .build/appcast.xml.sha256 \
   && git tag -a "v$VERSION" -m "AudioSync $VERSION" && git push origin "v$VERSION" \
   && gh release create "v$VERSION" --title "AudioSync $VERSION" --notes-file "$NOTES" \
      "${ASSETS[@]}" SHA256SUMS.txt
@@ -44,10 +46,12 @@ mkdir -p .build/release-check
 gh release view "v$VERSION" --json assets > .build/release-check/assets.json
 gh release download "v$VERSION" --pattern appcast.xml --output .build/release-check/appcast.xml --clobber
 python3 -I scripts/check_appcast.py --assets $ONLY .build/release-check/appcast.xml "$VERSION" \
-  --assets-file .build/release-check/assets.json
+  --assets-file .build/release-check/assets.json --signed-sha256 .build/appcast.xml.sha256
 ```
 
 The first check compares each zip with its appcast item: a zip made again after `scripts/sign_appcast.sh` ran almost always has another length, so it stops here instead of shipping with a stale length and signature that every updater refuses (the check reads lengths only, not signatures). The `--assets` check fails when a zip in the list, such as a Windows zip, has no appcast item or sits under the wrong `sparkle:os` (the Windows updater picks its item by `sparkle:os` alone), or when an item names a zip that isn't in the list. It also fails when the appcast has no Mac item or, without `--mac-only`, no item for one of the Windows zips, so a release that forgot the Windows zips stops here, and when `sparkle:version` is not above the release before's `CFBundleVersion` (read from its tag), so a release that forgot to raise `CFBundleVersion` stops here too. Run it before `gh release create`: once the release is public, `releases/latest/download/appcast.xml` serves its appcast at once. If either fails there, fix the zips, then run the steps again from `scripts/sign_appcast.sh` on, so the appcast and `SHA256SUMS.txt` are made anew, and don't tag yet. The run after publishing only confirms what GitHub serves, including that each item's length is the size GitHub reports for its zip. If that one fails, never edit or re-upload the published release: publish a new patch version with a correct appcast. The one exception is an S310 refusal there, which only means the variable wasn't set in that shell: run the confirmation again with `AUDIOSYNC_S310_MAC_CHECK` set; it calls for no patch release.
+
+The Mac app sets `SURequireSignedFeed` (Sparkle 2.9 and later), so Sparkle fails an `appcast.xml` without a valid feed signature, and an unsigned appcast on one release would stop every later update. `scripts/sign_appcast.sh` signs the finished appcast with Sparkle's `sign_update` as its last step and stops unless the appcast then carries exactly one signature block; it records the signed appcast's sha256 in `.build/appcast.xml.sha256`. Both `--assets` checks fail when the appcast carries no feed signature or more than one, or was edited after signing: its signed length no longer matches, or its sha256 is not the recorded one. They check the signature's form, not the signature itself; the Mac app does that. Never edit `appcast.xml` after `scripts/sign_appcast.sh`: run it again instead.
 
 `scripts/install.sh` (the Terminal install in the README) depends on two of these: it downloads `AudioSync-$VERSION.zip`, expects `AudioSync.app` at the top of it, and checks it against that file's line in `SHA256SUMS.txt`. Keep both names and the `--keepParent` zip as they are. The README's one-line installs fetch `install.sh`, `install-linux.sh` and `install.ps1` from `releases/latest/download/`, never from `main`, so every release attaches all three; each one then downloads only from the tag it resolved.
 

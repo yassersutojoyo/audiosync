@@ -9,7 +9,8 @@
 # ZIP defaults to AudioSync-VERSION.zip in the repository root, and
 # appcast.xml lands there too. Sparkle's generate_appcast signs the zip with
 # the EdDSA private key in this Mac's login keychain (made once with Sparkle's
-# generate_keys); the key never leaves the keychain.
+# generate_keys); the key never leaves the keychain. Sparkle's sign_update then
+# signs the finished appcast itself, which the app requires (SURequireSignedFeed).
 #
 # It runs generate_appcast as a copy named "AudioSync Release Signing", so the
 # keychain prompt should name AudioSync (not yet confirmed on a Mac). The copy
@@ -115,11 +116,11 @@ cp -p "$tool" "$signer"
 "$signer" --download-url-prefix "$REPO_URL/releases/download/v$version/" "$work/archives"
 [ -f "$work/archives/appcast.xml" ] || die "generate_appcast wrote no appcast.xml"
 grep -q 'sparkle:edSignature=' "$work/archives/appcast.xml" || die "appcast.xml carries no EdDSA signature"
+mkdir "$work/bin/sign"
+zip_signer="$work/bin/sign/AudioSync Release Signing"
+cp -p "$sign_tool" "$zip_signer"
 
 if [ "$mac_only" = no ]; then
-  mkdir "$work/bin/sign"
-  zip_signer="$work/bin/sign/AudioSync Release Signing"
-  cp -p "$sign_tool" "$zip_signer"
   signature_of() {
     local signed
     signed=$("$zip_signer" "$1") || die "sign_update failed on $1"
@@ -140,6 +141,13 @@ else
     || die "appcast.xml fails the S311 checks above"
   signed_for="$(basename "$zip") only (--mac-only)"
 fi
+# The app sets SURequireSignedFeed, so the feed is signed after its last edit above.
+"$zip_signer" "$work/archives/appcast.xml" || die "sign_update failed on appcast.xml"
+blocks=$(grep -cx '<!-- sparkle-signatures:' "$work/archives/appcast.xml") || blocks=0
+[ "$blocks" = 1 ] \
+  || die "appcast.xml carries $blocks feed signature blocks, not 1, and the app refuses it unless it is signed once"
 cp "$work/archives/appcast.xml" "$ROOT/appcast.xml"
+# The --assets checks compare against this, so an edit after signing stops the release.
+shasum -a 256 "$ROOT/appcast.xml" > "$ROOT/.build/appcast.xml.sha256"
 
 echo "✅ $ROOT/appcast.xml signed for $signed_for: attach it to the v$version release next to the zips"
