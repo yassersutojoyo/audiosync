@@ -143,9 +143,12 @@ else
 fi
 # The app sets SURequireSignedFeed, so the feed is signed after its last edit above.
 "$zip_signer" "$work/archives/appcast.xml" || die "sign_update failed on appcast.xml"
-blocks=$(grep -cx '<!-- sparkle-signatures:' "$work/archives/appcast.xml") || blocks=0
-[ "$blocks" = 1 ] \
-  || die "appcast.xml carries $blocks feed signature blocks, not 1, and the app refuses it unless it is signed once"
+# sign_update appends its block right after the last byte, so the marker can share a line with </rss>.
+blocks=$({ grep -o '<!-- sparkle-signatures:' "$work/archives/appcast.xml" || true; } | wc -l | tr -d '[:space:]')
+if [ "$blocks" != 1 ]; then
+  cp "$work/archives/appcast.xml" "$ROOT/.build/appcast-unverified.xml"
+  die "appcast.xml carries $blocks feed signature blocks, not 1, and the app refuses it unless it is signed once (copy in .build/appcast-unverified.xml)"
+fi
 cp "$work/archives/appcast.xml" "$ROOT/appcast.xml"
 # The --assets checks compare against this, so an edit after signing stops the release.
 shasum -a 256 "$ROOT/appcast.xml" > "$ROOT/.build/appcast.xml.sha256"
