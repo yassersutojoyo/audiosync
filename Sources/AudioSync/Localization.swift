@@ -1034,6 +1034,18 @@ struct UIStrings {
             + "“System Audio Recording Only”, then play something. If you just allowed access, "
             + "turn streaming off and on again."
     }
+    /// A session that heard sound gets only silence while its source plays
+    /// (S437); `input` for an input device, whose permission reads as off.
+    func captureSilenced(_ source: String?, input: Bool) -> String {
+        if input {
+            return "AudioSync is no longer allowed to use the microphone or other inputs, so every speaker is silent. "
+                + "Turn on AudioSync in System Settings → Privacy & Security → Microphone, "
+                + "then turn streaming off and on again."
+        }
+        return "AudioSync gets only silence from \(source ?? "the selected source") while it plays, so every speaker "
+            + "is silent. If you turned off AudioSync in System Settings → Privacy & Security → Screen & System Audio "
+            + "Recording, turn it on again under “System Audio Recording Only”, then turn streaming off and on again."
+    }
 
     let unknownDevice = "Unknown device"
     /// A device's name, or a placeholder when Core Audio can't read it.

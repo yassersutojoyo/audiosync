@@ -2368,6 +2368,52 @@ do {
     }
     check(!blamed, "capture: a tap that calls back nothing never blames the permission, whatever Now Playing reads")
 }
+do {
+    // covers: S437
+    // Sound for the first 5 checks (uptime 100 to 108), then exact zeros unless `sound`; the
+    // result is the seconds from the first check without sound to the one that says silenced.
+    func silencedAt(heard: Bool = true, sound: Bool = false, calledBack: Bool = true, moving: Bool = true,
+                    reading: Bool = true, microphone: Bool? = nil) -> Double? {
+        var silencedWatch = SilencedCaptureWatch()
+        for step in 0..<30 {
+            let uptime = 100 + 2 * Double(step)
+            let soundBlocks = heard ? UInt64(step < 5 || sound ? 10 * (step + 1) : 50) : 0
+            let callbacks = UInt64(step < 5 || calledBack ? 100 * (step + 1) : 500)
+            let position = NowPlayingMonitor.Position(elapsed: 10 + (moving ? 2 * Double(step) : 0), length: 600,
+                                                      readAt: uptime - 0.3, playing: true)
+            let source = microphone.map { SilencedCaptureWatch.Source.microphone(allowed: $0) }
+                ?? .nowPlaying(reading ? position : nil)
+            if silencedWatch.silenced(at: uptime, soundBlocks: soundBlocks, callbacks: callbacks, source: source) {
+                return uptime - 110
+            }
+        }
+        return nil
+    }
+    let tapSilenced = silencedAt()
+    check(tapSilenced.map { $0 >= SilencedCaptureWatch.span && $0 <= SilencedCaptureWatch.span + 2 } == true,
+          "silenced capture: a tap that heard sound and then gets only zeros while its track plays on is silenced after the span",
+          "\(String(describing: tapSilenced))")
+    check(silencedAt(sound: true) == nil,
+          "silenced capture: any sample above zero in every check, however quiet, is never silenced")
+    check(silencedAt(reading: false) == nil && silencedAt(moving: false) == nil,
+          "silenced capture: zeros while Now Playing shows the source paused, unknown or standing still are never silenced")
+    check(silencedAt(calledBack: false) == nil,
+          "silenced capture: a capture that stops calling back is never silenced")
+    check(silencedAt(heard: false) == nil,
+          "silenced capture: a session that never heard sound is never silenced")
+    check(silencedAt(microphone: true) == nil && silencedAt(microphone: false).map { $0 >= SilencedCaptureWatch.span } == true,
+          "silenced capture: an input's zeros are silenced only while the microphone permission doesn't read as allowed")
+    var soundBackWatch = SilencedCaptureWatch()
+    var soundBackSaid: [Bool] = []
+    for step in 0..<20 {
+        let uptime = 100 + 2 * Double(step)
+        let soundBlocks = UInt64(step < 2 || step == 19 ? 10 * (step + 1) : 30)
+        soundBackSaid.append(soundBackWatch.silenced(at: uptime, soundBlocks: soundBlocks, callbacks: UInt64(100 * (step + 1)),
+                                                     source: .microphone(allowed: false)))
+    }
+    check(soundBackSaid[17] && soundBackSaid[18] && !soundBackSaid[19],
+          "silenced capture: sound arriving again ends the silenced verdict", "\(soundBackSaid)")
+}
 
 // MARK: Automation consent: one waiting Apple event per player macOS hasn't decided on, off the scripts queue
 // covers: S336 (0.7.1: each 2 s reading's timeout took the prompt down and the next reading raised it again)

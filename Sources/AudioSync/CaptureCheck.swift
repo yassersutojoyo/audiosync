@@ -87,6 +87,71 @@ struct CaptureWatch {
     }
 }
 
+/// A session that heard sound and then gets only exact zeros while its source
+/// is known to play (S437). A tap or an input read after its permission is
+/// turned off calls back with zeros instead of stopping. Quiet music never
+/// reads as zeros: any sample above zero counts as sound.
+struct SilencedCaptureWatch {
+    /// Seconds of zeros, the source known to play all through, before the verdict.
+    static let span: TimeInterval = 15
+
+    /// What tells a silent source from a silenced capture.
+    enum Source: Equatable {
+        /// A system, app or mix tap: Now Playing's latest position while it
+        /// reports the source playing, nil otherwise.
+        case nowPlaying(NowPlayingMonitor.Position?)
+        /// An input device: whether the microphone permission reads as allowed.
+        case microphone(allowed: Bool)
+    }
+
+    private var lastSound: UInt64 = 0
+    private var lastCallbacks: UInt64 = 0
+    private var silentSince: TimeInterval?
+    private var lastPosition: NowPlayingMonitor.Position?
+    /// The read time of the first reading in the current stretch whose position moved on.
+    private var playingSince: TimeInterval?
+
+    /// - Parameters:
+    ///   - soundBlocks: the session's captured blocks with a sample above zero so far.
+    ///   - callbacks: the session's capture callbacks so far; nil while stopped.
+    mutating func silenced(at uptime: TimeInterval, soundBlocks: UInt64, callbacks: UInt64?, source: Source) -> Bool {
+        let calledBack = (callbacks ?? 0) > lastCallbacks
+        lastCallbacks = callbacks ?? 0
+        // A paused app's tap calls back nothing (S335), so only zeros that keep arriving count.
+        if soundBlocks == 0 || soundBlocks != lastSound || !calledBack {
+            silentSince = nil
+        } else {
+            silentSince = silentSince ?? uptime
+        }
+        lastSound = soundBlocks
+        read(source)
+        guard let silentSince else { return false }
+        switch source {
+        case .microphone(let allowed):
+            return !allowed && uptime - silentSince >= Self.span
+        case .nowPlaying:
+            guard let playingSince else { return false }
+            return uptime - max(silentSince, playingSince) >= Self.span
+        }
+    }
+
+    /// Checks outpace Now Playing's 2 s polls, so only a new reading moves the stretch on.
+    private mutating func read(_ source: Source) {
+        guard case .nowPlaying(let position?) = source else {
+            lastPosition = nil
+            playingSince = nil
+            return
+        }
+        guard let last = lastPosition else {
+            lastPosition = position
+            return
+        }
+        guard position.readAt > last.readAt else { return }
+        playingSince = NowPlayingMonitor.Position.advances(from: last, to: position) ? (playingSince ?? position.readAt) : nil
+        lastPosition = position
+    }
+}
+
 /// What each of one session's capture checks does with the notice (S350).
 struct CaptureNoticeGate {
     /// Seconds from the session's start to its first check.

@@ -450,6 +450,7 @@ extension AppDelegate {
                 return
             case .clear:
                 clearNotices([Notice.capture])
+                watchSilencedCapture()
                 return
             case .post(.waiting, let app):
                 let inDoubt = !engine.runHeard && CaptureCheck.provesPermission(audioSource)
@@ -468,6 +469,34 @@ extension AppDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + CaptureNoticeGate.recheck) { check() }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + CaptureNoticeGate.firstCheck) { check() }
+    }
+
+    /// From the session's first sound until it ends (S437): a capture that
+    /// gets only zeros while its source is known to play posts a notice, and
+    /// sound arriving again clears it.
+    private func watchSilencedCapture() {
+        let watched = session
+        var watch = SilencedCaptureWatch()
+        var said = false
+        func check() {
+            guard session == watched, engine.isRunning else { return }
+            let source: SilencedCaptureWatch.Source = CaptureCheck.provesPermission(audioSource)
+                ? .nowPlaying(sourcePlayingReading()?.position)
+                : .microphone(allowed: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized)
+            let silenced = watch.silenced(at: ProcessInfo.processInfo.systemUptime, soundBlocks: engine.captureSoundBlocks,
+                                          callbacks: engine.captureCallbacks, source: source)
+            if silenced != said {
+                said = silenced
+                if silenced {
+                    notify(text.captureSilenced(sourceDisplayName(), input: !CaptureCheck.provesPermission(audioSource)),
+                           origin: .automatic, subject: Notice.capture, settings: Permission.needed(for: audioSource).pane)
+                } else {
+                    clearNotices([Notice.capture])
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + CaptureNoticeGate.recheck) { check() }
+        }
+        check()
     }
 
     /// Now Playing's latest reading when it reports the selected source as

@@ -84,6 +84,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the tray panel shows the newest notice without its time, cut to three lines while others wait; hovering over it shows the whole text, as on the Mac.
 - On Windows, a paused Google Cast speaker no longer looks like it's playing in the window and the tray panel.
 - On Windows, a long speaker or zone name in the tray panel ends in "…" inside its row instead of scrolling past the row's edge; hovering over the row shows the whole name.
+- On the Mac, when the audio AudioSync captures turns to pure silence for 15 seconds while Music or Spotify keeps playing, or while you stream from an input AudioSync is no longer allowed to use, a notice now says so and how to turn the permission back on. Before, every speaker went silent with no notice, as happens when audio recording or the microphone is turned off for AudioSync in System Settings while it streams.
 - On the Mac, Update to Current Settings in the Presets menu can now be used. Every preset has Rename…, Update to Current Settings and Delete under its name, as on Windows. Before, they showed only under the preset in use, where Update to Current Settings is always greyed out because nothing differs from it.
 
 ### Changed

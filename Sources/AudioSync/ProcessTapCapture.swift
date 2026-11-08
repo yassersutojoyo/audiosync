@@ -121,6 +121,9 @@ final class SourceCapture {
     /// Some frame this session captured was not silent; false while stopped.
     var sessionHeard: Bool { sink?.heard.load(ordering: .relaxed) ?? false }
 
+    /// The session's captured blocks with a sample above zero so far; 0 while stopped.
+    var soundBlocks: UInt64 { sink?.soundBlocks.load(ordering: .relaxed) ?? 0 }
+
     /// The running session's callbacks, frames and callbacks without usable
     /// channels so far, for the debug log; nil while stopped.
     var counts: CaptureCounts? {
@@ -692,6 +695,8 @@ private extension SourceCapture {
         let callbacks = Atomic<UInt64>(0)
         let frames = Atomic<UInt64>(0)
         let silentCallbacks = Atomic<UInt64>(0)
+        /// Blocks with a sample above zero, so a capture gone silent shows (S437).
+        let soundBlocks = Atomic<UInt64>(0)
         /// Some frame this session captured was not silent (`SourceCapture.sessionHeard`).
         let heard = Atomic<Bool>(false)
         /// Some frame a tap captured in this app run was not silent (`SourceCapture.runHeard`).
@@ -724,9 +729,12 @@ private extension SourceCapture {
             let now = mach_absolute_time()
             var offset = 0
             channels.forEachBlock(in: stereoBlock) { block, count in
-                if !self.heard.load(ordering: .relaxed), CaptureChannels.hasSound(block, frames: count) {
-                    self.heard.store(true, ordering: .relaxed)
-                    if self.provesPermission { CaptureSink.runHeard.store(true, ordering: .relaxed) }
+                if CaptureChannels.hasSound(block, frames: count) {
+                    self.soundBlocks.wrappingAdd(1, ordering: .relaxed)
+                    if !self.heard.load(ordering: .relaxed) {
+                        self.heard.store(true, ordering: .relaxed)
+                        if self.provesPermission { CaptureSink.runHeard.store(true, ordering: .relaxed) }
+                    }
                 }
                 self.parts.deliver(block, frames: count, offset: offset, callbackFrames: channels.frames, now: now)
                 offset += count
