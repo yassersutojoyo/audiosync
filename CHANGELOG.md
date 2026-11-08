@@ -46,6 +46,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, when Connected Speakers is empty only because its outputs are virtual devices, which are hidden, it says so and how to show them (Show Virtual Devices in Settings), as on Windows.
 - On Windows, the Guide says Forget Password in a speaker's … menu drops its password and turns it off, so AudioSync asks for the password again the next time you turn the speaker on.
 - On Windows, the notice that AirPlay stopped or couldn't start now says AudioSync tries again every 10 seconds when it couldn't start, as on the Mac.
+- On Windows, the Guide names the AirPlay Delay row in Connected Speakers, where it is, instead of a card under them.
 
 ### Fixed
 
