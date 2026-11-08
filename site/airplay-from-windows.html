@@ -101,10 +101,10 @@
     <li>Each speaker gets its own volume, next to a master volume and a 10-band EQ.</li>
   </ul>
 
-  <h2>Why everything plays 1.75 seconds late</h2>
+  <h2>Why everything plays a little late</h2>
   <div class="card">
-    <p>AirPlay speakers don't play audio the moment it arrives. AudioSync's sender tells them to play each bit of audio 1.75 seconds after it's sent, and they hold it in a buffer until then. That's how several AirPlay speakers end up playing the same moment.</p>
-    <p>While an AirPlay speaker is on, the PC's own speakers wait those 1.75 seconds too, plus whatever you set under AirPlay Delay, and every other output waits by its own delay on top of that. So they all stay in step. A Bluetooth speaker runs behind the rest, so give it a small negative delay (around &minus;150 to &minus;300 ms), or let Calibrate with Microphone set it. Turn the last AirPlay speaker off and the local outputs only line up with each other again, with no AirPlay wait.</p>
+    <p>AirPlay speakers don't play audio the moment it arrives. AudioSync's sender tells them when to play each bit of audio, and they hold it in a buffer until then. The wait is what the speaker asks for, plus 0.1 s of AudioSync's own. That goes up to 0.2 s only after a speaker had to skip a bit of audio, during a quiet moment such as the gap between two songs, and comes back down by itself. That's how several AirPlay speakers end up playing the same moment.</p>
+    <p>While an AirPlay speaker is on, the PC's own speakers wait that long too, plus whatever you set under AirPlay Delay, and every other output waits by its own delay on top of that. So they all stay in step. A Bluetooth speaker runs behind the rest, so give it a small negative delay (around &minus;150 to &minus;300 ms), or let Calibrate with Microphone set it. Turn the last AirPlay speaker off and the local outputs only line up with each other again, with no AirPlay wait.</p>
   </div>
   <p class="after">That delay is fine for music, not for video or games. For video, a player with an audio delay setting, like mpv or VLC, can hold the picture back to match.</p>
 

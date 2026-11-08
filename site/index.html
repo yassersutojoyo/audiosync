@@ -377,7 +377,7 @@
     <div class="wrap">
       <div class="head reveal">
         <h2 id="how-title">Why it echoes, and the fix</h2>
-        <p>Every speaker takes its own time to make a sound. AirPlay holds about two seconds of audio before it plays, while a speaker plugged into the Mac plays right away. Same song, two start times: it sounds like it's playing twice.</p>
+        <p>Every speaker takes its own time to make a sound. AirPlay holds audio for a moment before it plays, while a speaker plugged into the Mac plays right away. Same song, two start times: it sounds like it's playing twice.</p>
         <p>AudioSync holds back every output attached to the Mac by its own amount, so they all play the same moment of the song at once. The AirPlay speakers stay matched to one another as well.</p>
       </div>
       <figure class="timeline card reveal">
@@ -395,7 +395,7 @@
             <div class="tl-axis" aria-hidden="true"><span></span><span><span>0 s</span><span>1 s</span><span>2 s</span><span>3 s</span><span>4 s</span></span></div>
           </div>
         </div>
-        <figcaption>Left: the desk speaker starts about two seconds before the HomePod. Right: the desk speaker waits those two seconds, and both play together.</figcaption>
+        <figcaption>Left: the desk speaker starts before the HomePod. Right: the desk speaker waits for the HomePod, and both play together.</figcaption>
       </figure>
     </div>
   </section>
@@ -476,7 +476,7 @@
       </div>
       <div class="card reveal">
         <ul class="limits">
-          <li><span><strong>There's a two-second lag.</strong> AirPlay adds a fixed delay of about 2 s, and nothing can shorten it. You won't notice with music, but it gets in the way of video and games.</span></li>
+          <li><span><strong>There's a lag.</strong> AirPlay plays as late as the speaker asks for, plus 0.1 s that AudioSync adds. It goes up to 0.2 s only after a speaker had to skip a bit of audio, and comes back down by itself. You won't notice with music, but it gets in the way of video and games.</span></li>
           <li><span><strong>You set the delays.</strong> Every output except the computer's own speakers gets a delay you pick (AirPlay speakers share one), and AudioSync remembers it per device.</span></li>
           <li><span><strong>AirPlay 1 and AirPlay 2.</strong> AudioSync streams with its own AirPlay sender. Speakers that only do AirPlay 2 play as they are. A speaker that does both uses AirPlay 2, or the original AirPlay when it was paired that way or AirPlay 2 can't take it. Up to 16 AirPlay 2 speakers play at once, and a stereo pair or an Apple TV with the HomePods it plays through shows up as one speaker.</span></li>
           <li><span><strong>Google Cast plays one speaker at a time.</strong> Cast has no shared clock, so you set its offset by ear and AudioSync remembers it. A speaker group made in the Google Home app plays as one speaker.</span></li>

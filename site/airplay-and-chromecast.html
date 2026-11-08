@@ -96,7 +96,7 @@
   <h2>How they line up</h2>
   <p>AirPlay and Cast keep time in different ways, so AudioSync treats them differently.</p>
   <ul>
-    <li>AirPlay speakers share a clock with the sender. AudioSync tells them to play each bit of audio 1.75 seconds after it's sent, they buffer it until then, and the other speakers are delayed to match. AirPlay speakers share one delay you can add to.</li>
+    <li>AirPlay speakers share a clock with the sender. AudioSync tells them to play each bit of audio a moment after it's sent (what the slowest of them asks for, plus 0.1 to 0.2 s), they buffer it until then, and the other speakers are delayed to match. AirPlay speakers share one delay you can add to.</li>
     <li>Google Cast has no shared clock. A sender can't tell a Cast speaker when to play something, and Google doesn't publish how long a Cast speaker buffers; it's a few seconds and differs from device to device. So you set an offset by ear for each Cast speaker, and AudioSync remembers it for next time.</li>
     <li>With both on, the side that's ahead waits for the other. AirPlay can wait up to 20 seconds. If a Cast speaker needs more than that, a notice tells you how far ahead AirPlay plays.</li>
     <li>If a Cast speaker drifts, hit Resync under its volume. That restarts its stream with a short gap. AudioSync never does it on its own.</li>
