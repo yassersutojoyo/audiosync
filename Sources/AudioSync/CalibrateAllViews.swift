@@ -14,10 +14,8 @@ struct CalibrateAllButton: View {
             Button { model.actions.calibrateAll() } label: {
                 // Spacing 8 and no spacer: the whole name (about 133 pt) fits the slim left column.
                 HStack(spacing: 8) {
-                    Image(systemName: "mic")
-                        .font(.system(size: 15))
+                    QuickRowIcon("mic")
                         .foregroundStyle(off == nil ? Color.primary : Color.secondary)
-                        .frame(width: 20)
                         .accessibilityHidden(true)
                     Text(t.calibrateAll)
                         .font(.body)

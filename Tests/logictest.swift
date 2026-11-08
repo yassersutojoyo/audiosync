@@ -7638,7 +7638,7 @@ do {
     // The mic is 20 pt wide; the chevron is estimated at 7 pt; "Calibrate All Speakers" measured 132.7 pt on the Mac.
     let calibrateRoom = MainColumns.narrow - 2 * MainColumns.rowInset - 20 - 7 - 2 * 8
     check(calibrateRoom >= 133 && calibrateRowSource.contains("HStack(spacing: 8)")
-            && calibrateRowSource.contains(".frame(width: 20)") && calibrateRowSource.contains("Text(t.calibrateAll)")
+            && calibrateRowSource.contains("QuickRowIcon(") && calibrateRowSource.contains("Text(t.calibrateAll)")
             && !calibrateRowSource.contains("Spacer(") && !calibrateRowSource.contains("ScrollingTitle"),
           "left column: Calibrate All Speakers fits whole on one still line at the slim width",
           calibrateRowSource.isEmpty ? "no CalibrateAllButton source" : "\(calibrateRoom) pt")
