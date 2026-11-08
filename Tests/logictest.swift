@@ -963,6 +963,12 @@ do {
           "devices: a chosen virtual device stays listed, in order")
     check(uids(AudioDevices.listed(all, showVirtual: true, keep: [])) == uids(all),
           "devices: Show Virtual Devices lists everything")
+    let macAirPlay = [dev("builtin", kAudioDeviceTransportTypeBuiltIn), dev("airplay", kAudioDeviceTransportTypeAirPlay)]
+    // covers: S434
+    check(!AudioDevices.hidesVirtual(macAirPlay, listed: AudioDevices.listed(macAirPlay, showVirtual: false, keep: []))
+            && AudioDevices.hidesVirtual(all, listed: AudioDevices.listed(all, showVirtual: false, keep: []))
+            && !AudioDevices.hidesVirtual(all, listed: all),
+          "devices: only a hidden virtual or aggregate device counts as hidden for the note, never macOS's AirPlay output")
     check(!AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeBluetooth)
           && !AudioDevices.isVirtual(transport: kAudioDeviceTransportTypeHDMI)
           && !AudioDevices.isVirtual(transport: 0), "devices: hardware and unknown transports are never hidden")
@@ -17757,6 +17763,18 @@ do {
             && !t.helpText.contains("Hidden Speakers in the gear menu")
             && t.helpText.contains("Source App Quits” in Settings."),
           "texts: the hidden-speaker line and the Guide send people to Settings, not to the gear menu")
+    let networkEmpty = t.noSpeakers
+    // covers: S434
+    check(t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty)
+            == t.virtualDevicesHidden + "\n" + networkEmpty
+            && t.virtualDevicesHidden.contains("Settings… in the gear menu and turn on Show Virtual Devices")
+            && t.connectedEmpty(allHidden: false, virtualHidden: false, networkEmpty: networkEmpty) == networkEmpty
+            && t.connectedEmpty(allHidden: true, virtualHidden: true, networkEmpty: networkEmpty) == t.allSpeakersHidden
+            && t.panelConnectedEmpty(virtualHidden: true, networkEmpty: networkEmpty)
+                == t.panelVirtualDevicesHidden + "\n" + networkEmpty
+            && t.panelConnectedEmpty(virtualHidden: false, networkEmpty: networkEmpty) == networkEmpty,
+          "Connected Speakers: empty only because virtual outputs are hidden, it says so and how to show them",
+          t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty))
 }
 
 // MARK: The playing badge's fill grows where the badge is, even as its row grows (MenuBar.swift)

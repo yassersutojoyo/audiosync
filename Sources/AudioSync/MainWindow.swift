@@ -199,8 +199,9 @@ struct MainView: View {
                                            scroll: proxy)
                             if !model.zones.isEmpty { zonesSection(t) }
                             speakerSection(t.connectedSection, speakers: layout.connected, zoned: zoned.connected,
-                                           empty: model.hidden.inConnected ? t.allSpeakersHidden
-                                               : model.networkEmptyText,
+                                           empty: t.connectedEmpty(allHidden: model.hidden.inConnected,
+                                                                   virtualHidden: model.virtualOutputsHidden,
+                                                                   networkEmpty: model.networkEmptyText),
                                            scroll: proxy,
                                            connected: true, airPlayListed: all.connected.contains { $0.isAirPlay },
                                            problem: model.airPlayProblem,

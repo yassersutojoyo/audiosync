@@ -377,6 +377,8 @@ extension AppDelegate {
         }
         if !keepListed { listedThisSession.forget() }
         let available = listedThisSession.list(outputs, showVirtual: showVirtualDevices, keep: chosen)
+        let virtualHidden = AudioDevices.hidesVirtual(outputs, listed: available)
+        if appModel.virtualOutputsHidden != virtualHidden { appModel.virtualOutputsHidden = virtualHidden }
         followMovedOutputs(available.filter { !localOrder.contains($0.uid) }, listed: Set(outputs.map(\.uid)))
         var known = Set(localOrder)
         var appeared: [String] = []

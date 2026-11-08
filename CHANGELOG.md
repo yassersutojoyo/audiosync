@@ -43,6 +43,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a speaker's row under In zones keeps its name whole when the window is narrow, and the zone's name beside it is shortened with "…" instead. A zone name cut short in the window shows in full when you hold the pointer over it, as on Windows.
 - On the Mac, each zone in the menu bar panel shows how many of its speakers are on, such as "2 of 3 on", as the window and the Windows tray flyout do.
 - On the Mac, a zone speaker that isn't found right now has the ⋯ menu too, so you can move it to another zone or take it out of the zone without waiting for it to come back, as on Windows.
+- On the Mac, when Connected Speakers is empty only because its outputs are virtual devices, which are hidden, it says so and how to show them (Show Virtual Devices in Settings), as on Windows.
 
 ### Fixed
 

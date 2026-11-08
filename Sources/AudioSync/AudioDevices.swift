@@ -119,6 +119,14 @@ struct AudioDevices: Sendable {
         return devices.filter { !isVirtual(transport: $0.transport) || keep.contains($0.uid) }
     }
 
+    /// Whether `listed` leaves out a virtual or aggregate device of `devices`,
+    /// for Connected Speakers' note (S434); macOS's own AirPlay output, hidden
+    /// on nearly every Mac, doesn't count.
+    static func hidesVirtual(_ devices: [Device], listed: [Device]) -> Bool {
+        let shown = Set(listed.map(\.uid))
+        return devices.contains { !shown.contains($0.uid) && $0.transport != kAudioDeviceTransportTypeAirPlay }
+    }
+
     /// Every device listed once stays listed until `forget`; S151.
     struct ListedThisSession {
         private var ids: Set<String> = []

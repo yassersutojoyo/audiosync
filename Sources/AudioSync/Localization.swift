@@ -1378,6 +1378,18 @@ struct UIStrings {
     }
     /// A section whose every speaker is hidden.
     let allSpeakersHidden = "Every speaker here is hidden. To show one again, choose Settings… in the gear menu and click Unhide."
+    /// Connected Speakers with no row: every speaker hidden, else
+    /// `networkEmpty`, under a line saying virtual devices are hidden when
+    /// they were its only outputs (S434).
+    func connectedEmpty(allHidden: Bool, virtualHidden: Bool, networkEmpty: String) -> String {
+        allHidden ? allSpeakersHidden : virtualHidden ? virtualDevicesHidden + "\n" + networkEmpty : networkEmpty
+    }
+    let virtualDevicesHidden = "Virtual devices are hidden. To list them, choose Settings… in the gear menu and turn on Show Virtual Devices."
+    /// The menu bar panel's Connected Speakers with no row and nothing hidden (S434).
+    func panelConnectedEmpty(virtualHidden: Bool, networkEmpty: String) -> String {
+        virtualHidden ? panelVirtualDevicesHidden + "\n" + networkEmpty : networkEmpty
+    }
+    let panelVirtualDevicesHidden = "Virtual devices are hidden. Open AudioSync and turn on Show Virtual Devices in Settings."
     let create = "Create"
     let cancel = "Cancel"
     let autoConnect = "Auto-Connect When Available"

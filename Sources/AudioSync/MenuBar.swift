@@ -337,6 +337,8 @@ final class AppModel: ObservableObject {
     @Published var volumeKeys = true
     /// The switch is on, but macOS hasn't given AudioSync Accessibility access.
     @Published var volumeKeysNeedAccess = false
+    /// Show Virtual Devices is off and left at least one output out (S434).
+    @Published var virtualOutputsHidden = false
     @Published var switchWhenSourceQuits = false
     @Published var appearance = AppAppearance.system
     /// Rows whose sync controls are expanded. Lives here rather than in view
@@ -1734,7 +1736,8 @@ struct MenuBarView: View {
                     : t.panelNoSpeakers(airPlayFoundNone: model.airplayFoundNone,
                                         airPlayStarting: !model.airplaySenderUp && model.airPlayProblem == nil,
                                         networkEmpty: model.networkEmptyText))
-                 : model.hidden.inConnected ? t.panelConnectedHidden : model.networkEmptyText)
+                 : model.hidden.inConnected ? t.panelConnectedHidden
+                 : t.panelConnectedEmpty(virtualHidden: model.virtualOutputsHidden, networkEmpty: model.networkEmptyText))
                 .font(.subheadline)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
