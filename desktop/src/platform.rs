@@ -936,11 +936,61 @@ unsafe extern "system" fn console_quit_procedure(event: u32) -> windows::core::B
     }
 }
 
-/// Whether the taskbar (and the notification area) uses the light theme, so
-/// the tray icon picks its dark-on-light variant. Dark when it can't be read,
-/// the Windows 11 default.
+/// Whether the taskbar (and the notification area) is light, so the tray
+/// icon picks its dark-on-light variant. A contrast theme paints the taskbar
+/// in its own window background, whatever the light or dark setting says.
 #[cfg(windows)]
 pub fn taskbar_is_light() -> bool {
+    light_taskbar(contrast_background(), uses_light_theme())
+}
+
+/// `contrast` is a contrast theme's window background as a COLORREF
+/// (0x00BBGGRR) while one is on: light above mid-grey luma (Rec. 709).
+#[cfg(windows)]
+fn light_taskbar(contrast: Option<u32>, uses_light_theme: bool) -> bool {
+    match contrast {
+        Some(colorref) => {
+            let [r, g, b, _] = colorref.to_le_bytes();
+            2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) > 128 * 10_000
+        }
+        None => uses_light_theme,
+    }
+}
+
+/// The window background of the contrast theme that is on, if one is.
+#[cfg(windows)]
+fn contrast_background() -> Option<u32> {
+    use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, GetSysColor};
+    use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    };
+
+    let mut contrast = HIGHCONTRASTW {
+        cbSize: size_of::<HIGHCONTRASTW>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: `contrast` is a HIGHCONTRASTW with its size set, which is what
+    // SPI_GETHIGHCONTRAST writes; nothing keeps the pointer.
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST,
+            contrast.cbSize,
+            Some((&raw mut contrast).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    if read.is_err() || (contrast.dwFlags & HCF_HIGHCONTRASTON).0 == 0 {
+        return None;
+    }
+    // SAFETY: GetSysColor reads a system color by index and takes no pointer.
+    Some(unsafe { GetSysColor(COLOR_WINDOW) })
+}
+
+/// Whether Windows uses the light theme for the taskbar. Dark when it can't
+/// be read, the Windows 11 default.
+#[cfg(windows)]
+fn uses_light_theme() -> bool {
     use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
     use windows::core::w;
 
@@ -1153,6 +1203,20 @@ pub fn end_at_exit_signal(signal: i32) -> Option<i32> {
 
 #[cfg(test)]
 mod tests {
+    /// A contrast theme picks the tray icon by its window background, not by
+    /// the light or dark setting under it: the light icon on a black
+    /// taskbar, the dark one on a white taskbar.
+    // covers: S440
+    #[cfg(windows)]
+    #[test]
+    fn a_contrast_theme_picks_the_tray_icon_by_its_background() {
+        use super::light_taskbar;
+        assert!(!light_taskbar(Some(0x0000_0000), true), "black taskbar");
+        assert!(light_taskbar(Some(0x00ff_ffff), false), "white taskbar");
+        assert!(!light_taskbar(Some(0x0020_1a1c), true), "Night sky");
+        assert!(light_taskbar(None, true) && !light_taskbar(None, false));
+    }
+
     use super::*;
 
     #[test]

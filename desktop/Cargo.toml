@@ -126,6 +126,8 @@ windows = { version = "0.62", features = [
     # (src/volume_keys/popup.rs).
     "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
+    # HIGHCONTRASTW: a contrast theme picks the tray icon by its own colors (src/platform.rs).
+    "Win32_UI_Accessibility",
     # GetDoubleClickTime: how long a click on a speaker's name waits for a second.
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
