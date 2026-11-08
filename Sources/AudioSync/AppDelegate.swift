@@ -215,9 +215,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             store.save(appearance: appearance)
         }
     }
-    var whenSourceQuits: WhenSourceQuits {
-        didSet { if whenSourceQuits != oldValue { store.save(whenSourceQuits: whenSourceQuits) } }
-    }
     /// The channel pair each input device plays (`InputChannelPair.index`), by
     /// device UID; a device without an entry plays channels 1-2.
     var inputPairs: [String: Int] {
@@ -375,7 +372,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showVirtualDevices = saved.showVirtualDevices
         volumeKeys = saved.volumeKeys
         appearance = saved.appearance
-        whenSourceQuits = saved.whenSourceQuits
         inputPairs = saved.inputPairs
         super.init()
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
@@ -537,7 +533,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     return
                 }
                 if let quit = AppLifecycle.sourceQuit(.captureLost(error), source: audioSource,
-                                                      setting: whenSourceQuits) {
+                                                      setting: .system) {
                     sourceAppQuit(quit.bundleID, quit.action)
                     return
                 }
@@ -651,7 +647,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let report = AppLifecycle.SourceQuitReport.terminated(bundleID: bundleID, streaming: engine.isRunning)
         if let bundleID, AppLifecycle.waitsForRecheck(report, source: audioSource) {
             recheckMixQuit(bundleID)
-        } else if let quit = AppLifecycle.sourceQuit(report, source: audioSource, setting: whenSourceQuits) {
+        } else if let quit = AppLifecycle.sourceQuit(report, source: audioSource, setting: .system) {
             sourceAppQuit(quit.bundleID, quit.action)
         }
         pushSources()

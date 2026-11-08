@@ -80,7 +80,7 @@ extension AppDelegate {
         } catch {
             DebugTrace.log("[AudioSync] engine start failed: \(error)")   // codes stay in the log
             if rebuild, let quit = AppLifecycle.sourceQuit(.rebuildFailed(error), source: audioSource,
-                                                           setting: whenSourceQuits) {
+                                                           setting: .system) {
                 sourceAppQuit(quit.bundleID, quit.action)
                 return
             }
@@ -383,7 +383,7 @@ extension AppDelegate {
             guard let self, audioSource == mix else { return }
             DebugTrace.log("[AudioSync] mix app quit: \(bundleID), judged again")
             if let quit = AppLifecycle.sourceQuit(.mixAppGone(bundleID: bundleID, streaming: engine.isRunning),
-                                                  source: mix, setting: whenSourceQuits) {
+                                                  source: mix, setting: .system) {
                 sourceAppQuit(quit.bundleID, quit.action)
             }
         }

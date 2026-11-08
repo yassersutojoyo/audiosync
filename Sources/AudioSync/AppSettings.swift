@@ -64,8 +64,6 @@ struct AppSettings: Equatable {
         static let volumeKeys = "volumeKeysControlAudioSync"
         /// `AppAppearance.defaultsValue` (S155).
         static let appearance = "appearance"
-        /// `WhenSourceQuits.defaultsValue` (S227): "stop", or "system" to switch.
-        static let whenSourceQuits = "whenSourceQuits"
         /// The channel pair (`InputChannelPair.index`) each input device plays,
         /// by device UID; devices on channels 1-2 are left out.
         static let inputChannelPairs = "inputChannelPairByUID"
@@ -145,7 +143,6 @@ struct AppSettings: Equatable {
     var showVirtualDevices = false
     var volumeKeys = true
     var appearance = AppAppearance.system
-    var whenSourceQuits = WhenSourceQuits.system
     var inputPairs: [String: Int] = [:]
     var webRemote = false
     var webRemotePort = RemotePort.default
@@ -204,7 +201,6 @@ struct AppSettings: Equatable {
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.volumeKeys = read(Keys.volumeKeys) as? Bool ?? true
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
-        s.whenSourceQuits = WhenSourceQuits(defaultsValue: read(Keys.whenSourceQuits) as? String)
         s.inputPairs = channelPairs(read(Keys.inputChannelPairs))
         s.webRemote = read(Keys.webRemote) as? Bool ?? false
         s.webRemotePort = read(Keys.webRemotePort).flatMap(number).flatMap(RemotePort.stored) ?? RemotePort.default
@@ -507,8 +503,6 @@ struct SettingsStore {
     func save(volumeKeys: Bool) { write(volumeKeys, Keys.volumeKeys) }
 
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
-
-    func save(whenSourceQuits: WhenSourceQuits) { write(whenSourceQuits.defaultsValue, Keys.whenSourceQuits) }
 
     func save(webRemote: Bool) { write(webRemote, Keys.webRemote) }
 

@@ -13,6 +13,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
+- On the Mac, AudioSync always switches to All System Audio when the app you capture quits, and the Switch to All System Audio When the Source App Quits switch is gone from Settings. If you had turned it off, streaming now goes on with All System Audio instead of stopping. Windows keeps its File menu item, off unless you turn it on.
 - On the Mac, the Permissions window is now called Setup, and Check Setup… in Settings opens it with a heading that says whether AudioSync is ready to stream and what is still missing. Ready to stream needs Local Network allowed and audio capture asked, and the first sound AudioSync hears confirms capture. Each row shows its state with an icon and updates when you come back from System Settings; the Now Playing row shows Music and Spotify separately, and the volume keys row shows only while Volume Keys Control AudioSync is on. VoiceOver reads each change.
 - On the Mac, the Guide says that Bluetooth speakers and headphones often need a delay below 0, and explains the line under a local speaker's slider when macOS has it turned down or muted. The notice that AirPlay stopped or couldn't start now says AudioSync tries again every 10 seconds when it couldn't start.
 - On the Mac, the Guide names the keyboard shortcuts for New Zone from Active Speakers (Command-N), the equalizer (Option-Command-E) and Refresh Devices (Command-R), as the Windows Guide names its own.

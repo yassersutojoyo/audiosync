@@ -8903,9 +8903,6 @@ do {
             && fresh.enabledAirPlay.isEmpty && fresh.enabledLocal.isEmpty && fresh.groups.isEmpty
             && !fresh.showVirtualDevices && fresh.appearance == .system,
           "settings: nothing stored gives the defaults (whole system, master 100, delays 2000 ms)")
-    // covers: S227 (the Mac's default when nothing is stored)
-    check(fresh.whenSourceQuits == .system,
-          "settings: Switch to All System Audio When the Source App Quits is on when nothing is stored (S227)")
 
     var wanted = AppSettings()
     wanted.source = .input(uid: "usb-mic")
@@ -8919,7 +8916,6 @@ do {
     wanted.autoConnect = ["ap:airplay-2"]
     wanted.showVirtualDevices = true
     wanted.appearance = .dark
-    wanted.whenSourceQuits = .stop
     store.save(source: wanted.source)
     store.save(ids: wanted.enabledAirPlay, forKey: Keys.enabledAirPlay)
     store.save(ids: wanted.enabledLocal, forKey: Keys.enabledLocal)
@@ -8931,10 +8927,7 @@ do {
     store.save(ids: wanted.autoConnect, forKey: Keys.autoConnect)
     store.save(showVirtualDevices: wanted.showVirtualDevices)
     store.save(appearance: wanted.appearance)
-    store.save(whenSourceQuits: wanted.whenSourceQuits)
     check(store.load() == wanted, "settings: every saved setting comes back unchanged")
-    check(stored.values[Keys.whenSourceQuits] as? String == "stop" && store.load().whenSourceQuits == .stop,
-          "settings: Switch to All System Audio When the Source App Quits turned off stays off (S227)")
     // covers: P170
     check(!AppSettings.airPlay2On(environment: [:])
             && !AppSettings.airPlay2On(environment: ["AUDIOSYNC_AIRPLAY2": "0"]),
@@ -9044,7 +9037,7 @@ do {
         (Keys.localVolumes, "localVolumePosByUID"), (Keys.localDelays, "localDelayMsByUID"),
         (Keys.airplayVolumes, "airPlayVolumeByID"), (Keys.groups, "speakerGroups"),
         (Keys.autoConnect, "autoConnectSpeakers"), (Keys.showVirtualDevices, "showVirtualOutputDevices"),
-        (Keys.appearance, "appearance"), (Keys.whenSourceQuits, "whenSourceQuits"), (Keys.equalizer, "equalizerSettings"),
+        (Keys.appearance, "appearance"), (Keys.equalizer, "equalizerSettings"),
         (Keys.legacyDelayMs, "delayMs"), (Keys.legacyLocalGains, "localGainByUID"),
         (Keys.retiredEngineChoice, "engineImpl"), (Keys.retiredAirPlayChoice, "airplayImpl"),
         (Keys.localOffsets, "localOffsetMsByUID"),
@@ -11929,13 +11922,6 @@ do {
     check(quit(musicQuit, .system, .system) == "keep"
             && quit(.terminated(bundleID: "com.apple.Music", streaming: false)) == "keep",
           "source quit: the same quit reported again (the capture, then macOS) acts once (S227 f)")
-    check(WhenSourceQuits(defaultsValue: nil) == .system && WhenSourceQuits(defaultsValue: "system") == .system,
-          "source quit: nothing stored reads as system, the Mac's default (S227)")
-    check(WhenSourceQuits(defaultsValue: "stop") == .stop,
-          "source quit: a stored stop reads as stop (S227)")
-    check(WhenSourceQuits(defaultsValue: "System") == .system && WhenSourceQuits(defaultsValue: "switch") == .system
-            && WhenSourceQuits(defaultsValue: "") == .system,
-          "source quit: a value this copy doesn't know reads as system, the default, like nothing stored (S227)")
     let t = UIStrings()
     let switched = t.sourceSwitchedToSystem(name: "Music", started: true)
     let notStarted = t.sourceSwitchedToSystem(name: "Music", started: false)
@@ -17841,9 +17827,15 @@ do {
     check(t.allSpeakersHidden.contains("Settings… in the gear menu and click Unhide")
             && !t.helpText.contains("gear menu, or in the AudioSync menu")
             && !t.helpText.contains("Show Virtual Devices in the gear menu")
-            && !t.helpText.contains("Hidden Speakers in the gear menu")
-            && t.helpText.contains("Source App Quits” in Settings."),
+            && !t.helpText.contains("Hidden Speakers in the gear menu"),
           "texts: the hidden-speaker line and the Guide send people to Settings, not to the gear menu")
+    // covers: S227 (the Mac always switches since 2026-11-08)
+    check(!Mirror(reflecting: AppSettings()).children.contains { $0.label == "whenSourceQuits" }
+            && ["AppDelegate.swift", "AppDelegate+Engine.swift", "AppDelegate+Windows.swift", "MenuBar.swift"]
+                .allSatisfy { !source($0).contains("henSourceQuits") }
+            && !settings.contains("switchToSystemWhenSourceQuits")
+            && !t.helpText.contains("Source App Quits"),
+          "source quit: the Mac keeps no choice, reads no stored stop and shows no switch, so a quit always switches to the whole system (S227)")
     let networkEmpty = t.noSpeakers
     // covers: S434
     check(t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty)

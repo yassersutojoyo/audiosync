@@ -713,7 +713,7 @@ struct UIStrings {
     /// The AudioSync menu (Command-comma) and the gear menu: opens the Settings window.
     let settingsMenu = "Settings…"
     let settingsTitle = "Settings"
-    /// Settings box titles; the other boxes take sourceLabel, menuSpeakers and setupTitle.
+    /// Settings box titles; the other boxes take menuSpeakers and setupTitle.
     let settingsGeneral = "General"
     let settingsUpdates = "Updates"
     /// Group titles in the Speakers menu and the gear menu, next to streamingSwitch and menuSpeakers.
@@ -779,7 +779,6 @@ struct UIStrings {
             : "\(name) quit, so the source is now \(sourceSystem), but streaming couldn't start with it. "
                 + "Turn streaming on again to retry."
     }
-    var switchToSystemWhenSourceQuits: String { "Switch to \(sourceSystem) When the Source App Quits" }
     /// A source or channel pair picked while streaming couldn't start, so
     /// the one before it plays on (S141); names as the source picker shows them.
     func sourceSwitchFailed(new: String, old: String) -> String {
@@ -2013,8 +2012,7 @@ struct UIStrings {
         - Appearance: in Settings. Match System follows macOS; Light or Dark
           keeps AudioSync's windows that way.\(guideUpdatesLine)
         - When the source app quits, AudioSync switches to All System Audio and
-          keeps playing. To stop streaming instead, turn off “Switch to All
-          System Audio When the Source App Quits” in Settings.
+          keeps playing.
 
         Calibration
         A microphone can measure the delays for you. Put it where you listen

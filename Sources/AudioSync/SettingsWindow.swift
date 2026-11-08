@@ -162,11 +162,6 @@ struct SettingsView: View {
                 SwitchRow(title: t.launchAtLogin, isOn: Binding(get: { model.launchAtLogin },
                                                                 set: { model.actions.setLaunchAtLogin($0) }))
             }
-            SettingsBox(title: t.sourceLabel) {
-                SwitchRow(title: t.switchToSystemWhenSourceQuits,
-                          isOn: Binding(get: { model.switchWhenSourceQuits },
-                                        set: { model.actions.setSwitchWhenSourceQuits($0) }))
-            }
             SettingsBox(title: t.menuSpeakers) {
                 volumeKeysRow(t)
                 Divider()

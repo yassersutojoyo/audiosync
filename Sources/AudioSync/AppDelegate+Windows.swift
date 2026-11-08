@@ -454,10 +454,6 @@ extension AppDelegate {
         a.setShowVirtualDevices = { [weak self] on in self?.setShowVirtualDevices(on) }
         a.setVolumeKeys = { [weak self] on in self?.setVolumeKeys(on) }
         a.openAccessibilitySettings = { NSWorkspace.shared.open(PrivacyPane.accessibility.url) }
-        a.setSwitchWhenSourceQuits = { [weak self] on in
-            self?.whenSourceQuits = on ? .system : .stop
-            self?.pushModel()
-        }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
         a.transport = { [weak self] command in self?.sendTransport(command) }
         a.quit = { NSApp.terminate(nil) }
@@ -644,7 +640,6 @@ extension AppDelegate {
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.volumeKeys, volumeKeys)
         publish(\.volumeKeysNeedAccess, followVolumeKeys())
-        publish(\.switchWhenSourceQuits, whenSourceQuits == .system)
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
         followCalibrationContext()
