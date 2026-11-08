@@ -423,7 +423,7 @@ component SpeakerSection inherits VerticalLayout {
             // works like one on that row. Alone, it is outside every row.
             // Inside the scroll view, so the window's own TouchArea doesn't
             // get it.
-            TouchArea {
+            note-area := TouchArea {
                 clicked => {
                     if root.zoned.length == 0 && root.speakers.length > 0 && root.speakers[root.speakers.length - 1].has-delay {
                         root.sync-toggled(root.speakers[root.speakers.length - 1].id);

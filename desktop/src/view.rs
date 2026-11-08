@@ -7198,6 +7198,7 @@ mod tests {
         app.main
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
+        app.main.global::<Motion>().set_on(true);
         app.main.set_equalizer_on(true);
         app.main.set_equalizer_curve("Electronic".into());
         slint::platform::update_timers_and_animations();
@@ -7218,9 +7219,19 @@ mod tests {
         );
         let middle = |e: &ElementHandle| e.absolute_position().y + e.size().height / 2.0;
         assert!((middle(&curve) - middle(&label)).abs() <= 1.0, "one line");
+        // A name that fits rests at the preset's width; a longer one takes
+        // its own width to scroll. The room is drawn for Segoe UI, so other
+        // hosts' fonts don't decide it.
+        let text = ElementHandle::find_by_element_id(&app.main, "MarqueeText::label")
+            .find(|t| {
+                (t.absolute_position().y - curve.absolute_position().y).abs() < 0.5
+                    && (t.absolute_position().x - curve.absolute_position().x).abs() < 0.5
+            })
+            .expect("the preset's text");
         assert!(
-            curve.size().width >= 60.0,
-            "the preset has {} px",
+            !cfg!(windows) || text.size().width <= curve.size().width + 0.5,
+            "Electronic needs {} px of the preset's {} px",
+            text.size().width,
             curve.size().width
         );
     }
@@ -9013,18 +9024,36 @@ mod tests {
     // covers: S221
     #[test]
     fn a_click_on_the_no_airplay_note_under_a_list_works_like_one_on_the_last_row() {
+        use i_slint_backend_testing::ElementHandle;
         let app = app_with_the_no_airplay_note(true);
-        click(app.main.window(), 600.0, 470.0);
+        // The note's wording and wrap differ per host and font, so the
+        // clicks aim at its own box, not at fixed points.
+        let click_the_note = || {
+            let note = ElementHandle::find_by_element_id(&app.main, "SpeakerSection::note-area")
+                .next()
+                .expect("the note shows");
+            let (at, size) = (note.absolute_position(), note.size());
+            let y = at.y + size.height / 2.0;
+            let height = app
+                .main
+                .window()
+                .size()
+                .to_logical(app.main.window().scale_factor())
+                .height;
+            assert!(y > 0.0 && y < height, "the note is in view at {y}");
+            click(app.main.window(), at.x + size.width / 2.0, y);
+        };
+        click_the_note();
         assert!(
             app.ui.borrow().sync_open.contains("local:desk"),
             "the desk's controls opened"
         );
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
-        // The open controls push the note below the list's bottom edge;
-        // scrolled to the end, it sits at y 549 to 580.
+        // The open controls push the note below the list's bottom edge.
         scroll(app.main.window(), 640.0, 600.0, -300.0);
-        click(app.main.window(), 420.0, 557.0);
+        draw_frames();
+        click_the_note();
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
