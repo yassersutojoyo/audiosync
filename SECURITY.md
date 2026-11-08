@@ -4,6 +4,10 @@
 
 Please report vulnerabilities privately through GitHub: Security → Report a vulnerability, or directly at <https://github.com/yassersutojoyo/audiosync/security/advisories/new>. Don't open a public issue for it. Steps to reproduce and the affected version or commit help a lot.
 
+There's no fixed response timeline; I reply as soon as I can.
+
+Only the latest release gets security fixes. A fix ships as a new version, not as a patch to an older one.
+
 ## How AudioSync is put together
 
 AudioSync captures the audio source on your Mac, Windows PC or Linux machine and streams it to your AirPlay speakers with its own AirPlay sender, which runs inside the app. It runs no helper process of its own; on Windows and Linux, Restart Now after an update opens the new version.
