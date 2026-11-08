@@ -630,10 +630,26 @@ private final class WindowWidth: ObservableObject {
 /// back (`Marquee`); with Reduce Motion it is cut with an ellipsis.
 struct ScrollingTitle: View {
     let text: String
+    /// Whether a name cut at its line shows in full in its tooltip.
+    let tip: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var line = MarqueeLine()
 
+    init(text: String, tip: Bool = false) {
+        self.text = text
+        self.tip = tip
+    }
+
     var body: some View {
+        if tip {
+            // Applied only here, so a caller's own tooltip on the name stays.
+            title.help(Marquee.overflow(text: line.textWidth, line: line.width, reduceMotion: false) > 0 ? text : "")
+        } else {
+            title
+        }
+    }
+
+    @ViewBuilder private var title: some View {
         let overflow = Marquee.overflow(text: line.textWidth, line: line.width, reduceMotion: reduceMotion)
         Text(text)
             .lineLimit(1)
@@ -955,7 +971,7 @@ private struct ZoneCard: View {
                                     label: model.text.nameField(for: zone.name),
                                     hint: model.text.zoneNameFieldHint)
                 } else {
-                    ScrollingTitle(text: zone.name)
+                    ScrollingTitle(text: zone.name, tip: true)
                         // Read through the switch's label, whose Rename action replaces the double-click.
                         .accessibilityHidden(true)
                         // As on a speaker's name: a double-click renames, a single
@@ -1107,6 +1123,8 @@ private struct ZoneMemberCompactRow: View {
                         ScrollingTitle(text: speaker.name)
                             .font(.body)
                             .help(t.speakerNameHelp(name: speaker.name, system: speaker.systemName, renamed: speaker.isRenamed))
+                            // The name stays whole; the chip's zone name ends in "…" first.
+                            .layoutPriority(1)
                             // The switch's Rename action replaces the double-click.
                             .accessibilityHidden(true)
                             // As on its row under the zone; a single click does nothing here.
@@ -1128,8 +1146,6 @@ private struct ZoneMemberCompactRow: View {
                         .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
-                    // The name truncates first.
-                    .fixedSize()
                     .accessibilityLabel(t.goToZoneLabel(zone.name))
                     .help(t.goToZoneLabel(zone.name))
                 }

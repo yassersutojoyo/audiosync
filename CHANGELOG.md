@@ -40,6 +40,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the message that asks you to turn speakers on before saving or updating a preset is titled Save Preset or Update to Current Settings, as on Windows, instead of AudioSync.
 - On the Mac, the Web Remote window says under the address where to allow AudioSync when the phone can't open the page: System Settings → Network → Firewall.
 - On the Mac, the arrows on the Equalizer and Calibrate All rows in the window are as dark as the other arrows that open or fold something, so they are easier to see.
+- On the Mac, a speaker's row under In zones keeps its name whole when the window is narrow, and the zone's name beside it is shortened with "…" instead. A zone name cut short in the window shows in full when you hold the pointer over it, as on Windows.
 
 ### Fixed
 
