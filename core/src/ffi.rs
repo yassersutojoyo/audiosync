@@ -311,6 +311,10 @@ pub unsafe extern "C" fn asc_airplay_row_move(
     })
 }
 
+/// Set by a panic in [`asc_apply_gain`], which has no handle to carry it;
+/// later calls only fill silence.
+static APPLY_GAIN_PANICKED: AtomicBool = AtomicBool::new(false);
+
 /// [`volume::apply_gain`] on `frames` interleaved stereo frames, in place (S64, S65).
 /// Real-time safe.
 ///
@@ -320,7 +324,8 @@ pub unsafe extern "C" fn asc_airplay_row_move(
 /// and writable, that nothing else accesses during the call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn asc_apply_gain(interleaved: *mut f32, frames: usize, gain: f32) {
-    guard_else(
+    guard_marked(
+        Some(&APPLY_GAIN_PANICKED),
         || {
             let Some(samples) = stereo_samples(frames) else {
                 return;
@@ -1967,7 +1972,7 @@ mod tests {
         assert_eq!(block, copy);
     }
 
-    // covers: S64, S65
+    // covers: S64, S65, S205
     #[test]
     fn gain_crosses_the_boundary_a_buffer_at_a_time() {
         let mut block = vec![0.5f32, -0.5, f32::NAN, f32::INFINITY, 1.0, -1.0];
@@ -1977,6 +1982,21 @@ mod tests {
         // SAFETY: the block holds 3 stereo frames.
         unsafe { asc_apply_gain(block.as_mut_ptr(), 3, 0.0) };
         assert!(block.iter().all(|x| x.to_bits() == 0));
+        // The only test that reads what the gain call wrote, so its panic is
+        // checked here, where no other test sees the call marked.
+        for call in 0..2 {
+            block.fill(0.5);
+            panic_next();
+            // SAFETY: the block holds 3 stereo frames.
+            unsafe { asc_apply_gain(block.as_mut_ptr(), 3, 0.5) };
+            assert!(block.iter().all(|&x| x == 0.0));
+            assert_eq!(
+                panic_still_pending(),
+                call == 1,
+                "applies gain after its panic"
+            );
+        }
+        APPLY_GAIN_PANICKED.store(false, Ordering::Relaxed);
     }
 }
 

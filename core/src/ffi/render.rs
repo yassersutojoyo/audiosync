@@ -20,8 +20,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::ring::{AscReaderCounters, AscRing, ring_of};
 use super::{
-    AscEqualizer, guard, guard_else, guard_marked, host_slice, host_slice_mut, samples_for,
-    silence, stereo_samples,
+    AscEqualizer, guard, guard_marked, host_slice, host_slice_mut, samples_for, silence,
+    stereo_samples,
 };
 use crate::clock;
 use crate::convert;
@@ -61,6 +61,8 @@ pub struct AscRenderer {
 /// A streaming resampler behind an opaque C pointer (S62, S85).
 pub struct AscResampler {
     resampler: Resampler,
+    /// Set by a panic in a process call; later ones only fill silence.
+    panicked: AtomicBool,
 }
 
 /// What one `asc_resampler_process` call consumed and produced.
@@ -85,7 +87,10 @@ pub struct AscGainStage {
 pub extern "C" fn asc_resampler_create(input_rate: u32, output_rate: u32) -> *mut AscResampler {
     guard(ptr::null_mut(), || {
         match Resampler::new(input_rate, output_rate) {
-            Ok(resampler) => Box::into_raw(Box::new(AscResampler { resampler })),
+            Ok(resampler) => Box::into_raw(Box::new(AscResampler {
+                resampler,
+                panicked: AtomicBool::new(false),
+            })),
             Err(_) => ptr::null_mut(),
         }
     })
@@ -197,7 +202,10 @@ pub unsafe extern "C" fn asc_resampler_process(
     output: *mut f32,
     output_frames: usize,
 ) -> AscResampleCount {
-    guard_else(
+    // SAFETY: the handle is null or live; this borrows only its atomic flag.
+    let panicked = (!resampler.is_null()).then(|| unsafe { &(*resampler).panicked });
+    guard_marked(
+        panicked,
         || {
             let (Some(input_samples), Some(output_samples)) =
                 (stereo_samples(input_frames), stereo_samples(output_frames))
@@ -214,12 +222,13 @@ pub unsafe extern "C" fn asc_resampler_process(
             let Some(output) = (unsafe { host_slice_mut(output, output_samples) }) else {
                 return AscResampleCount::default();
             };
-            // SAFETY: by the caller's contract the handle is null or live and only
-            // this call uses it now.
-            let Some(handle) = (unsafe { resampler.as_mut() }) else {
+            if resampler.is_null() {
                 return AscResampleCount::default();
-            };
-            let (consumed, produced) = handle.resampler.process(input, output);
+            }
+            // SAFETY: the handle is live and only this call uses it now; this borrows
+            // only the `resampler` field, apart from the flag borrowed above.
+            let (consumed, produced) =
+                unsafe { &mut (*resampler).resampler }.process(input, output);
             AscResampleCount {
                 input_frames: consumed,
                 output_frames: produced,
@@ -1651,6 +1660,34 @@ mod tests {
             asc_renderer_destroy(renderer);
             asc_ring_writer_destroy(writer);
             asc_ring_destroy(ring);
+        }
+    }
+
+    // covers: S205
+    #[test]
+    fn a_resampler_whose_call_panicked_only_silences_from_then_on() {
+        use crate::ffi::tests::{panic_next, panic_still_pending};
+        let input = vec![0.5f32; 441 * 2];
+        let mut out = vec![0.5f32; 600 * 2];
+        let resampler = asc_resampler_create(44_100, 48_000);
+        assert!(!resampler.is_null());
+        // SAFETY: the handle is live and used from this one thread; the
+        // buffers hold the frames passed with them.
+        unsafe {
+            for call in 0..2 {
+                panic_next();
+                let count =
+                    asc_resampler_process(resampler, input.as_ptr(), 441, out.as_mut_ptr(), 600);
+                assert_eq!(count, AscResampleCount::default());
+                assert!(out.iter().all(|&sample| sample == 0.0));
+                assert_eq!(
+                    panic_still_pending(),
+                    call == 1,
+                    "resamples after its panic"
+                );
+                out.fill(0.5);
+            }
+            asc_resampler_destroy(resampler);
         }
     }
 
