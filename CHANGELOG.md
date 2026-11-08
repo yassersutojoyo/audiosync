@@ -83,6 +83,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, Narrator now says which speaker Calibrate All is measuring as each one starts. Before, it stayed silent until the run ended.
 - On Windows, the tray panel shows the newest notice without its time, cut to three lines while others wait; hovering over it shows the whole text, as on the Mac.
 - On Windows, a paused Google Cast speaker no longer looks like it's playing in the window and the tray panel.
+- On Windows, a long speaker or zone name in the tray panel ends in "…" inside its row instead of scrolling past the row's edge; hovering over the row shows the whole name.
 
 ### Changed
 

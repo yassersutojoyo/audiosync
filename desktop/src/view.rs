@@ -15758,6 +15758,56 @@ mod tests {
         assert_eq!(row.accessible_checked(), Some(true), "{name} switched on");
     }
 
+    /// A speaker name too long for its flyout row ends in "…" inside the
+    /// row and stays put, as in the tray panel's drawing; the tooltip and
+    /// Narrator still give the whole name (S439).
+    // covers: S439
+    #[test]
+    fn a_long_name_in_a_flyout_row_ends_in_an_ellipsis() {
+        use i_slint_backend_testing::ElementHandle;
+        let name = "A speaker whose name is far too long for the row the tray panel gives it";
+        let mut backend = MockBackend::new();
+        let mut long = backend.snapshot().speaker("local:desk").unwrap().clone();
+        long.id = "local:long".into();
+        long.name = name.into();
+        backend.add_speaker(long);
+        hold_clock();
+        let app = app_over(backend);
+        app.refresh();
+        app.flyout.show().unwrap();
+        app.flyout.global::<Motion>().set_on(true);
+        draw_frames();
+        let row = || {
+            ElementHandle::find_by_element_type_name(&app.flyout, "FlyoutRow")
+                .find(|row| {
+                    row.accessible_label()
+                        .is_some_and(|label| label.contains(name))
+                })
+                .expect("the long name's row")
+        };
+        // Everything the row draws, as (left, right) edges.
+        let edges = || -> Vec<(f32, f32)> {
+            row()
+                .query_descendants()
+                .find_all()
+                .into_iter()
+                .map(|part| {
+                    let x = part.absolute_position().x;
+                    (x, x + part.size().width)
+                })
+                .collect()
+        };
+        let right = row().absolute_position().x + row().size().width;
+        let start = edges();
+        assert!(
+            start.iter().all(|&(_, end)| end <= right + 0.5),
+            "nothing runs past the row's end at {right}: {start:?}"
+        );
+        advance_clock(Duration::from_millis(3000));
+        draw_frames();
+        assert_eq!(edges(), start, "the name stays put");
+    }
+
     /// The flyout's mark and name are a button and the first stop for Tab:
     /// Space on it opens the main window, as a click does (S439).
     // covers: S439

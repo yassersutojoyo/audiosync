@@ -944,15 +944,18 @@ export component SpeakerBadge inherits Rectangle {
     callback expanded-changed(bool);
     // F2 while it has the focus.
     callback rename-key();
+    // Only the behavior and the focus ring: the tray panel draws its own
+    // round mark under it.
+    in property <bool> bare;
 
     width: root.size;
     height: root.size;
     border-radius: root.size / 2;
     // Hover and press deepen the fill a little; the state stays readable.
     property <bool> hovered: touch.has-hover && root.enabled;
-    background: root.plays ? Tokens.teal.with-alpha(root.hovered ? 0.22 : 0.14) : root.state == RowState.off ? Tokens.text.with-alpha(touch.pressed ? 0.05 : root.hovered ? 0.12 : 0.08) : root.hovered ? Fluent.hover : transparent;
+    background: root.bare ? transparent : root.plays ? Tokens.teal.with-alpha(root.hovered ? 0.22 : 0.14) : root.state == RowState.off ? Tokens.text.with-alpha(touch.pressed ? 0.05 : root.hovered ? 0.12 : 0.08) : root.hovered ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
-    border-width: root.state == RowState.off ? 0px : max(1.5px, root.size / 18);
+    border-width: root.bare || root.state == RowState.off ? 0px : max(1.5px, root.size / 18);
     border-color: Tokens.teal-text;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     forward-focus: focus;
@@ -1009,7 +1012,7 @@ export component SpeakerBadge inherits Rectangle {
         }
     }
 
-    Glyph {
+    if !root.bare: Glyph {
         glyph: root.glyph;
         font-size: root.size * 0.45;
         color: root.state == RowState.off ? Tokens.secondary-text : Tokens.teal-text;

@@ -755,6 +755,17 @@ mod tests {
         &body[..body.find('}').expect("the handler ends")]
     }
 
+    /// The kind icon after a flyout row's name switches the speaker only
+    /// while the row is enabled, as a click on the rest of the row does: a
+    /// zone's missing speaker stays as it is (S439).
+    // covers: S439
+    #[test]
+    fn the_kind_icon_on_a_disabled_flyout_row_switches_nothing() {
+        let flyout = include_str!("../ui/flyout.slint");
+        let body = handler_body(flyout, "if root.show-kind: KindIcon {", "clicked");
+        assert!(body.contains("if root.enabled {"), "{body}");
+    }
+
     /// The flyout's Dismiss All dismisses the notices (it used to open the
     /// main window), and the stack draws that row only for the rows it shows.
     #[test]
