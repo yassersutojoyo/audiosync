@@ -89,7 +89,9 @@ fn a_session_against_the_homepod_profile_dumps_its_stream_setup() {
     sender.shutdown();
     assert!(playing.is_some(), "{:?}", events.of(&key));
 
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fake_tv_homepod_dump");
+    // Per process: parallel copies of this test binary share CARGO_TARGET_TMPDIR.
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("fake_tv_homepod_dump-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     let mut dump = Dump::create(&dir).expect("the dump directory");
     let mut lines = Vec::new();
@@ -117,6 +119,7 @@ fn a_session_against_the_homepod_profile_dumps_its_stream_setup() {
         .expect("a stream SETUP line");
     assert!(summary.contains("type 96 realtime"), "{summary}");
     assert!(summary.contains("timing NTP"), "{summary}");
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
