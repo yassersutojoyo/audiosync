@@ -1907,7 +1907,8 @@ struct UIStrings {
         '\(calibrateWithMicrophone)'. AudioSync fades the music out, plays a
         short, quiet sweep on the built-in speakers and then on this speaker,
         sets its delay from the difference and fades the music back in.
-        Cancel stops it and leaves the delay as it was.
+        Cancel stops it and leaves the delay as it was. Headphones and virtual
+        outputs don't have that button; a line there says why.
 
         '\(calibrateAll)' in the left column measures every speaker that
         is on, AirPlay and Google Cast too. AudioSync fades the music out,

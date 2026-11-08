@@ -13,6 +13,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the Guide says where to rename, update or delete a preset (under its name in the Presets menu in the window), and that a speaker's tooltip shows the device's own name only while the speaker is renamed. The Windows and Linux Guide says the same about the tooltip.
 - On the Mac, the Guide names Several Apps' two modes, Only the Checked Apps and All Apps Except the Checked Ones, and says Now Playing shows no track while an input device is the source.
 - On the Mac, the Guide's Zones line says each zone has its own volume and that you can right-click a speaker to move it to a zone.
+- On the Mac, the Guide says headphones and virtual outputs have no button to calibrate them alone.
 
 ### Fixed
 

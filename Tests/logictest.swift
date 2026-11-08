@@ -14815,6 +14815,9 @@ do {
             && guideWords.contains("To move a speaker, right-click it or use its ⋯ button and choose Move to Zone, or Remove from Zone"),
           "guide, zones: each zone has its own volume, and right-click reaches Move to Zone, as on Windows")
     // covers: S407
+    check(guideWords.contains("Cancel stops it and leaves the delay as it was. Headphones and virtual outputs don't have that button; a line there says why."),
+          "guide, calibration: headphones and virtual outputs have no calibrate button of their own, as on Windows")
+    // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",
