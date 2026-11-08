@@ -11,6 +11,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the Guide's line on updates also says that AudioSync asks once whether it may check by itself, about once a day, that Settings turns this on or off, and that nothing downloads until you click Install Update, with Skip This Version for an update you don't want.
 - On the Mac, the Guide's Calibration topic says how to calibrate one zone with Calibrate Zone.
 - On the Mac, the Guide says where to rename, update or delete a preset (under its name in the Presets menu in the window), and that a speaker's tooltip shows the device's own name only while the speaker is renamed. The Windows and Linux Guide says the same about the tooltip.
+- On the Mac, the Guide names Several Apps' two modes, Only the Checked Apps and All Apps Except the Checked Ones, and says Now Playing shows no track while an input device is the source.
 
 ### Fixed
 

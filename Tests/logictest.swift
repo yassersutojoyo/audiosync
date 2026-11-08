@@ -14731,6 +14731,11 @@ do {
                 + "button, or the same one in the \(t.calibrateAll) window."),
           "guide, volume: the low macOS volume line says only its button or Calibrate All Speakers' changes it")
     // covers: S407
+    check(guideWords.contains("Several Apps opens a submenu where you check apps and choose "
+                + "\(t.sourceMixOnly) or \(t.sourceMixAllExcept).")
+            && guideWords.contains("With an input device as the source, the window shows no track."),
+          "guide, sources: Several Apps names its two modes and Now Playing shows no track for an input, as on Windows")
+    // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",

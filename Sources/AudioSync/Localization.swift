@@ -1783,7 +1783,9 @@ struct UIStrings {
            volume and the speakers. Closing the window keeps AudioSync running in
            the menu bar, and streaming continues.
         2. Pick a source under Audio Source: All System Audio, a specific app,
-           Several Apps, or an input device. AudioSync keeps your last mix of
+           Several Apps, or an input device. Several Apps opens a submenu where
+           you check apps and choose \(sourceMixOnly) or
+           \(sourceMixAllExcept). AudioSync keeps your last mix of
            apps, so you can switch back to it later.
            Keep the macOS sound output on a local device. Don't pick a HomePod in
            Control Center or in the player app: AudioSync streams to AirPlay itself.
@@ -1853,7 +1855,8 @@ struct UIStrings {
           speakers with a screen, such as a TV, show its title and artwork.
           Other apps aren't shown: macOS doesn't let apps read the
           system-wide Now Playing info.
-          macOS asks once for Automation access to Spotify or Music.
+          macOS asks once for Automation access to Spotify or Music. With an
+          input device as the source, the window shows no track.
         - Virtual devices (loopback drivers, meeting apps, aggregate devices) are
           hidden unless you use them; turn on Show Virtual Devices in Settings
           to list them all. To read the sources and outputs again, choose
