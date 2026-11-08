@@ -281,7 +281,7 @@ final class WebRemote {
                 volume: s.volume, isAirPlay: s.isAirPlay,
                 castVolumeFixed: s.cast?.volumeFixed, castVolumeStep: s.cast?.volumeStep ?? 0,
                 offsetMs: s.offsetMs, airPlayDelayMs: model.airPlayDelayMs,
-                needsCode: s.availability != .open, paired: s.paired, holdsPassword: s.holdsPassword,
+                needsCode: s.availability == .needsCode || s.availability == .codeEveryTime, paired: s.paired, holdsPassword: s.holdsPassword,
                 memberAsksPassword: s.airPlayTarget?.asksPassword == true, refusedForCode: s.refusedForCode,
                 availability: s.codeWait == nil ? s.availability : .open,
                 note: t.rowNote(cast: s.cast, waitingForAirPlay2: s.waitingForAirPlay2,

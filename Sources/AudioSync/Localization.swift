@@ -218,13 +218,16 @@ struct UIStrings {
         case .open: return nil
         case .needsCode: return "Asks for a code"
         case .codeEveryTime: return "Asks for a code every time"
+        case .cantPlay(.needsPairing): return "Pairing not supported yet"
+        case .cantPlay(.airPlay2Only): return "AirPlay 2 is off"
+        case .cantPlay: return "Not supported"
         }
     }
 
     /// Tooltip for that note.
     func availabilityHelp(_ a: SpeakerAvailability) -> String? {
         switch a {
-        case .open: return nil
+        case .open, .cantPlay: return nil
         case .needsCode:
             return "This speaker asks for a code or password. AudioSync asks you for it when you turn the speaker on."
         case .codeEveryTime:

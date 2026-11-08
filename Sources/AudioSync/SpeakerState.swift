@@ -33,6 +33,8 @@ enum SpeakerAvailability: Equatable {
     case needsCode
     /// Asks for a code every time it connects, so auto-connect leaves it off.
     case codeEveryTime
+    /// A stereo pair or home theater group none of whose members can play (P176).
+    case cantPlay(NativeReceiver.Availability)
 
     init(_ access: AirPlayPairing.Access) {
         switch access {

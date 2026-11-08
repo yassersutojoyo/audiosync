@@ -2137,7 +2137,8 @@ struct AvailabilityNote: View {
     var body: some View {
         if let note = text.availability(availability) {
             HStack(spacing: 3) {
-                Image(systemName: availability == .open ? "exclamationmark.triangle.fill" : "lock.fill")
+                Image(systemName: availability == .needsCode || availability == .codeEveryTime
+                      ? "lock.fill" : "exclamationmark.triangle.fill")
                     .imageScale(.small)
                 Text(note).lineLimit(1)
             }

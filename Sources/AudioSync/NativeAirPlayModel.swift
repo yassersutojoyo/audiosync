@@ -645,9 +645,9 @@ struct NativeAirPlayModel {
                     credentialsTurnedDown.remove(receiver.id)
                 }
             }
-            if receiver.access != nil {
+            if receiver.isTarget ? targetCantPlay(receiver.id) == nil : receiver.access != nil {
                 cantPlayAppeared.remove(receiver.id)
-            } else if case .appeared = change, !receiver.isTarget {
+            } else if case .appeared = change {
                 cantPlayAppeared.insert(receiver.id)
             }
         case .gone(let id, _):
@@ -781,10 +781,11 @@ struct NativeAirPlayModel {
         }.map(NativeAirPlayID.app)
     }
 
-    /// How a row shows the receiver; one that only plays on is open.
+    /// How a row shows the receiver; one that only plays on is open, and so
+    /// is a target that can't play, which its row says (`targetCantPlay`).
     func access(_ id: String) -> AirPlayPairing.Access? {
         if let receiver = receivers[id] {
-            return receiver.isTarget && availability(id) != .available ? nil : receiver.access
+            return targetCantPlay(id) != nil ? .open : receiver.access
         }
         return isPlaying(id) ? .open : nil
     }
@@ -800,6 +801,13 @@ struct NativeAirPlayModel {
         let inView = members(of: id).compactMap { receivers[$0]?.availability }
         if inView.isEmpty || inView.contains(where: { $0 == .available || $0 == .needsPassword }) { return .available }
         return inView[0] == .needsPin ? .needsPairing : inView[0]
+    }
+
+    /// A listed target with no member that can play, as `availability`
+    /// reads it: listed with that reason, and switched on it stays off, as on Windows (P176).
+    func targetCantPlay(_ id: String) -> NativeReceiver.Availability? {
+        guard receivers[id]?.isTarget == true, let shown = availability(id), shown != .available else { return nil }
+        return shown
     }
 
     /// The rows (app IDs) missing from `known` whose receiver is listed as
@@ -842,12 +850,16 @@ struct NativeAirPlayModel {
     /// on Windows (S349), also in rows a stop rebuilt: a turn-off starts
     /// no stream, and Windows says so whether or not it streams.
     func appearedCantPlay() -> [NativeAirPlayPlan.TurnOff] {
-        return cantPlayAppeared.sorted().compactMap { id -> NativeAirPlayPlan.TurnOff? in
-            switch receivers[id]?.availability {
-            case .airPlay2Only?: return .init(id: id, reason: .needsAirPlay2)
-            case .unsupported?, .needsPairing?: return .init(id: id, reason: .cantPlay)
-            default: return nil
-            }
+        cantPlayAppeared.sorted().compactMap(cantPlayTurnOff)
+    }
+
+    /// The turn-off of the listed receiver `id`, a target as `availability`
+    /// reads it, when it can't play; nil when it can or asks for a code.
+    func cantPlayTurnOff(_ id: String) -> NativeAirPlayPlan.TurnOff? {
+        switch availability(id) {
+        case .airPlay2Only?: return .init(id: id, reason: .needsAirPlay2)
+        case .unsupported?, .needsPairing?: return .init(id: id, reason: .cantPlay)
+        default: return nil
         }
     }
 
@@ -1221,6 +1233,9 @@ struct NativeAirPlayModel {
                 plan.add.append(id)
             case .needsPassword? where stages[id] == nil:
                 plan.turnOff.append(.init(id: id, reason: .needsPassword))
+            case _? where targetCantPlay(id) != nil:
+                // Left on from the last run: off with why, its row still listed (P176).
+                if let off = cantPlayTurnOff(id) { plan.turnOff.append(off) }
             default:
                 break
             }

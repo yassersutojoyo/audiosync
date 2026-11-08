@@ -511,7 +511,8 @@ extension AppDelegate {
     /// asks for a password AudioSync doesn't have this run prompts for it;
     /// switched off, a pairing under way stops.
     func setNativeAirPlayEnabled(_ id: String, _ on: Bool, origin: StartOrigin = .user) {
-        if on, refusedAsTargetMember(id, origin: origin) || refusedByHomeTheater(id, origin: origin) { return }
+        if on, refusedAsTargetMember(id, origin: origin) || refusedByHomeTheater(id, origin: origin)
+            || refusedAsCantPlay(id, origin: origin) { return }
         if on { clearNotices([SpeakerKey.make(id: id, airplay: true)]) }   // a new attempt
         if on { enabledAirPlay.insert(id) } else { enabledAirPlay.remove(id) }
         if !on { endNativeAttempt(id) } else if let ids = origin.attemptsToBegin([id]) { beginNativeAttempts(ids) }
@@ -533,6 +534,19 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off: it plays as part of \(nativeLabel(target))")
         notify(text.nativeAirPlayPlaysInGroup(name: shownName(airPlay: id), group: shownName(airPlay: NativeAirPlayID.app(target))),
                origin: origin, subject: SpeakerKey.make(id: id, airplay: true),
+               shortName: text.cantPlayNoticeName(shownName(airPlay: id)))
+        pushModel()
+        return true
+    }
+
+    /// A stereo pair or home theater group with no member that can play
+    /// (P176): switched on, it stays off, and says why.
+    func refusedAsCantPlay(_ id: String, origin: StartOrigin) -> Bool {
+        guard let receiver = NativeAirPlayID.receiver(id), let model = nativeAirPlay?.model,
+              model.targetCantPlay(receiver) != nil, let off = model.cantPlayTurnOff(receiver),
+              let words = nativeTurnOffText(id, off.reason, onThisMac: false) else { return false }
+        DebugTrace.log("[AudioSync] native AirPlay: \(nativeLabel(receiver)) stays off: no member can play (\(off.reason))")
+        notify(words, origin: origin, subject: SpeakerKey.make(id: id, airplay: true),
                shortName: text.cantPlayNoticeName(shownName(airPlay: id)))
         pushModel()
         return true

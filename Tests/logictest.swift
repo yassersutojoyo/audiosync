@@ -5693,19 +5693,33 @@ do {
     let unplayable = pairOf(.needsPin, .unsupported), halfPlayable = pairOf(.needsPin, .available)
     // covers: P176, P181
     check(unplayable.availability(pair) == .needsPairing
-            && unplayable.access(pair) == nil && !unplayable.rows(enabled: []).contains(app(pair))
+            && unplayable.access(pair) == .open && unplayable.rows(enabled: []).contains(app(pair))
+            && unplayable.targetCantPlay(pair) == .needsPairing && halfPlayable.targetCantPlay(pair) == nil
+            && UIStrings().availability(.cantPlay(.needsPairing)) == "Pairing not supported yet"
             && unplayable.joinable([app(pair)], after: [], stopped: false).isEmpty
             && halfPlayable.access(pair) == .open
             && halfPlayable.joinable([app(pair)], after: [], stopped: false) == [app(pair)],
-          "P176 native airplay: a pair with no playable member reads its first member's reason, so it has no row and "
-            + "auto-connect leaves it off; one member that can play is enough")
+          "P176 native airplay: a pair with no playable member reads its first member's reason, so it is listed with "
+            + "that reason as on Windows and auto-connect leaves it off; one member that can play is enough")
     // covers: P176, P181
     check(unplayable.plan(streaming: true, enabled: [app(pair)]).add.isEmpty
+            && unplayable.plan(streaming: true, enabled: [app(pair)]).turnOff == [.init(id: pair, reason: .cantPlay)]
+            && unplayable.rows(enabled: [app(pair)]).contains(app(pair))
             && !unplayable.soundingIDs.contains(app(pair))
             && halfPlayable.plan(streaming: true, enabled: [app(pair)]).add == [pair]
             && halfPlayable.soundingIDs.contains(app(pair)),
-          "P176 native airplay: a pair with no playable member left on from the last run starts no session and holds "
-            + "no local output back")
+          "P176 native airplay: a pair with no playable member left on from the last run goes off with the can't-play "
+            + "notice, keeps its row, starts no session and holds no local output back")
+    var pairAppearing = EveryTimeGuard()
+    // covers: P176, S349
+    check(unplayable.cantPlayTurnOff(pair) == .init(id: pair, reason: .cantPlay)
+            && halfPlayable.cantPlayTurnOff(pair) == nil
+            && unplayable.adopt(enabled: [], known: [], stopped: false, everyTime: &pairAppearing).asking
+                .contains(.init(id: pair, reason: .cantPlay))
+            && !halfPlayable.adopt(enabled: [], known: [], stopped: false, everyTime: &pairAppearing).asking
+                .contains { $0.id == pair },
+          "P176 native airplay: a pair with no playable member is refused as can't play however it is switched on "
+            + "(its row, a zone, auto-connect when it appears), as on Windows")
     var deafTheater = NativeAirPlayModel()
     deafTheater.apply(.appeared(NativeReceiver(id: tv, name: "Den TV", model: "AppleTV11,1", availability: .available,
                                                reason: nil, hints: ["airplay", "apple-tv"])))

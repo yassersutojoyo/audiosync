@@ -740,9 +740,10 @@ extension AppDelegate {
                                     volume: airPlayRowLevel(id),
                                     offsetMs: nil,
                                     autoConnect: autoConnect.contains(SpeakerKey.make(id: id, airplay: true)),
-                                    availability: SpeakerAvailability(airplayAccess[id] ?? .open,
-                                                                      everyTime: receiver.map { native?.asksEveryTime($0) == true } ?? false,
-                                                                      on: enabledAirPlay.contains(id)),
+                                    availability: receiver.flatMap { native?.targetCantPlay($0) }.map(SpeakerAvailability.cantPlay)
+                                        ?? SpeakerAvailability(airplayAccess[id] ?? .open,
+                                                               everyTime: receiver.map { native?.asksEveryTime($0) == true } ?? false,
+                                                               on: enabledAirPlay.contains(id)),
                                     systemName: systemName(airPlay: id),
                                     airPlay2: receiver.map { native?.reachedOverAirPlay2($0) == true } ?? false,
                                     waitingForAirPlay2: receiver.map { native?.waitReason($0) == .tooManyAirPlay2 } ?? false,

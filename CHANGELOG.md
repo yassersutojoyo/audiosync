@@ -24,6 +24,11 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, VoiceOver tells you on a speaker's or zone's name field that Return applies the name and Escape cancels, and on a speaker's that an empty name brings back the device's own, as on Windows.
 - On the Mac, Measure Again on a row whose delay changed after Calibrate All measured it now says "This speaker's delay changed after it was measured. Calibrate All again." instead of saying something changed during the measurement.
 - On the Mac, turning streaming on while none of the apps chosen in Several Apps is running now names every one of them ("Music and Safari are not running"), as on Windows. Before, it named only the first.
+- On the Mac, a stereo pair or home theater group none of whose speakers can play now stays in the speaker list with the reason next to its name, as on Windows, instead of being hidden. Turned on, it goes off again and says AudioSync can't play to it.
+- On the Mac, a stereo pair or home theater group none of whose speakers can play now stays in the speaker list with the reason next to its name, as on Windows, instead of being hidden. Turned on, it stays off and says AudioSync can't play to it.
+- On the Mac, a stereo pair's or home theater group's row names its speakers by the names you gave them, as a Google Cast group's row does.
+- On the Mac, the message that asks you to turn speakers on before saving or updating a preset is titled Save Preset or Update to Current Settings, as on Windows, instead of AudioSync.
+- On the Mac, the Web Remote window says under the address where to allow AudioSync when the phone can't open the page: System Settings → Network → Firewall.
 
 ### Fixed
 

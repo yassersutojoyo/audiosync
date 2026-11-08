@@ -167,7 +167,9 @@ extension AppDelegate {
             }
         case .airplay:
             if on {
-                if refusedByHomeTheater(member.appID, origin: origin) { return }
+                if refusedByHomeTheater(member.appID, origin: origin) || refusedAsCantPlay(member.appID, origin: origin) {
+                    return
+                }
                 clearNotices([member.key])
                 enabledAirPlay.insert(member.appID)
                 attempts.append(member.appID)
