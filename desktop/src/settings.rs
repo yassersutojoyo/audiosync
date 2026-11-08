@@ -1138,7 +1138,7 @@ impl Settings {
             })
             .take(MAX_ENTRIES)
             .collect();
-        let speaker_zones = Zones::from_stored(
+        let mut speaker_zones: Vec<SavedZone> = Zones::from_stored(
             self.speaker_zones
                 .into_iter()
                 .filter(|zone| usable_id(&zone.id))
@@ -1164,6 +1164,19 @@ impl Settings {
         .into_iter()
         .map(SavedZone::from)
         .collect();
+        for index in 0..speaker_zones.len() {
+            if speaker_zones[index].name.trim().is_empty() {
+                // Counts from the zones before it but skips a later zone's name too, as the Mac does.
+                let mut number = index + 1;
+                while speaker_zones
+                    .iter()
+                    .any(|zone| zone.name == format!("Zone {number}"))
+                {
+                    number += 1;
+                }
+                speaker_zones[index].name = format!("Zone {number}");
+            }
+        }
         let speaker_presets = presets::from_stored(
             self.speaker_presets
                 .iter()
@@ -3766,11 +3779,56 @@ mod tests {
                 },
                 SavedZone {
                     id: "z2".to_owned(),
+                    name: "Zone 2".to_owned(),
                     members: vec!["lc:hall".to_owned()],
                     ..SavedZone::default()
                 },
             ]
         );
+    }
+
+    // covers: S245 (a stored zone without an ID is dropped, one without a name is numbered), S150
+    #[test]
+    fn a_stored_zone_without_a_name_is_numbered_and_one_without_an_id_is_dropped() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true,
+            "speaker_zones": [
+                {"id": "z1", "name": "Zone 2"},
+                {"id": "", "name": ""},
+                {"name": "Den"},
+                {"id": "z2", "name": "  "},
+                {"id": "z2", "name": ""},
+                {"id": "z3"}
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        let named: Vec<(&str, &str)> = read
+            .speaker_zones
+            .iter()
+            .map(|zone| (zone.id.as_str(), zone.name.as_str()))
+            .collect();
+        assert_eq!(
+            named,
+            [("z1", "Zone 2"), ("z2", "Zone 3"), ("z3", "Zone 4")]
+        );
+    }
+
+    // covers: S245 (a numbered name skips a later zone's name, as on the Mac), S150
+    #[test]
+    fn a_numbered_stored_zone_skips_a_later_zones_name() {
+        let text = r#"{"version": 3, "speaker_zones_migrated": true,
+            "speaker_zones": [
+                {"id": "a"},
+                {"id": "b", "name": "Zone 1"},
+                {"id": "c", "name": 5}
+            ]
+        }"#;
+        let (read, _) = Settings::from_json(text).expect("read");
+        let named: Vec<(&str, &str)> = read
+            .speaker_zones
+            .iter()
+            .map(|zone| (zone.id.as_str(), zone.name.as_str()))
+            .collect();
+        assert_eq!(named, [("a", "Zone 2"), ("b", "Zone 1"), ("c", "Zone 3")]);
     }
 
     // covers: S286 (a zone member's kept kind), S212

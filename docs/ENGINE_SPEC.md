@@ -4154,6 +4154,8 @@ The checks for S150, S245 to S250 and S271 in the Rust core (`core/tests/policy_
 | the_sender_keeps_the_speakers_own_level_whatever_the_zone (`desktop/src/audio/airplay.rs`) | S290, S291 |
 | a_cast_row_shows_the_level_the_tv_gets_and_a_master_move_changes_neither (`desktop/src/audio/cast.rs`) | S290, S415 |
 | a_zone_with_an_unreadable_volume_member_or_name_keeps_the_rest (`desktop/src/settings.rs`) | S245, S212 |
+| a_stored_zone_without_a_name_is_numbered_and_one_without_an_id_is_dropped (`desktop/src/settings.rs`) | S245, S150 |
+| a_numbered_stored_zone_skips_a_later_zones_name (`desktop/src/settings.rs`) | S245, S150 |
 | zone_member_rows_say_why_they_dont_play (`desktop/src/view.rs`) | S246, S247 |
 | a_zone_switches_its_present_members_together (`desktop/src/adapter.rs`) | S246 |
 | zones_and_auto_connect_hold_airplay_speakers (`desktop/src/adapter.rs`) | S246, S383 |
