@@ -11,6 +11,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, when a speaker set to auto-connect appears but can't be turned on and no other speaker is on, the app no longer posts a notice asking you to choose a speaker, as on Windows.
 - On the Mac, a speaker set to auto-connect that appears but can't play (it needs AirPlay 2 while that's off, AudioSync doesn't support it, or it needs another kind of pairing) now stays off with a notice each time it shows up, even while streaming is stopped, as on Windows.
 - On the Mac, when calibration can't use the microphone's sample rate, it says to set the microphone to 48 kHz in Audio MIDI Setup, as on Windows. When it's the streamed audio's rate it can't use, it says so and says to set the Mac's output device or the input you stream from to 48 kHz, instead of blaming the microphone.
+- On the Mac, a menu bar panel with no speakers says "Looking for speakers…" for the first 20 seconds of the AirPlay search and "No speakers found" only after that, as on Windows. Before, it said "No speakers found" right away.
 
 ## [0.9.1] - 2026-11-08
 

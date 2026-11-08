@@ -1519,6 +1519,26 @@ do {
             && lookingText.networkSpeakersNote(airPlayNone: true, cast: .quiet, airPlaySearching: false)
                 == lookingText.airPlayNoneFound(),
           "AirPlay search: Connected Speakers says it is looking, not the network advice, during the first look")
+    // covers: S154
+    check(lookingText.panelNoSpeakers(airPlayFoundNone: false, airPlayStarting: false,
+                                      networkEmpty: lookingText.lookingForSpeakers)
+            == lookingText.lookingForSpeakers
+            && lookingText.panelNoSpeakers(airPlayFoundNone: true, airPlayStarting: false,
+                                           networkEmpty: lookingText.airPlayNoneFound())
+                == lookingText.noSpeakers,
+          "AirPlay search: the empty menu bar panel says it is looking during the first look, \"No speakers found\" after")
+    // covers: S154
+    check(lookingText.panelNoSpeakers(airPlayFoundNone: false, airPlayStarting: true,
+                                      networkEmpty: lookingText.airPlayNoneFound())
+            == lookingText.lookingForSpeakers,
+          "AirPlay search: the empty menu bar panel says it is looking while the sender is not up yet")
+    // covers: S154
+    check(!AirPlaySearch.foundNone(access: .unknown, senderUp: false, emptySince: nil, now: t0)
+            && !AirPlaySearch.foundNone(access: .unknown, senderUp: true, emptySince: nil, now: t0)
+            && !AirPlaySearch.foundNone(access: .unknown, senderUp: true, emptySince: t0, now: t0 + 1)
+            && AirPlaySearch.foundNone(access: .unknown, senderUp: true, emptySince: t0, now: t0 + wait)
+            && AirPlaySearch.foundNone(access: .denied, senderUp: true, emptySince: t0, now: t0),
+          "AirPlay search: found none only once a running sender's first look ended, never before the sender is up")
     check(due(.denied, empty: t0, at: t0) == nil && due(.allowed, empty: t0, at: t0) == nil
             && due(.unknown, up: false, empty: t0, at: t0) == nil && due(.unknown, empty: nil, at: t0) == nil,
           "local network: no hint falls due when access is known, the engine isn't up or speakers were found (S101)")
