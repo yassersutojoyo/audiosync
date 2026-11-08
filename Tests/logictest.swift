@@ -14811,6 +14811,10 @@ do {
             && guideWords.contains("With an input device as the source, the window shows no track."),
           "guide, sources: Several Apps names its two modes and Now Playing shows no track for an input, as on Windows")
     // covers: S407
+    check(guideWords.contains("Each zone has its own volume.")
+            && guideWords.contains("To move a speaker, right-click it or use its ⋯ button and choose Move to Zone, or Remove from Zone"),
+          "guide, zones: each zone has its own volume, and right-click reaches Move to Zone, as on Windows")
+    // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",

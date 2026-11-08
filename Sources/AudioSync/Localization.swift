@@ -1840,12 +1840,13 @@ struct UIStrings {
           This Mac or Connected Speakers: its round button there turns only that
           speaker on or off, and the button with its zone's name goes to the
           zone. Click the zone's round icon to switch its speakers at once; a
-          click elsewhere on its header shows or hides them. To play one speaker
-          of a zone alone, choose Only This Speaker from its ⋯ button under the
-          zone; the others turn off and stay in the zone. For a mix of speakers
-          you turn on again and again, save a preset instead. To move a speaker,
-          choose Move to Zone from its ⋯ button, or Remove from Zone to take it
-          out. To rename a zone, double-click its name; to rename or delete it,
+          click elsewhere on its header shows or hides them. Each zone has its
+          own volume. To play one speaker of a zone alone, choose Only This
+          Speaker from its ⋯ button under the zone; the others turn off and
+          stay in the zone. For a mix of speakers you turn on again and again,
+          save a preset instead. To move a speaker, right-click it or use its ⋯
+          button and choose Move to Zone, or Remove from Zone to take it out. To
+          rename a zone, double-click its name; to rename or delete it,
           right-click it or use its ⋯ button. Deleting a zone gives its speakers
           their full rows back.
         - Presets: turn on the speakers you want and set their volumes, the
