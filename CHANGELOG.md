@@ -7,6 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Changed
 
 - On the Mac, the Guide says that Bluetooth speakers and headphones often need a delay below 0, and explains the line under a local speaker's slider when macOS has it turned down or muted. The notice that AirPlay stopped or couldn't start now says AudioSync tries again every 10 seconds when it couldn't start.
+- On the Mac, the Guide names the keyboard shortcuts for New Zone from Active Speakers (Command-N), the equalizer (Option-Command-E) and Refresh Devices (Command-R), as the Windows Guide names its own.
 
 ### Fixed
 

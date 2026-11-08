@@ -1809,15 +1809,15 @@ struct UIStrings {
           speaker is on, every local speaker also waits the AirPlay Delay
           under Connected Speakers for it.
         - Zones: turn on the speakers you want, then choose “New Zone from Active
-          Speakers” in the gear menu. A speaker is in one zone at a time. It
-          shows under its zone and keeps a short row under This Mac or
-          Connected Speakers: its round button there turns only that speaker
-          on or off, and the button with its zone's name goes to the zone. Click the
-          zone's round icon to switch its speakers at once; a click elsewhere
-          on its header shows or hides them. To play one speaker of a zone
-          alone, choose Only This Speaker from its ⋯ button under the zone;
-          the others turn off and stay in the zone. For a mix of speakers you
-          turn on again and again, save a preset instead. To move a speaker,
+          Speakers” in the gear menu, or press Command-N. A speaker is in one
+          zone at a time. It shows under its zone and keeps a short row under
+          This Mac or Connected Speakers: its round button there turns only that
+          speaker on or off, and the button with its zone's name goes to the
+          zone. Click the zone's round icon to switch its speakers at once; a
+          click elsewhere on its header shows or hides them. To play one speaker
+          of a zone alone, choose Only This Speaker from its ⋯ button under the
+          zone; the others turn off and stay in the zone. For a mix of speakers
+          you turn on again and again, save a preset instead. To move a speaker,
           choose Move to Zone from its ⋯ button, or Remove from Zone to take it
           out. To rename a zone, double-click its name; to rename or delete it,
           right-click it or use its ⋯ button. Deleting a zone gives its speakers
@@ -1844,7 +1844,7 @@ struct UIStrings {
           show one again, off, with its volume and delay as you left them.
         - Equalizer: click Equalizer in the window for 10 bands, a preamp,
           preset curves and curves you save yourself. It shapes the sound on
-          every speaker at once.
+          every speaker at once. Option-Command-E opens it too.
         - Now Playing: while Spotify or Music is open with a track, the window
           shows it with play/pause, skip, shuffle and repeat, and AirPlay
           speakers with a screen, such as a TV, show its title and artwork.
@@ -1853,7 +1853,8 @@ struct UIStrings {
           macOS asks once for Automation access to Spotify or Music.
         - Virtual devices (loopback drivers, meeting apps, aggregate devices) are
           hidden unless you use them; turn on Show Virtual Devices in Settings
-          to list them all.
+          to list them all. To read the sources and outputs again, choose
+          Refresh Devices in the gear menu or press Command-R.
         - Launch at Login: in Settings (AudioSync > Settings…, or Settings… in
           the gear menu). The window doesn't open at login; click the Dock icon
           to bring it back.

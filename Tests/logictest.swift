@@ -17364,6 +17364,11 @@ do {
             && flatGuide.contains("- Rename: double-click a speaker's name, or right-click it or use its ⋯ button and choose Rename…;")
             && flatGuide.contains("out of the lists, right-click it or use its ⋯ button and choose “Hide Speaker”."),
           "guide: auto-connect says when a launch streams, and Rename and Hide name the right-click menu, as on Windows")
+    // covers: S407
+    check(flatGuide.contains("“New Zone from Active Speakers” in the gear menu, or press Command-N.")
+            && flatGuide.contains("every speaker at once. Option-Command-E opens it too.")
+            && flatGuide.contains("choose Refresh Devices in the gear menu or press Command-R."),
+          "guide: names the New Zone, Equalizer and Refresh Devices shortcuts of the main menu, as on Windows")
 }
 
 // MARK: Equalizer band keyboard focus and accessibility role (VerticalSlider)
