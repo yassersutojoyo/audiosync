@@ -2028,7 +2028,9 @@ struct UIStrings {
         - AirPlay adds at most 0.2 s on top of what the speaker needs. The first
           0.1 s is there from the start, and the rest comes and goes only when
           packets are lost.
-        - Delay, volume, and selection are saved per device and restored automatically.
+        - AudioSync saves the source, each speaker's switch, delay, volume and
+          name, the speakers you hid, your zones and the equalizer, and restores
+          them the next time it starts.
         """
     }
 

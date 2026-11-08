@@ -14,6 +14,11 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the Guide names Several Apps' two modes, Only the Checked Apps and All Apps Except the Checked Ones, and says Now Playing shows no track while an input device is the source.
 - On the Mac, the Guide's Zones line says each zone has its own volume and that you can right-click a speaker to move it to a zone.
 - On the Mac, the Guide says headphones and virtual outputs have no button to calibrate them alone.
+- On the Mac, the Guide lists everything AudioSync keeps between launches: the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer.
+- On the Mac, the Guide says what AudioSync keeps between launches: the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer.
+- On the Mac, the Guide names the Now Playing buttons: Previous Track, Play or Pause and Next Track, plus Shuffle and Repeat when the app offers them.
+- On the Mac, the Guide no longer says the speakers in a Google Cast group are busy while the group plays; they keep their own rows, as the Windows Guide says.
+- On the Mac, VoiceOver tells you on a speaker's or zone's name field that Return applies the name and Escape cancels, and on a speaker's that an empty name brings back the device's own, as on Windows.
 
 ### Fixed
 

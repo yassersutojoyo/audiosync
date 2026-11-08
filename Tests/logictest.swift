@@ -14818,6 +14818,10 @@ do {
     check(guideWords.contains("Cancel stops it and leaves the delay as it was. Headphones and virtual outputs don't have that button; a line there says why."),
           "guide, calibration: headphones and virtual outputs have no calibrate button of their own, as on Windows")
     // covers: S407
+    check(guideWords.contains("AudioSync saves the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer, and restores them the next time it starts.")
+            && !guideWords.contains("selection are saved per device"),
+          "guide, notes: the saved-settings line lists the source, names, hidden speakers, zones and the equalizer, as on Windows")
+    // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",
