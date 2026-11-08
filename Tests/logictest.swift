@@ -12376,13 +12376,18 @@ do {
     }
     // covers: S239
     check(refusal(1) { $0.offsetMs } == nil
-            && refusal(1) { $0.id == "usb" ? 120 : $0.offsetMs } == .interrupted
+            && refusal(1) { $0.id == "usb" ? 120 : $0.offsetMs } == .delayChanged
             && refusal(1, off: true) { $0.id == "usb" ? 120 : $0.offsetMs } == nil
             && refusal(3) { $0.kind == .airPlay ? 1900 : $0.offsetMs } == nil
-            && refusal(3, adjustmentMs: adjustment + 50) { $0.offsetMs } == .interrupted
+            && refusal(3, adjustmentMs: adjustment + 50) { $0.offsetMs } == .delayChanged
             && CalibrateAllFlow.againRefusal(planned, row: 1, off: true, reference: "usb",
                                              airPlayAdjustmentMs: adjustment) { $0.offsetMs } == .noReference,
           "calibrate all: Measure Again refuses a row whose stored delay changed since the sheet was made (S239)")
+    let changedRefusal = refusal(1) { $0.id == "usb" ? 120 : $0.offsetMs }
+    // covers: S239
+    check(changedRefusal.map { t.calibrateAllLine(.againEnded(name: "Desk", .failed($0))) }
+            == "This speaker's delay changed after it was measured. Calibrate All again. The row for Desk wasn't changed.",
+          "calibrate all: Measure Again of a row whose delay changed since says so (S239)", "\(String(describing: changedRefusal))")
 
     // A sitting: a Samsung TV at L_s 1750 ms was missed with the AirPlay delay field at 0.
     var fieldAtZero = inputs

@@ -409,7 +409,7 @@ enum CalibrateAllFlow {
                              current: (CalibrateAllSpeaker) -> Double?) -> CalibrationFailure? {
         guard speakers.first?.id == reference else { return .noReference }
         return off || unchanged([speakers[0], speakers[row]], reference: reference, airPlayAdjustmentMs: airPlayAdjustmentMs,
-                         current: current) ? nil : .interrupted
+                         current: current) ? nil : .delayChanged
     }
 
     /// Whether the input opened for a step may record it: at the run's rate,

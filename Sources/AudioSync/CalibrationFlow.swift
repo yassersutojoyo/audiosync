@@ -60,6 +60,8 @@ enum CalibrationFailure: Equatable {
     /// Streaming stopped, or the speakers or their delays changed, during
     /// the measurement.
     case interrupted
+    /// Measure Again: the row's stored delay changed since the sheet was made.
+    case delayChanged
     /// The default input device or its rate changed between the runs.
     case microphoneChanged
     /// The microphone lost audio before the recording's end, so its timing

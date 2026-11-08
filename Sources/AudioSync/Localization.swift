@@ -360,6 +360,8 @@ struct UIStrings {
         case .interrupted:
             return "Streaming, the speakers or their delays changed during the measurement. "
                 + "Leave them as they are while it measures, and try again."
+        case .delayChanged:
+            return "This speaker's delay changed after it was measured. Calibrate All again."
         case .microphoneChanged:
             return "The microphone changed during the calibration. Keep one microphone as the default input, "
                 + "and try again."
