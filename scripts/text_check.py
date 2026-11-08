@@ -9,6 +9,10 @@ file, everything under site/ and remote/page/, and the notices the Linux
 AppImage ships. docs/*_SPEC.md is left out because the specs quote test output
 verbatim. App strings, code and comments are out of scope.
 
+A full run also fails when an inline script a page under site/ runs has a
+sha256 that vercel.json's Content-Security-Policy doesn't list in script-src,
+since the browser would block it.
+
 Usage:
     scripts/text_check.py              check every tracked file in scope
     scripts/text_check.py FILE...      check the given files (scope still applies)
@@ -16,6 +20,9 @@ Usage:
 """
 
 import argparse
+import base64
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -47,6 +54,50 @@ def hits_in(text):
         for n, line in enumerate(text.splitlines(), 1)
         if EM_DASH in line or _ENTITY.search(line)
     ]
+
+
+_SCRIPT = re.compile(r"<script\b([^>]*)>(.*?)</script\s*>", re.IGNORECASE | re.DOTALL)
+_SCRIPT_TYPE = re.compile(r"""\btype\s*=\s*["']?([^"'\s>]*)""", re.IGNORECASE)
+# A script of any other type, such as application/ld+json, is a data block the browser never runs.
+_RUN_TYPES = {"", "text/javascript", "application/javascript", "module"}
+
+
+def csp_misses(pages, csp):
+    """(path, line) of each inline script in `pages` whose sha256 the CSP's script-src lacks."""
+    allowed = set()
+    for directive in (csp or "").split(";"):
+        words = directive.split()
+        if words and words[0].lower() == "script-src":
+            allowed.update(words[1:])
+    misses = []
+    for path, html in sorted(pages.items()):
+        for match in _SCRIPT.finditer(html):
+            attrs, body = match.groups()
+            kind = _SCRIPT_TYPE.search(attrs)
+            if re.search(r"\bsrc\s*=", attrs, re.IGNORECASE) or (kind.group(1).lower() if kind else "") not in _RUN_TYPES:
+                continue
+            digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode()
+            if f"'sha256-{digest}'" not in allowed:
+                misses.append((path, html.count("\n", 0, match.start()) + 1))
+    return misses
+
+
+def site_csp_misses(root, paths):
+    """The site's inline scripts that vercel.json's Content-Security-Policy would block."""
+    with open(os.path.join(root, "vercel.json"), encoding="utf-8") as f:
+        config = json.load(f)
+    csp = " ; ".join(
+        header["value"]
+        for rule in config.get("headers", [])
+        for header in rule.get("headers", [])
+        if header.get("key", "").lower() == "content-security-policy"
+    )
+    pages = {}
+    for path in paths:
+        if path.startswith("site/") and path.endswith(".html"):
+            with open(os.path.join(root, path), encoding="utf-8") as f:
+                pages[path] = f.read()
+    return csp_misses(pages, csp)
 
 
 def tracked_files(root):
@@ -130,9 +181,28 @@ def self_test():
         got = [(path, n) for path, n, _ in check(root, sorted(files) + ["gone.md"])]
     if sorted(got) != sorted(want):
         failures.append(f"check of sample files: expected {want}, got {got}")
+    body = "\nconsole.log(1);\n"
+    good = "'sha256-" + base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode() + "'"
+    script = "<script>" + body + "</script>\n"
+    csp_cases = {
+        # The inline script edited after vercel.json took its hash.
+        "edited script": ({"site/index.html": "<p>x</p>\n" + script.replace("1", "2")},
+                          "default-src 'none'; script-src " + good, [("site/index.html", 2)]),
+        "matching hash": ({"site/index.html": script},
+                          "default-src 'none'; script-src " + good + "; style-src 'unsafe-inline'", []),
+        "hash in another directive": ({"site/a.html": script}, "style-src " + good, [("site/a.html", 1)]),
+        "ld+json data block": ({"site/a.html": '<script type="application/ld+json">{}</script>'}, "script-src 'none'", []),
+        "external script": ({"site/a.html": '<script src="/a.js"></script>'}, "script-src 'self'", []),
+        "module script": ({"site/a.html": '<script type="module">' + body + "</script>"}, "script-src 'self'",
+                          [("site/a.html", 1)]),
+    }
+    for name, (pages, csp, want) in csp_cases.items():
+        got = csp_misses(pages, csp)
+        if got != want:
+            failures.append(f"CSP check, {name}: expected {want}, got {got}")
     for failure in failures:
         print(f"self-test: {failure}", file=sys.stderr)
-    cases = len(scope) + len(samples) + 1
+    cases = len(scope) + len(samples) + len(csp_cases) + 1
     print(f"self-test: {cases} cases, {len(failures)} failure(s)")
     return 1 if failures else 0
 
@@ -150,6 +220,9 @@ def main(argv):
     else:
         paths = tracked_files(root)
     found = check(root, paths)
+    if not args.files:
+        found += [(path, line, "inline script whose sha256 vercel.json's script-src doesn't list")
+                  for path, line in site_csp_misses(root, paths)]
     for path, line, reason in found:
         print(f"{path}:{line}: {reason}" if line else f"{path}: {reason}")
     return 1 if found else 0
