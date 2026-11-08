@@ -1313,6 +1313,9 @@ struct UIStrings {
     /// The name field's VoiceOver label; the field's placeholder is the
     /// system name, which an empty field brings back.
     func nameField(for name: String) -> String { "Name for \(name)" }
+    /// What VoiceOver adds on a speaker's or a zone's rename field, as on Windows.
+    let speakerNameFieldHint = "Press Return to apply or Escape to cancel. Leave it empty for the device's own name."
+    let zoneNameFieldHint = "Press Return to apply or Escape to cancel."
     /// The tooltip on a speaker's name: the full name, which the row may
     /// truncate, then how to rename it.
     func speakerNameHelp(name: String, system: String, renamed: Bool) -> String {

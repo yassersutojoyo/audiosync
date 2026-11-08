@@ -17039,6 +17039,17 @@ do {
     // covers: S228
     check(count(row, "InlineNameField(") == 1 && count(row, "TapGesture(count: 2).onEnded { model.startRename(speaker) }") == 1,
           "speaker row: a zone's member rows and every other row rename through the same field")
+    let renameField = window.components(separatedBy: "private struct InlineNameField").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    let renameWords = UIStrings()
+    // covers: S228
+    check(count(renameField, ".accessibilityHint(hint)") == 1
+            && count(window, "hint: model.text.speakerNameFieldHint)") == 2
+            && count(window, "hint: model.text.zoneNameFieldHint)") == 1
+            && renameWords.speakerNameFieldHint
+                == "Press Return to apply or Escape to cancel. Leave it empty for the device's own name."
+            && renameWords.zoneNameFieldHint == "Press Return to apply or Escape to cancel.",
+          "rename field: VoiceOver hears that Return applies and Escape cancels, and for a speaker what an empty name does, as on Windows")
 }
 
 // MARK: Zone members in the main window: one box per zone, label and separators on the name column

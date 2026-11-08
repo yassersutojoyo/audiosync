@@ -952,7 +952,8 @@ private struct ZoneCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 if model.isRenaming(zone) {
                     InlineNameField(model: model, id: zone.id, placeholder: zone.name,
-                                    label: model.text.nameField(for: zone.name))
+                                    label: model.text.nameField(for: zone.name),
+                                    hint: model.text.zoneNameFieldHint)
                 } else {
                     ScrollingTitle(text: zone.name)
                         // Read through the switch's label, whose Rename action replaces the double-click.
@@ -1100,7 +1101,8 @@ private struct ZoneMemberCompactRow: View {
                 HStack(spacing: 6) {
                     if model.isRenaming(speaker, in: .inZones) {
                         InlineNameField(model: model, id: speaker.id, placeholder: speaker.systemName,
-                                        label: model.text.nameField(for: speaker.systemName))
+                                        label: model.text.nameField(for: speaker.systemName),
+                                        hint: model.text.speakerNameFieldHint)
                     } else {
                         ScrollingTitle(text: speaker.name)
                             .font(.body)
@@ -1171,6 +1173,7 @@ private struct InlineNameField: View {
     let id: String
     let placeholder: String
     let label: String
+    let hint: String
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -1178,6 +1181,7 @@ private struct InlineNameField: View {
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: 220)
             .accessibilityLabel(label)
+            .accessibilityHint(hint)
             .focused($focused)
             .onSubmit { model.commitRename(id: id) }
             .onExitCommand { model.dropRename() }
@@ -1267,7 +1271,8 @@ struct SpeakerRow: View {
                     HStack(spacing: 6) {
                         if model.isRenaming(speaker, in: .row) {
                             InlineNameField(model: model, id: speaker.id, placeholder: speaker.systemName,
-                                        label: model.text.nameField(for: speaker.systemName))
+                                        label: model.text.nameField(for: speaker.systemName),
+                                        hint: model.text.speakerNameFieldHint)
                         } else {
                             ScrollingTitle(text: speaker.name)
                                 // The note beside it wraps or truncates first.
