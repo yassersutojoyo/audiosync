@@ -507,6 +507,7 @@ The sender's tests run against a fake receiver in the same process: a TLS server
 | cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender does: over none or a cleared one, never over one the id already had | C18 |
 | cast: the id a browse found for an address is saved, lists the address under it after a relaunch before any browse, gives way to another speaker a browse finds there, which is listed as a new one while the saved one stays off until listed, and goes with the address | C18 |
 | cast: removing an address listed under a saved id forgets the id, and a change the sender queued before the removal doesn't bring the row back | C18 |
+| cast: Add by Address with the address of a speaker a browse lists keeps the address and its id, and the row can be removed | C18 |
 | presets: a recall that swaps the Cast speaker while streaming gives the new one the preset's volume | C105 |
 | cast: a level set while the speaker is off goes at its first status | C105 |
 | cast model: a speaker that is on with no session leaves the list, says so in a notice and no longer blocks another | C2 |

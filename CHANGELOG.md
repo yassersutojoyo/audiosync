@@ -4,6 +4,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Fixed
+
+- On the Mac, adding a Google Cast speaker by address when it's already in the list now keeps the address, as on Windows: its row has Remove, and the address comes back at the next launch, so the speaker still shows up if your network later stops finding it on its own.
+
 ## [0.9.1] - 2026-11-08
 
 ### Changed

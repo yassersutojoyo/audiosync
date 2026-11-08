@@ -305,8 +305,8 @@ extension AppDelegate {
     }
 
     /// The user's Add in the address sheet: `completion` gets nil once the
-    /// sender lists the device (a new row whose address is stored, or the
-    /// row already listed at that address), else why it wasn't added.
+    /// sender lists the device (a new row, or the row already listed at that
+    /// address; the address is stored either way), else why it wasn't added.
     func addCastAddress(_ typed: String, completion: @escaping (CastAddProblem?) -> Void) {
         guard let address = CastManualAddress(typed) else { return completion(.unreadable) }
         guard let sender = castSender else { return completion(.notFound) }
@@ -323,18 +323,10 @@ extension AppDelegate {
                 completion(.notFound)
                 return
             }
-            guard id.hasPrefix(CastModel.manualPrefix) else {
-                // Already listed by a browse: its row is the one, nothing to keep.
-                DebugTrace.log("[AudioSync] Cast: \(address.text) is \(id), listed already")
-                completion(nil)
-                return
-            }
             DebugTrace.log("[AudioSync] Cast: \(address.text) added by address as \(id)")
             let store = self.store
             var list = store.castManualList
-            // Two addresses for one device keep only the newer.
-            if let before = self.castModel.addedManually(id, address: address) { list.remove(before) }
-            list.add(address)
+            self.castModel.keep(address, addedAs: id, in: &list)
             store.save(list)
             self.pushModel()
             completion(nil)

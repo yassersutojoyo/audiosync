@@ -734,6 +734,15 @@ struct CastModel {
         return before == address ? nil : before
     }
 
+    /// Add by Address listed `id` at `address`: `list` keeps the address,
+    /// in place of an earlier one of the same device, also when a browse
+    /// lists it already, so it comes back once multicast DNS fails (C18).
+    mutating func keep(_ address: CastManualAddress, addedAs id: String, in list: inout CastManualList) {
+        if !id.hasPrefix(Self.manualPrefix) { foundIDs[address.text] = id }
+        if let before = addedManually(id, address: address) { list.remove(before) }
+        list.add(address)
+    }
+
     /// A change the sender reported, with the device under the ID it is
     /// listed by. A browse that finds it ends the saved listing; another
     /// speaker found at the address is listed as a new one.
