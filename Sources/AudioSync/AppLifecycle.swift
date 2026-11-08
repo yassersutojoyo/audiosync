@@ -32,6 +32,13 @@ enum StartOrigin: Equatable {
 /// AppKit so the logic tests can check them. Clause numbers refer to
 /// docs/ENGINE_SPEC.md, case IDs to docs/EDGE_CASES.md.
 enum AppLifecycle {
+    /// Whether the app runs from a copy that won't stay where it is: a mounted
+    /// disk image or another volume, or App Translocation's copy of a
+    /// quarantined download (S436).
+    static func runsFromTemporaryPlace(_ bundlePath: String) -> Bool {
+        bundlePath.hasPrefix("/Volumes/") || bundlePath.contains("/AppTranslocation/")
+    }
+
     /// The safety net (S101): how often the AirPlay speakers and then the
     /// local devices are reconciled with no event asking for it. Events drive
     /// everything else; this catches what none reports, such as a device that

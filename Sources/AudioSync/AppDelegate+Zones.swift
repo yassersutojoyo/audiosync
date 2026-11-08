@@ -435,6 +435,14 @@ extension AppDelegate {
         let service = SMAppService.mainApp
         externalReads.loginChanged()
         clearNotices([Notice.login])   // a new attempt
+        if on, AppLifecycle.runsFromTemporaryPlace(Bundle.main.bundlePath) {
+            // The login item would point at a copy that goes away (S436).
+            notify(text.launchAtLoginMoveToApplications, origin: .user, subject: Notice.login,
+                   shortName: text.launchAtLoginNoticeName(turningOn: true))
+            launchAtLogin = service.status == .enabled
+            pushModel()
+            return
+        }
         do {
             if on { try service.register() } else { try service.unregister() }
         } catch {

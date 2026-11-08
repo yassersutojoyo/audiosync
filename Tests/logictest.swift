@@ -11428,6 +11428,15 @@ do {
     }
 }
 
+// covers: S436
+do {
+    check(AppLifecycle.runsFromTemporaryPlace("/Volumes/AudioSync/AudioSync.app")
+            && AppLifecycle.runsFromTemporaryPlace("/private/var/folders/ab/cd/T/AppTranslocation/0F1E2D3C/d/AudioSync.app"),
+          "launch at login: a copy run from a disk image or through App Translocation is in a temporary place")
+    check(!AppLifecycle.runsFromTemporaryPlace("/Applications/AudioSync.app")
+            && !AppLifecycle.runsFromTemporaryPlace("/Applications/Utilities/AudioSync.app"),
+          "launch at login: a copy in Applications is not")
+}
 // MARK: Launch, second launch and session events (AppLifecycle.swift)
 // covers: S215
 do {
