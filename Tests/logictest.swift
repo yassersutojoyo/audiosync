@@ -4124,6 +4124,7 @@ do {
         // covers: S222
         check(stoppedNotice.retriesAirPlay && !Notice(subject: Notice.start, text: "", date: t0).retriesAirPlay
                 && stoppedNotice.text == "AirPlay stopped or couldn't start. Click Retry to try again. "
+                    + "If it couldn't start, AudioSync tries again on its own every 10 seconds. "
                     + "If it keeps happening, restart AudioSync.",
               "EC7 native airplay: the notice that it stopped or couldn't start offers Retry, in Windows' words",
               stoppedNotice.text)
@@ -14725,6 +14726,11 @@ do {
     check(guideWords.contains("If a speaker turns the password down after it has started playing, it is switched off with a notice."),
           "guide, codes: a password turned down while playing switches the speaker off, as on Windows")
     // covers: S407
+    check(guideWords.contains("When a local speaker that is on is turned down low or muted in macOS, a line under its slider "
+                + "says so, with a button that fixes it. AudioSync changes the macOS volume only when you click that "
+                + "button, or the same one in the \(t.calibrateAll) window."),
+          "guide, volume: the low macOS volume line says only its button or Calibrate All Speakers' changes it")
+    // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",
@@ -17349,7 +17355,8 @@ do {
     let tips = tipsStart.flatMap { s in tipsEnd.map { e in s < e ? guideLines[s..<e].joined(separator: "\n") : "" } } ?? ""
     // covers: S407
     check(!tips.isEmpty && !tips.contains(" ms") && !tips.contains("if it plays late, lower it")
-            && tips.contains("one by one") && tips.contains("hands-free microphone"),
+            && tips.contains("one by one") && tips.contains("hands-free microphone")
+            && tips.contains("Bluetooth speakers and headphones add a lag of their own"),
           "guide: Tips keep their advice without an unsourced delay range or More Controls' raise/lower rule", tips)
     // covers: S407
     let flatGuide = guide.helpText.replacingOccurrences(of: "\n  ", with: " ")

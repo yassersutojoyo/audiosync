@@ -2630,6 +2630,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | track info call site: a paired phone that starts or stops showing Now Playing syncs track info | S361 |
 | track info call site: a source change that Now Playing notes sends track info again | S361 |
 | guide, zones: a zoned speaker's short row names the button that goes to its zone | S407 |
+| guide, volume: the low macOS volume line says only its button or Calibrate All Speakers' changes it | S407 |
 | guide: auto-connect says when a launch streams, and Rename and Hide name the right-click menu, as on Windows | S407 |
 | guide: every illustration has its anchor line, in order, and the text is kept whole | S407 |
 | guide: each illustration sits just before its anchor line | S407 |

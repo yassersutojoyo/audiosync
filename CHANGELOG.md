@@ -4,6 +4,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Changed
+
+- On the Mac, the Guide says that Bluetooth speakers and headphones often need a delay below 0, and explains the line under a local speaker's slider when macOS has it turned down or muted. The notice that AirPlay stopped or couldn't start now says AudioSync tries again every 10 seconds when it couldn't start.
+
 ### Fixed
 
 - On the Mac, adding a Google Cast speaker by address when it's already in the list now keeps the address, as on Windows: its row has Remove, and the address comes back at the next launch, so the speaker still shows up if your network later stops finding it on its own.

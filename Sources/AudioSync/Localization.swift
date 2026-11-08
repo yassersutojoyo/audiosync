@@ -815,6 +815,7 @@ struct UIStrings {
     /// AudioSync's own AirPlay sender couldn't start (or browse the network
     /// for speakers), or stopped after an internal error; the notice has Retry.
     let nativeAirPlayStopped = "AirPlay stopped or couldn't start. Click Retry to try again. "
+        + "If it couldn't start, AudioSync tries again on its own every 10 seconds. "
         + "If it keeps happening, restart AudioSync."
 
     /// AudioSync's own AirPlay sender can't play to this receiver.
@@ -1967,6 +1968,8 @@ struct UIStrings {
           HomePod plays first, lower it.
         - Then add the other local speakers one by one and tune each against
           the built-in speakers.
+        - Bluetooth speakers and headphones add a lag of their own, so they
+          often need a delay below 0.
         - A Bluetooth headset's hands-free microphone carries call audio, so it
           isn't offered as a source.
 
@@ -1976,6 +1979,10 @@ struct UIStrings {
         A Google Cast speaker's slider sets the speaker's own volume, and Master
         Volume scales it like every other speaker. Mute under it mutes the
         speaker itself.
+        When a local speaker that is on is turned down low or muted in macOS,
+        a line under its slider says so, with a button that fixes it. AudioSync
+        changes the macOS volume only when you click that button, or the same
+        one in the \(calibrateAll) window.
 
         Notes
         - AirPlay speakers are kept in step with each other by AudioSync's AirPlay
