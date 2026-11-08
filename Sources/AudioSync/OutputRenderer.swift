@@ -569,6 +569,22 @@ final class OutputRenderer: FadingOutput {
             &+ UInt64((min(unitSeconds, 1) * 1_000_000_000).rounded())
     }
 
+    /// The latency a device reports with no stream running, in ms (S455):
+    /// device latency, safety offset, IO buffer and stream latency at its
+    /// nominal rate; nil when any of them can't be read.
+    static func reportedLatencyMs(device: AudioObjectID) -> Double? {
+        guard let rate = deviceNominalRate(device) else { return nil }
+        let parts: [UInt32?] = [
+            uint32(device, kAudioDevicePropertyLatency, kAudioObjectPropertyScopeOutput),
+            uint32(device, kAudioDevicePropertySafetyOffset, kAudioObjectPropertyScopeOutput),
+            uint32(device, kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal),
+            firstOutputStream(device).flatMap { uint32($0, kAudioStreamPropertyLatency, kAudioObjectPropertyScopeGlobal) },
+        ]
+        guard !parts.contains(nil) else { return nil }
+        let frames: Double = parts.reduce(0) { $0 + Double($1 ?? 0) }
+        return frames / rate * 1000
+    }
+
     /// How far ahead of the callback its buffer is output, for a callback
     /// whose time stamp has no host time: one buffer plus the safety offset.
     private static func outputLeadNs(device: AudioObjectID, rate: Double) -> UInt64 {

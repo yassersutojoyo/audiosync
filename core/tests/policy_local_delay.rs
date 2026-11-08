@@ -11,10 +11,11 @@ use std::time::Duration;
 
 use audiosync_core::lead::HeldLead;
 use audiosync_core::policy::delay::{
-    BRIEF_LOSS_HOLD, BriefLosses, DEFAULT_AIRPLAY_DELAY_MS, DelayMigration, MAX_HOLD_BACK_MS,
-    MAX_OFFSET_MS, MIN_OFFSET_MS, Participant, Retimer, StoredDelay, airplay_chosen, hold_backs,
-    migrate_mac_delays, native_airplay_adjustment_ms, native_airplay_latency_ms, offset_ms,
-    sanitize_airplay_delay_ms, sanitize_offset_ms,
+    BLUETOOTH_SEED_MARGIN_MS, BRIEF_LOSS_HOLD, BriefLosses, DEFAULT_AIRPLAY_DELAY_MS,
+    DelayMigration, ListedOutput, MAX_HOLD_BACK_MS, MAX_OFFSET_MS, MIN_OFFSET_MS, Participant,
+    Retimer, StoredDelay, airplay_chosen, bluetooth_seed_offset_ms, hold_backs, migrate_mac_delays,
+    native_airplay_adjustment_ms, native_airplay_latency_ms, offset_ms, sanitize_airplay_delay_ms,
+    sanitize_offset_ms,
 };
 use audiosync_core::reader::Reader;
 use audiosync_core::render::RendererControl;
@@ -828,4 +829,130 @@ fn a_session_restart_clears_the_hold() {
     restarted.update(&counted(&WITHOUT_BLUETOOTH, &losses), None);
     assert_eq!(restarted.hold_back_ms("builtin"), Some(0.0));
     assert_eq!(restarted.hold_back_ms("bluetooth"), None);
+}
+
+/// A Bluetooth output listed for the first time and never set, reporting
+/// about what the soundcore did on the Mac (S455); the reference reports 24.5 ms.
+fn fresh_bluetooth() -> ListedOutput {
+    ListedOutput {
+        bluetooth: true,
+        is_reference: false,
+        known: false,
+        has_offset: false,
+        latency_ms: 160.5,
+    }
+}
+
+const REFERENCE_LATENCY_MS: f64 = 24.5;
+
+// covers: S455
+#[test]
+fn a_fresh_bluetooth_row_starts_its_reported_difference_plus_80_ms_late() {
+    assert_eq!(BLUETOOTH_SEED_MARGIN_MS, 80.0);
+    assert_eq!(
+        bluetooth_seed_offset_ms(fresh_bluetooth(), REFERENCE_LATENCY_MS, false),
+        Some(-216.0)
+    );
+}
+
+// covers: S455
+#[test]
+fn a_row_the_user_set_is_never_seeded() {
+    let set = ListedOutput {
+        has_offset: true,
+        ..fresh_bluetooth()
+    };
+    assert_eq!(
+        bluetooth_seed_offset_ms(set, REFERENCE_LATENCY_MS, false),
+        None
+    );
+}
+
+// covers: S455
+#[test]
+fn a_known_row_is_not_seeded_after_a_relaunch_or_a_reconnect() {
+    let known = ListedOutput {
+        known: true,
+        ..fresh_bluetooth()
+    };
+    assert_eq!(
+        bluetooth_seed_offset_ms(known, REFERENCE_LATENCY_MS, false),
+        None
+    );
+}
+
+// covers: S455
+#[test]
+fn only_a_bluetooth_row_other_than_the_reference_with_finite_latencies_is_seeded() {
+    let wired = ListedOutput {
+        bluetooth: false,
+        ..fresh_bluetooth()
+    };
+    let reference = ListedOutput {
+        is_reference: true,
+        ..fresh_bluetooth()
+    };
+    assert_eq!(
+        bluetooth_seed_offset_ms(wired, REFERENCE_LATENCY_MS, false),
+        None
+    );
+    assert_eq!(
+        bluetooth_seed_offset_ms(reference, REFERENCE_LATENCY_MS, false),
+        None
+    );
+    let unread = ListedOutput {
+        latency_ms: f64::NAN,
+        ..fresh_bluetooth()
+    };
+    assert_eq!(
+        bluetooth_seed_offset_ms(unread, REFERENCE_LATENCY_MS, false),
+        None
+    );
+    assert_eq!(
+        bluetooth_seed_offset_ms(fresh_bluetooth(), f64::INFINITY, false),
+        None
+    );
+}
+
+// covers: S455
+#[test]
+fn a_reference_reporting_more_than_the_new_row_moves_its_seed_up() {
+    assert_eq!(
+        bluetooth_seed_offset_ms(fresh_bluetooth(), 214.5, false),
+        Some(-26.0)
+    );
+    assert_eq!(
+        bluetooth_seed_offset_ms(fresh_bluetooth(), 300.5, false),
+        Some(60.0)
+    );
+}
+
+// covers: S455
+#[test]
+fn a_seed_is_clamped_to_the_offset_range() {
+    let slow = ListedOutput {
+        latency_ms: 5000.0,
+        ..fresh_bluetooth()
+    };
+    assert_eq!(
+        bluetooth_seed_offset_ms(slow, REFERENCE_LATENCY_MS, false),
+        Some(MIN_OFFSET_MS)
+    );
+    assert_eq!(
+        bluetooth_seed_offset_ms(fresh_bluetooth(), 30_000.0, false),
+        Some(MAX_OFFSET_MS)
+    );
+}
+
+// covers: S455
+#[test]
+fn against_a_bluetooth_reference_the_seed_is_the_plain_reported_difference() {
+    assert_eq!(
+        bluetooth_seed_offset_ms(fresh_bluetooth(), 214.5, true),
+        Some(54.0)
+    );
+    assert_eq!(
+        bluetooth_seed_offset_ms(fresh_bluetooth(), 100.5, true),
+        Some(-60.0)
+    );
 }

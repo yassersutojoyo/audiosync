@@ -1077,6 +1077,16 @@ bool asc_local_hold_backs_ms(const AscLocalOutput *outputs, size_t count, bool a
 bool asc_local_offset_sanitize_ms(double offset_ms, double *sanitized_ms);
 
 /*
+ * The starting offset of a local output (S455) into *seed_ms: for a
+ * Bluetooth output that is not the reference, was never listed before and
+ * has no stored offset, the reference's reported latency minus its own minus
+ * 80 ms (no margin when the reference is Bluetooth too), clamped to
+ * -2000...20 000 ms. False, writing nothing, for any other
+ * output, a non-finite latency or a NULL seed_ms.
+ */
+bool asc_local_bluetooth_seed_ms(bool bluetooth, bool is_reference, bool known, bool has_offset, double latency_ms, double reference_latency_ms, bool reference_bluetooth, double *seed_ms);
+
+/*
  * The bundled engine's AirPlay delay input, ready to store: clamped to
  * 0...20 000 ms into *sanitized_ms (2000 by default). False, writing nothing,
  * for a non-finite value (which is ignored) or a NULL sanitized_ms.

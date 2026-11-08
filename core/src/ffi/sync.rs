@@ -181,6 +181,39 @@ pub unsafe extern "C" fn asc_local_offset_sanitize_ms(
     })
 }
 
+/// [`delay::bluetooth_seed_offset_ms`] (S455) into `seed_ms`: false,
+/// writing nothing, when the output gets no seed or `seed_ms` is null.
+///
+/// # Safety
+///
+/// `seed_ms` is null or points to an aligned, writable double that nothing
+/// else touches during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_local_bluetooth_seed_ms(
+    bluetooth: bool,
+    is_reference: bool,
+    known: bool,
+    has_offset: bool,
+    latency_ms: f64,
+    reference_latency_ms: f64,
+    reference_bluetooth: bool,
+    seed_ms: *mut f64,
+) -> bool {
+    guard(false, || {
+        let output = delay::ListedOutput {
+            bluetooth,
+            is_reference,
+            known,
+            has_offset,
+            latency_ms,
+        };
+        let seed =
+            delay::bluetooth_seed_offset_ms(output, reference_latency_ms, reference_bluetooth);
+        // SAFETY: by the caller's contract.
+        unsafe { write_sanitized(seed, seed_ms) }
+    })
+}
+
 /// [`delay::sanitize_airplay_delay_ms`] (S178): false, writing nothing, for
 /// a non-finite delay or a null `sanitized_ms`.
 ///
@@ -651,6 +684,36 @@ mod tests {
         assert_eq!(asc_local_native_latency_ms(1750.0, 250.0), 2000.0);
         assert_eq!(asc_local_native_latency_ms(1750.0, -2000.0), 0.0);
         assert_eq!(asc_local_native_latency_ms(19_000.0, 5000.0), 20_000.0);
+    }
+
+    // covers: S455
+    #[test]
+    fn a_bluetooth_seed_through_the_c_interface() {
+        let mut out = 7.0;
+        // SAFETY: `out` is a live double; null is allowed.
+        unsafe {
+            assert!(asc_local_bluetooth_seed_ms(
+                true, false, false, false, 160.5, 24.5, false, &mut out
+            ));
+            assert_eq!(out, -216.0);
+            assert!(!asc_local_bluetooth_seed_ms(
+                true, false, true, false, 160.5, 24.5, false, &mut out
+            ));
+            assert!(!asc_local_bluetooth_seed_ms(
+                true, false, false, true, 160.5, 24.5, false, &mut out
+            ));
+            assert_eq!(out, -216.0, "no seed writes nothing");
+            assert!(!asc_local_bluetooth_seed_ms(
+                true,
+                false,
+                false,
+                false,
+                160.5,
+                24.5,
+                false,
+                ptr::null_mut()
+            ));
+        }
     }
 
     // covers: S179

@@ -90,6 +90,15 @@ enum LocalDelay {
         return asc_local_offset_sanitize_ms(ms, &value) ? value : nil
     }
 
+    /// The starting offset of a local output listed now (S455): set only for a
+    /// Bluetooth output that is not the reference, new and never set.
+    static func bluetoothSeed(bluetooth: Bool, isReference: Bool, known: Bool, hasOffset: Bool,
+                              latencyMs: Double, referenceLatencyMs: Double, referenceBluetooth: Bool) -> Double? {
+        var value = 0.0
+        return asc_local_bluetooth_seed_ms(bluetooth, isReference, known, hasOffset, latencyMs,
+                                           referenceLatencyMs, referenceBluetooth, &value) ? value : nil
+    }
+
     /// An AirPlay delay L as the field takes it: clamped to 0…20 000 ms, the
     /// range L can take (S178); nil (ignored) when it isn't finite.
     static func sanitizedAirPlayDelay(_ ms: Double) -> Double? {

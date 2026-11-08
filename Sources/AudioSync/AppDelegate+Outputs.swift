@@ -380,6 +380,7 @@ extension AppDelegate {
         let virtualHidden = AudioDevices.hidesVirtual(outputs, listed: available)
         if appModel.virtualOutputsHidden != virtualHidden { appModel.virtualOutputsHidden = virtualHidden }
         followMovedOutputs(available.filter { !localOrder.contains($0.uid) }, listed: Set(outputs.map(\.uid)))
+        seedBluetoothOffsets(listed: outputs)   // after the moves, so a moved output keeps its offset
         var known = Set(localOrder)
         var appeared: [String] = []
         for device in available {
@@ -390,6 +391,43 @@ extension AppDelegate {
         syncLocalOutputs(available: available, origin: .automatic)
         autoConnect(appeared.map { SpeakerKey.make(id: $0, airplay: false) })
         pushModel()
+    }
+
+    /// A Bluetooth output listed for the first time and never set starts at
+    /// its reported latency over the reference's, plus 80 ms when the
+    /// reference isn't Bluetooth (S455). Outputs in the first list a build
+    /// with the seed sees count as seen, except on a first install, and so
+    /// does every output with a volume, switch, auto-connect or name stored.
+    private func seedBluetoothOffsets(listed outputs: [AudioDevices.Device]) {
+        guard !outputs.isEmpty else { return }   // Core Audio not answering yet
+        let stored = store.seenLocalOutputs
+        let keyed = autoConnect.union(speakerNames.custom.keys).compactMap { key -> String? in
+            guard let (id, airplay) = SpeakerKey.parse(key), !airplay else { return nil }
+            return id
+        }
+        var seen = (stored ?? (freshInstall ? [] : Set(outputs.map(\.uid))))
+            .union(localVolume.keys).union(enabledLocal).union(keyed)
+        let referenceUID = LocalDelay.reference(in: outputs)
+        let reference = outputs.first { $0.uid == referenceUID }
+        for device in outputs where !seen.contains(device.uid) {
+            let bluetooth = BluetoothIOBuffer.isBluetooth(transport: device.transport)
+            if bluetooth, device.uid != referenceUID, localOffsetMs[device.uid] == nil {
+                // An unread latency leaves the output unseen, for the next list to try again.
+                guard let reference, let referenceMs = OutputRenderer.reportedLatencyMs(device: reference.id),
+                      let latencyMs = OutputRenderer.reportedLatencyMs(device: device.id) else { continue }
+                if let seed = LocalDelay.bluetoothSeed(
+                    bluetooth: true, isReference: false, known: false, hasOffset: false,
+                    latencyMs: latencyMs, referenceLatencyMs: referenceMs,
+                    referenceBluetooth: BluetoothIOBuffer.isBluetooth(transport: reference.transport)) {
+                    DebugTrace.log("[AudioSync] Bluetooth output \(device.uid) listed for the first time: offset "
+                        + "starts at \(Int(seed.rounded())) ms (reports \(Int(latencyMs.rounded())) ms, "
+                        + "the reference \(Int(referenceMs.rounded())) ms)")
+                    setLocalOffset(device.uid, seed)
+                }
+            }
+            seen.insert(device.uid)
+        }
+        if seen != stored { store.save(ids: seen, forKey: AppSettings.Keys.seenLocalOutputs) }
     }
 
     /// What was set for an output that left goes to the one of its name that

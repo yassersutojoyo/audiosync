@@ -122,6 +122,47 @@ pub fn native_airplay_adjustment_ms(shown_ms: f64, sender_latency_ms: f64) -> Op
     sanitize_airplay_adjustment_ms(shown_ms - sender_latency_ms)
 }
 
+/// What a Bluetooth output sounds later than its reported latency says, in
+/// ms (S455): 80 and 84 ms measured on two Bluetooth devices.
+pub const BLUETOOTH_SEED_MARGIN_MS: f64 = 80.0;
+
+/// A local output row the Mac lists, as its starting offset sees it (S455).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ListedOutput {
+    /// Its transport is Bluetooth.
+    pub bluetooth: bool,
+    /// It is the reference R (S173).
+    pub is_reference: bool,
+    /// It was listed before, in this launch or an earlier one.
+    pub known: bool,
+    /// It has an offset stored: the user's, the migration's or an earlier seed.
+    pub has_offset: bool,
+    /// Its reported latency in ms: device, safety offset, IO buffer and stream.
+    pub latency_ms: f64,
+}
+
+/// The starting offset of a Bluetooth output listed for the first time and
+/// never set (S455): −(its latency − the reference's + 80 ms), clamped to
+/// S175's range; `None` to leave it alone, also when a latency isn't finite.
+/// A Bluetooth reference has the same unreported remainder, so the margin
+/// counts only against a reference that isn't Bluetooth.
+pub fn bluetooth_seed_offset_ms(
+    output: ListedOutput,
+    reference_latency_ms: f64,
+    reference_bluetooth: bool,
+) -> Option<f64> {
+    let fresh = output.bluetooth && !output.is_reference && !output.known && !output.has_offset;
+    if !fresh || !output.latency_ms.is_finite() || !reference_latency_ms.is_finite() {
+        return None;
+    }
+    let margin = if reference_bluetooth {
+        0.0
+    } else {
+        BLUETOOTH_SEED_MARGIN_MS
+    };
+    sanitize_offset_ms(reference_latency_ms - output.latency_ms - margin)
+}
+
 /// A local output taking part (S172): switched on, with its device listed.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Participant<'a> {

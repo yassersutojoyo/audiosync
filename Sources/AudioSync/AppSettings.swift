@@ -109,6 +109,9 @@ struct AppSettings: Equatable {
         /// True once a first install's device list was seen, whether or not
         /// it switched This Mac on (`SettingsStore.speakerOnAtInstall`).
         static let speakerOnAtInstall = "thisMacOnAtInstall"
+        /// Every local output UID listed so far, for the Bluetooth seed's
+        /// first listing (S455); missing until a build with the seed lists one.
+        static let seenLocalOutputs = "seenLocalOutputUIDs"
     }
 
     /// Where a speaker without a volume of its own starts (S71, S399).
@@ -522,6 +525,9 @@ struct SettingsStore {
     func save(airPlayDelay: AirPlayDelay) {
         write(airPlayDelay.adjustmentMs, Keys.nativeAirPlayAdjustment)
     }
+
+    /// The local outputs listed so far (S455), or nil when none was noted yet.
+    var seenLocalOutputs: Set<String>? { read(Keys.seenLocalOutputs).map { AppSettings.ids($0) } }
 
     /// The one-time migration of the absolute delays to offsets (S179), the
     /// first time a device list is in: `listed` holds its UIDs, `reference`
