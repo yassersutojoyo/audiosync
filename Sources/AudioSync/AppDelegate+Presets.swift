@@ -169,7 +169,7 @@ extension AppDelegate {
     func promptSavePreset() {
         guard !presetScene().on.isEmpty else {
             menuBar?.close()
-            showAlert(text.savePresetNeedsSpeakers, style: .informational)
+            showAlert(text.savePresetNeedsSpeakers, style: .informational, title: text.savePresetTitle)
             return
         }
         guard let typed = askPresetName(title: text.savePresetTitle, message: text.savePresetMessage,
@@ -178,7 +178,7 @@ extension AppDelegate {
         guard let saved = PresetEdit.saving(typed, scene: presetScene(), id: UUID().uuidString, to: presets,
                                             numbered: text.numberedPreset),
               let name = saved.last?.name else {
-            showAlert(text.savePresetNeedsSpeakers, style: .informational)
+            showAlert(text.savePresetNeedsSpeakers, style: .informational, title: text.savePresetTitle)
             return
         }
         presets = saved
@@ -211,7 +211,7 @@ extension AppDelegate {
         guard let name = presets.first(where: { $0.id == id })?.name else { return }
         guard let updated = PresetEdit.updating(id, scene: presetScene(), in: presets) else {
             menuBar?.close()
-            showAlert(text.savePresetNeedsSpeakers, style: .informational)
+            showAlert(text.savePresetNeedsSpeakers, style: .informational, title: text.updatePreset)
             return
         }
         presets = updated

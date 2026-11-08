@@ -514,14 +514,14 @@ extension AppDelegate {
     /// `.informational` (a next step), `.warning` (something failed) or
     /// `.critical` (only when going on could lose the user's data or work).
     /// `settings`: a privacy pane offered as a second button.
-    func showAlert(_ message: String, style: NSAlert.Style, settings: PrivacyPane? = nil) {
+    func showAlert(_ message: String, style: NSAlert.Style, settings: PrivacyPane? = nil, title: String? = nil) {
         menuBar?.close()   // the panel floats above alerts and would cover this one
         NSApp.activate(ignoringOtherApps: true)
         // A start after the microphone answer gets here inside a main-queue block,
         // and an alert run there would hold every later block back until it closes.
         PromptStart.later { [self] in
             let modal = NSAlert()
-            modal.messageText = text.appName
+            modal.messageText = title ?? text.appName
             modal.informativeText = message
             modal.alertStyle = style
             modal.addButton(withTitle: text.alertOK)
