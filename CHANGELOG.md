@@ -48,6 +48,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the notice that AirPlay stopped or couldn't start now says AudioSync tries again every 10 seconds when it couldn't start, as on the Mac.
 - On Windows, the Guide names the AirPlay Delay row in Connected Speakers, where it is, instead of a card under them.
 - On Windows and Linux, the Guide's AirPlay topic says where to let AudioSync use a HomePod: in the Home app, Home Settings → Speakers & TV → Allow Speaker & TV Access → “Anyone on the Same Network”, as the Mac Guide does.
+- On Windows and Linux, the Guide's Calibration topic says how to calibrate one zone with Calibrate Zone, as the Mac Guide does.
 
 ### Fixed
 
