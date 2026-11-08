@@ -5170,7 +5170,7 @@ The release side:
 | the_switch_notice_goes_when_the_last_airplay_speaker_drops (`desktop/src/adapter.rs`) | S141 |
 | the_switch_notice_goes_when_the_last_local_output_fails_to_start (`desktop/src/adapter.rs`) | S141 |
 | a_source_switch_keeps_airplay_speakers_in_the_stream (`desktop/src/adapter.rs`) | S141 |
-| the_switch_failed_notice_says_to_pick_the_source_again (`desktop/src/view.rs`) | S141 |
+| the_switch_failed_notice_names_both_sources_and_no_retry (`desktop/src/view.rs`) | S141 |
 | picking_the_playing_input_again_keeps_the_busy_input_notice (`desktop/src/adapter.rs`) | S163 |
 | another_channel_pair_while_stopped_clears_the_notice_of_why_the_input_stopped (`desktop/src/adapter.rs`) | S163 |
 | picking_the_playing_source_again_keeps_the_speaker_and_pairing_notices (`desktop/src/adapter.rs`) | S163 |

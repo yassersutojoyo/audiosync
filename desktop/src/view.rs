@@ -11463,7 +11463,7 @@ mod tests {
 
     // covers: S141
     #[test]
-    fn the_switch_failed_notice_says_to_pick_the_source_again() {
+    fn the_switch_failed_notice_names_both_sources_and_no_retry() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         let failed = NoticeMessage::SwitchFailed {
@@ -11472,7 +11472,7 @@ mod tests {
         };
         assert_eq!(
             notice_text(&strings, &failed).as_str(),
-            "Couldn't start Spotify, still on All System Audio. Pick Spotify again to retry."
+            "Couldn't start Spotify, still on All System Audio."
         );
     }
 
