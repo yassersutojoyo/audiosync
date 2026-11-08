@@ -708,8 +708,8 @@ private struct SectionTitle: View {
     }
 }
 
-/// The Presets row (S259): the current preset's name, and a menu that
-/// recalls a preset, saves one, and renames, updates or deletes each one.
+/// The Presets row (S259): a menu that recalls a preset, saves one, and
+/// renames, updates or deletes each one.
 private struct PresetsRow: View {
     @ObservedObject var model: AppModel
     @StateObject private var anchor = MenuAnchor.Box()
@@ -717,7 +717,7 @@ private struct PresetsRow: View {
     var body: some View {
         let t = model.text
         let current = PresetPanel.label(model.presets)
-        // A borderless Menu let AppKit lay out its label, with its own icon width and gap.
+        // A button, not a Menu: AppKit laid out a Menu's label with its own icon width and gap.
         Button {
             if let view = anchor.view { PresetsRowMenu.make(model: model, text: t).popUp(under: view) }
         } label: {

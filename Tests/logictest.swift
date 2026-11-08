@@ -17388,8 +17388,9 @@ do {
     let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let card = window.components(separatedBy: "private struct PresetsRow").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
-    check(card.contains("Brand.secondaryText")
-            && !card.contains("Color(") && !card.contains("NSColor("),
+    let styles = card.components(separatedBy: ".foregroundStyle(").dropFirst() + card.components(separatedBy: ".tint(").dropFirst()
+    check(card.contains("Text(t.presets)") && styles.allSatisfy { $0.hasPrefix("Brand.") }
+            && !card.contains("Color(") && !card.contains("Color.") && !card.contains("NSColor("),
           "presets: the card's colors are brand tokens, never a literal color")
 
     // The card's fill is the system control background, which the brand surfaces stand for.
