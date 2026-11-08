@@ -4408,6 +4408,7 @@ The checks for S256 to S258, S287, S288, S337, S338 and S343 to S345 and S348 in
 | a_snapshot_reads_and_writes_back_with_its_revision (`remote/src/state.rs`) | S343 |
 | the_computer_name_is_optional_text_and_never_quoted_in_an_error (`remote/src/state.rs`) | S343 |
 | the_volume_step_defaults_to_1_and_takes_above_0_up_to_100 (`remote/src/state.rs`) | S343 |
+| the_phone_row_note_of_a_stereo_pair_names_its_members_or_the_missing_one (`desktop/src/view/remote_window.rs`) | S343 |
 | the_remote_page_gets_the_cast_step_rounded_and_1_without_a_usable_one (`desktop/src/remote.rs`) | C69 |
 | web remote: the page lists the picker's entries in its order, each with an ID the core takes | S344 |
 | web remote: a page ID maps back to the picker's ID; one that names no source maps to nothing | S344 |

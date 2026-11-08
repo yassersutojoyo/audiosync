@@ -1183,6 +1183,7 @@ fn the_guide_has_the_ten_topics_the_spec_names() {
 /// The Windows and Linux Guides name a Cast group's members, a zone's
 /// double-click rename, AirPlay 2 code pairing and the AirPlay volume
 /// scale, as the Mac Guide does.
+// covers: S416
 #[test]
 fn the_guide_matches_the_mac_guide_on_groups_zones_codes_and_volume() {
     let strings = include_str!("../ui/strings.slint");
