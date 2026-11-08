@@ -28,6 +28,8 @@ final class SourceCapture {
     enum CaptureError: Error, Equatable, CustomStringConvertible {
         /// The app chosen as the source isn't running.
         case appNotRunning(String)
+        /// None of the apps of a mix (S242) runs at a fresh start.
+        case appsNotRunning([String])
         /// AudioSync's own audio process object can't be found, so the
         /// whole-system tap can't leave it out.
         case ownProcessUnknown
@@ -53,6 +55,7 @@ final class SourceCapture {
         var description: String {
             switch self {
             case .appNotRunning(let bundleID): return "app not running (\(bundleID))"
+            case .appsNotRunning(let bundleIDs): return "apps not running (\(bundleIDs.joined(separator: ", ")))"
             case .ownProcessUnknown: return "AudioSync's own audio process is unknown"
             case .tapNotCreated(let status): return "process tap not created (\(Self.describe(status)))"
             case .formatUnusable(let status): return "capture format unreadable or unsupported (\(Self.describe(status)))"
@@ -264,7 +267,7 @@ final class SourceCapture {
         let pids = pidsByApp.flatMap { $0 }
         seenPIDs = Dictionary(zip(bundleIDs, pidsByApp), uniquingKeysWith: { first, _ in first })
         guard !pids.isEmpty else {
-            throw CaptureError.appNotRunning(AppTapFollow.quitApp(of: bundleIDs, ranBefore: appsRunning))
+            throw AppTapFollow.notRunning(bundleIDs, ranBefore: appsRunning, rebuild: rebuild)
         }
         appsRunning = zip(bundleIDs, pidsByApp).filter { !$0.1.isEmpty }.map { $0.0 }
         watchAppProcesses()

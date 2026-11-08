@@ -314,6 +314,12 @@ enum AppTapFollow: Equatable {
         apps.first(where: ranBefore.contains) ?? apps.first ?? ""
     }
 
+    /// Why a capture of `apps` found none running: a fresh start of several
+    /// names them all, as Windows does; a rebuild names the one that quit last.
+    static func notRunning(_ apps: [String], ranBefore: [String], rebuild: Bool) -> SourceCapture.CaptureError {
+        !rebuild && apps.count > 1 ? .appsNotRunning(apps) : .appNotRunning(quitApp(of: apps, ranBefore: ranBefore))
+    }
+
     /// Whether the capture of `source` looks at its apps again whenever macOS's
     /// list of running apps changes: an app quitting without an audio process
     /// changes no audio process, and macOS can still list an app as running

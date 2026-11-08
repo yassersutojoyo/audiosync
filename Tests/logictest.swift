@@ -357,6 +357,15 @@ do {
             && AppTapFollow.quitApp(of: [music, safari], ranBefore: ["com.other"]) == music
             && AppTapFollow.quitApp(of: [], ranBefore: [safari]).isEmpty,
           "mix: a mix's lost capture names an app that still ran at the last look, not simply the mix's first app")
+    let notRunningText = UIStrings().streamingStartMessage(for: SourceCapture.CaptureError.appsNotRunning([music, safari]),
+                                                            input: "")
+    // covers: S242
+    check(AppTapFollow.notRunning([music, safari], ranBefore: [safari], rebuild: false) == .appsNotRunning([music, safari])
+            && AppTapFollow.notRunning([music, safari], ranBefore: [safari], rebuild: true) == .appNotRunning(safari)
+            && AppTapFollow.notRunning([music], ranBefore: [], rebuild: false) == .appNotRunning(music)
+            && notRunningText == "\(SourceApps.name(for: music)) and \(SourceApps.name(for: safari)) are not running. "
+                + "Open them first, or pick another source.",
+          "mix: a start with none of the mix's apps running names every app, a rebuild the one that quit", notRunningText)
 
     let entries = SourceList.entries(systemName: "All System Audio", apps: [(bundleID: music, name: "Music")], inputs: [],
                                      chosen: both, chosenAppName: { _ in "Safari" }, mixName: { $1.joined(separator: " + ") })

@@ -100,6 +100,7 @@ struct UIStrings {
         }
         switch reason {
         case .appNotRunning(let bundleID): return "\(SourceApps.name(for: bundleID)) \(sourceNotRunningNote)"
+        case .appsNotRunning(let bundleIDs): return "\(listed(bundleIDs.map(SourceApps.name(for:)))) \(sourceNotRunningNote)"
         case .inputNotFound, .inputDisconnected: return "\(input) not connected"
         case .inputHandsFree: return nil
         default: return captureFailedNoticeName
@@ -981,7 +982,8 @@ struct UIStrings {
             return inputHandsFree
         case .appNotRunning(let bundleID):
             return sourceTerminated(name: SourceApps.name(for: bundleID))
-        case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:
+        case .appsNotRunning, .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed,
+             .ioProcNotStarted, .inputBusy:
             return "AudioSync lost the audio from the selected source, so streaming has stopped. "
                 + "Turn streaming on again, or pick another source."
         }
@@ -1081,6 +1083,9 @@ struct UIStrings {
         switch error {
         case .appNotRunning(let bundleID):
             return "\(SourceApps.name(for: bundleID)) is \(sourceNotRunningNote). Open it first, or pick another source."
+        case .appsNotRunning(let bundleIDs):
+            return "\(listed(bundleIDs.map(SourceApps.name(for:)))) are \(sourceNotRunningNote). "
+                + "Open them first, or pick another source."
         case .ownProcessUnknown:
             return "AudioSync couldn't capture its own sound to leave it out. Quit AudioSync and open it again."
         case .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:

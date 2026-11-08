@@ -409,7 +409,7 @@ struct CaptureFlowWatch {
     static func retries(after error: SourceCapture.CaptureError, inputListed: Bool = false) -> Bool {
         switch error {
         case .inputNotFound, .inputDisconnected: return inputListed
-        case .appNotRunning, .inputHandsFree: return false
+        case .appNotRunning, .appsNotRunning, .inputHandsFree: return false
         case .ownProcessUnknown, .tapNotCreated, .formatUnusable, .aggregateDeviceFailed, .ioProcNotStarted, .inputBusy:
             return true
         }
