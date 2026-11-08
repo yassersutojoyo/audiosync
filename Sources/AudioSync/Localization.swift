@@ -1980,7 +1980,9 @@ struct UIStrings {
         Notes
         - AirPlay speakers are kept in step with each other by AudioSync's AirPlay
           sender, so they need no delay.
-        - Total latency is about 2 seconds because of the AirPlay buffer.
+        - AirPlay adds at most 0.2 s on top of what the speaker needs. The first
+          0.1 s is there from the start, and the rest comes and goes only when
+          packets are lost.
         - Delay, volume, and selection are saved per device and restored automatically.
         """
     }
