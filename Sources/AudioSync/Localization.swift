@@ -753,7 +753,7 @@ struct UIStrings {
     /// A source or channel pair picked while streaming couldn't start, so
     /// the one before it plays on (S141); names as the source picker shows them.
     func sourceSwitchFailed(new: String, old: String) -> String {
-        "Couldn't start \(new), still on \(old). Pick \(new) again to retry."
+        "Couldn't start \(new), still on \(old)."
     }
 
     /// An AirPlay speaker was switched off by AudioSync, not by the user.

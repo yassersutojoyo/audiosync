@@ -24,6 +24,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - The help no longer says AirPlay adds about 2 seconds. It now says AirPlay adds at most 0.2 s on top of what the speaker needs, as it has since 0.9.1.
 - On the Mac, a speaker another app is using now says at once that it's in use by another app, as on Windows. Before, it stayed quiet for 30 seconds and then said the speaker was disconnected while it was still plugged in.
 - On the Mac, when the AirPlay pairings file can't be read at startup, a notice now says the speakers you paired will ask for a code again, as on Windows. Before, an Apple TV just asked for its code with no explanation.
+- On the Mac, the notice for a source switch that couldn't start no longer tells you to pick the new source again to retry, which doesn't help while another app holds that input.
 
 ## [0.9.1] - 2026-11-08
 

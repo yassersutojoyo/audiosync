@@ -6290,8 +6290,8 @@ do {
           "EC5 source: a failed switch logs that the speakers stayed",
           CaptureSwitch.logLine(.keptOld(.startFailed), kept: 1, fromRate: 48000, toRate: 48000))
     check(UIStrings().sourceSwitchFailed(new: "Music", old: "All System Audio")
-            == "Couldn't start Music, still on All System Audio. Pick Music again to retry.",
-          "EC5 source: the failed switch notice names both sources plainly and the next step")
+            == "Couldn't start Music, still on All System Audio.",
+          "EC5 source: the failed switch notice names both sources plainly")
     check(CaptureSwitch.start(starts: true, microphone: .notNeeded) == .rebuildCapture
             && CaptureSwitch.start(starts: true, microphone: .allowed) == .rebuildCapture,
           "EC5 source: a switch rebuilds only the capture and keeps the session")
