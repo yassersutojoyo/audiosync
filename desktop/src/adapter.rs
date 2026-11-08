@@ -490,6 +490,9 @@ pub struct AudioAdapter<A: AudioBackend> {
     mix_mode: MixMode,
     /// The last mix that was in use, while another source is (S354).
     last_mix: Option<Chosen>,
+    /// The executables of the chosen "only these" mix that the last listing
+    /// showing any of them listed: the quit notice names them (S227).
+    mix_ran_last: Vec<String>,
     /// The endpoint IDs of the last listing, to tell which outputs appeared.
     listed: BTreeSet<String>,
     /// The last name of every output listed, for a notice about one that is
@@ -755,6 +758,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             chosen: Chosen::WholeSystem,
             mix_mode: MixMode::Only,
             last_mix: None,
+            mix_ran_last: Vec::new(),
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
             kinds: BTreeMap::new(),
@@ -2106,6 +2110,32 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.chosen
             .notice_name()
             .unwrap_or_else(|| SourceName::Named(self.chosen_name()))
+    }
+
+    /// The chosen source as the quit notices name it: for an "only these"
+    /// mix, the app that ran last, as on the Mac (S227).
+    fn quit_notice_name(&self) -> SourceName {
+        if let Chosen::Mix {
+            mode: MixMode::Only,
+            apps,
+        } = &self.chosen
+        {
+            let ran: Vec<SavedMixApp> = apps
+                .iter()
+                .filter(|app| {
+                    self.mix_ran_last
+                        .iter()
+                        .any(|executable| executable.eq_ignore_ascii_case(&app.executable))
+                })
+                .cloned()
+                .collect();
+            match mix_names(&ran).as_slice() {
+                [] => {}
+                [one] => return SourceName::Named(one.clone()),
+                several => return SourceName::Apps(several.to_vec()),
+            }
+        }
+        self.chosen_notice_name()
     }
 
     /// Posts a notice, replacing an older one about the same subject.
@@ -3687,6 +3717,24 @@ impl<A: AudioBackend> AudioAdapter<A> {
         let changed = sources != self.sources || chosen != self.chosen;
         self.sources = sources;
         self.chosen = chosen;
+        if let Chosen::Mix {
+            mode: MixMode::Only,
+            apps,
+        } = &self.chosen
+        {
+            let running: Vec<String> = apps
+                .iter()
+                .filter(|app| {
+                    self.sources
+                        .iter()
+                        .any(|source| source.executable.eq_ignore_ascii_case(&app.executable))
+                })
+                .map(|app| app.executable.clone())
+                .collect();
+            if !running.is_empty() {
+                self.mix_ran_last = running;
+            }
+        }
         changed
     }
 
@@ -4293,7 +4341,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                         // of the app.
                         self.heard_twice_dismissed.remove(&self.chosen.key());
                         NoticeMessage::SourceQuit {
-                            source: self.chosen_notice_name(),
+                            source: self.quit_notice_name(),
                         }
                     }
                     StopReason::CaptureFailed(BackendError::InputGone) => {
@@ -4314,7 +4362,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             // The quit app's choice gives way to the whole system, as a
             // source the user picked would (S141, S227).
             BackendEvent::SwitchedToSystem => {
-                let source = self.chosen_notice_name();
+                let source = self.quit_notice_name();
                 self.heard_twice_dismissed.remove(&self.chosen.key());
                 self.keep_mix();
                 self.chosen = Chosen::WholeSystem;
@@ -13683,6 +13731,32 @@ mod tests {
         let ids = source_ids(&adapter);
         assert_eq!(once(&ids, LAST_MIX), 0, "replaced: {ids:?}");
         assert_eq!(once(&ids, "mix:only:browser.exe,chat.exe"), 1, "{ids:?}");
+    }
+
+    // covers: S227 (a mix's quit notice names the app that ran last)
+    #[test]
+    fn a_mix_that_quits_names_the_app_that_ran_last() {
+        let mut adapter = adapter();
+        adapter.audio.add_app(3000, "browser.exe");
+        adapter.refresh_sources();
+        turn_on(&mut adapter, SPEAKERS);
+        adapter.toggle_mix_app("player.exe");
+        adapter.toggle_mix_app("browser.exe");
+        assert!(adapter.snapshot().running);
+        adapter.audio_mut().quit_app(3000);
+        adapter.refresh_sources();
+        adapter.audio_mut().quit_app(PLAYER_PID);
+        for _ in 0..3 {
+            adapter.audio.pass_mix_follow();
+            adapter.poll();
+        }
+        assert!(!adapter.snapshot().running);
+        assert_eq!(
+            messages(&adapter),
+            [NoticeMessage::SourceQuit {
+                source: SourceName::Named("Player".into()),
+            }]
+        );
     }
 
     // covers: S354, S344
