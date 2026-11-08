@@ -284,6 +284,20 @@ impl Tray {
             self.shown.set(Some(choice));
         }
     }
+
+    /// Opens the flyout at the icon, as a click on it does.
+    #[cfg(windows)]
+    pub fn open_flyout(&self, app: &App) {
+        if let Some(rect) = self.icon.rect() {
+            let icon = Bounds {
+                x: rect.position.x,
+                y: rect.position.y,
+                width: f64::from(rect.size.width),
+                height: f64::from(rect.size.height),
+            };
+            show_flyout(app, icon);
+        }
+    }
 }
 
 /// Hands `pending` to `set`, keeping it for the next try when `set` fails.

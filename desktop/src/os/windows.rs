@@ -59,6 +59,10 @@ impl super::claim::Listen for single_instance::Instance {
     }
 }
 
+/// With the debug log on, `1` here opens the tray flyout a second after
+/// launch, as a click on the icon does.
+const PREVIEW_FLYOUT_VAR: &str = "AUDIOSYNC_PREVIEW_FLYOUT";
+
 /// The notification-area icon; it stays until it is dropped.
 pub type Tray = Rc<tray::Tray>;
 
@@ -69,6 +73,14 @@ pub fn create_tray(app: &Rc<App>, log: &DebugLog) -> Option<Tray> {
         Ok(tray) => {
             log.log(|| "tray icon: shown".to_owned());
             app.set_tray_available(true);
+            // To capture the flyout without a click on the icon.
+            if log.enabled() && std::env::var(PREVIEW_FLYOUT_VAR).as_deref() == Ok("1") {
+                log.log(|| format!("tray flyout: opened at launch ({PREVIEW_FLYOUT_VAR})"));
+                let (tray, app) = (Rc::clone(&tray), Rc::clone(app));
+                slint::Timer::single_shot(std::time::Duration::from_secs(1), move || {
+                    tray.open_flyout(&app);
+                });
+            }
             Some(tray)
         }
         Err(error) => {
