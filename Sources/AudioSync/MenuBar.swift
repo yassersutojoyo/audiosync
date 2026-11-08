@@ -675,6 +675,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private let popover = MenuBarPopover()
     private let host: PanelHost
     private var monitors: [Any] = []
+    private var rightClickWatch: Any?
     private var resignWatch: NSObjectProtocol?
     /// Open as far as clicks on the icon go. It turns false as the close
     /// begins, while the popover still animates out: the click that follows
@@ -731,6 +732,18 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             button.target = self
             button.action = #selector(togglePanel(_:))
             button.setAccessibilityTitle(model.text.appName)
+            button.setAccessibilityCustomActions([
+                NSAccessibilityCustomAction(name: model.text.statusItemShowMenu) { [weak self] in
+                    MainActor.assumeIsolated { self?.showMenu() }
+                    return true
+                },
+            ])
+        }
+        // A right-click opens the menu; the left click still opens or closes the panel.
+        rightClickWatch = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
+            guard let self, let window = event.window, window === self.statusItem.button?.window else { return event }
+            self.showMenu()
+            return nil
         }
         refreshIcon()
         quietQueue.quiet = PanelQuiet(system: PanelSwitches.systemAnimation)
@@ -802,6 +815,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     }
 
     @objc private func togglePanel(_ sender: Any?) {
+        // Control-click is the Mac's right-click.
+        if NSApp.currentEvent?.modifierFlags.contains(.control) == true { return showMenu() }
         // VoiceOver or the keyboard can press the button too, with no mouse press of its own.
         let byMouse = NSApp.currentEvent.map { $0.type == .leftMouseUp || $0.type == .leftMouseDown } ?? false
         let action = StatusItemClick.action(panelVisible: presented, closingPress: byMouse ? closingPress : nil,
@@ -817,6 +832,19 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             }
         case .close: dismiss(); closingPress = nil   // this click closed it; the next one opens it
         case .stayClosed: DebugTrace.log("[AudioSync] status item click: the press already closed the panel")
+        }
+    }
+
+    /// The Windows tray menu's commands, under the icon (S400).
+    private func showMenu() {
+        guard let button = statusItem.button else { return }
+        if presented { dismiss() }
+        let actions = model.actions
+        MainActor.assumeIsolated {
+            StatusItemMenu.make(text: model.text, running: model.running, launchAtLogin: model.launchAtLogin,
+                                open: actions.openMainWindow, setPower: actions.setPower,
+                                setLaunchAtLogin: actions.setLaunchAtLogin, quit: actions.quit)
+                .popUp(under: button)
         }
     }
 

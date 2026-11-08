@@ -4009,6 +4009,32 @@ do {
         // covers: S400
         check(firstTarget == nil, "Gear menu: the next menu that opens releases the one before it")
     }
+    MainActor.assumeIsolated {
+        let t = UIStrings()
+        var opened = 0, quits = 0
+        var power: [Bool] = [], login: [Bool] = []
+        let menu = StatusItemMenu.make(text: t, running: true, launchAtLogin: true, open: { opened += 1 },
+                                       setPower: { power.append($0) }, setLaunchAtLogin: { login.append($0) },
+                                       quit: { quits += 1 })
+        let titles = menu.items.map { $0.isSeparatorItem ? "-" : $0.title }
+        // covers: S400 (the menu bar icon's menu)
+        check(titles == [t.openApp, t.menuTurnStreamingOff, "-", t.launchAtLogin, "-", t.quitApp],
+              "menu bar icon menu: Open, the streaming switch, Launch at Login and Quit, in the Windows tray menu's order",
+              titles.joined(separator: " | "))
+        for item in menu.items where !item.isSeparatorItem {
+            if let target = item.target as? NSObject, let action = item.action { _ = target.perform(action, with: item) }
+        }
+        // covers: S400 (the menu bar icon's menu)
+        check(opened == 1 && power == [false] && login == [false] && quits == 1,
+              "menu bar icon menu: each item runs its own command once, and the switches turn off what is on",
+              "open \(opened), power \(power), login \(login), quit \(quits)")
+        let off = StatusItemMenu.make(text: t, running: false, launchAtLogin: false, open: {}, setPower: { _ in },
+                                      setLaunchAtLogin: { _ in }, quit: {})
+        // covers: S400 (the menu bar icon's menu)
+        check(menu.items.count == 6 && menu.items[3].state == .on && off.items.count == 6
+                && off.items[3].state == .off && off.items[1].title == t.menuTurnStreamingOn,
+              "menu bar icon menu: Launch at Login is checked while on, and the switch says Turn Streaming On while off")
+    }
     // covers: S285
     check(UIStrings().nativeAirPlayWaitingTitle(name: "Loft") == "Loft waiting"
             && UIStrings().rowNote(cast: nil, waitingForAirPlay2: true, unannounced: false, target: nil) == "Waiting: too many AirPlay 2 speakers"

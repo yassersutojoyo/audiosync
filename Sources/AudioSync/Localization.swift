@@ -183,6 +183,9 @@ struct UIStrings {
         appName + ": " + statusItemValue(running: running, speakers: speakers, notices: notices)
     }
 
+    /// VoiceOver's action on the menu bar icon that opens its right-click menu.
+    let statusItemShowMenu = "Show Menu"
+
     func speakerOptions(name: String) -> String { "Options for \(name)" }
 
     /// A speaker's (or group's) accessibility value.

@@ -7,6 +7,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 ### Added
 
 - On the Mac, hovering over the menu bar icon shows whether streaming is on, how many speakers are on and how many notices wait, as the tray icon's tooltip does on Windows.
+- On the Mac, right-clicking the menu bar icon opens a menu with Open AudioSync, Turn Streaming On or Off, Launch at Login and Quit AudioSync, as right-clicking the tray icon does on Windows. A left click still opens the panel.
 
 ### Changed
 

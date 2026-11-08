@@ -32,6 +32,26 @@ extension NSMenu {
     func keepUntilNextPopUp() { OpenMenu.current = self }
 }
 
+/// The menu a right-click on the menu bar icon opens: the commands of the
+/// Windows tray menu that the Mac has, in its order.
+@MainActor
+enum StatusItemMenu {
+    static func make(text t: UIStrings, running: Bool, launchAtLogin: Bool, open: @escaping () -> Void,
+                     setPower: @escaping (Bool) -> Void, setLaunchAtLogin: @escaping (Bool) -> Void,
+                     quit: @escaping () -> Void) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(MenuAction.item(t.openApp, open))
+        menu.addItem(MenuAction.item(running ? t.menuTurnStreamingOff : t.menuTurnStreamingOn) { setPower(!running) })
+        menu.addItem(.separator())
+        let login = MenuAction.item(t.launchAtLogin) { setLaunchAtLogin(!launchAtLogin) }
+        login.state = launchAtLogin ? .on : .off
+        menu.addItem(login)
+        menu.addItem(.separator())
+        menu.addItem(MenuAction.item(t.quitApp, quit))
+        return menu
+    }
+}
+
 @MainActor
 private enum OpenMenu {
     static var current: NSMenu?
