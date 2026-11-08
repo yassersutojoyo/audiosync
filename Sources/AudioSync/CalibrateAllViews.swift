@@ -25,7 +25,7 @@ struct CalibrateAllButton: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Brand.secondaryText)
                         .accessibilityHidden(true)
                 }
                 .contentShape(Rectangle())

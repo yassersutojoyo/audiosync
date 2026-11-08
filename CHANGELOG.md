@@ -39,6 +39,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a stereo pair's or home theater group's row names its speakers by the names you gave them, as a Google Cast group's row does.
 - On the Mac, the message that asks you to turn speakers on before saving or updating a preset is titled Save Preset or Update to Current Settings, as on Windows, instead of AudioSync.
 - On the Mac, the Web Remote window says under the address where to allow AudioSync when the phone can't open the page: System Settings → Network → Firewall.
+- On the Mac, the arrows on the Equalizer and Calibrate All rows in the window are as dark as the other arrows that open or fold something, so they are easier to see.
 
 ### Fixed
 
