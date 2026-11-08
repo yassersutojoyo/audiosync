@@ -199,3 +199,4 @@ S429 Hosts only: the keyboard's volume keys moving the master; the Windows tests
 S430 Host only: the firewall line under the web remote's address is window text; the core has no part in it.
 S431 Hosts only: what a running capture does when its permission is taken away is host capture code; the core has no part in it.
 S432 Mac host only: the Setup window's rows and summary; the Mac logic suite checks them.
+S434 Mac host only: the note in an empty Connected Speakers when only hidden virtual outputs exist; the Mac logic suite checks it.
