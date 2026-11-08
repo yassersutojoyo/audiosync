@@ -674,10 +674,6 @@ export component TrayFlyout inherits Window {
                         }
                     }
 
-                    if root.live-input-hint != "": SecondaryText {
-                        text: root.live-input-hint;
-                    }
-
                     if root.input-pairs.length > 0: VerticalLayout {
                         spacing: 4px;
 
@@ -692,6 +688,10 @@ export component TrayFlyout inherits Window {
                                 root.input-pair-selected(index);
                             }
                         }
+                    }
+
+                    if root.live-input-hint != "": SecondaryText {
+                        text: root.live-input-hint;
                     }
 
                     // Recall only: the main window saves, renames and deletes.
