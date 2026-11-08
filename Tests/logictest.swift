@@ -7040,7 +7040,8 @@ do {
     let nextCover = TrackMetadata.Artwork(large: Data([0xFF, 0xD8, 0xFF, 0x02]), small: Data([0xFF, 0xD8, 0xFF, 0x02]))
     var playing = NativeNowPlaying()
     playing.setTrack(song)
-    playing.setArtwork(cover)
+    let coverTurn = playing.artworkAsked()
+    playing.setArtwork(cover, turn: coverTurn)
     check(playing.fields == song && playing.artwork == cover, "native track info: the track goes out with its artwork")
     playing.setTrack(song)
     check(playing.fields == song && playing.artwork == cover,
@@ -7049,14 +7050,31 @@ do {
     playing.setTrack(next)
     check(playing.fields == next && playing.artwork == nil,
           "native track info: a new track drops the last one's artwork: it goes out without the wrong cover")
-    playing.setArtwork(nextCover)
+    let nextCoverTurn = playing.artworkAsked()
+    playing.setArtwork(nextCover, turn: nextCoverTurn)
     check(playing.fields == next && playing.artwork == nextCover, "native track info: the new track's artwork goes out once it comes")
     playing.setTrack(TrackMetadata.Fields(title: "Next", artist: "Other band", album: "Record"))
     let otherArtist = playing.artwork
-    playing.setArtwork(nextCover)
+    let againTurn = playing.artworkAsked()
+    playing.setArtwork(nextCover, turn: againTurn)
     playing.setTrack(TrackMetadata.Fields(title: "Next", artist: "Other band", album: "Single"))
     check(otherArtist == nil && playing.artwork == nil,
           "native track info: another artist or album is a new track too")
+}
+// covers: S219
+do {
+    let staleCover = TrackMetadata.Artwork(large: Data([0xFF, 0xD8, 0xFF, 0x04]), small: Data([0xFF, 0xD8, 0xFF, 0x05]))
+    let freshCover = TrackMetadata.Artwork(large: Data([0xFF, 0xD8, 0xFF, 0x06]), small: Data([0xFF, 0xD8, 0xFF, 0x07]))
+    var lateTrack = NativeNowPlaying()
+    lateTrack.setTrack(TrackMetadata.Fields(title: "Song", artist: "Band", album: "Record"))
+    let songTurn = lateTrack.artworkAsked()
+    lateTrack.setTrack(TrackMetadata.Fields(title: "Next", artist: "Band", album: "Record"))
+    check(!lateTrack.setArtwork(staleCover, turn: songTurn) && lateTrack.artwork == nil,
+          "native track info: a cover encoded off the queue that ends after the next track came is dropped")
+    let firstTurn = lateTrack.artworkAsked(), secondTurn = lateTrack.artworkAsked()
+    check(lateTrack.setArtwork(freshCover, turn: secondTurn) && !lateTrack.setArtwork(staleCover, turn: firstTurn)
+            && lateTrack.artwork == freshCover,
+          "native track info: of two covers asked for one track, the one asked for last wins")
 }
 
 // MARK: Track info the app gives its own sender — what goes out and what a repeat skips (SentTrackInfo)

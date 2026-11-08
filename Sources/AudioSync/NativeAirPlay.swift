@@ -35,6 +35,9 @@ final class NativeAirPlay {
     private let onChange: (NativeReceiverChange) -> Void
     private let onEvent: (NativeSpeakerEvent, NativeAirPlayOutcome?) -> Void
     private let queue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.native-airplay", qos: .userInitiated)
+    /// Scales and encodes covers, so the poll, volume and pause on `queue` never wait for one.
+    private let artworkQueue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.native-airplay.artwork",
+                                             qos: .utility)
     /// The sender (queue only).
     private var handle: OpaquePointer?
     /// Its audio input, installed in `NativeAirPlayTap` (queue only).
@@ -313,7 +316,8 @@ final class NativeAirPlay {
     /// What changed for the receivers that show it (P123 to P127), in one
     /// send: the track's title, artist and album, which drop the artwork set
     /// last (`NativeNowPlaying`); its artwork, scaled and encoded as a large
-    /// and a small JPEG on the queue (`TrackMetadata.artwork`); and, when `sendsPosition`,
+    /// and a small JPEG on `artworkQueue` (`TrackMetadata.artwork`) and sent once
+    /// ready, unless a newer track or cover came first; and, when `sendsPosition`,
     /// its position, nil for none, which a new track drops in the core.
     /// Main queue.
     func setTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?,
@@ -326,11 +330,17 @@ final class NativeAirPlay {
                 changed = true
             }
             if let artwork {
-                if let images = TrackMetadata.artwork(artwork) {
-                    self.nowPlaying.setArtwork(images)
-                    changed = true
-                } else {
-                    DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
+                let turn = self.nowPlaying.artworkAsked()
+                self.artworkQueue.async { [weak self] in
+                    let images = TrackMetadata.artwork(artwork)
+                    self?.queue.async { [weak self] in
+                        guard let self else { return }
+                        guard let images else {
+                            DispatchQueue.main.async { DebugTrace.log("[AudioSync] native AirPlay: the artwork could not be made small enough") }
+                            return
+                        }
+                        if self.nowPlaying.setArtwork(images, turn: turn) { self.sendNowPlaying() }
+                    }
                 }
             }
             if changed { self.sendNowPlaying() }

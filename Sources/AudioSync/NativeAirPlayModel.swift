@@ -1516,14 +1516,30 @@ struct NativeNowPlaying: Equatable {
     private(set) var fields: TrackMetadata.Fields?
     /// The artwork in both sizes, once one was set for this track.
     private(set) var artwork: TrackMetadata.Artwork?
+    /// Bumped by every cover asked for and every new track, so a cover encoded
+    /// off the sender's queue that ends after either is dropped.
+    private(set) var artworkTurn = 0
 
     mutating func setTrack(_ track: TrackMetadata.Fields) {
-        if track != fields { artwork = nil }
+        if track != fields {
+            artwork = nil
+            artworkTurn += 1
+        }
         fields = track
     }
 
-    mutating func setArtwork(_ artwork: TrackMetadata.Artwork) {
+    /// The turn a cover asked for now must come back with to be set.
+    mutating func artworkAsked() -> Int {
+        artworkTurn += 1
+        return artworkTurn
+    }
+
+    /// False, setting nothing, when a new track or another cover came after `turn`.
+    @discardableResult
+    mutating func setArtwork(_ artwork: TrackMetadata.Artwork, turn: Int) -> Bool {
+        guard turn == artworkTurn else { return false }
         self.artwork = artwork
+        return true
     }
 }
 
