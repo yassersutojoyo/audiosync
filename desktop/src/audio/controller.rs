@@ -4148,6 +4148,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 OutputInfo {
                     id: endpoint.id.clone(),
                     name: endpoint.name.clone(),
+                    name_read: endpoint.name_read,
                     kind: endpoint.kind,
                     traits: endpoint.traits.clone(),
                     is_default: endpoint.is_default,

@@ -38,7 +38,7 @@ use audiosync_core::volume::{
 };
 
 use super::SESSION_RATE;
-use super::backend::{BackendError, OutputKind};
+use super::backend::{BackendError, OutputKind, UNKNOWN_DEVICE_NAME};
 
 /// The L_s a new native sender starts with: the AirPlay delay adjustment A
 /// is set against it until a sender has reported one (S178).
@@ -53,6 +53,9 @@ pub struct Endpoint {
     pub id: String,
     /// The name Windows shows for it.
     pub name: String,
+    /// Whether Windows gave its name; without one it is listed as
+    /// [`UNKNOWN_DEVICE_NAME`].
+    pub name_read: bool,
     /// Whether it is Windows' default output.
     pub is_default: bool,
     /// What kind of device it is.
@@ -326,8 +329,8 @@ pub fn is_hands_free(enumerator: &str) -> bool {
 ///
 /// Every endpoint is listed except a Bluetooth hands-free one
 /// ([`is_hands_free`]) and one without an ID, which nothing could play to.
-/// One whose properties can't be read is listed under its ID as an output
-/// of unknown kind. The notes say what was left out, or listed without its
+/// One whose properties can't be read is listed as an output of unknown
+/// kind, and one without a readable name as [`UNKNOWN_DEVICE_NAME`]. The notes say what was left out, or listed without its
 /// properties, and why, so nothing goes missing without a word in the log.
 pub fn list_endpoints(readings: Vec<EndpointReading>, default_id: Option<&str>) -> Listing {
     let mut listing = Listing::default();
@@ -367,7 +370,10 @@ pub fn list_endpoints(readings: Vec<EndpointReading>, default_id: Option<&str>) 
                 form_factor: properties.form_factor,
                 enumerator: properties.enumerator,
             },
-            name: properties.name.unwrap_or_else(|| id.clone()),
+            name_read: properties.name.is_some(),
+            name: properties
+                .name
+                .unwrap_or_else(|| UNKNOWN_DEVICE_NAME.to_owned()),
             id,
         });
     }
@@ -952,6 +958,7 @@ mod tests {
         Endpoint {
             id: id.to_owned(),
             name: format!("Output {id}"),
+            name_read: true,
             is_default: false,
             kind: OutputKind::Other,
             traits: DeviceTraits::default(),
@@ -1057,6 +1064,7 @@ mod tests {
             vec![Endpoint {
                 id: "b".to_owned(),
                 name: "Headphones (Example Buds)".to_owned(),
+                name_read: true,
                 is_default: true,
                 kind: OutputKind::Bluetooth,
                 traits: DeviceTraits {
@@ -1097,7 +1105,7 @@ mod tests {
 
     // covers: S381
     #[test]
-    fn an_endpoint_whose_properties_fail_is_listed_under_its_id_and_noted() {
+    fn an_endpoint_whose_properties_fail_is_listed_as_unknown_device_and_noted() {
         let listing = list_endpoints(
             vec![EndpointReading {
                 index: 0,
@@ -1110,7 +1118,8 @@ mod tests {
             listing.endpoints,
             vec![Endpoint {
                 id: "a".to_owned(),
-                name: "a".to_owned(),
+                name: "Unknown device".to_owned(),
+                name_read: false,
                 is_default: false,
                 kind: OutputKind::Other,
                 traits: DeviceTraits::default(),
@@ -1151,13 +1160,13 @@ mod tests {
 
     // covers: S381
     #[test]
-    fn a_name_that_cannot_be_read_falls_back_to_the_id() {
+    fn a_name_that_cannot_be_read_shows_unknown_device() {
         let mut nameless = reading(0, "a", "", 1, "HDAUDIO");
         if let Ok(properties) = &mut nameless.properties {
             properties.name = None;
         }
         let listing = list_endpoints(vec![nameless], None);
-        assert_eq!(listing.endpoints[0].name, "a");
+        assert_eq!(listing.endpoints[0].name, "Unknown device");
         assert_eq!(listing.endpoints[0].kind, OutputKind::BuiltIn);
         assert!(listing.notes.is_empty());
     }
@@ -1166,6 +1175,7 @@ mod tests {
         Endpoint {
             id: id.to_owned(),
             name: format!("Output {id}"),
+            name_read: true,
             is_default: false,
             kind,
             traits: DeviceTraits::default(),

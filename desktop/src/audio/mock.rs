@@ -32,7 +32,7 @@ use audiosync_core::ring::{Ring, RingWriter};
 use audiosync_core::volume::SharedGain;
 
 use super::SESSION_RATE;
-use super::backend::{BackendError, OutputKind};
+use super::backend::{BackendError, OutputKind, UNKNOWN_DEVICE_NAME};
 use super::capture::{CAPTURE_ATTEMPTS, CaptureAttempt, CaptureTarget, Feeds, LoopbackMode};
 use super::controller::{
     CaptureHandle, CaptureState, Controller, Driver, FEED_FADE, PowerNotice, RendererHandle,
@@ -1116,10 +1116,14 @@ impl Controller<MockDriver> {
     pub fn connect_output(&mut self, id: &str, name: &str) {
         let driver = self.driver_mut();
         match driver.outputs.iter_mut().find(|output| output.id == id) {
-            Some(output) => output.name = name.to_owned(),
+            Some(output) => {
+                output.name = name.to_owned();
+                output.name_read = true;
+            }
             None => driver.outputs.push(Endpoint {
                 id: id.to_owned(),
                 name: name.to_owned(),
+                name_read: true,
                 is_default: false,
                 kind: OutputKind::Other,
                 traits: DeviceTraits::default(),
@@ -1134,6 +1138,15 @@ impl Controller<MockDriver> {
         let driver = self.driver_mut();
         if let Some(output) = driver.outputs.iter_mut().find(|output| output.id == id) {
             output.kind = kind;
+        }
+    }
+
+    /// Connects an output of this kind whose name Windows can't read.
+    pub fn connect_nameless_output(&mut self, id: &str, kind: OutputKind) {
+        self.connect_output_as(id, UNKNOWN_DEVICE_NAME, kind);
+        let driver = self.driver_mut();
+        if let Some(output) = driver.outputs.iter_mut().find(|output| output.id == id) {
+            output.name_read = false;
         }
     }
 

@@ -347,6 +347,7 @@ impl Graph {
             }
             listing.endpoints.push(Endpoint {
                 is_default: self.default_sink.as_deref() == Some(id.as_str()),
+                name_read: name.is_some(),
                 name: name.unwrap_or_else(|| id.clone()),
                 kind: sink_kind(node),
                 traits: sink_traits(node),

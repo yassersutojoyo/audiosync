@@ -70,6 +70,10 @@ pub enum SourceId {
     },
 }
 
+/// The name of a speaker whose own name can't be read, as on the Mac; the
+/// UI's `unknown-device` string says the same.
+pub const UNKNOWN_DEVICE_NAME: &str = "Unknown device";
+
 /// A capture source the user can pick.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceInfo {
@@ -126,6 +130,9 @@ pub struct OutputInfo {
     pub id: String,
     /// The name Windows shows for it.
     pub name: String,
+    /// Whether Windows gave its name; a nameless output isn't matched by
+    /// name to one that left (S384).
+    pub name_read: bool,
     /// What kind of device it is.
     pub kind: OutputKind,
     /// What Windows said about its device, which decides whether microphone

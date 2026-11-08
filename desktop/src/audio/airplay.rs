@@ -107,7 +107,7 @@ use audiosync_core::volume::{
 use super::SESSION_RATE;
 use super::backend::{
     AirPlayAvailability, AirPlayGroup, AirPlayGroupKind, AirPlayInfo, AirPlayPasswordPrompt,
-    AirPlayPinPrompt, AirPlayProblem, BackendEvent, InTarget, PairingPhase,
+    AirPlayPinPrompt, AirPlayProblem, BackendEvent, InTarget, PairingPhase, UNKNOWN_DEVICE_NAME,
 };
 use super::explicit_pause::{ExplicitPause, Step, sound_frames};
 use super::pairings::PairingStore;
@@ -2197,7 +2197,11 @@ impl AirPlaySpeakers {
                 }
                 AirPlayInfo {
                     id: id.clone(),
-                    name: self.names.get(id).cloned().unwrap_or_else(|| id.clone()),
+                    name: self
+                        .names
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_else(|| UNKNOWN_DEVICE_NAME.to_owned()),
                     // One whose password the user typed can play.
                     availability: match self.listed_availability(id) {
                         Some(AirPlayAvailability::NeedsPassword) if self.can_join(id) => {
@@ -5529,6 +5533,17 @@ pub mod tests {
         airplay.poll();
         let names: Vec<String> = airplay.speakers().into_iter().map(|s| s.name).collect();
         assert_eq!(names, ["Den".to_owned(), a, b]);
+    }
+
+    #[test]
+    fn a_speaker_without_a_known_name_shows_unknown_device() {
+        let fake = FakeAirPlay::new();
+        let mut airplay = speakers(&fake);
+        fake.appear(&device(1, "Kitchen", OPEN_TXT));
+        airplay.poll();
+        airplay.names.clear();
+        let names: Vec<String> = airplay.speakers().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, ["Unknown device"]);
     }
 
     #[test]

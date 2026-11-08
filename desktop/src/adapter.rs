@@ -498,6 +498,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The last name of every output listed, for a notice about one that is
     /// gone.
     names: BTreeMap<String, String>,
+    /// The outputs whose name Windows didn't give when last listed.
+    nameless: BTreeSet<String>,
     /// The last kind of every output listed, to tell a device listed under
     /// a new endpoint ID.
     kinds: BTreeMap<String, OutputKind>,
@@ -761,6 +763,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             mix_ran_last: Vec::new(),
             listed: BTreeSet::new(),
             names: BTreeMap::new(),
+            nameless: BTreeSet::new(),
             kinds: BTreeMap::new(),
             saved_kinds: BTreeMap::new(),
             left_behind: BTreeSet::new(),
@@ -3189,6 +3192,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 }
             }
             self.names.insert(output.id.clone(), output.name.clone());
+            if output.name_read {
+                self.nameless.remove(&output.id);
+            } else {
+                self.nameless.insert(output.id.clone());
+            }
             self.kinds.insert(output.id.clone(), output.kind);
             listed.insert(output.id.clone());
         }
@@ -3251,7 +3259,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
     /// `fresh`: an endpoint ID not listed before in this run, or one a
     /// device left behind when its settings followed it to another port (it
     /// came back). It must be the only output that appeared with its name
-    /// and kind (which follows its form factor and bus). And exactly one
+    /// and kind (which follows its form factor and bus). Outputs whose name
+    /// Windows didn't give match nothing, on either side. And exactly one
     /// output with that name and kind, listed earlier in this run and not
     /// now, with or without anything set, or a zone member not listed in
     /// this run under its kept name and saved kind, must be gone, and have
@@ -3279,7 +3288,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .iter()
                 .filter(|other| same(&other.name, Some(&other.kind)))
                 .count();
-            if twins > 1 || !fresh.contains(&output.id) || self.has_choices(&output.id) {
+            if twins > 1
+                || !output.name_read
+                || !fresh.contains(&output.id)
+                || self.has_choices(&output.id)
+            {
                 continue;
             }
             let gone: Vec<String> = self
@@ -3288,6 +3301,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .filter(|(id, name)| {
                     !self.listed.contains(*id)
                         && !self.left_behind.contains(*id)
+                        && !self.nameless.contains(*id)
                         && same(name, self.kinds.get(*id))
                 })
                 .map(|(id, _)| id.clone())
@@ -14146,6 +14160,29 @@ mod tests {
         assert_eq!(hidden.len(), 1, "no stale entry: {hidden:?}");
         assert_eq!(hidden[0].id, key(DAC_PORT_2));
         assert!(hidden[0].present.is_some());
+    }
+
+    // covers: S384
+    #[test]
+    fn a_nameless_output_under_a_new_id_is_a_new_speaker() {
+        let mut adapter = adapter();
+        adapter
+            .audio_mut()
+            .connect_nameless_output(DAC_PORT_1, OutputKind::Usb);
+        adapter.poll();
+        turn_on(&mut adapter, DAC_PORT_1);
+        adapter.set_speaker_volume(&key(DAC_PORT_1), 35.0);
+        adapter.new_zone("Desk").unwrap();
+        unplug(&mut adapter, DAC_PORT_1);
+
+        // Another device whose name can't be read either may be any device.
+        adapter
+            .audio_mut()
+            .connect_nameless_output(DAC_PORT_2, OutputKind::Usb);
+        adapter.poll();
+        assert!(!enabled(&adapter, DAC_PORT_2));
+        assert_eq!(adapter.audio.enabled_outputs(), [DAC_PORT_1]);
+        assert_eq!(adapter.snapshot().zones[0].members, [key(DAC_PORT_1)]);
     }
 
     // covers: S384
