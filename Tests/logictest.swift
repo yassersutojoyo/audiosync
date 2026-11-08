@@ -7639,6 +7639,8 @@ do {
             && count(presets, "model.actions.renamePreset(row.id)") == 1 && count(presets, "model.actions.updatePreset(row.id)") == 1
             && count(presets, "model.actions.deletePreset(row.id)") == 1 && count(presets, "PresetEdit.canUpdate(row)") == 1,
           "main window presets: one row whose menu still recalls, saves, renames, updates and deletes every preset")
+    check(count(presets, "currentRow") == 0 && count(presets, "ForEach(model.presets) { row in") == 2,
+          "main window presets: every preset has its own Rename…, Update to Current Settings and Delete, so a preset that isn't current can be updated")
     let speakerRow = part(after: "struct SpeakerRow: View")
     check(count(speakerRow, ".modifier(Reveal(shown: oneStepShown || optionsFocused))") == 1
             && count(speakerRow, "(model.savedDelay(of: speaker.id) ?? 0) != 0") == 1

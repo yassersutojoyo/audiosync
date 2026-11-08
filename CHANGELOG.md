@@ -84,6 +84,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the tray panel shows the newest notice without its time, cut to three lines while others wait; hovering over it shows the whole text, as on the Mac.
 - On Windows, a paused Google Cast speaker no longer looks like it's playing in the window and the tray panel.
 - On Windows, a long speaker or zone name in the tray panel ends in "…" inside its row instead of scrolling past the row's edge; hovering over the row shows the whole name.
+- On the Mac, Update to Current Settings in the Presets menu can now be used. Every preset has Rename…, Update to Current Settings and Delete under its name, as on Windows. Before, they showed only under the preset in use, where Update to Current Settings is always greyed out because nothing differs from it.
 
 ### Changed
 

@@ -711,13 +711,12 @@ private struct SectionTitle: View {
 }
 
 /// The Presets row (S259): the current preset's name, and a menu that
-/// recalls a preset, saves one, and renames, updates or deletes the current one.
+/// recalls a preset, saves one, and renames, updates or deletes each one.
 private struct PresetsRow: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
         let t = model.text
-        let currentRow = model.presets.first(where: \.current)
         let current = PresetPanel.label(model.presets)
         Menu {
             if model.presets.isEmpty {
@@ -729,7 +728,7 @@ private struct PresetsRow: View {
             }
             Divider()
             Button(t.savePreset) { model.actions.savePreset() }
-            if let row = currentRow {
+            ForEach(model.presets) { row in
                 Divider()
                 Section(row.name) {
                     Button(t.renamePreset) { model.actions.renamePreset(row.id) }
