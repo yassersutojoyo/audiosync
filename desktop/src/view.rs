@@ -15613,6 +15613,34 @@ mod tests {
         assert!(!app.main.get_mix_open(), "a refresh never reopens it");
     }
 
+    /// A click on a flyout row's name, not only on its round mark, switches
+    /// the speaker, as the Mac panel's rows do (S439).
+    // covers: S439
+    #[test]
+    fn a_click_anywhere_on_a_flyout_row_switches_its_speaker() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.flyout.show().unwrap();
+        draw_frames();
+        let off = ElementHandle::find_by_element_type_name(&app.flyout, "FlyoutRow")
+            .find(|row| row.accessible_checked() == Some(false))
+            .expect("a flyout row that is off");
+        let name = off.accessible_label().unwrap();
+        let (at, size) = (off.absolute_position(), off.size());
+        click(
+            app.flyout.window(),
+            at.x + size.width - 12.0,
+            at.y + size.height / 2.0,
+        );
+        app.refresh();
+        draw_frames();
+        let row = ElementHandle::find_by_accessible_label(&app.flyout, &name)
+            .find(|row| row.accessible_checked().is_some())
+            .expect("the row again");
+        assert_eq!(row.accessible_checked(), Some(true), "{name} switched on");
+    }
+
     /// The logo and wordmark at the top of the flyout open the main window,
     /// with Open AudioSync as their tooltip, as in the Mac panel.
     #[test]

@@ -8,15 +8,8 @@ import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, Wordmark, ZoneArrowFocus } from "widgets.slint";
+import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, Wordmark, ZoneArrowFocus, Motion } from "widgets.slint";
 
-// A compact row: the toggle and the name, with the note of a speaker or
-// zone that is on but can't play right now under it (a zone's count first) ("In use by another app",
-// "Reconnecting…", which Narrator reads as the toggle's value), and at the
-// right a small glyph
-// when a switched-on output's own volume in Windows is low or muted (spec
-// S198). The flyout has no volume sliders, so the fix is in the main window;
-// the hint itself is in the toggle's description.
 // The preset pull-down under the source (spec S260): the current preset's
 // name, else "Choose a Preset"; its menu lists every preset, the current
 // one checked, and recalls the one chosen.
@@ -105,7 +98,49 @@ component PresetPicker inherits Rectangle {
     }
 }
 
-component FlyoutRow inherits HorizontalLayout {
+// A compact row's round mark: a teal disc with a white glyph while it
+// plays, a teal ring while it is on and waits, a grey ring while off. The
+// disc grows in as the speaker starts playing; with animation effects off it
+// fades in.
+component RowDisc inherits Rectangle {
+    in property <string> glyph;
+    in property <bool> on;
+    in property <bool> plays;
+    property <float> fill: root.plays ? 1 : 0;
+    animate fill {
+        duration: Motion.on ? 440ms : 150ms;
+        easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+
+    width: 28px;
+    height: 28px;
+    border-radius: self.width / 2;
+    border-width: root.plays ? 0px : root.on ? 2.5px : 1.5px;
+    border-color: root.on ? Tokens.teal : Tokens.secondary-text;
+
+    Rectangle {
+        width: root.width * (Motion.on ? root.fill : 1);
+        height: self.width;
+        border-radius: self.width / 2;
+        background: Tokens.teal;
+        opacity: Motion.on ? 1 : root.fill;
+    }
+
+    Glyph {
+        glyph: root.glyph;
+        font-size: 13px;
+        color: root.plays ? #ffffff : root.on ? Tokens.teal-text : Tokens.secondary-text;
+    }
+}
+
+// A compact row, one button as on the Mac: a click anywhere on it, Space or
+// Enter switches the speaker. The name, with the note of a speaker or zone
+// that is on but can't play right now at the right (a zone's count first)
+// ("In use by another app", "Reconnecting…", which Narrator reads as the
+// row's value), and a small glyph when a switched-on output's own volume in
+// Windows is low or muted (spec S198). The flyout has no volume sliders, so
+// the fix is in the main window; the hint itself is in the description.
+component FlyoutRow inherits Rectangle {
     in property <string> glyph;
     in property <string> name;
     in property <string> label;
@@ -115,117 +150,143 @@ component FlyoutRow inherits HorizontalLayout {
     in property <bool> enabled: true;
     in property <DeviceVolumeHint> device-volume;
     // A zone's count, before the note; and what Narrator reads as the
-    // toggle's value instead of its state.
+    // row's value instead of its state.
     in property <string> caption;
     // The note the main window row gives (Strings.speaker-note).
     in property <string> note;
     in property <string> value-text;
-    // A renamed speaker's own name, shown in the name's tooltip; else empty.
+    // A renamed speaker's own name, shown in the row's tooltip; else empty.
     in property <string> system-name;
     // The kind's glyph after the name, where `show-kind` is set.
     in property <SpeakerKind> kind;
     in property <bool> show-kind;
+    // A zone's speakers start past its arrow.
+    in property <length> indent;
     callback toggled();
-    // The toggle gained (true) or lost (false) keyboard focus.
+    // The row gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
 
-    spacing: 10px;
-    padding-top: 4px;
-    padding-bottom: 4px;
+    min-height: 38px;
+    border-radius: Fluent.radius-control;
+    background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    animate background { duration: Fluent.fast; }
+    forward-focus: focus;
+    // A toggle button, not a switch: see ToggleSwitch.
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.state != RowState.off;
+    accessible-value: root.value-text != "" ? root.value-text : Strings.value(root.state, root.name);
+    // The value already reads a state note; any other note leads.
+    accessible-description: Strings.flyout-speaker-description(root.description, root.note == Strings.row-note(root.state, root.name) ? "" : root.note);
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.toggled();
+    }
 
-    SpeakerBadge {
-        size: 28px;
-        glyph: root.glyph;
-        state: root.state;
-        plays: root.plays;
+    focus := FocusScope {
         enabled: root.enabled;
-        name: root.name;
-        label: root.label;
-        // The value already reads a state note; any other note leads.
-        description: Strings.flyout-speaker-description(root.description, root.note == Strings.row-note(root.state, root.name) ? "" : root.note);
-        value-text: root.value-text;
-        toggled => {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.toggled();
+                return accept;
+            }
+            return reject;
+        }
+        focus-changed-event => {
+            root.focus-changed(self.has-focus);
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
             root.toggled();
         }
-        focus-changed(focused) => {
-            root.focus-changed(focused);
+
+        // Narrator reads the device name from the row instead.
+        Tooltip {
+            LabelTip {
+                text: Strings.speaker-tooltip(root.name, root.system-name);
+                max-tip-width: root.width;
+            }
         }
     }
 
-    // One line, as in the Mac's menu bar panel: the name and its kind, then
-    // the note at the right.
     HorizontalLayout {
-        spacing: 6px;
-        horizontal-stretch: 1;
+        padding-left: 6px + root.indent;
+        padding-right: 6px;
+        padding-top: 3px;
+        padding-bottom: 3px;
+        spacing: 10px;
 
-        // No stretch, so a long note ends in "…" before the name does, as
-        // on the Mac.
-        Rectangle {
-            horizontal-stretch: 0;
-            min-width: 0px;
-            preferred-width: name-label.preferred-width;
-            max-width: name-label.preferred-width;
-            min-height: name-label.preferred-height;
-
-            name-label := MarqueeText {
-                width: 100%;
-                height: 100%;
-                text: root.name;
-                text-color: Tokens.text;
-                font-weight: root.plays ? 600 : 400;
-                accessible-role: none;
+        VerticalLayout {
+            alignment: center;
+            RowDisc {
+                glyph: root.glyph;
+                on: root.state != RowState.off;
+                plays: root.plays;
+                opacity: root.enabled ? 1 : Tokens.disabled-opacity;
             }
+        }
 
-            // Narrator reads the device name from the toggle instead.
-            TouchArea {
-                Tooltip {
-                    Rectangle {
-                        width: name-tip.preferred-width + 16px;
-                        height: name-tip.preferred-height + 10px;
-                        border-radius: Fluent.radius-control;
-                        border-width: 1px;
-                        border-color: Fluent.stroke;
-                        background: Tokens.surface;
-                        drop-shadow-blur: 8px;
-                        drop-shadow-offset-y: 2px;
-                        drop-shadow-color: Tokens.text.with-alpha(0.18);
-                        accessible-role: none;
+        // One line, as in the Mac's menu bar panel: the name and its kind,
+        // then the note at the right.
+        HorizontalLayout {
+            spacing: 6px;
+            horizontal-stretch: 1;
 
-                        name-tip := Text {
-                            x: 8px;
-                            text: Strings.speaker-tooltip(root.name, root.system-name);
-                            font-size: Tokens.font-size-caption;
-                            color: Tokens.text;
-                            vertical-alignment: center;
-                            accessible-role: none;
-                        }
-                    }
+            // No stretch, so a long note ends in "…" before the name does,
+            // as on the Mac.
+            Rectangle {
+                horizontal-stretch: 0;
+                min-width: 0px;
+                preferred-width: name-label.preferred-width;
+                max-width: name-label.preferred-width;
+                min-height: name-label.preferred-height;
+
+                name-label := MarqueeText {
+                    width: 100%;
+                    height: 100%;
+                    text: root.name;
+                    text-color: Tokens.text;
+                    font-weight: root.plays ? 600 : 400;
+                    accessible-role: none;
                 }
             }
+
+            if root.show-kind: KindIcon {
+                kind: root.kind;
+                clicked => {
+                    root.toggled();
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            if Strings.speaker-caption(root.caption, root.note) != "": QuietText {
+                text: Strings.speaker-caption(root.caption, root.note);
+                horizontal-stretch: 1;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                wrap: no-wrap;
+                overflow: elide;
+            }
         }
 
-        if root.show-kind: KindIcon {
-            kind: root.kind;
-        }
-
-        Rectangle {
-            horizontal-stretch: 1;
-        }
-
-        if Strings.speaker-caption(root.caption, root.note) != "": QuietText {
-            text: Strings.speaker-caption(root.caption, root.note);
-            horizontal-stretch: 1;
-            horizontal-alignment: right;
-            vertical-alignment: center;
-            wrap: no-wrap;
-            overflow: elide;
+        if root.device-volume != DeviceVolumeHint.none: Glyph {
+            glyph: Glyphs.device-volume(root.device-volume);
+            font-size: 12px;
+            color: Tokens.secondary-text;
         }
     }
 
-    if root.device-volume != DeviceVolumeHint.none: Glyph {
-        glyph: Glyphs.device-volume(root.device-volume);
-        font-size: 12px;
-        color: Tokens.secondary-text;
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
     }
 }
 
@@ -805,7 +866,7 @@ export component TrayFlyout inherits Window {
                                 // Its speakers while it is unfolded, their toggles
                                 // under the zone's, past the arrow.
                                 for speaker in zone.expanded ? zone.members : []: FlyoutRow {
-                                    padding-left: 26px;
+                                    indent: 26px;
                                     glyph: Glyphs.speaker(speaker.kind);
                                     name: speaker.name;
                                     label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);

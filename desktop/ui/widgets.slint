@@ -515,7 +515,7 @@ export component Glyph inherits HorizontalLayout {
 }
 
 // The keyboard focus ring: drawn only while the control has keyboard focus.
-component FocusRing inherits Rectangle {
+export component FocusRing inherits Rectangle {
     in property <bool> visible-focus;
     border-width: root.visible-focus ? 2px : 0px;
     border-color: Tokens.focus;
