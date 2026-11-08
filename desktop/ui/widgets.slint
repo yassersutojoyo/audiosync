@@ -58,6 +58,12 @@ export global Fluent {
     out property <brush> hero: Tokens.text.with-alpha(0.04);
     // A 1 px edge that sets a card off a light background.
     out property <brush> stroke: Tokens.dark ? Tokens.separator : #0000001a;
+    // Windows' two-tone keyboard focus ring, as the style's own controls draw it.
+    out property <color> focus-outer: Tokens.dark ? #ffffff : #000000e6;
+    out property <color> focus-inner: Tokens.dark ? #000000b3 : #ffffff;
+    // The style's slider thumb and its edge, for a slider AudioSync draws itself.
+    out property <color> thumb: Tokens.dark ? #454545 : #ffffff;
+    out property <color> thumb-edge: Tokens.dark ? #ffffff17 : #00000029;
     // Fluent's fast and normal durations: a state change, a fade.
     out property <duration> fast: 83ms;
     out property <duration> normal: 167ms;
@@ -524,7 +530,17 @@ export component Glyph inherits HorizontalLayout {
 export component FocusRing inherits Rectangle {
     in property <bool> visible-focus;
     border-width: root.visible-focus ? 2px : 0px;
-    border-color: Tokens.focus;
+    border-color: Fluent.focus-outer;
+
+    Rectangle {
+        x: 2px;
+        y: 2px;
+        width: parent.width - 4px;
+        height: parent.height - 4px;
+        border-width: root.visible-focus ? 1px : 0px;
+        border-radius: max(0px, parent.border-radius - 2px);
+        border-color: Fluent.focus-inner;
+    }
 }
 
 // A rounded panel on the window background.
@@ -1249,6 +1265,15 @@ export component VolumeSlider inherits HorizontalLayout {
                     }
                 }
             }
+        }
+
+        FocusRing {
+            x: -3px;
+            y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: Fluent.radius-control;
+            visible-focus: slider.has-focus;
         }
     }
 

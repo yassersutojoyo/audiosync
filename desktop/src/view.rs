@@ -6626,10 +6626,11 @@ mod tests {
         App::new(Box::new(backend), log).expect("the windows build headless")
     }
 
-    /// Saves the main window and the tray flyout over the mock backend as
-    /// main-window.png and flyout.png in AUDIOSYNC_SHOT_DIR, and dark as
-    /// main-window-dark.png and flyout-dark.png, to compare a UI change
-    /// before and after without opening a window.
+    /// Saves the main window, the tray flyout and the equalizer (on, two
+    /// bands moved, the first one focused) over the mock backend as
+    /// main-window.png, flyout.png and equalizer.png in AUDIOSYNC_SHOT_DIR,
+    /// and dark with a -dark suffix, to compare a UI change before and after
+    /// without opening a window.
     #[test]
     #[ignore = "writes screenshots: run with --ignored and AUDIOSYNC_SHOT_DIR set"]
     fn shots_of_the_main_window_and_flyout() {
@@ -6645,6 +6646,13 @@ mod tests {
             "A track title long enough to need more than the two lines the card shows".into(),
         );
         app.main.set_now_playing_subtitle("Artist".into());
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_enabled_toggled(true);
+        app.equalizer.invoke_gain_changed(1, 6.0);
+        app.equalizer.invoke_gain_changed(4, -4.5);
+        app.equalizer.invoke_take_focus();
+        draw_frames();
+        tab(app.equalizer.window(), 4);
         for (suffix, appearance) in [
             ("", ui_model::Appearance::Light),
             ("-dark", ui_model::Appearance::Dark),
@@ -6663,9 +6671,13 @@ mod tests {
             app.flyout
                 .window()
                 .set_size(slint::LogicalSize::new(340.0, fit));
+            app.equalizer
+                .window()
+                .set_size(slint::LogicalSize::new(660.0, 420.0));
             for (name, window) in [
                 ("main-window", app.main.window()),
                 ("flyout", app.flyout.window()),
+                ("equalizer", app.equalizer.window()),
             ] {
                 let shot = window
                     .take_snapshot()
@@ -14404,6 +14416,151 @@ mod tests {
         press(window, Key::LeftArrow);
         press(window, Key::LeftArrow);
         assert_eq!(first_band_gain(&app), 0.0, "Left moves it down");
+    }
+
+    // covers: S453
+    #[test]
+    fn home_and_end_leave_an_equalizer_band_where_it_is() {
+        let app = app_over(MockBackend::new());
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_take_focus();
+        draw_frames();
+        let window = app.equalizer.window();
+        tab(window, 4);
+        press(window, Key::UpArrow);
+        assert_eq!(first_band_gain(&app), 0.5, "the first band has the focus");
+        press(window, Key::Home);
+        assert_eq!(first_band_gain(&app), 0.5, "Home");
+        press(window, Key::End);
+        assert_eq!(first_band_gain(&app), 0.5, "End");
+    }
+
+    /// The left, top, width and height of the slider Narrator calls `label`.
+    fn slider_box(component: &impl ComponentHandle, label: &str) -> (f32, f32, f32, f32) {
+        use i_slint_backend_testing::ElementHandle;
+        let slider = ElementHandle::find_by_accessible_label(component, label)
+            .next()
+            .unwrap_or_else(|| panic!("{label} is there"));
+        let (at, size) = (slider.absolute_position(), slider.size());
+        (at.x, at.y, size.width, size.height)
+    }
+
+    /// The RGBA color `window` shows now at a logical point.
+    fn pixels(window: &slint::Window) -> impl Fn(f32, f32) -> [u8; 4] {
+        let shot = window
+            .take_snapshot()
+            .expect("the software renderer draws it");
+        let scale = window.scale_factor();
+        move |x, y| {
+            let (x, y) = ((x * scale) as usize, (y * scale) as usize);
+            let at = (y * shot.width() as usize + x) * 4;
+            shot.as_bytes()[at..at + 4].try_into().unwrap()
+        }
+    }
+
+    // covers: S453
+    #[test]
+    fn a_flat_equalizer_band_is_empty_with_its_0_db_tick_showing() {
+        let app = app_over(MockBackend::new());
+        app.equalizer.show().expect("the equalizer shows headless");
+        draw_frames();
+        let (x, y, width, height) = slider_box(&app.equalizer, "32 Hz");
+        let pixel = pixels(app.equalizer.window());
+        let center = x + width / 2.0;
+        assert_eq!(
+            pixel(center, y + height - 14.0),
+            pixel(center, y + 14.0),
+            "the track below the thumb looks as it does above"
+        );
+        let beside = center + width / 2.0 + 3.0;
+        let zero = (y + height / 2.0).round();
+        let background = pixel(beside, zero + 8.0);
+        assert!(
+            (-1..=1).any(|row| pixel(beside, zero + row as f32) != background),
+            "the 0 dB tick shows beside the thumb"
+        );
+    }
+
+    // covers: S453
+    #[test]
+    fn a_raised_equalizer_band_fills_from_0_db_to_its_thumb() {
+        let app = app_over(MockBackend::new());
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_gain_changed(0, 6.0);
+        draw_frames();
+        let (x, y, width, height) = slider_box(&app.equalizer, "32 Hz");
+        let pixel = pixels(app.equalizer.window());
+        let center = x + width / 2.0;
+        let zero = y + height / 2.0;
+        let thumb = y + 10.0 + (height - 20.0) / 4.0;
+        let bottom = pixel(center, y + height - 14.0);
+        assert_eq!(
+            pixel(center, zero + 14.0),
+            bottom,
+            "nothing fills below 0 dB"
+        );
+        assert_ne!(
+            pixel(center, (zero + thumb) / 2.0),
+            bottom,
+            "0 dB to the thumb fills"
+        );
+    }
+
+    /// "Custom" in the curve picker is in the text color, as a curve's name is.
+    // covers: S453
+    #[test]
+    fn the_curve_picker_shows_custom_in_the_text_color() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.apply_appearance(ui_model::Appearance::Light);
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_gain_changed(0, 6.0);
+        draw_frames();
+        assert_eq!(app.equalizer.get_preset_index(), -1);
+        let picker = ElementHandle::find_by_element_id(&app.equalizer, "EqualizerWindow::presets")
+            .next()
+            .expect("the curve picker");
+        let (at, size) = (picker.absolute_position(), picker.size());
+        let pixel = pixels(app.equalizer.window());
+        let darkest = (0..size.height as i32)
+            .flat_map(|dy| (12..(size.width - 36.0) as i32).map(move |dx| (dx, dy)))
+            .map(|(dx, dy)| pixel(at.x + dx as f32, at.y + dy as f32)[0])
+            .min()
+            .unwrap();
+        // Tokens.text is #292929 in light mode; the secondary text color is far lighter.
+        assert!(darkest <= 0x29 + 12, "darkest red channel {darkest:#x}");
+    }
+
+    /// While a slider has the keyboard focus a ring shows around it: an
+    /// equalizer band and a speaker's volume.
+    // covers: S452
+    #[test]
+    fn a_focused_slider_shows_a_focus_ring() {
+        let app = app_over(MockBackend::new());
+        app.equalizer.show().expect("the equalizer shows headless");
+        app.equalizer.invoke_take_focus();
+        draw_frames();
+        let window = app.equalizer.window();
+        let (x, y, _, height) = slider_box(&app.equalizer, "32 Hz");
+        let (left, middle) = (x - 2.0, y + height / 2.0);
+        let before = pixels(window)(left, middle);
+        tab(window, 4);
+        assert_ne!(pixels(window)(left, middle), before, "an equalizer band");
+
+        // Off, its volume is not there to take the focus.
+        app.toggle_speaker("local:desk");
+        app.main.show().unwrap();
+        draw_frames();
+        let name = app.snapshot().speaker("local:desk").unwrap().name.clone();
+        let (x, y, width, _) = slider_box(&app.main, &format!("{name} volume"));
+        let (center, above) = (x + width / 2.0, y - 2.0);
+        let before = pixels(app.main.window())(center, above);
+        focus_speaker_volume(&app, "local:desk");
+        assert_ne!(
+            pixels(app.main.window())(center, above),
+            before,
+            "a speaker's volume"
+        );
     }
 
     fn speaker_volume(app: &App, id: &str) -> f64 {

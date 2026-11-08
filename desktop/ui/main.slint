@@ -9,7 +9,7 @@ import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -623,9 +623,8 @@ component PresetsCard inherits Rectangle {
         }
     }
 
-    Rectangle {
-        border-width: focus.has-focus ? 2px : 0px;
-        border-color: Tokens.focus;
+    FocusRing {
+        visible-focus: focus.has-focus;
         border-radius: root.border-radius;
     }
 }
@@ -722,9 +721,8 @@ component EqualizerCard inherits Rectangle {
         }
     }
 
-    Rectangle {
-        border-width: focus.has-focus ? 2px : 0px;
-        border-color: Tokens.focus;
+    FocusRing {
+        visible-focus: focus.has-focus;
         border-radius: root.border-radius;
     }
 }
@@ -833,9 +831,8 @@ component QuickRow inherits Rectangle {
         }
     }
 
-    Rectangle {
-        border-width: focus.has-focus ? 2px : 0px;
-        border-color: Tokens.focus;
+    FocusRing {
+        visible-focus: focus.has-focus;
         border-radius: root.border-radius;
     }
 }

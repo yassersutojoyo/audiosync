@@ -175,15 +175,54 @@ fn every_text_pair_reaches_4_5_to_1_in_light_and_dark() {
     );
 }
 
-/// The focus ring stands out from what it's drawn on (3:1 for graphics).
+/// A `Fluent` color written `Tokens.dark ? #dark : #light` in widgets.slint,
+/// as light and dark sRGB plus alpha.
+fn fluent_color(name: &str) -> [[f64; 4]; 2] {
+    let prefix = format!("out property <color> {name}: Tokens.dark ? ");
+    let line = include_str!("../ui/widgets.slint")
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(prefix.as_str()))
+        .unwrap_or_else(|| panic!("widgets.slint defines Fluent.{name} for both themes"));
+    let parse = |hex: &str| {
+        let hex = hex.trim().trim_start_matches('#').trim_end_matches(';');
+        let byte = |i: usize| f64::from(u8::from_str_radix(&hex[i..i + 2], 16).unwrap()) / 255.0;
+        [
+            byte(0),
+            byte(2),
+            byte(4),
+            if hex.len() == 8 { byte(6) } else { 1.0 },
+        ]
+    };
+    let (dark, light) = line.split_once(" : ").expect("a dark and a light value");
+    [parse(light), parse(dark)]
+}
+
+/// The focus ring is Windows' two-tone ring: its outer line stands out from
+/// what it's drawn on (3:1 for graphics) in both themes, and its inner line
+/// keeps it visible on a control filled in the outer line's color.
+// covers: S452
 #[test]
-fn the_focus_ring_reaches_3_to_1() {
-    for appearance in [Appearance::Light, Appearance::Dark] {
+fn the_two_tone_focus_ring_reaches_3_to_1() {
+    let [outer, inner] = [fluent_color("focus-outer"), fluent_color("focus-inner")];
+    for (index, appearance) in [Appearance::Light, Appearance::Dark]
+        .into_iter()
+        .enumerate()
+    {
         for background in ["background", "surface", "playingRow"] {
-            let value = ratio("focus", background, appearance);
+            let under = srgb(background, appearance);
+            let [r, g, b, a] = outer[index];
+            let ring = [0, 1, 2].map(|i| [r, g, b][i] * a + under[i] * (1.0 - a));
+            let value = contrast(ring, under);
             assert!(
                 value >= MIN_GRAPHIC_CONTRAST,
-                "focus on {background} ({appearance:?}): {value:.2}:1"
+                "outer ring on {background} ({appearance:?}): {value:.2}:1"
+            );
+            let [r, g, b, a] = inner[index];
+            let inside = [0, 1, 2].map(|i| [r, g, b][i] * a + ring[i] * (1.0 - a));
+            assert!(
+                contrast(inside, ring) >= MIN_GRAPHIC_CONTRAST,
+                "inner line against the outer ({appearance:?})"
             );
         }
     }
@@ -1641,7 +1680,7 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
     for needle in [
         "accessible-role: button;",
         "accessible-label: Strings.presets;",
-        "border-color: Tokens.focus;",
+        "FocusRing {",
         "if event.text == \" \" || event.text == Key.Return {",
     ] {
         assert!(card.contains(needle), "PresetsCard has {needle}");
@@ -1718,7 +1757,7 @@ fn only_a_flyout_zone_badge_switches_the_zone() {
 #[test]
 fn an_equalizer_turned_off_fades_only_the_sliders() {
     let source = include_str!("../ui/equalizer.slint");
-    let sliders: usize = blocks(source, "Slider")
+    let sliders: usize = blocks(source, "track := Rectangle")
         .iter()
         .map(|block| block.matches("Tokens.disabled-opacity").count())
         .sum();

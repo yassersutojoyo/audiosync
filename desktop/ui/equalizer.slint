@@ -3,10 +3,10 @@
 // steps), saving curves, and Reset. Opened with Ctrl+E or from the
 // Equalizer card.
 
-import { Button, ComboBox, Slider } from "std-widgets.slint";
+import { Button, ComboBox, Palette, Slider } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Card, Fluent, NameField, QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
+import { Card, FocusRing, Fluent, NameField, QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -38,6 +38,10 @@ component Band inherits VerticalLayout {
         vertical-stretch: 1;
         focus-on-click: false;
         focus-on-tab-navigation: false;
+        // Home and End would throw the band to -12 or +12 dB in one key.
+        capture-key-pressed(event) => {
+            event.text == Key.Home || event.text == Key.End ? accept : reject
+        }
         key-pressed(event) => {
             if event.modifiers.control || event.modifiers.alt || event.modifiers.shift || event.modifiers.meta
                 || (event.text != Key.LeftArrow && event.text != Key.RightArrow) {
@@ -55,41 +59,121 @@ component Band inherits VerticalLayout {
 
         HorizontalLayout {
             alignment: center;
-            slider := Slider {
-                orientation: vertical;
+
+            // The style's slider fills from -12 dB, so it only takes input; the track
+            // is drawn here, filled from 0 dB with a 0 dB tick, as on the Mac.
+            track := Rectangle {
+                // Where the style's slider centers its 20 px thumb.
+                property <length> thumb-y: 10px + (self.height - 20px) * (root.max-gain - slider.value) / (2 * root.max-gain);
+                property <length> zero-y: round(self.height / 2 / 1px) * 1px;
+                width: 32px;
                 min-height: 140px;
                 vertical-stretch: 1;
-                minimum: -root.max-gain;
-                maximum: root.max-gain;
-                step: 0.5;
-                value: root.gain;
-                opacity: root.faded ? Tokens.disabled-opacity : 1;
-                animate opacity { duration: Fluent.normal; }
-                accessible-label: root.name;
-                accessible-value: Strings.equalizer-gain-value(self.value);
-                changed(value) => {
-                    if !root.press-gain-set {
-                        root.press-gain-set = true;
-                        root.press-gain = round(value * 2) / 2;
+
+                // Only these fade with the equalizer off; the focus ring keeps its contrast.
+                Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    opacity: root.faded ? Tokens.disabled-opacity : 1;
+                    animate opacity { duration: Fluent.normal; }
+
+                    Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        y: 10px;
+                        width: 4px;
+                        height: parent.height - 20px;
+                        border-radius: 2px;
+                        background: Palette.border;
                     }
-                    // The keyboard and the pointer both land on 0.5 dB steps;
-                    // a drag isn't snapped to `step`, so the knob, number and
-                    // Narrator follow the step too.
-                    self.value = round(value * 2) / 2;
-                    root.changed(self.value);
+
+                    Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        y: min(track.zero-y, track.thumb-y);
+                        width: 4px;
+                        height: abs(track.thumb-y - track.zero-y);
+                        background: Palette.accent-background;
+                    }
+
+                    Rectangle {
+                        x: 0;
+                        y: track.zero-y;
+                        width: parent.width;
+                        height: 1px;
+                        background: Tokens.text;
+                    }
+
+                    // Fluent's thumb: its dot grows under the pointer and shrinks while the band has the focus.
+                    Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        y: track.thumb-y - 10px;
+                        width: 20px;
+                        height: 20px;
+                        border-radius: 10px;
+                        background: Fluent.thumb;
+                        border-width: 1px;
+                        border-color: Fluent.thumb-edge;
+
+                        Rectangle {
+                            width: slider.has-focus ? 10px : hover.has-hover ? 14px : 12px;
+                            height: self.width;
+                            border-radius: self.width / 2;
+                            background: slider.has-focus ? Palette.accent-background.with-alpha(0.8) : hover.has-hover ? Palette.accent-background.with-alpha(0.9) : Palette.accent-background;
+                            animate background, width { duration: 150ms; }
+                        }
+                    }
                 }
-                // Two clicks within the system's double-click time set 0 dB, as on the Mac.
-                released => {
-                    if root.press-gain-set && round(self.value * 2) / 2 != root.press-gain {
-                        second-click.running = false;
-                    } else if second-click.running {
-                        second-click.running = false;
-                        self.value = 0;
-                        root.changed(0);
-                    } else {
-                        second-click.running = true;
+
+                // Tells the thumb the pointer is over the band; the slider still takes the press.
+                hover := TouchArea {
+                    x: (parent.width - self.width) / 2;
+                    width: 20px;
+                    height: parent.height;
+
+                    slider := Slider {
+                        width: parent.width;
+                        height: parent.height;
+                        orientation: vertical;
+                        minimum: -root.max-gain;
+                        maximum: root.max-gain;
+                        step: 0.5;
+                        value: root.gain;
+                        opacity: 0;
+                        accessible-label: root.name;
+                        accessible-value: Strings.equalizer-gain-value(self.value);
+                        changed(value) => {
+                            if !root.press-gain-set {
+                                root.press-gain-set = true;
+                                root.press-gain = round(value * 2) / 2;
+                            }
+                            // The keyboard and the pointer both land on 0.5 dB steps;
+                            // a drag isn't snapped to `step`, so the knob, number and
+                            // Narrator follow the step too.
+                            self.value = round(value * 2) / 2;
+                            root.changed(self.value);
+                        }
+                        // Two clicks within the system's double-click time set 0 dB, as on the Mac.
+                        released => {
+                            if root.press-gain-set && round(self.value * 2) / 2 != root.press-gain {
+                                second-click.running = false;
+                            } else if second-click.running {
+                                second-click.running = false;
+                                self.value = 0;
+                                root.changed(0);
+                            } else {
+                                second-click.running = true;
+                            }
+                            root.press-gain-set = false;
+                        }
                     }
-                    root.press-gain-set = false;
+                }
+
+                FocusRing {
+                    x: hover.x - 3px;
+                    y: -3px;
+                    width: hover.width + 6px;
+                    height: parent.height + 6px;
+                    border-radius: Fluent.radius-control;
+                    visible-focus: slider.has-focus;
                 }
             }
         }
@@ -252,7 +336,7 @@ export component EqualizerWindow inherits Window {
                         width: parent.width - 36px;
                         height: parent.height;
                         text: Strings.equalizer-custom;
-                        color: Tokens.secondary-text;
+                        color: Tokens.text;
                         vertical-alignment: center;
                         overflow: elide;
                         accessible-role: none;

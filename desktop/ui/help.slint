@@ -8,7 +8,7 @@
 import { Button, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Fluent, SectionTitle } from "widgets.slint";
+import { FocusRing, Fluent, SectionTitle } from "widgets.slint";
 
 // A heading and its text. Narrator reads the heading as the group's name,
 // as for the main window's sections, so SectionTitle hides it from Narrator.
@@ -283,9 +283,8 @@ export component HelpWindow inherits Window {
 
                 // The text has the keyboard focus (the scroll keys work), as
                 // the other windows' focus rings show.
-                Rectangle {
-                    border-width: keys.has-focus ? 2px : 0px;
-                    border-color: Tokens.focus;
+                FocusRing {
+                    visible-focus: keys.has-focus;
                     border-radius: 4px;
                 }
             }

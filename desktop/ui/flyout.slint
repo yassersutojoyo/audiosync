@@ -96,9 +96,8 @@ component PresetPicker inherits Rectangle {
         }
     }
 
-    Rectangle {
-        border-width: focus.has-focus ? 2px : 0px;
-        border-color: Tokens.focus;
+    FocusRing {
+        visible-focus: focus.has-focus;
         border-radius: root.border-radius;
     }
 }

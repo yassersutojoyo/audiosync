@@ -217,3 +217,5 @@ S448 Windows host only: the source picker's input marker; the desktop tests mark
 S449 Windows host only: Web Remote in the View menu; the desktop tests marked S449 check it.
 S450 Windows host only: the main window's look; the desktop tests marked S450 check it.
 S451 Mac host only: the notice for a capture that goes silent after sound; the Mac logic suite checks it.
+S452 Windows host only: the two-tone keyboard focus ring on the controls and sliders; the desktop tests marked S452 check it.
+S453 Windows host only: the equalizer band's fill from 0 dB, its tick, Home and End, and the Custom label; the desktop tests marked S453 check it.

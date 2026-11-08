@@ -62,9 +62,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a click anywhere on a speaker's row in the tray panel switches it on or off, and the row lights up under the pointer, as on the Mac.
 - On Windows, the tray panel shows the input picker above the note about live input, so the note reads after the choice it explains.
 - On Windows, the tray icon gets a small orange badge while a notice is up, and in a contrast theme it picks the light or dark icon by the theme's background.
+- On Windows, the keyboard focus ring is Windows' two-tone ring everywhere, black and white, and the volume sliders and the equalizer's bands show it too while they have the focus. Before, AudioSync's own controls drew a teal ring and a focused slider only shrank its thumb's dot.
+- On Windows, an equalizer band fills from 0 dB to its thumb, with a tick at 0 dB, as on the Mac, so a flat curve looks empty. Before, every band filled from −12 dB. "Custom" in the curve picker is in the normal text color.
 
 ### Fixed
 
+- On Windows, Home and End on a focused equalizer band no longer throw it to −12 or +12 dB.
 - On the Mac, adding a Google Cast speaker by address when it's already in the list now keeps the address, as on Windows: its row has Remove, and the address comes back at the next launch, so the speaker still shows up if your network later stops finding it on its own.
 - A saved zone without a name now loads as a numbered zone ("Zone 2" and so on). Before, the Mac could drop it and Windows showed it with a blank name.
 - On the Mac, when a speaker set to auto-connect appears but can't be turned on and no other speaker is on, the app no longer posts a notice asking you to choose a speaker, as on Windows.
