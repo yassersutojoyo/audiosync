@@ -113,8 +113,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/appimage-tools"
           cd "$RUNNER_TEMP/appimage-tools"
-          curl -fsSL -o appimagetool "$APPIMAGETOOL_URL"
-          curl -fsSL -o runtime "$RUNTIME_URL"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 15 -o appimagetool "$APPIMAGETOOL_URL"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 15 -o runtime "$RUNTIME_URL"
           echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
           echo "$RUNTIME_SHA256  runtime" | sha256sum -c -
           chmod +x appimagetool
@@ -223,8 +223,8 @@ jobs:
         run: |
           mkdir -p ../dist/runtime-sources
           cd ../dist/runtime-sources
-          curl -fsSL -o type2-runtime-20251108.tar.gz "$RUNTIME_SOURCE_URL"
-          curl -fsSL -o fuse-3.15.0.tar.xz "$FUSE_SOURCE_URL"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 15 -o type2-runtime-20251108.tar.gz "$RUNTIME_SOURCE_URL"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 15 -o fuse-3.15.0.tar.xz "$FUSE_SOURCE_URL"
           echo "$RUNTIME_SOURCE_SHA256  type2-runtime-20251108.tar.gz" | sha256sum -c -
           echo "$FUSE_SOURCE_SHA256  fuse-3.15.0.tar.xz" | sha256sum -c -
           sha256sum ./* | tee SHA256SUMS
