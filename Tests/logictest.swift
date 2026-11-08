@@ -7656,6 +7656,22 @@ do {
           "now playing: without Shuffle or Repeat the three buttons keep their spacing")
 }
 
+// MARK: Left column rows line up (MainWindow.swift, CalibrateAllViews.swift)
+do {
+    let part = { (file: String, start: String, end: String) -> String in
+        ((try? String(contentsOfFile: "Sources/AudioSync/\(file)", encoding: .utf8)) ?? "")
+            .components(separatedBy: start).dropFirst().first?.components(separatedBy: end).first ?? ""
+    }
+    let rows = [("Presets", part("MainWindow.swift", "private struct PresetsRow", "\n}\n")),
+                ("Equalizer", part("MainWindow.swift", "func equalizerRow(", "\n    }\n")),
+                ("Calibrate All Speakers", part("CalibrateAllViews.swift", "struct CalibrateAllButton", "\n}\n"))]
+    // A borderless Menu hands its label to AppKit, which sets its own icon width and gap.
+    let apart = rows.filter { !$0.1.contains("QuickRowIcon(") || $0.1.contains(".menuStyle(") }.map(\.0)
+    check(apart.isEmpty,
+          "left column: Presets, Equalizer and Calibrate All Speakers draw their icon in one slot, so their names start on one line",
+          "laid out apart: \(apart)")
+}
+
 // MARK: Main window v3.1: zoom, motion, and what waits one step away (WindowRules.swift, MainWindow.swift)
 do {
     let visible = CGRect(x: 0, y: 0, width: 1440, height: 875)
