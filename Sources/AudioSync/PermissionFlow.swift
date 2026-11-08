@@ -185,10 +185,10 @@ enum PermissionSetup {
         }
     }
 
-    /// `asked`: the explanation was accepted, so macOS's prompt went up. macOS
-    /// reports only whether access is on, not whether it was refused.
+    /// `asked`: the explanation was accepted, so macOS's prompt went up; access
+    /// still off after that reads as refused.
     static func accessibility(trusted: Bool, asked: Bool) -> SetupRowState {
-        trusted ? .allowed : asked ? .askedUnknown : .notAsked
+        trusted ? .allowed : asked ? .denied : .notAsked
     }
 
     /// The next permission the Allow button asks for; nil once each was asked.
@@ -199,4 +199,49 @@ enum PermissionSetup {
     static func offersSettings(_ state: SetupRowState) -> Bool {
         state == .denied || state == .askedUnknown
     }
+
+    /// The Automation row's players: macOS asks once for each.
+    static let players = [NowPlayingMonitor.music, NowPlayingMonitor.spotify]
+
+    /// From each player's last answer, in `players` order.
+    static func automation(_ verdicts: [AutomationConsent.Verdict]) -> SetupRowState {
+        if verdicts.contains(.denied) { return .denied }
+        return verdicts.allSatisfy { $0 == .allowed } ? .allowed : .notAsked
+    }
+
+    /// The volume keys row shows only while their switch is on.
+    static func shows(_ permission: Permission, volumeKeys: Bool) -> Bool {
+        permission != .accessibility || volumeKeys
+    }
+
+    /// The window's heading and line when opened from Settings.
+    static func summary(_ rows: [Permission: SetupRowState], volumeKeys: Bool) -> SetupSummary {
+        let state = { (permission: Permission) in rows[permission, default: .notAsked] }
+        let missing = required.filter { state($0) != .allowed && state($0) != .askedUnknown }
+        return SetupSummary(
+            ready: missing.isEmpty,
+            missing: missing,
+            captureUnconfirmed: state(.audioCapture) == .askedUnknown,
+            refused: optional.filter { state($0) == .denied && shows($0, volumeKeys: volumeKeys) })
+    }
+
+    /// The rows VoiceOver announces: shown ones that turned allowed or
+    /// refused, not the window's first fill.
+    static func announced(from old: [Permission: SetupRowState], to new: [Permission: SetupRowState],
+                          volumeKeys: Bool) -> [Permission] {
+        Permission.allCases.filter { permission in
+            guard let before = old[permission], let after = new[permission], before != after else { return false }
+            return (after == .allowed || after == .denied) && shows(permission, volumeKeys: volumeKeys)
+        }
+    }
+}
+
+struct SetupSummary: Equatable {
+    /// Local Network allowed, and audio capture at least asked.
+    let ready: Bool
+    /// Needed permissions not allowed yet; audio capture once asked is in `captureUnconfirmed` instead.
+    let missing: [Permission]
+    let captureUnconfirmed: Bool
+    /// Feature permissions macOS refused.
+    let refused: [Permission]
 }

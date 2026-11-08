@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import AVFoundation
 import ServiceManagement
+import SwiftUI
 
 // The app's windows and the bridge to its views: the menu bar item, the main
 // window, the equalizer and the Guide; the model snapshots the views render;
@@ -28,6 +29,10 @@ extension AppDelegate {
         nowPlaying.onReading = { [weak self] startedAt in self?.nowPlayingRead(startedAt: startedAt) }
         nowPlaying.onAutomationDenied = { [weak self] bundleID, denied in
             self?.automationChanged(bundleID, denied: denied)
+        }
+        nowPlaying.onAutomationVerdict = { [weak self] bundleID, verdict in
+            self?.automationVerdicts[bundleID] = verdict
+            self?.refreshSetup()
         }
         nowPlaying.mayRaisePrompt = permissions.mayRaiseAutomationPrompt
         nowPlaying.onPromptHeld = { [weak self] in
@@ -207,14 +212,16 @@ extension AppDelegate {
         let seen = store.read(PermissionSetup.seenKey) as? Bool ?? false
         guard PermissionSetup.showsAtLaunch(permissions, seen: seen) else { return }
         store.write(true, PermissionSetup.seenKey)
-        openPermissionSetup()
+        openPermissionSetup(checking: false)
     }
 
-    /// The window with every permission and its state; Set Up Permissions… opens it again.
-    func openPermissionSetup() {
+    /// The window with every permission and its state; Check Setup… opens it
+    /// again, with a summary in place of the first install's explanation.
+    func openPermissionSetup(checking: Bool = true) {
         menuBar?.close()
         let setup = setupWindow ?? makeSetupWindow()
         setupWindow = setup
+        setup.model.checking = checking
         refreshSetup()
         setup.show()
         showPermissionOffer()
@@ -248,14 +255,31 @@ extension AppDelegate {
             .microphone: PermissionSetup.microphone(microphonePermission(), asking: setupMicrophoneAsking),
             .accessibility: PermissionSetup.accessibility(trusted: AXIsProcessTrusted(),
                                                           asked: permissions.explained.contains(.accessibility)),
+            .automation: PermissionSetup.automation(setupPlayers()),
         ]
+    }
+
+    private func setupPlayers() -> [AutomationConsent.Verdict] {
+        PermissionSetup.players.map { automationVerdicts[$0] ?? .undecided }
     }
 
     /// From every model update while the window exists.
     func refreshSetup() {
-        guard let model = setupWindow?.model else { return }
+        guard let setup = setupWindow else { return }
+        let model = setup.model
         let rows = setupRows()
-        if model.rows != rows { model.rows = rows }
+        if model.rows != rows {
+            if setup.isOpen {
+                for permission in PermissionSetup.announced(from: model.rows, to: rows, volumeKeys: volumeKeys) {
+                    AccessibilityNotification.Announcement(
+                        text.setupAnnouncement(permission, rows[permission, default: .notAsked])).post()
+                }
+            }
+            model.rows = rows
+        }
+        let players = setupPlayers()
+        if model.players != players { model.players = players }
+        if model.volumeKeys != volumeKeys { model.volumeKeys = volumeKeys }
         if model.asking != setupAsking { model.asking = setupAsking }
         if setupAsking, localNetworkProbe.access != .unknown { setupAskCapture() }
     }

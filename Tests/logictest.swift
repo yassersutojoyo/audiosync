@@ -6927,7 +6927,7 @@ do {
           "volume keys: the switch is on unless turned off")
     check(Permission.accessibility.pane == .accessibility
             && PermissionSetup.accessibility(trusted: false, asked: false) == .notAsked
-            && PermissionSetup.accessibility(trusted: false, asked: true) == .askedUnknown
+            && PermissionSetup.accessibility(trusted: false, asked: true) == .denied
             && PermissionSetup.accessibility(trusted: true, asked: false) == .allowed,
           "volume keys: the Accessibility row is allowed once macOS trusts AudioSync, and offers its pane after the ask")
     check(PermissionAsks(explained: [], usedBefore: true).step(.accessibility, state: .notAsked, userAction: false) == .offer
@@ -16990,6 +16990,84 @@ do {
           "setup: each Open Settings button names its permission for VoiceOver")
     check(t.setupDetail(.localNetwork).contains("Privacy & Security → Local Network"),
           "setup: the Local Network row gives the full System Settings path")
+}
+
+// MARK: Setup window rows and summary (PermissionFlow.swift, PermissionSetup; Localization.swift)
+// covers: S432
+do {
+    let t = UIStrings()
+    check(t.setupWindowTitle == "Setup" && t.setupMenu == "Check Setup…",
+          "setup check: the window is called Setup, and Settings opens it with Check Setup…")
+
+    check(PermissionSetup.players == [NowPlayingMonitor.music, NowPlayingMonitor.spotify],
+          "setup check: the Automation row names Music, then Spotify")
+    check(PermissionSetup.automation([.allowed, .allowed]) == .allowed
+            && PermissionSetup.automation([.allowed, .denied]) == .denied
+            && PermissionSetup.automation([.undecided, .denied]) == .denied
+            && PermissionSetup.automation([.allowed, .undecided]) == .notAsked,
+          "setup check: Automation reads allowed when both players are, refused when either is")
+    check(t.setupAutomation(["Music", "Spotify"], [.allowed, .undecided])
+            == "Music allowed. Spotify not asked yet."
+            && t.setupAutomation(["Music", "Spotify"], [.denied, .allowed]) == "Music not allowed. Spotify allowed.",
+          "setup check: each player has its own answer; one macOS hasn't answered for reads not asked yet",
+          t.setupAutomation(["Music", "Spotify"], [.allowed, .undecided]))
+
+    check(PermissionSetup.shows(.accessibility, volumeKeys: true)
+            && !PermissionSetup.shows(.accessibility, volumeKeys: false)
+            && PermissionSetup.shows(.microphone, volumeKeys: false),
+          "setup check: the volume keys row shows only while Volume Keys Control AudioSync is on")
+    check(t.setupState(.accessibility, .notAsked)
+            == "Not asked yet. macOS asks the first time you start streaming with this switch on."
+            && t.setupState(.accessibility, .denied) == "Not allowed. The volume keys keep changing the Mac's volume.",
+          "setup check: the volume keys row says when macOS asks, and what a refusal leaves the keys doing")
+    check(t.setupState(.audioCapture, .allowed).contains("heard")
+            && t.setupState(.audioCapture, .askedUnknown).contains("doesn't report"),
+          "setup check: audio capture says it is allowed because AudioSync heard sound, and why it can't say before")
+    check(t.setupState(.microphone, .denied) == "Not allowed. Turn it on in System Settings.",
+          "setup check: a refused row says where to turn it on")
+
+    let heard: [Permission: SetupRowState] = [.localNetwork: .allowed, .audioCapture: .allowed]
+    let ready = PermissionSetup.summary(heard, volumeKeys: true)
+    check(ready.ready && t.setupSummaryHeading(ready) == "Ready to stream"
+            && t.setupSummaryLine(ready) == "Everything AudioSync asked for is allowed.",
+          "setup check: ready to stream once Local Network is allowed and AudioSync heard sound")
+    let unheard = PermissionSetup.summary([.localNetwork: .allowed, .audioCapture: .askedUnknown], volumeKeys: true)
+    check(unheard.ready && unheard.missing.isEmpty && unheard.captureUnconfirmed
+            && t.setupSummaryHeading(unheard) == "Ready to stream"
+            && t.setupSummaryLine(unheard) == "Audio capture is confirmed the first time AudioSync hears sound.",
+          "setup check: audio capture asked counts as ready to stream, and the line says sound confirms it",
+          t.setupSummaryLine(unheard))
+    let missing = PermissionSetup.summary([.localNetwork: .denied, .audioCapture: .notAsked], volumeKeys: true)
+    check(!missing.ready && missing.missing == [.localNetwork, .audioCapture]
+            && t.setupSummaryLine(missing) == "Local Network and Audio capture are not allowed yet.",
+          "setup check: the summary names each permission streaming still needs",
+          t.setupSummaryLine(missing))
+    var refusedRows = heard
+    refusedRows[.microphone] = .denied
+    refusedRows[.automation] = .denied
+    refusedRows[.accessibility] = .denied
+    let refused = PermissionSetup.summary(refusedRows, volumeKeys: false)
+    check(refused.ready && refused.refused == [.microphone, .automation]
+            && t.setupSummaryLine(refused) == "Not allowed, used only when you need them: Microphone, Now Playing.",
+          "setup check: refused feature permissions are named, the volume keys only while their switch is on",
+          t.setupSummaryLine(refused))
+    check(PermissionSetup.summary(refusedRows, volumeKeys: true).refused == [.microphone, .automation, .accessibility],
+          "setup check: a refused volume keys row is named while their switch is on")
+    let lines = [ready, unheard, missing, refused].flatMap { [t.setupSummaryHeading($0), t.setupSummaryLine($0)] }
+    check(lines.allSatisfy { !$0.isEmpty && !$0.contains("attention") && !$0.contains("\u{2014}") },
+          "setup check: the Mac summary never borrows the Windows line about nothing needing attention")
+
+    check(PermissionSetup.announced(from: [.microphone: .notAsked, .localNetwork: .waiting],
+                                    to: [.microphone: .allowed, .localNetwork: .denied], volumeKeys: true)
+            == [.localNetwork, .microphone]
+            && PermissionSetup.announced(from: [:], to: heard, volumeKeys: true).isEmpty
+            && PermissionSetup.announced(from: [.microphone: .notAsked], to: [.microphone: .waiting], volumeKeys: true).isEmpty
+            && PermissionSetup.announced(from: [.accessibility: .notAsked], to: [.accessibility: .allowed],
+                                         volumeKeys: false).isEmpty,
+          "setup check: VoiceOver hears a row that turned allowed or refused, not the first fill or a hidden row")
+    check(t.setupAnnouncement(.microphone, .allowed) == "Microphone, Allowed"
+            && t.setupAnnouncement(.automation, .denied) == "Now Playing, Not allowed",
+          "setup check: the announcement names the row and its new state")
 }
 
 // MARK: Zone header routing table in the main window and the menu bar panel (ZoneHeaderHit)

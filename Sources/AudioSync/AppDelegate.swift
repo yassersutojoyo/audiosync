@@ -68,6 +68,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var setupMicrophoneAsking = false
     /// The short capture that raises the audio capture prompt (`probeAudioCapture`).
     var setupCaptureProbe: SourceCapture?
+    /// Each player's last Automation answer, by bundle ID, for the Setup window.
+    var automationVerdicts: [String: AutomationConsent.Verdict] = [:]
 
     // MARK: - AudioSync's own AirPlay sender (`+NativeAirPlay`)
 

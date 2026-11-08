@@ -1396,7 +1396,7 @@ struct UIStrings {
         case .audioCapture: return "Capture your Mac's audio"
         case .microphone: return "Use the microphone or an input"
         case .automation: return "Show Now Playing for Spotify and Music"
-        case .accessibility: return "Let the volume keys control AudioSync"
+        case .accessibility: return "Let the volume keys change AudioSync's volume"
         }
     }
     func permissionReason(_ permission: Permission) -> String {
@@ -1432,9 +1432,9 @@ struct UIStrings {
         case .microphone:
             return "For an input device as the source, or to calibrate a speaker with the microphone."
         case .automation:
-            return "Shows the track playing in Spotify or Music. macOS asks the first time Now Playing reads one."
+            return "Shows the track playing in Spotify or Music. macOS asks once for each app."
         case .accessibility:
-            return "Lets the volume keys change AudioSync's master volume while streaming. In System Settings → Privacy & Security → Accessibility."
+            return "Only while Volume Keys Control AudioSync is on in Settings. In System Settings → Privacy & Security → Accessibility."
         }
     }
     func setupState(_ state: SetupRowState) -> String {
@@ -1465,7 +1465,71 @@ struct UIStrings {
         }
     }
     /// The app menu item that opens the window again.
-    let setupMenu = "Set Up Permissions…"
+    let setupMenu = "Check Setup…"
+    let setupWindowTitle = "Setup"
+    /// Over the Local Network and audio capture rows.
+    let setupNeeded = "Needed to stream"
+    /// A row's state line, worded for what macOS can report about it.
+    func setupState(_ permission: Permission, _ state: SetupRowState) -> String {
+        switch (permission, state) {
+        case (.audioCapture, .allowed):
+            return "Allowed. AudioSync heard your Mac's audio."
+        case (.audioCapture, .askedUnknown):
+            return "Asked. macOS doesn't report the answer, so this turns to Allowed the first time AudioSync hears your Mac's audio."
+        case (.accessibility, .notAsked):
+            return "Not asked yet. macOS asks the first time you start streaming with this switch on."
+        case (.accessibility, .denied):
+            return "Not allowed. The volume keys keep changing the Mac's volume."
+        case (_, .denied):
+            return "Not allowed. Turn it on in System Settings."
+        default:
+            return setupState(state)
+        }
+    }
+    /// The Automation row's players, named as in its title.
+    func setupPlayer(_ bundleID: String) -> String {
+        bundleID == NowPlayingMonitor.spotify ? "Spotify" : "Music"
+    }
+    /// The Automation row's state line, one sentence per player.
+    func setupAutomation(_ names: [String], _ verdicts: [AutomationConsent.Verdict]) -> String {
+        zip(names, verdicts).map { player -> String in
+            switch player.1 {
+            case .allowed: return "\(player.0) allowed."
+            case .denied: return "\(player.0) not allowed."
+            case .undecided: return "\(player.0) not asked yet."
+            }
+        }.joined(separator: " ")
+    }
+    func setupName(_ permission: Permission) -> String {
+        switch permission {
+        case .localNetwork: return "Local Network"
+        case .audioCapture: return "Audio capture"
+        case .microphone: return "Microphone"
+        case .automation: return "Now Playing"
+        case .accessibility: return "Volume keys"
+        }
+    }
+    func setupSummaryHeading(_ summary: SetupSummary) -> String {
+        summary.ready ? "Ready to stream" : "Not ready to stream"
+    }
+    func setupSummaryLine(_ summary: SetupSummary) -> String {
+        var parts: [String] = []
+        if !summary.missing.isEmpty {
+            let names = summary.missing.map(setupName).joined(separator: " and ")
+            parts.append(names + (summary.missing.count > 1 ? " are" : " is") + " not allowed yet.")
+        }
+        if summary.captureUnconfirmed {
+            parts.append("Audio capture is confirmed the first time AudioSync hears sound.")
+        }
+        if !summary.refused.isEmpty {
+            parts.append("Not allowed, used only when you need them: \(summary.refused.map(setupName).joined(separator: ", ")).")
+        }
+        return parts.isEmpty ? "Everything AudioSync asked for is allowed." : parts.joined(separator: " ")
+    }
+    /// VoiceOver's line when a row turns allowed or refused.
+    func setupAnnouncement(_ permission: Permission, _ state: SetupRowState) -> String {
+        "\(setupName(permission)), \(setupState(state))"
+    }
     /// AirPlay has found nothing for a while and AudioSync can't tell whether
     /// Local Network access is the reason.
     let localNetworkHint = "If you expect AirPlay speakers, make sure this Mac is on the same network as them, and that AudioSync is allowed in System Settings → Privacy & Security → Local Network."

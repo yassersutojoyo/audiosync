@@ -294,6 +294,8 @@ final class NowPlayingMonitor {
     /// user said no to the consent prompt, or turned it off in System Settings
     /// → Privacy & Security → Automation.
     var onAutomationDenied: ((_ bundleID: String, _ denied: Bool) -> Void)?
+    /// Called on the main queue with each player's new Automation answer (the Setup window's row).
+    var onAutomationVerdict: ((_ bundleID: String, _ verdict: AutomationConsent.Verdict) -> Void)?
     /// False until the user read why Now Playing scripts the players: a
     /// player macOS would still ask about is skipped meanwhile, and
     /// `onPromptHeld` says so (main thread).
@@ -386,7 +388,10 @@ final class NowPlayingMonitor {
             DebugTrace.log("Now Playing: AudioSync's control of \(app) is \(verdict)")
             guard let self else { return }
             self.noteRefusal(app, verdict == .denied)
-            DispatchQueue.main.async { if self.isRunning { self.refresh() } }
+            DispatchQueue.main.async {
+                self.onAutomationVerdict?(app, verdict)
+                if self.isRunning { self.refresh() }
+            }
         }
         return consent
     }()
