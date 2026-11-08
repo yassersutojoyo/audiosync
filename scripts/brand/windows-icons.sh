@@ -6,6 +6,7 @@
 #   desktop/res/audiosync-256.png     the same at 256 px, the Slint windows' icon
 #   desktop/res/tray-{light,dark}.ico           the tray icon for a light or dark taskbar
 #   desktop/res/tray-{light,dark}-off.ico       the same, dimmed while streaming is off
+#   desktop/res/tray-*-notice.ico               each with a dot while a notice is up
 # The app icon is brand/audiosync-icon.svg cropped to its tile; the tray icons are
 # brand/audiosync-mark.svg in the token colors (scripts/brand/ico.py).
 #
@@ -36,6 +37,7 @@ render() {
 # Tray icons: 16 px at 100% scaling up to 48 px at 300%.
 for name in tray-light tray-dark tray-light-off tray-dark-off; do
   render "$name" 16 20 24 32 40 48
+  render "$name-notice" 16 20 24 32 40 48
 done
 
 render app 16 20 24 32 40 48 64 256

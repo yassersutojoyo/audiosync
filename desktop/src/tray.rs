@@ -40,6 +40,9 @@ const ICON_DARK: u16 = 3;
 const ICON_LIGHT_OFF: u16 = 4;
 #[cfg(windows)]
 const ICON_DARK_OFF: u16 = 5;
+/// Each of those plus this is the same with the notice dot.
+#[cfg(windows)]
+const ICON_NOTICE_STEP: u16 = 4;
 
 /// The app's icon, compiled in: a StatusNotifier host draws the pixmap as
 /// it is, so a colored icon reads on light and dark panels alike.
@@ -80,6 +83,8 @@ pub struct Tray {
     /// The icon variant showing now, so it is replaced only when it changes.
     shown: Cell<Option<IconChoice>>,
     running: Cell<bool>,
+    /// A notice is up: the icon shows its dot, as the Mac's does.
+    notice: Cell<bool>,
     /// A tooltip not shown yet: Windows refuses it while Explorer restarts,
     /// and the icon it adds again would keep the old one.
     tooltip: RefCell<Option<String>>,
@@ -98,9 +103,9 @@ struct IconChoice {
 #[cfg(windows)]
 impl IconChoice {
     /// The variant for the taskbar's current theme and scale.
-    fn current(running: bool) -> IconChoice {
+    fn current(running: bool, notice: bool) -> IconChoice {
         IconChoice {
-            ordinal: icon_ordinal(platform::taskbar_is_light(), running),
+            ordinal: icon_ordinal(platform::taskbar_is_light(), running, notice),
             size: platform::small_icon_size(),
         }
     }
@@ -115,7 +120,8 @@ struct IconChoice {
 
 #[cfg(target_os = "linux")]
 impl IconChoice {
-    fn current(running: bool) -> IconChoice {
+    // The panel's icon has no notice dot.
+    fn current(running: bool, _notice: bool) -> IconChoice {
         IconChoice { running }
     }
 }
@@ -162,7 +168,8 @@ impl Tray {
         .map_err(|e| TrayError(e.to_string()))?;
 
         let state = app.snapshot();
-        let choice = IconChoice::current(state.running);
+        let notice = !app.notices_posted().is_empty();
+        let choice = IconChoice::current(state.running, notice);
         let icon = TrayIconBuilder::new()
             .with_icon(load_icon(choice)?)
             .with_tooltip(view::tray_tooltip(&strings, &state, &app.notices_posted()))
@@ -177,6 +184,7 @@ impl Tray {
             login_item,
             shown: Cell::new(Some(choice)),
             running: Cell::new(state.running),
+            notice: Cell::new(notice),
             tooltip: RefCell::new(None),
             #[cfg(windows)]
             theme_timer: slint::Timer::default(),
@@ -245,8 +253,9 @@ impl Tray {
             return;
         };
         let strings = app.strings();
-        *self.tooltip.borrow_mut() =
-            Some(view::tray_tooltip(&strings, state, &app.notices_posted()));
+        let posted = app.notices_posted();
+        self.notice.set(!posted.is_empty());
+        *self.tooltip.borrow_mut() = Some(view::tray_tooltip(&strings, state, &posted));
         self.show_tooltip();
         self.toggle_item.set_text(if state.running {
             strings.get_menu_turn_streaming_off()
@@ -267,7 +276,7 @@ impl Tray {
     /// Shows the icon variant for the current theme, scale and state, if it
     /// isn't showing already.
     fn show_icon(&self) {
-        let choice = IconChoice::current(self.running.get());
+        let choice = IconChoice::current(self.running.get(), self.notice.get());
         if self.shown.get() != Some(choice)
             && let Ok(icon) = load_icon(choice)
             && self.icon.set_icon(Some(icon)).is_ok()
@@ -296,12 +305,17 @@ impl MenuIds {
 }
 
 #[cfg(windows)]
-fn icon_ordinal(light_taskbar: bool, running: bool) -> u16 {
-    match (light_taskbar, running) {
+fn icon_ordinal(light_taskbar: bool, running: bool, notice: bool) -> u16 {
+    let plain = match (light_taskbar, running) {
         (true, true) => ICON_LIGHT,
         (false, true) => ICON_DARK,
         (true, false) => ICON_LIGHT_OFF,
         (false, false) => ICON_DARK_OFF,
+    };
+    if notice {
+        plain + ICON_NOTICE_STEP
+    } else {
+        plain
     }
 }
 
@@ -448,6 +462,20 @@ fn place_flyout(app: &App, icon: Bounds) {
 
 #[cfg(test)]
 mod tests {
+    /// While a notice is up the tray icon takes its variant with the dot,
+    /// for either taskbar and either streaming state (S440).
+    // covers: S440
+    #[cfg(windows)]
+    #[test]
+    fn a_notice_puts_the_dot_on_the_tray_icon() {
+        use super::*;
+        for (light, running) in [(true, true), (false, true), (true, false), (false, false)] {
+            let plain = icon_ordinal(light, running, false);
+            assert!((ICON_LIGHT..=ICON_DARK_OFF).contains(&plain));
+            assert_eq!(icon_ordinal(light, running, true), plain + 4);
+        }
+    }
+
     use super::show_pending;
 
     #[test]

@@ -41,13 +41,18 @@ fn embed_windows_resources() {
     };
     let manifest = resource("audiosync.exe.manifest");
     // Icon 1 is the app icon Explorer shows; 2 to 5 are the tray icons
-    // (src/tray.rs): for a light and a dark taskbar, streaming and off.
+    // (src/tray.rs): for a light and a dark taskbar, streaming and off; 6 to
+    // 9 are the same with the dot shown while a notice is up.
     let icons = [
         "audiosync.ico",
         "tray-light.ico",
         "tray-dark.ico",
         "tray-light-off.ico",
         "tray-dark-off.ico",
+        "tray-light-notice.ico",
+        "tray-dark-notice.ico",
+        "tray-light-off-notice.ico",
+        "tray-dark-off-notice.ico",
     ]
     .iter()
     .enumerate()
