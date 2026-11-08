@@ -2017,7 +2017,12 @@ struct UIStrings {
     }
 
     private var guideUpdatesLine: String {
-        updatesOn ? "\n- Updates: choose \(menuCheckForUpdates) in the AudioSync menu to\n  look for a newer version." : ""
+        guard updatesOn else { return "" }
+        return "\n- Updates: choose \(menuCheckForUpdates) in the AudioSync menu to\n  look for a newer version."
+            + " AudioSync asks once whether it may also look\n  by itself, about once a day;"
+            + " \(menuCheckUpdatesAutomatically) in\n  Settings turns that on or off."
+            + " A newer version opens a window with\n  Install Update, Remind Me Later and Skip This Version,"
+            + " and nothing\n  downloads until you click Install Update."
     }
 
     /// The Guide's lines on which AirPlay a speaker plays over (S312).

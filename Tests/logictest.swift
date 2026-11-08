@@ -17349,6 +17349,15 @@ do {
     check(updatingGuide.helpText.contains("\(guide.menuCheckForUpdates) in the AudioSync menu")
             && !guide.helpText.contains(guide.menuCheckForUpdates),
           "guide: names Check for Updates… in the AudioSync menu only in a build that checks for updates")
+    // covers: S407
+    let updatesFlat = updatingGuide.helpText.replacingOccurrences(of: "\n  ", with: " ")
+    check(updatesFlat.contains("AudioSync asks once whether it may also look by itself, about once a day; "
+                + "\(guide.menuCheckUpdatesAutomatically) in Settings turns that on or off.")
+            && updatesFlat.contains("Install Update, Remind Me Later and Skip This Version, "
+                + "and nothing downloads until you click Install Update.")
+            && !guide.helpText.contains("Skip This Version"),
+          "guide: the updates line covers automatic checks, Skip This Version and no download before a click, as on Windows",
+          updatesFlat)
     let guideLines = guide.helpText.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     let tipsStart = guideLines.firstIndex(of: "Tips")
     let tipsEnd = guideLines.firstIndex(of: "Volume")
