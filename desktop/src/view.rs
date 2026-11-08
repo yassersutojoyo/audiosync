@@ -5936,7 +5936,8 @@ fn calibration_failure(strings: &Strings<'_>, reference: &str, failure: Failure)
         Failure::NoMicrophone => strings.get_calibration_no_microphone(),
         Failure::UnsupportedRate => strings.get_calibration_unsupported_rate(),
         Failure::SourceSilent => strings.get_calibration_source_silent(),
-        Failure::Interrupted | Failure::DelayChanged => strings.get_calibration_interrupted(),
+        Failure::Interrupted => strings.get_calibration_interrupted(),
+        Failure::DelayChanged => strings.get_calibration_delay_changed(),
         Failure::MicrophoneChanged => strings.get_calibration_microphone_changed(),
         Failure::MicrophoneSkipped => strings.get_calibration_microphone_skipped(),
         Failure::HandsFreeMicrophone => strings.get_calibration_hands_free(),
@@ -8253,6 +8254,17 @@ mod tests {
                 "Turn on streaming, Den and Speakers to measure it again.",
             ],
             "Measure Again"
+        );
+    }
+
+    // covers: S239
+    #[test]
+    fn measure_again_of_a_row_whose_delay_changed_says_so_as_on_the_mac() {
+        let app = app_over(MockBackend::new());
+        let strings = app.strings();
+        assert_eq!(
+            calibration_failure(&strings, "Speakers", Failure::DelayChanged).to_string(),
+            "This speaker's delay changed after it was measured. Calibrate All again."
         );
     }
 
