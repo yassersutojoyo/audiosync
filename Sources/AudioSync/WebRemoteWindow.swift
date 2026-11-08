@@ -191,6 +191,12 @@ struct WebRemoteView: View {
                         }
                         .accessibilityElement(children: .combine)
                     }
+                    if !urls.isEmpty {
+                        Text(t.webRemoteFirewall)
+                            .font(.caption)
+                            .foregroundStyle(Brand.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             setupSteps(t)

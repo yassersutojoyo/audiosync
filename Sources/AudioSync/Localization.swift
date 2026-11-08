@@ -1749,6 +1749,7 @@ struct UIStrings {
     /// Above the first address, then above the IP address after the Bonjour one.
     let webRemoteAddressLabel = "On the phone, open"
     let webRemoteIPLabel = "If that doesn't open, use"
+    let webRemoteFirewall = "Phone can't open it? Allow AudioSync in System Settings → Network → Firewall."
     let webRemoteSetupTitle = "Set Up the Phone"
     /// The accessibility name of the iPhone and Android choice above the steps.
     let webRemotePhonePicker = "Phone"

@@ -196,3 +196,4 @@ S426 Web remote only: the install ID in the token cookie's name; the remote crat
 S427 Web remote only: a replaced token that comes back unpairs its device; the remote crate's tests check it.
 S428 Windows host only: the web remote's IP address on Wi-Fi or Ethernet, never a VPN tunnel's; the Windows tests named in the test map check it.
 S429 Hosts only: the keyboard's volume keys moving the master; the Windows tests and the Mac logic suite named in the test map check it.
+S430 Host only: the firewall line under the web remote's address is window text; the core has no part in it.
