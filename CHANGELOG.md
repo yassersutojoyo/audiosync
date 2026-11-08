@@ -57,6 +57,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, when the apps of an "only these apps" mix have all quit, the notice names the app that ran last, as on the Mac. Before, it named every app in the mix, even ones that never ran.
 - On Windows, a stereo pair's or home theater group's note now names its speakers by the names you gave them.
 
+### Changed
+
+- On Windows, AirPlay speakers that AudioSync can't play to are no longer listed, as on the Mac. Before, they showed with a note such as "Not supported".
+
 ## [0.9.1] - 2026-11-08
 
 ### Changed

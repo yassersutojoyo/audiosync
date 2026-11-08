@@ -4995,6 +4995,16 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                     self.audio
                         .airplay_speakers()
                         .into_iter()
+                        // A single receiver that can't play isn't listed, as on the Mac (S222).
+                        .filter(|speaker| {
+                            speaker.group.is_some()
+                                || !matches!(
+                                    speaker.availability,
+                                    AirPlayAvailability::PairingNotYet
+                                        | AirPlayAvailability::AirPlay2NotYet
+                                        | AirPlayAvailability::Unsupported
+                                )
+                        })
                         .map(|speaker| self.airplay_speaker(speaker, prompted)),
                 )
                 .chain(
@@ -10896,13 +10906,59 @@ mod tests {
         assert!(state.running);
     }
 
+    // covers: S222 (a receiver that can't play isn't listed, as on the Mac)
+    #[test]
+    fn a_receiver_that_cannot_play_is_not_listed() {
+        let (mut adapter, fake, loft) = airplay2_adapter(false);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        let tv = device(
+            3,
+            "TV",
+            &["txtvers=1", "cn=0,1", "et=0", "tp=UDP", "sf=0x8"],
+        );
+        let old = device(4, "Old", &["txtvers=1", "cn=0,1", "et=1", "tp=UDP"]);
+        for receiver in [&kitchen, &tv, &old] {
+            fake.appear(receiver);
+        }
+        adapter.poll();
+        let state = adapter.snapshot();
+        let listed: Vec<&str> = [&kitchen, &tv, &old, &loft]
+            .into_iter()
+            .filter(|receiver| state.speaker(&ap(receiver)).is_some())
+            .map(|receiver| receiver.name.as_str())
+            .collect();
+        assert_eq!(listed, ["Kitchen"]);
+    }
+
+    // covers: S222 (a pair that can't play stays listed with its first member's reason)
+    #[test]
+    fn a_stereo_pair_that_cannot_play_stays_listed() {
+        use crate::audio::airplay::tests::stereo_pair;
+
+        let (mut adapter, fake, _) = airplay2_adapter(true);
+        // Both members ask for a PIN, which a pair can't take yet.
+        let (pair, _, _) = stereo_pair();
+        for member in [
+            airplay2_device(21, "Left", true),
+            airplay2_device(22, "Right", true),
+        ] {
+            fake.appear_in(&member, &pair);
+        }
+        fake.target(&pair);
+        adapter.poll();
+        let state = adapter.snapshot();
+        let row = state.speaker("ap:pair:5f0c").expect("the pair's row");
+        assert_eq!(row.availability, Availability::PairingNotYet);
+    }
+
     // covers: S312
     #[test]
     fn an_airplay2_speaker_row_says_airplay_2_only_with_the_switch_on() {
         let (adapter, _, loft) = airplay2_adapter(false);
-        let row = adapter.snapshot().speaker(&ap(&loft)).unwrap().clone();
-        assert_eq!(row.kind, SpeakerKind::AirPlay);
-        assert_eq!(row.availability, Availability::AirPlay2NotYet);
+        assert!(
+            adapter.snapshot().speaker(&ap(&loft)).is_none(),
+            "with the switch off it can't play, so it isn't listed"
+        );
 
         let (mut adapter, fake, loft) = airplay2_adapter(true);
         let kitchen = device(1, "Kitchen", OPEN_TXT);
