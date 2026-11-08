@@ -57,6 +57,9 @@ final class NativeAirPlay {
     /// The store this sender opened keeps pairings only until it goes
     /// (main queue, set before `start` completes).
     private(set) var pairingsNotSaved = false
+    /// The store this sender opened ignored a file in the wrong format
+    /// (main queue, set before `start` completes).
+    private(set) var pairingsIgnored = false
     /// The hold-back last asked for (main queue), and the one the sender
     /// gets, also when it is created later (queue only).
     private(set) var holdBackMs = 0.0
@@ -423,6 +426,12 @@ final class NativeAirPlay {
         }
     }
 
+    /// Whether the store opened with `loaded` ignored a file in the wrong
+    /// format, so the speakers paired in it ask for a code again.
+    static func pairingsIgnored(_ loaded: Int32) -> Bool {
+        loaded == ASC_AIRPLAY_PAIRINGS_IGNORED
+    }
+
     /// Whether pairings made while the store opened with `loaded` is in use
     /// are lost when AudioSync quits.
     static func pairingsNotSaved(_ loaded: Int32) -> Bool {
@@ -599,6 +608,7 @@ final class NativeAirPlay {
             }
             DebugTrace.log("[AudioSync] native AirPlay: " + Self.pairingsLogLine(loaded))
             self.pairingsNotSaved = Self.pairingsNotSaved(loaded)
+            self.pairingsIgnored = Self.pairingsIgnored(loaded)
             if let airPlay2, airPlay2 != 0 {
                 DebugTrace.log("[AudioSync] native AirPlay: AirPlay 2 identity file: "
                     + (airPlay2 > 0 ? "\(airPlay2) paired receiver(s)" : "ignored or left as it is (code \(airPlay2))"))

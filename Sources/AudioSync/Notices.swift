@@ -41,6 +41,7 @@ struct Notice: Identifiable, Equatable {
     static let airplaySender = "airplay-sender"   // AudioSync's own AirPlay sender stopped or couldn't start
     static let airplayPtp = "airplay-ptp"   // another app holds PTP port 319 or 320
     static let pairings = "pairings"    // the AirPlay sender keeps pairings only until AudioSync quits
+    static let pairingsIgnored = "pairings-ignored"   // the pairings file was in the wrong format
     static let zones = "zones"          // the groups became zones at this launch (S248)
     static let presets = "presets"      // a preset recall left speakers off (S265)
     /// A Google Cast speaker, by its device ID.

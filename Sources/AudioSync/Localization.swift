@@ -77,6 +77,7 @@ struct UIStrings {
     let airPlayStoppedNoticeName = "AirPlay stopped"
     let ptpPortsNoticeName = "PTP ports in use"
     let pairingsNotSavedNoticeName = "pairings not saved"
+    let pairingsIgnoredNoticeName = "pairings reset"
     func airPlayAheadNoticeName(_ castSpeaker: String) -> String { "AirPlay ahead of \(castSpeaker)" }
     let groupsBecameZonesNoticeName = "groups became zones"
     let presetLeftOffNoticeName = "some speakers stayed off"
@@ -849,6 +850,9 @@ struct UIStrings {
     /// A newer AudioSync wrote the pairings file, its folder couldn't be found, or a write of it failed.
     let nativeAirPlayPairingsNotSaved = "AudioSync couldn't save your AirPlay pairings, so pairings you add or "
         + "forget now won't be kept after AudioSync quits. If the disk is full, free up some space."
+    /// The pairings file was in the wrong format, so the next pairing replaces it.
+    let nativeAirPlayPairingsIgnored = "AudioSync couldn't read your AirPlay pairings when it started, "
+        + "so AirPlay speakers you paired ask for a code again."
 
     /// Every AirPlay 2 place is taken: this one stays on and starts once
     /// one of them stops (P169, S285).

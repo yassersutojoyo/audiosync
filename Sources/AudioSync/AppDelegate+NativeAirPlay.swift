@@ -82,6 +82,11 @@ extension AppDelegate {
                 postNotice(text.nativeAirPlayPairingsNotSaved, subject: Notice.pairings,
                            shortName: text.pairingsNotSavedNoticeName)
             }
+            if native.pairingsIgnored, !pairingsIgnoredPosted {
+                pairingsIgnoredPosted = true
+                postNotice(text.nativeAirPlayPairingsIgnored, subject: Notice.pairingsIgnored,
+                           shortName: text.pairingsIgnoredNoticeName)
+            }
             resendTrackInfo()   // a new sender knows nothing of what plays
             // Its discovery raised the Local Network prompt, if any: the
             // probe may ask now, and an empty list counts from here.

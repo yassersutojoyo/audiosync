@@ -17329,6 +17329,21 @@ do {
           "native pairing: a pairing for this session only logs that nothing was stored")
 }
 
+do {
+    let ignoredText = UIStrings()
+    let ignoredSource = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+NativeAirPlay.swift",
+                                     encoding: .utf8)) ?? ""
+    // covers: S224
+    check(NativeAirPlay.pairingsIgnored(ASC_AIRPLAY_PAIRINGS_IGNORED)
+            && !NativeAirPlay.pairingsIgnored(ASC_AIRPLAY_PAIRINGS_UNREADABLE)
+            && !NativeAirPlay.pairingsIgnored(ASC_AIRPLAY_PAIRINGS_NEWER)
+            && !NativeAirPlay.pairingsIgnored(0)
+            && ignoredSource.contains("if native.pairingsIgnored, !pairingsIgnoredPosted {")
+            && ignoredSource.contains("postNotice(text.nativeAirPlayPairingsIgnored, subject: Notice.pairingsIgnored,")
+            && ignoredText.pairingsIgnoredNoticeName == "pairings reset",
+          "pairings notice: a file in the wrong format, which the next pairing replaces, says paired speakers ask for a code again, once per launch, as on Windows")
+}
+
 // MARK: Main window opens one sheet at a time (MainWindowSheet.mayOpen)
 do {
     check(!MainWindowSheet.castAdd.mayOpen(calibrateShown: true, castAddShown: false),

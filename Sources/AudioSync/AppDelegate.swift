@@ -276,6 +276,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// Local outputs whose listed device refuses to start, until one starts (S331).
     var refusalRetry = OutputRefusalRetry()
     var goneNotices = OutputGoneNotices()
+    /// The wrong-format pairings notice was posted; it shows once per launch, as on Windows.
+    var pairingsIgnoredPosted = false
     /// The microphone calibration under way, if any (S232).
     var calibrationRun: CalibrationRun?
     /// Calibrate All Speakers under way, its sheet and the Undo of its Apply (S235 to S240).
