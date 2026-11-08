@@ -14826,6 +14826,10 @@ do {
             && !guideWords.contains("play/pause, skip"),
           "guide, now playing: the line names the card's buttons, as on Windows")
     // covers: S407
+    check(guideWords.contains("Those speakers keep their own rows. While a Cast speaker or group plays,")
+            && !guideWords.contains("busy while the group plays"),
+          "guide, cast: a group's speakers keep their own rows, with no claim that they are busy, as on Windows")
+    // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",

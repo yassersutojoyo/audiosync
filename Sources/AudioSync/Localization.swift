@@ -1966,8 +1966,8 @@ struct UIStrings {
         offset for that speaker. One Google Cast speaker plays at a time. A
         speaker group made in the Google Home app plays as one speaker, with
         one volume and one offset, and its note names the speakers in it once
-        the group reports them. Those speakers keep their own rows and are
-        busy while the group plays. While a Cast speaker or group plays,
+        the group reports them. Those speakers keep their own rows. While a
+        Cast speaker or group plays,
         Resync under its volume restarts the stream, with a short gap, so it
         lines up at its offset again. If a Cast speaker doesn't show up, click
         \(castAddByAddress) under the speaker list and enter its IP address or
