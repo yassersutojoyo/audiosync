@@ -76,6 +76,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, when the apps of an "only these apps" mix have all quit, the notice names the app that ran last, as on the Mac. Before, it named every app in the mix, even ones that never ran.
 - On Windows, a stereo pair's or home theater group's note now names its speakers by the names you gave them.
 - On Windows, a speaker whose name can't be read now shows as "Unknown device", as on the Mac, instead of a long device ID.
+- On Windows, Narrator now says which speaker Calibrate All is measuring as each one starts. Before, it stayed silent until the run ended.
 
 ### Changed
 

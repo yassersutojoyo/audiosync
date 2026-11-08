@@ -2031,6 +2031,8 @@ pub struct MockBackend {
     pub airplay_delays: std::rc::Rc<std::cell::RefCell<Vec<f64>>>,
     /// Calibrate All's left-out list, read at each snapshot.
     pub left_out: std::rc::Rc<std::cell::RefCell<Vec<LeftOutRow>>>,
+    /// Calibrate All's phase while `Some`, read at each snapshot.
+    pub calibrate_all_phase: std::rc::Rc<std::cell::RefCell<Option<AllPhase>>>,
     /// Each Include Anyway (true) or Leave Out, by output ID.
     pub includes: std::rc::Rc<std::cell::RefCell<Vec<(String, bool)>>>,
     /// Each volume slider hold (true) or release (false), by speaker key.
@@ -2227,6 +2229,7 @@ impl MockBackend {
             play_pauses: std::rc::Rc::default(),
             airplay_delays: std::rc::Rc::default(),
             left_out: std::rc::Rc::default(),
+            calibrate_all_phase: std::rc::Rc::default(),
             includes: std::rc::Rc::default(),
             volume_editing: std::rc::Rc::default(),
             late_view: std::rc::Rc::default(),
@@ -2592,6 +2595,9 @@ impl Backend for MockBackend {
             .any(|speaker| speaker.kind == SpeakerKind::Cast && speaker.enabled);
         show_presets(&mut state, &self.presets, &Default::default());
         state.calibrate_all.left_out = self.left_out.borrow().clone();
+        if let Some(phase) = self.calibrate_all_phase.borrow().clone() {
+            state.calibrate_all.phase = phase;
+        }
         state
     }
 

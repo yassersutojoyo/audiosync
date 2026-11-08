@@ -836,6 +836,8 @@ pub struct App {
     calibration_announced: RefCell<Option<(String, Phase)>>,
     /// The Calibrate All ending Narrator was last told about.
     calibrate_all_announced: Cell<u64>,
+    /// The speaker of the running Calibrate All Narrator was last told about.
+    calibrate_all_measuring: RefCell<Option<String>>,
     /// The delay fields holding a number out of range, so Narrator hears
     /// the range once as a field goes out of it (`newly_out_of_range`).
     out_of_range: RefCell<HashSet<String>>,
@@ -1178,6 +1180,7 @@ impl App {
             closing_notices: RefCell::default(),
             calibration_announced: RefCell::default(),
             calibrate_all_announced: Cell::new(0),
+            calibrate_all_measuring: RefCell::default(),
             out_of_range: RefCell::default(),
             announcement_timer: Timer::default(),
             repeat_timer: Timer::default(),
@@ -2254,6 +2257,20 @@ impl App {
                 self.announce(said.clone());
                 notice_said = Some(said);
             }
+        }
+        let measuring = match &state.calibrate_all.phase {
+            AllPhase::Running(AllProgress::Measuring { name, .. }) => Some(name.clone()),
+            AllPhase::Running(_) => self.calibrate_all_measuring.borrow().clone(),
+            _ => None,
+        };
+        let before = self.calibrate_all_measuring.replace(measuring.clone());
+        if measuring.is_some() && before != measuring {
+            let said = match notice_said.take() {
+                Some(notice) => strings.invoke_announcements(notice, card.status.clone()),
+                None => card.status.clone(),
+            };
+            self.announce(said.clone());
+            notice_said = Some(said);
         }
         let sources: Vec<SharedString> = state
             .sources
@@ -8587,6 +8604,32 @@ mod tests {
             Some("local:desk"),
             "a second run that ends the same way"
         );
+    }
+
+    #[test]
+    fn narrator_hears_each_speaker_as_calibrate_all_starts_measuring_it() {
+        let backend = MockBackend::new();
+        let phase = backend.calibrate_all_phase.clone();
+        let app = app_over(backend);
+        let said = || app.main.get_notice_announcement().to_string();
+        let measuring = |name: &str, take| {
+            Some(AllPhase::Running(AllProgress::Measuring {
+                name: name.into(),
+                reference: false,
+                take,
+                searching: false,
+            }))
+        };
+        *phase.borrow_mut() = measuring("Den", 1);
+        app.refresh();
+        assert_eq!(said(), "Listening to Den, sweep 1 of 2…");
+        app.clear_announcement();
+        *phase.borrow_mut() = measuring("Den", 2);
+        app.refresh();
+        assert_eq!(said(), "", "the same speaker's second sweep");
+        *phase.borrow_mut() = measuring("Kitchen", 1);
+        app.refresh();
+        assert_eq!(said(), "Listening to Kitchen, sweep 1 of 2…");
     }
 
     #[test]
