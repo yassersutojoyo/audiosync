@@ -339,7 +339,12 @@ struct UIStrings {
                 + "would switch the headset to call mode. Choose another input in System Settings → Sound, "
                 + "and try again."
         case .unsupportedRate:
-            return "The microphone runs at a sample rate calibration can't use."
+            return "The audio runs at a sample rate calibration can't use. "
+                + "Set the Mac's output device, or the input you stream from, to 48 kHz in Audio MIDI Setup, "
+                + "and try again."
+        case .unsupportedMicrophoneRate:
+            return "The microphone runs at a sample rate calibration can't use. "
+                + "Set its format to 48 kHz in Audio MIDI Setup, and try again."
         case .sourceSilent:
             return "The test sound couldn't start because streaming stalled. "
                 + "Turn streaming off and on, and try again."

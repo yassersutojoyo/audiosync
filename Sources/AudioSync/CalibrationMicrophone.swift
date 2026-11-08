@@ -25,7 +25,7 @@ final class CalibrationMicrophone {
         var failure: CalibrationFailure {
             switch self {
             case .handsFree: return .handsFreeMicrophone
-            case .unsupportedRate: return .unsupportedRate
+            case .unsupportedRate: return .unsupportedMicrophoneRate
             default: return .noMicrophone
             }
         }

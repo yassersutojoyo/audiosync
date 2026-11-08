@@ -52,6 +52,8 @@ enum CalibrationFailure: Equatable {
     case handsFreeMicrophone
     /// The capture's rate is outside the test signal's range (S233).
     case unsupportedRate
+    /// The microphone's rate is outside the test signal's range (S233).
+    case unsupportedMicrophoneRate
     /// No block carried the signal: neither the capture nor the fill that
     /// stands in for a quiet capture (`QuietFill`) wrote one.
     case sourceSilent
@@ -227,7 +229,7 @@ enum CalibrationFlow {
         if let refusal = microphoneRefusal(defaultInputTransport: transport, inputSubTransports: subTransports) {
             return refusal
         }
-        return microphoneRate(nominal: nominal) == nil ? .unsupportedRate : nil
+        return microphoneRate(nominal: nominal) == nil ? .unsupportedMicrophoneRate : nil
     }
 
     /// An input's nominal rate in whole Hz, nil for one the test signal isn't made at (S233).

@@ -11852,6 +11852,7 @@ do {
     // Refusals the host makes before the estimate say why and that nothing changed.
     let hostRefusals: [CalibrationFailure] = [.microphoneDenied, .noMicrophone, .handsFreeMicrophone, .sourceSilent,
                                               .interrupted, .notPlaying(.streaming), .noReference, .unsupportedRate,
+                                              .unsupportedMicrophoneRate,
                                               .microphoneChanged, .microphoneSkipped]
     for failure in hostRefusals {
         let message = t.calibrationMessage(.failed(failure)) ?? ""
@@ -11896,20 +11897,31 @@ do {
             && CalibrationFlow.microphonePreflight(nominalRate: 48_000, transport: nil) == nil,
           "calibration preflight: no default input or a hands-free one is refused before the music fades")
     // covers: S232
-    check(CalibrationFlow.microphonePreflight(nominalRate: 16_000, transport: builtInTransport) == .unsupportedRate
-            && CalibrationFlow.microphonePreflight(nominalRate: 768_000, transport: builtInTransport) == .unsupportedRate
-            && CalibrationFlow.microphonePreflight(nominalRate: 48_000.5, transport: builtInTransport) == .unsupportedRate
-            && CalibrationFlow.microphonePreflight(nominalRate: 0, transport: builtInTransport) == .unsupportedRate
-            && CalibrationFlow.microphonePreflight(nominalRate: .nan, transport: builtInTransport) == .unsupportedRate
+    check(CalibrationFlow.microphonePreflight(nominalRate: 16_000, transport: builtInTransport) == .unsupportedMicrophoneRate
+            && CalibrationFlow.microphonePreflight(nominalRate: 768_000, transport: builtInTransport) == .unsupportedMicrophoneRate
+            && CalibrationFlow.microphonePreflight(nominalRate: 48_000.5, transport: builtInTransport) == .unsupportedMicrophoneRate
+            && CalibrationFlow.microphonePreflight(nominalRate: 0, transport: builtInTransport) == .unsupportedMicrophoneRate
+            && CalibrationFlow.microphonePreflight(nominalRate: .nan, transport: builtInTransport) == .unsupportedMicrophoneRate
             && CalibrationFlow.microphoneRate(nominal: 44_100) == 44_100
             && CalibrationFlow.microphoneRate(nominal: 16_000) == nil,
           "calibration preflight: a microphone at a rate the signal isn't made at is an unsupported rate, not no microphone")
+    let micRateFailure = CalibrationFlow.microphonePreflight(nominalRate: 16_000, transport: builtInTransport) ?? .noMicrophone
+    let micRateText = t.calibrationMessage(.failed(micRateFailure)) ?? ""
+    let captureRateText = t.calibrationMessage(.failed(.unsupportedRate)) ?? ""
+    // covers: S232
+    check(micRateText.hasPrefix("The microphone runs at a sample rate calibration can't use. "
+                                    + "Set its format to 48 kHz in Audio MIDI Setup, and try again.")
+            && captureRateText.hasPrefix("The audio runs at a sample rate calibration can't use. "
+                                         + "Set the Mac's output device, or the input you stream from, "
+                                         + "to 48 kHz in Audio MIDI Setup, and try again."),
+          "calibration preflight: the microphone's rate and the capture's rate each have their own reason",
+          "\(micRateText) | \(captureRateText)")
 
     // covers: S232
     // defaultInputID() reads an unsupported rate as 0, which differs from every sheet's rate.
     let sheetMic = CalibrationMicrophoneID(device: 51, rate: 48_000)
-    check(CalibrateAllFlow.againMicrophone(preflight: .unsupportedRate, rate: 48_000, first: sheetMic,
-                                           now: CalibrationMicrophoneID(device: 51, rate: 0)) == .unsupportedRate
+    check(CalibrateAllFlow.againMicrophone(preflight: .unsupportedMicrophoneRate, rate: 48_000, first: sheetMic,
+                                           now: CalibrationMicrophoneID(device: 51, rate: 0)) == .unsupportedMicrophoneRate
             && CalibrateAllFlow.againMicrophone(preflight: .noMicrophone, rate: 48_000, first: sheetMic,
                                                 now: nil) == .noMicrophone
             && CalibrateAllFlow.againMicrophone(preflight: nil, rate: 48_000, first: sheetMic,
