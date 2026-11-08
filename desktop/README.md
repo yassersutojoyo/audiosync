@@ -63,7 +63,7 @@ build you make yourself, you write that file as shown below), and run it.
   volume restarts it with a short gap. A group made in the Google Home app
   plays as one speaker. If one doesn't show up, Speakers > Add by Address…
   adds it by its IP address or host name.
-- **Web Remote:** File > Web Remote… lets a phone on the same network switch
+- **Web Remote:** View > Web Remote… lets a phone on the same network switch
   your speakers on and off and set volumes and delays. Turn it on, open the
   address it shows on the phone (or scan the QR code), add the page to the
   Home Screen, then open it from there and enter the pairing code. It's plain
@@ -223,7 +223,7 @@ AudioSync keeps the address, and Remove in the speaker's menu forgets it.
 
 ### Web Remote
 
-File > Web Remote… turns on a page that a phone on the same network can
+View > Web Remote… turns on a page that a phone on the same network can
 open, by its address or the QR code in the window. Add the page to the Home
 Screen first, then open it from there and enter the pairing code: on some
 phones a pairing made in the browser doesn't carry over. Each code works

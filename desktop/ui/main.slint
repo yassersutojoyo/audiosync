@@ -335,7 +335,7 @@ component SpeakerSection inherits VerticalLayout {
     // Open Network Settings, under the note while AirPlay finds nothing.
     in property <bool> show-network-settings;
     callback network-settings();
-    // Add by Address…, under the note while no Google Cast speaker is found.
+    // Add by Address…, last, while a Google Cast sender runs (S443).
     in property <bool> show-add-address;
     callback add-address();
     in-out property <string> focus-id <=> rows.focus-id;
@@ -355,6 +355,9 @@ component SpeakerSection inherits VerticalLayout {
         rows := SpeakerRows {
             speakers: root.speakers;
         }
+
+        // Rows right after the list, as on the Mac: Connected Speakers' AirPlay delay.
+        @children
 
         if root.zoned.length > 0: VerticalLayout {
             if root.speakers.length > 0: Divider { }
@@ -452,11 +455,13 @@ component SpeakerSection inherits VerticalLayout {
                     }
                 }
             }
+        }
 
-            if root.show-add-address: HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                padding-bottom: 12px;
+        if root.show-add-address: VerticalLayout {
+            if root.speakers.length > 0 || root.zoned.length > 0 || root.note != "": Divider { }
+
+            HorizontalLayout {
+                padding: 10px;
                 alignment: start;
                 LinkButton {
                     text: Strings.cast-add-address;
@@ -467,9 +472,6 @@ component SpeakerSection inherits VerticalLayout {
                 }
             }
         }
-
-        // Rows after the list and its note: Connected Speakers' AirPlay delay.
-        @children
     }
 }
 
@@ -1318,6 +1320,7 @@ export component MainWindow inherits Window {
     // The chosen input device's channel pairs; none up to two channels.
     in property <[string]> input-pairs;
     in property <int> input-pair-index;
+    in property <bool> source-is-input;
     // The level meter under the source, while an input device is captured.
     in property <bool> input-meter-shown;
     in property <float> input-level;
@@ -1536,7 +1539,7 @@ export component MainWindow inherits Window {
     callback check-updates-automatically-toggled(bool);
     callback volume-keys-toggled(bool);
     callback check-for-updates-requested();
-    // File > Web Remote…
+    // View > Web Remote…
     callback remote-requested();
     // File > Check Setup… (Windows only: its rows name Windows settings).
     callback setup-requested();
@@ -1674,13 +1677,6 @@ export component MainWindow inherits Window {
                 }
             }
 
-            MenuItem {
-                title: Strings.menu-remote;
-                activated => {
-                    root.remote-requested();
-                }
-            }
-
             if Platform.os == OperatingSystemType.windows: MenuItem {
                 title: Strings.menu-check-setup;
                 activated => {
@@ -1800,6 +1796,13 @@ export component MainWindow inherits Window {
                     activated => {
                         root.save-preset-requested();
                     }
+                }
+            }
+
+            MenuItem {
+                title: Strings.menu-remote;
+                activated => {
+                    root.remote-requested();
                 }
             }
 
@@ -2007,16 +2010,26 @@ export component MainWindow inherits Window {
                                 text: Strings.source-label;
                             }
 
-                            source := ComboBox {
-                                model: root.sources;
-                                current-index: root.source-index;
-                                accessible-label: Strings.source-label;
-                                changed has-focus => {
-                                    root.control-focus-changed(MainControl.source, self.has-focus);
+                            // An input device carries a microphone, as the Mac's picker shows its icon (S448).
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                if root.source-is-input: input-marker := Glyph {
+                                    glyph: Glyphs.microphone;
+                                    color: Tokens.secondary-text;
                                 }
-                                selected => {
-                                    root.source-selected(self.current-index);
-                                    self.current-index = root.source-index;
+
+                                source := ComboBox {
+                                    model: root.sources;
+                                    current-index: root.source-index;
+                                    accessible-label: Strings.source-label;
+                                    changed has-focus => {
+                                        root.control-focus-changed(MainControl.source, self.has-focus);
+                                    }
+                                    selected => {
+                                        root.source-selected(self.current-index);
+                                        self.current-index = root.source-index;
+                                    }
                                 }
                             }
 
@@ -2516,7 +2529,7 @@ export component MainWindow inherits Window {
                         network-settings => {
                             root.network-settings-requested();
                         }
-                        show-add-address: root.cast-by-address && root.cast-list == CastList.none-found;
+                        show-add-address: root.cast-by-address;
                         add-address => {
                             root.cast-add-address-requested();
                         }
@@ -2612,9 +2625,8 @@ export component MainWindow inherits Window {
                             root.calibration-privacy-requested();
                         }
 
-                        // Last in the speakers card; the Mac puts it right after the rows.
                         if root.airplay-delay-shown: VerticalLayout {
-                            Divider { }
+                            if root.connected.length > 0: Divider { }
 
                             AirPlayDelayControls {
                                 delay-text: root.airplay-delay-text;

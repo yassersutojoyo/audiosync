@@ -10,7 +10,7 @@
 //! the master volume, the
 //! auto-connect marks, the names the user gave speakers, the groups, the
 //! zones, the speaker presets, the equalizer, View > Show Virtual Devices, View > Appearance, the main
-//! window's place and size, and File > Web Remote with its port.
+//! window's place and size, and View > Web Remote with its port.
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
 //! version is read for the fields it has; one from a newer version, one that
@@ -834,7 +834,7 @@ pub struct Settings {
     /// stores it: `stop` or `system` (spec S227).
     #[serde(deserialize_with = "or_default")]
     pub when_source_quits: String,
-    /// File > Web Remote: whether it is on, and its port.
+    /// View > Web Remote: whether it is on, and its port.
     #[serde(deserialize_with = "or_default")]
     pub remote: RemoteSettings,
     /// The Google Cast speakers added by address (spec C18), as

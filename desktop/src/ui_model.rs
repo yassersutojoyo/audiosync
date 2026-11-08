@@ -1920,7 +1920,7 @@ pub struct ViewSettings {
     pub appearance: Appearance,
     /// The main window's place and size, once it has been shown.
     pub window: Option<WindowFrame>,
-    /// File > Web Remote.
+    /// View > Web Remote.
     pub remote: crate::remote::RemoteSettings,
     /// File > Check for Updates Automatically.
     pub check_updates_automatically: bool,

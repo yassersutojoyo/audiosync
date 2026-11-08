@@ -241,6 +241,7 @@ export global Glyphs {
     out property <string> pause: "\u{E769}";
     out property <string> presets: "\u{E728}";
     out property <string> check: "\u{E73E}";
+    out property <string> microphone: "\u{E720}";
 
     // A switched-on output's own volume in Windows: the muted speaker while
     // muted, the speaker with one wave while low (spec S198).
@@ -333,6 +334,9 @@ export global Glyphs {
         }
         if glyph == root.bluetooth {
             return "M4.5 5 L11 10.75 L8 13.75 V2.25 L11 5.25 L4.5 11";
+        }
+        if glyph == root.microphone {
+            return "M6 3.5 A2 2 0 0 1 10 3.5 V7.5 A2 2 0 0 1 6 7.5 Z M3.5 7.5 A4.5 4.5 0 0 0 12.5 7.5 M8 12 V14.5 M5.5 14.5 H10.5";
         }
         if glyph == root.usb {
             return "M5.5 1.5 H10.5 V6 H5.5 Z M4 6 H12 V9.5 A2.5 2.5 0 0 1 9.5 12 H6.5 A2.5 2.5 0 0 1 4 9.5 Z M8 12 V14.5";
@@ -756,6 +760,8 @@ export component LinkButton inherits Rectangle {
     in property <string> text;
     in property <string> label;
     in property <TextOverflow> overflow: clip;
+    // Shown while the pointer rests on it; empty for none.
+    in property <string> tip;
     // Whether it has the keyboard focus (a click doesn't give it).
     out property <bool> keyboard-focused: focus.has-focus;
     callback clicked();
@@ -789,6 +795,13 @@ export component LinkButton inherits Rectangle {
         mouse-cursor: pointer;
         clicked => {
             root.clicked();
+        }
+
+        if root.tip != "": Tooltip {
+            link-tip := LabelTip {
+                text: root.tip;
+                max-tip-width: 360px;
+            }
         }
     }
 
@@ -2041,7 +2054,7 @@ export component SpeakerRow inherits Rectangle {
     // "Reconnecting…").
     property <string> availability-note: Strings.speaker-availability(root.item.availability, root.item.code-every-time, root.item.state);
     property <string> note: root.item.zone-note != "" ? root.item.zone-note : Strings.speaker-note(root.item);
-    property <string> note-help: root.note == root.availability-note ? Strings.speaker-availability-help(root.item.availability, root.item.code-every-time, root.item.state) : "";
+    property <string> note-help: root.availability-note != "" && root.note == Strings.speaker-caption(Strings.row-note(root.item.state, root.item.name), root.availability-note) ? Strings.speaker-availability-help(root.item.availability, root.item.code-every-time, root.item.state) : "";
 
     // A click on the row's box works like its delay button; a row without a
     // delay is outside every sync control.
@@ -2719,6 +2732,16 @@ export component SpeakerRow inherits Rectangle {
             }
         }
     }
+
+    // The name's tooltip under the name while the switch has the keyboard
+    // focus, which a click never gives it: a keyboard user can read a cut
+    // name too (S447). Last, so it draws over the row's own controls.
+    if root.badge-focused && !root.item.renaming: focus-tip := LabelTip {
+        x: badge.absolute-position.x - root.absolute-position.x + badge.width + 12px;
+        y: badge.absolute-position.y - root.absolute-position.y + badge.height;
+        text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
+        max-tip-width: root.width - self.x - 8px;
+    }
 }
 
 // A zone member's compact row under its own section: its switch, which runs
@@ -2925,6 +2948,7 @@ export component ZoneMemberRow inherits Rectangle {
                         if !root.item.renaming: LinkButton {
                             text: Strings.in-zone(root.item.zone-name);
                             label: Strings.go-to-zone-label(root.item.zone-name);
+                            tip: root.item.zone-name;
                             overflow: elide;
                             clicked => {
                                 root.go-to-zone();

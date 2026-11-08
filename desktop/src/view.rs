@@ -113,7 +113,7 @@ struct UiState {
     show_virtual: bool,
     /// View > Appearance as chosen, which the theme preview doesn't change.
     appearance: ui_model::Appearance,
-    /// File > Web Remote.
+    /// View > Web Remote.
     remote: crate::remote::RemoteSettings,
     /// File > Check for Updates Automatically, as saved.
     check_updates_automatically: bool,
@@ -800,7 +800,7 @@ pub struct App {
     guide_follows_notice: Cell<bool>,
     /// The AudioSync Guide (Help > AudioSync Guide), `help_window.rs`.
     help: crate::HelpWindow,
-    /// File > Web Remote, `remote_window.rs`.
+    /// View > Web Remote, `remote_window.rs`.
     remote_window: crate::RemoteWindow,
     /// File > Check Setup…, `setup_window.rs`.
     setup: crate::SetupWindow,
@@ -2442,8 +2442,15 @@ impl App {
             keys_switch,
             state.running && !state.no_speaker_on,
         ));
+        // As on the Mac, only while an AirPlay speaker is listed (S445).
+        let airplay_listed = state.speakers.iter().any(|s| {
+            matches!(
+                s.kind,
+                ui_model::SpeakerKind::AirPlay | ui_model::SpeakerKind::AirPlay2
+            )
+        });
         self.main
-            .set_airplay_delay_shown(state.airplay_delay_ms.is_some());
+            .set_airplay_delay_shown(state.airplay_delay_ms.is_some() && airplay_listed);
         let airplay_delay = format_ms(state.airplay_delay_ms.unwrap_or(0.0));
         let typed = airplay_typed.as_deref();
         let airplay_typed = is_draft(typed, &airplay_delay);
@@ -4947,6 +4954,12 @@ impl WindowState for MainWindow {
         self.set_running(state.running);
         self.set_status(status.clone());
         self.set_source_index(source_index);
+        self.set_source_is_input(
+            state
+                .sources
+                .iter()
+                .any(|s| s.id == state.source_id && s.kind == SourceKind::Input),
+        );
         self.set_master_volume(state.master_volume as f32);
         self.set_master_volume_waves(volume_waves(state.master_volume));
         self.set_switch_source_on_quit(state.when_source_quits == WhenSourceQuits::SwitchToSystem);
@@ -10730,10 +10743,14 @@ mod tests {
                 .invoke_speaker_rename_edited("local:desk".into(), name.into());
         };
 
+        let click_on = |id: &str| {
+            let found = element(&app, id).unwrap_or_else(|| panic!("{id}"));
+            let (at, size) = (found.absolute_position(), found.size());
+            click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        };
+
         rename("Desk");
-        // The master volume's slider, in the left column, below the source
-        // card's level meter row.
-        click(window, 150.0, 279.0);
+        click_on("MasterVolume::slider");
         assert_eq!(
             app.main_focus.borrow().control,
             Some(MainControl::MasterVolume)
@@ -10745,10 +10762,8 @@ mod tests {
         assert_eq!(name_of(&app, "local:desk"), "Desk");
 
         rename("Desk left");
-        // The AirPlay delay's field, at the end of the Connected Speakers
-        // card, scrolled to the end.
         scroll(window, 640.0, 600.0, -2000.0);
-        click(window, 520.0, 624.0);
+        click_on("AirPlayDelayControls::field");
         assert_eq!(
             app.main_focus.borrow().control,
             Some(MainControl::AirplayDelay)
@@ -17382,5 +17397,239 @@ mod tests {
         backend.post("start", NoticeMessage::NoSpeaker, "09.41");
         state.notices = backend.snapshot().notices;
         assert!(tooltip(&state).starts_with("AudioSync: Streaming on, 2 speakers on, 2 notices\n"));
+    }
+
+
+    /// A speaker that asks for a code and is reconnecting says both, its
+    /// state first, as on the Mac (S442).
+    // covers: S442
+    #[test]
+    fn a_row_shows_its_state_note_before_its_code_note() {
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        let mut item = app
+            .models
+            .flyout_connected
+            .iter()
+            .find(|s| s.id == "airplay:living")
+            .expect("listed");
+        item.state = RowState::Reconnecting;
+        item.availability = Availability::NeedsCode;
+        let note = app.strings().invoke_speaker_note(item.clone()).to_string();
+        assert_eq!(note, "Reconnecting\u{2026} \u{b7} Asks for a code");
+
+        item.state = RowState::Off;
+        let note = app.strings().invoke_speaker_note(item).to_string();
+        assert_eq!(note, "Asks for a code", "off, the code note alone");
+    }
+
+
+    /// Add by Address… sits under Connected Speakers whenever a Google Cast
+    /// sender runs, with Cast speakers listed or not, as on the Mac (S443).
+    // covers: S443
+    #[test]
+    fn add_by_address_shows_whenever_cast_runs() {
+        use i_slint_backend_testing::ElementHandle;
+        for list in [ui_model::CastList::Quiet, ui_model::CastList::Searching] {
+            let mut backend = MockBackend::new();
+            backend.set_cast_list(list);
+            let app = app_over(backend);
+            app.main.show().unwrap();
+            draw_frames();
+            // Tall enough that the whole list is in view, where the search looks.
+            app.main
+                .window()
+                .set_size(slint::LogicalSize::new(1000.0, 2400.0));
+            let label = app.strings().get_cast_add_address();
+            assert!(
+                ElementHandle::find_by_accessible_label(&app.main, &label)
+                    .next()
+                    .is_some(),
+                "{list:?}: {label}"
+            );
+        }
+    }
+
+
+    /// Connected Speakers reads as on the Mac: its rows, the AirPlay delay,
+    /// the In zones rows, then Add by Address… (S444).
+    // covers: S444
+    #[test]
+    fn connected_speakers_order_their_parts_as_on_the_mac() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:up", "Upstairs", &["airplay:bedroom"]);
+        backend.set_cast_list(ui_model::CastList::NoneFound);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        draw_frames();
+        // Tall enough that the whole list is in view, where the search looks.
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(1000.0, 2400.0));
+        let strings = app.strings();
+        let top = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .map(|e| e.absolute_position().y)
+                .reduce(f32::min)
+                .unwrap_or_else(|| panic!("{label} is shown"))
+        };
+        let last_row = ElementHandle::find_by_element_type_name(&app.main, "SpeakerRow")
+            .map(|e| e.absolute_position().y)
+            .reduce(f32::max)
+            .expect("speaker rows");
+        let order = [
+            last_row,
+            top(&strings.get_airplay_delay_title()),
+            top(&strings.get_in_zones()),
+            top(&strings.get_cast_add_address()),
+        ];
+        assert!(
+            order.windows(2).all(|pair| pair[0] < pair[1]),
+            "rows, AirPlay Delay, In zones, Add by Address: {order:?}"
+        );
+    }
+
+
+    /// The AirPlay Delay row shows while an AirPlay speaker is listed, and
+    /// goes with the last one even though the sender still runs (S445).
+    // covers: S445
+    #[test]
+    fn the_airplay_delay_row_shows_only_with_an_airplay_speaker() {
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        assert!(app.main.get_airplay_delay_shown(), "the mock lists AirPlay speakers");
+
+        let mut backend = MockBackend::new();
+        backend.retain_speakers(|s| {
+            !matches!(
+                s.kind,
+                ui_model::SpeakerKind::AirPlay | ui_model::SpeakerKind::AirPlay2
+            )
+        });
+        assert!(backend.snapshot().airplay_delay_ms.is_some(), "the sender runs");
+        let app = app_over(backend);
+        app.refresh();
+        assert!(!app.main.get_airplay_delay_shown());
+    }
+
+
+    /// An In zones row's "In <zone>" link cut to "…" shows the whole zone
+    /// name in a tooltip while the pointer rests on it (S446).
+    // covers: S446
+    #[test]
+    fn a_cut_in_zones_link_shows_the_zone_name_in_a_tooltip() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        let den = long_named_speaker(&backend, "airplay:den");
+        backend.add_speaker(den);
+        let zone = "The long living room zone by the window and the bookshelf";
+        backend.add_zone("zone:den", zone, &["airplay:den"]);
+        let app = narrow_app(backend);
+        let list = element(&app, "MainWindow::scroll").expect("the speaker list");
+        let (at, size) = (list.absolute_position(), list.size());
+        scroll(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+            -3000.0,
+        );
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        let label = app.strings().invoke_go_to_zone_label(zone.into());
+        let link = ElementHandle::find_by_accessible_label(&app.main, &label)
+            .next()
+            .expect("the In zones link");
+        let (at, size) = (link.absolute_position(), link.size());
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+        app.main
+            .window()
+            .dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_secs(2));
+        slint::platform::update_timers_and_animations();
+        let tip = element(&app, "LinkButton::link-tip").expect("a tooltip on the In zones link");
+        assert!(
+            tip.size().width > size.width,
+            "tip {} wide, link {}",
+            tip.size().width,
+            size.width
+        );
+    }
+
+
+    /// While a speaker row's round switch has the keyboard focus, its name
+    /// tooltip shows, so a keyboard user can read a cut name; it goes with
+    /// the focus (S447).
+    // covers: S447
+    #[test]
+    fn a_speaker_name_tooltip_shows_while_its_switch_has_the_keyboard_focus() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        let focus = |part: RowPart| {
+            app.main.set_focus_speaker_part(part);
+            app.main.set_focus_speaker_id("airplay:kitchen".into());
+            draw_frames();
+        };
+        focus(RowPart::Toggle);
+        assert_eq!(
+            app.main_focus.borrow().speaker,
+            Some(("airplay:kitchen".into(), RowPart::Toggle))
+        );
+        assert!(
+            element(&app, "SpeakerRow::focus-tip").is_some(),
+            "the name tip shows with the switch focused"
+        );
+        focus(RowPart::Options);
+        assert!(element(&app, "SpeakerRow::focus-tip").is_none());
+    }
+
+
+    /// With an input device chosen as the source, the source picker carries
+    /// a microphone marker, as the Mac's does; with an app or the whole
+    /// system it carries none (S448).
+    // covers: S448
+    #[test]
+    fn the_source_picker_marks_a_chosen_input() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        assert!(element(&app, "MainWindow::input-marker").is_none());
+        let line_in = app
+            .snapshot()
+            .sources
+            .iter()
+            .position(|s| s.id == "input:line")
+            .expect("the mock's input");
+        app.main.invoke_source_selected(line_in as i32);
+        app.refresh();
+        draw_frames();
+        assert!(element(&app, "MainWindow::input-marker").is_some());
+    }
+
+
+    /// Web Remote… sits under View, right after Presets, with the other
+    /// items that open a window, not under File (S449).
+    // covers: S449
+    #[test]
+    fn web_remote_sits_under_view_below_presets() {
+        let source = include_str!("../ui/main.slint");
+        let at = |text: &str| {
+            source
+                .find(text)
+                .unwrap_or_else(|| panic!("{text} in main.slint"))
+        };
+        let view = at("title: Strings.menu-view;");
+        let help = at("title: Strings.menu-help;");
+        let remote = at("title: Strings.menu-remote;");
+        let presets = view + source[view..].find("title: Strings.presets;").expect("View > Presets");
+        let virtual_devices = at("title: Strings.show-virtual-devices;");
+        assert!(view < remote && remote < help, "under View");
+        assert!(
+            presets < remote && remote < virtual_devices,
+            "right after Presets"
+        );
     }
 }

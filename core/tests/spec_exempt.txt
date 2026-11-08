@@ -207,3 +207,11 @@ S438 Windows host only: the tray panel's notice; the desktop tests marked S438 c
 S439 Windows host only: the tray panel's look; the desktop tests marked S439 check it.
 S440 Windows host only: the tray icon and its notice mark; the desktop tests marked S440 check it.
 S441 Hosts only: the Mac's signed appcast requirement and the release side that signs it; scripts/check_appcast.py checks the feed signature block (a Python marker the core's coverage rule doesn't count), and the Mac app enforces it.
+S442 Windows host only: a speaker row's state and code notes shown together; the desktop tests marked S442 check it.
+S443 Windows host only: Add by Address in the main window while Cast runs; the desktop tests marked S443 check it.
+S444 Windows host only: the order inside the main window's Connected Speakers; the desktop tests marked S444 check it.
+S445 Windows host only: the AirPlay Delay row shown only with an AirPlay speaker; the desktop tests marked S445 check it.
+S446 Windows host only: the In zones link's tooltip; the desktop tests marked S446 check it.
+S447 Windows host only: a speaker's name tooltip while its switch has the keyboard focus; the desktop tests marked S447 check it.
+S448 Windows host only: the source picker's input marker; the desktop tests marked S448 check it.
+S449 Windows host only: Web Remote in the View menu; the desktop tests marked S449 check it.
