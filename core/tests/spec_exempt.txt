@@ -216,3 +216,4 @@ S447 Windows host only: a speaker's name tooltip while its switch has the keyboa
 S448 Windows host only: the source picker's input marker; the desktop tests marked S448 check it.
 S449 Windows host only: Web Remote in the View menu; the desktop tests marked S449 check it.
 S450 Windows host only: the main window's look; the desktop tests marked S450 check it.
+S451 Mac host only: the notice for a capture that goes silent after sound; the Mac logic suite checks it.

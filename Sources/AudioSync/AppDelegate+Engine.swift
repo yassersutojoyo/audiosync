@@ -471,7 +471,7 @@ extension AppDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + CaptureNoticeGate.firstCheck) { check() }
     }
 
-    /// From the session's first sound until it ends (S437): a capture that
+    /// From the session's first sound until it ends (S451): a capture that
     /// gets only zeros while its source is known to play posts a notice, and
     /// sound arriving again clears it.
     private func watchSilencedCapture() {

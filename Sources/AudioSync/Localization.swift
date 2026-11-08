@@ -1035,16 +1035,17 @@ struct UIStrings {
             + "turn streaming off and on again."
     }
     /// A session that heard sound gets only silence while its source plays
-    /// (S437); `input` for an input device, whose permission reads as off.
+    /// (S451); `input` for an input device, whose permission reads as off.
     func captureSilenced(_ source: String?, input: Bool) -> String {
         if input {
-            return "AudioSync is no longer allowed to use the microphone or other inputs, so every speaker is silent. "
+            return "AudioSync is no longer allowed to use the microphone, so every speaker is silent. "
                 + "Turn on AudioSync in System Settings → Privacy & Security → Microphone, "
                 + "then turn streaming off and on again."
         }
-        return "AudioSync gets only silence from \(source ?? "the selected source") while it plays, so every speaker "
-            + "is silent. If you turned off AudioSync in System Settings → Privacy & Security → Screen & System Audio "
-            + "Recording, turn it on again under “System Audio Recording Only”, then turn streaming off and on again."
+        let from = source.map { "\($0) while \($0) is playing" } ?? "the selected source while it is playing"
+        return "AudioSync gets only silence from \(from), so every speaker is silent. "
+            + "If its own volume is at zero, turn it up. If you turned off AudioSync in System Settings → "
+            + "Privacy & Security → Screen & System Audio Recording, turn it on again under “System Audio Recording Only”, then turn streaming off and on again."
     }
 
     let unknownDevice = "Unknown device"
@@ -1976,9 +1977,8 @@ struct UIStrings {
           the menu bar panel, or press Control-Command-1 to 9 for the first
           nine (they're also in Window > Presets). Speakers you hid are never
           saved in a preset, and recalling one leaves them hidden. To rename,
-          update or delete the preset in use, choose Rename…, Update to
-          Current Settings or Delete under its name in the Presets menu in the
-          window.
+          update or delete a preset, point to its name in the Presets menu in
+          the window and choose Rename…, Update to Current Settings or Delete.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           Auto-Connect When Available. AudioSync then turns it on whenever it
           appears. At launch, AudioSync starts streaming only when such a speaker

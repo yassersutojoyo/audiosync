@@ -88,7 +88,7 @@ struct CaptureWatch {
 }
 
 /// A session that heard sound and then gets only exact zeros while its source
-/// is known to play (S437). A tap or an input read after its permission is
+/// is known to play (S451). A tap or an input read after its permission is
 /// turned off calls back with zeros instead of stopping. Quiet music never
 /// reads as zeros: any sample above zero counts as sound.
 struct SilencedCaptureWatch {

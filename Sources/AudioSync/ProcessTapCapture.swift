@@ -695,7 +695,7 @@ private extension SourceCapture {
         let callbacks = Atomic<UInt64>(0)
         let frames = Atomic<UInt64>(0)
         let silentCallbacks = Atomic<UInt64>(0)
-        /// Blocks with a sample above zero, so a capture gone silent shows (S437).
+        /// Blocks with a sample above zero, so a capture gone silent shows (S451).
         let soundBlocks = Atomic<UInt64>(0)
         /// Some frame this session captured was not silent (`SourceCapture.sessionHeard`).
         let heard = Atomic<Bool>(false)

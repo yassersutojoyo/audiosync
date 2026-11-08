@@ -728,9 +728,9 @@ private struct PresetsRow: View {
             }
             Divider()
             Button(t.savePreset) { model.actions.savePreset() }
+            Divider()
             ForEach(model.presets) { row in
-                Divider()
-                Section(row.name) {
+                Menu(row.name) {
                     Button(t.renamePreset) { model.actions.renamePreset(row.id) }
                     Button(t.updatePreset) { model.actions.updatePreset(row.id) }
                         .disabled(!PresetEdit.canUpdate(row))

@@ -149,7 +149,7 @@ final class StreamEngine {
     /// The capture's callbacks so far this session; nil while stopped.
     var captureCallbacks: UInt64? { capture.counts?.callbacks }
 
-    /// The session's captured blocks with a sample above zero so far (S437).
+    /// The session's captured blocks with a sample above zero so far (S451).
     var captureSoundBlocks: UInt64 { capture.soundBlocks }
 
     /// The rate the running capture delivers at, which the ring's frames are

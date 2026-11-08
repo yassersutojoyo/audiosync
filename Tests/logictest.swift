@@ -2369,7 +2369,7 @@ do {
     check(!blamed, "capture: a tap that calls back nothing never blames the permission, whatever Now Playing reads")
 }
 do {
-    // covers: S437
+    // covers: S451
     // Sound for the first 5 checks (uptime 100 to 108), then exact zeros unless `sound`; the
     // result is the seconds from the first check without sound to the one that says silenced.
     func silencedAt(heard: Bool = true, sound: Bool = false, calledBack: Bool = true, moving: Bool = true,
@@ -17746,7 +17746,7 @@ do {
             && flatGuide.contains("choose Refresh Devices in the gear menu or press Command-R."),
           "guide: names the New Zone, Equalizer and Refresh Devices shortcuts of the main menu, as on Windows")
     // covers: S407
-    check(flatGuide.contains("update or delete the preset in use, choose Rename…, Update to Current Settings or Delete under its name in the Presets menu in the window.")
+    check(flatGuide.contains("update or delete a preset, point to its name in the Presets menu in the window and choose Rename…, Update to Current Settings or Delete.")
             && flatGuide.contains("Leave it empty to go back to the device's own name; while a speaker is renamed, its tooltip also shows the device's own name.")
             && !flatGuide.contains("Presets card") && !flatGuide.contains("tooltip keeps showing"),
           "guide: the Presets line names the Presets menu's items, and the tooltip shows the device's name only while renamed")
