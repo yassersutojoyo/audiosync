@@ -2001,8 +2001,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | cast track info: a large cover is scaled to fit 1280 by 720 and the byte cap | C53 |
 | cast model: a manual device a browse finds keeps its address under the new id, and Remove there forgets only the address | C18 |
 | cast model: a speaker added by address that a browse finds keeps its offset under its id, as the sender does: over none or a cleared one, never over one the id already had | C18 |
-| airplay off: a speaker that needs a PIN says PIN, not password | S356 |
-| airplay off: a speaker that asks for a password says password, not PIN | S356 |
+| airplay off: a speaker that needs a PIN says it needs pairing with a code, not password | S356 |
+| airplay off: a speaker that asks for a password says password, not code | S356 |
 | native off: a speaker that needs a PIN gets the PIN notice | S356 |
 | native off: a speaker that asks for a password gets the password notice | S356 |
 | native off: a speaker that turned the session down unasked says it didn't accept | S356 |

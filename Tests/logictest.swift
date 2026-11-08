@@ -1598,9 +1598,9 @@ do {
     let pinOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPin)
     let passwordOff = UIStrings().airPlayTurnedOff(name: "Den", reason: .needsPassword)
     check(pinOff.contains("code") && !pinOff.lowercased().contains("password"),
-          "airplay off: a speaker that needs a PIN says PIN, not password")
+          "airplay off: a speaker that needs a PIN says it needs pairing with a code, not password")
     check(passwordOff.contains("password") && !passwordOff.contains("code"),
-          "airplay off: a speaker that asks for a password says password, not PIN")
+          "airplay off: a speaker that asks for a password says password, not code")
     let text = UIStrings()
     check(text.nativeAirPlayAsksForCode(name: "Den", reason: .needsCode, unasked: false) == pinOff,
           "native off: a speaker that needs a PIN gets the PIN notice")
