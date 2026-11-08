@@ -901,7 +901,7 @@ private struct ZoneCard: View {
                             SpeakerRow(model: model, speaker: speaker, showTag: true, zoneNote: member.note,
                                        grouped: true)
                         } else {
-                            ZoneMemberPlaceholder(member: member, text: t)
+                            ZoneMemberPlaceholder(model: model, member: member, zone: zone, text: t)
                         }
                     }
                 }
@@ -1213,26 +1213,64 @@ private struct InlineNameField: View {
 /// A zone member that can't play with its zone now: not found yet, part of a
 /// stereo pair or home theater, or a target that needs AirPlay 2.
 private struct ZoneMemberPlaceholder: View {
+    @ObservedObject var model: AppModel
     let member: AppModel.ZoneMember
+    let zone: AppModel.Zone
     let text: UIStrings
+    @StateObject private var hover = HoverState()
+    @FocusState private var optionsFocused: Bool
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
     var body: some View {
         HStack(spacing: 12) {
             // Dimmed by the badge and secondary text, which keeps 4.5:1.
             SpeakerBadge(symbol: member.symbol, state: .off, size: 32).opacity(0.45)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 ScrollingTitle(text: member.name).font(.body).foregroundStyle(Brand.secondaryText)
                 if let note = member.note {
                     Text(note).font(.caption).foregroundStyle(Brand.secondaryText).lineLimit(2)
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(member.name)
+            .accessibilityValue(member.note ?? "")
             Spacer(minLength: 0)
+            // One that plays as part of a target changes through Use <target> Instead (S247).
+            if member.target == nil {
+                Menu { menuItems(text) } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .tint(Brand.secondaryText)   // grey: teal is kept for state
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel(text.speakerOptions(name: member.name))
+                .help(text.speakerOptions(name: member.name))
+                .focused($optionsFocused)
+                .modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))
+            }
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(member.name)
-        .accessibilityValue(member.note ?? "")
+        .contentShape(Rectangle())
+        .onHover { hover.isHovered = $0 }
+        .contextMenu { if member.target == nil { menuItems(text) } }
+    }
+
+    /// As a speaker row's: Move to Zone (the other zones, then New Zone…)
+    /// and Remove from Zone, as on Windows.
+    @ViewBuilder
+    private func menuItems(_ t: UIStrings) -> some View {
+        Menu(t.moveToZone) {
+            let others = model.zones.filter { $0.id != zone.id }
+            ForEach(others) { other in
+                Button(other.name) { model.move(member, to: other) }
+            }
+            if !others.isEmpty { Divider() }
+            Button(t.newZoneItem) { model.actions.newZoneWithSpeaker(member.key, member.name) }
+        }
+        Button(t.removeFromZone) { model.actions.removeFromZone(member.key) }
     }
 }
 

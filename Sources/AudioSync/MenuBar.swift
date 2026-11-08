@@ -500,6 +500,12 @@ final class AppModel: ObservableObject {
         AccessibilityNotification.Announcement(text.speakerMovedToZone(speaker.name, zone: zone.name)).post()
     }
 
+    /// Move to Zone in the menu of a zone member that isn't listed.
+    func move(_ member: ZoneMember, to zone: Zone) {
+        actions.moveToZone(member.key, zone.id)
+        AccessibilityNotification.Announcement(text.speakerMovedToZone(member.name, zone: zone.name)).post()
+    }
+
     /// Delete Zone: its members go back to the plain lists, without asking.
     func delete(_ zone: Zone) {
         actions.deleteZone(zone.id)
