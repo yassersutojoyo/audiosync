@@ -5494,6 +5494,11 @@ do {
     check(row == AirPlayTargetRow(kind: .stereoPair, members: ["Left", "Right"], missing: [], incomplete: false)
             && model.targetRow("K3") == nil,
           "P176 native airplay: the pair's row knows its kind and members; a speaker's row has none")
+    let givenRow = model.targetRow(pair) { $0 == right ? "Bookshelf" : nil }
+    // covers: S228
+    check(givenRow?.members == ["Bookshelf", "Left"]
+            && t.airPlayTargetNote(givenRow!) == "Stereo pair: Bookshelf and Left",
+          "speaker names: a stereo pair's note names its members by the names given them", "\(String(describing: givenRow))")
     // covers: P176
     check(t.rowNote(cast: nil, waitingForAirPlay2: false, unannounced: false, target: row) == "Stereo pair: Left and Right"
             && t.airPlayTargetNote(AirPlayTargetRow(kind: .homeTheater, members: ["Left", "Right", "Sub"], missing: [],

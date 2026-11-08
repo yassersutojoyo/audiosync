@@ -707,12 +707,12 @@ struct NativeAirPlayModel {
     }
 
     /// What the row of the target `id` says about its members; nil for a
-    /// speaker's row.
-    func targetRow(_ id: String) -> AirPlayTargetRow? {
+    /// speaker's row. `renamed` gives a member's name the user gave it (S228).
+    func targetRow(_ id: String, renamed: (String) -> String? = { _ in nil }) -> AirPlayTargetRow? {
         guard let kind = NativeTarget.kind(id) else { return nil }
         let ids = members(of: id)
         func named(_ ids: [String]) -> [String] {
-            ids.map { names[$0] ?? $0 }.sorted { $0.lowercased() < $1.lowercased() }
+            ids.map { renamed($0) ?? names[$0] ?? $0 }.sorted { $0.lowercased() < $1.lowercased() }
         }
         let missing = (receivers[id]?.missing ?? []).sorted { $0.lowercased() < $1.lowercased() }
         return AirPlayTargetRow(kind: kind, members: named(ids), missing: missing,

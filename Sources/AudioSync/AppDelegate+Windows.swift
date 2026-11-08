@@ -755,7 +755,12 @@ extension AppDelegate {
                                     holdsCredentials: receiver.map { native?.keepsCredentials($0) == true } ?? false,
                                     holdsPassword: receiver.map { native?.holdsPassword($0) == true } ?? false,
                                     refusedForCode: receiver.map { native?.refusedOff.contains($0) == true } ?? false,
-                                    airPlayTarget: receiver.flatMap { native?.targetRow($0) })
+                                    airPlayTarget: receiver.flatMap { target in
+                                        native?.targetRow(target) { member in
+                                            self.speakerNames.renamed(key: SpeakerKey.make(id: NativeAirPlayID.app(member),
+                                                                                           airplay: true))
+                                        }
+                                    })
         }
     }
 
