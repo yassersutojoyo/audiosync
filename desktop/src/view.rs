@@ -1467,11 +1467,13 @@ impl App {
     }
 
     /// Reads the media sessions for the Now Playing card while the main
-    /// window shows or the web remote listens, and shows what changed.
-    /// Returns whether the track changed.
+    /// window or the tray panel shows or the web remote listens, and shows
+    /// what changed in both. Returns whether the track changed.
     fn sync_now_playing(&self) -> bool {
         let window = self.main.window();
-        let shows = (window.is_visible() && !window.is_minimized()) || self.remote_listening();
+        let shows = (window.is_visible() && !window.is_minimized())
+            || self.flyout.window().is_visible()
+            || self.remote_listening();
         let source = self.now_playing_source.borrow().clone();
         if !self.now_playing.borrow_mut().sync(source, shows) {
             return false;
@@ -1484,6 +1486,7 @@ impl App {
                 self.main.invoke_focus_source();
             }
             self.main.set_now_playing_shown(false);
+            self.flyout.set_now_playing_shown(false);
             self.log
                 .log(|| "now playing card: the window hides the card".to_owned());
             return true;
@@ -1519,10 +1522,17 @@ impl App {
             );
             slint::Image::from_rgba8_premultiplied(pixels)
         });
+        self.flyout
+            .set_now_playing_title(track.title.as_str().into());
+        self.flyout
+            .set_now_playing_subtitle(track.subtitle().as_str().into());
+        self.flyout.set_now_playing_has_artwork(artwork.is_some());
         self.main.set_now_playing_has_artwork(artwork.is_some());
-        self.main
-            .set_now_playing_artwork(artwork.unwrap_or_default());
+        let artwork = artwork.unwrap_or_default();
+        self.flyout.set_now_playing_artwork(artwork.clone());
+        self.main.set_now_playing_artwork(artwork);
         self.main.set_now_playing_shown(true);
+        self.flyout.set_now_playing_shown(true);
         true
     }
 
@@ -6603,6 +6613,113 @@ mod tests {
         // App has it, which is fine.
         let _ = slint::platform::set_platform(Box::new(Headless));
         App::new(Box::new(backend), log).expect("the windows build headless")
+    }
+
+    /// Saves the main window and the tray flyout over the mock backend as
+    /// main-window.png and flyout.png in AUDIOSYNC_SHOT_DIR, and dark as
+    /// main-window-dark.png and flyout-dark.png, to compare a UI change
+    /// before and after without opening a window.
+    #[test]
+    #[ignore = "writes screenshots: run with --ignored and AUDIOSYNC_SHOT_DIR set"]
+    fn shots_of_the_main_window_and_flyout() {
+        let dir = std::path::PathBuf::from(
+            std::env::var_os("AUDIOSYNC_SHOT_DIR").expect("AUDIOSYNC_SHOT_DIR names a folder"),
+        );
+        let app = app_over(MockBackend::new());
+        // No refresh timer may fire and hide the Now Playing card set below.
+        hold_clock();
+        app.refresh();
+        app.main.set_now_playing_shown(true);
+        app.main.set_now_playing_title(
+            "A track title long enough to need more than the two lines the card shows".into(),
+        );
+        app.main.set_now_playing_subtitle("Artist".into());
+        for (suffix, appearance) in [
+            ("", ui_model::Appearance::Light),
+            ("-dark", ui_model::Appearance::Dark),
+        ] {
+            app.apply_appearance(appearance);
+            // draw_frames sizes every window 1000x720; the shots take the real sizes after it:
+            // main.slint's preferred size, the flyout's width and then its fitted height.
+            draw_frames();
+            app.main
+                .window()
+                .set_size(slint::LogicalSize::new(776.0, 680.0));
+            app.flyout
+                .window()
+                .set_size(slint::LogicalSize::new(340.0, 720.0));
+            let fit = app.flyout.get_fit_height();
+            app.flyout
+                .window()
+                .set_size(slint::LogicalSize::new(340.0, fit));
+            for (name, window) in [
+                ("main-window", app.main.window()),
+                ("flyout", app.flyout.window()),
+            ] {
+                let shot = window
+                    .take_snapshot()
+                    .expect("the software renderer draws it");
+                let file = png(shot.width(), shot.height(), shot.as_bytes());
+                std::fs::write(dir.join(format!("{name}{suffix}.png")), file)
+                    .expect("the PNG is written");
+            }
+        }
+    }
+
+    /// An uncompressed RGBA PNG (stored deflate blocks), since the Windows
+    /// build has no image crate.
+    fn png(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+        fn crc(bytes: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for &byte in bytes {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            let start = out.len();
+            out.extend_from_slice(kind);
+            out.extend_from_slice(data);
+            let crc = crc(&out[start..]);
+            out.extend_from_slice(&crc.to_be_bytes());
+        }
+        let mut raw = Vec::new();
+        for row in rgba.chunks(width as usize * 4) {
+            raw.push(0);
+            raw.extend_from_slice(row);
+        }
+        let mut zlib = vec![0x78, 0x01];
+        let blocks = raw.len().div_ceil(0xFFFF);
+        for (index, block) in raw.chunks(0xFFFF).enumerate() {
+            zlib.push(u8::from(index + 1 == blocks));
+            let len = block.len() as u16;
+            zlib.extend_from_slice(&len.to_le_bytes());
+            zlib.extend_from_slice(&(!len).to_le_bytes());
+            zlib.extend_from_slice(block);
+        }
+        let (mut a, mut b) = (1u32, 0u32);
+        for &byte in &raw {
+            a = (a + u32::from(byte)) % 65521;
+            b = (b + a) % 65521;
+        }
+        zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+        let mut header = [0u8; 13];
+        header[..4].copy_from_slice(&width.to_be_bytes());
+        header[4..8].copy_from_slice(&height.to_be_bytes());
+        header[8..10].copy_from_slice(&[8, 6]);
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(&mut out, b"IHDR", &header);
+        chunk(&mut out, b"IDAT", &zlib);
+        chunk(&mut out, b"IEND", &[]);
+        out
     }
 
     // covers: S388
@@ -11967,7 +12084,7 @@ mod tests {
         app.prepare_flyout_open(true);
         assert_eq!(
             app.flyout.get_content_offset(),
-            8.0,
+            16.0,
             "back to the start at once"
         );
         assert_eq!(app.flyout.get_fit_height(), height);
@@ -11976,7 +12093,7 @@ mod tests {
         advance_clock(Duration::from_millis(80));
         draw_frames();
         let offset = app.flyout.get_content_offset();
-        assert!(offset > 0.0 && offset < 8.0, "it slides: {offset}");
+        assert!(offset > 0.0 && offset < 16.0, "it slides: {offset}");
         advance_clock(Duration::from_millis(200));
         draw_frames();
         assert_eq!(app.flyout.get_content_offset(), 0.0);
@@ -15641,6 +15758,21 @@ mod tests {
         assert_eq!(row.accessible_checked(), Some(true), "{name} switched on");
     }
 
+    /// The flyout's mark and name are a button and the first stop for Tab:
+    /// Space on it opens the main window, as a click does (S439).
+    // covers: S439
+    #[test]
+    fn the_flyout_brand_is_the_first_tab_stop_and_opens_the_app() {
+        let app = app_over(MockBackend::new());
+        app.flyout.show().unwrap();
+        app.flyout.invoke_take_focus();
+        draw_frames();
+        let window = app.flyout.window();
+        tab(window, 1);
+        press(window, " ");
+        assert!(app.main.window().is_visible());
+    }
+
     /// The logo and wordmark at the top of the flyout open the main window,
     /// with Open AudioSync as their tooltip, as in the Mac panel.
     #[test]
@@ -15669,7 +15801,7 @@ mod tests {
         let switch = ElementHandle::find_by_accessible_label(&app.flyout, "Streaming")
             .next()
             .expect("the flyout's streaming switch");
-        click(window, switch.absolute_position().x - 10.0, position.y);
+        click(window, switch.absolute_position().x - 5.0, position.y);
         assert!(
             !app.main.window().is_visible(),
             "a click beside the switch opens nothing"
@@ -15707,8 +15839,9 @@ mod tests {
         );
     }
 
-    /// With no notice, the source drop-down starts the flyout's body: no
-    /// line sits between it and the header, as in the Mac panel.
+    /// With no notice, the block holding the source drop-down starts the
+    /// flyout's body: no line sits between it and the header, as in the Mac
+    /// panel.
     #[test]
     fn no_line_sits_between_the_flyout_header_and_its_source() {
         use i_slint_backend_testing::ElementHandle;
@@ -15722,7 +15855,11 @@ mod tests {
         let body = ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::body")
             .next()
             .expect("the flyout's body");
-        assert_eq!(source.absolute_position().y, body.absolute_position().y);
+        assert_eq!(
+            source.absolute_position().y,
+            body.absolute_position().y + 10.0,
+            "inside the block's padding"
+        );
     }
 
     /// Several Apps… is a link under the flyout's source drop-down, as the

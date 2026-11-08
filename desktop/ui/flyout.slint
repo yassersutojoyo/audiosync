@@ -1,8 +1,8 @@
 // The tray flyout: what the macOS app's menu bar panel offers, opened by
 // clicking the AudioSync icon in the notification area. Streaming on and
 // off, the newest notice, the source, the master volume, every zone with
-// its speakers under it and every other speaker, then Open AudioSync and Exit. Escape or a click elsewhere
-// closes it.
+// its speakers under it and every other speaker, then Exit; the mark and
+// name open the main window. Escape or a click elsewhere closes it.
 
 import { Button, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
@@ -10,9 +10,9 @@ import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, Wordmark, ZoneArrowFocus, Motion } from "widgets.slint";
 
-// The preset pull-down under the source (spec S260): the current preset's
-// name, else "Choose a Preset"; its menu lists every preset, the current
-// one checked, and recalls the one chosen.
+// The preset row under the source (spec S260): Presets and the current
+// preset's name, else "Choose a Preset"; its menu lists every preset, the
+// current one checked, and recalls the one chosen.
 component PresetPicker inherits Rectangle {
     in property <[PresetItem]> presets;
     // The current preset's name; empty while none is current.
@@ -23,10 +23,8 @@ component PresetPicker inherits Rectangle {
         menu.show({ x: 0, y: root.height });
     }
 
-    min-height: 32px;
+    min-height: 36px;
     border-radius: Fluent.radius-control;
-    border-width: 1px;
-    border-color: Fluent.stroke;
     background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
     forward-focus: focus;
     accessible-role: button;
@@ -64,19 +62,26 @@ component PresetPicker inherits Rectangle {
                 }
 
                 HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
+                    padding-left: 6px;
+                    padding-right: 6px;
                     spacing: 8px;
 
                     Glyph {
                         glyph: Glyphs.presets;
-                        color: Tokens.teal-text;
+                        color: Tokens.text;
                         width: 16px;
+                    }
+
+                    Text {
+                        text: Strings.presets;
+                        color: Tokens.text;
+                        vertical-alignment: center;
+                        accessible-role: none;
                     }
 
                     MarqueeText {
                         text: root.current != "" ? root.current : Strings.choose-preset;
-                        text-color: root.current != "" ? Tokens.text : Tokens.secondary-text;
+                        text-color: Tokens.secondary-text;
                         horizontal-stretch: 1;
                         accessible-role: none;
                     }
@@ -426,6 +431,12 @@ export component TrayFlyout inherits Window {
     in property <[ZoneItem]> zones;
     in property <[PresetItem]> presets;
     in property <string> current-preset;
+    // What plays, as the main window's Now Playing card shows it.
+    in property <bool> now-playing-shown;
+    in property <string> now-playing-title;
+    in property <string> now-playing-subtitle;
+    in property <bool> now-playing-has-artwork;
+    in property <image> now-playing-artwork;
     // AirPlay discovery has run for 20 seconds without finding a speaker.
     in property <bool> airplay-none-found;
     // Every speaker present is hidden.
@@ -552,12 +563,12 @@ export component TrayFlyout inherits Window {
     }
 
     focus := FocusScope {
-        y: root.revealed ? 0px : 8px;
+        y: root.revealed || !Motion.on ? 0px : 16px;
         opacity: root.revealed ? 1 : 0;
         // Back to the start at once, so the next open plays in full.
         animate y, opacity {
-            duration: root.revealed ? Fluent.normal : 0ms;
-            easing: ease-out;
+            duration: !root.revealed ? 0ms : Motion.on ? 250ms : 150ms;
+            easing: cubic-bezier(0.1, 0.9, 0.2, 1);
         }
 
         key-pressed(event) => {
@@ -580,51 +591,84 @@ export component TrayFlyout inherits Window {
             HorizontalLayout {
                 spacing: 10px;
 
-                // A mouse shortcut, as on the Mac; Open AudioSync below is the
-                // keyboard's way.
-                TouchArea {
-                    horizontal-stretch: 0;
-                    clicked => {
+                // The mark and name open the main window, the first stop for
+                // Tab, as on the Mac.
+                brand := Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: Fluent.radius-control;
+                    background: brand-touch.pressed ? Fluent.pressed : brand-touch.has-hover ? Fluent.hover : transparent;
+                    animate background { duration: Fluent.fast; }
+                    forward-focus: brand-focus;
+                    accessible-role: button;
+                    accessible-label: Strings.open-app-status(root.status);
+                    accessible-action-default => {
                         root.open-app();
                     }
 
+                    brand-focus := FocusScope {
+                        focus-on-click: false;
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == Key.Return {
+                                root.open-app();
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+
+                    brand-touch := TouchArea {
+                        clicked => {
+                            root.open-app();
+                        }
+
+                        Tooltip {
+                            brand-tip := LabelTip {
+                                text: Strings.open-app;
+                                max-tip-width: 240px;
+                            }
+                        }
+                    }
+
                     HorizontalLayout {
+                        padding-left: 6px;
+                        padding-right: 6px;
+                        padding-top: 2px;
+                        padding-bottom: 2px;
                         spacing: 10px;
 
-                        BrandMark {
-                            running: root.running;
-                            width: 24px;
-                            height: 24px;
+                        VerticalLayout {
+                            alignment: center;
+                            BrandMark {
+                                running: root.running;
+                                width: 22px;
+                                height: 22px;
+                            }
                         }
 
                         VerticalLayout {
                             alignment: center;
+                            horizontal-stretch: 1;
                             Wordmark {
-                                size: 15px;
+                                size: 14px;
                             }
 
-                            SecondaryText {
+                            QuietText {
                                 text: root.status;
                             }
                         }
                     }
 
-                    Tooltip {
-                        brand-tip := LabelTip {
-                            text: Strings.open-app;
-                            max-tip-width: 240px;
-                        }
+                    FocusRing {
+                        visible-focus: brand-focus.has-focus;
+                        border-radius: parent.border-radius;
                     }
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
                 }
 
                 TouchArea {
                     horizontal-stretch: 0;
                     power := ToggleSwitch {
                         height: 100%;
+                        text: Strings.streaming-switch;
                         checked: root.running;
                         accessible-label: Strings.streaming-switch;
                         toggled => {
@@ -710,15 +754,73 @@ export component TrayFlyout inherits Window {
                         }
                     }
 
-                    // No visible labels above the source and the volume, as in the
-                    // Mac panel; Narrator still hears each control's name.
-                    source := ComboBox {
-                        model: root.sources;
-                        current-index: root.source-index;
-                        accessible-label: Strings.source-label;
-                        selected => {
-                            root.source-selected(self.current-index);
-                            self.current-index = root.source-index;
+                    // What plays, with no buttons, over the source. No visible
+                    // labels above the source and the volume, as in the Mac
+                    // panel; Narrator still hears each control's name.
+                    Rectangle {
+                        border-radius: Fluent.radius-card;
+                        background: Fluent.hero;
+
+                        VerticalLayout {
+                            padding: 10px;
+                            spacing: 10px;
+
+                            if root.now-playing-shown: HorizontalLayout {
+                                spacing: 11px;
+                                accessible-role: groupbox;
+                                accessible-label: Strings.now-playing;
+
+                                Rectangle {
+                                    width: 48px;
+                                    height: 48px;
+                                    border-radius: 6px;
+                                    clip: true;
+                                    background: Tokens.text.with-alpha(0.06);
+
+                                    if root.now-playing-has-artwork: Image {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        source: root.now-playing-artwork;
+                                        image-fit: cover;
+                                        accessible-role: none;
+                                    }
+
+                                    if !root.now-playing-has-artwork: Glyph {
+                                        width: parent.width;
+                                        height: parent.height;
+                                        glyph: Glyphs.music-note;
+                                        color: Tokens.secondary-text;
+                                        font-size: 20px;
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+                                    horizontal-stretch: 1;
+
+                                    MarqueeText {
+                                        text: root.now-playing-title;
+                                        font-weight: 600;
+                                    }
+
+                                    if root.now-playing-subtitle != "": MarqueeText {
+                                        text: root.now-playing-subtitle;
+                                        font-size: Tokens.font-size-callout;
+                                        text-color: Tokens.secondary-text;
+                                    }
+                                }
+                            }
+
+                            source := ComboBox {
+                                model: root.sources;
+                                current-index: root.source-index;
+                                accessible-label: Strings.source-label;
+                                selected => {
+                                    root.source-selected(self.current-index);
+                                    self.current-index = root.source-index;
+                                }
+                            }
                         }
                     }
 
@@ -818,11 +920,32 @@ export component TrayFlyout inherits Window {
                     // "No speakers found" waits for 20 seconds of AirPlay discovery;
                     // until then it says it looks, as the main window's note does.
                     // Otherwise it is the main window's note itself.
-                    if root.zones.length == 0 && root.speakers.length == 0 && !(root.this-pc.length > 0 && root.connected-all-hidden): SecondaryText {
+                    if root.zones.length == 0 && root.speakers.length == 0 && !(root.this-pc.length > 0 && root.connected-all-hidden): none-note := HorizontalLayout {
                         property <bool> both-none: root.airplay-none-found && root.cast-list == CastList.none-found;
                         property <string> list-note: root.airplay-none-found ? (self.both-none ? Strings.network-none-found : Strings.airplay-none-found) : root.airplay-searching ? (root.cast-list == CastList.none-found || root.cast-list == CastList.failed ? Strings.looking-for-airplay-speakers : Strings.looking-for-speakers) : Strings.connected-none;
                         property <string> cast-note: self.both-none || self.list-note == Strings.looking-for-speakers ? "" : Strings.cast-list(root.cast-list);
-                        text: root.this-pc.length == 0 && root.all-hidden ? Strings.flyout-all-hidden : root.this-pc.length == 0 && root.airplay-none-found ? Strings.no-speakers : self.cast-note == "" ? self.list-note : self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
+                        property <string> text: root.this-pc.length == 0 && root.all-hidden ? Strings.flyout-all-hidden : root.this-pc.length == 0 && root.airplay-none-found ? Strings.no-speakers : self.cast-note == "" ? self.list-note : self.list-note == Strings.connected-none ? self.cast-note : self.list-note + " " + self.cast-note;
+                        spacing: 10px;
+
+                        // While it looks: a dot that beats once a second, still
+                        // with animation effects off.
+                        if none-note.text == Strings.looking-for-speakers || none-note.text == Strings.looking-for-airplay-speakers: Rectangle {
+                            property <float> beat: Motion.on ? mod(animation-tick() / 1ms, 1000) / 1000 : 1;
+                            width: 15px;
+
+                            Rectangle {
+                                width: 7px * (self.beat < 0.11 ? 1 + 0.6 * self.beat / 0.11 : self.beat < 0.22 ? 1.6 - 0.6 * (self.beat - 0.11) / 0.11 : 1);
+                                height: self.width;
+                                border-radius: self.width / 2;
+                                background: Tokens.secondary-text;
+                                property <float> beat: parent.beat;
+                            }
+                        }
+
+                        SecondaryText {
+                            text: none-note.text;
+                            horizontal-stretch: 1;
+                        }
                     }
 
                     // Linux has no Settings page to open.
@@ -939,23 +1062,53 @@ export component TrayFlyout inherits Window {
             Divider { }
 
             footer := HorizontalLayout {
-                spacing: 8px;
+                alignment: end;
 
-                Button {
-                    text: Strings.open-app;
-                    primary: true;
-                    horizontal-stretch: 1;
-                    accessible-label: Strings.open-app;
-                    clicked => {
-                        root.open-app();
-                    }
-                }
-
-                Button {
-                    text: Strings.exit-short;
+                exit := Rectangle {
+                    border-radius: Fluent.radius-control;
+                    background: exit-touch.pressed ? Fluent.pressed : exit-touch.has-hover ? Fluent.hover : transparent;
+                    animate background { duration: Fluent.fast; }
+                    forward-focus: exit-focus;
+                    accessible-role: button;
                     accessible-label: Strings.exit-app;
-                    clicked => {
+                    accessible-action-default => {
                         root.exit-app();
+                    }
+
+                    exit-focus := FocusScope {
+                        focus-on-click: false;
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == Key.Return {
+                                root.exit-app();
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+
+                    exit-touch := TouchArea {
+                        clicked => {
+                            root.exit-app();
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+
+                        Text {
+                            text: Strings.exit-short;
+                            font-size: Tokens.font-size-callout;
+                            color: Tokens.text;
+                            accessible-role: none;
+                        }
+                    }
+
+                    FocusRing {
+                        visible-focus: exit-focus.has-focus;
+                        border-radius: parent.border-radius;
                     }
                 }
             }

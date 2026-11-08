@@ -54,6 +54,8 @@ export global Fluent {
     // Subtle fills under the pointer, over any card or row.
     out property <brush> hover: Tokens.text.with-alpha(0.06);
     out property <brush> pressed: Tokens.text.with-alpha(0.035);
+    // The tray panel's block of what plays and the source.
+    out property <brush> hero: Tokens.text.with-alpha(0.04);
     // A 1 px edge that sets a card off a light background.
     out property <brush> stroke: Tokens.dark ? Tokens.separator : #0000001a;
     // Fluent's fast and normal durations: a state change, a fade.
