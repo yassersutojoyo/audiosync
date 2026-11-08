@@ -58,6 +58,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, pointing at a zone's name shows a tooltip that says to double-click it to rename, as a speaker's name does.
 - On Windows, the Web Remote window says under the address to allow AudioSync in Windows Firewall when the phone can't open the page.
 - On Windows and Linux, the Calibrate All results' Close button reads Done once you've applied the new delays, as on the Mac.
+- On Windows, the tray panel has a new look: the AudioSync mark at the top opens the window, what's playing and the source sit together in one block, each speaker shows a round mark that fills while it plays, and the bottom has only Exit.
+- On Windows, a click anywhere on a speaker's row in the tray panel switches it on or off, and the row lights up under the pointer, as on the Mac.
+- On Windows, the tray panel shows the input picker above the note about live input, so the note reads after the choice it explains.
+- On Windows, the tray icon gets a small orange badge while a notice is up, and in a contrast theme it picks the light or dark icon by the theme's background.
 
 ### Fixed
 
@@ -77,6 +81,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, a stereo pair's or home theater group's note now names its speakers by the names you gave them.
 - On Windows, a speaker whose name can't be read now shows as "Unknown device", as on the Mac, instead of a long device ID.
 - On Windows, Narrator now says which speaker Calibrate All is measuring as each one starts. Before, it stayed silent until the run ended.
+- On Windows, the tray panel shows the newest notice without its time, cut to three lines while others wait; hovering over it shows the whole text, as on the Mac.
+- On Windows, a paused Google Cast speaker no longer looks like it's playing in the window and the tray panel.
 
 ### Changed
 

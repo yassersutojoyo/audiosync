@@ -40,7 +40,7 @@ const ICON_DARK: u16 = 3;
 const ICON_LIGHT_OFF: u16 = 4;
 #[cfg(windows)]
 const ICON_DARK_OFF: u16 = 5;
-/// Each of those plus this is the same with the notice dot.
+/// Each of those plus this is the same with the notice badge.
 #[cfg(windows)]
 const ICON_NOTICE_STEP: u16 = 4;
 
@@ -83,7 +83,7 @@ pub struct Tray {
     /// The icon variant showing now, so it is replaced only when it changes.
     shown: Cell<Option<IconChoice>>,
     running: Cell<bool>,
-    /// A notice is up: the icon shows its dot, as the Mac's does.
+    /// A notice is up: the icon shows its badge, as the Mac's shows a dot.
     notice: Cell<bool>,
     /// A tooltip not shown yet: Windows refuses it while Explorer restarts,
     /// and the icon it adds again would keep the old one.
@@ -120,7 +120,7 @@ struct IconChoice {
 
 #[cfg(target_os = "linux")]
 impl IconChoice {
-    // The panel's icon has no notice dot.
+    // The panel's icon has no notice badge.
     fn current(running: bool, _notice: bool) -> IconChoice {
         IconChoice { running }
     }
@@ -476,12 +476,12 @@ fn place_flyout(app: &App, icon: Bounds) {
 
 #[cfg(test)]
 mod tests {
-    /// While a notice is up the tray icon takes its variant with the dot,
+    /// While a notice is up the tray icon takes its variant with the badge,
     /// for either taskbar and either streaming state (S440).
     // covers: S440
     #[cfg(windows)]
     #[test]
-    fn a_notice_puts_the_dot_on_the_tray_icon() {
+    fn a_notice_puts_the_badge_on_the_tray_icon() {
         use super::*;
         for (light, running) in [(true, true), (false, true), (true, false), (false, false)] {
             let plain = icon_ordinal(light, running, false);

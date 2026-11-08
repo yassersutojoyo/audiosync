@@ -6,7 +6,7 @@
 #   desktop/res/audiosync-256.png     the same at 256 px, the Slint windows' icon
 #   desktop/res/tray-{light,dark}.ico           the tray icon for a light or dark taskbar
 #   desktop/res/tray-{light,dark}-off.ico       the same, dimmed while streaming is off
-#   desktop/res/tray-*-notice.ico               each with a dot while a notice is up
+#   desktop/res/tray-*-notice.ico               each with a badge while a notice is up
 # The app icon is brand/audiosync-icon.svg cropped to its tile; the tray icons are
 # brand/audiosync-mark.svg in the token colors (scripts/brand/ico.py).
 #

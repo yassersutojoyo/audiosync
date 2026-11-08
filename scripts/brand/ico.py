@@ -7,8 +7,8 @@
         tray-light.svg      the mark for a light taskbar (the readable teal, color.tealText)
         tray-dark.svg       the mark for a dark taskbar (the mint, color.logo dark)
         tray-*-off.svg      the same at the disabled opacity, while streaming is off
-        tray-*-notice.svg   each of those with a dot at the top right, at full strength,
-                            while a notice is up (the Mac's menu bar icon has the same dot)
+        tray-*-notice.svg   each of those with a badge at the bottom right in the warning
+                            color (color.warn), at full strength, while a notice is up
       Colors and the opacity come from brand/tokens.json.
 
   python3 -I scripts/brand/ico.py pack <out.ico> <png>...
@@ -30,9 +30,9 @@ TOKENS = 'brand/tokens.json'
 TILE_VIEWBOX = '100 100 824 824'
 # Room around the mark in the tray icon, as a fraction of its width.
 TRAY_PADDING = 0.04
-# The notice dot's diameter and the gap cut around it, as fractions of the
-# icon's side: the Mac draws a 5 px dot on its 18 px menu bar icon.
-DOT = 5 / 18
+# The notice badge's diameter and the gap cut around it, as fractions of the
+# icon's side. At the top right a dot over the mark's stem read as "ai".
+DOT = 3 / 8
 DOT_GAP = 1 / 16
 
 
@@ -42,6 +42,7 @@ def svgs(directory):
     light = tokens['color']['tealText']['light']
     dark = tokens['color']['logo']['dark']
     off = tokens['opacity']['disabled']['value']
+    warn = tokens['color']['warn']
 
     with open(ICON, encoding='utf-8') as f:
         icon = f.read()
@@ -62,16 +63,18 @@ def svgs(directory):
     if not paths:
         sys.exit(f'{MARK}: no paths')
     radius = side * DOT / 2
-    cx, cy = x + side - radius, y + radius
-    for name, color, opacity in (('tray-light', light, 1), ('tray-dark', dark, 1),
-                                 ('tray-light-off', light, off), ('tray-dark-off', dark, off)):
+    cx, cy = x + side - radius, y + side - radius
+    for name, color, opacity, badge in (('tray-light', light, 1, warn['light']),
+                                        ('tray-dark', dark, 1, warn['dark']),
+                                        ('tray-light-off', light, off, warn['light']),
+                                        ('tray-dark-off', dark, off, warn['dark'])):
         body = ''.join(f'<path fill="{color}" fill-opacity="{opacity:g}" d="{d}"/>' for d in paths)
         view = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{x:g} {y:g} {side:g} {side:g}">'
         write(f'{directory}/{name}.svg', f'{view}{body}</svg>\n')
-        # The mark keeps clear of the dot by a gap, so the dot reads on its own.
+        # The mark keeps clear of the badge by a gap, so the badge reads on its own.
         cut = (f'<mask id="cut"><rect x="{x:g}" y="{y:g}" width="{side:g}" height="{side:g}" fill="#fff"/>'
                f'<circle cx="{cx:g}" cy="{cy:g}" r="{radius + side * DOT_GAP:g}" fill="#000"/></mask>')
-        dot = f'<circle cx="{cx:g}" cy="{cy:g}" r="{radius:g}" fill="{color}"/>'
+        dot = f'<circle cx="{cx:g}" cy="{cy:g}" r="{radius:g}" fill="{badge}"/>'
         write(f'{directory}/{name}-notice.svg',
               f'{view}<defs>{cut}</defs><g mask="url(#cut)">{body}</g>{dot}</svg>\n')
 
