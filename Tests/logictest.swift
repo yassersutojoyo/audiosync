@@ -14802,7 +14802,7 @@ do {
     let start = lines.firstIndex(of: "Calibration")
     let end = lines.firstIndex(of: "Speaker Notes")
     let topic = start.flatMap { s in end.map { e in s < e ? lines[s..<e].joined(separator: "\n") : "" } } ?? ""
-    let named = [t.calibrateWithMicrophone, t.calibrateAll, t.includeAnyway, t.measureAgain,
+    let named = [t.calibrateWithMicrophone, t.calibrateAll, t.calibrateZoneItem, t.includeAnyway, t.measureAgain,
                  t.calibrateAllApply, t.calibrateAllUndo]
     // covers: S407
     check(!topic.isEmpty && named.allSatisfy(topic.contains),

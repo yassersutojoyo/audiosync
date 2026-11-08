@@ -1891,6 +1891,11 @@ struct UIStrings {
         '\(measureAgain)' repeats one speaker. If the speakers, the source or
         a delay change during a run, it stops and no delay changes.
 
+        To calibrate one zone, right-click it or use its ⋯ button and choose
+        '\(calibrateZoneItem)'. It measures the zone's speakers that are on,
+        as '\(calibrateAll)' does; speakers outside the zone stay quiet during
+        the run and keep their delays.
+
         Headphones, headsets, earbuds and virtual outputs are left out, since
         the microphone can't hear them: their rows say so, and their delay
         stays yours to set. If one of them does play through a speaker in
