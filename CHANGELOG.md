@@ -11,6 +11,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, while an AirPlay speaker plays, the status line in the main window ends with the AirPlay delay in use, such as "AirPlay delay 2.0 s", so you can see when AudioSync changes it by itself.
 - On the Mac, a Bluetooth speaker or headphones you connect for the first time start with a delay worked out from the latency macOS reports for them, instead of 0 ms. You still fine-tune it, and a delay you already set is never changed.
 - On Windows, File > Check Setup… shows what AudioSync needs from Windows and whether anything needs your attention: whether the network is set to Private, whether Windows blocks the microphone once an input device is used, and that Windows Firewall isn't checked. The rows update by themselves while the window is open.
+- The volume keys on your keyboard change AudioSync's master volume while it streams, on the Mac and on Windows, and a level pop-up shows the new level, which VoiceOver on the Mac and Narrator on Windows read out. It's on unless you turn off Volume Keys Control AudioSync, in Settings on the Mac or under Speakers on Windows. On the Mac it needs Accessibility access.
+- The Web Remote page shows the app's notices above Now Playing, from the Mac and from Windows, with a Mac notice's title before its text. A screen reader reads a new one once, and it goes away when the app clears it; the phone has no button to dismiss it.
 
 ### Changed
 
@@ -25,20 +27,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the Guide's Zones line says each zone has its own volume and that you can right-click a speaker to move it to a zone.
 - On the Mac, the Guide says headphones and virtual outputs have no button to calibrate them alone.
 - On the Mac, the Guide lists everything AudioSync keeps between launches: the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer.
-- On the Mac, the Guide says what AudioSync keeps between launches: the source, each speaker's switch, delay, volume and name, the speakers you hid, your zones and the equalizer.
-- On the Mac, the Guide names the Now Playing buttons: Previous Track, Play or Pause and Next Track, plus Shuffle and Repeat when the app offers them.
-- On the Mac, the Guide no longer says the speakers in a Google Cast group are busy while the group plays; they keep their own rows, as the Windows Guide says.
-- On the Mac, VoiceOver tells you on a speaker's or zone's name field that Return applies the name and Escape cancels, and on a speaker's that an empty name brings back the device's own, as on Windows.
 - On the Mac, the Guide names the Now Playing buttons: Previous Track, Play or Pause and Next Track, plus Shuffle and Repeat when the app offers them.
 - On the Mac, the Guide no longer says the speakers in a Google Cast group are busy while the group plays; they keep their own rows, as the Windows Guide says.
 - On the Mac, VoiceOver tells you on a speaker's or zone's name field that Return applies the name and Escape cancels, and on a speaker's that an empty name brings back the device's own, as on Windows.
 - On the Mac and Windows, Measure Again on a row whose delay changed after Calibrate All measured it now says "This speaker's delay changed after it was measured. Calibrate All again." instead of saying something changed during the measurement.
 - On the Mac, turning streaming on while none of the apps chosen in Several Apps is running now names every one of them ("Music and Safari are not running"), as on Windows. Before, it named only the first.
-- On the Mac, a stereo pair or home theater group none of whose speakers can play now stays in the speaker list with the reason next to its name, as on Windows, instead of being hidden. Turned on, it goes off again and says AudioSync can't play to it.
 - On the Mac, a stereo pair or home theater group none of whose speakers can play now stays in the speaker list with the reason next to its name, as on Windows, instead of being hidden. Turned on, it stays off and says AudioSync can't play to it.
-- On the Mac, a stereo pair's or home theater group's row names its speakers by the names you gave them, as a Google Cast group's row does.
-- On the Mac, the message that asks you to turn speakers on before saving or updating a preset is titled Save Preset or Update to Current Settings, as on Windows, instead of AudioSync.
-- On the Mac, the Web Remote window says under the address where to allow AudioSync when the phone can't open the page: System Settings → Network → Firewall.
 - On the Mac, a stereo pair's or home theater group's row names its speakers by the names you gave them, as a Google Cast group's row does.
 - On the Mac, the message that asks you to turn speakers on before saving or updating a preset is titled Save Preset or Update to Current Settings, as on Windows, instead of AudioSync.
 - On the Mac, the Web Remote window says under the address where to allow AudioSync when the phone can't open the page: System Settings → Network → Firewall.
@@ -53,10 +47,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, the Guide's AirPlay topic says where to let AudioSync use a HomePod: in the Home app, Home Settings → Speakers & TV → Allow Speaker & TV Access → “Anyone on the Same Network”, as the Mac Guide does.
 - On Windows and Linux, the Guide's Calibration topic says how to calibrate one zone with Calibrate Zone, as the Mac Guide does.
 - On Windows, the notice for a speaker that needs pairing with a code says to turn it on again on this PC, where the code is entered, as the Mac says "on this Mac".
-- On Windows, the notice for a speaker that needs pairing with a code says to turn it on again on this PC, where the code is entered.
-- On Windows and Linux, pointing at a zone's name shows a tooltip that says to double-click it to rename, as a speaker's name does.
-- On Windows, the Web Remote window says under the address to allow AudioSync in Windows Firewall when the phone can't open the page.
-- On Windows and Linux, the Calibrate All results' Close button reads Done once you've applied the new delays, as on the Mac.
 - On Windows and Linux, pointing at a zone's name shows a tooltip that says to double-click it to rename, as a speaker's name does.
 - On Windows, the Web Remote window says under the address to allow AudioSync in Windows Firewall when the phone can't open the page.
 - On Windows and Linux, the Calibrate All results' Close button reads Done once you've applied the new delays, as on the Mac.
@@ -66,6 +56,13 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the tray icon gets a small orange badge while a notice is up, and in a contrast theme it picks the light or dark icon by the theme's background.
 - On Windows, the keyboard focus ring is Windows' two-tone ring everywhere, black and white, and the volume sliders and the equalizer's bands show it too while they have the focus. Before, AudioSync's own controls drew a teal ring and a focused slider only shrank its thumb's dot.
 - On Windows, an equalizer band fills from 0 dB to its thumb, with a tick at 0 dB, as on the Mac, so a flat curve looks empty. Before, every band filled from −12 dB. "Custom" in the curve picker is in the normal text color.
+- On Windows, AirPlay speakers that AudioSync can't play to are no longer listed, as on the Mac. Before, they showed with a note such as "Not supported".
+- On Windows, a manual update check that reaches the server but gets no update information it can read now says so, instead of saying AudioSync couldn't reach the update server.
+- On Windows, the notice for a source switch that couldn't start no longer tells you to pick the new source again to retry, as on the Mac.
+- On the Mac, a new track's cover is now prepared for AirPlay speakers apart from their volume and pause, so a large cover can't hold up a volume change or a pause.
+- On the Mac, turning on Launch at Login while AudioSync runs from its disk image or from Downloads now says to move it to the Applications folder first, instead of adding a login item that stops working once that copy is gone.
+- On Windows, the main window has a new look: the speaker list sits on the window itself, the source and what's playing share one block, and presets are one Presets row with a menu. A speaker row shows its state note and its code note together, Add by Address… shows whenever Google Cast runs, the AirPlay Delay row shows only while an AirPlay speaker is listed, an In zones link and a focused speaker show their whole name in a tooltip, the source picker marks an input device with a microphone, and Web Remote… moves to the View menu.
+- On the Mac, Check for Updates installs an update only from an update list signed with AudioSync's release key, and refuses one that isn't signed or was changed.
 
 ### Fixed
 
@@ -89,18 +86,10 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, the tray panel shows the newest notice without its time, cut to three lines while others wait; hovering over it shows the whole text, as on the Mac.
 - On Windows, a paused Google Cast speaker no longer looks like it's playing in the window and the tray panel.
 - On Windows, a long speaker or zone name in the tray panel ends in "…" inside its row instead of scrolling past the row's edge; hovering over the row shows the whole name.
-- On the Mac, when the audio AudioSync captures turns to pure silence for 15 seconds while Music or Spotify keeps playing, or while you stream from an input AudioSync is no longer allowed to use, a notice now says so and how to turn the permission back on. Before, every speaker went silent with no notice, as happens when audio recording or the microphone is turned off for AudioSync in System Settings while it streams.
+- On the Mac, when the audio AudioSync captures turns to pure silence for 15 seconds while Music or Spotify keeps playing, or while you stream from an input AudioSync is no longer allowed to use, a notice now says so. It names the source, says to turn its own volume up if it's at zero, and says how to turn the permission back on. Before, every speaker went silent with no notice, as happens when audio recording or the microphone is turned off for AudioSync in System Settings while it streams.
 - On the Mac, Update to Current Settings in the Presets menu can now be used. Every preset has Rename…, Update to Current Settings and Delete under its name, as on Windows. Before, they showed only under the preset in use, where Update to Current Settings is always greyed out because nothing differs from it.
-
-### Changed
-
-- On Windows, AirPlay speakers that AudioSync can't play to are no longer listed, as on the Mac. Before, they showed with a note such as "Not supported".
-- On Windows, a manual update check that reaches the server but gets no update information it can read now says so, instead of saying AudioSync couldn't reach the update server.
-- On Windows, the notice for a source switch that couldn't start no longer tells you to pick the new source again to retry, as on the Mac.
-- On the Mac, an app source streamed only to local speakers with the window closed now has its capture watched too: if it stops after a wake, AudioSync opens it again instead of playing silence with no notice.
-- On the Mac, a new track's cover is now prepared for AirPlay speakers apart from their volume and pause, so a large cover can't hold up a volume change or a pause.
-- On the Mac, turning on Launch at Login while AudioSync runs from its disk image or from Downloads now says to move it to the Applications folder first, instead of adding a login item that stops working once that copy is gone.
-- The level pop-up a volume key shows now tells VoiceOver on the Mac and Narrator on Windows the new level.
+- On the Mac, if the audio core hits an internal error while resampling or setting a volume, that part plays silence from then on, as the other audio steps already did, instead of failing again on every call.
+- Calibration now times a speaker right when the echo off a wall is 0.7 to 0.9 times as loud as its direct sound, as it already did when the echo was the louder one.
 
 ## [0.9.1] - 2026-11-08
 
