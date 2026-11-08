@@ -186,6 +186,14 @@ struct UIStrings {
     /// VoiceOver's action on the menu bar icon that opens its right-click menu.
     let statusItemShowMenu = "Show Menu"
 
+    /// The main window's status line: `status`, then the AirPlay delay in use
+    /// while streaming to an AirPlay speaker, to a tenth of a second.
+    func mainStatus(_ status: String, running: Bool, airPlayOn: Bool, airPlayDelayMs: Double) -> String {
+        guard running, airPlayOn else { return status }
+        let tenths = AirPlayDelayTenths.of(airPlayDelayMs)
+        return status + " · AirPlay delay \(tenths / 10).\(tenths % 10) s"
+    }
+
     func speakerOptions(name: String) -> String { "Options for \(name)" }
 
     /// A speaker's (or group's) accessibility value.

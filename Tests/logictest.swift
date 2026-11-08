@@ -16462,6 +16462,19 @@ do {
     check(note.hasPrefix("AirPlay adds a 1.8 s delay") && !note.contains("\u{2014}"), "live input note: \(note)")
 }
 
+// MARK: The AirPlay delay in the main window's status line (Localization.swift)
+do {
+    let t = UIStrings()
+    let shown = t.mainStatus("Streaming to 2 speakers", running: true, airPlayOn: true, airPlayDelayMs: 1960)
+    // covers: S181 (the status line)
+    check(shown == "Streaming to 2 speakers · AirPlay delay 2.0 s",
+          "main window status: names the AirPlay delay in use, to a tenth of a second", shown)
+    // covers: S181 (the status line)
+    check(t.mainStatus("Streaming", running: true, airPlayOn: false, airPlayDelayMs: 1960) == "Streaming"
+            && t.mainStatus("Off", running: false, airPlayOn: true, airPlayDelayMs: 1960) == "Off",
+          "main window status: no AirPlay delay with no AirPlay speaker on or streaming off")
+}
+
 // MARK: Microphone permission request (MicrophoneRequestGate.swift)
 do {
     var gate = MicrophoneRequestGate()

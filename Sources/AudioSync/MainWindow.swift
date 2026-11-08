@@ -260,7 +260,7 @@ struct MainView: View {
                 .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 2) {
                 Wordmark(size: BrandTokens.Typography.wordmarkSize)
-                Text(model.statusText)
+                Text(model.mainStatusText)
                     .font(.callout)
                     .foregroundStyle(Brand.secondaryText)
                     // A new status replaces the old in the same frame.

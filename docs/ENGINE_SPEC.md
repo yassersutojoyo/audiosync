@@ -380,6 +380,7 @@ S172 to S181 replace the rule that local outputs play at once unless an AirPlay 
   - Every other local output's row shows its offset with its sign: "+150 ms", "−250 ms", and "0 ms" for zero. The field takes whole ms with an optional leading "+" or "−" (a hyphen-minus counts as "−"), clamped to S175's range; other input is ignored and the field shows the stored value again.
   - One short hint beside the delay fields says what they are relative to, naming the reference (the built-in speakers on the Mac, the reference's name on Windows), and which way to move a value for a speaker heard first or late; with a reference it adds that a negative value is for a speaker that sounds late, such as Bluetooth. With no reference, it says that the speaker with the lowest value plays first and the others wait by the difference.
   - The AirPlay delay (S178) is one field in the AirPlay part of the window, not on any local row, with a hint that the local speakers wait that long for the AirPlay speakers. With the native sender, the only one since 2026-10-20 (with the bundled engine it showed and edited the stored value), it shows L = clamp(L_s + A, 0, 20 000) in whole ms and follows L_s when that changes; entering v stores A = clamp(v − L_s, −2000, 20 000) with the L_s of that moment, so the field then shows v (unless clamped). Neither window offers an AirPlay speaker's own delay d_s (P99), and neither app applies one (S180).
+  - *Mac:* while streaming to an AirPlay speaker, the main window's status line under the wordmark ends with that L to a tenth of a second ("Streaming to 2 speakers · AirPlay delay 2.0 s"), so a step the sender takes on L_s by itself shows there; with no AirPlay speaker on or streaming off it is left out (`Localization.swift`, `mainStatus`; tests "main window status: …").
   - Hold-backs (S176) are not shown.
 
 ### Microphone calibration of one output's offset
@@ -1687,6 +1688,8 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | offset text: +150 ms, −250 ms and 0 ms | S181 |
 | offset text: a leading + or − (a hyphen too) is read and other text is ignored | S175, S181 |
 | speaker row: the reference has no delay field | S181 |
+| main window status: names the AirPlay delay in use, to a tenth of a second | S181 |
+| main window status: no AirPlay delay with no AirPlay speaker on or streaming off | S181 |
 | delay field: it starts out showing the saved value | S181, S220 |
 | delay field: typing 2, 22, 220 applies nothing and keeps the typed text | S181, S220 |
 | delay field: Return applies the typed value once, and focus loss after it applies nothing more | S181, S220 |

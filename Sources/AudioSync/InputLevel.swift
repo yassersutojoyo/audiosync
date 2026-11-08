@@ -82,6 +82,12 @@ enum LiveInputAirPlayHint {
     /// The AirPlay delay to name, in tenths of a second; nil hides the note.
     static func tenths(source: AudioSource, airPlayOn: Bool, airPlayDelayMs: Double) -> Int? {
         guard case .input = source, airPlayOn else { return nil }
-        return Int((max(0, airPlayDelayMs) / 100).rounded())
+        return AirPlayDelayTenths.of(airPlayDelayMs)
     }
+}
+
+/// The AirPlay delay in tenths of a second, as the live input note and the
+/// main window's status line name it.
+enum AirPlayDelayTenths {
+    static func of(_ ms: Double) -> Int { Int((max(0, ms) / 100).rounded()) }
 }

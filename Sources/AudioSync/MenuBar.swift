@@ -582,6 +582,15 @@ final class AppModel: ObservableObject {
 
     var statusText: String { running ? text.statusStreaming(speakers: activeSpeakers) : text.statusOff }
 
+    /// The main window's status: the panel's, then the AirPlay delay in use,
+    /// which follows a step the sender takes on its own (S181).
+    var mainStatusText: String {
+        text.mainStatus(statusText, running: running,
+                        airPlayOn: StreamingPolicy.activeSpeakers(airPlay: airplay.map(\.enabled),
+                                                                  senderFailed: airplaySenderFailed, others: []) > 0,
+                        airPlayDelayMs: airPlayDelayMs)
+    }
+
     /// AirPlay speakers left over from before the sender stopped can't be
     /// switched, so they're hidden while `airPlayProblem` is shown.
     var shownAirPlay: [Speaker] { airPlayProblem == nil ? airplay : [] }
