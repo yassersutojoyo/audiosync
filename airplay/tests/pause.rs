@@ -343,20 +343,27 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
     let _serial = serial();
     let receiver = NetReceiver::start(Behavior::default());
     let (sender, _host, _events, key) = play(&receiver, 1);
+    // A busy runner that stalls the sender for L restarts the timeline,
+    // whose FLUSH comes first (P143).
+    sender.restart_timeline();
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 1));
+    let restarted = receiver.log().audio.len();
+    assert!(wait_until(LONG, || receiver.log().audio.len() >= restarted + 30));
     receiver
         .behavior()
         .answer_delay
         .insert("FLUSH".to_owned(), ANSWER);
+    let flushed = receiver.log().count("FLUSH");
     sender.set_delay(&key, Duration::from_millis(200));
-    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 1));
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == flushed + 1));
     sender.pause();
     let paused = Instant::now();
     sender.resume();
-    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 2));
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") == flushed + 2));
     // The pause FLUSH names the first packet held back. Packets before it
     // left before the sender took the pause, however late a busy runner
     // stamps them, so they must beat that FLUSH to the receiver.
-    let held = flush_seq(&receiver, 1);
+    let held = flush_seq(&receiver, flushed + 1);
     let first_held = || {
         receiver
             .log()
@@ -372,7 +379,7 @@ fn a_resume_waits_for_the_pause_flush_behind_a_delay_flush() {
         .requests
         .iter()
         .filter(|(_, request)| request.method == Method::Flush)
-        .nth(1)
+        .nth(flushed + 1)
         .map(|(at, _)| *at)
         .expect("FLUSH");
     assert!(
@@ -464,8 +471,18 @@ fn a_refused_pause_flush_lets_the_resume_play() {
     behavior.status.insert("FLUSH".to_owned(), 500);
     let receiver = NetReceiver::start(behavior);
     let (sender, _host, mut events, key) = play(&receiver, 1);
-    sender.pause();
+    // A busy runner that stalls the sender for L restarts the timeline,
+    // whose FLUSH comes first (P143).
+    sender.restart_timeline();
     assert!(wait_until(LONG, || receiver.log().count("FLUSH") == 1));
+    let restarted = receiver.log().audio.len();
+    assert!(wait_until(LONG, || receiver.log().audio.len() >= restarted + 30));
+    // The restart's FLUSH was refused too; only the pause's refusal counts.
+    events.drain(&sender);
+    events.seen.clear();
+    let flushed = receiver.log().count("FLUSH");
+    sender.pause();
+    assert!(wait_until(LONG, || receiver.log().count("FLUSH") > flushed));
     let refused = events.wait_for(&sender, LONG, |event| {
         matches!(
             event,
@@ -483,7 +500,7 @@ fn a_refused_pause_flush_lets_the_resume_play() {
     sender.resume();
     assert!(wait_until(LONG, || first_audio_after(&receiver, resumed).is_some()));
     let (_, seq, marker) = first_audio_after(&receiver, resumed).expect("audio");
-    assert_eq!(seq, flush_seq(&receiver, 0));
+    assert_eq!(seq, flush_seq(&receiver, flushed));
     assert!(marker);
     sender.shutdown();
 }
@@ -496,8 +513,15 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
     let first = NetReceiver::start(Behavior::default());
     let second = NetReceiver::start(Behavior::default());
     let (sender, _host, mut events, first_key) = play(&first, 1);
-    sender.pause();
+    // A busy runner that stalls the sender for L restarts the timeline,
+    // whose FLUSH comes before the pause's (P143).
+    sender.restart_timeline();
     assert!(wait_until(LONG, || first.log().count("FLUSH") == 1));
+    let restarted = first.log().audio.len();
+    assert!(wait_until(LONG, || first.log().audio.len() >= restarted + 30));
+    let flushed = first.log().count("FLUSH");
+    sender.pause();
+    assert!(wait_until(LONG, || first.log().count("FLUSH") > flushed));
 
     let device = second.device(2, PCM_TXT);
     let second_key = device.key.clone();
@@ -513,7 +537,9 @@ fn a_speaker_added_or_reconnected_while_paused_waits_for_the_resume() {
         );
     }
     std::thread::sleep(Duration::from_millis(500));
-    let held = flush_seq(&first, 0);
+    // Nothing is flushed while paused, so the last FLUSH is the pause's.
+    let flushed = first.log().count("FLUSH");
+    let held = flush_seq(&first, flushed - 1);
     let reconnected = rtp_info_seq(&first, Method::Record, 1);
     {
         let log = first.log();
