@@ -24,10 +24,10 @@ Play your PC's sound on AirPlay speakers, Google Cast speakers and the PC's own 
 
 ### Description
 
-Limit: 10,000 characters, plain text, no URLs. Current: 2,256, line breaks included.
+Limit: 10,000 characters, plain text, no URLs. Current: 2,247, line breaks included.
 
 ```text
-AirPlay speakers play up to two seconds late. The speakers on your PC don't. Play the same song on both and you hear an echo.
+AirPlay speakers play late. The speakers on your PC don't. Play the same song on both and you hear an echo.
 
 AudioSync captures the sound once, sends it to your AirPlay speakers, and plays a delayed copy on each local speaker, so they all line up. The source can be everything the PC plays, one app, several apps, every app except the ones you pick, or an input device such as a microphone or line in.
 
