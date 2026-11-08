@@ -19,6 +19,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the Guide names the Now Playing buttons: Previous Track, Play or Pause and Next Track, plus Shuffle and Repeat when the app offers them.
 - On the Mac, the Guide no longer says the speakers in a Google Cast group are busy while the group plays; they keep their own rows, as the Windows Guide says.
 - On the Mac, VoiceOver tells you on a speaker's or zone's name field that Return applies the name and Escape cancels, and on a speaker's that an empty name brings back the device's own, as on Windows.
+- On the Mac, the Guide names the Now Playing buttons: Previous Track, Play or Pause and Next Track, plus Shuffle and Repeat when the app offers them.
 
 ### Fixed
 

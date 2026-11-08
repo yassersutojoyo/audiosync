@@ -14822,6 +14822,10 @@ do {
             && !guideWords.contains("selection are saved per device"),
           "guide, notes: the saved-settings line lists the source, names, hidden speakers, zones and the equalizer, as on Windows")
     // covers: S407
+    check(guideWords.contains("shows it with Previous Track, Play or Pause and Next Track, plus Shuffle and Repeat when the app offers them,")
+            && !guideWords.contains("play/pause, skip"),
+          "guide, now playing: the line names the card's buttons, as on Windows")
+    // covers: S407
     check(pieces.compactMap(\.art) == GuideArt.allCases && pieces.last?.art == nil
             && pieces.map(\.text).joined() == t.helpText,
           "guide: every illustration has its anchor line, in order, and the text is kept whole",

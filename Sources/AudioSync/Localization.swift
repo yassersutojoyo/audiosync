@@ -1876,8 +1876,9 @@ struct UIStrings {
           preset curves and curves you save yourself. It shapes the sound on
           every speaker at once. Option-Command-E opens it too.
         - Now Playing: while Spotify or Music is open with a track, the window
-          shows it with play/pause, skip, shuffle and repeat, and AirPlay
-          speakers with a screen, such as a TV, show its title and artwork.
+          shows it with Previous Track, Play or Pause and Next Track, plus
+          Shuffle and Repeat when the app offers them, and AirPlay speakers
+          with a screen, such as a TV, show its title and artwork.
           Other apps aren't shown: macOS doesn't let apps read the
           system-wide Now Playing info.
           macOS asks once for Automation access to Spotify or Music. With an
