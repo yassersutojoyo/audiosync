@@ -55,6 +55,30 @@ pub fn flyout_origin(
     )
 }
 
+/// The flyout's top-left corner on Linux, where the StatusNotifier host
+/// reports the pointer but not the icon. It opens away from the `monitor`
+/// edge nearest the pointer (the panel's), past a panel twice as thick as
+/// the pointer is from that edge. At (0, 0), which hosts send when they
+/// know no position, or off the monitor, it opens in the top-right corner.
+#[cfg(any(target_os = "linux", test))]
+pub fn pointer_flyout_origin(
+    pointer: (f64, f64),
+    width: f64,
+    height: f64,
+    monitor: Bounds,
+    gap: f64,
+) -> (f64, f64) {
+    let _ = (pointer, width, height, monitor, gap);
+    (0.0, 0.0)
+}
+
+/// The monitor holding the point, else the first one.
+#[cfg(any(target_os = "linux", test))]
+pub fn monitor_at(monitors: &[Bounds], x: f64, y: f64) -> Option<Bounds> {
+    let _ = (x, y);
+    monitors.last().copied()
+}
+
 /// A window's outer frame `frame` (physical pixels) as it opens in
 /// `work_area`: no larger than the work area, and moved as little as needed
 /// to lie wholly inside it; centered in it unless `keep_place` (a saved
@@ -199,5 +223,60 @@ mod tests {
     fn a_window_from_a_monitor_that_is_gone_opens_centered() {
         let fitted = fit_window(frame(5000.0, 3000.0, 2500.0, 600.0), LAPTOP, false);
         assert_eq!(fitted, frame(0.0, 64.0, 1366.0, 600.0));
+    }
+
+    const MONITOR: Bounds = Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1080.0,
+    };
+
+    #[test]
+    fn pointer_flyout_opens_below_a_top_panel_and_above_a_bottom_one() {
+        assert_eq!(
+            pointer_flyout_origin((1800.0, 16.0), 320.0, 500.0, MONITOR, 12.0),
+            (1920.0 - 12.0 - 320.0, 32.0 + 12.0)
+        );
+        assert_eq!(
+            pointer_flyout_origin((900.0, 1060.0), 320.0, 500.0, MONITOR, 12.0),
+            (900.0 - 160.0, 1040.0 - 12.0 - 500.0)
+        );
+    }
+
+    #[test]
+    fn pointer_flyout_opens_beside_a_side_panel() {
+        assert_eq!(
+            pointer_flyout_origin((20.0, 600.0), 320.0, 500.0, MONITOR, 12.0),
+            (40.0 + 12.0, 350.0)
+        );
+        assert_eq!(
+            pointer_flyout_origin((1900.0, 600.0), 320.0, 500.0, MONITOR, 12.0),
+            (1880.0 - 12.0 - 320.0, 350.0)
+        );
+    }
+
+    #[test]
+    fn pointer_flyout_without_a_position_opens_top_right() {
+        let corner = (1920.0 - 12.0 - 320.0, 12.0);
+        assert_eq!(
+            pointer_flyout_origin((0.0, 0.0), 320.0, 500.0, MONITOR, 12.0),
+            corner
+        );
+        assert_eq!(
+            pointer_flyout_origin((-50.0, 300.0), 320.0, 500.0, MONITOR, 12.0),
+            corner
+        );
+    }
+
+    #[test]
+    fn monitor_at_picks_the_one_under_the_pointer_else_the_first() {
+        let right = Bounds {
+            x: 1920.0,
+            ..MONITOR
+        };
+        assert_eq!(monitor_at(&[MONITOR, right], 2000.0, 10.0), Some(right));
+        assert_eq!(monitor_at(&[MONITOR, right], -5.0, 10.0), Some(MONITOR));
+        assert_eq!(monitor_at(&[], 0.0, 0.0), None);
     }
 }
