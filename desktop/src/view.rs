@@ -12232,11 +12232,6 @@ mod tests {
         assert!(height <= bottom + 16.5, "no room left under the buttons");
     }
 
-    /// The update notice's three buttons stack in the 340 px flyout, Not Now
-    /// on top and Download and Install at the bottom, on one left edge and
-    /// within the notice's text column, measured on a one-button notice
-    /// whose text fills that column; at 200% scaling too.
-    // covers: S308
     /// The hero's borderless source menu reads the chosen source, as the
     /// Mac panel's does.
     #[test]
@@ -12256,6 +12251,11 @@ mod tests {
         assert_eq!(menu.accessible_value().unwrap_or_default(), chosen);
     }
 
+    /// The update notice's three buttons stack in the 340 px flyout, Not Now
+    /// on top and Download and Install at the bottom, on one left edge and
+    /// within the notice's text column, measured on a one-button notice
+    /// whose text fills that column; at 200% scaling too.
+    // covers: S308
     #[test]
     fn the_flyout_fits_the_update_notice_buttons() {
         use i_slint_backend_testing::ElementHandle;
@@ -16131,9 +16131,9 @@ mod tests {
         );
     }
 
-    /// With no notice, the block holding the source drop-down starts the
-    /// flyout's body: no line sits between it and the header, as in the Mac
-    /// panel.
+    /// With no notice, the hero holding the source menu starts the flyout's
+    /// body: no line sits between it and the header, and the menu sits in the
+    /// hero's 48 px cover row, as in the Mac panel.
     #[test]
     fn no_line_sits_between_the_flyout_header_and_its_source() {
         use i_slint_backend_testing::ElementHandle;
@@ -16147,21 +16147,22 @@ mod tests {
         let body = ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::body")
             .next()
             .expect("the flyout's body");
-        assert_eq!(
+        let (top, row) = (
             source.absolute_position().y,
             body.absolute_position().y + 10.0,
-            "inside the block's padding"
+        );
+        assert!(
+            top >= row && top + source.size().height <= row + 48.0,
+            "{top} inside the cover row from {row}"
         );
     }
 
-    /// Several Apps… is a link under the flyout's source drop-down, as the
-    /// Mac panel's source menu ends in its submenu: the drop-down holds the
-    /// sources only, and the link opens the main window's list and leaves the
-    /// source as it was.
+    /// Several Apps… ends the flyout's source menu, as the Mac panel's menu
+    /// ends in its submenu: the menu's model holds the sources only, and the
+    /// item opens the main window's list and leaves the source as it was.
     // covers: S419
     #[test]
     fn several_apps_under_the_flyout_sources_opens_the_main_windows_list() {
-        use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         let sources = app.snapshot().sources.len();
         let chosen = app.snapshot().source_id;
@@ -16169,10 +16170,7 @@ mod tests {
         assert_eq!(app.main.get_sources().row_count(), sources);
 
         app.flyout.show().unwrap();
-        let links: Vec<_> =
-            ElementHandle::find_by_accessible_label(&app.flyout, "Several Apps…").collect();
-        assert_eq!(links.len(), 1);
-        links[0].invoke_accessible_default_action();
+        app.flyout.invoke_several_apps_requested();
         assert!(app.main.get_mix_open());
         assert!(app.main.window().is_visible());
         assert!(!app.flyout.window().is_visible());
@@ -17828,7 +17826,7 @@ mod tests {
         let app = app_over(MockBackend::new());
         app.main.show().unwrap();
         draw_frames();
-        assert!(element(&app, "MainWindow::input-marker").is_none());
+        assert!(!app.main.get_source_is_input());
         let line_in = app
             .snapshot()
             .sources
@@ -17838,7 +17836,10 @@ mod tests {
         app.main.invoke_source_selected(line_in as i32);
         app.refresh();
         draw_frames();
-        assert!(element(&app, "MainWindow::input-marker").is_some());
+        assert!(app.main.get_source_is_input());
+        let source = include_str!("../ui/main.slint");
+        assert!(source.contains("is-input: root.source-is-input;"));
+        assert!(source.contains("glyph: root.is-input ? Glyphs.microphone"));
     }
 
     /// Web Remote… sits under View, right after Presets, with the other

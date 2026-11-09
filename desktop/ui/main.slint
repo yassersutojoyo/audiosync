@@ -49,6 +49,7 @@ component SourceMenu inherits Rectangle {
         menu.show({ x: 0, y: root.height });
     }
 
+    min-height: row.preferred-height;
     border-radius: 9px;
     background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : Tokens.text.with-alpha(0.05);
     forward-focus: focus;
@@ -86,7 +87,7 @@ component SourceMenu inherits Rectangle {
                     return reject;
                 }
 
-                HorizontalLayout {
+                row := HorizontalLayout {
                     padding-left: 10px;
                     padding-right: 10px;
                     padding-top: 8px;

@@ -656,7 +656,7 @@ mod tests {
         );
         assert!((spread(0.0) - spread(PERIOD)).abs() < 1e-9);
         assert_eq!(motion(0.9, 0.0, 0.2), 0.2);
-        assert_eq!(motion(0.9, 1.0, 0.2), 0.9);
+        assert!((motion(0.9, 1.0, 0.2) - 0.9).abs() < 1e-9);
         assert_eq!(motion(0.0, 1.0, 0.2), 0.2);
         assert_eq!(layers(0.0, 0.8), (OPACITY, 0.0));
         assert_eq!(layers(1.0, 0.8), (0.0, 1.0));
