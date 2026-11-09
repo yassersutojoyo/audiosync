@@ -79,6 +79,11 @@ mod view;
     expect(dead_code, reason = "only the Windows keyboard hook takes the keys")
 )]
 mod volume_keys;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the Slint views adopt these rules later")
+)]
+mod window_rules;
 
 use std::process::ExitCode;
 use std::time::Duration;
