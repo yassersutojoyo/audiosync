@@ -882,6 +882,7 @@ struct BreathingMark: View {
                 .opacity(MarkBreath.opacity(depth: depth))
         }
         .animation(reduceMotion ? nil : .easeOut(duration: MarkBreath.settle), value: breathes)
+        .animation(reduceMotion ? .linear(duration: 0.15) : .easeOut(duration: 0.4), value: model.running)
         .onChange(of: breathes) { _, now in
             if !now { start.date = nil }
         }

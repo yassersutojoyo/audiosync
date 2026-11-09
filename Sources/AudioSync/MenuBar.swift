@@ -2058,7 +2058,8 @@ struct SpeakerBadge: View {
                 .font(.system(size: size * 0.43, weight: .semibold))
                 .foregroundStyle(iconColor)
         }
-        .animation(reduceMotion || !filled ? nil : .easeOut(duration: PanelRowMotion.duration), value: filled)
+        .animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: state)
+        .animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: connecting)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
@@ -2644,21 +2645,41 @@ struct PermissionCard: View {
     }
 }
 
+/// The streaming switch's clicked position, held while the engine starts or stops.
+final class SwitchPosition: ObservableObject {
+    @Published var isOn: Bool?
+}
+
 /// The on/off switch, drawn by hand so it always shows the app's own colours
 /// (a system switch dims whenever its window isn't key).
 struct PowerSwitch: View {
     let isOn: Bool
     let text: UIStrings
     let toggle: () -> Void
+    @StateObject private var shown = SwitchPosition()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private static let glide = 0.15
+
+    /// Where the knob sits: the clicked position until the engine has started
+    /// or stopped, the model's otherwise.
+    private var on: Bool { shown.isOn ?? isOn }
 
     var body: some View {
-        Button(action: toggle) {
-            ZStack(alignment: isOn ? .trailing : .leading) {
+        Button {
+            guard shown.isOn == nil else { return }
+            shown.isOn = !on
+            // Starting and stopping block the main thread, so they wait for the knob to finish moving.
+            DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : Self.glide)) {
+                toggle()
+                shown.isOn = nil
+            }
+        } label: {
+            ZStack(alignment: on ? .trailing : .leading) {
                 // The off track's edge in `.secondary` keeps 3:1 on the panel
                 // (3.89 light, 5.37 dark, measured in Brand.secondaryText).
                 Capsule()
-                    .fill(isOn ? accent : Color.secondary.opacity(0.3))
-                    .overlay(Capsule().strokeBorder(isOn ? Color.clear : Color.secondary, lineWidth: 1))
+                    .fill(on ? accent : Color.secondary.opacity(0.15))
+                    .overlay(Capsule().strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.75))
                     .frame(width: 38, height: 22)
                 Circle()
                     .fill(Color.white)
@@ -2666,11 +2687,11 @@ struct PowerSwitch: View {
                     .frame(width: 18, height: 18)
                     .padding(2)
             }
-            .animation(.easeInOut(duration: 0.15), value: isOn)
+            .animation(reduceMotion ? nil : .easeInOut(duration: Self.glide), value: on)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(text.streamingSwitch)
-        .accessibilityValue(isOn ? text.on : text.off)
+        .accessibilityValue(on ? text.on : text.off)
         .accessibilityAddTraits(.isToggle)
     }
 }

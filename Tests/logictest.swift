@@ -18044,5 +18044,30 @@ do {
           "volume number source: the master's and each speaker's number brighten while the slider is held")
 }
 
+do {
+    func offMotionPart(_ path: String, _ start: String) -> String {
+        let source = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        return source.components(separatedBy: start).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
+    }
+    let offSwitch = offMotionPart("Sources/AudioSync/MenuBar.swift", "struct PowerSwitch: View")
+    check(offSwitch.contains("Color.secondary.opacity(0.15)")
+            && offSwitch.contains("strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.75)"),
+          "streaming switch source: the off track has a 0.75 pt ring in .secondary over a lighter fill")
+    check(offSwitch.contains("@StateObject private var shown = SwitchPosition()")
+            && offSwitch.contains("DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : Self.glide))")
+            && offSwitch.contains("guard shown.isOn == nil else { return }")
+            && offSwitch.contains(".animation(reduceMotion ? nil : .easeInOut(duration: Self.glide), value: on)")
+            && offSwitch.contains("shown.isOn = nil")
+            && offSwitch.contains("value: on)"),
+          "streaming switch source: the knob moves on the click and the engine starts or stops after its glide, then the switch follows the model again")
+    let offMark = offMotionPart("Sources/AudioSync/MainWindow.swift", "struct BreathingMark: View")
+    check(offMark.contains(".animation(reduceMotion ? .linear(duration: 0.15) : .easeOut(duration: 0.4), value: model.running)"),
+          "breathing mark source: the mark fades between teal and grey both ways as streaming starts and stops")
+    let offBadge = offMotionPart("Sources/AudioSync/MenuBar.swift", "struct SpeakerBadge: View")
+    check(offBadge.contains("value: state)") && offBadge.contains("value: connecting)")
+            && !offBadge.contains("!filled ? nil"),
+          "speaker badge source: the fill shrinks back and the connecting arc fades out as a speaker stops")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
