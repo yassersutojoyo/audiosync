@@ -6,6 +6,7 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController {
     private var window: NSWindow?
+    private var host: NSHostingController<SettingsView>?
     private let model: AppModel
     private let updates = UpdateChecks()
     private let motion = OpenMotion()
@@ -22,7 +23,10 @@ final class SettingsWindowController {
         let opening = window?.isVisible != true
         let panel = window ?? makeWindow()
         window = panel
-        if opening { animateOpen(panel) }
+        if opening {
+            fit(contentHeight())
+            animateOpen(panel)
+        }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
     }
@@ -31,6 +35,7 @@ final class SettingsWindowController {
         let view = SettingsView(model: model, updates: updates, motion: motion,
                                 setUpPermissions: setUpPermissions) { [weak self] height in self?.fit(height) }
         let host = NSHostingController(rootView: view)
+        self.host = host
         // The window follows the content's height through `fit`, top edge fixed.
         host.sizingOptions = []
         let panel = SettingsPanel(contentViewController: host)
@@ -38,7 +43,8 @@ final class SettingsWindowController {
         panel.styleMask = [.titled, .closable]
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none   // the open motion is `animateOpen`'s
-        panel.setContentSize(NSSize(width: SettingsView.width, height: host.view.fittingSize.height))
+        // The view's fitting size is 0 here: with no sizing options, before layout it has no constraints.
+        panel.setContentSize(NSSize(width: SettingsView.width, height: host.sizeThatFits(in: PanelTopLayout.measuring).height))
         panel.center()
         // Launch at Login and Sparkle's setting can change outside AudioSync.
         let center = NotificationCenter.default
@@ -54,6 +60,11 @@ final class SettingsWindowController {
             },
         ]
         return panel
+    }
+
+    /// The content may have changed while the window was closed, when no geometry change reached `fit`.
+    private func contentHeight() -> CGFloat {
+        host?.sizeThatFits(in: PanelTopLayout.measuring).height ?? 0
     }
 
     private func reread() {
@@ -144,6 +155,12 @@ struct SettingsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        // Unlike a flexible frame, it reports the content's own height when measured unbounded.
+        PanelTopLayout { content }
+            .tint(Brand.teal)
+    }
+
+    @ViewBuilder private var content: some View {
         let t = model.text
         VStack(alignment: .leading, spacing: 16) {
             SettingsBox(title: t.settingsGeneral) {
@@ -199,8 +216,6 @@ struct SettingsView: View {
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: onHeight)
         .scaleEffect(motion.atRest ? 1 : 0.97, anchor: .top)
         .offset(y: motion.atRest ? 0 : 8)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .tint(Brand.teal)
     }
 
     /// The switch, what it does, and while macOS keeps the keys, why and where to change it.

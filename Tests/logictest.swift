@@ -17880,6 +17880,15 @@ do {
             && t.panelConnectedEmpty(virtualHidden: false, networkEmpty: networkEmpty) == networkEmpty,
           "Connected Speakers: empty only because virtual outputs are hidden, it says so and how to show them",
           t.connectedEmpty(allHidden: false, virtualHidden: true, networkEmpty: networkEmpty))
+    let showSection = section(settings, from: "func show() {", to: "private func makeWindow()")
+    check(!settings.contains("fittingSize")
+            && settings.contains("height: host.sizeThatFits(in: PanelTopLayout.measuring).height")
+            && settings.contains("PanelTopLayout { content }")
+            && !settings.contains(".frame(maxHeight: .infinity, alignment: .top)"),
+          "Settings: the window opens at the content's measured height, not an unlaid-out fittingSize (28 pt title bar only)")
+    check(showSection.contains("if opening {\n            fit(")
+            && showSection.components(separatedBy: "fit(").last?.contains("animateOpen(panel)") == true,
+          "Settings: every open measures the content again before the open motion, so a reopen fits too")
 }
 
 // MARK: The playing badge's fill grows where the badge is, even as its row grows (MenuBar.swift)
