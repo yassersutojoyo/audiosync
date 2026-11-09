@@ -18188,7 +18188,7 @@ do {
     check(panelFoldRows.contains(".modifier(DisclosedPane(open: zoneDisclosure.isExpanded(zone.id)))")
             && !panelFoldRows.contains("ZoneLayout.shownMembers("),
           "menu bar panel source: a zone's members fold in a DisclosedPane, faded before the rows below climb and after they move down")
-    check(panelFoldBody.contains("let half = motion.duration / 2") && panelFoldBody.contains("asyncAfter(deadline: .now() + half)"),
+    check(panelFoldBody.contains("let half = motion.duration / 2") && panelFoldBody.contains("asyncAfter(deadline: .now() + half, execute: shrink)"),
           "menu bar panel source: the panel resizes in the half of a fold its rows move in, after the fade on a fold and before it on an unfold")
     check(panelFoldBody.components(separatedBy: "pendingShrink?.cancel()").count == 2
             && panelFoldBody.components(separatedBy: "pendingShrink?.cancel()").first?.contains("asyncAfter(") == false,
