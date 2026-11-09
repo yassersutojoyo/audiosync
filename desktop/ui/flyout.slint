@@ -4,7 +4,7 @@
 // its speakers under it and every other speaker, then Exit; the mark and
 // name open the main window. Escape or a click elsewhere closes it.
 
-import { Button, ComboBox, ScrollView } from "std-widgets.slint";
+import { Button, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
@@ -89,6 +89,98 @@ component PresetPicker inherits Rectangle {
                     Glyph {
                         glyph: Glyphs.chevron-down;
                         font-size: 12px;
+                        color: Tokens.secondary-text;
+                    }
+                }
+            }
+        }
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
+// The hero's source menu, borderless as the Mac panel's: the source's name
+// and an arrow in grey; its menu checks the current source and ends with
+// Several Apps.
+component SourceMenu inherits Rectangle {
+    in property <[string]> sources;
+    in property <int> current;
+    callback selected(int);
+    callback several-apps-requested();
+    property <string> name: root.current >= 0 && root.current < root.sources.length ? root.sources[root.current] : Strings.source-system;
+
+    function open-menu() {
+        menu.show({ x: 0, y: root.height });
+    }
+
+    min-width: 0px;
+    preferred-width: row.preferred-width;
+    min-height: row.preferred-height;
+    border-radius: Fluent.radius-control;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    forward-focus: focus;
+    accessible-role: combobox;
+    accessible-label: Strings.source-label;
+    accessible-value: root.name;
+    accessible-action-default => {
+        root.open-menu();
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.open-menu();
+        }
+
+        menu := ContextMenuArea {
+            Menu {
+                for source[index] in root.sources: MenuItem {
+                    title: source;
+                    checkable: true;
+                    checked: index == root.current;
+                    activated => {
+                        root.selected(index);
+                    }
+                }
+                MenuSeparator { }
+                MenuItem {
+                    title: Strings.source-mix-more;
+                    activated => {
+                        root.several-apps-requested();
+                    }
+                }
+            }
+
+            focus := FocusScope {
+                focus-on-click: false;
+                key-pressed(event) => {
+                    if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
+                        root.open-menu();
+                        return accept;
+                    }
+                    return reject;
+                }
+
+                row := HorizontalLayout {
+                    alignment: start;
+                    padding-left: 2px;
+                    padding-right: 2px;
+                    spacing: 6px;
+
+                    Text {
+                        text: root.name;
+                        color: Tokens.secondary-text;
+                        vertical-alignment: center;
+                        wrap: no-wrap;
+                        overflow: elide;
+                        accessible-role: none;
+                    }
+
+                    Glyph {
+                        glyph: Glyphs.chevron-down;
+                        font-size: 10px;
                         color: Tokens.secondary-text;
                     }
                 }
@@ -441,6 +533,7 @@ export component TrayFlyout inherits Window {
     in property <string> status;
     in property <[string]> sources;
     in property <int> source-index;
+    in property <bool> source-is-input;
     // The chosen input device's channel pairs; none up to two channels.
     in property <[string]> input-pairs;
     in property <int> input-pair-index;
@@ -575,9 +668,6 @@ export component TrayFlyout inherits Window {
 
     changed running => {
         power.checked = root.running;
-    }
-    changed source-index => {
-        source.current-index = root.source-index;
     }
 
     // Without the system's rounded frame, draw the edge.
@@ -778,30 +868,28 @@ export component TrayFlyout inherits Window {
                         }
                     }
 
-                    // What plays, with no buttons, over the source. No visible
-                    // labels above the source and the volume, as in the Mac
-                    // panel; Narrator still hears each control's name.
+                    // The Mac panel's hero: the cover, or the source's icon,
+                    // beside the source menu with the song under it, and the
+                    // input's channel pair below.
                     Rectangle {
                         border-radius: Fluent.radius-card;
                         background: Fluent.hero;
 
                         VerticalLayout {
                             padding: 10px;
-                            spacing: 10px;
+                            spacing: 6px;
 
-                            if root.now-playing-shown: HorizontalLayout {
+                            HorizontalLayout {
                                 spacing: 11px;
-                                accessible-role: groupbox;
-                                accessible-label: Strings.now-playing;
 
                                 Rectangle {
                                     width: 48px;
                                     height: 48px;
-                                    border-radius: 6px;
+                                    border-radius: 9px;
                                     clip: true;
                                     background: Tokens.text.with-alpha(0.06);
 
-                                    if root.now-playing-has-artwork: Image {
+                                    if root.now-playing-shown && root.now-playing-has-artwork: Image {
                                         width: parent.width;
                                         height: parent.height;
                                         source: root.now-playing-artwork;
@@ -809,12 +897,18 @@ export component TrayFlyout inherits Window {
                                         accessible-role: none;
                                     }
 
-                                    if !root.now-playing-has-artwork: Glyph {
+                                    if !(root.now-playing-shown && root.now-playing-has-artwork): Glyph {
                                         width: parent.width;
                                         height: parent.height;
-                                        glyph: Glyphs.music-note;
+                                        glyph: root.source-is-input ? Glyphs.microphone : Glyphs.volume-high;
                                         color: Tokens.secondary-text;
-                                        font-size: 20px;
+                                        font-size: 22px;
+                                    }
+
+                                    Rectangle {
+                                        border-radius: parent.border-radius;
+                                        border-width: 1px;
+                                        border-color: Tokens.text.with-alpha(0.1);
                                     }
                                 }
 
@@ -823,56 +917,53 @@ export component TrayFlyout inherits Window {
                                     spacing: 2px;
                                     horizontal-stretch: 1;
 
-                                    MarqueeText {
-                                        text: root.now-playing-title;
-                                        font-weight: 600;
+                                    HorizontalLayout {
+                                        alignment: start;
+                                        SourceMenu {
+                                            sources: root.sources;
+                                            current: root.source-index;
+                                            selected(index) => {
+                                                root.source-selected(index);
+                                            }
+                                            several-apps-requested => {
+                                                root.several-apps-requested();
+                                            }
+                                        }
                                     }
 
-                                    if root.now-playing-subtitle != "": MarqueeText {
-                                        text: root.now-playing-subtitle;
-                                        font-size: Tokens.font-size-callout;
-                                        text-color: Tokens.secondary-text;
+                                    if root.now-playing-shown: VerticalLayout {
+                                        spacing: 1px;
+                                        accessible-role: groupbox;
+                                        accessible-label: Strings.now-playing;
+
+                                        MarqueeText {
+                                            text: root.now-playing-title;
+                                            font-size: 15px;
+                                            font-weight: 600;
+                                        }
+
+                                        if root.now-playing-subtitle != "": MarqueeText {
+                                            text: root.now-playing-subtitle;
+                                            text-color: Tokens.secondary-text;
+                                        }
                                     }
                                 }
                             }
 
-                            source := ComboBox {
-                                model: root.sources;
-                                current-index: root.source-index;
-                                accessible-label: Strings.source-label;
-                                selected => {
-                                    root.source-selected(self.current-index);
-                                    self.current-index = root.source-index;
+                            if root.input-pairs.length > 0: VerticalLayout {
+                                spacing: 4px;
+
+                                SecondaryText {
+                                    text: Strings.input-channels-label;
                                 }
-                            }
-                        }
-                    }
 
-                    // A link, not a drop-down entry, so arrowing or wheeling
-                    // through the sources never lands on it and closes the panel.
-                    HorizontalLayout {
-                        alignment: start;
-                        LinkButton {
-                            text: Strings.source-mix-more;
-                            label: Strings.source-mix-more;
-                            clicked => {
-                                root.several-apps-requested();
-                            }
-                        }
-                    }
-
-                    if root.input-pairs.length > 0: VerticalLayout {
-                        spacing: 4px;
-
-                        SecondaryText {
-                            text: Strings.input-channels-label;
-                        }
-
-                        PairPicker {
-                            model: root.input-pairs;
-                            chosen: root.input-pair-index;
-                            picked(index) => {
-                                root.input-pair-selected(index);
+                                PairPicker {
+                                    model: root.input-pairs;
+                                    chosen: root.input-pair-index;
+                                    picked(index) => {
+                                        root.input-pair-selected(index);
+                                    }
+                                }
                             }
                         }
                     }
@@ -1010,10 +1101,10 @@ export component TrayFlyout inherits Window {
                                     }
                                 }
 
-                                // Its speakers while it is unfolded, their toggles
-                                // under the zone's, past the arrow.
+                                // Its speakers while it is unfolded, 12 px in, as
+                                // the Mac panel sets them under the arrow.
                                 for speaker in zone.expanded ? zone.members : []: FlyoutRow {
-                                    indent: 26px;
+                                    indent: 12px;
                                     glyph: Glyphs.speaker(speaker.kind);
                                     name: speaker.name;
                                     label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);

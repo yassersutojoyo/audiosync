@@ -4970,6 +4970,12 @@ impl WindowState for TrayFlyout {
         self.set_running(state.running);
         self.set_status(status.clone());
         self.set_source_index(source_index);
+        self.set_source_is_input(
+            state
+                .sources
+                .iter()
+                .any(|s| s.id == state.source_id && s.kind == SourceKind::Input),
+        );
         self.set_master_volume(state.master_volume as f32);
         self.set_master_volume_waves(volume_waves(state.master_volume));
     }
@@ -12231,6 +12237,25 @@ mod tests {
     /// within the notice's text column, measured on a one-button notice
     /// whose text fills that column; at 200% scaling too.
     // covers: S308
+    /// The hero's borderless source menu reads the chosen source, as the
+    /// Mac panel's does.
+    #[test]
+    fn the_flyout_source_menu_reads_the_source() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let menu = ElementHandle::find_by_accessible_label(&app.flyout, "Audio Source")
+            .next()
+            .expect("the source menu is in the flyout");
+        let chosen = app
+            .flyout
+            .get_sources()
+            .row_data(app.flyout.get_source_index() as usize)
+            .unwrap_or_default();
+        assert_eq!(menu.accessible_value().unwrap_or_default(), chosen);
+    }
+
     #[test]
     fn the_flyout_fits_the_update_notice_buttons() {
         use i_slint_backend_testing::ElementHandle;
