@@ -248,6 +248,10 @@ final class AppModel: ObservableObject {
     }
 
     @Published var running = false
+    /// The switch's clicked position until the engine has started or
+    /// stopped; nil once the views follow `running` again.
+    @Published var pendingPower: Bool?
+    var shownRunning: Bool { pendingPower ?? running }
     @Published var sourceID = ""
     /// The stored channel pair of the input source (`InputChannelPair.index`).
     @Published var inputPair = 0
@@ -455,7 +459,7 @@ final class AppModel: ObservableObject {
 
     /// How a row shows `speaker`: playing only while streaming is on.
     func state(of speaker: Speaker) -> SpeakerState {
-        SpeakerState(enabled: speaker.enabled, streaming: running)
+        SpeakerState(enabled: speaker.enabled, streaming: shownRunning)
     }
 
     /// The device volume hint `speaker`'s row shows: none on an AirPlay row
@@ -528,7 +532,7 @@ final class AppModel: ObservableObject {
 
     /// A zone is on when every member a click would switch on is on.
     func state(of zone: Zone) -> SpeakerState {
-        SpeakerState(enabled: zone.allOn, streaming: running)
+        SpeakerState(enabled: zone.allOn, streaming: shownRunning)
     }
 
     /// The note `zone`'s header shows while each of its members that is on
@@ -586,12 +590,12 @@ final class AppModel: ObservableObject {
                                        others: (local + cast).map(\.enabled))
     }
 
-    var statusText: String { running ? text.statusStreaming(speakers: activeSpeakers) : text.statusOff }
+    var statusText: String { shownRunning ? text.statusStreaming(speakers: activeSpeakers) : text.statusOff }
 
     /// The main window's status: the panel's, then the AirPlay delay in use,
     /// which follows a step the sender takes on its own (S181).
     var mainStatusText: String {
-        text.mainStatus(statusText, running: running,
+        text.mainStatus(statusText, running: shownRunning,
                         airPlayOn: StreamingPolicy.activeSpeakers(airPlay: airplay.map(\.enabled),
                                                                   senderFailed: airplaySenderFailed, others: []) > 0,
                         airPlayDelayMs: airPlayDelayMs)
@@ -1687,24 +1691,27 @@ struct MenuBarView: View {
                         .frame(width: 22, height: 22)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 1) {
-                        Wordmark(size: 15, dim: !model.running)
-                        Text(model.statusText)
-                            .font(.subheadline)
-                            .foregroundStyle(Brand.secondaryText)
-                            .lineLimit(1)
-                            // The new status shows at once, never cross-faded with the old one.
-                            .transaction(value: model.statusText) { $0.animation = nil }
+                        Wordmark(size: 15, dim: !model.shownRunning)
+                        // One slot, so the old and the new status cross-fade in place.
+                        ZStack(alignment: .leading) {
+                            Text(model.statusText)
+                                .font(.subheadline)
+                                .foregroundStyle(Brand.secondaryText)
+                                .lineLimit(1)
+                                .id(model.statusText)
+                                .transition(.opacity)
+                        }
                     }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .animation(reduceMotion ? .linear(duration: 0.15) : .easeOut(duration: 0.4), value: model.running)
+            .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: model.shownRunning)
             .help(t.openApp)
             .accessibilityHint(t.openApp)
             Spacer(minLength: 8)
-            PowerSwitch(isOn: model.running, text: t) { model.actions.setPower(!model.running) }
-                .help(model.running ? t.turnOff : t.turnOn)
+            PowerSwitch(model: model, text: t)
+                .help(model.shownRunning ? t.turnOff : t.turnOn)
         }
     }
 
@@ -2053,13 +2060,13 @@ struct SpeakerBadge: View {
                     .opacity(state == .willPlay ? 1 : 0)
             }
             // Scaled, not inserted, so it grows wherever the row has just moved the badge.
-            Circle().fill(accent).scaleEffect(filled ? 1 : 0)
+            Circle().fill(accent).scaleEffect(filled || reduceMotion ? 1 : 0.6).opacity(filled ? 1 : 0)
             Image(systemName: symbol)
                 .font(.system(size: size * 0.43, weight: .semibold))
                 .foregroundStyle(iconColor)
         }
-        .animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: state)
-        .animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: connecting)
+        .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: state)
+        .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: connecting)
         .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
@@ -2645,33 +2652,38 @@ struct PermissionCard: View {
     }
 }
 
-/// The streaming switch's clicked position, held while the engine starts or stops.
-final class SwitchPosition: ObservableObject {
-    @Published var isOn: Bool?
+/// The streaming switch and every view that follows it (header mark and
+/// status, speaker badges, the Calibrate row) start on the click's frame, on
+/// one curve. The engine starts or stops only after it, since that work
+/// blocks the main thread and would stall the motion.
+enum PowerMotion {
+    static let duration: TimeInterval = 0.25
+
+    static func animation(reduceMotion: Bool) -> Animation {
+        reduceMotion ? .linear(duration: 0.15) : .easeInOut(duration: duration)
+    }
+
+    static func wait(reduceMotion: Bool) -> TimeInterval { reduceMotion ? 0.15 : duration }
 }
 
 /// The on/off switch, drawn by hand so it always shows the app's own colours
 /// (a system switch dims whenever its window isn't key).
 struct PowerSwitch: View {
-    let isOn: Bool
+    @ObservedObject var model: AppModel
     let text: UIStrings
-    let toggle: () -> Void
-    @StateObject private var shown = SwitchPosition()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private static let glide = 0.15
 
-    /// Where the knob sits: the clicked position until the engine has started
-    /// or stopped, the model's otherwise.
-    private var on: Bool { shown.isOn ?? isOn }
+    private var on: Bool { model.shownRunning }
 
     var body: some View {
         Button {
-            guard shown.isOn == nil else { return }
-            shown.isOn = !on
-            // Starting and stopping block the main thread, so they wait for the knob to finish moving.
-            DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : Self.glide)) {
-                toggle()
-                shown.isOn = nil
+            guard model.pendingPower == nil else { return }
+            let target = !model.running
+            model.pendingPower = target
+            DispatchQueue.main.asyncAfter(deadline: .now() + PowerMotion.wait(reduceMotion: reduceMotion)) {
+                // Streaming may have started or stopped on its own meanwhile.
+                if model.running != target { model.actions.setPower(target) }
+                model.pendingPower = nil
             }
         } label: {
             ZStack(alignment: on ? .trailing : .leading) {
@@ -2683,11 +2695,11 @@ struct PowerSwitch: View {
                     .frame(width: 38, height: 22)
                 Circle()
                     .fill(Color.white)
-                    .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+                    .shadow(color: .black.opacity(0.25), radius: 1)
                     .frame(width: 18, height: 18)
                     .padding(2)
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: Self.glide), value: on)
+            .animation(reduceMotion ? nil : PowerMotion.animation(reduceMotion: false), value: on)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(text.streamingSwitch)

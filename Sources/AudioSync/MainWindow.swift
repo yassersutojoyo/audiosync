@@ -263,17 +263,21 @@ struct MainView: View {
                 .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 2) {
                 Wordmark(size: BrandTokens.Typography.wordmarkSize)
-                Text(model.mainStatusText)
-                    .font(.callout)
-                    .foregroundStyle(Brand.secondaryText)
-                    // A new status replaces the old in the same frame.
-                    .transaction { $0.animation = nil }
+                // One slot, so the old and the new status cross-fade in place.
+                ZStack(alignment: .leading) {
+                    Text(model.mainStatusText)
+                        .font(.callout)
+                        .foregroundStyle(Brand.secondaryText)
+                        .id(model.mainStatusText)
+                        .transition(.opacity)
+                }
+                .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: model.shownRunning)
             }
             .allowsHitTesting(false)
             Spacer()
             gearMenu(t)
-            PowerSwitch(isOn: model.running, text: t) { model.actions.setPower(!model.running) }
-                .help(model.running ? t.turnOff : t.turnOn)
+            PowerSwitch(model: model, text: t)
+                .help(model.shownRunning ? t.turnOff : t.turnOn)
         }
         // The band drags the window like a title bar, and as a click outside
         // every speaker row it closes the delay panels; the gear and the
@@ -431,16 +435,23 @@ struct MainView: View {
             HStack(spacing: 8) {
                 QuickRowIcon("slider.vertical.3")
                 Text(t.equalizer).lineLimit(1).layoutPriority(1)
-                // The teal dot is the row's one state mark: the curve is on.
-                if model.equalizerOn {
-                    Circle().fill(accent).frame(width: 6, height: 6)
+                Spacer(minLength: 8)
+                // Right-aligned against the chevron, so a long curve name takes the room before it.
+                HStack(spacing: 4) {
+                    // The teal dot is the row's one state mark: the curve is on.
+                    if model.equalizerOn {
+                        Circle().fill(accent).frame(width: 6, height: 6)
+                    }
+                    let name = model.equalizerOn ? model.equalizerCurve : t.off
+                    Text(name)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .foregroundStyle(Brand.secondaryText)
+                        .help(name)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Brand.secondaryText)
                 }
-                ScrollingTitle(text: model.equalizerOn ? model.equalizerCurve : t.off)
-                    .foregroundStyle(Brand.secondaryText)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Brand.secondaryText)
             }
             .contentShape(Rectangle())
         }
@@ -877,12 +888,12 @@ struct BreathingMark: View {
             let depth = breathes
                 ? MarkBreath.depth(sinceStart: context.date.timeIntervalSince(start.since(context.date))) : 0
             BrandMark()
-                .fill(model.running ? Brand.logo : Color.secondary)
+                .fill(model.shownRunning ? Brand.logo : Color.secondary)
                 .scaleEffect(MarkBreath.scale(depth: depth))
                 .opacity(MarkBreath.opacity(depth: depth))
         }
         .animation(reduceMotion ? nil : .easeOut(duration: MarkBreath.settle), value: breathes)
-        .animation(reduceMotion ? .linear(duration: 0.15) : .easeOut(duration: 0.4), value: model.running)
+        .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: model.shownRunning)
         .onChange(of: breathes) { _, now in
             if !now { start.date = nil }
         }

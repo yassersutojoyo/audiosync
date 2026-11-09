@@ -8711,9 +8711,9 @@ do {
     let statusLine = menuBar.components(separatedBy: "Text(model.statusText)").dropFirst().first?
         .components(separatedBy: "\n                    }\n").first ?? ""
     // covers: S405
-    check(statusLine.contains(".transaction(value: model.statusText) { $0.animation = nil }")
+    check(statusLine.contains(".id(model.statusText)") && statusLine.contains(".transition(.opacity)")
             && !statusLine.contains(".transaction {") && !statusLine.contains(".animation(nil"),
-          "menu bar panel: the status line under the wordmark fades in with the header, only a new status shows at once",
+          "menu bar panel: the status line under the wordmark fades in with the header, and a new status cross-fades in place",
           statusLine)
     // covers: S403
     check(!showBody.isEmpty && inShow("let finishNow = host.sizing.show(onScreen: popover.isShown)") == 1
@@ -17561,8 +17561,8 @@ do {
             && panelView.contains(".help(t.openApp)") && panelView.contains("SourcePicker(model: model, hero: true)"),
           "menu bar panel source: Open AudioSync is gone; the header still opens the main window; the source sits in the hero")
     check(panelView.contains(".animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: rowPlaces)")
-            && panelView.contains("Text(model.statusText)") && panelView.contains(".transaction(value: model.statusText) { $0.animation = nil }"),
-          "menu bar panel source: rows move on one ease-out, at once with Reduce Motion; the status text changes at once")
+            && panelView.contains("Text(model.statusText)") && panelView.contains(".id(model.statusText)"),
+          "menu bar panel source: rows move on one ease-out, at once with Reduce Motion; the status text cross-fades in place")
     let polling = read("Sources/AudioSync/AppDelegate+AirPlay.swift")
     let showBody = panelSource.components(separatedBy: "    func show(pressedAt press: TimeInterval? = nil) {").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
@@ -17888,7 +17888,7 @@ do {
     let badgeSource = menuBarSource.components(separatedBy: "struct SpeakerBadge: View {").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
     check(!badgeSource.isEmpty && !badgeSource.contains(".transition(")
-            && badgeSource.contains(".scaleEffect(filled ? 1 : 0)")
+            && badgeSource.contains(".scaleEffect(filled || reduceMotion ? 1 : 0.6)")
             && badgeSource.contains("case .off, .willPlay, .playing:")
             && badgeSource.contains("Circle().fill(Color.secondary.opacity(0.18)).opacity(state == .off ? 1 : 0)")
             && badgeSource.contains("Circle().fill(accent.opacity(0.14)).opacity(state == .willPlay ? 1 : 0)"),
@@ -18053,20 +18053,56 @@ do {
     check(offSwitch.contains("Color.secondary.opacity(0.15)")
             && offSwitch.contains("strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.75)"),
           "streaming switch source: the off track has a 0.75 pt ring in .secondary over a lighter fill")
-    check(offSwitch.contains("@StateObject private var shown = SwitchPosition()")
-            && offSwitch.contains("DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : Self.glide))")
-            && offSwitch.contains("guard shown.isOn == nil else { return }")
-            && offSwitch.contains(".animation(reduceMotion ? nil : .easeInOut(duration: Self.glide), value: on)")
-            && offSwitch.contains("shown.isOn = nil")
-            && offSwitch.contains("value: on)"),
-          "streaming switch source: the knob moves on the click and the engine starts or stops after its glide, then the switch follows the model again")
-    let offMark = offMotionPart("Sources/AudioSync/MainWindow.swift", "struct BreathingMark: View")
-    check(offMark.contains(".animation(reduceMotion ? .linear(duration: 0.15) : .easeOut(duration: 0.4), value: model.running)"),
-          "breathing mark source: the mark fades between teal and grey both ways as streaming starts and stops")
     let offBadge = offMotionPart("Sources/AudioSync/MenuBar.swift", "struct SpeakerBadge: View")
     check(offBadge.contains("value: state)") && offBadge.contains("value: connecting)")
             && !offBadge.contains("!filled ? nil"),
           "speaker badge source: the fill shrinks back and the connecting arc fades out as a speaker stops")
+}
+
+// MARK: The streaming switch and the views that follow it move together (MenuBar.swift, MainWindow.swift)
+do {
+    func syncPart(_ file: String, _ start: String, _ end: String = "\n}\n") -> String {
+        ((try? String(contentsOfFile: "Sources/AudioSync/\(file)", encoding: .utf8)) ?? "")
+            .components(separatedBy: start).dropFirst().first?.components(separatedBy: end).first ?? ""
+    }
+    let syncSwitch = syncPart("MenuBar.swift", "struct PowerSwitch: View")
+    check(syncSwitch.contains(".shadow(color: .black.opacity(0.25), radius: 1)") && !syncSwitch.contains("y: 0.5"),
+          "streaming switch source: the knob's shadow falls evenly, so no track shows above the knob")
+    let syncModel = syncPart("MenuBar.swift", "final class AppModel")
+    check(syncModel.contains("@Published var pendingPower: Bool?")
+            && syncModel.contains("var shownRunning: Bool { pendingPower ?? running }")
+            && syncModel.contains("SpeakerState(enabled: speaker.enabled, streaming: shownRunning)")
+            && syncModel.contains("SpeakerState(enabled: zone.allOn, streaming: shownRunning)")
+            && syncModel.contains("var statusText: String { shownRunning ?"),
+          "streaming switch source: the badges and the status follow the switch's clicked position, not the engine")
+    check(syncSwitch.contains("guard model.pendingPower == nil else { return }")
+            && syncSwitch.contains("DispatchQueue.main.asyncAfter(deadline: .now() + PowerMotion.wait(reduceMotion: reduceMotion))")
+            && syncSwitch.contains("model.pendingPower = nil"),
+          "streaming switch source: the engine starts or stops once every view has moved, then the views follow the model again")
+    let syncMark = syncPart("MainWindow.swift", "struct BreathingMark: View")
+    let syncBadge = syncPart("MenuBar.swift", "struct SpeakerBadge: View {")
+    check(syncMark.contains(".fill(model.shownRunning ? Brand.logo : Color.secondary)")
+            && syncMark.contains(".animation(PowerMotion.animation(reduceMotion: reduceMotion), value: model.shownRunning)")
+            && syncBadge.contains(".animation(PowerMotion.animation(reduceMotion: reduceMotion), value: state)")
+            && syncBadge.contains(".scaleEffect(filled || reduceMotion ? 1 : 0.6)")
+            && syncBadge.contains(".opacity(filled ? 1 : 0)"),
+          "streaming switch source: the mark and the badges move on the switch's curve, the badge fill scaling and fading in one piece")
+    let syncHeader = syncPart("MainWindow.swift", "private func header(_ t: UIStrings)", "\n    }\n")
+    let syncPanel = syncPart("MenuBar.swift", "struct MenuBarView: View {")
+    let syncCalibrate = syncPart("CalibrateAllViews.swift", "struct CalibrateAllButton")
+    check(syncHeader.contains(".id(model.mainStatusText)") && syncHeader.contains(".transition(.opacity)")
+            && syncPanel.contains(".id(model.statusText)") && syncPanel.contains(".transition(.opacity)")
+            && syncCalibrate.contains("model.pendingPower == false ? .notPlaying(.streaming)")
+            && syncCalibrate.contains(".animation(PowerMotion.animation(reduceMotion: reduceMotion), value: off)")
+            && syncCalibrate.contains("model.pendingPower == true && model.calibrateAll.blocker == .notPlaying(.streaming) ? nil")
+            && syncSwitch.contains("if model.running != target { model.actions.setPower(target) }")
+            && syncHeader.contains(".help(model.shownRunning ? t.turnOff : t.turnOn)")
+            && syncPanel.contains(".help(model.shownRunning ? t.turnOff : t.turnOn)"),
+          "streaming switch source: the status lines and the Calibrate row cross-fade with the switch")
+    let syncEqualizer = syncPart("MainWindow.swift", "func equalizerRow(", "\n    }\n")
+    check(syncEqualizer.contains(".minimumScaleFactor(") && !syncEqualizer.contains("ScrollingTitle(")
+            && syncEqualizer.contains("Spacer(minLength: 8)") && syncEqualizer.contains(".help(name)"),
+          "equalizer row source: the dot and the curve name sit right against the chevron, using the room before them")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
