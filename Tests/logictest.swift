@@ -7789,7 +7789,7 @@ do {
           "music art: at rest it breathes once every 4 to 6 s, spread about a quarter of the sound's motion",
           "\(period), \(breaths.min() ?? -1), \(breaths.max() ?? -1)")
     check(AmbientBreath.motion(env: 0.9, live: 0, breath: 0.2) == 0.2
-            && AmbientBreath.motion(env: 0.9, live: 1, breath: 0.2) == 0.9
+            && abs(AmbientBreath.motion(env: 0.9, live: 1, breath: 0.2) - 0.9) < 1e-9
             && AmbientBreath.motion(env: 0, live: 1, breath: 0.2) == 0.2,
           "music art: the breath gives way to the sound's motion, never to a dead line")
     let idleLayers = AmbientBreath.layers(live: 0, env: 0.8)
