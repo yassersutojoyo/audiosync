@@ -451,6 +451,8 @@ final class AppModel: ObservableObject {
     /// Folds or unfolds a zone in the menu bar panel; its controller resizes
     /// the panel with the change.
     var foldPanelZone: (() -> Void) -> Void = { $0() }
+    /// The menu bar panel's content height on each frame it changes (set by its controller).
+    var panelContentHeight: (CGFloat) -> Void = { _ in }
 
     var currentSource: Source? { sources.first { $0.id == sourceID } }
 
@@ -726,8 +728,12 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var resizeEndsAt: TimeInterval?
     /// Bumped by every resize step, so only the latest one's end tells the popover its size.
     private var resizeStep = 0
-    /// A fold's shrink, waiting for its rows to fade (`fold`).
-    private var pendingShrink: DispatchWorkItem?
+    /// When the latest zone fold started (system uptime), and how much taller
+    /// the window's content is than the panel's content (`followFold`).
+    private var foldStart: TimeInterval?
+    private var foldInset: CGFloat = 0
+    /// The panel's content height as last laid out.
+    private var contentHeight: CGFloat = 0
     /// Where the open panel's window sits for its content size, once the open is over.
     private var rest: PanelRest?
     private var moveWatch: NSObjectProtocol?
@@ -781,6 +787,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
             guard let self else { return change() }
             self.fold(change)
         }
+        model.panelContentHeight = { [weak self] height in self?.followFold(height) }
         DebugTrace.log("[AudioSync] panel animation: \(PanelSwitches.systemAnimation ? "system" : "own grow")")
         // @Published delivers the new value before the property is set.
         noticeWatch = model.$notices.sink { [weak self] list in
@@ -1272,7 +1279,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     /// Takes the content's new size in one animated step (`PanelResize`),
     /// the top edge staying under the icon.
     private func resizeLater(_ size: NSSize) {
-        guard presented, size.width > 0, size.height > 0 else { return }
+        guard presented, size.width > 0, size.height > 0, !folding else { return }
         let now = Self.uptime
         // A step still running finishes before the next one starts.
         let due = resize.changed(to: size, at: now, settled: max(quietQueue.quiet.busyUntil, resizeEndsAt ?? 0),
@@ -1286,40 +1293,61 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                       timing: CAMediaTimingFunction(name: .easeOut))
     }
 
-    /// Folds or unfolds a zone as one motion: the panel resizes while the
-    /// rows move, on the main window's progress (`PanelFold`).
+    /// Folds or unfolds a zone as one motion: the window takes the content's
+    /// height on each frame of the rows' move (`followFold`, `PanelFold`).
     private func fold(_ change: () -> Void) {
         let motion = PanelFold(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         let animation: Animation? = motion.moves ? .linear(duration: motion.duration) : nil
-        // A quick re-open measures the size the panel still has, so the earlier shrink must not start.
-        pendingShrink?.cancel()
         guard presented, host.sizing.followsContent else { return withAnimation(animation) { change() } }
-        let clicked = Self.uptime
-        withAnimation(animation) {
-            change()
-            host.view.needsLayout = true
-            host.view.layoutSubtreeIfNeeded()
+        if motion.moves {
+            resize = PanelResize()
+            foldInset = host.sizeThatFits(in: PanelTopLayout.measuring).height - contentHeight
+            foldStart = Self.uptime
+            DebugTrace.log("[AudioSync] panel fold: the window follows the content's height")
+            return withAnimation(animation) { change() }
         }
+        change()
+        host.view.needsLayout = true
+        host.view.layoutSubtreeIfNeeded()
         // The layout pass just now asked for this size as a gathered step; this one replaces it.
         resize = PanelResize()
-        let size = host.sizeThatFits(in: PanelTopLayout.measuring)
-        // The rows move in one half of the motion (`DisclosedPane`): the second
-        // on a fold, after their fade, and the first on an unfold, before it.
-        let half = motion.duration / 2
-        let timing = CAMediaTimingFunction(name: .easeInEaseOut)
-        if half > 0, size.height < (rest?.content ?? popover.contentSize).height {
-            let step = resizeStep
-            let shrink = DispatchWorkItem { [weak self] in
-                guard let self, self.presented, self.resizeStep == step else { return }
-                self.animateResize(to: size, duration: half, timing: timing)
-            }
-            pendingShrink = shrink
-            DispatchQueue.main.asyncAfter(deadline: .now() + half, execute: shrink)
-        } else {
-            animateResize(to: size, duration: half, timing: timing)
+        animateResize(to: host.sizeThatFits(in: PanelTopLayout.measuring), duration: 0,
+                      timing: CAMediaTimingFunction(name: .easeInEaseOut))
+    }
+
+    private var folding: Bool {
+        foldStart.map { PanelFold(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+            .follows(since: $0, at: Self.uptime) } ?? false
+    }
+
+    /// Measured right after the click, the content still has its old height,
+    /// as the fold animates it; so while a fold moves, the window takes the
+    /// height SwiftUI lays out on each frame, in that frame.
+    private func followFold(_ height: CGFloat) {
+        contentHeight = height
+        guard presented, host.sizing.followsContent, folding, let window = host.view.window else { return }
+        let size = NSSize(width: (rest?.content ?? popover.contentSize).width, height: height + foldInset)
+        guard size != (rest?.content ?? popover.contentSize) else { return }
+        resizeStep += 1
+        let icon = iconMiddle
+        var aim = PanelRest.next(rest, stepRunning: resizeEndsAt != nil, window: window.frame,
+                                 content: popover.contentSize, icon: icon)
+        let frame = aim.move(to: size, icon: icon)
+        rest = aim
+        resizeEndsAt = nil
+        host.view.autoresizingMask = [.minYMargin]
+        setHeight(size.height)
+        // At no duration, so it also replaces a resize step still animating the frame.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            window.animator().setFrame(frame, display: true)
         }
-        DebugTrace.log(String(format: "[AudioSync] panel fold: resize set %.1f ms after the click",
-                              (Self.uptime - clicked) * 1000))
+        let normal = popover.animates
+        popover.animates = false
+        popover.contentSize = size
+        popover.animates = normal
+        DebugTrace.log(String(format: "[AudioSync] panel fold: height %.0f, %.0f ms into the fold",
+                              size.height, (Self.uptime - (foldStart ?? 0)) * 1000))
     }
 
     private func animateResize(to size: NSSize, duration: TimeInterval, timing: CAMediaTimingFunction) {
@@ -1701,6 +1729,7 @@ struct MenuBarView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: rowPlaces)
         .padding(EdgeInsets(top: 14, leading: 14, bottom: 8, trailing: 14))
         .frame(width: 300)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.panelContentHeight($0) }
         .pinnedToTop()
         // Over the popover's material; the popover rounds it and draws the edge.
         .background(Brand.panelBacking.ignoresSafeArea())

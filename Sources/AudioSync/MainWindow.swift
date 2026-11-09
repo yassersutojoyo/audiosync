@@ -774,11 +774,9 @@ private struct MarqueeEdges: View {
 
     var body: some View {
         if width > 0 {
-            // Each fade within its half, so the stops stay in order on a very short line.
-            LinearGradient(stops: [.init(color: .clear, location: 0),
-                                   .init(color: .black, location: min(fades.leading / width, 0.5)),
-                                   .init(color: .black, location: 1 - min(fades.trailing / width, 0.5)),
-                                   .init(color: .clear, location: 1)],
+            LinearGradient(stops: Marquee.maskStops(fades: fades, width: width).map {
+                               Gradient.Stop(color: .black.opacity($0.opacity), location: $0.location)
+                           },
                            startPoint: .leading, endPoint: .trailing)
         }
     }

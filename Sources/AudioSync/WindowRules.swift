@@ -145,6 +145,15 @@ enum Marquee {
         guard overflow > 0 else { return (0, 0) }
         return (min(max(offset, 0), leadingFade), min(max(overflow - offset, 0), edgeFade))
     }
+
+    /// The running title's mask over a line `width` wide: each stop's place
+    /// (0 to 1 along the line) and opacity, fading over each edge's `fades` width.
+    static func maskStops(fades: (leading: CGFloat, trailing: CGFloat), width: CGFloat) -> [(location: CGFloat, opacity: CGFloat)] {
+        // Each fade within its half, so the stops stay in order on a very short line.
+        let leading = min(fades.leading / width, 0.5)
+        // Clear over the first quarter of the leading fade: a cut letter's sliver there still showed faintly on the ramp.
+        return [(0, 0), (leading / 4, 0), (leading, 1), (1 - min(fades.trailing / width, 0.5), 1), (1, 0)]
+    }
 }
 
 /// How a notice comes and goes in the main window.
@@ -576,6 +585,13 @@ struct PanelFold: Equatable {
     init(reduceMotion: Bool) { duration = reduceMotion ? 0 : Self.duration }
 
     var moves: Bool { duration > 0 }
+
+    /// Whether the panel's window takes its content's height on each frame,
+    /// at `now`, for the latest fold that started at `start`.
+    /// A little past the motion, so its last frame's height still arrives.
+    func follows(since start: TimeInterval, at now: TimeInterval) -> Bool {
+        moves && now >= start && now - start <= duration + 0.05
+    }
 
     /// What a zone shows of itself: while a fold moves, only its own moving
     /// area, so the rows below never slide over its fading rows; at rest

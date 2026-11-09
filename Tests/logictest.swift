@@ -18188,14 +18188,28 @@ do {
     check(panelFoldRows.contains(".modifier(DisclosedPane(open: zoneDisclosure.isExpanded(zone.id)))")
             && !panelFoldRows.contains("ZoneLayout.shownMembers("),
           "menu bar panel source: a zone's members fold in a DisclosedPane, faded before the rows below climb and after they move down")
-    check(panelFoldBody.contains("let half = motion.duration / 2") && panelFoldBody.contains("asyncAfter(deadline: .now() + half, execute: shrink)"),
-          "menu bar panel source: the panel resizes in the half of a fold its rows move in, after the fade on a fold and before it on an unfold")
-    check(panelFoldBody.components(separatedBy: "pendingShrink?.cancel()").count == 2
-            && panelFoldBody.components(separatedBy: "pendingShrink?.cancel()").first?.contains("asyncAfter(") == false,
-          "menu bar panel source: a fold cancels the shrink an earlier fold still waits to start, so a quick re-open keeps its rows")
+    check(panelFoldBody.contains("foldStart = Self.uptime") && !panelFoldBody.contains("asyncAfter(")
+            && panelFoldBar.contains("{ $0.size.height } action: { model.panelContentHeight($0) }"),
+          "menu bar panel source: a fold resizes the panel on each frame its rows move, from the content's own laid-out height, with nothing scheduled for later")
     check(panelFoldHeader.contains(".modifier(FoldTurn(open: expanded))")
             && !panelFoldHeader.contains(".rotationEffect(.degrees(expanded ? 90 : 0))"),
           "panel zone header source: the chevron turns on the fold's own progress and curve")
+}
+
+// MARK: The menu bar panel's height moves with a fold's rows; a running title's cut edge shows no sliver (WindowRules.swift)
+do {
+    let followFold = PanelFold(reduceMotion: false), stillFollow = PanelFold(reduceMotion: true)
+    check([0, 0.008, 0.125, 0.25].allSatisfy { followFold.follows(since: 10, at: 10 + $0) }
+            && !followFold.follows(since: 10, at: 10.4) && !followFold.follows(since: 10, at: 9.9)
+            && followFold.follows(since: 10.1, at: 10.3) && !stillFollow.follows(since: 10, at: 10.008),
+          "menu bar panel: the window takes the content's height on every frame of a fold's 0.25 s, from the latest click, so it shrinks as the rows climb and grows as they move down; with Reduce Motion it jumps")
+    let titleStops = Marquee.maskStops(fades: (16, 8), width: 256)
+    check(titleStops.map { $0.location } == [0, 0.015625, 0.0625, 0.96875, 1] && titleStops.map { $0.opacity } == [0, 0, 1, 1, 0],
+          "scrolling title: the leading quarter of the cut edge's fade is fully clear, so no sliver of a cut letter shows beside the dot",
+          "\(titleStops)")
+    let startStops = Marquee.maskStops(fades: (0, 8), width: 256)
+    check(startStops.map { $0.location } == [0, 0, 0, 0.96875, 1] && startStops.map { $0.opacity } == [0, 0, 1, 1, 0],
+          "scrolling title: a title at its start shows its first letter in full", "\(startStops)")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
