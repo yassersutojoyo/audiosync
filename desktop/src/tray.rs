@@ -7,26 +7,27 @@
 //! names the newest notice, if any.
 //!
 //! On Linux the icon is a StatusNotifier item: the app's colored icon,
-//! dimmed while streaming is off, and a left click opens the main window,
-//! since the host gives no icon position to place a flyout at.
+//! dimmed while streaming is off. A left click opens the flyout at the
+//! pointer, since the host gives no icon position; a host that only shows
+//! the menu sends no click, and its menu holds Open AudioSync.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use std::time::{Duration, Instant};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use slint::ComponentHandle;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use slint::winit_030::winit::event::WindowEvent;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use slint::winit_030::{EventResult, WinitWindowAccessor};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use crate::placement::{self, Bounds};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 use crate::platform;
 use crate::ui_model::AppState;
 use crate::view::{self, App};
@@ -51,11 +52,11 @@ const APP_ICON_PNG: &[u8] = include_bytes!("../res/audiosync-256.png");
 
 /// A click on the icon right after the flyout closed (because that click
 /// took its focus) only closes it.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const REOPEN_GUARD: Duration = Duration::from_millis(300);
 
 /// Logical pixels between the flyout and the taskbar.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 const FLYOUT_GAP: f64 = 12.0;
 
 /// How often the taskbar's theme and the icon size are checked again. A
@@ -68,7 +69,7 @@ thread_local! {
     static APP: RefCell<Weak<App>> = const { RefCell::new(Weak::new()) };
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 thread_local! {
     static FLYOUT_CLOSED_AT: Cell<Option<Instant>> = const { Cell::new(None) };
     /// The icon the flyout last opened next to: a refresh while it is open
@@ -199,7 +200,7 @@ impl Tray {
         }));
 
         // The flyout closes when it loses focus, like the system flyouts.
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         app.flyout.window().on_winit_window_event(|window, event| {
             match event {
                 WindowEvent::Focused(false) => {
@@ -207,6 +208,7 @@ impl Tray {
                     let _ = window.hide();
                 }
                 // Slint reads the Windows accent after this filter returns.
+                #[cfg(windows)]
                 WindowEvent::ThemeChanged(_) => {
                     slint::Timer::single_shot(Duration::ZERO, || {
                         if let Some(app) = APP.with(|cell| cell.borrow().upgrade()) {
@@ -224,7 +226,7 @@ impl Tray {
             if let Some(tray) = weak.upgrade() {
                 tray.show_state(state);
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if let Some(app) = APP.with(|cell| cell.borrow().upgrade())
                 && app.flyout.window().is_visible()
                 && let Some(icon) = FLYOUT_ICON.with(Cell::get)
@@ -371,28 +373,30 @@ fn on_tray_event(event: TrayIconEvent) {
             button: MouseButton::Left,
             button_state: MouseButtonState::Up,
             ..
-        } => {
-            let just_closed = FLYOUT_CLOSED_AT.with(|at| {
-                at.take()
-                    .is_some_and(|closed| closed.elapsed() < REOPEN_GUARD)
-            });
-            if app.flyout.window().is_visible() {
-                app.hide_flyout();
-            } else if !just_closed {
-                let icon = Bounds {
-                    x: rect.position.x,
-                    y: rect.position.y,
-                    width: f64::from(rect.size.width),
-                    height: f64::from(rect.size.height),
-                };
-                show_flyout(&app, icon);
-            }
-        }
+        } => toggle_flyout(
+            &app,
+            Bounds {
+                x: rect.position.x,
+                y: rect.position.y,
+                width: f64::from(rect.size.width),
+                height: f64::from(rect.size.height),
+            },
+        ),
+        // The host reports the pointer, which stands in for the icon.
         #[cfg(target_os = "linux")]
         TrayIconEvent::Click {
+            position,
             button: MouseButton::Left,
             ..
-        } => app.show_main(),
+        } => toggle_flyout(
+            &app,
+            Bounds {
+                x: position.x,
+                y: position.y,
+                width: 0.0,
+                height: 0.0,
+            },
+        ),
         TrayIconEvent::DoubleClick {
             button: MouseButton::Left,
             ..
@@ -409,6 +413,19 @@ fn on_tray_event(event: TrayIconEvent) {
             ..
         } => app.reread_launch_at_login(),
         _ => {}
+    }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn toggle_flyout(app: &App, icon: Bounds) {
+    let just_closed = FLYOUT_CLOSED_AT.with(|at| {
+        at.take()
+            .is_some_and(|closed| closed.elapsed() < REOPEN_GUARD)
+    });
+    if app.flyout.window().is_visible() {
+        app.hide_flyout();
+    } else if !just_closed {
+        show_flyout(app, icon);
     }
 }
 
@@ -430,13 +447,14 @@ fn on_menu_event(id: MenuId) {
 
 /// Opens the flyout next to the icon, inside the work area of the icon's
 /// monitor, and gives it the keyboard focus.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn show_flyout(app: &App, icon: Bounds) {
     let flyout = app.flyout.window();
     app.prepare_flyout_open(platform::animation_effects());
     if flyout.show().is_err() {
         return;
     }
+    #[cfg(windows)]
     flyout.with_winit_window(|window| {
         use slint::winit_030::winit::platform::windows::WindowExtWindows;
         window.set_skip_taskbar(true);
@@ -468,6 +486,45 @@ fn place_flyout(app: &App, icon: Bounds) {
     let height = f64::from(app.fit_flyout(room as f32)) * scale;
     let (x, y) =
         placement::flyout_origin(icon, f64::from(flyout.size().width), height, work_area, gap);
+    let origin = slint::PhysicalPosition::new(x.round() as i32, y.round() as i32);
+    if flyout.position() != origin {
+        flyout.set_position(origin);
+    }
+}
+
+/// Sizes the flyout to its parts, as much as the monitor under the pointer
+/// holds, and places it next to the pointer. A Wayland compositor places it
+/// itself and ignores the position.
+#[cfg(target_os = "linux")]
+fn place_flyout(app: &App, pointer: Bounds) {
+    let flyout = app.flyout.window();
+    let monitors: Vec<Bounds> = flyout
+        .with_winit_window(|window| {
+            window
+                .available_monitors()
+                .map(|monitor| Bounds {
+                    x: f64::from(monitor.position().x),
+                    y: f64::from(monitor.position().y),
+                    width: f64::from(monitor.size().width),
+                    height: f64::from(monitor.size().height),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let Some(monitor) = placement::monitor_at(&monitors, pointer.x, pointer.y) else {
+        return;
+    };
+    let scale = f64::from(flyout.scale_factor());
+    let gap = FLYOUT_GAP * scale;
+    let room = (monitor.height - 2.0 * gap) / scale;
+    let height = f64::from(app.fit_flyout(room as f32)) * scale;
+    let (x, y) = placement::pointer_flyout_origin(
+        (pointer.x, pointer.y),
+        f64::from(flyout.size().width),
+        height,
+        monitor,
+        gap,
+    );
     let origin = slint::PhysicalPosition::new(x.round() as i32, y.round() as i32);
     if flyout.position() != origin {
         flyout.set_position(origin);

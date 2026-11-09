@@ -68,15 +68,48 @@ pub fn pointer_flyout_origin(
     monitor: Bounds,
     gap: f64,
 ) -> (f64, f64) {
-    let _ = (pointer, width, height, monitor, gap);
-    (0.0, 0.0)
+    let (px, py) = pointer;
+    let known = pointer != (0.0, 0.0)
+        && (monitor.x..monitor.right()).contains(&px)
+        && (monitor.y..monitor.bottom()).contains(&py);
+    let (x, y) = if !known {
+        (monitor.right() - gap - width, monitor.y + gap)
+    } else {
+        let top = py - monitor.y;
+        let bottom = monitor.bottom() - py;
+        let left = px - monitor.x;
+        let right = monitor.right() - px;
+        let nearest = top.min(bottom).min(left).min(right);
+        if nearest == top {
+            (px - width / 2.0, monitor.y + 2.0 * top + gap)
+        } else if nearest == bottom {
+            (
+                px - width / 2.0,
+                monitor.bottom() - 2.0 * bottom - gap - height,
+            )
+        } else if nearest == left {
+            (monitor.x + 2.0 * left + gap, py - height / 2.0)
+        } else {
+            (
+                monitor.right() - 2.0 * right - gap - width,
+                py - height / 2.0,
+            )
+        }
+    };
+    (
+        clamp(x, monitor.x + gap, monitor.right() - gap - width),
+        clamp(y, monitor.y + gap, monitor.bottom() - gap - height),
+    )
 }
 
 /// The monitor holding the point, else the first one.
 #[cfg(any(target_os = "linux", test))]
 pub fn monitor_at(monitors: &[Bounds], x: f64, y: f64) -> Option<Bounds> {
-    let _ = (x, y);
-    monitors.last().copied()
+    monitors
+        .iter()
+        .find(|m| (m.x..m.right()).contains(&x) && (m.y..m.bottom()).contains(&y))
+        .or(monitors.first())
+        .copied()
 }
 
 /// A window's outer frame `frame` (physical pixels) as it opens in
