@@ -169,9 +169,11 @@ struct MainView: View {
                         hero(t)
                         masterVolume(t).padding(.top, 16)
                         Divider().padding(.vertical, 10)
-                        PresetsRow(model: model)
-                        equalizerRow(t)
-                        CalibrateAllButton(model: model).modifier(QuickRow())
+                        VStack(alignment: .leading, spacing: QuickRow.gap) {
+                            PresetsRow(model: model)
+                            equalizerRow(t)
+                            CalibrateAllButton(model: model)
+                        }
                     }
                 }
                 .frame(width: MainColumns.left(window: windowWidth.points))
@@ -427,9 +429,7 @@ struct MainView: View {
     private func equalizerRow(_ t: UIStrings) -> some View {
         Button { model.actions.openEqualizer() } label: {
             HStack(spacing: 8) {
-                Image(systemName: "slider.vertical.3")
-                    .font(.system(size: 15))
-                    .frame(width: 20)
+                QuickRowIcon("slider.vertical.3")
                 Text(t.equalizer).lineLimit(1).layoutPriority(1)
                 // The teal dot is the row's one state mark: the curve is on.
                 if model.equalizerOn {
@@ -710,52 +710,28 @@ private struct SectionTitle: View {
     }
 }
 
-/// The Presets row (S259): the current preset's name, and a menu that
-/// recalls a preset, saves one, and renames, updates or deletes each one.
+/// The Presets row (S259): a menu that recalls a preset, saves one, and
+/// renames, updates or deletes each one.
 private struct PresetsRow: View {
     @ObservedObject var model: AppModel
+    @StateObject private var anchor = MenuAnchor.Box()
 
     var body: some View {
         let t = model.text
         let current = PresetPanel.label(model.presets)
-        Menu {
-            if model.presets.isEmpty {
-                Text(t.presetsEmpty)
-            }
-            ForEach(model.presets) { row in
-                Toggle(row.name, isOn: Binding(get: { row.current },
-                                               set: { _ in model.actions.recallPreset(row.id) }))
-            }
-            Divider()
-            Button(t.savePreset) { model.actions.savePreset() }
-            Divider()
-            ForEach(model.presets) { row in
-                Menu(row.name) {
-                    Button(t.renamePreset) { model.actions.renamePreset(row.id) }
-                    Button(t.updatePreset) { model.actions.updatePreset(row.id) }
-                        .disabled(!PresetEdit.canUpdate(row))
-                    Button(t.deletePreset, role: .destructive) { model.actions.deletePreset(row.id) }
-                }
-            }
+        // A button, not a Menu: AppKit laid out a Menu's label with its own icon width and gap.
+        Button {
+            if let view = anchor.view { PresetsRowMenu.make(model: model, text: t).popUp(under: view) }
         } label: {
-            // AppKit draws the label; unnamed symbols keep VoiceOver on the text (SourcePicker.unnamedSymbol).
             HStack(spacing: 8) {
-                SourcePicker.unnamedSymbol("square.stack.3d.up")
-                    .frame(width: 18, height: 16)
+                QuickRowIcon("square.stack.3d.up")
                 Text(t.presets).lineLimit(1)
-                Text(current ?? "").foregroundStyle(Brand.secondaryText).lineLimit(1)
                 Spacer(minLength: 0)
-                SourcePicker.unnamedSymbol("chevron.down")
-                    .foregroundStyle(.tertiary)
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(t.presets)
-            .accessibilityValue(current ?? t.choosePreset)
+            .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .tint(.primary)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
+        .background(MenuAnchor(box: anchor).accessibilityHidden(true))
         .modifier(QuickRow())
         .help(current ?? t.choosePreset)
         .accessibilityLabel(t.presets)
@@ -763,13 +739,63 @@ private struct PresetsRow: View {
     }
 }
 
-/// A left-column row below the hero: 34 pt high, with a faint fill under the pointer.
-private struct QuickRow: ViewModifier {
+/// The Presets row's menu, built at each click from the model.
+@MainActor
+private enum PresetsRowMenu {
+    static func make(model: AppModel, text t: UIStrings) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        if model.presets.isEmpty {
+            let empty = NSMenuItem(title: t.presetsEmpty, action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+        }
+        for row in model.presets {
+            let recall = MenuAction.item(row.name) { model.actions.recallPreset(row.id) }
+            recall.state = row.current ? .on : .off
+            menu.addItem(recall)
+        }
+        menu.addItem(.separator())
+        menu.addItem(MenuAction.item(t.savePreset) { model.actions.savePreset() })
+        menu.addItem(.separator())
+        for row in model.presets {
+            let edit = NSMenu()
+            edit.autoenablesItems = false
+            edit.addItem(MenuAction.item(t.renamePreset) { model.actions.renamePreset(row.id) })
+            let update = MenuAction.item(t.updatePreset) { model.actions.updatePreset(row.id) }
+            update.isEnabled = PresetEdit.canUpdate(row)
+            edit.addItem(update)
+            edit.addItem(MenuAction.item(t.deletePreset) { model.actions.deletePreset(row.id) })
+            let item = NSMenuItem(title: row.name, action: nil, keyEquivalent: "")
+            item.submenu = edit
+            menu.addItem(item)
+        }
+        return menu
+    }
+}
+
+/// A left-column row's symbol, in the slot that starts every row's name on one line.
+struct QuickRowIcon: View {
+    let name: String
+    init(_ name: String) { self.name = name }
+
+    var body: some View {
+        Image(systemName: name)
+            .font(.system(size: 15))
+            .frame(width: 20)
+    }
+}
+
+/// A left-column row below the hero: one fixed height and gap, so the rows read as one list,
+/// with a faint fill under the pointer.
+struct QuickRow: ViewModifier {
+    static let height: CGFloat = 28
+    static let gap: CGFloat = 6
     @StateObject private var hover = HoverState()
 
     func body(content: Content) -> some View {
         content
-            .frame(minHeight: 34)
+            .frame(height: QuickRow.height)
             .padding(.horizontal, MainColumns.rowInset)
             .background(RoundedRectangle(cornerRadius: 8)
                 .fill(Color.primary.opacity(hover.isHovered ? 0.05 : 0)))

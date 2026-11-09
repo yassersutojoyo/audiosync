@@ -7638,7 +7638,7 @@ do {
     // The mic is 20 pt wide; the chevron is estimated at 7 pt; "Calibrate All Speakers" measured 132.7 pt on the Mac.
     let calibrateRoom = MainColumns.narrow - 2 * MainColumns.rowInset - 20 - 7 - 2 * 8
     check(calibrateRoom >= 133 && calibrateRowSource.contains("HStack(spacing: 8)")
-            && calibrateRowSource.contains(".frame(width: 20)") && calibrateRowSource.contains("Text(t.calibrateAll)")
+            && calibrateRowSource.contains("QuickRowIcon(") && calibrateRowSource.contains("Text(t.calibrateAll)")
             && !calibrateRowSource.contains("Spacer(") && !calibrateRowSource.contains("ScrollingTitle"),
           "left column: Calibrate All Speakers fits whole on one still line at the slim width",
           calibrateRowSource.isEmpty ? "no CalibrateAllButton source" : "\(calibrateRoom) pt")
@@ -7654,6 +7654,35 @@ do {
           "now playing: with Shuffle and Repeat, all five buttons fit the narrow left column's hero", "\(row) pt")
     check(MainColumns.transportSpacing(modes: false) == 28,
           "now playing: without Shuffle or Repeat the three buttons keep their spacing")
+}
+
+// MARK: Left column rows line up (MainWindow.swift, CalibrateAllViews.swift)
+do {
+    let part = { (file: String, start: String, end: String) -> String in
+        ((try? String(contentsOfFile: "Sources/AudioSync/\(file)", encoding: .utf8)) ?? "")
+            .components(separatedBy: start).dropFirst().first?.components(separatedBy: end).first ?? ""
+    }
+    let rows = [("Presets", part("MainWindow.swift", "private struct PresetsRow", "\n}\n")),
+                ("Equalizer", part("MainWindow.swift", "func equalizerRow(", "\n    }\n")),
+                ("Calibrate All Speakers", part("CalibrateAllViews.swift", "struct CalibrateAllButton", "\n}\n"))]
+    // A borderless Menu hands its label to AppKit, which sets its own icon width and gap.
+    let apart = rows.filter { !$0.1.contains("QuickRowIcon(") || $0.1.contains(".menuStyle(") }.map(\.0)
+    check(apart.isEmpty,
+          "left column: Presets, Equalizer and Calibrate All Speakers draw their icon in one slot, so their names start on one line",
+          "laid out apart: \(apart)")
+    let quickRow = part("MainWindow.swift", "struct QuickRow: ViewModifier", "\n}\n")
+    let column = part("MainWindow.swift", "hero(t)\n", "\n                }\n")
+    let calibrate = rows[2].1
+    let calibrateRow = calibrate.components(separatedBy: "if let off").first ?? ""
+    let oneRowEach = rows.filter { $0.1.components(separatedBy: ".modifier(QuickRow())").count != 2 }.map(\.0)
+    // The blocker note hangs below Calibrate's row; inside the row it pushed the button to the top.
+    check(quickRow.contains(".frame(height: QuickRow.height)") && !quickRow.contains("minHeight")
+            && column.contains("VStack(alignment: .leading, spacing: QuickRow.gap) {")
+            && column.contains("PresetsRow(model: model)\n")
+            && column.contains("CalibrateAllButton(model: model)\n") && !column.contains("CalibrateAllButton(model: model).modifier")
+            && oneRowEach.isEmpty && calibrateRow.contains(".modifier(QuickRow())"),
+          "left column: Presets, Equalizer and Calibrate All Speakers share one row height and one gap, the Calibrate note below its row",
+          "rows without exactly one QuickRow: \(oneRowEach)")
 }
 
 // MARK: Main window v3.1: zoom, motion, and what waits one step away (WindowRules.swift, MainWindow.swift)
@@ -7680,12 +7709,14 @@ do {
         window.components(separatedBy: marker).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
     }
     func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
-    let presets = part(after: "private struct PresetsRow")
-    check(count(presets, "model.actions.recallPreset(row.id)") == 1 && count(presets, "model.actions.savePreset()") == 1
+    let presets = part(after: "private enum PresetsRowMenu")
+    check(count(part(after: "private struct PresetsRow"), "PresetsRowMenu.make(") == 1
+            && count(presets, "model.actions.recallPreset(row.id)") == 1 && count(presets, "row.current ? .on : .off") == 1
+            && count(presets, "model.actions.savePreset()") == 1
             && count(presets, "model.actions.renamePreset(row.id)") == 1 && count(presets, "model.actions.updatePreset(row.id)") == 1
             && count(presets, "model.actions.deletePreset(row.id)") == 1 && count(presets, "PresetEdit.canUpdate(row)") == 1,
           "main window presets: one row whose menu still recalls, saves, renames, updates and deletes every preset")
-    check(count(presets, "currentRow") == 0 && count(presets, "ForEach(model.presets) { row in") == 2,
+    check(count(presets, "currentRow") == 0 && count(presets, "for row in model.presets {") == 2,
           "main window presets: every preset has its own Rename…, Update to Current Settings and Delete, so a preset that isn't current can be updated")
     let speakerRow = part(after: "struct SpeakerRow: View")
     check(count(speakerRow, ".modifier(Reveal(shown: oneStepShown || optionsFocused))") == 1
@@ -17372,8 +17403,9 @@ do {
     let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let card = window.components(separatedBy: "private struct PresetsRow").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
-    check(card.contains("Brand.secondaryText")
-            && !card.contains("Color(") && !card.contains("NSColor("),
+    let styles = card.components(separatedBy: ".foregroundStyle(").dropFirst() + card.components(separatedBy: ".tint(").dropFirst()
+    check(card.contains("Text(t.presets)") && styles.allSatisfy { $0.hasPrefix("Brand.") }
+            && !card.contains("Color(") && !card.contains("Color.") && !card.contains("NSColor("),
           "presets: the card's colors are brand tokens, never a literal color")
 
     // The card's fill is the system control background, which the brand surfaces stand for.
