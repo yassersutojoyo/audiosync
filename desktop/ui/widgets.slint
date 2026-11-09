@@ -1327,9 +1327,19 @@ export component LevelMeter inherits Rectangle {
     in property <int> spoken-percent;
     in property <string> label;
 
+    // The level drawn; a fall glides over one 100 ms poll so it lands as the
+    // next reading comes, a rise is at once so a peak never shows late.
+    property <float> drawn;
+    property <bool> falling;
+    init => {
+        root.drawn = root.level;
+    }
+    changed level => {
+        root.falling = root.level < root.drawn;
+        root.drawn = root.level;
+    }
+
     height: 4px;
-    border-radius: self.height / 2;
-    background: Tokens.separator;
     accessible-role: progress-indicator;
     accessible-label: root.label;
     accessible-value: Strings.input-level-value(root.spoken-percent);
@@ -1337,11 +1347,22 @@ export component LevelMeter inherits Rectangle {
     accessible-value-maximum: 100;
 
     Rectangle {
-        x: 0;
-        width: parent.width * clamp(root.level, 0, 1);
-        height: parent.height;
-        border-radius: parent.border-radius;
-        background: Tokens.teal-text;
+        x: 10px;
+        width: parent.width - 20px;
+        border-radius: self.height / 2;
+        background: Tokens.separator;
+
+        Rectangle {
+            x: 0;
+            width: parent.width * clamp(root.drawn, 0, 1);
+            height: parent.height;
+            border-radius: parent.border-radius;
+            background: Tokens.teal-text;
+            animate width {
+                duration: root.falling && Motion.on ? 100ms : 0ms;
+                easing: linear;
+            }
+        }
     }
 }
 

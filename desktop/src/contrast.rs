@@ -404,6 +404,7 @@ fn custom_controls_are_accessible_and_show_focus() {
         (widgets, "LinkButton"),
         (main, "EqualizerCard"),
         (main, "QuickRow"),
+        (main, "SourceMenu"),
     ] {
         let start = source
             .find(&format!("component {component} "))

@@ -36,6 +36,94 @@ global MainColumns {
     }
 }
 
+// The hero's source menu, drawn as the Mac's: a filled row with the source's
+// teal icon, its name and a chevron, opening the list of sources.
+component SourceMenu inherits Rectangle {
+    in property <[string]> sources;
+    in property <int> index;
+    in property <bool> is-input;
+    out property <bool> has-focus: focus.has-focus;
+    callback chosen(int);
+
+    function open-menu() {
+        menu.show({ x: 0, y: root.height });
+    }
+
+    border-radius: 9px;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : Tokens.text.with-alpha(0.05);
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: Strings.source-label;
+    accessible-value: root.sources[root.index];
+    accessible-action-default => {
+        root.open-menu();
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.open-menu();
+        }
+
+        menu := ContextMenuArea {
+            Menu {
+                for name[i] in root.sources: MenuItem {
+                    title: name;
+                    checkable: true;
+                    checked: i == root.index;
+                    activated => {
+                        root.chosen(i);
+                    }
+                }
+            }
+
+            focus := FocusScope {
+                focus-on-click: false;
+                key-pressed(event) => {
+                    if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
+                        root.open-menu();
+                        return accept;
+                    }
+                    return reject;
+                }
+
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    spacing: 8px;
+
+                    Glyph {
+                        glyph: root.is-input ? Glyphs.microphone : Glyphs.volume-high;
+                        color: Tokens.teal-text;
+                        font-size: 20px;
+                    }
+
+                    Text {
+                        text: root.sources[root.index];
+                        color: Tokens.text;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
+
+                    Glyph {
+                        glyph: Glyphs.chevron-down;
+                        font-size: 9px;
+                        color: Tokens.text;
+                    }
+                }
+            }
+        }
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
 // Speaker rows with a line between them, in a section's or a zone's card.
 component SpeakerRows inherits VerticalLayout {
     in property <[SpeakerItem]> speakers;
@@ -1646,9 +1734,6 @@ export component MainWindow inherits Window {
     changed running => {
         power.checked = root.running;
     }
-    changed source-index => {
-        source.current-index = root.source-index;
-    }
 
     MenuBar {
         Menu {
@@ -2034,29 +2119,18 @@ export component MainWindow inherits Window {
 
                         hero-touch := TouchArea {
                             hero-content := VerticalLayout {
-                                padding: 12px;
+                                padding: 14px;
                                 spacing: 8px;
 
-                                // An input device carries a microphone, as the Mac's picker shows its icon (S448).
-                                HorizontalLayout {
-                                    spacing: 8px;
-
-                                    if root.source-is-input: input-marker := Glyph {
-                                        glyph: Glyphs.microphone;
-                                        color: Tokens.secondary-text;
+                                source := SourceMenu {
+                                    sources: root.sources;
+                                    index: root.source-index;
+                                    is-input: root.source-is-input;
+                                    changed has-focus => {
+                                        root.control-focus-changed(MainControl.source, self.has-focus);
                                     }
-
-                                    source := ComboBox {
-                                        model: root.sources;
-                                        current-index: root.source-index;
-                                        accessible-label: Strings.source-label;
-                                        changed has-focus => {
-                                            root.control-focus-changed(MainControl.source, self.has-focus);
-                                        }
-                                        selected => {
-                                            root.source-selected(self.current-index);
-                                            self.current-index = root.source-index;
-                                        }
+                                    chosen(i) => {
+                                        root.source-selected(i);
                                     }
                                 }
 
@@ -2137,7 +2211,7 @@ export component MainWindow inherits Window {
                                 }
 
                                 if root.now-playing-shown: NowPlayingCard {
-                                    cover-size: MainColumns.left(root.columns-width) - 28px;
+                                    cover-size: MainColumns.left(root.columns-width) - 32px;
                                     revealed: hero-touch.has-hover;
                                     title: root.now-playing-title;
                                     subtitle: root.now-playing-subtitle;

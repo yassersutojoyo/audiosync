@@ -1045,38 +1045,32 @@ mod tests {
             (
                 "main.slint",
                 include_str!("../ui/main.slint"),
-                [
-                    ("power := ToggleSwitch", "self.checked = root.running;"),
-                    (
-                        "source := ComboBox",
-                        "self.current-index = root.source-index;",
-                    ),
-                ],
+                &[("power := ToggleSwitch", "self.checked = root.running;")][..],
             ),
             (
                 "flyout.slint",
                 include_str!("../ui/flyout.slint"),
-                [
+                &[
                     ("power := ToggleSwitch", "self.checked = root.running;"),
                     (
                         "source := ComboBox",
                         "self.current-index = root.source-index;",
                     ),
-                ],
+                ][..],
             ),
             (
                 "equalizer.slint",
                 include_str!("../ui/equalizer.slint"),
-                [
+                &[
                     ("power := ToggleSwitch", "self.checked = root.enabled;"),
                     (
                         "presets := ComboBox",
                         "self.current-index = root.preset-index;",
                     ),
-                ],
+                ][..],
             ),
         ] {
-            for (element, reset) in pairs {
+            for &(element, reset) in pairs {
                 let handler = if element.ends_with("Switch") {
                     "toggled"
                 } else {
