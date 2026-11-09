@@ -47,10 +47,11 @@ struct PanelZoneHeader: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .contentShape(.focusEffect, Circle())
             .opacity(nonePresent ? 0.45 : 1)
             // With nothing to switch, the name button speaks for the row.
             .accessibilityHidden(nonePresent)
-            .focusable(!nonePresent)
+            .modifier(SkipsFocus(skip: nonePresent))
             .accessibilityLabel(t.zoneLabel(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))

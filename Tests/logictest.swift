@@ -17222,7 +17222,7 @@ do {
     check(inCard(".accessibilityHidden(nonePresent)") == 1
           && inCard(".accessibilityValue(nonePresent ? model.countText(of: zone) : \"\")") == 1,
           "main window zone header: VoiceOver skips the greyed icon and the fold button carries the count")
-    check(inCard(".focusable(!nonePresent)") == 1 && occurrences(".focusable(!nonePresent)") == 1,
+    check(inCard(".modifier(SkipsFocus(skip: nonePresent))") == 1 && occurrences(".modifier(SkipsFocus(skip: nonePresent))") == 1,
           "zone header: the keyboard skips the greyed icon VoiceOver skips, in the main window as in the panel")
     // Go to Zone lands on a part VoiceOver can reach: the greyed icon is hidden from it.
     check(ZoneHeaderHit.goToZoneFocus(nonePresent: false) == .zoneIcon,
@@ -17242,6 +17242,28 @@ do {
             && inCard(".onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }") == 2
             && occurrences("ZoneHeaderHit.arrowFolds(") == 1 && inCard("ZoneHeaderHit.arrowFolds(") == 1,
           "zone header: both focusable parts take Left and Right through ZoneHeaderHit.arrowFolds, in the panel and the main window")
+}
+
+// MARK: A delay pane closed while its field has the focus leaves no ring on a neighbour (MainWindow.swift, PanelZoneHeader.swift)
+do {
+    let ringWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let ringPanel = (try? String(contentsOfFile: "Sources/AudioSync/PanelZoneHeader.swift", encoding: .utf8)) ?? ""
+    func ringCount(_ source: String, _ needle: String) -> Int { source.components(separatedBy: needle).count - 1 }
+    check(ringCount(ringWindow, "returnDelayFocus($delayFocused)") == 2
+            && ringWindow.contains("if NSApp.isFullKeyboardAccessEnabled { focus.wrappedValue = true }")
+            && ringWindow.contains("NSApp.keyWindow?.makeFirstResponder(nil)"),
+          "delay pane focus: a speaker's and the AirPlay pane closing hand the focus to the delay value only under keyboard navigation, else the window keeps it")
+    check(ringCount(ringWindow, ".focusable(!nonePresent)") == 0 && ringCount(ringPanel, ".focusable(!nonePresent)") == 0
+            && ringCount(ringWindow, ".modifier(SkipsFocus(skip: nonePresent))") == 1
+            && ringCount(ringPanel, ".modifier(SkipsFocus(skip: nonePresent))") == 1,
+          "zone icon focus: a click never focuses the round icon with keyboard navigation off, in the main window as in the panel")
+    check(ringCount(ringWindow, ".contentShape(.focusEffect, Circle())") == 1
+            && ringCount(ringPanel, ".contentShape(.focusEffect, Circle())") == 1,
+          "zone icon focus: under keyboard navigation the ring follows the round icon, not a square")
+    check(ringCount(ringWindow, "FadingScroll(onBlankTap: blankTap)") == 2
+            && ringCount(ringWindow, ".onTapGesture(perform: blankTap)") == 1
+            && ringWindow.contains("model.closeDelayPanels()\n        NSApp.keyWindow?.makeFirstResponder(nil)"),
+          "blank click: a click no control takes clears the focus, so a ring left on a control always has a way out")
 }
 
 // MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)

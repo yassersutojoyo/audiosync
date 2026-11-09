@@ -229,6 +229,12 @@ struct MainView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
+    /// A click no control takes also ends any focus, so a focus ring left on a control has a way out.
+    private func blankTap() {
+        model.closeDelayPanels()
+        NSApp.keyWindow?.makeFirstResponder(nil)
+    }
+
     var body: some View {
         let t = model.text
         // The notices carry the gap above them, so it opens and closes with them.
@@ -236,7 +242,7 @@ struct MainView: View {
             header(t)
             NoticeStack(model: model)
             HStack(alignment: .top, spacing: BrandTokens.Spacing.columnGap) {
-                FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
+                FadingScroll(onBlankTap: blankTap) {
                     // One hero, then plain rows split by a hairline instead of a card each.
                     VStack(alignment: .leading, spacing: 0) {
                         hero(t)
@@ -250,7 +256,7 @@ struct MainView: View {
                     }
                 }
                 .frame(width: MainColumns.left(window: windowWidth.points))
-                FadingScroll(onBlankTap: { model.closeDelayPanels() }) {
+                FadingScroll(onBlankTap: blankTap) {
                     let all = model.layout
                     let layout = model.zonelessLayout
                     let zoned = model.zonedLayout
@@ -311,7 +317,7 @@ struct MainView: View {
         .background {
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture { model.closeDelayPanels() }
+                .onTapGesture(perform: blankTap)
         }
         // Near monochrome: sliders and controls in ink, teal only where a state shows.
         .tint(.primary)
@@ -1079,10 +1085,11 @@ private struct ZoneCard: View {
                 SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: shownState, size: 32)
             }
             .buttonStyle(.plain)
+            .contentShape(.focusEffect, Circle())
             .opacity(nonePresent ? 0.45 : 1)
             // With nothing to switch, the chevron speaks for the header.
             .accessibilityHidden(nonePresent)
-            .focusable(!nonePresent)
+            .modifier(SkipsFocus(skip: nonePresent))
             .accessibilityLabel(t.zoneLabel(zone.name))
             .accessibilityValue(nonePresent ? model.countText(of: zone)
                                 : t.zoneValue(on: zone.on, of: zone.total, waiting: zone.waiting))
@@ -1573,7 +1580,7 @@ struct SpeakerRow: View {
         }
         .onChange(of: showSync) { _, open in
             if !open, model.draft(for: speaker.id).fieldFocused || model.delayFocusLeftByClick == speaker.id {
-                delayFocused = true
+                returnDelayFocus($delayFocused)
             }
         }
         .onChange(of: model.focusSwitch, initial: true) { _, id in
@@ -1729,6 +1736,25 @@ private extension View {
     }
 }
 
+/// A closing delay pane hands the focus to the row's delay value, which a plain button takes only under
+/// keyboard navigation; otherwise the window keeps it, so AppKit doesn't pass it, ring and all, to a neighbour.
+@MainActor private func returnDelayFocus(_ focus: FocusState<Bool>.Binding) {
+    if NSApp.isFullKeyboardAccessEnabled { focus.wrappedValue = true } else {
+        focus.wrappedValue = false
+        NSApp.keyWindow?.makeFirstResponder(nil)
+    }
+}
+
+/// `.focusable(true)` would let a click focus a plain button, ring and all, with keyboard navigation
+/// off; left alone, the button keeps the system's rule.
+struct SkipsFocus: ViewModifier {
+    let skip: Bool
+
+    func body(content: Content) -> some View {
+        if skip { content.focusable(false) } else { content }
+    }
+}
+
 /// The AirPlay delay (S178, S181): one row under the AirPlay speakers, with
 /// the controls of a local speaker's delay, since every local speaker waits
 /// that long for them while one is on.
@@ -1766,7 +1792,7 @@ struct AirPlayDelayRow: View {
         }
         .onChange(of: expanded) { _, open in
             if !open, model.draft(for: Self.id).fieldFocused || model.delayFocusLeftByClick == Self.id {
-                delayFocused = true
+                returnDelayFocus($delayFocused)
             }
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
