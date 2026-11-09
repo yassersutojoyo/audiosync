@@ -7670,6 +7670,19 @@ do {
     check(apart.isEmpty,
           "left column: Presets, Equalizer and Calibrate All Speakers draw their icon in one slot, so their names start on one line",
           "laid out apart: \(apart)")
+    let quickRow = part("MainWindow.swift", "struct QuickRow: ViewModifier", "\n}\n")
+    let column = part("MainWindow.swift", "hero(t)\n", "\n                }\n")
+    let calibrate = rows[2].1
+    let calibrateRow = calibrate.components(separatedBy: "if let off").first ?? ""
+    let oneRowEach = rows.filter { $0.1.components(separatedBy: ".modifier(QuickRow())").count != 2 }.map(\.0)
+    // The blocker note hangs below Calibrate's row; inside the row it pushed the button to the top.
+    check(quickRow.contains(".frame(height: QuickRow.height)") && !quickRow.contains("minHeight")
+            && column.contains("VStack(alignment: .leading, spacing: QuickRow.gap) {")
+            && column.contains("PresetsRow(model: model)\n")
+            && column.contains("CalibrateAllButton(model: model)\n") && !column.contains("CalibrateAllButton(model: model).modifier")
+            && oneRowEach.isEmpty && calibrateRow.contains(".modifier(QuickRow())"),
+          "left column: Presets, Equalizer and Calibrate All Speakers share one row height and one gap, the Calibrate note below its row",
+          "rows without exactly one QuickRow: \(oneRowEach)")
 }
 
 // MARK: Main window v3.1: zoom, motion, and what waits one step away (WindowRules.swift, MainWindow.swift)
