@@ -18119,5 +18119,20 @@ do {
           "equalizer row source: a curve name too long for its room scrolls, cut with an ellipsis only under Reduce Motion")
 }
 
+// MARK: A delay pane's content opens and closes with its pane (MainWindow.swift, MenuBar.swift)
+do {
+    let paneWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let paneMenuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    func paneCount(_ needle: String) -> Int { paneWindow.components(separatedBy: needle).count - 1 }
+    check(paneCount(".transition(DelayPaneMotion.transition(reduceMotion: reduceMotion))") == 3
+            && paneCount(".padding(.horizontal, BrandTokens.Spacing.rowPaddingX)\n        // The pane's content never draws over the rows below while it closes.\n        .clipped()") == 2,
+          "delay pane source: a speaker's and the AirPlay delay's pane content is clipped to its row as the pane opens and closes")
+    check(paneWindow.contains(".animation(reduceMotion ? nil : PowerMotion.animation(reduceMotion: false), value: model.delayPanels)")
+            && paneWindow.contains("insertion: .opacity.animation(.easeInOut(duration: half).delay(half))")
+            && paneWindow.contains("removal: .opacity.animation(.easeInOut(duration: half))")
+            && paneMenuBar.contains("static let delayPanelAnimation = Animation.easeInOut(duration: PowerMotion.duration)"),
+          "delay pane source: the pane and its rows move on the switch's curve, the content fading out in the first half and in over the second")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

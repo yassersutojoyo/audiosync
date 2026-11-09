@@ -133,6 +133,18 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
 private let accent = Brand.teal
 
+/// How a delay pane's content comes and goes inside its row, which clips it:
+/// out over the first half of the pane's close, in over the second half of
+/// its open, once the room is there. A plain fade with Reduce Motion.
+enum DelayPaneMotion {
+    static func transition(reduceMotion: Bool) -> AnyTransition {
+        guard !reduceMotion else { return .opacity.animation(.linear(duration: MainMotion.reducedFade)) }
+        let half = PowerMotion.duration / 2
+        return .asymmetric(insertion: .opacity.animation(.easeInOut(duration: half).delay(half)),
+                           removal: .opacity.animation(.easeInOut(duration: half)))
+    }
+}
+
 private extension MainMotion {
     static func rows(reduceMotion: Bool) -> Animation? {
         reduceMotion ? nil : .easeOut(duration: rowMove)
@@ -214,7 +226,7 @@ struct MainView: View {
                     // ease-out; with Reduce Motion they move at once.
                     .animation(MainMotion.rows(reduceMotion: reduceMotion),
                                value: all.thisMac.map(\.id) + all.connected.map(\.id) + model.zones.map(\.id))
-                    .animation(MainMotion.rows(reduceMotion: reduceMotion), value: model.delayPanels)
+                    .animation(reduceMotion ? nil : PowerMotion.animation(reduceMotion: false), value: model.delayPanels)
                     .padding(.bottom, 4)
                 }
                 // Slim by default; a wider window widens it up to 524 pt, its
@@ -1324,6 +1336,7 @@ struct SpeakerRow: View {
     private var tag: String? { showTag ? model.text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2) : nil }
 
     private var showSync: Bool { model.delayPanels.isOpen(speaker.id) }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var state: SpeakerState { model.state(of: speaker) }
 
@@ -1467,13 +1480,13 @@ struct SpeakerRow: View {
                     else { model.actions.setLocalOffset(speaker.id, ms) }
                 }
                 .padding(.leading, 44)
-                .transition(.opacity)
+                .transition(DelayPaneMotion.transition(reduceMotion: reduceMotion))
                 // A Cast speaker's timing isn't known to the microphone sweep's model.
                 if !speaker.isCast {
                     CalibrationControl(model: model, id: speaker.id, name: speaker.name, speakerOn: speaker.enabled,
                                        leftOut: speaker.calibrationLeftOut)
                         .padding(.leading, 44)
-                        .transition(.opacity)
+                        .transition(DelayPaneMotion.transition(reduceMotion: reduceMotion))
                 }
             }
         }
@@ -1490,6 +1503,8 @@ struct SpeakerRow: View {
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
+        // The pane's content never draws over the rows below while it closes.
+        .clipped()
         // Teal marks state on the badge alone; the row's fill only follows the pointer,
         // in over 80 ms and out at once.
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
@@ -1644,6 +1659,7 @@ struct AirPlayDelayRow: View {
     static let id = "airplay-delay"
 
     private var expanded: Bool { model.delayPanels.isOpen(Self.id) }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var delayFocused: Bool
 
     var body: some View {
@@ -1669,7 +1685,7 @@ struct AirPlayDelayRow: View {
                     delayFocused = true
                 }) { model.actions.setAirPlayDelay($0) }
                     .padding(.leading, 44)
-                    .transition(.opacity)
+                    .transition(DelayPaneMotion.transition(reduceMotion: reduceMotion))
             }
         }
         .onChange(of: expanded) { _, open in
@@ -1679,6 +1695,8 @@ struct AirPlayDelayRow: View {
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
+        // The pane's content never draws over the rows below while it closes.
+        .clipped()
         // A click on the row's box works like its delay value.
         .contentShape(Rectangle())
         .onTapGesture { model.toggleDelayPanel(Self.id) }
