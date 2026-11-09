@@ -28,7 +28,7 @@ struct PanelZoneHeader: View {
             Button { hit(.chevron) } label: {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .modifier(FoldTurn(open: expanded))
                     .frame(width: 12)
                     .padding(.leading, 6)
                     .padding(.trailing, 5)

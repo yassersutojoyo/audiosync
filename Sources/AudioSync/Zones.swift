@@ -453,11 +453,6 @@ enum ZoneLayout {
                              collapsed: Set<String>) -> Int {
         zones.reduce(0) { $0 + 1 + (collapsed.contains(id($1)) ? 0 : members($1)) }
     }
-
-    /// The member rows a zone shows: none while it is folded.
-    static func shownMembers<M>(_ members: [M], folded: Bool) -> [M] {
-        folded ? [] : members
-    }
 }
 
 /// What a click on each part of a zone's header does, in the main window and

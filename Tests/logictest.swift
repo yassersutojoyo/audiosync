@@ -8538,13 +8538,13 @@ do {
         .components(separatedBy: "\n    }\n").first ?? ""
     // covers: S403
     check(foldBody.contains("animateResize(") && !foldBody.contains("resizeLater(")
-            && foldBody.contains(".easeInOut(duration: motion.duration)") && foldBody.contains("name: .easeInEaseOut"),
-          "menu bar panel source: fold() starts the resize itself, not through the gathered step, on the rows' ease-in-out curve")
+            && foldBody.contains(".linear(duration: motion.duration)") && foldBody.contains("name: .easeInEaseOut"),
+          "menu bar panel source: fold() starts the resize itself, not through the gathered step, on the main window's linear progress")
     let rowsSource = bar.components(separatedBy: "private var speakerRows: some View {").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
     // covers: S403
-    check(rowsSource.contains(".transition(.opacity)") && !bar.contains(".opacity.animation("),
-          "menu bar panel source: a zone's rows fade only inside the fold's animation, so a speaker joining or leaving a zone, or a Reduce Motion fold, shows at once")
+    check(!rowsSource.contains(".transition(.opacity)") && !bar.contains(".opacity.animation("),
+          "menu bar panel source: a zone's rows fade in their fold's pane, not in an insert or remove transition, so a speaker joining or leaving a zone, or a Reduce Motion fold, shows at once")
     let zoneArea = CGRect(x: 0, y: 0, width: 294, height: 84)
     // covers: S403
     check(PanelFold.clip(zoneArea, moving: true) == zoneArea
@@ -17266,7 +17266,7 @@ do {
           "blank click: a click no control takes clears the focus, so a ring left on a control always has a way out")
 }
 
-// MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows, shownMembers)
+// MARK: Menu bar panel rows for zones, folded and unfolded (ZoneLayout.panelRows)
 // covers: S359
 do {
     let zones: [(id: String, members: [String])] = [("living", ["tv", "sonos"]), ("kitchen", ["pod"]), ("empty", [])]
@@ -17279,10 +17279,6 @@ do {
     check(rows(["living", "kitchen", "empty"]) == 3, "panel zone rows: all folded, only the headers stay",
           "\(rows(["living", "kitchen", "empty"]))")
     check(rows(["gone"]) == 6, "panel zone rows: a folded zone that no longer exists changes nothing")
-    check(ZoneLayout.shownMembers(zones[0].members, folded: false) == ["tv", "sonos"],
-          "panel zone members: an unfolded zone lists its members in order")
-    check(ZoneLayout.shownMembers(zones[0].members, folded: true).isEmpty,
-          "panel zone members: a folded zone lists none")
 }
 
 // MARK: Zone folding is per view; double-clicks rename zones and zoned speakers
@@ -18171,14 +18167,35 @@ do {
     check(auditTitle.contains(".mask(MarqueeEdges(") && auditTitle.contains("Marquee.edges(offset:"),
           "scrolling title source: a running name fades out at the edge it is cut on, so no cut letter meets the dot beside it")
     let auditEdges = ([0, 3, 30, 57, 60] as [CGFloat]).map { Marquee.edges(offset: $0, overflow: 60) }
-    check(auditEdges.map(\.leading) == [0, 3, 8, 8, 8] && auditEdges.map(\.trailing) == [8, 8, 8, 3, 0]
+    check(auditEdges.map(\.leading) == [0, 3, 16, 16, 16] && auditEdges.map(\.trailing) == [8, 8, 8, 3, 0]
             && Marquee.edges(offset: 0, overflow: 0) == (0, 0),
-          "scrolling title: only an edge that cuts a letter fades, up to 8 pt, so the title's start and end read in full")
+          "scrolling title: only an edge that cuts a letter fades, the leading one up to 16 pt so no sliver of a cut letter shows at the scroll end")
     let auditZone = auditPart("MainWindow.swift", "ZoneCard: View")
     check(auditZone.contains(".modifier(FoldTurn(open: expanded))")
             && !auditZone.contains(".rotationEffect(.degrees(expanded ? 90 : 0))")
             && auditZone.contains("withAnimation(AppModel.delayPanelMotion(reduceMotion: reduceMotion))"),
           "zone card source: the chevron turns on the fold's own progress and curve, reading Reduce Motion from the view")
+}
+
+// MARK: The panel's zone fold fades its rows before it folds and after it unfolds, as the main window does (MenuBar.swift, PanelZoneHeader.swift)
+do {
+    let panelFoldBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let panelFoldHeader = (try? String(contentsOfFile: "Sources/AudioSync/PanelZoneHeader.swift", encoding: .utf8)) ?? ""
+    let panelFoldRows = panelFoldBar.components(separatedBy: "private var speakerRows: some View {").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let panelFoldBody = panelFoldBar.components(separatedBy: "private func fold(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(panelFoldRows.contains(".modifier(DisclosedPane(open: zoneDisclosure.isExpanded(zone.id)))")
+            && !panelFoldRows.contains("ZoneLayout.shownMembers("),
+          "menu bar panel source: a zone's members fold in a DisclosedPane, faded before the rows below climb and after they move down")
+    check(panelFoldBody.contains("let half = motion.duration / 2") && panelFoldBody.contains("asyncAfter(deadline: .now() + half)"),
+          "menu bar panel source: the panel resizes in the half of a fold its rows move in, after the fade on a fold and before it on an unfold")
+    check(panelFoldBody.components(separatedBy: "pendingShrink?.cancel()").count == 2
+            && panelFoldBody.components(separatedBy: "pendingShrink?.cancel()").first?.contains("asyncAfter(") == false,
+          "menu bar panel source: a fold cancels the shrink an earlier fold still waits to start, so a quick re-open keeps its rows")
+    check(panelFoldHeader.contains(".modifier(FoldTurn(open: expanded))")
+            && !panelFoldHeader.contains(".rotationEffect(.degrees(expanded ? 90 : 0))"),
+          "panel zone header source: the chevron turns on the fold's own progress and curve")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

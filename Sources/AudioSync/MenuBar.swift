@@ -726,6 +726,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private var resizeEndsAt: TimeInterval?
     /// Bumped by every resize step, so only the latest one's end tells the popover its size.
     private var resizeStep = 0
+    /// A fold's shrink, waiting for its rows to fade (`fold`).
+    private var pendingShrink: DispatchWorkItem?
     /// Where the open panel's window sits for its content size, once the open is over.
     private var rest: PanelRest?
     private var moveWatch: NSObjectProtocol?
@@ -1284,11 +1286,13 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
                       timing: CAMediaTimingFunction(name: .easeOut))
     }
 
-    /// Folds or unfolds a zone as one motion: the panel starts to resize in
-    /// the click's frame, on the curve the rows move and fade on (`PanelFold`).
+    /// Folds or unfolds a zone as one motion: the panel resizes while the
+    /// rows move, on the main window's progress (`PanelFold`).
     private func fold(_ change: () -> Void) {
         let motion = PanelFold(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
-        let animation: Animation? = motion.moves ? .easeInOut(duration: motion.duration) : nil
+        let animation: Animation? = motion.moves ? .linear(duration: motion.duration) : nil
+        // A quick re-open measures the size the panel still has, so the earlier shrink must not start.
+        pendingShrink?.cancel()
         guard presented, host.sizing.followsContent else { return withAnimation(animation) { change() } }
         let clicked = Self.uptime
         withAnimation(animation) {
@@ -1299,8 +1303,22 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         // The layout pass just now asked for this size as a gathered step; this one replaces it.
         resize = PanelResize()
         let size = host.sizeThatFits(in: PanelTopLayout.measuring)
-        animateResize(to: size, duration: motion.duration, timing: CAMediaTimingFunction(name: .easeInEaseOut))
-        DebugTrace.log(String(format: "[AudioSync] panel fold: resize began %.1f ms after the click",
+        // The rows move in one half of the motion (`DisclosedPane`): the second
+        // on a fold, after their fade, and the first on an unfold, before it.
+        let half = motion.duration / 2
+        let timing = CAMediaTimingFunction(name: .easeInEaseOut)
+        if half > 0, size.height < (rest?.content ?? popover.contentSize).height {
+            let step = resizeStep
+            let shrink = DispatchWorkItem { [weak self] in
+                guard let self, self.presented, self.resizeStep == step else { return }
+                self.animateResize(to: size, duration: half, timing: timing)
+            }
+            pendingShrink = shrink
+            DispatchQueue.main.asyncAfter(deadline: .now() + half, execute: shrink)
+        } else {
+            animateResize(to: size, duration: half, timing: timing)
+        }
+        DebugTrace.log(String(format: "[AudioSync] panel fold: resize set %.1f ms after the click",
                               (Self.uptime - clicked) * 1000))
     }
 
@@ -1816,21 +1834,22 @@ struct MenuBarView: View {
             ForEach(model.zones) { zone in
                 VStack(spacing: 0) {
                     PanelZoneHeader(model: model, disclosure: zoneDisclosure, zone: zone, height: rowHeight)
-                    ForEach(ZoneLayout.shownMembers(zone.members, folded: !zoneDisclosure.isExpanded(zone.id))) { member in
-                        Group {
-                            if let speaker = model.speaker(of: member) {
-                                speakerRow(speaker, note: member.note)
-                            } else {
-                                CompactRow(name: member.name, symbol: member.symbol, state: .off, text: t,
-                                           height: rowHeight, hint: member.note,
-                                           shownNote: t.panelRowNote(member.note)) {}
-                                    .disabled(true)
+                    VStack(spacing: 0) {
+                        ForEach(zone.members) { member in
+                            Group {
+                                if let speaker = model.speaker(of: member) {
+                                    speakerRow(speaker, note: member.note)
+                                } else {
+                                    CompactRow(name: member.name, symbol: member.symbol, state: .off, text: t,
+                                               height: rowHeight, hint: member.note,
+                                               shownNote: t.panelRowNote(member.note)) {}
+                                        .disabled(true)
+                                }
                             }
+                            .padding(.leading, 12)
                         }
-                        .padding(.leading, 12)
-                        // Fades only in the fold's animation; a speaker joining or leaving a zone shows at once.
-                        .transition(.opacity)
                     }
+                    .modifier(DisclosedPane(open: zoneDisclosure.isExpanded(zone.id)))
                 }
                 .clipShape(FoldClip(moving: zoneDisclosure.moving))
             }
