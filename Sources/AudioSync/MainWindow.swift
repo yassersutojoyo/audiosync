@@ -169,9 +169,11 @@ struct MainView: View {
                         hero(t)
                         masterVolume(t).padding(.top, 16)
                         Divider().padding(.vertical, 10)
-                        PresetsRow(model: model)
-                        equalizerRow(t)
-                        CalibrateAllButton(model: model).modifier(QuickRow())
+                        VStack(alignment: .leading, spacing: QuickRow.gap) {
+                            PresetsRow(model: model)
+                            equalizerRow(t)
+                            CalibrateAllButton(model: model)
+                        }
                     }
                 }
                 .frame(width: MainColumns.left(window: windowWidth.points))
@@ -784,13 +786,16 @@ struct QuickRowIcon: View {
     }
 }
 
-/// A left-column row below the hero: 34 pt high, with a faint fill under the pointer.
-private struct QuickRow: ViewModifier {
+/// A left-column row below the hero: one fixed height and gap, so the rows read as one list,
+/// with a faint fill under the pointer.
+struct QuickRow: ViewModifier {
+    static let height: CGFloat = 28
+    static let gap: CGFloat = 6
     @StateObject private var hover = HoverState()
 
     func body(content: Content) -> some View {
         content
-            .frame(minHeight: 34)
+            .frame(height: QuickRow.height)
             .padding(.horizontal, MainColumns.rowInset)
             .background(RoundedRectangle(cornerRadius: 8)
                 .fill(Color.primary.opacity(hover.isHovered ? 0.05 : 0)))

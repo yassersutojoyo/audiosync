@@ -30,6 +30,7 @@ struct CalibrateAllButton: View {
             }
             .buttonStyle(.plain)
             .disabled(off != nil)
+            .modifier(QuickRow())
             .help(blocker.map(t.calibrateAllUnavailable) ?? t.calibrateAllHint)
             .accessibilityLabel(t.calibrateAll)
             .accessibilityHint(blocker.map(t.calibrateAllUnavailable) ?? t.calibrateAllHint)
@@ -39,6 +40,7 @@ struct CalibrateAllButton: View {
                     .font(.caption)
                     .foregroundStyle(Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, MainColumns.rowInset)
                     .accessibilityHidden(true)
             }
         }
