@@ -133,15 +133,54 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
 private let accent = Brand.teal
 
-/// How a delay pane's content comes and goes inside its row, which clips it:
-/// out over the first half of the pane's close, in over the second half of
-/// its open, once the room is there. A plain fade with Reduce Motion.
-enum DelayPaneMotion {
-    static func transition(reduceMotion: Bool) -> AnyTransition {
-        guard !reduceMotion else { return .opacity.animation(.linear(duration: MainMotion.reducedFade)) }
-        let half = PowerMotion.duration / 2
-        return .asymmetric(insertion: .opacity.animation(.easeInOut(duration: half).delay(half)),
-                           removal: .opacity.animation(.easeInOut(duration: half)))
+/// A pane under its row, laid out from one animated `progress` so the rows below follow it frame by
+/// frame. The content fades only while the edge holds still (out, then fold; unfold, then in), so no
+/// edge crosses visible text. Reduce Motion: the height jumps and the content only fades.
+struct DisclosedPane: ViewModifier, Animatable {
+    var progress: Double
+    let open: Bool
+    /// The gap above the content, folded with it so the row doesn't jump.
+    let gap: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(open: Bool, gap: CGFloat = 0) {
+        progress = open ? 1 : 0
+        self.open = open
+        self.gap = gap
+    }
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    private static func ease(_ t: Double) -> Double { t * t * (3 - 2 * t) }
+
+    func body(content: Content) -> some View {
+        if open || progress > 0 {
+            let fold = reduceMotion ? (progress > 0 ? 1 : 0) : Self.ease(min(progress * 2, 1))
+            let fade = reduceMotion ? progress : Self.ease(max(progress * 2 - 1, 0))
+            PaneHeight(fraction: fold) {
+                content.padding(.top, gap).opacity(fade)
+            }
+            // Clipped only while it folds, so an open pane's focus rings aren't cut.
+            .clipShape(Rectangle().inset(by: fold < 1 ? 0 : -4))
+        }
+    }
+}
+
+/// Its content's full height times `fraction`, the content pinned to the top.
+private struct PaneHeight: Layout {
+    let fraction: Double
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let size = subviews.first?.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)) ?? .zero
+        return CGSize(width: size.width, height: size.height * fraction)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, anchor: .topLeading,
+                              proposal: ProposedViewSize(width: bounds.width, height: nil))
     }
 }
 
@@ -222,11 +261,10 @@ struct MainView: View {
                                            localNetworkHint: model.localNetworkHint)
                         }
                     }
-                    // A row that comes, goes or opens its delay moves its neighbours on one
-                    // ease-out; with Reduce Motion they move at once.
+                    // A row that comes or goes moves its neighbours on one ease-out; with
+                    // Reduce Motion they move at once. An opening pane moves them itself.
                     .animation(MainMotion.rows(reduceMotion: reduceMotion),
                                value: all.thisMac.map(\.id) + all.connected.map(\.id) + model.zones.map(\.id))
-                    .animation(reduceMotion ? nil : PowerMotion.animation(reduceMotion: false), value: model.delayPanels)
                     .padding(.bottom, 4)
                 }
                 // Slim by default; a wider window widens it up to 524 pt, its
@@ -579,7 +617,7 @@ struct MainView: View {
                             ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, speaker in
                                 if index > 0 { Divider().padding(.leading, ZoneLook.nameColumn) }
                                 ZoneMemberCompactRow(model: model, speaker: speaker, zone: zone) {
-                                    withAnimation(AppModel.delayPanelAnimation) {
+                                    withAnimation(reduceMotion ? nil : AppModel.delayPanelAnimation) {
                                         scroll.scrollTo(ZoneAnchor(id: zone.id), anchor: .top)
                                     }
                                     model.focusZone = zone.id
@@ -941,7 +979,7 @@ private struct ZoneCard: View {
                         model.focusZone = nil
                     }
                 }
-            if expanded && !zone.members.isEmpty {
+            if !zone.members.isEmpty {
                 ZoneMemberGroup {
                     ForEach(Array(zone.members.enumerated()), id: \.element.id) { index, member in
                         if index > 0 { Divider().padding(.leading, ZoneLook.nameColumn) }
@@ -953,6 +991,7 @@ private struct ZoneCard: View {
                         }
                     }
                 }
+                .modifier(DisclosedPane(open: expanded))
             }
         }
         .accessibilityElement(children: .contain)
@@ -1336,7 +1375,6 @@ struct SpeakerRow: View {
     private var tag: String? { showTag ? model.text.speakerTag(speaker.tag, airPlay2: speaker.airPlay2) : nil }
 
     private var showSync: Bool { model.delayPanels.isOpen(speaker.id) }
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var state: SpeakerState { model.state(of: speaker) }
 
@@ -1356,7 +1394,7 @@ struct SpeakerRow: View {
 
     var body: some View {
         let t = model.text
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 Button { toggle(state.clickTurnsOn) } label: {
                     SpeakerBadge(symbol: speaker.symbol, state: state, size: 32)
@@ -1467,27 +1505,28 @@ struct SpeakerRow: View {
                     if let cast = speaker.cast, cast.live { castButtons(cast, t) }
                 }
             }
-            if showSync, let ms = model.savedDelay(of: speaker.id) {
-                SyncControls(model: model, id: speaker.id,
-                             kind: speaker.isCast ? .cast : .offset(hasReference: model.hasLocalReference), ms: ms,
-                             label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id),
-                             escape: {
-                    // Dropped first: the field losing the focus would apply it.
-                    model.dropDelayTyping()
-                    delayFocused = true
-                }) { ms in
-                    if speaker.isCast { model.actions.setCastOffset(speaker.id, ms) }
-                    else { model.actions.setLocalOffset(speaker.id, ms) }
+            if let ms = model.savedDelay(of: speaker.id) {
+                VStack(alignment: .leading, spacing: 8) {
+                    SyncControls(model: model, id: speaker.id,
+                                 kind: speaker.isCast ? .cast : .offset(hasReference: model.hasLocalReference), ms: ms,
+                                 label: t.delay(of: speaker.name), text: t, draft: model.draft(for: speaker.id),
+                                 escape: {
+                        // Dropped first: the field losing the focus would apply it.
+                        model.dropDelayTyping()
+                        delayFocused = true
+                    }) { ms in
+                        if speaker.isCast { model.actions.setCastOffset(speaker.id, ms) }
+                        else { model.actions.setLocalOffset(speaker.id, ms) }
+                    }
+                    .padding(.leading, 44)
+                    // A Cast speaker's timing isn't known to the microphone sweep's model.
+                    if !speaker.isCast {
+                        CalibrationControl(model: model, id: speaker.id, name: speaker.name, speakerOn: speaker.enabled,
+                                           leftOut: speaker.calibrationLeftOut)
+                            .padding(.leading, 44)
+                    }
                 }
-                .padding(.leading, 44)
-                .transition(DelayPaneMotion.transition(reduceMotion: reduceMotion))
-                // A Cast speaker's timing isn't known to the microphone sweep's model.
-                if !speaker.isCast {
-                    CalibrationControl(model: model, id: speaker.id, name: speaker.name, speakerOn: speaker.enabled,
-                                       leftOut: speaker.calibrationLeftOut)
-                        .padding(.leading, 44)
-                        .transition(DelayPaneMotion.transition(reduceMotion: reduceMotion))
-                }
+                .modifier(DisclosedPane(open: showSync, gap: 8))
             }
         }
         .onChange(of: showSync) { _, open in
@@ -1503,8 +1542,6 @@ struct SpeakerRow: View {
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
-        // The pane's content never draws over the rows below while it closes.
-        .clipped()
         // Teal marks state on the badge alone; the row's fill only follows the pointer,
         // in over 80 ms and out at once.
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
@@ -1659,12 +1696,11 @@ struct AirPlayDelayRow: View {
     static let id = "airplay-delay"
 
     private var expanded: Bool { model.delayPanels.isOpen(Self.id) }
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var delayFocused: Bool
 
     var body: some View {
         let t = model.text
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
                 Image(systemName: "timer")
                     .font(.system(size: 15))
@@ -1676,17 +1712,15 @@ struct AirPlayDelayRow: View {
                 DelayValueButton(model: model, id: Self.id, draft: model.draft(for: Self.id),
                                  label: t.airPlayDelay, focus: $delayFocused)
             }
-            if expanded {
-                SyncControls(model: model, id: Self.id, kind: .airPlay, ms: model.airPlayDelayMs,
-                             label: t.airPlayDelay, text: t,
-                             draft: model.draft(for: Self.id), escape: {
-                    // Dropped first: the field losing the focus would apply it.
-                    model.dropDelayTyping()
-                    delayFocused = true
-                }) { model.actions.setAirPlayDelay($0) }
-                    .padding(.leading, 44)
-                    .transition(DelayPaneMotion.transition(reduceMotion: reduceMotion))
-            }
+            SyncControls(model: model, id: Self.id, kind: .airPlay, ms: model.airPlayDelayMs,
+                         label: t.airPlayDelay, text: t,
+                         draft: model.draft(for: Self.id), escape: {
+                // Dropped first: the field losing the focus would apply it.
+                model.dropDelayTyping()
+                delayFocused = true
+            }) { model.actions.setAirPlayDelay($0) }
+                .padding(.leading, 44)
+                .modifier(DisclosedPane(open: expanded, gap: 8))
         }
         .onChange(of: expanded) { _, open in
             if !open, model.draft(for: Self.id).fieldFocused || model.delayFocusLeftByClick == Self.id {
@@ -1695,8 +1729,6 @@ struct AirPlayDelayRow: View {
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
         .padding(.horizontal, BrandTokens.Spacing.rowPaddingX)
-        // The pane's content never draws over the rows below while it closes.
-        .clipped()
         // A click on the row's box works like its delay value.
         .contentShape(Rectangle())
         .onTapGesture { model.toggleDelayPanel(Self.id) }

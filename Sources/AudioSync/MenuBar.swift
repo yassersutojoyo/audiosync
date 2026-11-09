@@ -395,7 +395,10 @@ final class AppModel: ObservableObject {
         for draft in drafts.values { draft.field.drop() }
     }
     /// Every way a panel opens or closes animates the same.
-    static let delayPanelAnimation = Animation.easeInOut(duration: PowerMotion.duration)
+    /// Linear, since `DisclosedPane` eases each half of it on its own.
+    static var delayPanelAnimation: Animation {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)
+    }
     /// A click on a row's delay value or on its row: the other panels'
     /// typing applies first, and they stay open.
     func toggleDelayPanel(_ id: String) {

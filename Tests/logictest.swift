@@ -18119,19 +18119,20 @@ do {
           "equalizer row source: a curve name too long for its room scrolls, cut with an ellipsis only under Reduce Motion")
 }
 
-// MARK: A delay pane's content opens and closes with its pane (MainWindow.swift, MenuBar.swift)
+// MARK: A disclosed pane and the rows below it move as one, its content still while they move (MainWindow.swift, MenuBar.swift)
 do {
-    let paneWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
-    let paneMenuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
-    func paneCount(_ needle: String) -> Int { paneWindow.components(separatedBy: needle).count - 1 }
-    check(paneCount(".transition(DelayPaneMotion.transition(reduceMotion: reduceMotion))") == 3
-            && paneCount(".padding(.horizontal, BrandTokens.Spacing.rowPaddingX)\n        // The pane's content never draws over the rows below while it closes.\n        .clipped()") == 2,
-          "delay pane source: a speaker's and the AirPlay delay's pane content is clipped to its row as the pane opens and closes")
-    check(paneWindow.contains(".animation(reduceMotion ? nil : PowerMotion.animation(reduceMotion: false), value: model.delayPanels)")
-            && paneWindow.contains("insertion: .opacity.animation(.easeInOut(duration: half).delay(half))")
-            && paneWindow.contains("removal: .opacity.animation(.easeInOut(duration: half))")
-            && paneMenuBar.contains("static let delayPanelAnimation = Animation.easeInOut(duration: PowerMotion.duration)"),
-          "delay pane source: the pane and its rows move on the switch's curve, the content fading out in the first half and in over the second")
+    let disclosedWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let disclosedMenuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    func disclosedCount(_ needle: String) -> Int { disclosedWindow.components(separatedBy: needle).count - 1 }
+    check(disclosedWindow.contains("struct DisclosedPane: ViewModifier, Animatable")
+            && disclosedWindow.contains("ease(min(progress * 2, 1))")
+            && disclosedWindow.contains("ease(max(progress * 2 - 1, 0))")
+            && disclosedCount(".modifier(DisclosedPane(") == 3,
+          "disclosed pane source: a speaker's, the AirPlay delay's and a zone's pane fold on one progress, the content fading only while the edge holds still")
+    check(!disclosedWindow.contains("value: model.delayPanels)")
+            && disclosedMenuBar.contains("accessibilityDisplayShouldReduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)")
+            && disclosedWindow.contains("withAnimation(reduceMotion ? nil : AppModel.delayPanelAnimation) {\n                                        scroll.scrollTo("),
+          "disclosed pane source: the toggle's own transaction moves the rows below, a plain fade and no scroll under Reduce Motion")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
