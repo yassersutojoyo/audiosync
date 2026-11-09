@@ -98,4 +98,6 @@ Apple, AirPlay and HomePod are trademarks of Apple Inc., Airfoil of Rogue Amoeba
 
 Building, contributing, security: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
 
+Privacy and signing: [`PRIVACY.md`](PRIVACY.md), [Code signing policy](docs/CODE_SIGNING_POLICY.md).
+
 And of course, thank god for Anthropic and Claude.
