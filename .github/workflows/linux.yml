@@ -99,13 +99,13 @@ jobs:
           rustc --version
 
       # Build: Slint's fonts and windows, the Cast sender's OpenSSL, the PipeWire
-      # client with libclang for its bindings. Checks: Xvfb, a session bus, the
+      # client with libclang for its bindings, rpmbuild. Checks: Xvfb, a session bus, the
       # .desktop and AppStream validators, readelf and the X11 libraries winit loads.
       - name: System libraries and tools
         run: >-
           sudo apt-get update -q && sudo apt-get install -y --no-install-recommends
           libfontconfig1-dev libxkbcommon-dev libwayland-dev libx11-dev libssl-dev pkg-config
-          libpipewire-0.3-dev clang libclang-dev
+          libpipewire-0.3-dev clang libclang-dev rpm
           xvfb dbus dbus-user-session appstream desktop-file-utils binutils file
           libx11-xcb1 libxcursor1 libxkbcommon-x11-0 libxi6 libxrandr2
 
@@ -130,7 +130,7 @@ jobs:
       - name: Third-party notices
         run: python3 -I ../scripts/windows_notices.py "$ARCH-unknown-linux-gnu" --output target/release/THIRD-PARTY-NOTICES.txt
 
-      - name: AppImage and .deb
+      - name: AppImage and .deb, and the .rpm on x86_64
         run: |
           version=$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "audiosync-desktop"))')
           mkdir -p ../dist
@@ -139,6 +139,10 @@ jobs:
             "../dist/AudioSync-$version-$ARCH.AppImage"
           ../scripts/build_deb.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt "$version" \
             "../dist/AudioSync-$version-$(dpkg --print-architecture).deb"
+          if [ "$ARCH" = x86_64 ]; then
+            ../scripts/build_rpm.sh target/release/audiosync target/release/THIRD-PARTY-NOTICES.txt "$version" \
+              "../dist/AudioSync-$version-x86_64.rpm"
+          fi
           # RELEASE.md checks this against the commit it tags.
           echo "$GITHUB_SHA" > ../dist/SOURCE-COMMIT.txt
 
@@ -160,6 +164,31 @@ jobs:
           dpkg -s audiosync | grep -q '^Status: install ok installed'
           sudo apt-get remove -y audiosync
           test ! -e /usr/bin/audiosync
+
+      # Installs and removes it in Fedora 43's image, so dnf resolves its Requires.
+      - name: Check the .rpm (fields, files, install and remove)
+        if: matrix.arch == 'x86_64'
+        working-directory: dist
+        run: |
+          rpm=$(ls AudioSync-*.rpm)
+          sha256sum -c "$rpm.sha256"
+          rpm -K --nosignature "$rpm"
+          rpm -qpi "$rpm"
+          rpm -qpR "$rpm"
+          [ "$(rpm -qp --qf '%{ARCH}' "$rpm")" = x86_64 ] || { echo "the .rpm isn't x86_64"; exit 1; }
+          contents=$(rpm -qpl "$rpm")
+          for file in /usr/bin/audiosync /usr/share/applications/io.github.yassersutojoyo.audiosync.desktop \
+            /usr/share/metainfo/io.github.yassersutojoyo.audiosync.metainfo.xml \
+            /usr/share/icons/hicolor/256x256/apps/io.github.yassersutojoyo.audiosync.png \
+            /usr/share/doc/audiosync/THIRD-PARTY-NOTICES.txt /usr/share/doc/audiosync/LICENSE; do
+            echo "$contents" | grep -qx "$file" || { echo "the .rpm lacks $file"; exit 1; }
+          done
+          docker run --rm -v "$PWD:/dist:ro" -e RPM="$rpm" fedora:43 sh -euc '
+            dnf install -y -q "/dist/$RPM"
+            test -x /usr/bin/audiosync
+            rpm -V audiosync
+            dnf remove -y -q audiosync
+            test ! -e /usr/bin/audiosync'
 
       - name: Check the AppImage (layout, linked libraries, .desktop and AppStream files)
         working-directory: dist
@@ -201,7 +230,7 @@ jobs:
           echo "Highest glibc symbol version: $(objdump -T "$root/usr/bin/audiosync" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)"
           file "$appimage"
 
-      - name: Upload the AppImage, the .deb and the notices (workflow artifact, not a release)
+      - name: Upload the AppImage, the .deb, the .rpm and the notices (workflow artifact, not a release)
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: audiosync-linux-${{ matrix.arch }}
@@ -210,6 +239,8 @@ jobs:
             dist/AudioSync-*.AppImage.sha256
             dist/AudioSync-*.deb
             dist/AudioSync-*.deb.sha256
+            dist/AudioSync-*.rpm
+            dist/AudioSync-*.rpm.sha256
             desktop/target/release/THIRD-PARTY-NOTICES.txt
             dist/SOURCE-COMMIT.txt
           if-no-files-found: error

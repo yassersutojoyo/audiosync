@@ -72,9 +72,10 @@ Linux, x86_64 or aarch64, glibc 2.39 or newer and PipeWire:
 - Get the AppImage from [Releases](https://github.com/yassersutojoyo/audiosync/releases), make it executable and run it.
 - Or from a terminal, no sudo: `curl -fsSL https://github.com/yassersutojoyo/audiosync/releases/latest/download/install-linux.sh | bash`
 - On Debian or Ubuntu there's a `.deb` too: `sudo apt install ./AudioSync-<version>-amd64.deb` (or `arm64`).
+- On Fedora 40 or newer there's an `.rpm` for x86_64: `sudo dnf install ./AudioSync-<version>-x86_64.rpm`.
 - Hear the source twice with no output to spare? [desktop/README.md](desktop/README.md#linux-a-silent-output) shows how to add a silent one.
 
-Each install script checks the download against the release's SHA-256 checksums; run it again to update. The Mac app, the Windows exe and the AppImage update themselves; a `.deb` install and Windows 0.7.1 don't, so get the next version by hand. To build it yourself, see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+Each install script checks the download against the release's SHA-256 checksums; run it again to update. The Mac app, the Windows exe and the AppImage update themselves; a `.deb` or `.rpm` install and Windows 0.7.1 don't, so get the next version by hand. To build it yourself, see [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 
 ## Use
 
