@@ -209,6 +209,15 @@ fn session_requests(receiver: &NetReceiver) -> usize {
 #[test]
 fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
     let _serial = serial();
+    // A loaded runner can hold one thread past MAX_GAP while the probe runs on
+    // time (104 ms seen); a connect that blocks the stream does so every run.
+    if let Err(first) = six_starts_once() {
+        eprintln!("rerun after: {first}");
+        six_starts_once().unwrap_or_else(|second| panic!("{second}; before it: {first}"));
+    }
+}
+
+fn six_starts_once() -> Result<(), String> {
     let playing = NetReceiver::start(Behavior::default());
     let airplay1: Vec<NetReceiver> = (0..5)
         .map(|_| NetReceiver::start(Behavior::default()))
@@ -299,13 +308,14 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
             let gap = pair[1].duration_since(pair[0]);
             // A stall reaches the receiver up to one gap after it begins.
             let idle = unscheduled(&wakes, pair[0] - MAX_GAP, pair[1]);
-            assert!(
-                gap.saturating_sub(idle) <= MAX_GAP,
-                "a gap of {gap:?}, {idle:?} of it unscheduled, from {} ms after the call; connects at {:?} ms; {} packets sent late; {starved:?} of the {span:?} burst unscheduled",
-                ms(asked, pair[0]),
-                starts.iter().map(|at| ms(asked, *at)).collect::<Vec<_>>(),
-                p_counters.late_packets()
-            );
+            if gap.saturating_sub(idle) > MAX_GAP {
+                return Err(format!(
+                    "a gap of {gap:?}, {idle:?} of it unscheduled, from {} ms after the call; connects at {:?} ms; {} packets sent late; {starved:?} of the {span:?} burst unscheduled",
+                    ms(asked, pair[0]),
+                    starts.iter().map(|at| ms(asked, *at)).collect::<Vec<_>>(),
+                    p_counters.late_packets()
+                ));
+            }
             excused = excused.max(gap.saturating_sub(MAX_GAP).min(idle));
         }
         eprintln!(
@@ -337,6 +347,7 @@ fn six_starts_connect_in_turn_without_disturbing_a_playing_speaker() {
         .filter(|event| matches!(event, SpeakerEvent::Error(_)))
         .collect();
     assert!(errors.is_empty(), "{errors:?}");
+    Ok(())
 }
 
 // covers: P222, P223, P224, P225
