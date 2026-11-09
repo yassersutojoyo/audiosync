@@ -8531,8 +8531,8 @@ do {
           "menu bar panel: no run of folds and unfolds moves the top edge under the icon")
     let fold = PanelFold(reduceMotion: false), stillFold = PanelFold(reduceMotion: true)
     // covers: S357
-    check(fold.moves && fold.duration == 0.2 && !stillFold.moves && stillFold.duration == 0,
-          "menu bar panel: a zone folds in one 0.2 s motion; with Reduce Motion the panel changes at once")
+    check(fold.moves && fold.duration == 0.25 && !stillFold.moves && stillFold.duration == 0,
+          "menu bar panel: a zone folds in one 0.25 s motion, the main window's fold time; with Reduce Motion the panel changes at once")
     let bar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
     let foldBody = bar.components(separatedBy: "private func fold(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
@@ -18079,7 +18079,7 @@ do {
           "streaming switch source: the knob's shadow falls evenly, so no track shows above the knob")
     check(syncSwitch.contains("strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.5)")
             && syncSwitch.contains(".frame(width: on ? 18 : 21, height: on ? 18 : 21)")
-            && syncSwitch.contains(".padding(on ? 2 : 0.5)"),
+            && syncSwitch.contains(".padding(.horizontal, on ? 2 : 0.5)"),
           "streaming switch source: off, the knob meets a one-pixel ring, so no track shows between them")
     let syncModel = syncPart("MenuBar.swift", "final class AppModel")
     check(syncModel.contains("@Published var pendingPower: Bool?")
@@ -18130,9 +18130,33 @@ do {
             && disclosedCount(".modifier(DisclosedPane(") == 3,
           "disclosed pane source: a speaker's, the AirPlay delay's and a zone's pane fold on one progress, the content fading only while the edge holds still")
     check(!disclosedWindow.contains("value: model.delayPanels)")
-            && disclosedMenuBar.contains("accessibilityDisplayShouldReduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)")
+            && disclosedMenuBar.contains("reduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)")
             && disclosedWindow.contains("withAnimation(reduceMotion ? nil : AppModel.delayPanelAnimation) {\n                                        scroll.scrollTo("),
           "disclosed pane source: the toggle's own transaction moves the rows below, a plain fade and no scroll under Reduce Motion")
+}
+
+// MARK: Folds, the streaming switch and running text keep one motion and stay clear of their neighbours (MainWindow.swift, MenuBar.swift)
+do {
+    func auditPart(_ file: String, _ start: String, _ end: String = "\n}\n") -> String {
+        ((try? String(contentsOfFile: "Sources/AudioSync/\(file)", encoding: .utf8)) ?? "")
+            .components(separatedBy: start).dropFirst().first?.components(separatedBy: end).first ?? ""
+    }
+    let auditSwitch = auditPart("MenuBar.swift", "struct PowerSwitch: View")
+    check(auditSwitch.contains(".overlay(alignment: on ? .trailing : .leading) {") && auditSwitch.contains(".drawingGroup()")
+            && !auditSwitch.contains("ZStack(alignment: on ? .trailing : .leading)"),
+          "streaming switch source: the knob sits on the track and both draw in one pass, so the off knob is not a pixel low")
+    let auditTitle = auditPart("MainWindow.swift", "struct ScrollingTitle: View")
+    check(auditTitle.contains(".mask(MarqueeEdges(") && auditTitle.contains("Marquee.edges(offset:"),
+          "scrolling title source: a running name fades out at the edge it is cut on, so no cut letter meets the dot beside it")
+    let auditEdges = ([0, 3, 30, 57, 60] as [CGFloat]).map { Marquee.edges(offset: $0, overflow: 60) }
+    check(auditEdges.map(\.leading) == [0, 3, 8, 8, 8] && auditEdges.map(\.trailing) == [8, 8, 8, 3, 0]
+            && Marquee.edges(offset: 0, overflow: 0) == (0, 0),
+          "scrolling title: only an edge that cuts a letter fades, up to 8 pt, so the title's start and end read in full")
+    let auditZone = auditPart("MainWindow.swift", "ZoneCard: View")
+    check(auditZone.contains(".modifier(FoldTurn(open: expanded))")
+            && !auditZone.contains(".rotationEffect(.degrees(expanded ? 90 : 0))")
+            && auditZone.contains("withAnimation(AppModel.delayPanelMotion(reduceMotion: reduceMotion))"),
+          "zone card source: the chevron turns on the fold's own progress and curve, reading Reduce Motion from the view")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

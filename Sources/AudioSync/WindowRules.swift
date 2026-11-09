@@ -132,6 +132,15 @@ enum Marquee {
         if at < 2 * pause + travel { return overflow }
         return overflow - CGFloat(at - 2 * pause - travel) * speed
     }
+
+    static let edgeFade: CGFloat = 8
+
+    /// How far each edge of the line fades at `offset`: only an edge that
+    /// cuts a letter, so the start and the end of the title read in full.
+    static func edges(offset: CGFloat, overflow: CGFloat) -> (leading: CGFloat, trailing: CGFloat) {
+        guard overflow > 0 else { return (0, 0) }
+        return (min(max(offset, 0), edgeFade), min(max(overflow - offset, 0), edgeFade))
+    }
 }
 
 /// How a notice comes and goes in the main window.
@@ -554,7 +563,8 @@ enum PanelArrow {
 /// arrow turns and the panel resizes as one motion that starts with the
 /// click, on one ease-in-out curve. With Reduce Motion it all changes at once.
 struct PanelFold: Equatable {
-    static let duration: TimeInterval = 0.2
+    /// The main window's fold time (`PowerMotion.duration`).
+    static let duration: TimeInterval = 0.25
 
     /// How long the panel's resize and the rows' movement take; 0 is at once.
     var duration: TimeInterval

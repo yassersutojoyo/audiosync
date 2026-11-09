@@ -397,7 +397,11 @@ final class AppModel: ObservableObject {
     /// Every way a panel opens or closes animates the same.
     /// Linear, since `DisclosedPane` eases each half of it on its own.
     static var delayPanelAnimation: Animation {
-        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)
+        delayPanelMotion(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
+
+    static func delayPanelMotion(reduceMotion: Bool) -> Animation {
+        reduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)
     }
     /// A click on a row's delay value or on its row: the other panels'
     /// typing applies first, and they stay open.
@@ -2689,21 +2693,26 @@ struct PowerSwitch: View {
                 model.pendingPower = nil
             }
         } label: {
-            ZStack(alignment: on ? .trailing : .leading) {
-                // The off track's edge in `.secondary` keeps 3:1 on the panel
-                // (3.89 light, 5.37 dark, measured in Brand.secondaryText).
-                Capsule()
-                    .fill(on ? accent : Color.secondary.opacity(0.15))
-                    .overlay(Capsule().strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.5))
-                    .frame(width: 38, height: 22)
-                Circle()
-                    .fill(Color.white)
-                    .shadow(color: .black.opacity(0.25), radius: 1)
-                    // Off, the knob meets the ring: a whole pixel at 2x, with no track between them.
-                    .frame(width: on ? 18 : 21, height: on ? 18 : 21)
-                    .padding(on ? 2 : 0.5)
-            }
-            .animation(reduceMotion ? nil : PowerMotion.animation(reduceMotion: false), value: on)
+            // The off track's edge in `.secondary` keeps 3:1 on the panel
+            // (3.89 light, 5.37 dark, measured in Brand.secondaryText).
+            Capsule()
+                .fill(on ? accent : Color.secondary.opacity(0.15))
+                .overlay(Capsule().strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.5))
+                .frame(width: 38, height: 22)
+                .overlay(alignment: on ? .trailing : .leading) {
+                    Circle()
+                        .fill(Color.white)
+                        .shadow(color: .black.opacity(0.25), radius: 1)
+                        // Off, the knob meets the ring: a whole pixel at 2x, with no track between them.
+                        .frame(width: on ? 18 : 21, height: on ? 18 : 21)
+                        .padding(.horizontal, on ? 2 : 0.5)
+                }
+                // One pass snaps knob and ring to the same pixel rows; drawn apart, the off knob sat a pixel low.
+                // The 2 pt keep the knob's shadow inside the pass.
+                .padding(2)
+                .drawingGroup()
+                .padding(-2)
+                .animation(reduceMotion ? nil : PowerMotion.animation(reduceMotion: false), value: on)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(text.streamingSwitch)

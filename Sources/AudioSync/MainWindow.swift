@@ -156,9 +156,14 @@ struct DisclosedPane: ViewModifier, Animatable {
 
     private static func ease(_ t: Double) -> Double { t * t * (3 - 2 * t) }
 
+    /// How far the edge has moved at `progress`, 0 folded to 1 open.
+    static func edge(_ progress: Double, reduceMotion: Bool) -> Double {
+        reduceMotion ? (progress > 0 ? 1 : 0) : Self.ease(min(progress * 2, 1))
+    }
+
     func body(content: Content) -> some View {
         if open || progress > 0 {
-            let fold = reduceMotion ? (progress > 0 ? 1 : 0) : Self.ease(min(progress * 2, 1))
+            let fold = Self.edge(progress, reduceMotion: reduceMotion)
             let fade = reduceMotion ? progress : Self.ease(max(progress * 2 - 1, 0))
             PaneHeight(fraction: fold) {
                 content.padding(.top, gap).opacity(fade)
@@ -166,6 +171,23 @@ struct DisclosedPane: ViewModifier, Animatable {
             // Clipped only while it folds, so an open pane's focus rings aren't cut.
             .clipShape(Rectangle().inset(by: fold < 1 ? 0 : -4))
         }
+    }
+}
+
+/// A disclosure chevron that turns with its pane's edge, on the same progress and curve.
+struct FoldTurn: ViewModifier, Animatable {
+    var progress: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(open: Bool) { progress = open ? 1 : 0 }
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.rotationEffect(.degrees(90 * DisclosedPane.edge(progress, reduceMotion: reduceMotion)))
     }
 }
 
@@ -720,12 +742,14 @@ struct ScrollingTitle: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { line.width = $0 }
             .overlay(alignment: .leading) {
                 TimelineView(.animation(paused: overflow == 0)) { context in
+                    let offset = Marquee.offset(elapsed: context.date.timeIntervalSince(line.start), overflow: overflow)
                     Text(text)
                         .fixedSize()
                         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { line.textWidth = $0 }
-                        .offset(x: -Marquee.offset(elapsed: context.date.timeIntervalSince(line.start),
-                                                   overflow: overflow))
+                        .offset(x: -offset)
                         .opacity(overflow > 0 ? 1 : 0)
+                        .frame(width: line.width, alignment: .leading)
+                        .mask(MarqueeEdges(fades: Marquee.edges(offset: offset, overflow: overflow), width: line.width))
                 }
             }
             .clipped()
@@ -734,6 +758,23 @@ struct ScrollingTitle: View {
             .onChange(of: text) { line.start = .now }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)
+    }
+}
+
+/// The running title's mask: opaque, fading to clear over each edge's `fades` width.
+private struct MarqueeEdges: View {
+    let fades: (leading: CGFloat, trailing: CGFloat)
+    let width: CGFloat
+
+    var body: some View {
+        if width > 0 {
+            // Each fade within its half, so the stops stay in order on a very short line.
+            LinearGradient(stops: [.init(color: .clear, location: 0),
+                                   .init(color: .black, location: min(fades.leading / width, 0.5)),
+                                   .init(color: .black, location: 1 - min(fades.trailing / width, 0.5)),
+                                   .init(color: .clear, location: 1)],
+                           startPoint: .leading, endPoint: .trailing)
+        }
     }
 }
 
@@ -967,6 +1008,7 @@ private struct ZoneCard: View {
     @FocusState private var optionsFocused: Bool
     @StateObject private var hover = HoverState()
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let t = model.text
@@ -1006,7 +1048,7 @@ private struct ZoneCard: View {
         }
     }
 
-    private func fold() { withAnimation(AppModel.delayPanelAnimation) { disclosure.toggle(zone.id) } }
+    private func fold() { withAnimation(AppModel.delayPanelMotion(reduceMotion: reduceMotion)) { disclosure.toggle(zone.id) } }
 
     private func arrowKey(_ press: KeyPress) -> KeyPress.Result {
         guard ZoneHeaderHit.arrowFolds(right: press.key == .rightArrow, expanded: expanded) else { return .ignored }
@@ -1019,7 +1061,7 @@ private struct ZoneCard: View {
             Button { hit(.chevron) } label: {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .modifier(FoldTurn(open: expanded))
                     .frame(width: 16, height: 32)
                     .contentShape(Rectangle())
             }
