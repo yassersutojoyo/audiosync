@@ -2691,13 +2691,14 @@ struct PowerSwitch: View {
                 // (3.89 light, 5.37 dark, measured in Brand.secondaryText).
                 Capsule()
                     .fill(on ? accent : Color.secondary.opacity(0.15))
-                    .overlay(Capsule().strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.75))
+                    .overlay(Capsule().strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.5))
                     .frame(width: 38, height: 22)
                 Circle()
                     .fill(Color.white)
                     .shadow(color: .black.opacity(0.25), radius: 1)
-                    .frame(width: 18, height: 18)
-                    .padding(2)
+                    // Off, the knob meets the ring: a whole pixel at 2x, with no track between them.
+                    .frame(width: on ? 18 : 21, height: on ? 18 : 21)
+                    .padding(on ? 2 : 0.5)
             }
             .animation(reduceMotion ? nil : PowerMotion.animation(reduceMotion: false), value: on)
         }

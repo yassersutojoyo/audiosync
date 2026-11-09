@@ -18051,8 +18051,8 @@ do {
     }
     let offSwitch = offMotionPart("Sources/AudioSync/MenuBar.swift", "struct PowerSwitch: View")
     check(offSwitch.contains("Color.secondary.opacity(0.15)")
-            && offSwitch.contains("strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.75)"),
-          "streaming switch source: the off track has a 0.75 pt ring in .secondary over a lighter fill")
+            && offSwitch.contains("strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.5)"),
+          "streaming switch source: the off track has a 0.5 pt ring in .secondary over a lighter fill")
     let offBadge = offMotionPart("Sources/AudioSync/MenuBar.swift", "struct SpeakerBadge: View")
     check(offBadge.contains("value: state)") && offBadge.contains("value: connecting)")
             && !offBadge.contains("!filled ? nil"),
@@ -18068,6 +18068,10 @@ do {
     let syncSwitch = syncPart("MenuBar.swift", "struct PowerSwitch: View")
     check(syncSwitch.contains(".shadow(color: .black.opacity(0.25), radius: 1)") && !syncSwitch.contains("y: 0.5"),
           "streaming switch source: the knob's shadow falls evenly, so no track shows above the knob")
+    check(syncSwitch.contains("strokeBorder(on ? Color.clear : Color.secondary, lineWidth: 0.5)")
+            && syncSwitch.contains(".frame(width: on ? 18 : 21, height: on ? 18 : 21)")
+            && syncSwitch.contains(".padding(on ? 2 : 0.5)"),
+          "streaming switch source: off, the knob meets a one-pixel ring, so no track shows between them")
     let syncModel = syncPart("MenuBar.swift", "final class AppModel")
     check(syncModel.contains("@Published var pendingPower: Bool?")
             && syncModel.contains("var shownRunning: Bool { pendingPower ?? running }")
@@ -18100,9 +18104,10 @@ do {
             && syncPanel.contains(".help(model.shownRunning ? t.turnOff : t.turnOn)"),
           "streaming switch source: the status lines and the Calibrate row cross-fade with the switch")
     let syncEqualizer = syncPart("MainWindow.swift", "func equalizerRow(", "\n    }\n")
-    check(syncEqualizer.contains(".minimumScaleFactor(") && !syncEqualizer.contains("ScrollingTitle(")
-            && syncEqualizer.contains("Spacer(minLength: 8)") && syncEqualizer.contains(".help(name)"),
+    check(syncEqualizer.contains("Spacer(minLength: 8)") && syncEqualizer.contains(".help(name)"),
           "equalizer row source: the dot and the curve name sit right against the chevron, using the room before them")
+    check(syncEqualizer.contains("ScrollingTitle(text: name)") && !syncEqualizer.contains(".minimumScaleFactor("),
+          "equalizer row source: a curve name too long for its room scrolls, cut with an ellipsis only under Reduce Motion")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

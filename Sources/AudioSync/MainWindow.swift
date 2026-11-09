@@ -443,9 +443,7 @@ struct MainView: View {
                         Circle().fill(accent).frame(width: 6, height: 6)
                     }
                     let name = model.equalizerOn ? model.equalizerCurve : t.off
-                    Text(name)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
+                    ScrollingTitle(text: name)
                         .foregroundStyle(Brand.secondaryText)
                         .help(name)
                     Image(systemName: "chevron.right")
