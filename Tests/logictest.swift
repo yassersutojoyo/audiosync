@@ -7757,6 +7757,89 @@ do {
           "\(songRun.suffix(20).max() ?? 0), \(stopRun[30]), \(stopRun[140])")
 }
 
+// MARK: Now Playing art at rest (WindowRules.swift AmbientMode, AmbientBreath)
+do {
+    func modeRun(_ seconds: Double, _ mode: inout AmbientMode, sounding: (Double) -> Bool) -> [Double] {
+        (0..<Int((seconds * 10).rounded())).map { tick in
+            mode.step(sounding: sounding(Double(tick) / 10), dt: 0.1)
+            return mode.live
+        }
+    }
+    check(!AmbientMode.sounding(meter: nil) && !AmbientMode.sounding(meter: 0) && AmbientMode.sounding(meter: 0.3),
+          "music art: only captured sound counts; streaming off or silence is not sound")
+    var mode = AmbientMode()
+    let start = mode.live
+    let rising = modeRun(0.5, &mode) { _ in true }
+    let held = modeRun(0.9, &mode) { _ in false }
+    let falling = modeRun(0.8, &mode) { _ in false }
+    check(start == 0 && rising[0] > 0 && rising[0] < 1 && rising.last == 1 && held.allSatisfy { $0 == 1 }
+            && falling.contains { $0 > 0 && $0 < 1 } && falling.last == 0,
+          "music art: it blends into the sound's motion over 0.4 s and back to the breath only after 1 s of quiet",
+          "\(start), \(rising), \(held), \(falling)")
+    var gaps = AmbientMode()
+    let gapRun = modeRun(6, &gaps) { t in t.truncatingRemainder(dividingBy: 1.4) < 0.8 }
+    check(gapRun.dropFirst(5).allSatisfy { $0 == 1 },
+          "music art: short gaps and quiet passages keep the sound's motion", "\(gapRun)")
+
+    let period = AmbientBreath.period
+    let breaths = (0..<100).map { AmbientBreath.spread(at: period * Double($0) / 100) }
+    check(period >= 4 && period <= 6 && (breaths.max() ?? 0) <= 0.26 && (breaths.max() ?? 0) >= 0.2
+            && (breaths.max() ?? 0) - (breaths.min() ?? 0) > 0.1
+            && abs(AmbientBreath.spread(at: 0) - AmbientBreath.spread(at: period)) < 1e-9,
+          "music art: at rest it breathes once every 4 to 6 s, spread about a quarter of the sound's motion",
+          "\(period), \(breaths.min() ?? -1), \(breaths.max() ?? -1)")
+    check(AmbientBreath.motion(env: 0.9, live: 0, breath: 0.2) == 0.2
+            && AmbientBreath.motion(env: 0.9, live: 1, breath: 0.2) == 0.9
+            && AmbientBreath.motion(env: 0, live: 1, breath: 0.2) == 0.2,
+          "music art: the breath gives way to the sound's motion, never to a dead line")
+    let idleLayers = AmbientBreath.layers(live: 0, env: 0.8)
+    let liveLayers = AmbientBreath.layers(live: 1, env: 0.8)
+    check(idleLayers.breath == AmbientBreath.opacity && idleLayers.sound == 0 && liveLayers.breath == 0 && liveLayers.sound == 1
+            && AmbientBreath.opacity < 1,
+          "music art: the breath shows a little translucent and the sound's strands replace it",
+          "\(idleLayers), \(liveLayers)")
+    check(AmbientBreath.frameInterval(onScreen: false, reduceMotion: false, live: 1) == nil
+            && AmbientBreath.frameInterval(onScreen: true, reduceMotion: true, live: 1) == nil
+            && (AmbientBreath.frameInterval(onScreen: true, reduceMotion: false, live: 0) ?? 0) >= 1.0 / 20
+            && (AmbientBreath.frameInterval(onScreen: true, reduceMotion: false, live: 1) ?? 1) <= 1.0 / 30,
+          "music art: the breath draws at a low frame rate, nothing draws off screen or with Reduce Motion")
+
+    func luminance(_ c: BrandRGB) -> Double {
+        func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(c.red) + 0.7152 * linear(c.green) + 0.0722 * linear(c.blue)
+    }
+    func seen(_ c: BrandRGB, dark: Bool, opacity: Double) -> Double {
+        let card = dark ? AmbientBreath.darkCard : AmbientBreath.lightCard
+        let mixed = BrandRGB(red: c.red * opacity + card.red * (1 - opacity),
+                             green: c.green * opacity + card.green * (1 - opacity),
+                             blue: c.blue * opacity + card.blue * (1 - opacity))
+        let (a, b) = (luminance(mixed), luminance(card))
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+    let levels = [0.0, 0.25, 0.5, 0.75, 0.93, 1.0]
+    let covers: [[BrandRGB]] = levels.flatMap { r in levels.map { g in [BrandRGB(red: r, green: g, blue: 0.85)] } }
+        + [[], [BrandRGB(red: 0.94, green: 0.92, blue: 0.88), BrandRGB(red: 0.91, green: 0.9, blue: 0.86)]]
+    var dim: [String] = []
+    for cover in covers {
+        for dark in [false, true] {
+            for opacity in [AmbientBreath.opacity, 1] {
+                let ratio = seen(AmbientBreath.line(cover: cover, dark: dark, opacity: opacity), dark: dark, opacity: opacity)
+                if ratio < 3 { dim.append("\(cover.first.map { "\($0.red),\($0.green)" } ?? "none") dark \(dark): \(ratio)") }
+            }
+        }
+    }
+    check(dim.isEmpty, "music art: the resting line keeps 3:1 on the card for any cover, light or dark", "\(dim.prefix(4))")
+    let deep = BrandRGB(red: 0.1, green: 0.15, blue: 0.4)
+    let pale = BrandRGB(red: 0.94, green: 0.92, blue: 0.88)
+    let picked = AmbientBreath.line(cover: [pale, deep], dark: false, opacity: AmbientBreath.opacity)
+    let paleOnly = AmbientBreath.line(cover: [pale], dark: false, opacity: AmbientBreath.opacity)
+    let accent = BrandTokens.Light.tealText
+    check(picked.red == deep.red && picked.blue == deep.blue
+            && paleOnly.red == accent.red && paleOnly.green == accent.green && paleOnly.blue == accent.blue,
+          "music art: the line takes the cover's colour that shows, and the accent when a light cover has none",
+          "\(picked), \(paleOnly)")
+}
+
 // MARK: Now Playing shuffle and repeat (NowPlaying.swift)
 do {
     typealias Repeat = NowPlayingMonitor.RepeatMode

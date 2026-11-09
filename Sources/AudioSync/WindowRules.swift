@@ -110,6 +110,86 @@ struct Tide: Equatable {
     }
 }
 
+/// Which of the Now Playing art's two motions shows: the sound's (`live` 1)
+/// while streaming captures sound, else a slow breath (`live` 0). It turns
+/// over `blend` seconds, and back to the breath only after `settle` seconds of
+/// quiet, so a quiet passage or the gap between songs doesn't flip it.
+struct AmbientMode: Equatable {
+    static let blend: TimeInterval = 0.4
+    static let settle: TimeInterval = 1
+    private(set) var live = 0.0
+    private var quiet = AmbientMode.settle
+
+    /// `meter` is the meter's 0-to-1 reading, nil when nothing is captured.
+    static func sounding(meter: Double?) -> Bool { (meter ?? 0) > Tide.stopAt }
+
+    mutating func step(sounding: Bool, dt: TimeInterval) {
+        quiet = sounding ? 0 : quiet + dt
+        // 1e-9: ten 0.1 s steps sum to just under 1 s.
+        let target = quiet < Self.settle - 1e-9 ? 1.0 : 0.0
+        let move = dt / Self.blend
+        live = abs(target - live) <= move + 1e-9 ? target : live + (target > live ? move : -move)
+    }
+}
+
+/// The art's calm motion, its colour against the hero card, and how often it draws.
+enum AmbientBreath {
+    static let period: TimeInterval = 5
+    /// In `Tide.env` units, a quarter of the sound's widest.
+    static let spread = 0.25
+    static let opacity = 0.8
+    static let minContrast = 3.0
+    /// The hero card (primary at 5% over the window or panel) in each appearance.
+    static let lightCard = BrandRGB(red: 0.9, green: 0.9, blue: 0.9)
+    static let darkCard = BrandRGB(red: 0.2, green: 0.2, blue: 0.2)
+
+    static func spread(at time: TimeInterval) -> Double {
+        spread * (0.6 - 0.4 * cos(2 * .pi * time / period))
+    }
+
+    static func motion(env: Double, live: Double, breath: Double) -> Double {
+        breath + live * max(0, env - breath)
+    }
+
+    /// Opacity of the breath's contrasting line and of the sound's cover-coloured
+    /// strands; the line stays while the strands are still faint.
+    static func layers(live: Double, env: Double) -> (breath: Double, sound: Double) {
+        (opacity * (1 - live * min(1, env * 2.5)), live * min(1, 0.25 + env * 2.5))
+    }
+
+    /// Seconds between frames, nil for none.
+    static func frameInterval(onScreen: Bool, reduceMotion: Bool, live: Double) -> TimeInterval? {
+        guard onScreen, !reduceMotion else { return nil }
+        return live > 0 ? 1.0 / 60 : 1.0 / 15
+    }
+
+    static func contrast(_ a: BrandRGB, _ b: BrandRGB) -> Double {
+        func luminance(_ c: BrandRGB) -> Double {
+            func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+            return 0.2126 * linear(c.red) + 0.7152 * linear(c.green) + 0.0722 * linear(c.blue)
+        }
+        let (x, y) = (luminance(a), luminance(b))
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+
+    static func over(_ color: BrandRGB, _ card: BrandRGB, opacity: Double) -> BrandRGB {
+        BrandRGB(red: color.red * opacity + card.red * (1 - opacity),
+                 green: color.green * opacity + card.green * (1 - opacity),
+                 blue: color.blue * opacity + card.blue * (1 - opacity))
+    }
+
+    /// The cover colour that stands out most on the card, else the accent,
+    /// else grey, so the line drawn at `opacity` keeps `minContrast`.
+    static func line(cover: [BrandRGB], dark: Bool, opacity: Double) -> BrandRGB {
+        let card = dark ? darkCard : lightCard
+        let seen = { (color: BrandRGB) in contrast(over(color, card, opacity: opacity), card) }
+        if let best = cover.max(by: { seen($0) < seen($1) }), seen(best) >= minContrast { return best }
+        let accent = dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText
+        if seen(accent) >= minContrast { return accent }
+        return dark ? BrandRGB(red: 0.85, green: 0.85, blue: 0.85) : BrandRGB(red: 0.2, green: 0.2, blue: 0.2)
+    }
+}
+
 /// A title or name too long for its line scrolls: it rests at its start,
 /// moves to its end at `speed`, rests there, moves back, and repeats.
 enum Marquee {

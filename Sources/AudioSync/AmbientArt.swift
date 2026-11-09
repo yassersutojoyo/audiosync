@@ -11,7 +11,11 @@ final class SoundTide: ObservableObject {
 
     /// `Tide.env`, published only when it changes.
     @Published private(set) var env = 0.0
+    /// `AmbientMode.live`.
+    @Published private(set) var live = 0.0
+    @Published private(set) var onScreen = false
     private var tide = Tide()
+    private var mode = AmbientMode()
     private var timer: Timer?
     private var meter: Float = 0
 
@@ -22,50 +26,69 @@ final class SoundTide: ObservableObject {
         timer = nil
         guard let peak else {
             tide = Tide()
+            mode = AmbientMode()
             meter = 0
             if env != 0 { env = 0 }
+            if live != 0 { live = 0 }
+            if onScreen { onScreen = false }
             return
         }
+        if !onScreen { onScreen = true }
         let dt = Double(ASC_METER_POLL_MS) / 1000
         let poll = Timer(timeInterval: dt, repeats: true) { [weak self] _ in
             guard let self else { return }
             if let reading = peak() {
                 meter = asc_meter_level(meter, reading)
                 tide.step(level: Double(meter), dt: dt)
+                mode.step(sounding: AmbientMode.sounding(meter: Double(meter)), dt: dt)
             } else {
                 meter = 0
                 tide.step(level: nil, dt: dt)
+                mode.step(sounding: false, dt: dt)
             }
             if tide.env != env { env = tide.env }
+            if mode.live != live { live = mode.live }
         }
         RunLoop.main.add(poll, forMode: .common)
         timer = poll
     }
 }
 
-/// Three strands in the cover's colours that spread and ripple as the sound
-/// changes and rest as one thin line when it doesn't. Still with Reduce
-/// Motion. `density` scales how far the strands spread: 1 for the main
-/// window's hero, less for a smaller one.
+/// Three strands in the cover's colours that spread and ripple with the
+/// sound while streaming captures it, and otherwise breathe slowly in one
+/// colour that shows on the card. One still line with Reduce Motion.
+/// `density` scales how far the strands spread: 1 for the main window's hero,
+/// less for a smaller one.
 struct AmbientArt: View {
     @ObservedObject var tide: SoundTide
     let colors: [Color]
     var height: CGFloat = 22
     var density: CGFloat = 1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
 
     private static let waves: [(amplitude: CGFloat, length: CGFloat, offset: Double)] =
         [(7, 92, 0), (5, 61, 1.7), (3.2, 137, 3.1)]
 
     var body: some View {
-        let env = reduceMotion ? 0 : CGFloat(min(1, tide.env))
-        TimelineView(.animation(paused: env == 0)) { context in
+        let still = reduceMotion
+        let interval = AmbientBreath.frameInterval(onScreen: tide.onScreen, reduceMotion: still, live: tide.live)
+        let lineOpacity = still ? 1 : AmbientBreath.opacity
+        let tones = colors.compactMap { NSColor($0).usingColorSpace(.sRGB) }
+            .map { BrandRGB(red: Double($0.redComponent), green: Double($0.greenComponent), blue: Double($0.blueComponent)) }
+        let pick = AmbientBreath.line(cover: tones, dark: colorScheme == .dark, opacity: lineOpacity)
+        let lineColor = Color(.sRGB, red: pick.red, green: pick.green, blue: pick.blue)
+        TimelineView(.animation(minimumInterval: interval, paused: interval == nil)) { context in
             Canvas { canvas, size in
-                let phase = context.date.timeIntervalSinceReferenceDate * 2
+                let time = context.date.timeIntervalSinceReferenceDate
+                let live = still ? 0 : tide.live
+                let env = still ? 0 : min(1, tide.env)
+                let breath = still ? 0 : AmbientBreath.spread(at: time)
+                let spread = CGFloat(AmbientBreath.motion(env: env, live: live, breath: breath))
+                let layers = still ? (breath: 1.0, sound: 0.0) : AmbientBreath.layers(live: live, env: env)
+                let phase = time * 2
                 let scale = size.height / 22
-                for (index, wave) in Self.waves.enumerated() {
-                    let opacity = env > 0 ? min(1, 0.25 + env * 2.5) : (index == 1 ? 0.35 : 0)
-                    guard opacity > 0 else { continue }
+                for (index, wave) in Self.waves.enumerated() where !still || index == 1 {
                     var path = Path()
                     for step in 0...60 {
                         let x = size.width * CGFloat(step) / 60
@@ -73,13 +96,18 @@ struct AmbientArt: View {
                         let taper = sin(.pi * CGFloat(step) / 60)
                         let angle = 2 * .pi * Double(300 * CGFloat(step) / 60 / wave.length)
                             + phase * (1 + Double(index) * 0.35) + wave.offset
-                        let lift = wave.amplitude * env * CGFloat(sin(angle)) + CGFloat(index - 1) * 2.2 * env
+                        let lift = wave.amplitude * spread * CGFloat(sin(angle)) + CGFloat(index - 1) * 2.2 * spread
                         let y = min(21, max(1, 11 + taper * lift * density)) * scale
                         if step == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
-                    let color = colors.isEmpty ? Color.gray : colors[index % colors.count]
-                    canvas.stroke(path, with: .color(color.opacity(opacity)),
-                                  style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                    let style = StrokeStyle(lineWidth: 1.6, lineCap: .round)
+                    if layers.breath > 0 {
+                        canvas.stroke(path, with: .color(lineColor.opacity(layers.breath)), style: style)
+                    }
+                    if layers.sound > 0 {
+                        let color = colors.isEmpty ? Color.gray : colors[index % colors.count]
+                        canvas.stroke(path, with: .color(color.opacity(layers.sound)), style: style)
+                    }
                 }
             }
         }
