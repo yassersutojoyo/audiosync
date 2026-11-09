@@ -309,6 +309,24 @@ jobs:
           # Test builds only: every push makes new ones, so a week is plenty.
           retention-days: 7
 
+      # Pinned and checked by hash; installed for the runner's user only.
+      - name: Inno Setup 6.7.3
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/innosetup.exe" https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe
+          echo "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732  $RUNNER_TEMP/innosetup.exe" | sha256sum -c
+          MSYS2_ARG_CONV_EXCL="*" "$RUNNER_TEMP/innosetup.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER
+
+      - name: Installer (AudioSync-Setup.exe, from the same two files as the zip)
+        run: bash ../scripts/build_installer.sh ${{ matrix.arch }} target/${{ matrix.target }}/release target/installer-${{ matrix.arch }}
+
+      - name: Upload the installer (workflow artifact, not a release)
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: audiosync-windows-setup-${{ matrix.arch }}
+          path: desktop/target/installer-${{ matrix.arch }}/AudioSync-Setup*.exe
+          if-no-files-found: error
+          retention-days: 7
+
   licenses:
     name: Licenses
     needs: proven

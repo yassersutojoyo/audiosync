@@ -222,6 +222,7 @@ release.
 | [Slint](https://slint.dev) 1.18, © SixtyFPS GmbH (the user interface toolkit) | GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0; public builds of AudioSync use it under GPL-3.0-only |
 | [tray-icon](https://github.com/tauri-apps/tray-icon) 0.26 and [muda](https://github.com/tauri-apps/muda) 0.21, © the Tauri Programme within The Commons Conservancy (the notification-area icon and its menu) | MIT OR Apache-2.0 |
 | [Poppins](https://github.com/itfoundry/Poppins) Medium, © 2020 The Poppins Project Authors (the wordmark typeface, compiled into the executable from `brand/fonts/`) | SIL Open Font License 1.1 |
+| [Inno Setup](https://jrsoftware.org/isinfo.php) 6.7, © Jordan Russell, portions © Martijn Laan (the setup and uninstall program of the Windows installer, `AudioSync-Setup.exe`; not in the zip or the exe) | [Inno Setup License](https://jrsoftware.org/files/is/license.txt) |
 
 The app's About dialog, which the top-level menu opens (Help > About
 AudioSync), names AudioSync's copyright holder and license and also credits
