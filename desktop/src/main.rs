@@ -1046,12 +1046,12 @@ mod tests {
             (
                 "main.slint",
                 include_str!("../ui/main.slint"),
-                &[("power := ToggleSwitch", "self.checked = root.running;")][..],
+                &[("power := PowerSwitch", "self.checked = root.running;")][..],
             ),
             (
                 "flyout.slint",
                 include_str!("../ui/flyout.slint"),
-                &[("power := ToggleSwitch", "self.checked = root.running;")][..],
+                &[("power := PowerSwitch", "self.checked = root.running;")][..],
             ),
             (
                 "equalizer.slint",

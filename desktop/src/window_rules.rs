@@ -406,6 +406,48 @@ impl Badge {
     }
 }
 
+/// The header's brand mark breathes, 4 % larger and 20 % fainter at the top
+/// of a 4.5 s breath, while no network speaker has been found, as the Mac's
+/// `MarkBreath`; it rests with animation effects off and while hidden.
+pub mod mark_breath {
+    pub const PERIOD: f64 = 4.5;
+
+    pub fn breathes(network_speakers: usize, motion: bool, on_screen: bool) -> bool {
+        network_speakers == 0 && motion && on_screen
+    }
+
+    /// 0 at rest, 1 at the top; each breath starts and ends at rest, so one
+    /// that starts never jumps.
+    pub fn depth(since_start: f64) -> f64 {
+        (1.0 - (std::f64::consts::TAU * since_start.max(0.0) / PERIOD).cos()) / 2.0
+    }
+
+    pub fn scale(depth: f64) -> f64 {
+        1.0 + 0.04 * depth
+    }
+
+    pub fn opacity(depth: f64) -> f64 {
+        1.0 - 0.2 * depth
+    }
+}
+
+/// What input last reached a window: the focus ring shows after Tab and
+/// hides after a pointer press, as Windows draws its focus rectangles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FocusInput {
+    Tab,
+    OtherKey,
+    Pointer,
+}
+
+pub fn focus_ring_shown(was: bool, input: FocusInput) -> bool {
+    match input {
+        FocusInput::Tab => true,
+        FocusInput::OtherKey => was,
+        FocusInput::Pointer => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -741,5 +783,35 @@ mod tests {
         assert_eq!(Badge::of(true, true), Badge::Filled);
         assert_eq!(Badge::ring_width(18.0), 1.5);
         assert_eq!(Badge::ring_width(36.0), 2.0);
+    }
+
+    #[test]
+    fn the_mark_breathes_slowly_from_rest_only_while_no_network_speaker_is_found() {
+        use mark_breath::*;
+        assert!(breathes(0, true, true));
+        assert!(!breathes(1, true, true), "still once a speaker is found");
+        assert!(
+            !breathes(0, false, true),
+            "still with animation effects off"
+        );
+        assert!(!breathes(0, true, false), "still while hidden");
+        assert_eq!(depth(0.0), 0.0);
+        assert!((depth(PERIOD / 2.0) - 1.0).abs() < 1e-9);
+        assert!(depth(PERIOD) < 1e-9, "a breath ends at rest");
+        assert_eq!(depth(-1.0), 0.0);
+        assert_eq!(scale(0.0), 1.0);
+        assert!((scale(1.0) - 1.04).abs() < 1e-9);
+        assert!((opacity(1.0) - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_focus_ring_shows_after_tab_and_hides_after_a_click() {
+        assert!(!focus_ring_shown(false, FocusInput::OtherKey));
+        assert!(focus_ring_shown(false, FocusInput::Tab));
+        assert!(
+            focus_ring_shown(true, FocusInput::OtherKey),
+            "arrows keep it"
+        );
+        assert!(!focus_ring_shown(true, FocusInput::Pointer));
     }
 }

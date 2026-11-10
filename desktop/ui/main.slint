@@ -10,7 +10,7 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, PowerSwitch, QuietText, SecondaryText, SectionTitle, SpeakerRow, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -21,7 +21,7 @@ export { HelpWindow } from "help.slint";
 export { RemoteWindow } from "remote.slint";
 export { SetupWindow } from "setup.slint";
 export { Strings } from "strings.slint";
-export { Motion, NameField } from "widgets.slint";
+export { KeyboardFocus, Motion, NameField } from "widgets.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
@@ -33,7 +33,7 @@ export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastSt
 // width, then the left column, from narrow to wide.
 global MainColumns {
     public pure function left(window: length) -> length {
-        let room = window - 2 * Fluent.window-margin - Fluent.gap;
+        let room = window - 2 * Fluent.window-margin - Fluent.column-gap;
         return clamp(room - Fluent.speaker-list-full, Fluent.left-column-narrow, Fluent.left-column-wide);
     }
 }
@@ -1431,6 +1431,8 @@ component MixAppBox inherits CheckBox {
 
 export component MainWindow inherits Window {
     in property <bool> running;
+    // The header's mark breathes (mark_breath in src/window_rules.rs).
+    in property <bool> mark-breathes;
     in property <string> status;
     in property <[string]> sources;
     in property <int> source-index;
@@ -1714,18 +1716,18 @@ export component MainWindow inherits Window {
 
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
-    // Wide enough for a zone's name beside its volume in the speaker list,
-    // and short enough for a 1366 x 768 screen at 150 % (both columns scroll).
-    min-width: 776px;
+    // The Mac's slim window (main_zoom in src/window_rules.rs), and short
+    // enough for a 1366 x 768 screen at 150 % (both columns scroll).
+    min-width: 696px;
     min-height: 440px;
-    preferred-width: 776px;
+    preferred-width: 696px;
     preferred-height: 680px;
     // White in light mode, as the Mac's window.
     background: Tokens.dark ? Tokens.background : Tokens.surface;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
 
-    property <length> content-max-width: Fluent.left-column-wide + Fluent.gap + scroll.max-width;
+    property <length> content-max-width: Fluent.left-column-wide + Fluent.column-gap + scroll.max-width;
     // The window's width as its columns read it: kept by a handler, since a
     // binding on it would loop through the window's own size constraints.
     property <length> columns-width;
@@ -2014,7 +2016,7 @@ export component MainWindow inherits Window {
         // Header: the brand and the state on the left, the switch on the right.
         // It and the notices end with the speaker cards.
         HorizontalLayout {
-            spacing: 10px;
+            spacing: 12px;
             min-height: 36px;
             max-width: root.content-max-width;
             padding-right: root.scroll-gutter;
@@ -2024,6 +2026,7 @@ export component MainWindow inherits Window {
                 alignment: center;
                 BrandMark {
                     running: root.running;
+                    breathes: root.mark-breathes;
                     width: Fluent.mark;
                     height: Fluent.mark;
                 }
@@ -2031,7 +2034,7 @@ export component MainWindow inherits Window {
 
             VerticalLayout {
                 alignment: center;
-                spacing: 0px;
+                spacing: 2px;
 
                 Wordmark {
                     size: Fluent.wordmark;
@@ -2051,10 +2054,9 @@ export component MainWindow inherits Window {
 
             VerticalLayout {
                 alignment: center;
-                power := ToggleSwitch {
+                power := PowerSwitch {
                     text: Strings.streaming-switch;
                     checked: root.running;
-                    accessible-label: Strings.streaming-switch;
                     changed has-focus => {
                         root.control-focus-changed(MainControl.power, self.has-focus);
                     }
@@ -2103,7 +2105,7 @@ export component MainWindow inherits Window {
 
         HorizontalLayout {
             padding-top: Fluent.gap;
-            spacing: Fluent.gap;
+            spacing: Fluent.column-gap;
             vertical-stretch: 1;
             // Past the speaker list's widest, the extra width stays empty on the right.
             alignment: start;

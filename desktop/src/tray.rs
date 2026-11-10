@@ -202,6 +202,11 @@ impl Tray {
         // The flyout closes when it loses focus, like the system flyouts.
         #[cfg(any(windows, target_os = "linux"))]
         app.flyout.window().on_winit_window_event(|window, event| {
+            if let Some(input) = crate::view::focus_input(event)
+                && let Some(app) = APP.with(|cell| cell.borrow().upgrade())
+            {
+                app.note_focus_input(input);
+            }
             match event {
                 WindowEvent::Focused(false) => {
                     FLYOUT_CLOSED_AT.with(|at| at.set(Some(Instant::now())));

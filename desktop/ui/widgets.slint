@@ -33,21 +33,22 @@ export global Fluent {
     out property <length> row-padding-y: 6px;
     // The main window's edge, and the gap between its header, notices,
     // columns and the speaker list's sections.
-    out property <length> window-margin: 16px;
+    out property <length> window-margin: 20px;
     out property <length> gap: 12px;
-    // The main window's wordmark and mark, smaller than the Mac's.
-    out property <length> wordmark: 18px;
-    out property <length> mark: 28px;
+    // Between the main window's two columns (main_columns in src/window_rules.rs).
+    out property <length> column-gap: 16px;
+    // The main window's wordmark and mark, as the Mac's.
+    out property <length> wordmark: 21px;
+    out property <length> mark: 32px;
     // Where a row's name starts: its padding, the 32 px toggle and the gap.
     out property <length> name-inset: 56px;
     // The delay column every speaker row lines up on.
     out property <length> delay-column: 76px;
-    // The main window's left column: narrow, ending where its master volume
-    // track ended in the 268 px column (slider-inset short of the slider's
-    // end), and wide; and the speaker list's full width (MainColumns).
-    out property <length> left-column-narrow: 208px;
-    out property <length> left-column-wide: 268px;
-    out property <length> speaker-list-full: 644px;
+    // The main window's left column, narrow and wide, and the speaker list's
+    // full width, as the Mac's (MainColumns).
+    out property <length> left-column-narrow: 210px;
+    out property <length> left-column-wide: 280px;
+    out property <length> speaker-list-full: 524px;
     // How far inside its box the style's slider track starts (measured on
     // screen: 10 px at 100 %).
     out property <length> slider-inset: 10px;
@@ -526,10 +527,18 @@ export component Glyph inherits HorizontalLayout {
     }
 }
 
-// The keyboard focus ring: drawn only while the control has keyboard focus.
+// Rust sets it from the last input to reach a window (focus_ring_shown in
+// src/window_rules.rs): true after Tab, false after a pointer press.
+export global KeyboardFocus {
+    in property <bool> shown;
+}
+
+// The keyboard focus ring: drawn while the control has the focus and the
+// last input was the keyboard's.
 export component FocusRing inherits Rectangle {
     in property <bool> visible-focus;
-    border-width: root.visible-focus ? 2px : 0px;
+    property <bool> drawn: root.visible-focus && KeyboardFocus.shown;
+    border-width: root.drawn ? 2px : 0px;
     border-color: Fluent.focus-outer;
 
     Rectangle {
@@ -537,7 +546,7 @@ export component FocusRing inherits Rectangle {
         y: 2px;
         width: parent.width - 4px;
         height: parent.height - 4px;
-        border-width: root.visible-focus ? 1px : 0px;
+        border-width: root.drawn ? 1px : 0px;
         border-radius: max(0px, parent.border-radius - 2px);
         border-color: Fluent.focus-inner;
     }
@@ -980,19 +989,20 @@ export component SpeakerBadge inherits Rectangle {
     width: root.size;
     height: root.size;
     border-radius: root.size / 2;
-    // As the tray panel's marks: a teal disc while it plays, a teal ring
-    // while it is on and waits, a grey ring while off. The disc grows in;
-    // with animation effects off it fades in.
+    // As the Mac's (Badge in src/window_rules.rs): a grey disc while off, a
+    // faint teal disc in a teal ring while it is on and waits, a teal disc
+    // while it plays. The disc grows in; with animation effects off it fades in.
     property <bool> hovered: touch.has-hover && root.enabled;
+    property <bool> waits: !root.plays && root.state != RowState.off;
     property <float> fill: root.plays ? 1 : 0;
     animate fill {
-        duration: Motion.on ? 440ms : 150ms;
-        easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+        duration: Motion.on ? 250ms : 150ms;
+        easing: Motion.on ? ease-in-out : linear;
     }
-    background: root.bare || root.plays ? transparent : root.hovered ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
-    border-width: root.bare || root.plays ? 0px : root.state == RowState.off ? 1.5px : max(2px, root.size / 13);
-    border-color: root.state == RowState.off ? Tokens.secondary-text : Tokens.teal;
+    background: root.bare || root.plays ? transparent : root.waits ? Tokens.teal.with-alpha(0.14) : root.hovered ? #80808042 : #8080802e;
+    animate background { duration: Motion.on ? 250ms : 150ms; }
+    border-width: !root.bare && root.waits ? max(1.5px, root.size / 18) : 0px;
+    border-color: Tokens.teal-text;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     forward-focus: focus;
     // A toggle button, not a switch: see ToggleSwitch.
@@ -1049,16 +1059,16 @@ export component SpeakerBadge inherits Rectangle {
     }
 
     if !root.bare: Rectangle {
-        width: root.width * (Motion.on ? root.fill : 1);
+        width: root.width * (Motion.on ? 0.6 + 0.4 * root.fill : 1);
         height: self.width;
         border-radius: self.width / 2;
         background: root.hovered ? Tokens.teal.darker(0.15) : Tokens.teal;
-        opacity: Motion.on ? 1 : root.fill;
+        opacity: root.fill;
     }
 
     if !root.bare: Glyph {
         glyph: root.glyph;
-        font-size: root.size * 0.45;
+        font-size: root.size * 0.43;
         color: root.plays ? #ffffff : root.state == RowState.off ? Tokens.secondary-text : Tokens.teal-text;
     }
 
@@ -1115,46 +1125,92 @@ export component ZoneArrowFocus inherits Rectangle {
     }
 }
 
-// "audiosync": "audio" in the text color, "sync" in the logo color, set in
+// "audiosync": "audio" in the text color, "sync" in the wordmark's teal
+// (the darker text teal on light, mint on dark) or grey while `dim`, set in
 // Poppins Medium like the logo.
-export component Wordmark inherits HorizontalLayout {
+export component Wordmark inherits Rectangle {
     in property <length> size: Tokens.font-size-wordmark;
-    alignment: start;
+    in property <bool> dim;
+    property <color> sync: Tokens.dark ? Tokens.logo : Tokens.teal-text;
+    // Animated, not the color, so a theme change switches at once.
+    property <float> lit: root.dim ? 0 : 1;
+    animate lit { duration: Motion.on ? 250ms : 150ms; }
+    // Poppins' 1.4 em line box leaves about 0.3 em empty above the ascenders and
+    // 0.08 em below the "y": trimmed, as on the Mac, so it lines up with
+    // the text around it, in whole pixels.
+    height: round(root.size * (1.4 - 0.38) / 1px) * 1px;
+    min-width: letters.preferred-width;
+    preferred-width: letters.preferred-width;
     accessible-role: text;
     accessible-label: Strings.app-name;
 
-    Text {
-        text: "audio";
-        font-family: Tokens.brand-font;
-        font-weight: Tokens.brand-font-weight;
-        font-size: root.size;
-        letter-spacing: Tokens.brand-tracking * root.size;
-        color: Tokens.text;
-        accessible-role: none;
-    }
+    letters := HorizontalLayout {
+        alignment: start;
+        y: -round(0.3 * root.size / 1px) * 1px;
+        height: root.size * 1.4;
 
-    Text {
-        text: "sync";
-        font-family: Tokens.brand-font;
-        font-weight: Tokens.brand-font-weight;
-        font-size: root.size;
-        letter-spacing: Tokens.brand-tracking * root.size;
-        color: Tokens.logo;
-        accessible-role: none;
+        Text {
+            text: "audio";
+            font-family: Tokens.brand-font;
+            font-weight: Tokens.brand-font-weight;
+            font-size: root.size;
+            letter-spacing: Tokens.brand-tracking * root.size;
+            color: Tokens.text;
+            accessible-role: none;
+        }
+
+        Text {
+            text: "sync";
+            font-family: Tokens.brand-font;
+            font-weight: Tokens.brand-font-weight;
+            font-size: root.size;
+            letter-spacing: Tokens.brand-tracking * root.size;
+            color: root.sync.mix(Tokens.secondary-text, root.lit);
+            accessible-role: none;
+        }
     }
 }
 
-// The brand mark, in the logo color while streaming and grey while off.
-// Decorative (the wordmark beside it names the app); a wrapper, like Glyph.
+// The brand mark, in the logo color while streaming and grey while off. It
+// breathes while `breathes` (mark_breath in src/window_rules.rs).
+// Decorative: the wordmark beside it names the app.
 export component BrandMark inherits Rectangle {
     in property <bool> running;
+    in property <bool> breathes;
+    property <duration> breathing;
+    // Eases the breath out once streaming stops.
+    property <float> rest: root.breathes ? 1 : 0;
+    animate rest {
+        duration: Motion.on ? 350ms : 0ms;
+        easing: ease-out;
+    }
+    property <float> depth: root.rest * (1 - cos(360deg * (root.breathing / 4500ms))) / 2;
+    property <float> lit: root.running ? 1 : 0;
+    animate lit { duration: Motion.on ? 250ms : 150ms; }
+
+    changed breathes => {
+        if root.breathes {
+            root.breathing = 0ms;
+        }
+    }
+
+    // 30 frames a second is plenty for a 4.5 s breath; at rest it stops.
+    Timer {
+        interval: 33ms;
+        running: root.breathes || root.rest > 0;
+        triggered => {
+            root.breathing += self.interval;
+        }
+    }
 
     Image {
         width: 100%;
         height: 100%;
         source: @image-url("../../brand/audiosync-mark.svg");
-        colorize: root.running ? Tokens.logo : Tokens.secondary-text;
+        colorize: Tokens.logo.mix(Tokens.secondary-text, root.lit);
         image-fit: contain;
+        transform-scale: 1 + 0.04 * root.depth;
+        opacity: 1 - 0.2 * root.depth;
         accessible-role: none;
     }
 }
@@ -1166,6 +1222,78 @@ export component BrandMark inherits Rectangle {
 // focus ring are the standard Switch's.
 export component ToggleSwitch inherits Switch {
     accessible-role: button;
+}
+
+// The streaming switch, drawn as the Mac's (power_switch in
+// src/window_rules.rs): a 38 x 22 track, teal while on; the knob is 18 px on
+// and 21 px off, so off it meets the track's ring. Narrator hears a toggle
+// button, as on ToggleSwitch.
+export component PowerSwitch inherits Rectangle {
+    in-out property <bool> checked;
+    in property <string> text;
+    out property <bool> has-focus: focus.has-focus;
+    callback toggled();
+    property <duration> turn: Motion.on ? 250ms : 0ms;
+
+    width: 38px;
+    height: 22px;
+    border-radius: self.height / 2;
+    background: root.checked ? Tokens.teal : Tokens.secondary-text.with-alpha(0.15);
+    animate background { duration: root.turn; easing: ease-in-out; }
+    // One device pixel at 100 %, the Mac's half point at 200 %.
+    border-width: root.checked ? 0px : max(0.5px, 1phx);
+    border-color: Tokens.secondary-text;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.flip();
+    }
+
+    function flip() {
+        root.checked = !root.checked;
+        root.toggled();
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.flip();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.flip();
+        }
+    }
+
+    Rectangle {
+        width: root.checked ? 18px : 21px;
+        height: self.width;
+        x: root.checked ? root.width - 2px - self.width : 0.5px;
+        y: (root.height - self.height) / 2;
+        border-radius: self.width / 2;
+        background: #ffffff;
+        drop-shadow-blur: 2px;
+        drop-shadow-color: #00000040;
+        animate width, x { duration: root.turn; easing: ease-in-out; }
+    }
+
+    FocusRing {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.height / 2;
+        visible-focus: focus.has-focus;
+    }
 }
 
 // An input device's channel pair choice. It shows `chosen` again after a

@@ -9,7 +9,7 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, Wordmark, ZoneArrowFocus, Motion } from "widgets.slint";
+import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion } from "widgets.slint";
 
 // The preset row under the source (spec S260): Presets and the current
 // preset's name, else "Choose a Preset"; its menu lists every preset, the
@@ -531,6 +531,8 @@ component FlyoutZoneHeader inherits Rectangle {
 
 export component TrayFlyout inherits Window {
     in property <bool> running;
+    // The header's mark breathes (mark_breath in src/window_rules.rs).
+    in property <bool> mark-breathes;
     in property <string> status;
     in property <[string]> sources;
     in property <int> source-index;
@@ -750,12 +752,13 @@ export component TrayFlyout inherits Window {
                         padding-right: 6px;
                         padding-top: 2px;
                         padding-bottom: 2px;
-                        spacing: 10px;
+                        spacing: 9px;
 
                         VerticalLayout {
                             alignment: center;
                             BrandMark {
                                 running: root.running;
+                                breathes: root.mark-breathes;
                                 width: 22px;
                                 height: 22px;
                             }
@@ -765,7 +768,8 @@ export component TrayFlyout inherits Window {
                             alignment: center;
                             horizontal-stretch: 1;
                             Wordmark {
-                                size: 14px;
+                                size: 15px;
+                                dim: !root.running;
                             }
 
                             QuietText {
@@ -782,11 +786,11 @@ export component TrayFlyout inherits Window {
 
                 TouchArea {
                     horizontal-stretch: 0;
-                    power := ToggleSwitch {
-                        height: 100%;
+                    width: power.width;
+                    power := PowerSwitch {
+                        y: (parent.height - self.height) / 2;
                         text: Strings.streaming-switch;
                         checked: root.running;
-                        accessible-label: Strings.streaming-switch;
                         toggled => {
                             root.power-toggled(self.checked);
                             // Show what the engine did, even if it refused.

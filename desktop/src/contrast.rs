@@ -477,23 +477,28 @@ fn toggles_report_keyboard_focus_to_narrator() {
     let toggle = component_body(widgets, "ToggleSwitch");
     assert!(toggle.contains("inherits Switch"));
     assert!(toggle.contains("accessible-role: button;"));
-    let badge = component_body(widgets, "SpeakerBadge");
-    for needle in [
-        "accessible-role: button;",
-        "accessible-checkable: true;",
-        "accessible-checked:",
-        "FocusScope",
-        "event.text == \" \" || event.text == Key.Return",
-        "FocusRing",
-        "visible-focus: focus.has-focus;",
-    ] {
-        assert!(badge.contains(needle), "SpeakerBadge has {needle}");
+    for name in ["SpeakerBadge", "PowerSwitch"] {
+        let body = component_body(widgets, name);
+        for needle in [
+            "accessible-role: button;",
+            "accessible-checkable: true;",
+            "accessible-checked:",
+            "FocusScope",
+            "event.text == \" \" || event.text == Key.Return",
+            "FocusRing",
+            "visible-focus: focus.has-focus;",
+        ] {
+            assert!(body.contains(needle), "{name} has {needle}");
+        }
     }
-    let mut toggles = 0;
-    for (_, source) in UI_FILES {
-        toggles += blocks(source, "power := ToggleSwitch").len();
-    }
-    assert_eq!(toggles, 3, "main window, flyout and equalizer");
+    let count = |needle: &str| {
+        UI_FILES
+            .iter()
+            .map(|(_, source)| blocks(source, needle).len())
+            .sum::<usize>()
+    };
+    assert_eq!(count("power := ToggleSwitch"), 1, "the equalizer");
+    assert_eq!(count("power := PowerSwitch"), 2, "main window and flyout");
 }
 
 /// Icons and other decorative pieces stay out of Narrator's way. Slint 1.18

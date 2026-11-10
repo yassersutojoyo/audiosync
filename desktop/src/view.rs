@@ -51,10 +51,10 @@ use crate::window_rules::Rgb;
 use crate::{
     AboutDialog, AirPlayProblem, AmbientLook, AmbientStrand, Availability, CalibrationRowItem,
     CastAddressDialog, CastList, CastProblem, CastState, DeviceVolumeHint, EqualizerWindow,
-    GuidePage, GuideStepItem, GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow,
-    MixAppItem, Motion, NameField, NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog,
-    PinPhase, PresetItem, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings,
-    Tokens, TrayFlyout, UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget,
+    GuidePage, GuideStepItem, GuideWindow, HiddenItem, KeyboardFocus, LeftOutItem, MainControl,
+    MainWindow, MixAppItem, Motion, NameField, NoticeItem, NoticeKind, Palette, PasswordDialog,
+    PinDialog, PinPhase, PresetItem, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind,
+    Strings, Tokens, TrayFlyout, UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget,
     speaker_names,
 };
 
@@ -813,6 +813,8 @@ pub struct App {
     ui: RefCell<UiState>,
     /// What has the keyboard focus in the main window's lists.
     main_focus: RefCell<MainFocus>,
+    /// Every window draws its focus ring (`focus_ring_shown`).
+    focus_ring_shown: Cell<bool>,
     dialog_purpose: RefCell<DialogPurpose>,
     models: Models,
     /// With a tray icon, closing the main window keeps the app running there.
@@ -1044,6 +1046,30 @@ fn set_size_once_native(
     });
 }
 
+/// The input a window event brings, for the focus ring.
+pub fn focus_input(
+    event: &slint::winit_030::winit::event::WindowEvent,
+) -> Option<crate::window_rules::FocusInput> {
+    use crate::window_rules::FocusInput;
+    use slint::winit_030::winit::event::{ElementState, WindowEvent};
+    use slint::winit_030::winit::keyboard::{Key, NamedKey};
+    match event {
+        WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+            Some(if event.logical_key == Key::Named(NamedKey::Tab) {
+                FocusInput::Tab
+            } else {
+                FocusInput::OtherKey
+            })
+        }
+        WindowEvent::MouseInput {
+            state: ElementState::Pressed,
+            ..
+        }
+        | WindowEvent::Touch(_) => Some(FocusInput::Pointer),
+        _ => None,
+    }
+}
+
 /// What a titled window does on gaining the focus besides taking its frame.
 #[derive(Clone, Copy, PartialEq)]
 enum Titled {
@@ -1180,6 +1206,7 @@ impl App {
             log,
             ui: RefCell::default(),
             main_focus: RefCell::default(),
+            focus_ring_shown: Cell::new(false),
             dialog_purpose: RefCell::new(DialogPurpose::Message),
             models,
             tray_available: Cell::new(false),
@@ -1952,6 +1979,18 @@ impl App {
             .set_accent_color(teal);
     }
 
+    /// Shows or hides the focus ring in every window after `input` reached one.
+    pub fn note_focus_input(&self, input: crate::window_rules::FocusInput) {
+        let shown = crate::window_rules::focus_ring_shown(self.focus_ring_shown.get(), input);
+        if self.focus_ring_shown.replace(shown) == shown {
+            return;
+        }
+        self.main.global::<KeyboardFocus>().set_shown(shown);
+        self.flyout.global::<KeyboardFocus>().set_shown(shown);
+        self.equalizer.global::<KeyboardFocus>().set_shown(shown);
+        self.help.global::<KeyboardFocus>().set_shown(shown);
+    }
+
     /// Gives a titled window (every window but the flyout) its frame each
     /// time it gains the focus, which covers a native window created after
     /// `show` returned, and the brand accent again after a theme change.
@@ -1984,6 +2023,9 @@ impl App {
         // with or without the focus; outside this filter, as it resizes.
         let min_held = std::cell::Cell::new(kind != Titled::Main);
         window(self).on_winit_window_event(move |_, event| {
+            if let Some(input) = focus_input(event) {
+                with_app(&weak, |app| app.note_focus_input(input));
+            }
             if !min_held.replace(true) {
                 let weak = weak.clone();
                 Timer::single_shot(Duration::ZERO, move || {
@@ -5070,6 +5112,22 @@ fn flyout_fit_holds(fit: f32, room: f32, cut: bool) -> bool {
     }
 }
 
+fn mark_breathes(state: &AppState, window: &slint::Window, motion: &Motion) -> bool {
+    let network = state
+        .speakers
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.kind,
+                ui_model::SpeakerKind::AirPlay
+                    | ui_model::SpeakerKind::AirPlay2
+                    | ui_model::SpeakerKind::Cast
+            )
+        })
+        .count();
+    crate::window_rules::mark_breath::breathes(network, motion.get_on(), window.is_visible())
+}
+
 /// The properties the main window and the flyout share.
 trait WindowState {
     fn show_state(&self, state: &AppState, status: &SharedString, source_index: i32);
@@ -5089,6 +5147,11 @@ impl WindowState for MainWindow {
         );
         self.set_master_volume(state.master_volume as f32);
         self.set_master_volume_waves(volume_waves(state.master_volume));
+        self.set_mark_breathes(mark_breathes(
+            state,
+            self.window(),
+            &self.global::<Motion>(),
+        ));
         self.set_switch_source_on_quit(state.when_source_quits == WhenSourceQuits::SwitchToSystem);
     }
 
@@ -5110,6 +5173,11 @@ impl WindowState for TrayFlyout {
         );
         self.set_master_volume(state.master_volume as f32);
         self.set_master_volume_waves(volume_waves(state.master_volume));
+        self.set_mark_breathes(mark_breathes(
+            state,
+            self.window(),
+            &self.global::<Motion>(),
+        ));
     }
 
     fn show_live_input_hint(&self, hint: &SharedString) {
@@ -6798,6 +6866,7 @@ mod tests {
         app.equalizer.invoke_gain_changed(4, -4.5);
         app.equalizer.invoke_take_focus();
         draw_frames();
+        app.note_focus_input(crate::window_rules::FocusInput::Tab);
         tab(app.equalizer.window(), 4);
         for (suffix, appearance) in [
             ("", ui_model::Appearance::Light),
@@ -6809,7 +6878,7 @@ mod tests {
             draw_frames();
             app.main
                 .window()
-                .set_size(slint::LogicalSize::new(776.0, 680.0));
+                .set_size(slint::LogicalSize::new(696.0, 680.0));
             app.flyout
                 .window()
                 .set_size(slint::LogicalSize::new(340.0, 720.0));
@@ -7099,9 +7168,8 @@ mod tests {
         assert_eq!(fake.following(), None, "nothing is read while hidden");
     }
 
-    /// A wider window widens the speaker list first, to its full 644 px,
-    /// then the left column, from where its master volume track ended in
-    /// the 268 px column (208 px) back to 268 px.
+    /// A wider window widens the speaker list first, to its full width,
+    /// then the left column, as `main_columns` and the Mac's.
     #[test]
     fn the_main_window_widens_the_speaker_list_before_the_left_column() {
         let app = app_over(MockBackend::new());
@@ -7119,11 +7187,14 @@ mod tests {
                 width("MainWindow::scroll"),
             )
         };
-        assert_eq!(widths(776.0), (208.0, 524.0), "at its narrowest");
-        assert_eq!(widths(896.0), (208.0, 644.0), "the speaker list first");
-        assert_eq!(widths(926.0), (238.0, 644.0), "then the left column");
-        assert_eq!(widths(956.0), (268.0, 644.0));
-        assert_eq!(widths(1100.0), (268.0, 644.0));
+        use crate::window_rules::main_columns::{left, speaker_list};
+        for window in [696.0, 790.0, 825.0, 860.0, 1100.0] {
+            assert_eq!(
+                widths(window),
+                (left(window), speaker_list(window)),
+                "at {window} px"
+            );
+        }
     }
 
     /// Shuffle and repeat show only while the player takes them, read the
@@ -8073,7 +8144,7 @@ mod tests {
     }
 
     /// The speaker list opens slim, grows one for one with the window and
-    /// stops at the 644 px it had in the old 980 px default window.
+    /// stops at its full width, as the Mac's.
     // covers: S420
     #[test]
     fn the_speaker_list_grows_with_the_window_up_to_its_old_width() {
@@ -8092,9 +8163,9 @@ mod tests {
                 .size()
                 .width
         };
-        assert_eq!(list_width(776.0), 524.0, "the default window");
-        assert_eq!(list_width(876.0), 624.0, "a wider window");
-        assert_eq!(list_width(1400.0), 644.0, "a wide window");
+        assert_eq!(list_width(696.0), 430.0, "the default window");
+        assert_eq!(list_width(760.0), 494.0, "a wider window");
+        assert_eq!(list_width(1400.0), 524.0, "a wide window");
     }
 
     /// The header's switch ends with the speaker cards, also past the
@@ -9756,8 +9827,18 @@ mod tests {
         draw_frames();
         type_into_two_rows(&app, "-200");
         let running = app.snapshot().running;
-        // The streaming switch, at the right end of the header.
-        click(app.main.window(), 920.0, 78.0);
+        let switch = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            "Streaming",
+        )
+        .next()
+        .expect("the streaming switch");
+        let (at, size) = (switch.absolute_position(), switch.size());
+        click(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+        );
         assert_ne!(
             app.snapshot().running,
             running,
@@ -14797,6 +14878,8 @@ mod tests {
         let (x, y, _, height) = slider_box(&app.equalizer, "32 Hz");
         let (left, middle) = (x - 2.0, y + height / 2.0);
         let before = pixels(window)(left, middle);
+        // What the windows' winit filter reports for a Tab.
+        app.note_focus_input(crate::window_rules::FocusInput::Tab);
         tab(window, 4);
         assert_ne!(pixels(window)(left, middle), before, "an equalizer band");
 
