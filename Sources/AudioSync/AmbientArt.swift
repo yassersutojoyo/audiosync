@@ -59,8 +59,9 @@ final class SoundTide: ObservableObject {
                 if tide.env != env { env = tide.env }
             }
             let peaks = read.bands() ?? []
-            let next = bands.indices.map { index in
-                AmbientBands.follow(bands[index], to: AmbientBands.level(peak: index < peaks.count ? peaks[index] : 0), dt: dt)
+            let current = bands
+            let next = current.indices.map { index in
+                AmbientBands.follow(current[index], to: AmbientBands.level(peak: index < peaks.count ? peaks[index] : 0), dt: dt)
             }
             mode.step(loudest: next.max() ?? 0, dt: dt)
             if next != bands { bands = next }
