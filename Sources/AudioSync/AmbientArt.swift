@@ -17,6 +17,8 @@ final class SoundTide: ObservableObject {
     /// Bass, mid and treble levels, 0 to 1.
     @Published private(set) var bands = [0.0, 0.0, 0.0]
     @Published private(set) var onScreen = false
+    /// Shared by every art on screen, so the main window's and the panel's keep one time.
+    var clock = ArtClock()
     private var tide = Tide()
     private var mode = AmbientMode()
     private var timer: Timer?
@@ -112,7 +114,7 @@ struct AmbientArt: View {
         }
         TimelineView(.animation(minimumInterval: interval, paused: interval == nil)) { context in
             Canvas { canvas, size in
-                let time = context.date.timeIntervalSinceReferenceDate
+                let time = tide.clock.tick(context.date.timeIntervalSinceReferenceDate)
                 let live = still ? 0 : tide.live
                 let breath = still ? 0 : AmbientBreath.spread(at: time)
                 let idle = still ? 0 : 1 - live

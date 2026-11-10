@@ -214,7 +214,7 @@ enum AmbientBreath {
     /// Seconds between frames, nil for none.
     static func frameInterval(onScreen: Bool, reduceMotion: Bool, live: Double) -> TimeInterval? {
         guard onScreen, !reduceMotion else { return nil }
-        return live > 0 ? 1.0 / 60 : 1.0 / 15
+        return live > 0 ? 1.0 / 60 : 1.0 / 30
     }
 
     static func contrast(_ a: BrandRGB, _ b: BrandRGB) -> Double {
@@ -253,9 +253,10 @@ struct ArtClock {
     private var last: TimeInterval?
 
     mutating func tick(_ now: TimeInterval) -> TimeInterval {
-        time = now
-        last = now
-        return now
+        let next = time.map { $0 + min(Self.maxStep, max(0, now - (last ?? now))) } ?? now
+        time = next
+        last = max(now, last ?? now)
+        return next
     }
 }
 
