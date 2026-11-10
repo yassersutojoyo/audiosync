@@ -7767,6 +7767,20 @@ do {
     }
     check(!AmbientMode.sounding(meter: nil) && !AmbientMode.sounding(meter: 0) && AmbientMode.sounding(meter: 0.3),
           "music art: only captured sound counts; streaming off or silence is not sound")
+    check(!AmbientMode.follows(running: false, source: .system) && !AmbientMode.follows(running: true, source: .input(uid: "mic"))
+            && AmbientMode.follows(running: true, source: .system) && AmbientMode.follows(running: true, source: .app(bundleID: "a.b")),
+          "music art: it takes peaks only while streaming captures apps or the system")
+    var stoppedTide = Tide()
+    var stoppedMode = AmbientMode()
+    for tick in 0..<30 { AmbientMode.poll(&stoppedTide, &stoppedMode, meter: tick % 3 == 0 ? 1 : 0.3, dt: 0.1) }
+    let wasLive = stoppedMode.live
+    let stopped = (0..<200).map { _ in
+        AmbientMode.poll(&stoppedTide, &stoppedMode, meter: nil, dt: 0.1)
+        return (live: stoppedMode.live, env: stoppedTide.env)
+    }
+    check(wasLive == 1 && stopped.dropFirst(14).allSatisfy { $0.live == 0 } && stopped.dropFirst(140).allSatisfy { $0.env == 0 },
+          "music art: once nothing is captured it goes back to the breath within 1.5 s and the tint is gone by 14 s, however loud it was",
+          "\(wasLive), \(stopped[14]), \(stopped[140])")
     var mode = AmbientMode()
     let start = mode.live
     let rising = modeRun(0.5, &mode) { _ in true }
@@ -7788,6 +7802,26 @@ do {
             && abs(AmbientBreath.spread(at: 0) - AmbientBreath.spread(at: period)) < 1e-9,
           "music art: at rest it breathes once every 4 to 6 s, spread about a quarter of the sound's motion",
           "\(period), \(breaths.min() ?? -1), \(breaths.max() ?? -1)")
+    // The main window's 22 pt slot at density 1 and the panel's 16 pt one at 0.7.
+    for (slot, density) in [(22.0, 1.0), (16.0, 0.7)] {
+        // Drawn offsets in points, tapered as the art draws them.
+        func drawn(_ strand: Int, _ x: Double, _ time: Double) -> Double {
+            AmbientBreath.lift(strand: strand, x: x, time: time, spread: AmbientBreath.spread(at: time) * density,
+                               idle: 1, slot: slot) * slot / 22 * sin(.pi * x)
+        }
+        let restTimes = (0..<100).map { period * Double($0) / 100 }
+        let swayPeaks = (0..<3).map { strand in
+            restTimes.flatMap { t in (0...20).map { abs(drawn(strand, Double($0) / 20, t)) } }.max() ?? 0
+        }
+        let swayApart = [(0, 1), (0, 2), (1, 2)].map { pair in
+            restTimes.map { abs(drawn(pair.0, 0.5, $0) - drawn(pair.1, 0.5, $0)) }.reduce(0, +) / Double(restTimes.count)
+        }
+        check(swayPeaks.allSatisfy { (3...5.5).contains($0) } && swayApart.allSatisfy { $0 >= 3 },
+              "music art: at rest each strand sways 3 to 5.5 pt in a \(slot) pt slot, on average 3 pt from the others",
+              "\(swayPeaks), \(swayApart)")
+    }
+    check(AmbientBreath.lift(strand: 1, x: 0.5, time: 1.3, spread: 0, idle: 0, slot: 16) == 0,
+          "music art: with no motion it is one still line")
     check(AmbientBreath.motion(env: 0.9, live: 0, breath: 0.2) == 0.2
             && abs(AmbientBreath.motion(env: 0.9, live: 1, breath: 0.2) - 0.9) < 1e-9
             && AmbientBreath.motion(env: 0, live: 1, breath: 0.2) == 0.2,

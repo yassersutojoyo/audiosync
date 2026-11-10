@@ -589,6 +589,17 @@ uint64_t asc_ring_frames_written(const AscRing *ring);
  */
 float asc_ring_take_peak(const AscRing *ring);
 
+/*
+ * Any thread: the peak of each band of the signal written since the last call
+ * into bands[0] bass (below 200 Hz), bands[1] mid and bands[2] treble (above
+ * 2 kHz), for a capture at `rate`. The capture splits bands only while someone
+ * calls this: the first call turns the split on (and reads zeros), and it
+ * turns itself off a second after the last call. False, with zeros written,
+ * for NULL `ring` or an unsupported rate; false and nothing written for NULL
+ * `bands`.
+ */
+bool asc_ring_take_band_peaks(const AscRing *ring, uint32_t rate, float *bands);
+
 /* How often the UI polls asc_ring_take_peak for the input level meter, in ms. */
 #define ASC_METER_POLL_MS 100
 

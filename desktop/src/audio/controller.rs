@@ -4257,6 +4257,12 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .map(|session| session.ring.take_peak())
     }
 
+    fn sound_bands(&mut self) -> Option<[f32; 3]> {
+        self.session
+            .as_ref()
+            .map(|session| session.ring.take_band_peaks(SESSION_RATE))
+    }
+
     fn set_output_enabled(&mut self, id: &str, enabled: bool) -> Result<(), BackendError> {
         self.log.log(|| {
             let state = if enabled { "on" } else { "off" };
@@ -9857,6 +9863,23 @@ mod tests {
         for strand in art.strands(&NO_COVER, WINDOW_DENSITY, false) {
             assert_eq!((strand.breath, strand.sound), (OPACITY, 0.0));
         }
+    }
+
+    #[test]
+    fn the_band_levels_are_read_from_any_running_source() {
+        let mut backend = backend();
+        assert_eq!(backend.sound_bands(), None, "stopped");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(
+            backend.sound_bands(),
+            Some([0.0; 3]),
+            "the first take turns the split on"
+        );
+        backend.feed_capture_level(480, 0.5);
+        let bands = backend.sound_bands().unwrap();
+        assert!(bands.iter().any(|&band| band > 0.0), "{bands:?}");
+        backend.stop();
+        assert_eq!(backend.sound_bands(), None);
     }
 
     // covers: S350

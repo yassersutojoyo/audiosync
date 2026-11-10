@@ -123,6 +123,19 @@ struct AmbientMode: Equatable {
     /// `meter` is the meter's 0-to-1 reading, nil when nothing is captured.
     static func sounding(meter: Double?) -> Bool { (meter ?? 0) > Tide.stopAt }
 
+    /// Whether the art may take the engine's peaks: only while streaming runs,
+    /// and never from an input device, whose peaks belong to the input meter.
+    static func follows(running: Bool, source: AudioSource) -> Bool {
+        if case .input = source { return false }
+        return running
+    }
+
+    /// One poll of the art; `meter` is nil when nothing is captured.
+    static func poll(_ tide: inout Tide, _ mode: inout AmbientMode, meter: Double?, dt: TimeInterval) {
+        tide.step(level: meter, dt: dt)
+        mode.step(sounding: sounding(meter: meter), dt: dt)
+    }
+
     mutating func step(sounding: Bool, dt: TimeInterval) {
         quiet = sounding ? 0 : quiet + dt
         // 1e-9: ten 0.1 s steps sum to just under 1 s.
@@ -149,6 +162,21 @@ enum AmbientBreath {
 
     static func motion(env: Double, live: Double, breath: Double) -> Double {
         breath + live * max(0, env - breath)
+    }
+
+    /// Points each way of the resting swing, in a slot of any height.
+    static let sway = 3.0
+    static let waves: [(amplitude: Double, length: Double, offset: Double)] =
+        [(7, 92, 0), (5, 61, 1.7), (3.2, 137, 3.1)]
+
+    /// Strand `index`'s offset from the middle at `x` (0 to 1 across), before the
+    /// taper, in a 22 pt slot drawn `slot` points high; `idle` is 1 at rest, 0 with the sound.
+    static func lift(strand index: Int, x: Double, time: TimeInterval, spread: Double, idle: Double, slot: Double) -> Double {
+        let wave = waves[index]
+        let angle = 2 * .pi * 300 * x / wave.length + time * 2 * (1 + Double(index) * 0.35) + wave.offset
+        // A third of a cycle apart, so the resting strands read as three lines.
+        let swing = sin(2 * .pi * time / period + Double(index) * 2 * .pi / 3 + .pi * x)
+        return wave.amplitude * spread * sin(angle) + Double(index - 1) * 2.2 * spread + idle * sway * 22 / slot * swing
     }
 
     /// Opacity of the breath's contrasting line and of the sound's cover-coloured

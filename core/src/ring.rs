@@ -18,6 +18,7 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering, fence};
 
+use crate::bands::BandSplitter;
 use crate::lead::SessionLeads;
 
 /// Smallest safety margin M, in frames (S40).
@@ -131,6 +132,14 @@ pub struct Ring {
     /// ran, as float bits: for non-negative floats the bit order is the
     /// numeric order, so the writer raises it with one `fetch_max`.
     peak: AtomicU32,
+    /// The peak of each band (bass, mid, treble) since
+    /// [`Ring::take_band_peaks`] last ran, as float bits like `peak`.
+    band_peaks: [AtomicU32; 3],
+    /// The rate the writer splits bands at; 0 while nobody takes them.
+    band_rate: AtomicU32,
+    /// W at the last [`Ring::take_band_peaks`]: the writer stops splitting
+    /// once more than a second of frames passed without one.
+    band_taken_at: AtomicU64,
     /// Set by the first write holding a finite sample other than zero, and never
     /// cleared, so a meter taking [`Ring::take_peak`] can't hide it.
     heard: AtomicBool,
@@ -180,6 +189,9 @@ impl Ring {
             stamp_written: AtomicU64::new(0),
             stamp_time: AtomicU64::new(NO_STAMP),
             peak: AtomicU32::new(0),
+            band_peaks: [const { AtomicU32::new(0) }; 3],
+            band_rate: AtomicU32::new(0),
+            band_taken_at: AtomicU64::new(0),
             heard: AtomicBool::new(false),
             writer_taken: AtomicBool::new(false),
             leads: SessionLeads::new(),
@@ -243,6 +255,25 @@ impl Ring {
     /// samples don't count. A relaxed swap, safe on any thread.
     pub fn take_peak(&self) -> f32 {
         f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+    }
+
+    /// The peak of each band of the signal written since the last call, as
+    /// bass, mid and treble ([`crate::bands`]), for a capture at `rate`, and
+    /// starts the next span at 0. The writer splits only while someone
+    /// takes them: the first take turns the split on, and it turns itself
+    /// off a second of frames after the last one, so a span that started
+    /// off reads zeros. Zeros for a rate outside the supported range.
+    /// Atomics only, safe on any thread.
+    pub fn take_band_peaks(&self, rate: u32) -> [f32; 3] {
+        if !is_supported_rate(rate) {
+            return [0.0; 3];
+        }
+        self.band_taken_at
+            .store(self.written.load(Ordering::Relaxed), Ordering::Relaxed);
+        self.band_rate.store(rate, Ordering::Release);
+        self.band_peaks
+            .each_ref()
+            .map(|peak| f32::from_bits(peak.swap(0, Ordering::Relaxed)))
     }
 
     /// Whether any write so far held a finite sample other than zero,
@@ -311,6 +342,7 @@ impl Ring {
             ring: Arc::clone(self),
             open: 0,
             blocks: [0; BLOCK_WINDOW],
+            bands: None,
             next: 0,
         })
     }
@@ -354,6 +386,8 @@ pub struct RingWriter {
     blocks: [u64; BLOCK_WINDOW],
     /// Where in `blocks` the next closed block goes.
     next: usize,
+    /// The band split, while it runs.
+    bands: Option<BandSplitter>,
 }
 
 impl fmt::Debug for RingWriter {
@@ -401,9 +435,44 @@ impl RingWriter {
             self.ring.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
             self.ring.heard.store(true, Ordering::Relaxed);
         }
+        self.split_bands(samples);
         if frames > 0 {
             self.open += frames as u64;
             self.publish_block();
+        }
+    }
+
+    /// Raises the band peaks with `samples` while someone takes them
+    /// ([`Ring::take_band_peaks`]); one atomic load while nobody does.
+    fn split_bands(&mut self, samples: &[f32]) {
+        let rate = self.ring.band_rate.load(Ordering::Acquire);
+        if rate == 0 {
+            return;
+        }
+        let idle = self
+            .ring
+            .written
+            .load(Ordering::Relaxed)
+            .saturating_sub(self.ring.band_taken_at.load(Ordering::Relaxed));
+        if idle > u64::from(rate) {
+            let _ =
+                self.ring
+                    .band_rate
+                    .compare_exchange(rate, 0, Ordering::Relaxed, Ordering::Relaxed);
+            self.bands = None;
+            return;
+        }
+        if self.bands.as_ref().map(BandSplitter::rate) != Some(rate) {
+            self.bands = Some(BandSplitter::new(rate));
+        }
+        let Some(splitter) = self.bands.as_mut() else {
+            return;
+        };
+        let peaks = splitter.process(samples);
+        for (slot, peak) in self.ring.band_peaks.iter().zip(peaks) {
+            if peak > 0.0 {
+                slot.fetch_max(peak.to_bits(), Ordering::Relaxed);
+            }
         }
     }
 
@@ -513,6 +582,7 @@ impl RingWriter {
         self.blocks = [0; BLOCK_WINDOW];
         self.next = 0;
         self.ring.block_frames.store(0, Ordering::Relaxed);
+        self.ring.band_taken_at.store(0, Ordering::Relaxed);
         self.publish_stamp(0, NO_STAMP);
         self.ring.written.store(0, Ordering::Release);
         fence(Ordering::Release);
@@ -609,6 +679,71 @@ mod tests {
         ring.take_peak();
         writer.write(&[0.0, 0.0], 1);
         assert!(ring.heard());
+    }
+
+    fn stereo_tone(rate: u32, hz: f64, frames: usize) -> Vec<f32> {
+        (0..frames)
+            .flat_map(|i| {
+                let phase = 2.0 * std::f64::consts::PI * hz * i as f64 / f64::from(rate);
+                let sample = 0.5 * phase.sin() as f32;
+                [sample, sample]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn band_peaks_follow_the_written_signal_once_taken() {
+        for rate in [44_100, 48_000] {
+            let ring = Ring::for_rate(rate).unwrap();
+            let mut writer = ring.writer().unwrap();
+            let block = stereo_tone(rate, 60.0, 512);
+            writer.write(&block, 512);
+            assert_eq!(
+                ring.take_band_peaks(rate),
+                [0.0; 3],
+                "off until the first take"
+            );
+            for chunk in stereo_tone(rate, 60.0, 512 * 40).chunks(1024) {
+                writer.write(chunk, 512);
+            }
+            let [bass, _, treble] = ring.take_band_peaks(rate);
+            assert!(bass > 0.3 && treble < 0.01, "{rate}: {bass} {treble}");
+            assert_eq!(ring.take_band_peaks(rate), [0.0; 3], "a take resets them");
+        }
+    }
+
+    #[test]
+    fn the_split_stops_a_second_after_the_last_take() {
+        let ring = Ring::for_rate(48_000).unwrap();
+        let mut writer = ring.writer().unwrap();
+        let low = stereo_tone(48_000, 60.0, 4800);
+        let high = stereo_tone(48_000, 6_000.0, 4800);
+        ring.take_band_peaks(48_000);
+        for _ in 0..11 {
+            writer.write(&low, 4800);
+        }
+        writer.write(&high, 4800);
+        let [bass, _, treble] = ring.take_band_peaks(48_000);
+        assert!(bass > 0.3, "split while taken: {bass}");
+        assert!(treble < 0.01, "not split a second after the take: {treble}");
+        writer.write(&high, 4800);
+        let [_, _, treble] = ring.take_band_peaks(48_000);
+        assert!(treble > 0.3, "a take turns it on again: {treble}");
+    }
+
+    #[test]
+    fn the_band_split_leaves_the_peak_as_it_is() {
+        let quiet = Ring::for_rate(48_000).unwrap();
+        let split = Ring::for_rate(48_000).unwrap();
+        let mut quiet_writer = quiet.writer().unwrap();
+        let mut split_writer = split.writer().unwrap();
+        split.take_band_peaks(48_000);
+        let block = stereo_tone(48_000, 6_000.0, 512);
+        for _ in 0..8 {
+            quiet_writer.write(&block, 512);
+            split_writer.write(&block, 512);
+            assert_eq!(quiet.take_peak(), split.take_peak());
+        }
     }
 
     // covers: S35

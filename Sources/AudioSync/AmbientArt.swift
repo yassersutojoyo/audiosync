@@ -39,12 +39,10 @@ final class SoundTide: ObservableObject {
             guard let self else { return }
             if let reading = peak() {
                 meter = asc_meter_level(meter, reading)
-                tide.step(level: Double(meter), dt: dt)
-                mode.step(sounding: AmbientMode.sounding(meter: Double(meter)), dt: dt)
+                AmbientMode.poll(&tide, &mode, meter: Double(meter), dt: dt)
             } else {
                 meter = 0
-                tide.step(level: nil, dt: dt)
-                mode.step(sounding: false, dt: dt)
+                AmbientMode.poll(&tide, &mode, meter: nil, dt: dt)
             }
             if tide.env != env { env = tide.env }
             if mode.live != live { live = mode.live }
@@ -67,9 +65,6 @@ struct AmbientArt: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
-    private static let waves: [(amplitude: CGFloat, length: CGFloat, offset: Double)] =
-        [(7, 92, 0), (5, 61, 1.7), (3.2, 137, 3.1)]
-
     var body: some View {
         let still = reduceMotion
         let interval = AmbientBreath.frameInterval(onScreen: tide.onScreen, reduceMotion: still, live: tide.live)
@@ -84,20 +79,19 @@ struct AmbientArt: View {
                 let live = still ? 0 : tide.live
                 let env = still ? 0 : min(1, tide.env)
                 let breath = still ? 0 : AmbientBreath.spread(at: time)
-                let spread = CGFloat(AmbientBreath.motion(env: env, live: live, breath: breath))
+                let spread = AmbientBreath.motion(env: env, live: live, breath: breath)
+                let idle = still ? 0 : 1 - live
                 let layers = still ? (breath: 1.0, sound: 0.0) : AmbientBreath.layers(live: live, env: env)
-                let phase = time * 2
                 let scale = size.height / 22
-                for (index, wave) in Self.waves.enumerated() where !still || index == 1 {
+                for index in AmbientBreath.waves.indices where !still || index == 1 {
                     var path = Path()
                     for step in 0...60 {
                         let x = size.width * CGFloat(step) / 60
                         // Pinned at both ends, widest in the middle.
                         let taper = sin(.pi * CGFloat(step) / 60)
-                        let angle = 2 * .pi * Double(300 * CGFloat(step) / 60 / wave.length)
-                            + phase * (1 + Double(index) * 0.35) + wave.offset
-                        let lift = wave.amplitude * spread * CGFloat(sin(angle)) + CGFloat(index - 1) * 2.2 * spread
-                        let y = min(21, max(1, 11 + taper * lift * density)) * scale
+                        let lift = CGFloat(AmbientBreath.lift(strand: index, x: Double(step) / 60, time: time,
+                                                              spread: spread * Double(density), idle: idle, slot: Double(size.height)))
+                        let y = min(21, max(1, 11 + taper * lift)) * scale
                         if step == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
                     let style = StrokeStyle(lineWidth: 1.6, lineCap: .round)

@@ -356,6 +356,34 @@ pub unsafe extern "C" fn asc_ring_take_peak(ring: *const AscRing) -> f32 {
     })
 }
 
+/// Any thread: [`Ring::take_band_peaks`] into `bands`, three floats for bass,
+/// mid and treble, for a capture at `rate`. False, with zeros written, for a
+/// null handle or a rate outside the supported range; false and nothing
+/// written when `bands` is null.
+///
+/// # Safety
+///
+/// `ring` is null or a live ring handle; `bands` is null or points to three
+/// writable floats.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn asc_ring_take_band_peaks(
+    ring: *const AscRing,
+    rate: u32,
+    bands: *mut f32,
+) -> bool {
+    guard(false, || {
+        if bands.is_null() {
+            return false;
+        }
+        // SAFETY: by the caller's contract the handle is null or live.
+        let ring = unsafe { ring_of(ring) };
+        let peaks = ring.map_or([0.0; 3], |ring| ring.take_band_peaks(rate));
+        // SAFETY: non-null, and by the caller's contract three writable floats.
+        unsafe { bands.cast::<[f32; 3]>().write_unaligned(peaks) };
+        ring.is_some() && ring::is_supported_rate(rate)
+    })
+}
+
 /// [`meter::meter_level`]: the level meter's length, 0 to 1, after a poll
 /// that took `peak` while it showed `previous`.
 #[unsafe(no_mangle)]
@@ -790,6 +818,28 @@ mod tests {
         // SAFETY: `reader` is live; `dst` holds `frames` frames.
         unsafe { asc_reader_read(reader, dst.as_mut_ptr(), frames, &mut report) };
         (dst, report)
+    }
+
+    #[test]
+    fn band_peaks_cross_the_c_interface() {
+        let mut bands = [f32::NAN; 3];
+        // SAFETY: a null handle and a writable array of three floats.
+        assert!(!unsafe { asc_ring_take_band_peaks(ptr::null(), RATE, bands.as_mut_ptr()) });
+        assert_eq!(bands, [0.0; 3]);
+        let session = Session::new();
+        let ring = session.ring;
+        let take = |rate: u32, bands: *mut f32| {
+            // SAFETY: `ring` is live; `bands` is null or three writable floats.
+            unsafe { asc_ring_take_band_peaks(ring, rate, bands) }
+        };
+        assert!(!take(RATE, ptr::null_mut()));
+        assert!(!take(0, bands.as_mut_ptr()));
+        assert!(take(RATE, bands.as_mut_ptr()));
+        let step = [0.5_f32; BLOCK * 2];
+        // SAFETY: `writer` is live and `step` holds BLOCK frames.
+        unsafe { asc_ring_write(session.writer, step.as_ptr(), BLOCK) };
+        assert!(take(RATE, bands.as_mut_ptr()));
+        assert!(bands.iter().all(|&band| band > 0.0), "{bands:?}");
     }
 
     // covers: S16, S36, S40

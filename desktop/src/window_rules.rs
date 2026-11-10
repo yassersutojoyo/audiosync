@@ -312,6 +312,25 @@ pub mod ambient_breath {
         breath + live * (env - breath).max(0.0)
     }
 
+    /// Points each way of the resting swing, in a slot of any height.
+    pub const SWAY: f64 = 3.0;
+    /// `(amplitude, length, offset)` of each strand's ripple.
+    pub const WAVES: [(f64, f64, f64); 3] = [(7.0, 92.0, 0.0), (5.0, 61.0, 1.7), (3.2, 137.0, 3.1)];
+
+    /// Strand `index`'s offset from the middle at `x` (0 to 1 across), before the
+    /// taper, in a 22 pt slot drawn `slot` points high; `idle` is 1 at rest, 0 with the sound.
+    pub fn lift(index: usize, x: f64, time: f64, spread: f64, idle: f64, slot: f64) -> f64 {
+        use std::f64::consts::{PI, TAU};
+        let (amplitude, length, offset) = WAVES[index];
+        let strand = index as f64;
+        let angle = TAU * 300.0 * x / length + time * 2.0 * (1.0 + strand * 0.35) + offset;
+        // A third of a cycle apart, so the resting strands read as three lines.
+        let swing = (TAU * time / PERIOD + strand * TAU / 3.0 + PI * x).sin();
+        amplitude * spread * angle.sin()
+            + (strand - 1.0) * 2.2 * spread
+            + idle * SWAY * 22.0 / slot * swing
+    }
+
     /// `(breath, sound)` opacities: the breath's line stays while the sound's strands are faint.
     pub fn layers(live: f64, env: f64) -> (f64, f64) {
         (
@@ -703,6 +722,35 @@ mod tests {
         assert_eq!(layers(0.0, 0.8), (OPACITY, 0.0));
         assert_eq!(layers(1.0, 0.8), (0.0, 1.0));
         const { assert!(OPACITY < 1.0) };
+    }
+
+    #[test]
+    fn ambient_rest_sways_three_points_each_way_with_three_strands_out_of_step() {
+        use ambient_breath::*;
+        use std::f64::consts::PI;
+        let times: Vec<f64> = (0..100).map(|i| PERIOD * i as f64 / 100.0).collect();
+        // The main window's 22 pt slot at density 1 and the panel's 16 pt one at 0.7.
+        for (slot, density) in [(22.0, 1.0), (16.0, 0.7)] {
+            let drawn = |strand: usize, x: f64, t: f64| {
+                lift(strand, x, t, spread(t) * density, 1.0, slot) * slot / 22.0 * (PI * x).sin()
+            };
+            for strand in 0..3 {
+                let peak = times
+                    .iter()
+                    .flat_map(|t| (0..=20).map(move |s| drawn(strand, s as f64 / 20.0, *t).abs()))
+                    .fold(0.0, f64::max);
+                assert!((3.0..=5.5).contains(&peak), "{slot} {strand} {peak}");
+            }
+            for (a, b) in [(0, 1), (0, 2), (1, 2)] {
+                let apart = times
+                    .iter()
+                    .map(|t| (drawn(a, 0.5, *t) - drawn(b, 0.5, *t)).abs())
+                    .sum::<f64>()
+                    / times.len() as f64;
+                assert!(apart >= 3.0, "{slot} {a} {b} {apart}");
+            }
+        }
+        assert_eq!(lift(1, 0.5, 1.3, 0.0, 0.0, 16.0), 0.0);
     }
 
     #[test]

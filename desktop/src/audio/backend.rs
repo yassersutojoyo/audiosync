@@ -923,6 +923,21 @@ pub trait AudioBackend {
         None
     }
 
+    /// While a session runs, the peak of the captured signal's bass, mid and
+    /// treble bands since the last call, for the ambient art; `None` while
+    /// stopped. The capture splits bands only while this is called, from a
+    /// second after the last call on.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the ambient art's strands read it once its UI lands"
+        )
+    )]
+    fn sound_bands(&mut self) -> Option<[f32; 3]> {
+        None
+    }
+
     /// Turns an output on or off. While playing, an output turned on starts
     /// at once if it is connected; if it can't start, it is turned off again
     /// and the error returned.

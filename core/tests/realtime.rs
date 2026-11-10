@@ -153,6 +153,24 @@ fn ring_write_and_reader_read_do_not_allocate() {
     assert!(counters.starved_frames > 0 || counters.drift_silences > 0 || counters.drift_skips > 0);
 }
 
+#[test]
+fn the_band_split_in_a_ring_write_does_not_allocate() {
+    let ring = Ring::for_rate(48_000).unwrap();
+    let mut writer = ring.writer().unwrap();
+    let block = noisy_block(512, 4);
+    ring.take_band_peaks(48_000);
+    writer.write(&block, 512);
+    let count = allocations_in(|| {
+        for round in 0..200 {
+            writer.write(&block, 512);
+            if round % 3 == 0 {
+                std::hint::black_box(ring.take_band_peaks([44_100, 48_000][round % 2]));
+            }
+        }
+    });
+    assert_eq!(count, 0, "the band split allocated or freed");
+}
+
 // covers: S126, S127
 #[test]
 fn resample_and_convert_do_not_allocate() {
@@ -389,6 +407,7 @@ fn audio_path_modules_use_only_atomics() {
         ("fade.rs", "none"),
         ("render.rs", "none"),
         ("meter.rs", "none"),
+        ("bands.rs", "none"),
         ("eq.rs", "yield"),
         ("clock.rs", "origin"),
     ];
