@@ -151,6 +151,17 @@ enum AmbientBreath {
         breath + live * max(0, env - breath)
     }
 
+    static let waves: [(amplitude: Double, length: Double, offset: Double)] =
+        [(7, 92, 0), (5, 61, 1.7), (3.2, 137, 3.1)]
+
+    /// Strand `index`'s offset in points from the middle of a 22 pt slot at
+    /// `x` (0 to 1 across), before the taper; `idle` is 1 at rest, 0 with the sound.
+    static func lift(strand index: Int, x: Double, time: TimeInterval, spread: Double, idle: Double) -> Double {
+        let wave = waves[index]
+        let angle = 2 * .pi * 300 * x / wave.length + time * 2 * (1 + Double(index) * 0.35) + wave.offset
+        return wave.amplitude * spread * sin(angle) + Double(index - 1) * 2.2 * spread
+    }
+
     /// Opacity of the breath's contrasting line and of the sound's cover-coloured
     /// strands; the line stays while the strands are still faint.
     static func layers(live: Double, env: Double) -> (breath: Double, sound: Double) {
