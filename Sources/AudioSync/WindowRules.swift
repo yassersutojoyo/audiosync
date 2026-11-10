@@ -164,19 +164,19 @@ enum AmbientBreath {
         breath + live * max(0, env - breath)
     }
 
-    /// Points each way of the resting swing in a 22 pt slot.
+    /// Points each way of the resting swing, in a slot of any height.
     static let sway = 3.0
     static let waves: [(amplitude: Double, length: Double, offset: Double)] =
         [(7, 92, 0), (5, 61, 1.7), (3.2, 137, 3.1)]
 
-    /// Strand `index`'s offset in points from the middle of a 22 pt slot at
-    /// `x` (0 to 1 across), before the taper; `idle` is 1 at rest, 0 with the sound.
-    static func lift(strand index: Int, x: Double, time: TimeInterval, spread: Double, idle: Double) -> Double {
+    /// Strand `index`'s offset from the middle at `x` (0 to 1 across), before the
+    /// taper, in a 22 pt slot drawn `slot` points high; `idle` is 1 at rest, 0 with the sound.
+    static func lift(strand index: Int, x: Double, time: TimeInterval, spread: Double, idle: Double, slot: Double) -> Double {
         let wave = waves[index]
         let angle = 2 * .pi * 300 * x / wave.length + time * 2 * (1 + Double(index) * 0.35) + wave.offset
         // A third of a cycle apart, so the resting strands read as three lines.
         let swing = sin(2 * .pi * time / period + Double(index) * 2 * .pi / 3 + .pi * x)
-        return wave.amplitude * spread * sin(angle) + Double(index - 1) * 2.2 * spread + idle * sway * swing
+        return wave.amplitude * spread * sin(angle) + Double(index - 1) * 2.2 * spread + idle * sway * 22 / slot * swing
     }
 
     /// Opacity of the breath's contrasting line and of the sound's cover-coloured

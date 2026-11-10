@@ -7802,21 +7802,26 @@ do {
             && abs(AmbientBreath.spread(at: 0) - AmbientBreath.spread(at: period)) < 1e-9,
           "music art: at rest it breathes once every 4 to 6 s, spread about a quarter of the sound's motion",
           "\(period), \(breaths.min() ?? -1), \(breaths.max() ?? -1)")
-    // Drawn offsets in points of the 22 pt slot, tapered as the art draws them.
-    func drawn(_ strand: Int, _ x: Double, _ time: Double) -> Double {
-        AmbientBreath.lift(strand: strand, x: x, time: time, spread: AmbientBreath.spread(at: time), idle: 1) * sin(.pi * x)
+    // The main window's 22 pt slot at density 1 and the panel's 16 pt one at 0.7.
+    for (slot, density) in [(22.0, 1.0), (16.0, 0.7)] {
+        // Drawn offsets in points, tapered as the art draws them.
+        func drawn(_ strand: Int, _ x: Double, _ time: Double) -> Double {
+            AmbientBreath.lift(strand: strand, x: x, time: time, spread: AmbientBreath.spread(at: time) * density,
+                               idle: 1, slot: slot) * slot / 22 * sin(.pi * x)
+        }
+        let restTimes = (0..<100).map { period * Double($0) / 100 }
+        let swayPeaks = (0..<3).map { strand in
+            restTimes.flatMap { t in (0...20).map { abs(drawn(strand, Double($0) / 20, t)) } }.max() ?? 0
+        }
+        let swayApart = [(0, 1), (0, 2), (1, 2)].map { pair in
+            restTimes.map { abs(drawn(pair.0, 0.5, $0) - drawn(pair.1, 0.5, $0)) }.reduce(0, +) / Double(restTimes.count)
+        }
+        check(swayPeaks.allSatisfy { (3...5.5).contains($0) } && swayApart.allSatisfy { $0 >= 3 },
+              "music art: at rest each strand sways 3 to 5.5 pt in a \(slot) pt slot, on average 3 pt from the others",
+              "\(swayPeaks), \(swayApart)")
     }
-    let restTimes = (0..<100).map { period * Double($0) / 100 }
-    let swayPeaks = (0..<3).map { strand in
-        restTimes.flatMap { t in (0...20).map { abs(drawn(strand, Double($0) / 20, t)) } }.max() ?? 0
-    }
-    let swayApart = [(0, 1), (0, 2), (1, 2)].map { pair in
-        restTimes.map { abs(drawn(pair.0, 0.5, $0) - drawn(pair.1, 0.5, $0)) }.reduce(0, +) / Double(restTimes.count)
-    }
-    check(swayPeaks.allSatisfy { (3.0 / 22...0.25).contains($0 / 22) } && swayApart.allSatisfy { $0 >= 2 }
-            && AmbientBreath.lift(strand: 1, x: 0.5, time: 1.3, spread: 0, idle: 0) == 0,
-          "music art: at rest each strand sways 3 to 5.5 pt of the 22 pt slot, out of step with the others; still with no motion",
-          "\(swayPeaks), \(swayApart)")
+    check(AmbientBreath.lift(strand: 1, x: 0.5, time: 1.3, spread: 0, idle: 0, slot: 16) == 0,
+          "music art: with no motion it is one still line")
     check(AmbientBreath.motion(env: 0.9, live: 0, breath: 0.2) == 0.2
             && abs(AmbientBreath.motion(env: 0.9, live: 1, breath: 0.2) - 0.9) < 1e-9
             && AmbientBreath.motion(env: 0, live: 1, breath: 0.2) == 0.2,

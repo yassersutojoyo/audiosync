@@ -90,7 +90,7 @@ struct AmbientArt: View {
                         // Pinned at both ends, widest in the middle.
                         let taper = sin(.pi * CGFloat(step) / 60)
                         let lift = CGFloat(AmbientBreath.lift(strand: index, x: Double(step) / 60, time: time,
-                                                              spread: spread * Double(density), idle: idle))
+                                                              spread: spread * Double(density), idle: idle, slot: Double(size.height)))
                         let y = min(21, max(1, 11 + taper * lift)) * scale
                         if step == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
