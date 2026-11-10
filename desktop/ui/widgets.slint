@@ -76,6 +76,54 @@ export global Motion {
     in property <bool> on: true;
 }
 
+// A fold's edge and its content's opacity at a progress, from the app's
+// fold rule (window_rules::fold_phase), which the Mac panes share.
+export global Fold {
+    pure callback edge(float, bool) -> float;
+    pure callback fade(float, bool) -> float;
+}
+
+// A pane under its row, laid out from one progress that runs 0.25 s, so the
+// rows below follow it frame by frame; with Motion off it folds at once.
+export component FoldPane inherits Rectangle {
+    in property <bool> open;
+    // The content may go only once the pane is folded shut.
+    out property <bool> shown: root.open || root.progress > 0;
+    // Escape inside the pane, where nothing in it took the key, folds it.
+    in property <bool> escape-folds;
+    callback fold();
+    property <float> progress: root.open ? 1 : 0;
+    animate progress { duration: Motion.on ? 250ms : 0ms; }
+    property <length> height-open: max(body.min-height, body.preferred-height);
+
+    min-width: body.min-width;
+    preferred-width: body.preferred-width;
+    min-height: Fold.edge(root.progress, !Motion.on) * root.height-open;
+    max-height: self.min-height;
+    clip: true;
+
+    FocusScope {
+        enabled: false;
+        key-pressed(event) => {
+            if root.escape-folds && root.open && event.text == Key.Escape {
+                root.fold();
+                return accept;
+            }
+            return reject;
+        }
+
+        Rectangle {
+            height: root.height-open;
+            y: 0px;
+            opacity: Fold.fade(root.progress, !Motion.on);
+
+            body := VerticalLayout {
+                @children
+            }
+        }
+    }
+}
+
 // A line too long for its room rests 2 s at its start, moves to its end at
 // 30 px a second, rests 2 s and moves back.
 global Marquee {
@@ -112,11 +160,12 @@ export component MarqueeText inherits Rectangle {
     property <duration> rested-at;
     property <duration> wait: 2s;
     property <length> offset: self.excess > 0 ? Marquee.offset(self.moving ? animation-tick() - self.started : self.rested-at, self.excess) : 0px;
-    // Slint has no alpha mask: each fade is four strips of the text, fainter
-    // toward the edge.
-    property <length> strip: 3px;
-    property <bool> fade-start: self.offset > 0;
-    property <bool> fade-end: self.offset < self.excess;
+    // Slint has no alpha mask: each fade is strips of the text, fainter
+    // toward the edge. As on the Mac, only an edge that cuts a letter fades:
+    // the start over up to 16 px with its first quarter clear (a cut
+    // letter's sliver showed there), the end over up to 8 px.
+    property <length> lead: min(self.offset, 16px);
+    property <length> tail: self.excess > 0 ? min(self.excess - self.offset, 8px) : 0px;
 
     init => {
         self.started = animation-tick();
@@ -149,8 +198,8 @@ export component MarqueeText inherits Rectangle {
     accessible-label: root.text;
 
     Rectangle {
-        x: root.fade-start ? 4 * root.strip : 0px;
-        width: root.width - self.x - (root.fade-end ? 4 * root.strip : 0px);
+        x: root.lead;
+        width: root.width - self.x - root.tail;
         clip: true;
 
         label := Text {
@@ -167,9 +216,10 @@ export component MarqueeText inherits Rectangle {
         }
     }
 
-    for i in root.fade-start ? 4 : 0: Rectangle {
-        x: i * root.strip;
-        width: root.strip;
+    // The start's fade in eighths, the first two left out.
+    for i in root.lead > 0 ? 6 : 0: Rectangle {
+        x: (i + 2) * root.lead / 8;
+        width: root.lead / 8;
         clip: true;
 
         Text {
@@ -177,7 +227,7 @@ export component MarqueeText inherits Rectangle {
             width: label.width;
             height: root.height;
             text: root.text;
-            color: root.text-color.transparentize(1 - (i + 1) / 5);
+            color: root.text-color.transparentize(1 - (i + 0.5) / 6);
             font-size: root.font-size;
             font-weight: root.font-weight;
             vertical-alignment: center;
@@ -185,9 +235,9 @@ export component MarqueeText inherits Rectangle {
         }
     }
 
-    for i in root.fade-end ? 4 : 0: Rectangle {
-        x: root.width - (i + 1) * root.strip;
-        width: root.strip;
+    for i in root.tail > 0 ? 4 : 0: Rectangle {
+        x: root.width - (i + 1) * root.tail / 4;
+        width: root.tail / 4;
         clip: true;
 
         Text {
@@ -195,7 +245,7 @@ export component MarqueeText inherits Rectangle {
             width: label.width;
             height: root.height;
             text: root.text;
-            color: root.text-color.transparentize(1 - (i + 1) / 5);
+            color: root.text-color.transparentize(1 - (i + 0.5) / 4);
             font-size: root.font-size;
             font-weight: root.font-weight;
             vertical-alignment: center;
@@ -878,7 +928,7 @@ export component Disclosure inherits Rectangle {
     focus := FocusScope {
         focus-on-click: false;
         key-pressed(event) => {
-            if event.text == " " || event.text == Key.Return {
+            if event.text == " " || event.text == Key.Return || (event.text == Key.Escape && root.expanded) {
                 root.toggled();
                 return accept;
             }

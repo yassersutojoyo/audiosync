@@ -232,13 +232,10 @@ impl Tray {
                 tray.show_state(state);
             }
             #[cfg(any(windows, target_os = "linux"))]
-            if let Some(app) = APP.with(|cell| cell.borrow().upgrade())
-                && app.flyout.window().is_visible()
-                && let Some(icon) = FLYOUT_ICON.with(Cell::get)
-            {
-                place_flyout(&app, icon);
-            }
+            place_open_flyout();
         });
+        #[cfg(any(windows, target_os = "linux"))]
+        app.flyout.on_fit_height_changed(place_open_flyout);
         // The taskbar's theme can change while nothing else does.
         #[cfg(windows)]
         {
@@ -472,6 +469,17 @@ fn show_flyout(app: &App, icon: Bounds) {
     platform::bring_to_front(flyout);
     app.flyout.set_revealed(true);
     app.flyout.invoke_take_focus();
+}
+
+/// Sizes and places the flyout again while it is open.
+#[cfg(any(windows, target_os = "linux"))]
+fn place_open_flyout() {
+    if let Some(app) = APP.with(|cell| cell.borrow().upgrade())
+        && app.flyout.window().is_visible()
+        && let Some(icon) = FLYOUT_ICON.with(Cell::get)
+    {
+        place_flyout(&app, icon);
+    }
 }
 
 /// Sizes the flyout to its parts, as much as the work area of the icon's

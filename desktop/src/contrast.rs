@@ -1754,7 +1754,8 @@ fn only_a_flyout_zone_badge_switches_the_zone() {
         !header.contains("accessible-expanded:"),
         "UI Automation offers Invoke only on an arrow with no expanded state"
     );
-    assert!(flyout.contains("for speaker in zone.expanded ? zone.members : []: FlyoutRow {"));
+    assert!(flyout.contains("open: zone.expanded;"));
+    assert!(flyout.contains("for speaker in zone-members.shown ? zone.members : []: FlyoutRow {"));
     assert!(flyout.contains("root.zone-expanded-changed(zone.id, open);"));
 }
 

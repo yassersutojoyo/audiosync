@@ -50,7 +50,7 @@ use crate::volume_keys::{self, VolumeKey};
 use crate::window_rules::Rgb;
 use crate::{
     AboutDialog, AirPlayProblem, AmbientLook, AmbientStrand, Availability, CalibrationRowItem,
-    CastAddressDialog, CastList, CastProblem, CastState, DeviceVolumeHint, EqualizerWindow,
+    CastAddressDialog, CastList, CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, Fold,
     GuidePage, GuideStepItem, GuideWindow, HiddenItem, KeyboardFocus, LeftOutItem, MainControl,
     MainWindow, MixAppItem, Motion, NameField, NoticeItem, NoticeKind, Palette, PasswordDialog,
     PinDialog, PinPhase, PresetItem, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind,
@@ -928,6 +928,16 @@ fn unix_now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
+/// Gives a window's fold panes the fold the Mac's panes run.
+fn follow_fold_rule(fold: &Fold<'_>) {
+    fold.on_edge(|progress, still| {
+        crate::window_rules::fold_phase(progress.into(), still).edge as f32
+    });
+    fold.on_fade(|progress, still| {
+        crate::window_rules::fold_phase(progress.into(), still).fade as f32
+    });
+}
+
 fn with_app(app: &Weak<App>, action: impl FnOnce(&App)) {
     if let Some(app) = app.upgrade() {
         action(&app);
@@ -1253,6 +1263,8 @@ impl App {
             .global::<Strings>()
             .set_airplay2_sessions(sessions.unwrap_or(i32::MAX));
         app.attach_models();
+        follow_fold_rule(&app.main.global::<Fold>());
+        follow_fold_rule(&app.flyout.global::<Fold>());
         app.connect_main();
         app.connect_flyout();
         app.connect_equalizer();
@@ -13351,6 +13363,117 @@ mod tests {
         draw_frames();
         assert!(shows(flyout, fold), "the flyout unfolded the zone");
         assert!(shows(main, unfold), "the main window keeps it folded");
+    }
+
+    /// Where the arrow of the zone under Living Room is, after folding
+    /// Living Room with the animation effects `on`: at once, 190 ms into the
+    /// quarter-second fold (its rows faded, its edge moving), and after it.
+    fn upstairs_while_living_room_folds(on: bool) -> (f32, f32, f32, f32) {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.add_zone(
+            "zone:living",
+            "Living Room",
+            &["airplay:kitchen", "local:desk"],
+        );
+        backend.add_zone("zone:upstairs", "Upstairs", &["airplay:bedroom"]);
+        let app = app_over(backend);
+        app.main.show().unwrap();
+        app.main.global::<Motion>().set_on(on);
+        hold_clock();
+        draw_frames();
+        let below = || {
+            ["Hide speakers in Upstairs", "Show speakers in Upstairs"]
+                .into_iter()
+                .find_map(|label| ElementHandle::find_by_accessible_label(&app.main, label).next())
+                .expect("the next zone's arrow")
+                .absolute_position()
+                .y
+        };
+        let open = below();
+        app.main
+            .invoke_zone_expanded_changed("zone:living".into(), false);
+        draw_frames();
+        let started = below();
+        advance_clock(Duration::from_millis(190));
+        draw_frames();
+        let midway = below();
+        advance_clock(Duration::from_millis(135));
+        draw_frames();
+        (open, started, midway, below())
+    }
+
+    /// As on the Mac, the zone under a folding zone moves up with it frame
+    /// by frame instead of jumping.
+    #[test]
+    fn the_zone_under_a_folding_zone_follows_it() {
+        let (open, started, midway, folded) = upstairs_while_living_room_folds(true);
+        assert!(
+            folded < midway && midway < open,
+            "open {open}, folding {midway}, folded {folded}"
+        );
+        assert!(started > midway, "it starts where it was");
+    }
+
+    #[test]
+    fn with_animation_effects_off_a_zone_folds_at_once() {
+        let (open, started, midway, folded) = upstairs_while_living_room_folds(false);
+        assert!(folded < open);
+        assert_eq!(started, folded, "no motion");
+        assert_eq!(midway, folded);
+    }
+
+    /// The flyout's height follows a zone's fold, so its window can follow
+    /// it with no gap under the rows and nothing cut.
+    #[test]
+    fn the_flyout_height_follows_a_folding_zone() {
+        // Two speakers only, so the list is short enough not to scroll.
+        let members = ["airplay:kitchen", "local:desk"];
+        let mut backend = MockBackend::new();
+        backend.retain_speakers(|s| members.contains(&s.id.as_str()));
+        backend.add_zone("zone:two", "Two", &members);
+        let app = app_over(backend);
+        app.flyout.show().expect("the flyout shows headless");
+        app.flyout.global::<Motion>().set_on(true);
+        hold_clock();
+        draw_frames();
+        let open = app.flyout.get_fit_height();
+        let resized = Rc::new(Cell::new(0));
+        let count = resized.clone();
+        app.flyout
+            .on_fit_height_changed(move || count.set(count.get() + 1));
+        app.flyout
+            .invoke_zone_expanded_changed("zone:two".into(), false);
+        draw_frames();
+        advance_clock(Duration::from_millis(190));
+        draw_frames();
+        let midway = app.flyout.get_fit_height();
+        advance_clock(Duration::from_millis(135));
+        draw_frames();
+        let folded = app.flyout.get_fit_height();
+        assert!(
+            folded < midway && midway < open,
+            "open {open}, folding {midway}, folded {folded}"
+        );
+        assert!(
+            resized.get() >= 2,
+            "the window is sized again on its frames"
+        );
+    }
+
+    #[test]
+    fn escape_on_several_apps_folds_its_list() {
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        draw_frames();
+        let window = app.main.window();
+        tab(window, 3);
+        press(window, " ");
+        draw_frames();
+        assert!(app.main.get_mix_open());
+        press(window, Key::Escape);
+        draw_frames();
+        assert!(!app.main.get_mix_open(), "Escape folded it");
     }
 
     // covers: S245

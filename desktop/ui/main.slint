@@ -10,7 +10,7 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, PowerSwitch, QuietText, SecondaryText, SectionTitle, SpeakerRow, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, PowerSwitch, QuietText, SecondaryText, SectionTitle, SpeakerRow, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -21,7 +21,7 @@ export { HelpWindow } from "help.slint";
 export { RemoteWindow } from "remote.slint";
 export { SetupWindow } from "setup.slint";
 export { Strings } from "strings.slint";
-export { KeyboardFocus, Motion, NameField } from "widgets.slint";
+export { Fold, KeyboardFocus, Motion, NameField } from "widgets.slint";
 // The style's palette, for the theme preview (src/view.rs).
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
@@ -364,16 +364,20 @@ component ZoneCard inherits VerticalLayout {
         }
 
         // Its speakers while unfolded, in one tinted box as on the Mac.
-        Rectangle {
-            background: root.members-shown ? Tokens.playing-row : transparent;
-            border-width: root.members-shown ? 1px : 0px;
-            border-color: Tokens.teal.with-alpha(0.35);
-            border-radius: Fluent.radius-control;
+        members := FoldPane {
+            open: root.members-shown;
 
-            VerticalLayout {
-                rows := SpeakerRows {
-                    speakers: root.item.expanded ? root.item.members : [];
-                    grouped: true;
+            Rectangle {
+                background: Tokens.playing-row;
+                border-width: 1px;
+                border-color: Tokens.teal.with-alpha(0.35);
+                border-radius: Fluent.radius-control;
+
+                VerticalLayout {
+                    rows := SpeakerRows {
+                        speakers: members.shown ? root.item.members : [];
+                        grouped: true;
+                    }
                 }
             }
         }
@@ -2149,45 +2153,56 @@ export component MainWindow inherits Window {
                                 // Right under the sources, where the Mac's source
                                 // menu ends in its Several Apps submenu; a
                                 // drop-down can't hold one, so it unfolds here.
-                                HorizontalLayout {
-                                    alignment: start;
+                                VerticalLayout {
+                                    HorizontalLayout {
+                                        alignment: start;
 
-                                    Disclosure {
-                                        text: Strings.source-mix-title;
-                                        expanded: root.mix-open;
-                                        toggled => {
-                                            root.mix-open = !root.mix-open;
-                                        }
-                                    }
-                                }
-
-                                if root.mix-open: VerticalLayout {
-                                    spacing: 6px;
-
-                                    if root.mix-apps.length == 0: SecondaryText {
-                                        text: Strings.source-mix-empty;
-                                    }
-
-                                    if root.mix-apps.length > 0: ComboBox {
-                                        model: [Strings.source-mix-only, Strings.source-mix-all-except];
-                                        current-index: root.mix-all-except ? 1 : 0;
-                                        accessible-label: Strings.source-mix-mode;
-                                        selected => {
-                                            root.mix-mode-selected(self.current-index == 1);
-                                            self.current-index = root.mix-all-except ? 1 : 0;
+                                        Disclosure {
+                                            text: Strings.source-mix-title;
+                                            expanded: root.mix-open;
+                                            toggled => {
+                                                root.mix-open = !root.mix-open;
+                                            }
                                         }
                                     }
 
-                                    for app[index] in root.mix-apps: MixAppBox {
-                                        text: app.name;
-                                        on: app.checked;
-                                        flip => {
-                                            root.mix-app-toggled(index);
+                                    mix-pane := FoldPane {
+                                        open: root.mix-open;
+                                        escape-folds: true;
+                                        fold => {
+                                            root.mix-open = false;
                                         }
-                                    }
 
-                                    if root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": SecondaryText {
-                                        text: Strings.source-mix-all-except-note;
+                                        if mix-pane.shown: VerticalLayout {
+                                            padding-top: 8px;
+                                            spacing: 6px;
+
+                                            if root.mix-apps.length == 0: SecondaryText {
+                                                text: Strings.source-mix-empty;
+                                            }
+
+                                            if root.mix-apps.length > 0: ComboBox {
+                                                model: [Strings.source-mix-only, Strings.source-mix-all-except];
+                                                current-index: root.mix-all-except ? 1 : 0;
+                                                accessible-label: Strings.source-mix-mode;
+                                                selected => {
+                                                    root.mix-mode-selected(self.current-index == 1);
+                                                    self.current-index = root.mix-all-except ? 1 : 0;
+                                                }
+                                            }
+
+                                            for app[index] in root.mix-apps: MixAppBox {
+                                                text: app.name;
+                                                on: app.checked;
+                                                flip => {
+                                                    root.mix-app-toggled(index);
+                                                }
+                                            }
+
+                                            if root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": SecondaryText {
+                                                text: Strings.source-mix-all-except-note;
+                                            }
+                                        }
                                     }
                                 }
 
@@ -2753,27 +2768,31 @@ export component MainWindow inherits Window {
                             root.calibration-privacy-requested();
                         }
 
-                        if root.airplay-delay-shown: VerticalLayout {
-                            if root.connected.length > 0: Divider { }
+                        delay-pane := FoldPane {
+                            open: root.airplay-delay-shown;
 
-                            AirPlayDelayControls {
-                                delay-text: root.airplay-delay-text;
-                                pending: root.airplay-delay-pending;
-                                range-hint: root.airplay-delay-range-hint;
-                                stepped(delta) => {
-                                    root.airplay-delay-stepped(delta);
-                                }
-                                edited(text) => {
-                                    root.airplay-delay-edited(text);
-                                }
-                                committed => {
-                                    root.airplay-delay-committed();
-                                }
-                                cancelled => {
-                                    root.airplay-delay-cancelled();
-                                }
-                                focus-changed(has) => {
-                                    root.control-focus-changed(MainControl.airplay-delay, has);
+                            if delay-pane.shown: VerticalLayout {
+                                if root.connected.length > 0: Divider { }
+
+                                AirPlayDelayControls {
+                                    delay-text: root.airplay-delay-text;
+                                    pending: root.airplay-delay-pending;
+                                    range-hint: root.airplay-delay-range-hint;
+                                    stepped(delta) => {
+                                        root.airplay-delay-stepped(delta);
+                                    }
+                                    edited(text) => {
+                                        root.airplay-delay-edited(text);
+                                    }
+                                    committed => {
+                                        root.airplay-delay-committed();
+                                    }
+                                    cancelled => {
+                                        root.airplay-delay-cancelled();
+                                    }
+                                    focus-changed(has) => {
+                                        root.control-focus-changed(MainControl.airplay-delay, has);
+                                    }
                                 }
                             }
                         }

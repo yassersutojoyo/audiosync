@@ -9,7 +9,7 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion } from "widgets.slint";
+import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
 
 // The preset row under the source (spec S260): Presets and the current
 // preset's name, else "Choose a Preset"; its menu lists every preset, the
@@ -643,6 +643,12 @@ export component TrayFlyout inherits Window {
     // notice as one line. The parts sit at the top, so this holds at any
     // window height.
     out property <length> fit-height: root.footer-bottom + 16px;
+    // Each frame of a zone's fold changes it; the app then sizes the window
+    // again, so no gap opens under the rows and nothing is cut.
+    callback fit-height-changed();
+    changed fit-height => {
+        root.fit-height-changed();
+    }
     // How much less room the zones and speakers list gets, set by the app
     // on a screen too short for the whole flyout; the list scrolls.
     in property <length> list-cut;
@@ -1114,26 +1120,30 @@ export component TrayFlyout inherits Window {
 
                                 // Its speakers while it is unfolded, 12 px in, as
                                 // the Mac panel sets them under the arrow.
-                                for speaker in zone.expanded ? zone.members : []: FlyoutRow {
-                                    indent: 12px;
-                                    glyph: Glyphs.speaker(speaker.kind);
-                                    name: speaker.name;
-                                    label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
-                                    description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
-                                    caption: speaker.zone-note;
-                                    note: Strings.speaker-note(speaker);
-                                    system-name: speaker.system-name;
-                                    kind: speaker.kind;
-                                    show-kind: speaker.show-kind && !speaker.cast-group;
-                                    state: speaker.state;
-                                    plays: speaker.plays;
-                                    enabled: !speaker.missing;
-                                    device-volume: speaker.device-volume;
-                                    toggled => {
-                                        root.speaker-toggled(speaker.id);
-                                    }
-                                    focus-changed(focused) => {
-                                        root.speaker-focused = focused;
+                                zone-members := FoldPane {
+                                    open: zone.expanded;
+
+                                    for speaker in zone-members.shown ? zone.members : []: FlyoutRow {
+                                        indent: 12px;
+                                        glyph: Glyphs.speaker(speaker.kind);
+                                        name: speaker.name;
+                                        label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
+                                        description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
+                                        caption: speaker.zone-note;
+                                        note: Strings.speaker-note(speaker);
+                                        system-name: speaker.system-name;
+                                        kind: speaker.kind;
+                                        show-kind: speaker.show-kind && !speaker.cast-group;
+                                        state: speaker.state;
+                                        plays: speaker.plays;
+                                        enabled: !speaker.missing;
+                                        device-volume: speaker.device-volume;
+                                        toggled => {
+                                            root.speaker-toggled(speaker.id);
+                                        }
+                                        focus-changed(focused) => {
+                                            root.speaker-focused = focused;
+                                        }
                                     }
                                 }
                             }
