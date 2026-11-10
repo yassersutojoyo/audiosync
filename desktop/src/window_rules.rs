@@ -718,6 +718,15 @@ mod tests {
     }
 
     #[test]
+    fn ambient_goes_live_on_music_as_quiet_as_the_input_meter_shows() {
+        // -50 dBFS bands: music at a low player volume, on the meter's -60 dB scale.
+        let quiet = ambient_bands::level(10_f32.powf(-50.0 / 20.0));
+        let mut mode = AmbientMode::default();
+        let run = mode_run(1.5, &mut mode, |_| quiet);
+        assert_eq!(run.last(), Some(&1.0), "{quiet}");
+    }
+
+    #[test]
     fn ambient_bands_rise_within_two_polls_and_fall_over_a_fifth_of_a_second() {
         use ambient_bands::*;
         const { assert!(POLL >= 0.016 && POLL <= 0.034) };

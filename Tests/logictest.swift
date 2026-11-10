@@ -7800,6 +7800,12 @@ do {
             && shortGap.allSatisfy { $0 == 1 } && bandQuiet.prefix(5).allSatisfy { $0 == 1 } && bandQuiet[16] == 0,
           "music art: held sound turns it live over half a second, a click or faint sound does not, and quiet rests it soon",
           "\(blip), \(bandRising), \(bandQuiet)")
+    // -50 dBFS bands: music at a low player volume, on the input meter's -60 dB scale.
+    let quietBandLevel = AmbientBands.level(peak: pow(10, -50.0 / 20))
+    var quietBandMode = AmbientMode()
+    let quietBandRun = bandModeRun(1.5, &quietBandMode, loudest: quietBandLevel)
+    check(quietBandRun.last == 1, "music art: music as quiet as the input meter shows turns it live",
+          "\(quietBandLevel), \(quietBandRun.last ?? -1)")
     var bandLevel = 0.0
     var bandPolls = 0
     while bandLevel < 0.9 && bandPolls < 10 {

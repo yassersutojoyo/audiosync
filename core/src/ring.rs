@@ -746,6 +746,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_poll_on_another_thread_reads_every_band_of_a_capture() {
+        let ring = Ring::for_rate(48_000).unwrap();
+        let mut writer = ring.writer().unwrap();
+        // -20 dBFS: a tenth of full scale in each of bass, mid and treble.
+        let block: Vec<f32> = (0..48_000)
+            .flat_map(|i| {
+                let t = i as f64 / 48_000.0;
+                let sample = [100.0, 1_000.0, 5_000.0]
+                    .map(|hz| 0.1 * (2.0 * std::f64::consts::PI * hz * t).sin())
+                    .iter()
+                    .sum::<f64>() as f32;
+                [sample, sample]
+            })
+            .collect();
+        let stop = Arc::new(AtomicBool::new(false));
+        let capture = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                for chunk in block.chunks(2 * 480).cycle() {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    writer.write(chunk, 480);
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            })
+        };
+        assert_eq!(ring.take_band_peaks(48_000), [0.0; 3], "off until taken");
+        let mut heard = 0;
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(33));
+            if ring.take_band_peaks(48_000).iter().all(|&band| band > 0.03) {
+                heard += 1;
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        capture.join().unwrap();
+        assert!(heard >= 25, "{heard} of 30 polls heard every band");
+    }
+
     // covers: S35
     #[test]
     fn full_ring_overwrites_oldest_without_waiting() {
