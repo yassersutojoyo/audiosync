@@ -7891,9 +7891,19 @@ do {
           "music art: the breath shows a little translucent", "\(idleLayers)")
     check(AmbientBreath.frameInterval(onScreen: false, reduceMotion: false, live: 1) == nil
             && AmbientBreath.frameInterval(onScreen: true, reduceMotion: true, live: 1) == nil
-            && (AmbientBreath.frameInterval(onScreen: true, reduceMotion: false, live: 0) ?? 0) >= 1.0 / 20
+            && abs((AmbientBreath.frameInterval(onScreen: true, reduceMotion: false, live: 0) ?? 0) - 1.0 / 30) < 1e-9
             && (AmbientBreath.frameInterval(onScreen: true, reduceMotion: false, live: 1) ?? 1) <= 1.0 / 30,
-          "music art: the breath draws at a low frame rate, nothing draws off screen or with Reduce Motion")
+          "music art: the breath's sway draws at 30 fps, nothing draws off screen or with Reduce Motion")
+    var artClock = ArtClock()
+    let artStart = artClock.tick(100)
+    let artNext = artClock.tick(100 + 1.0 / 30)
+    let artAfterStall = artClock.tick(100 + 1.0 / 30 + 0.35)
+    let artResumed = artClock.tick(100 + 2.0 / 30 + 0.35)
+    check(artStart == 100 && abs(artNext - artStart - 1.0 / 30) < 1e-9
+            && artAfterStall - artNext <= ArtClock.maxStep + 1e-9 && ArtClock.maxStep <= 0.1
+            && abs(artResumed - artAfterStall - 1.0 / 30) < 1e-9 && artClock.tick(90) == artResumed,
+          "music art: a 350 ms stall of the main thread resumes the motion where it stopped, never jumps",
+          "\(artStart) \(artNext) \(artAfterStall) \(artResumed)")
 
     func luminance(_ c: BrandRGB) -> Double {
         func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }

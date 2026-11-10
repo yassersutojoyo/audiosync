@@ -244,6 +244,21 @@ enum AmbientBreath {
     }
 }
 
+/// The art's time: the wall clock's, except that a gap between frames longer
+/// than `maxStep` (the main thread busy, as while a session starts) counts as
+/// `maxStep`, so the motion picks up where it stopped instead of jumping.
+struct ArtClock {
+    static let maxStep: TimeInterval = 0.1
+    private var time: TimeInterval?
+    private var last: TimeInterval?
+
+    mutating func tick(_ now: TimeInterval) -> TimeInterval {
+        time = now
+        last = now
+        return now
+    }
+}
+
 /// Each live strand follows one band of the captured sound, bass, mid and
 /// treble, as an equalizer's bars do: up at once, down slowly.
 enum AmbientBands {
