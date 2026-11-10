@@ -32,6 +32,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 mod cast_address;
 mod password;
 
+use crate::ambient::{self, Driver as AmbientDriver};
 use crate::audio::backend::AirPlayGroupKind;
 use crate::audio::calibration::{self, Failure, Missing, Phase, Step, Which};
 use crate::backdrop::Frame;
@@ -46,13 +47,15 @@ use crate::ui_model::{
     SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame,
 };
 use crate::volume_keys::{self, VolumeKey};
+use crate::window_rules::Rgb;
 use crate::{
-    AboutDialog, AirPlayProblem, Availability, CalibrationRowItem, CastAddressDialog, CastList,
-    CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, GuidePage, GuideStepItem,
-    GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow, MixAppItem, Motion, NameField,
-    NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart,
-    RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrayFlyout, UpdateButton,
-    ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
+    AboutDialog, AirPlayProblem, AmbientLook, AmbientStrand, Availability, CalibrationRowItem,
+    CastAddressDialog, CastList, CastProblem, CastState, DeviceVolumeHint, EqualizerWindow,
+    GuidePage, GuideStepItem, GuideWindow, HiddenItem, LeftOutItem, MainControl, MainWindow,
+    MixAppItem, Motion, NameField, NoticeItem, NoticeKind, Palette, PasswordDialog, PinDialog,
+    PinPhase, PresetItem, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind, Strings,
+    Tokens, TrayFlyout, UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget,
+    speaker_names,
 };
 
 mod help_window;
@@ -853,6 +856,15 @@ pub struct App {
     meter_timer: Timer,
     /// The meter's length as last shown, 0 to 1.
     meter_level: Cell<f32>,
+    /// Draws the Now Playing art's frames while it shows and moves.
+    ambient_timer: Timer,
+    ambient: RefCell<AmbientDriver>,
+    /// When the art's last frame was drawn.
+    ambient_frame_at: Cell<std::time::Instant>,
+    /// The cover's top, middle and bottom colours.
+    ambient_cover: Cell<[Rgb; 3]>,
+    /// The still line is drawn for the cover shown now.
+    ambient_still_drawn: Cell<bool>,
     /// Launch at Sign-In and its notice, which the windows own: the
     /// backend's notices are about audio.
     login: RefCell<LaunchAtLogin>,
@@ -1188,6 +1200,11 @@ impl App {
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
             meter_level: Cell::new(0.0),
+            ambient_timer: Timer::default(),
+            ambient: RefCell::default(),
+            ambient_frame_at: Cell::new(std::time::Instant::now()),
+            ambient_cover: Cell::new(ambient::NO_COVER),
+            ambient_still_drawn: Cell::new(false),
             login: RefCell::new(LaunchAtLogin::new(
                 launch_at_login::system_store(),
                 launch_at_login::own_exe(),
@@ -1236,6 +1253,7 @@ impl App {
                     app.poll();
                     app.poll_updater();
                     app.follow_input_level(&weak);
+                    app.follow_ambient(&weak);
                 })
             });
         let weak = Rc::downgrade(&app);
@@ -1442,6 +1460,115 @@ impl App {
         true
     }
 
+    /// Whether the Now Playing card shows in the main window or the tray panel.
+    fn ambient_on_screen(&self) -> bool {
+        self.main.get_now_playing_shown()
+            && (!matches!(self.main_window_shows(), MainWindowShows::Not)
+                || self.flyout.window().is_visible())
+    }
+
+    /// Starts the Now Playing art's frames while it shows and moves, or draws
+    /// its still line once; the frames stop themselves when it goes.
+    fn follow_ambient(&self, weak: &Weak<App>) {
+        #[cfg(all(any(windows, target_os = "linux"), not(test)))]
+        self.main
+            .global::<Motion>()
+            .set_on(crate::platform::animation_effects());
+        if self.ambient_timer.running() {
+            return;
+        }
+        let still = !self.main.global::<Motion>().get_on();
+        let on_screen = self.ambient_on_screen();
+        let Some(interval) = self.ambient.borrow().interval(on_screen, still) else {
+            if on_screen && still && !self.ambient_still_drawn.replace(true) {
+                self.draw_ambient(true);
+            }
+            return;
+        };
+        self.ambient_still_drawn.set(false);
+        self.ambient_frame_at.set(std::time::Instant::now());
+        self.log.log(|| "ambient art: frames start".to_owned());
+        let weak = weak.clone();
+        self.ambient_timer
+            .start(TimerMode::Repeated, interval, move || {
+                with_app(&weak, App::tick_ambient);
+            });
+        self.draw_ambient(false);
+    }
+
+    /// One frame of the Now Playing art: it reads the captured sound when a
+    /// meter poll is due, and runs at the rate its motion needs.
+    fn tick_ambient(&self) {
+        let still = !self.main.global::<Motion>().get_on();
+        let on_screen = self.ambient_on_screen();
+        let now = std::time::Instant::now();
+        let dt = now
+            .duration_since(self.ambient_frame_at.replace(now))
+            .as_secs_f64();
+        if self.ambient.borrow().interval(on_screen, still).is_none() {
+            self.ambient_timer.stop();
+            self.ambient.borrow_mut().reset();
+            self.log.log(|| {
+                let why = if on_screen {
+                    "animations off"
+                } else {
+                    "off screen"
+                };
+                format!("ambient art: frames stop, {why}")
+            });
+            if on_screen {
+                self.ambient_still_drawn.set(true);
+                self.draw_ambient(true);
+            }
+            return;
+        }
+        self.ambient
+            .borrow_mut()
+            .advance(dt, || self.backend.borrow_mut().sound_peak());
+        if let Some(interval) = self.ambient.borrow().interval(true, false)
+            && interval != self.ambient_timer.interval()
+        {
+            self.ambient_timer.set_interval(interval);
+        }
+        self.draw_ambient(false);
+    }
+
+    /// Gives the art's strands to the windows that show them; the still line
+    /// to both, since it is drawn once.
+    fn draw_ambient(&self, still: bool) {
+        if still || !matches!(self.main_window_shows(), MainWindowShows::Not) {
+            self.main
+                .set_now_playing_ambient(self.ambient_look(ambient::WINDOW_DENSITY, still));
+        }
+        if still || self.flyout.window().is_visible() {
+            self.flyout
+                .set_now_playing_ambient(self.ambient_look(ambient::FLYOUT_DENSITY, still));
+        }
+    }
+
+    fn ambient_look(&self, density: f64, still: bool) -> AmbientLook {
+        let cover = self.ambient_cover.get();
+        let (light, dark) = ambient::line_colors(&cover, still);
+        let color = |[r, g, b]: Rgb| slint::Color::from_rgb_f32(r as f32, g as f32, b as f32);
+        let strands: Vec<AmbientStrand> = self
+            .ambient
+            .borrow()
+            .strands(&cover, density, still)
+            .into_iter()
+            .map(|strand| AmbientStrand {
+                commands: strand.commands.into(),
+                breath: strand.breath as f32,
+                sound: strand.sound as f32,
+                tone: color(strand.tone),
+            })
+            .collect();
+        AmbientLook {
+            strands: ModelRc::new(VecModel::from(strands)),
+            line_light: color(light),
+            line_dark: color(dark),
+        }
+    }
+
     /// Lets the backend take in what happened on its own, and shows it.
     fn poll(&self) {
         // Kept before the backend's poll saves, so a crash or a kill keeps
@@ -1514,6 +1641,11 @@ impl App {
             Some(Repeat::All) => 1,
             Some(Repeat::One) => 2,
         });
+        self.ambient_cover
+            .set(track.artwork.as_ref().map_or(ambient::NO_COVER, |artwork| {
+                ambient::cover_bands(&artwork.rgba, artwork.side)
+            }));
+        self.ambient_still_drawn.set(false);
         let artwork = track.artwork.as_ref().map(|artwork| {
             let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
                 &artwork.rgba,
@@ -6652,6 +6784,14 @@ mod tests {
             "A track title long enough to need more than the two lines the card shows".into(),
         );
         app.main.set_now_playing_subtitle("Artist".into());
+        app.flyout.set_now_playing_shown(true);
+        app.flyout.set_now_playing_title("A track title".into());
+        app.flyout.set_now_playing_subtitle("Artist".into());
+        app.ambient.borrow_mut().advance(1.0, || None);
+        app.main
+            .set_now_playing_ambient(app.ambient_look(ambient::WINDOW_DENSITY, false));
+        app.flyout
+            .set_now_playing_ambient(app.ambient_look(ambient::FLYOUT_DENSITY, false));
         app.equalizer.show().expect("the equalizer shows headless");
         app.equalizer.invoke_enabled_toggled(true);
         app.equalizer.invoke_gain_changed(1, 6.0);
@@ -7673,6 +7813,94 @@ mod tests {
         app.follow_input_level(&weak);
         assert_eq!(reads.get(), Some(4), "nothing is read while hidden");
         assert!(!app.meter_timer.running());
+    }
+
+    #[test]
+    fn the_now_playing_art_moves_only_while_its_card_shows() {
+        use i_slint_backend_testing::ElementHandle;
+        let backend = MockBackend::new();
+        let peak = backend.sound_peak.clone();
+        let app = app_over(backend);
+        let weak = Rc::downgrade(&app);
+        app.main.global::<Motion>().set_on(true);
+        app.main.set_now_playing_shown(true);
+        app.follow_ambient(&weak);
+        assert!(!app.ambient_timer.running(), "the window is closed");
+
+        app.main.show().expect("the main window shows");
+        app.follow_ambient(&weak);
+        assert!(app.ambient_timer.running());
+        let frame = |fps: f64| Duration::from_secs_f64(1.0 / fps);
+        assert_eq!(app.ambient_timer.interval(), frame(15.0), "the breath");
+        let look = app.main.get_now_playing_ambient();
+        assert_eq!(look.strands.row_count(), 3);
+
+        for loud in [0.9, 0.4, 0.9, 0.4, 0.9, 0.4] {
+            peak.set(Some(loud));
+            let before = std::time::Instant::now().checked_sub(Duration::from_millis(100));
+            app.ambient_frame_at.set(before.expect("the clock runs"));
+            app.tick_ambient();
+        }
+        assert_eq!(app.ambient_timer.interval(), frame(60.0), "the sound");
+        let strand = app.main.get_now_playing_ambient().strands.row_data(0);
+        assert!(strand.is_some_and(|strand| strand.sound > 0.0));
+
+        app.main.window().set_minimized(true);
+        app.tick_ambient();
+        assert!(!app.ambient_timer.running(), "stopped while minimized");
+        app.main.window().set_minimized(false);
+
+        app.main.global::<Motion>().set_on(false);
+        app.follow_ambient(&weak);
+        assert!(
+            !app.ambient_timer.running(),
+            "no frames with animations off"
+        );
+        let still = app.main.get_now_playing_ambient().strands;
+        assert_eq!(still.row_count(), 1, "one still line");
+        assert_eq!(still.row_data(0).map(|strand| strand.breath), Some(1.0));
+
+        draw_frames();
+        let strip = ElementHandle::find_by_element_type_name(&app.main, "AmbientArt")
+            .next()
+            .expect("the art's strip");
+        assert_eq!(strip.size().height, 22.0, "the strip keeps its height");
+    }
+
+    #[test]
+    fn the_now_playing_art_breathes_while_nothing_is_streamed() {
+        use crate::window_rules::ambient_breath::OPACITY;
+        let backend = MockBackend::new();
+        let peak = backend.sound_peak.clone();
+        let app = app_over(backend);
+        let weak = Rc::downgrade(&app);
+        app.main.global::<Motion>().set_on(true);
+        app.main.set_now_playing_shown(true);
+        app.main.show().expect("the main window shows");
+        app.follow_ambient(&weak);
+        let tick = |loud: Option<f32>| {
+            peak.set(loud);
+            let before = std::time::Instant::now().checked_sub(Duration::from_millis(100));
+            app.ambient_frame_at.set(before.expect("the clock runs"));
+            app.tick_ambient();
+        };
+        for loud in [0.9, 0.4, 0.9, 0.4, 0.9, 0.4] {
+            tick(Some(loud));
+        }
+        for _ in 0..40 {
+            tick(None);
+        }
+        assert_eq!(
+            app.ambient_timer.interval(),
+            Duration::from_secs_f64(1.0 / 15.0),
+            "the breath's frame rate"
+        );
+        let strands = app.main.get_now_playing_ambient().strands;
+        assert_eq!(strands.row_count(), 3);
+        for strand in strands.iter() {
+            assert_eq!(strand.sound, 0.0, "no sound strand");
+            assert_eq!(strand.breath, OPACITY as f32);
+        }
     }
 
     #[test]

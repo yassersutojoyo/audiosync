@@ -4250,6 +4250,13 @@ impl<D: Driver> AudioBackend for Controller<D> {
             .map(|session| session.ring.take_peak())
     }
 
+    fn sound_peak(&mut self) -> Option<f32> {
+        self.session
+            .as_ref()
+            .filter(|session| !matches!(session.source, SourceId::Input { .. }))
+            .map(|session| session.ring.take_peak())
+    }
+
     fn set_output_enabled(&mut self, id: &str, enabled: bool) -> Result<(), BackendError> {
         self.log.log(|| {
             let state = if enabled { "on" } else { "off" };
@@ -9794,6 +9801,62 @@ mod tests {
         assert_eq!(backend.input_peak(), Some(0.0), "taken once");
         backend.stop();
         assert_eq!(backend.input_peak(), None);
+    }
+
+    #[test]
+    fn the_now_playing_art_reads_the_peak_of_any_source_but_an_input_device() {
+        let mut backend = backend();
+        backend.connect_input("mic", "Microphone", "USB");
+        assert_eq!(backend.sound_peak(), None, "stopped");
+        backend.start(&SourceId::WholeSystem).unwrap();
+        let written = backend.feed_capture_level(480, 0.5);
+        let loudest = written.iter().copied().map(f32::abs).fold(0.0, f32::max);
+        assert!(loudest > 0.0);
+        assert_eq!(backend.sound_peak(), Some(loudest));
+        assert_eq!(backend.sound_peak(), Some(0.0), "taken once");
+        backend
+            .start(&SourceId::Input {
+                endpoint_id: "mic".to_owned(),
+            })
+            .unwrap();
+        backend.feed_capture_level(480, 0.5);
+        assert_eq!(backend.sound_peak(), None, "the level meter's");
+        backend.stop();
+        assert_eq!(backend.sound_peak(), None);
+    }
+
+    #[test]
+    fn the_now_playing_art_rests_whenever_streaming_is_off() {
+        use crate::ambient::{Driver, NO_COVER, WINDOW_DENSITY};
+        use crate::window_rules::ambient_breath::OPACITY;
+        let idle = Some(std::time::Duration::from_secs_f64(1.0 / 15.0));
+        let mut backend = backend();
+        let mut art = Driver::default();
+        let frames = |backend: &mut MockBackend, art: &mut Driver, seconds: f64| {
+            for _ in 0..(seconds * 10.0).round() as u32 {
+                backend.feed_capture_level(480, 0.8);
+                art.advance(0.1, || backend.sound_peak());
+            }
+        };
+        frames(&mut backend, &mut art, 2.0);
+        assert_eq!(art.interval(true, false), idle, "never started");
+
+        backend.start(&SourceId::WholeSystem).unwrap();
+        frames(&mut backend, &mut art, 1.0);
+        assert_ne!(
+            art.interval(true, false),
+            idle,
+            "streaming follows the sound"
+        );
+
+        backend.stop();
+        frames(&mut backend, &mut art, 1.5);
+        assert_eq!(art.interval(true, false), idle, "back to the breath");
+        frames(&mut backend, &mut art, 5.0);
+        assert_eq!(art.interval(true, false), idle, "and it stays there");
+        for strand in art.strands(&NO_COVER, WINDOW_DENSITY, false) {
+            assert_eq!((strand.breath, strand.sound), (OPACITY, 0.0));
+        }
     }
 
     // covers: S350

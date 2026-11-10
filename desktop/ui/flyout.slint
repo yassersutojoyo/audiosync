@@ -6,6 +6,7 @@
 
 import { Button, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
+import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, ToggleSwitch, Wordmark, ZoneArrowFocus, Motion } from "widgets.slint";
@@ -554,6 +555,7 @@ export component TrayFlyout inherits Window {
     in property <string> now-playing-subtitle;
     in property <bool> now-playing-has-artwork;
     in property <image> now-playing-artwork;
+    in property <AmbientLook> now-playing-ambient;
     // AirPlay discovery has run for 20 seconds without finding a speaker.
     in property <bool> airplay-none-found;
     // Every speaker present is hidden.
@@ -948,6 +950,11 @@ export component TrayFlyout inherits Window {
                                         }
                                     }
                                 }
+                            }
+
+                            if root.now-playing-shown: AmbientArt {
+                                height: 16px;
+                                look: root.now-playing-ambient;
                             }
 
                             if root.input-pairs.length > 0: VerticalLayout {

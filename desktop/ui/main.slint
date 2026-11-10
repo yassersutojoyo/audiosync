@@ -7,6 +7,7 @@
 
 import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
+import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
 import { AirPlayDelayControls, Announcer, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SectionTitle, SpeakerRow, ToggleSwitch, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
@@ -25,6 +26,7 @@ export { Motion, NameField } from "widgets.slint";
 export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
 export { Tokens } from "tokens.slint";
+export { AmbientLook, AmbientStrand } from "ambient.slint";
 export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, GuideStepItem, MixAppItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SetupMicrophone, SetupNetwork, SpeakerGroup, SpeakerItem, SpeakerKind, ZoneChoice, ZoneItem, ZoneTarget } from "types.slint";
 
 // The main window's left column: the speaker list widens first, to its full
@@ -1250,6 +1252,7 @@ component NowPlayingCard inherits VerticalLayout {
     in property <bool> playing;
     in property <bool> has-artwork;
     in property <image> artwork;
+    in property <AmbientLook> ambient;
     // As the player reports them, -1 where it doesn't take the command:
     // shuffle 0 off, 1 on; repeat 0 off, 1 all, 2 one.
     in property <int> shuffle: -1;
@@ -1299,6 +1302,11 @@ component NowPlayingCard inherits VerticalLayout {
                 color: Tokens.secondary-text;
                 font-size: root.cover-size / 5;
             }
+        }
+
+        AmbientArt {
+            height: 22px;
+            look: root.ambient;
         }
 
         HorizontalLayout {
@@ -1454,6 +1462,7 @@ export component MainWindow inherits Window {
     in property <bool> now-playing-playing;
     in property <bool> now-playing-has-artwork;
     in property <image> now-playing-artwork;
+    in property <AmbientLook> now-playing-ambient;
     in property <int> now-playing-shuffle: -1;
     in property <int> now-playing-repeat: -1;
     in-out property <int> now-playing-focused-button: -1;
@@ -2219,6 +2228,7 @@ export component MainWindow inherits Window {
                                     playing: root.now-playing-playing;
                                     has-artwork: root.now-playing-has-artwork;
                                     artwork: root.now-playing-artwork;
+                                    ambient: root.now-playing-ambient;
                                     shuffle: root.now-playing-shuffle;
                                     repeat: root.now-playing-repeat;
                                     focused-button <=> root.now-playing-focused-button;

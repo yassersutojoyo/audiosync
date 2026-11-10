@@ -1,0 +1,58 @@
+// The Now Playing art under the cover: strands the app redraws while the
+// sound or the breath moves them, or one still line (`src/ambient.rs`).
+
+import { Tokens } from "tokens.slint";
+
+export struct AmbientStrand {
+    // SVG path commands in a 300 x 22 box.
+    commands: string,
+    // The breath's line over the strand, and the sound's strand in `tone`.
+    breath: float,
+    sound: float,
+    tone: color,
+}
+
+export struct AmbientLook {
+    strands: [AmbientStrand],
+    line-light: color,
+    line-dark: color,
+}
+
+export component AmbientArt inherits Rectangle {
+    in property <AmbientLook> look;
+    property <color> line: Tokens.dark ? root.look.line-dark : root.look.line-light;
+
+    accessible-role: none;
+
+    for strand in root.look.strands: Rectangle {
+        width: 100%;
+        height: 100%;
+
+        Path {
+            width: 100%;
+            height: 100%;
+            viewbox-width: 300;
+            viewbox-height: 22;
+            // Stretched, as the Mac draws the strands across the strip's width.
+            fit: fill;
+            commands: strand.commands;
+            stroke: root.line.with-alpha(strand.breath);
+            stroke-width: 1.6px;
+            stroke-line-cap: round;
+            visible: strand.breath > 0;
+        }
+
+        Path {
+            width: 100%;
+            height: 100%;
+            viewbox-width: 300;
+            viewbox-height: 22;
+            fit: fill;
+            commands: strand.commands;
+            stroke: strand.tone.with-alpha(strand.sound);
+            stroke-width: 1.6px;
+            stroke-line-cap: round;
+            visible: strand.sound > 0;
+        }
+    }
+}

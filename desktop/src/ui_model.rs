@@ -1840,6 +1840,14 @@ pub trait Backend {
         None
     }
 
+    /// While streaming captures a source other than an input device, the
+    /// largest sample magnitude since the last call, for the Now Playing
+    /// art; `None` otherwise. The UI calls it every `METER_POLL_MS` while
+    /// the art shows and moves.
+    fn sound_peak(&mut self) -> Option<f32> {
+        None
+    }
+
     /// The windows' own settings as last saved: what the UI shows them with
     /// at launch.
     fn view_settings(&self) -> ViewSettings {
@@ -2045,6 +2053,8 @@ pub struct MockBackend {
     /// While `Some`, an input device is captured, and it counts the level
     /// meter's reads of its peak.
     pub input_peak_reads: std::rc::Rc<std::cell::Cell<Option<u32>>>,
+    /// What each read of the captured sound's peak gets.
+    pub sound_peak: std::rc::Rc<std::cell::Cell<Option<f32>>>,
     /// How many times Refresh Devices ran.
     pub refreshes: std::rc::Rc<std::cell::Cell<u32>>,
     /// Runs at each save, to look at the app as the save happens.
@@ -2235,6 +2245,7 @@ impl MockBackend {
             late_view: std::rc::Rc::default(),
             saved_views: std::rc::Rc::default(),
             input_peak_reads: std::rc::Rc::default(),
+            sound_peak: std::rc::Rc::default(),
             refreshes: std::rc::Rc::default(),
             on_save: std::rc::Rc::default(),
             view_restored: false,
@@ -2575,6 +2586,10 @@ impl Backend for MockBackend {
         let reads = self.input_peak_reads.get()?;
         self.input_peak_reads.set(Some(reads + 1));
         Some(0.5)
+    }
+
+    fn sound_peak(&mut self) -> Option<f32> {
+        self.sound_peak.get()
     }
 
     fn take_view_restored(&mut self) -> bool {

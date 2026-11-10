@@ -915,6 +915,14 @@ pub trait AudioBackend {
         None
     }
 
+    /// While a source other than an input device is captured, the largest
+    /// sample magnitude captured since the last call, for the Now Playing
+    /// art; `None` while stopped and for an input device, whose peak is the
+    /// level meter's.
+    fn sound_peak(&mut self) -> Option<f32> {
+        None
+    }
+
     /// Turns an output on or off. While playing, an output turned on starts
     /// at once if it is connected; if it can't start, it is turned off again
     /// and the error returned.

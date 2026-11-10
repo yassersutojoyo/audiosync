@@ -25,6 +25,7 @@
     )
 )]
 mod adapter;
+mod ambient;
 #[cfg_attr(
     not(any(os_backend, test)),
     expect(
