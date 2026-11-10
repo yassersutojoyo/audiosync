@@ -378,7 +378,7 @@ pub mod ambient_bands {
     pub const ATTACK: f64 = 0.025;
     pub const RELEASE: f64 = 0.2;
     /// The quietest band peak that moves a strand, in dBFS.
-    pub const FLOOR_DB: f64 = -48.0;
+    pub const FLOOR_DB: f64 = -60.0;
 
     /// A band's peak (1 is full scale) on a dB scale from `FLOOR_DB` to 0 dBFS.
     pub fn level(peak: f32) -> f64 {
@@ -746,7 +746,7 @@ mod tests {
         assert_eq!(ambient_bands::level(0.0), 0.0);
         assert_eq!(ambient_bands::level(1.0), 1.0);
         let tenth = ambient_bands::level(0.1);
-        assert!((tenth - 28.0 / 48.0).abs() < 1e-6, "{tenth}");
+        assert!((tenth - 40.0 / 60.0).abs() < 1e-6, "{tenth}");
         assert_eq!(ambient_bands::level(f32::NAN), 0.0);
     }
 

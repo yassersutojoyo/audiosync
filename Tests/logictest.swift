@@ -7820,7 +7820,7 @@ do {
     check(AmbientBands.poll >= 0.016 && AmbientBands.poll <= 0.034 && bandPolls <= 2
             && bandAfter(0.1) > 0.4 && bandAfter(1) < 0.01
             && AmbientBands.level(peak: 0) == 0 && AmbientBands.level(peak: 1) == 1
-            && abs(AmbientBands.level(peak: 0.1) - 28.0 / 48) < 1e-6 && AmbientBands.level(peak: .nan) == 0,
+            && abs(AmbientBands.level(peak: 0.1) - 40.0 / 60) < 1e-6 && AmbientBands.level(peak: .nan) == 0,
           "music art: each strand rises with its band within two reads and falls over a fifth of a second",
           "\(bandPolls), \(bandAfter(0.1)), \(bandAfter(1)), \(AmbientBands.level(peak: 0.1))")
     let endTimes = (0..<100).map { AmbientBreath.period * Double($0) / 100 }

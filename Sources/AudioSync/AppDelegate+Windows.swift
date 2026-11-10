@@ -81,7 +81,7 @@ extension AppDelegate {
             guard let self, AmbientMode.follows(running: self.engine.isRunning, source: self.audioSource) else { return nil }
             return self.engine.takePeak()
         }, bands: { [weak self] in
-            guard let self, self.engine.isRunning else { return nil }
+            guard let self, AmbientMode.follows(running: self.engine.isRunning, source: self.audioSource) else { return nil }
             return self.engine.takeBandPeaks()
         }) : nil)
     }

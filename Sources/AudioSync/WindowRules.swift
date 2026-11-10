@@ -252,7 +252,7 @@ enum AmbientBands {
     static let attack: TimeInterval = 0.025
     static let release: TimeInterval = 0.2
     /// The quietest band peak that moves a strand, in dBFS.
-    static let floorDb = -48.0
+    static let floorDb = -60.0
 
     /// A band's peak (1 is full scale) on a dB scale from `floorDb` to 0 dBFS.
     static func level(peak: Float) -> Double {

@@ -22,6 +22,7 @@ final class SoundTide: ObservableObject {
     private var timer: Timer?
     private var meter: Float = 0
     private var sincePeak: TimeInterval = 0
+    private var sinceLog: TimeInterval = 0
 
     /// Polls `peak` (the largest sample magnitude since the last call, nil
     /// while nothing is captured) and `bands` (the bass, mid and treble peaks
@@ -35,6 +36,7 @@ final class SoundTide: ObservableObject {
             mode = AmbientMode()
             meter = 0
             sincePeak = 0
+            sinceLog = 0
             if env != 0 { env = 0 }
             if live != 0 { live = 0 }
             if bands != [0, 0, 0] { bands = [0, 0, 0] }
@@ -58,12 +60,21 @@ final class SoundTide: ObservableObject {
                 }
                 if tide.env != env { env = tide.env }
             }
-            let peaks = read.bands() ?? []
+            let taken = read.bands()
+            let peaks = taken ?? []
             let current = bands
             let next = current.indices.map { index in
                 AmbientBands.follow(current[index], to: AmbientBands.level(peak: index < peaks.count ? peaks[index] : 0), dt: dt)
             }
             mode.step(loudest: next.max() ?? 0, dt: dt)
+            if taken != nil { sinceLog += dt }
+            if DebugTrace.enabled, sinceLog + 1e-9 >= 5 {
+                sinceLog = 0
+                let levels: [String] = next.map { String(format: "%.2f", $0) }
+                let dbfs: [String] = peaks.map { String(format: "%.1f", 20 * log10(Double($0))) }
+                let loudest = String(format: "%.2f", next.max() ?? 0)
+                DebugTrace.log("[AudioSync] art bands \(levels), peaks dBFS \(dbfs), loudest \(loudest), live \(mode.live)")
+            }
             if next != bands { bands = next }
             if mode.live != live { live = mode.live }
         }
