@@ -25,13 +25,6 @@ pub enum Frame {
     Titled,
     /// The frameless tray flyout: rounded corners with the system border and
     /// shadow, like the Windows 11 flyouts.
-    #[cfg_attr(
-        all(not(windows), not(test)),
-        expect(
-            dead_code,
-            reason = "only the Windows tray has a flyout; tests log it everywhere"
-        )
-    )]
     Flyout,
 }
 

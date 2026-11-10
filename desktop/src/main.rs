@@ -1050,13 +1050,7 @@ mod tests {
             (
                 "flyout.slint",
                 include_str!("../ui/flyout.slint"),
-                &[
-                    ("power := ToggleSwitch", "self.checked = root.running;"),
-                    (
-                        "source := ComboBox",
-                        "self.current-index = root.source-index;",
-                    ),
-                ][..],
+                &[("power := ToggleSwitch", "self.checked = root.running;")][..],
             ),
             (
                 "equalizer.slint",
@@ -1083,6 +1077,18 @@ mod tests {
                 );
             }
         }
+        // The flyout's source menu has no state of its own to reset: its
+        // check mark follows an input-only index the engine sets.
+        let flyout = include_str!("../ui/flyout.slint");
+        let menu = &flyout[flyout
+            .find("component SourceMenu")
+            .expect("the source menu is there")..];
+        assert!(
+            menu.contains("in property <int> current;")
+                && menu.contains("checked: index == root.current;")
+                && flyout.contains("current: root.source-index;"),
+            "flyout.slint: the source menu checks the source the engine reports"
+        );
     }
 
     /// The contrast pairs name colors and opacities that brand/tokens.json has.

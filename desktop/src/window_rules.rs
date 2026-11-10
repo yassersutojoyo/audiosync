@@ -660,7 +660,7 @@ mod tests {
         assert_eq!(motion(0.0, 1.0, 0.2), 0.2);
         assert_eq!(layers(0.0, 0.8), (OPACITY, 0.0));
         assert_eq!(layers(1.0, 0.8), (0.0, 1.0));
-        assert!(OPACITY < 1.0);
+        const { assert!(OPACITY < 1.0) };
     }
 
     #[test]

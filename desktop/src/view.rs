@@ -7131,7 +7131,7 @@ mod tests {
             element(&app, "MainWindow::left-column").map_or(0.0, |column| column.size().width);
         assert_eq!(
             card.1 - card.0,
-            column - 4.0 - 24.0,
+            column - 4.0 - 28.0,
             "it fills the block inside its padding, clear of the column's scroll gutter"
         );
         let inner = card;
