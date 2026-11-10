@@ -72,7 +72,7 @@ impl Driver {
             self.meter = 0.0;
         }
         self.tide.step(level, POLL);
-        self.mode.step(AmbientMode::sounding(level), POLL);
+        self.mode.step(level.unwrap_or(0.0), POLL);
     }
 
     /// Time between frames, `None` when the art doesn't move.
@@ -93,7 +93,7 @@ impl Driver {
         }
         let (live, env) = (self.mode.live(), self.tide.env().min(1.0));
         let spread = ambient_breath::motion(env, live, ambient_breath::spread(self.time));
-        let (breath, sound) = ambient_breath::layers(live, env);
+        let (breath, sound) = ambient_breath::layers(live);
         (0..WAVES.len())
             .map(|index| Strand {
                 commands: path(index, spread, density, self.time * 2.0),

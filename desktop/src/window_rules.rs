@@ -265,7 +265,9 @@ impl AmbientMode {
         meter.unwrap_or(0.0) > Tide::STOP_AT
     }
 
-    pub fn step(&mut self, sounding: bool, dt: f64) {
+    /// `loudest` is the loudest band's level, 0 to 1.
+    pub fn step(&mut self, loudest: f64, dt: f64) {
+        let sounding = loudest > Tide::STOP_AT;
         self.quiet = if sounding { 0.0 } else { self.quiet + dt };
         // 1e-9: ten 0.1 s steps sum to just under 1 s.
         let target = if self.quiet < Self::SETTLE - 1e-9 {
@@ -332,11 +334,31 @@ pub mod ambient_breath {
     }
 
     /// `(breath, sound)` opacities: the breath's line stays while the sound's strands are faint.
-    pub fn layers(live: f64, env: f64) -> (f64, f64) {
+    pub fn layers(live: f64) -> (f64, f64) {
+        let env = 0.0;
         (
-            OPACITY * (1.0 - live * (env * 2.5).min(1.0)),
-            live * (0.25 + env * 2.5).min(1.0),
+            OPACITY * (1.0 - live * (env * 2.5_f64).min(1.0)),
+            live * (0.25 + env * 2.5_f64).min(1.0),
         )
+    }
+
+    pub const TAPER_FLOOR: f64 = 0.4;
+    pub const EDGE_FADE: f64 = 0.09;
+
+    pub fn taper(x: f64) -> f64 {
+        (std::f64::consts::PI * x).sin()
+    }
+
+    pub fn edge(_x: f64) -> f64 {
+        1.0
+    }
+
+    pub fn stroke(_live: f64) -> f64 {
+        1.6
+    }
+
+    pub fn tone(color: Rgb, _dark: bool) -> Rgb {
+        color
     }
 
     /// Seconds between frames, `None` for none.
@@ -383,6 +405,25 @@ pub mod ambient_breath {
             return accent;
         }
         if dark { DARK_GREY } else { LIGHT_GREY }
+    }
+}
+
+/// Each live strand follows one band of the captured sound, bass, mid and
+/// treble, as an equalizer's bars do: up at once, down slowly.
+pub mod ambient_bands {
+    /// Seconds between band reads while the art shows.
+    pub const POLL: f64 = 1.0 / 30.0;
+    pub const ATTACK: f64 = 0.025;
+    pub const RELEASE: f64 = 0.2;
+    /// The quietest band peak that moves a strand, in dBFS.
+    pub const FLOOR_DB: f64 = -48.0;
+
+    pub fn level(peak: f32) -> f64 {
+        f64::from(peak)
+    }
+
+    pub fn follow(_level: f64, target: f64, _dt: f64) -> f64 {
+        target
     }
 }
 
@@ -667,10 +708,10 @@ mod tests {
         assert_eq!(fold_phase(0.0, true).edge, 0.0);
     }
 
-    fn mode_run(seconds: f64, mode: &mut AmbientMode, sounding: impl Fn(f64) -> bool) -> Vec<f64> {
-        (0..(seconds * 10.0).round() as usize)
+    fn mode_run(seconds: f64, mode: &mut AmbientMode, loudest: impl Fn(f64) -> f64) -> Vec<f64> {
+        (0..(seconds * 20.0).round() as usize)
             .map(|tick| {
-                mode.step(sounding(tick as f64 / 10.0), 0.1);
+                mode.step(loudest(tick as f64 / 20.0), 0.05);
                 mode.live()
             })
             .collect()
@@ -681,25 +722,6 @@ mod tests {
         assert!(!AmbientMode::sounding(None));
         assert!(!AmbientMode::sounding(Some(0.0)));
         assert!(AmbientMode::sounding(Some(0.3)));
-    }
-
-    #[test]
-    fn ambient_blends_in_fast_and_back_to_the_breath_after_a_second_of_quiet() {
-        let mut mode = AmbientMode::default();
-        assert_eq!(mode.live(), 0.0);
-        let rising = mode_run(0.5, &mut mode, |_| true);
-        let held = mode_run(0.9, &mut mode, |_| false);
-        let falling = mode_run(0.8, &mut mode, |_| false);
-        assert!(
-            rising[0] > 0.0 && rising[0] < 1.0 && rising.last() == Some(&1.0),
-            "{rising:?}"
-        );
-        assert!(held.iter().all(|l| *l == 1.0), "{held:?}");
-        assert!(falling.iter().any(|l| *l > 0.0 && *l < 1.0), "{falling:?}");
-        assert_eq!(falling.last(), Some(&0.0));
-        let mut gaps = AmbientMode::default();
-        let run = mode_run(6.0, &mut gaps, |t| t % 1.4 < 0.8);
-        assert!(run[5..].iter().all(|l| *l == 1.0), "{run:?}");
     }
 
     #[test]
@@ -719,8 +741,6 @@ mod tests {
         assert_eq!(motion(0.9, 0.0, 0.2), 0.2);
         assert!((motion(0.9, 1.0, 0.2) - 0.9).abs() < 1e-9);
         assert_eq!(motion(0.0, 1.0, 0.2), 0.2);
-        assert_eq!(layers(0.0, 0.8), (OPACITY, 0.0));
-        assert_eq!(layers(1.0, 0.8), (0.0, 1.0));
         const { assert!(OPACITY < 1.0) };
     }
 
@@ -751,6 +771,109 @@ mod tests {
             }
         }
         assert_eq!(lift(1, 0.5, 1.3, 0.0, 0.0, 16.0), 0.0);
+    }
+
+    #[test]
+    fn ambient_goes_live_on_held_sound_and_rests_soon_after_it_stops() {
+        let mut mode = AmbientMode::default();
+        let blip = mode_run(0.3, &mut mode, |_| 0.8);
+        let after = mode_run(1.0, &mut mode, |_| 0.0);
+        assert!(
+            blip.iter().chain(&after).all(|l| *l == 0.0),
+            "a click stays at rest: {blip:?}"
+        );
+        let between = mode_run(2.0, &mut mode, |_| 0.07);
+        assert!(between.iter().all(|l| *l == 0.0), "too faint to start");
+        let rising = mode_run(1.5, &mut mode, |_| 0.8);
+        assert!(rising[..9].iter().all(|l| *l == 0.0), "{rising:?}");
+        let fading = rising.iter().filter(|l| **l > 0.0 && **l < 1.0).count();
+        assert!((8..=10).contains(&fading), "a half second fade: {rising:?}");
+        assert_eq!(rising.last(), Some(&1.0));
+        let faint = mode_run(2.0, &mut mode, |_| 0.07);
+        assert!(faint.iter().all(|l| *l == 1.0), "faint keeps it live");
+        let gap = mode_run(0.2, &mut mode, |_| 0.0);
+        assert!(gap.iter().all(|l| *l == 1.0), "a short gap keeps it live");
+        mode_run(0.5, &mut mode, |_| 0.8);
+        let quiet = mode_run(1.0, &mut mode, |_| 0.0);
+        assert!(quiet[..5].iter().all(|l| *l == 1.0), "{quiet:?}");
+        assert_eq!(quiet.get(16), Some(&0.0), "{quiet:?}");
+    }
+
+    #[test]
+    fn ambient_bands_rise_within_two_polls_and_fall_over_a_fifth_of_a_second() {
+        use ambient_bands::*;
+        const { assert!(POLL >= 0.016 && POLL <= 0.034) };
+        const { assert!(ATTACK >= 0.02 && ATTACK <= 0.03 && RELEASE >= 0.15 && RELEASE <= 0.25) };
+        let mut level = 0.0;
+        let mut polls = 0;
+        while level < 0.9 && polls < 10 {
+            level = follow(level, 1.0, POLL);
+            polls += 1;
+        }
+        assert!(polls <= 2, "{polls}");
+        let after = |seconds: f64| {
+            (0..(seconds / POLL).round() as usize).fold(1.0, |l, _| follow(l, 0.0, POLL))
+        };
+        assert!(after(0.1) > 0.4, "{}", after(0.1));
+        assert!(after(1.0) < 0.01, "{}", after(1.0));
+        assert_eq!(ambient_bands::level(0.0), 0.0);
+        assert_eq!(ambient_bands::level(1.0), 1.0);
+        let tenth = ambient_bands::level(0.1);
+        assert!((tenth - 28.0 / 48.0).abs() < 1e-6, "{tenth}");
+        assert_eq!(ambient_bands::level(f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn ambient_strand_ends_stay_apart_and_fade_out() {
+        use ambient_breath::*;
+        assert!((0.35..=0.5).contains(&taper(0.0)), "{}", taper(0.0));
+        assert!((taper(1.0) - taper(0.0)).abs() < 1e-9);
+        assert!((taper(0.5) - 1.0).abs() < 1e-9);
+        const { assert!(EDGE_FADE >= 0.08 && EDGE_FADE <= 0.1) };
+        assert_eq!(
+            (edge(0.0), edge(1.0), edge(0.5), edge(0.12)),
+            (0.0, 0.0, 1.0, 1.0)
+        );
+        assert!(edge(0.04) > 0.0 && edge(0.04) < 1.0);
+        let times: Vec<f64> = (0..100).map(|i| PERIOD * i as f64 / 100.0).collect();
+        for x in [0.0, 1.0] {
+            let end = |strand: usize, t: f64| lift(strand, x, t, spread(t), 1.0, 22.0) * taper(x);
+            let apart = times
+                .iter()
+                .map(|t| (end(0, *t) - end(1, *t)).abs() + (end(1, *t) - end(2, *t)).abs())
+                .sum::<f64>()
+                / (2.0 * times.len() as f64);
+            assert!(apart >= 0.8, "{x} {apart}");
+        }
+    }
+
+    #[test]
+    fn ambient_live_strands_crossfade_thicken_and_keep_three_to_one() {
+        use ambient_breath::*;
+        assert_eq!(layers(0.0), (OPACITY, 0.0));
+        assert_eq!(layers(1.0), (0.0, 1.0));
+        let (breath, sound) = layers(0.5);
+        assert!((breath - OPACITY / 2.0).abs() < 1e-9 && (sound - 0.5).abs() < 1e-9);
+        assert_eq!(stroke(0.0), 1.6);
+        assert!(stroke(1.0) > 1.8 && stroke(1.0) <= 2.4, "{}", stroke(1.0));
+        let levels = [0.0, 0.25, 0.5, 0.75, 0.93, 1.0];
+        let mut dim = Vec::new();
+        for r in levels {
+            for g in levels {
+                for b in levels {
+                    for dark in [false, true] {
+                        let card = if dark { DARK_CARD } else { LIGHT_CARD };
+                        let seen = contrast(tone([r, g, b], dark), card);
+                        if seen < MIN_CONTRAST {
+                            dim.push(([r, g, b], dark, seen));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(dim.is_empty(), "{:?}", &dim[..dim.len().min(4)]);
+        let deep = [0.1, 0.15, 0.4];
+        assert_eq!(tone(deep, false), deep, "a colour that shows is kept");
     }
 
     #[test]

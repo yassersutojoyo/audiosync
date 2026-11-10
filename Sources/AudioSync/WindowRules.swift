@@ -136,6 +136,11 @@ struct AmbientMode: Equatable {
         mode.step(sounding: sounding(meter: meter), dt: dt)
     }
 
+    /// `loudest` is the loudest band's level, 0 to 1.
+    mutating func step(loudest: Double, dt: TimeInterval) {
+        step(sounding: loudest > Tide.stopAt, dt: dt)
+    }
+
     mutating func step(sounding: Bool, dt: TimeInterval) {
         quiet = sounding ? 0 : quiet + dt
         // 1e-9: ten 0.1 s steps sum to just under 1 s.
@@ -185,6 +190,21 @@ enum AmbientBreath {
         (opacity * (1 - live * min(1, env * 2.5)), live * min(1, 0.25 + env * 2.5))
     }
 
+    static func layers(live: Double) -> (breath: Double, sound: Double) {
+        layers(live: live, env: 0)
+    }
+
+    static let taperFloor = 0.4
+    static let edgeFade = 0.09
+
+    static func taper(x: Double) -> Double { sin(.pi * x) }
+
+    static func edge(x: Double) -> Double { 1 }
+
+    static func stroke(live: Double) -> Double { 1.6 }
+
+    static func tone(_ color: BrandRGB, dark: Bool) -> BrandRGB { color }
+
     /// Seconds between frames, nil for none.
     static func frameInterval(onScreen: Bool, reduceMotion: Bool, live: Double) -> TimeInterval? {
         guard onScreen, !reduceMotion else { return nil }
@@ -216,6 +236,21 @@ enum AmbientBreath {
         if seen(accent) >= minContrast { return accent }
         return dark ? BrandRGB(red: 0.85, green: 0.85, blue: 0.85) : BrandRGB(red: 0.2, green: 0.2, blue: 0.2)
     }
+}
+
+/// Each live strand follows one band of the captured sound, bass, mid and
+/// treble, as an equalizer's bars do: up at once, down slowly.
+enum AmbientBands {
+    /// Seconds between band reads while the art shows.
+    static let poll: TimeInterval = 1.0 / 30
+    static let attack: TimeInterval = 0.025
+    static let release: TimeInterval = 0.2
+    /// The quietest band peak that moves a strand, in dBFS.
+    static let floorDb = -48.0
+
+    static func level(peak: Float) -> Double { Double(peak) }
+
+    static func follow(_ level: Double, to target: Double, dt: TimeInterval) -> Double { target }
 }
 
 /// A title or name too long for its line scrolls: it rests at its start,

@@ -7795,6 +7795,75 @@ do {
     check(gapRun.dropFirst(5).allSatisfy { $0 == 1 },
           "music art: short gaps and quiet passages keep the sound's motion", "\(gapRun)")
 
+    func bandModeRun(_ seconds: Double, _ mode: inout AmbientMode, loudest: Double) -> [Double] {
+        (0..<Int((seconds * 20).rounded())).map { _ in
+            mode.step(loudest: loudest, dt: 0.05)
+            return mode.live
+        }
+    }
+    var bandMode = AmbientMode()
+    let blip = bandModeRun(0.3, &bandMode, loudest: 0.8) + bandModeRun(1, &bandMode, loudest: 0)
+    let tooFaint = bandModeRun(2, &bandMode, loudest: 0.07)
+    let bandRising = bandModeRun(1.5, &bandMode, loudest: 0.8)
+    let bandFade = bandRising.filter { $0 > 0 && $0 < 1 }.count
+    let keptFaint = bandModeRun(2, &bandMode, loudest: 0.07)
+    let shortGap = bandModeRun(0.2, &bandMode, loudest: 0)
+    _ = bandModeRun(0.5, &bandMode, loudest: 0.8)
+    let bandQuiet = bandModeRun(1, &bandMode, loudest: 0)
+    check(blip.allSatisfy { $0 == 0 } && tooFaint.allSatisfy { $0 == 0 } && bandRising.prefix(9).allSatisfy { $0 == 0 }
+            && (8...10).contains(bandFade) && bandRising.last == 1 && keptFaint.allSatisfy { $0 == 1 }
+            && shortGap.allSatisfy { $0 == 1 } && bandQuiet.prefix(5).allSatisfy { $0 == 1 } && bandQuiet[16] == 0,
+          "music art: held sound turns it live over half a second, a click or faint sound does not, and quiet rests it soon",
+          "\(blip), \(bandRising), \(bandQuiet)")
+    var bandLevel = 0.0
+    var bandPolls = 0
+    while bandLevel < 0.9 && bandPolls < 10 {
+        bandLevel = AmbientBands.follow(bandLevel, to: 1, dt: AmbientBands.poll)
+        bandPolls += 1
+    }
+    func bandAfter(_ seconds: Double) -> Double {
+        (0..<Int((seconds / AmbientBands.poll).rounded())).reduce(1.0) { level, _ in
+            AmbientBands.follow(level, to: 0, dt: AmbientBands.poll)
+        }
+    }
+    check(AmbientBands.poll >= 0.016 && AmbientBands.poll <= 0.034 && bandPolls <= 2
+            && bandAfter(0.1) > 0.4 && bandAfter(1) < 0.01
+            && AmbientBands.level(peak: 0) == 0 && AmbientBands.level(peak: 1) == 1
+            && abs(AmbientBands.level(peak: 0.1) - 28.0 / 48) < 1e-6 && AmbientBands.level(peak: .nan) == 0,
+          "music art: each strand rises with its band within two reads and falls over a fifth of a second",
+          "\(bandPolls), \(bandAfter(0.1)), \(bandAfter(1)), \(AmbientBands.level(peak: 0.1))")
+    let endTimes = (0..<100).map { AmbientBreath.period * Double($0) / 100 }
+    let endsApart = [0.0, 1.0].map { x in
+        endTimes.map { t in
+            let end = (0..<3).map { AmbientBreath.lift(strand: $0, x: x, time: t, spread: AmbientBreath.spread(at: t),
+                                                      idle: 1, slot: 22) * AmbientBreath.taper(x: x) }
+            return abs(end[0] - end[1]) + abs(end[1] - end[2])
+        }.reduce(0, +) / Double(2 * endTimes.count)
+    }
+    check((0.35...0.5).contains(AmbientBreath.taper(x: 0)) && abs(AmbientBreath.taper(x: 1) - AmbientBreath.taper(x: 0)) < 1e-9
+            && abs(AmbientBreath.taper(x: 0.5) - 1) < 1e-9
+            && AmbientBreath.edge(x: 0) == 0 && AmbientBreath.edge(x: 1) == 0 && AmbientBreath.edge(x: 0.5) == 1
+            && AmbientBreath.edge(x: 0.12) == 1 && AmbientBreath.edge(x: 0.04) > 0 && AmbientBreath.edge(x: 0.04) < 1
+            && endsApart.allSatisfy { $0 >= 0.8 },
+          "music art: the strands' ends stay apart and fade out instead of pinching together",
+          "\(AmbientBreath.taper(x: 0)), \(endsApart)")
+    let liveLayersOnly = AmbientBreath.layers(live: 1)
+    let halfLayers = AmbientBreath.layers(live: 0.5)
+    var dimTones: [String] = []
+    let toneLevels = [0.0, 0.25, 0.5, 0.75, 0.93, 1.0]
+    for r in toneLevels { for g in toneLevels { for b in toneLevels { for dark in [false, true] {
+        let card = dark ? AmbientBreath.darkCard : AmbientBreath.lightCard
+        let ratio = AmbientBreath.contrast(AmbientBreath.tone(BrandRGB(red: r, green: g, blue: b), dark: dark), card)
+        if ratio < AmbientBreath.minContrast { dimTones.append("\(r),\(g),\(b) dark \(dark): \(ratio)") }
+    } } } }
+    let deepTone = AmbientBreath.tone(BrandRGB(red: 0.1, green: 0.15, blue: 0.4), dark: false)
+    check(liveLayersOnly.breath == 0 && liveLayersOnly.sound == 1
+            && abs(halfLayers.breath - AmbientBreath.opacity / 2) < 1e-9 && abs(halfLayers.sound - 0.5) < 1e-9
+            && AmbientBreath.stroke(live: 0) == 1.6 && AmbientBreath.stroke(live: 1) > 1.8 && AmbientBreath.stroke(live: 1) <= 2.4
+            && dimTones.isEmpty && deepTone.red == 0.1 && deepTone.blue == 0.4,
+          "music art: live strands cross-fade with the line, draw a little thicker, and keep 3:1 on the card",
+          "\(liveLayersOnly), \(halfLayers), \(dimTones.prefix(4))")
+
     let period = AmbientBreath.period
     let breaths = (0..<100).map { AmbientBreath.spread(at: period * Double($0) / 100) }
     check(period >= 4 && period <= 6 && (breaths.max() ?? 0) <= 0.26 && (breaths.max() ?? 0) >= 0.2
