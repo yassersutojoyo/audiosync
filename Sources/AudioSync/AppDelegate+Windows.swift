@@ -77,10 +77,8 @@ extension AppDelegate {
 
     /// The Now Playing art moves while the main window or the panel shows it.
     private func followSoundTide() {
-        // An input device's peaks belong to the input meter; the art rests then.
         SoundTide.shared.follow(nowPlayingOnScreen || panelOnScreen ? { [weak self] in
-            guard let self, self.engine.isRunning else { return nil }
-            if case .input = self.audioSource { return nil }
+            guard let self, AmbientMode.follows(running: self.engine.isRunning, source: self.audioSource) else { return nil }
             return self.engine.takePeak()
         } : nil)
     }

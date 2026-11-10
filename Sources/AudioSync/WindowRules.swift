@@ -123,6 +123,19 @@ struct AmbientMode: Equatable {
     /// `meter` is the meter's 0-to-1 reading, nil when nothing is captured.
     static func sounding(meter: Double?) -> Bool { (meter ?? 0) > Tide.stopAt }
 
+    /// Whether the art may take the engine's peaks: only while streaming runs,
+    /// and never from an input device, whose peaks belong to the input meter.
+    static func follows(running: Bool, source: AudioSource) -> Bool {
+        if case .input = source { return false }
+        return running
+    }
+
+    /// One poll of the art; `meter` is nil when nothing is captured.
+    static func poll(_ tide: inout Tide, _ mode: inout AmbientMode, meter: Double?, dt: TimeInterval) {
+        tide.step(level: meter, dt: dt)
+        mode.step(sounding: sounding(meter: meter), dt: dt)
+    }
+
     mutating func step(sounding: Bool, dt: TimeInterval) {
         quiet = sounding ? 0 : quiet + dt
         // 1e-9: ten 0.1 s steps sum to just under 1 s.

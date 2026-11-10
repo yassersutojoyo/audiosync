@@ -7767,6 +7767,20 @@ do {
     }
     check(!AmbientMode.sounding(meter: nil) && !AmbientMode.sounding(meter: 0) && AmbientMode.sounding(meter: 0.3),
           "music art: only captured sound counts; streaming off or silence is not sound")
+    check(!AmbientMode.follows(running: false, source: .system) && !AmbientMode.follows(running: true, source: .input(uid: "mic"))
+            && AmbientMode.follows(running: true, source: .system) && AmbientMode.follows(running: true, source: .app(bundleID: "a.b")),
+          "music art: it takes peaks only while streaming captures apps or the system")
+    var stoppedTide = Tide()
+    var stoppedMode = AmbientMode()
+    for tick in 0..<30 { AmbientMode.poll(&stoppedTide, &stoppedMode, meter: tick % 3 == 0 ? 1 : 0.3, dt: 0.1) }
+    let wasLive = stoppedMode.live
+    let stopped = (0..<200).map { _ in
+        AmbientMode.poll(&stoppedTide, &stoppedMode, meter: nil, dt: 0.1)
+        return (live: stoppedMode.live, env: stoppedTide.env)
+    }
+    check(wasLive == 1 && stopped.dropFirst(14).allSatisfy { $0.live == 0 } && stopped.dropFirst(140).allSatisfy { $0.env == 0 },
+          "music art: once nothing is captured it goes back to the breath within 1.5 s and the tint is gone by 14 s, however loud it was",
+          "\(wasLive), \(stopped[14]), \(stopped[140])")
     var mode = AmbientMode()
     let start = mode.live
     let rising = modeRun(0.5, &mode) { _ in true }

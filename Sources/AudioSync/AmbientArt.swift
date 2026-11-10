@@ -39,12 +39,10 @@ final class SoundTide: ObservableObject {
             guard let self else { return }
             if let reading = peak() {
                 meter = asc_meter_level(meter, reading)
-                tide.step(level: Double(meter), dt: dt)
-                mode.step(sounding: AmbientMode.sounding(meter: Double(meter)), dt: dt)
+                AmbientMode.poll(&tide, &mode, meter: Double(meter), dt: dt)
             } else {
                 meter = 0
-                tide.step(level: nil, dt: dt)
-                mode.step(sounding: false, dt: dt)
+                AmbientMode.poll(&tide, &mode, meter: nil, dt: dt)
             }
             if tide.env != env { env = tide.env }
             if mode.live != live { live = mode.live }
