@@ -3,9 +3,10 @@ import CAudioSyncCore
 import Combine
 import SwiftUI
 
-/// What the Now Playing art follows (`Tide`), polled every
-/// `ASC_METER_POLL_MS` while the main window or the panel is on screen. Its own object,
-/// like `InputLevel`, so the polls redraw the art alone.
+/// What the Now Playing art follows: the bands (`AmbientBands`), read every
+/// `AmbientBands.poll`, and the tint's `Tide`, read every `ASC_METER_POLL_MS`,
+/// while the main window or the panel is on screen. Its own object, like
+/// `InputLevel`, so the polls redraw the art alone.
 final class SoundTide: ObservableObject {
     static let shared = SoundTide()
 
@@ -13,38 +14,56 @@ final class SoundTide: ObservableObject {
     @Published private(set) var env = 0.0
     /// `AmbientMode.live`.
     @Published private(set) var live = 0.0
+    /// Bass, mid and treble levels, 0 to 1.
+    @Published private(set) var bands = [0.0, 0.0, 0.0]
     @Published private(set) var onScreen = false
     private var tide = Tide()
     private var mode = AmbientMode()
     private var timer: Timer?
     private var meter: Float = 0
+    private var sincePeak: TimeInterval = 0
 
     /// Polls `peak` (the largest sample magnitude since the last call, nil
-    /// while nothing is captured); nil stops polling and stills the art.
-    func follow(_ peak: (() -> Float?)?) {
+    /// while nothing is captured) and `bands` (the bass, mid and treble peaks
+    /// since the last call, nil while streaming is off); nil stops polling
+    /// and stills the art.
+    func follow(_ read: (peak: () -> Float?, bands: () -> [Float]?)?) {
         timer?.invalidate()
         timer = nil
-        guard let peak else {
+        guard let read else {
             tide = Tide()
             mode = AmbientMode()
             meter = 0
+            sincePeak = 0
             if env != 0 { env = 0 }
             if live != 0 { live = 0 }
+            if bands != [0, 0, 0] { bands = [0, 0, 0] }
             if onScreen { onScreen = false }
             return
         }
         if !onScreen { onScreen = true }
-        let dt = Double(ASC_METER_POLL_MS) / 1000
+        let dt = AmbientBands.poll
+        let peakDt = Double(ASC_METER_POLL_MS) / 1000
         let poll = Timer(timeInterval: dt, repeats: true) { [weak self] _ in
             guard let self else { return }
-            if let reading = peak() {
-                meter = asc_meter_level(meter, reading)
-                AmbientMode.poll(&tide, &mode, meter: Double(meter), dt: dt)
-            } else {
-                meter = 0
-                AmbientMode.poll(&tide, &mode, meter: nil, dt: dt)
+            sincePeak += dt
+            if sincePeak + 1e-9 >= peakDt {
+                sincePeak = 0
+                if let reading = read.peak() {
+                    meter = asc_meter_level(meter, reading)
+                    tide.step(level: Double(meter), dt: peakDt)
+                } else {
+                    meter = 0
+                    tide.step(level: nil, dt: peakDt)
+                }
+                if tide.env != env { env = tide.env }
             }
-            if tide.env != env { env = tide.env }
+            let peaks = read.bands() ?? []
+            let next = bands.indices.map { index in
+                AmbientBands.follow(bands[index], to: AmbientBands.level(peak: index < peaks.count ? peaks[index] : 0), dt: dt)
+            }
+            mode.step(loudest: next.max() ?? 0, dt: dt)
+            if next != bands { bands = next }
             if mode.live != live { live = mode.live }
         }
         RunLoop.main.add(poll, forMode: .common)
@@ -53,8 +72,9 @@ final class SoundTide: ObservableObject {
 }
 
 /// Three strands in the cover's colours that spread and ripple with the
-/// sound while streaming captures it, and otherwise breathe slowly in one
-/// colour that shows on the card. One still line with Reduce Motion.
+/// sound's bass, mid and treble while streaming captures it, and otherwise
+/// breathe slowly in one colour that shows on the card. One still line with
+/// Reduce Motion.
 /// `density` scales how far the strands spread: 1 for the main window's hero,
 /// less for a smaller one.
 struct AmbientArt: View {
@@ -73,34 +93,45 @@ struct AmbientArt: View {
             .map { BrandRGB(red: Double($0.redComponent), green: Double($0.greenComponent), blue: Double($0.blueComponent)) }
         let pick = AmbientBreath.line(cover: tones, dark: colorScheme == .dark, opacity: lineOpacity)
         let lineColor = Color(.sRGB, red: pick.red, green: pick.green, blue: pick.blue)
+        let liveColors = (0..<3).map { index -> Color in
+            let cover = tones.isEmpty ? BrandRGB(red: 0.5, green: 0.5, blue: 0.5) : tones[index % tones.count]
+            let tone = AmbientBreath.tone(cover, dark: colorScheme == .dark)
+            return Color(.sRGB, red: tone.red, green: tone.green, blue: tone.blue)
+        }
         TimelineView(.animation(minimumInterval: interval, paused: interval == nil)) { context in
             Canvas { canvas, size in
                 let time = context.date.timeIntervalSinceReferenceDate
                 let live = still ? 0 : tide.live
-                let env = still ? 0 : min(1, tide.env)
                 let breath = still ? 0 : AmbientBreath.spread(at: time)
-                let spread = AmbientBreath.motion(env: env, live: live, breath: breath)
                 let idle = still ? 0 : 1 - live
-                let layers = still ? (breath: 1.0, sound: 0.0) : AmbientBreath.layers(live: live, env: env)
+                let layers = still ? (breath: 1.0, sound: 0.0) : AmbientBreath.layers(live: live)
                 let scale = size.height / 22
+                let style = StrokeStyle(lineWidth: CGFloat(AmbientBreath.stroke(live: live)), lineCap: .round)
+                let fade = CGFloat(AmbientBreath.edgeFade)
+                func faded(_ color: Color, _ opacity: Double) -> GraphicsContext.Shading {
+                    .linearGradient(Gradient(stops: [.init(color: color.opacity(0), location: 0),
+                                                     .init(color: color.opacity(opacity), location: fade),
+                                                     .init(color: color.opacity(opacity), location: 1 - fade),
+                                                     .init(color: color.opacity(0), location: 1)]),
+                                    startPoint: .zero, endPoint: CGPoint(x: size.width, y: 0))
+                }
                 for index in AmbientBreath.waves.indices where !still || index == 1 {
+                    let band = still ? 0 : min(1, tide.bands[index])
+                    let spread = AmbientBreath.motion(env: band, live: live, breath: breath)
                     var path = Path()
                     for step in 0...60 {
                         let x = size.width * CGFloat(step) / 60
-                        // Pinned at both ends, widest in the middle.
-                        let taper = sin(.pi * CGFloat(step) / 60)
+                        let taper = CGFloat(AmbientBreath.taper(x: Double(step) / 60))
                         let lift = CGFloat(AmbientBreath.lift(strand: index, x: Double(step) / 60, time: time,
                                                               spread: spread * Double(density), idle: idle, slot: Double(size.height)))
                         let y = min(21, max(1, 11 + taper * lift)) * scale
                         if step == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
-                    let style = StrokeStyle(lineWidth: 1.6, lineCap: .round)
                     if layers.breath > 0 {
-                        canvas.stroke(path, with: .color(lineColor.opacity(layers.breath)), style: style)
+                        canvas.stroke(path, with: faded(lineColor, layers.breath), style: style)
                     }
                     if layers.sound > 0 {
-                        let color = colors.isEmpty ? Color.gray : colors[index % colors.count]
-                        canvas.stroke(path, with: .color(color.opacity(layers.sound)), style: style)
+                        canvas.stroke(path, with: faded(liveColors[index], layers.sound), style: style)
                     }
                 }
             }

@@ -6,10 +6,12 @@ import { Tokens } from "tokens.slint";
 export struct AmbientStrand {
     // SVG path commands in a 300 x 22 box.
     commands: string,
-    // The breath's line over the strand, and the sound's strand in `tone`.
+    // The breath's line over the strand, and the sound's strand in its tone.
     breath: float,
     sound: float,
-    tone: color,
+    tone-light: color,
+    tone-dark: color,
+    width: float,
 }
 
 export struct AmbientLook {
@@ -24,7 +26,9 @@ export component AmbientArt inherits Rectangle {
 
     accessible-role: none;
 
-    for strand in root.look.strands: Rectangle {
+    // The strands fade out over their outer 9% (`ambient_breath::EDGE_FADE`).
+    for strand in root.look.strands: strip := Rectangle {
+        property <color> tone: Tokens.dark ? strand.tone-dark : strand.tone-light;
         width: 100%;
         height: 100%;
 
@@ -36,8 +40,8 @@ export component AmbientArt inherits Rectangle {
             // Stretched, as the Mac draws the strands across the strip's width.
             fit: fill;
             commands: strand.commands;
-            stroke: root.line.with-alpha(strand.breath);
-            stroke-width: 1.6px;
+            stroke: @linear-gradient(90deg, root.line.with-alpha(0) 0%, root.line.with-alpha(strand.breath) 9%, root.line.with-alpha(strand.breath) 91%, root.line.with-alpha(0) 100%);
+            stroke-width: strand.width * 1px;
             stroke-line-cap: round;
             visible: strand.breath > 0;
         }
@@ -49,8 +53,8 @@ export component AmbientArt inherits Rectangle {
             viewbox-height: 22;
             fit: fill;
             commands: strand.commands;
-            stroke: strand.tone.with-alpha(strand.sound);
-            stroke-width: 1.6px;
+            stroke: @linear-gradient(90deg, strip.tone.with-alpha(0) 0%, strip.tone.with-alpha(strand.sound) 9%, strip.tone.with-alpha(strand.sound) 91%, strip.tone.with-alpha(0) 100%);
+            stroke-width: strand.width * 1px;
             stroke-line-cap: round;
             visible: strand.sound > 0;
         }

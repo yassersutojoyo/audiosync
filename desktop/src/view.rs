@@ -47,7 +47,7 @@ use crate::ui_model::{
     SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame,
 };
 use crate::volume_keys::{self, VolumeKey};
-use crate::window_rules::Rgb;
+use crate::window_rules::{Rgb, ambient_breath};
 use crate::{
     AboutDialog, AirPlayProblem, AmbientLook, AmbientStrand, Availability, CalibrationRowItem,
     CastAddressDialog, CastList, CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, Fold,
@@ -1535,8 +1535,8 @@ impl App {
         self.draw_ambient(false);
     }
 
-    /// One frame of the Now Playing art: it reads the captured sound when a
-    /// meter poll is due, and runs at the rate its motion needs.
+    /// One frame of the Now Playing art: it reads the captured bands when a
+    /// read is due, and runs at the rate its motion needs.
     fn tick_ambient(&self) {
         let still = !self.main.global::<Motion>().get_on();
         let on_screen = self.ambient_on_screen();
@@ -1563,7 +1563,7 @@ impl App {
         }
         self.ambient
             .borrow_mut()
-            .advance(dt, || self.backend.borrow_mut().sound_peak());
+            .advance(dt, || self.backend.borrow_mut().sound_bands());
         if let Some(interval) = self.ambient.borrow().interval(true, false)
             && interval != self.ambient_timer.interval()
         {
@@ -1576,29 +1576,37 @@ impl App {
     /// to both, since it is drawn once.
     fn draw_ambient(&self, still: bool) {
         if still || !matches!(self.main_window_shows(), MainWindowShows::Not) {
-            self.main
-                .set_now_playing_ambient(self.ambient_look(ambient::WINDOW_DENSITY, still));
+            self.main.set_now_playing_ambient(self.ambient_look(
+                ambient::WINDOW_DENSITY,
+                ambient::WINDOW_SLOT,
+                still,
+            ));
         }
         if still || self.flyout.window().is_visible() {
-            self.flyout
-                .set_now_playing_ambient(self.ambient_look(ambient::FLYOUT_DENSITY, still));
+            self.flyout.set_now_playing_ambient(self.ambient_look(
+                ambient::FLYOUT_DENSITY,
+                ambient::FLYOUT_SLOT,
+                still,
+            ));
         }
     }
 
-    fn ambient_look(&self, density: f64, still: bool) -> AmbientLook {
+    fn ambient_look(&self, density: f64, slot: f64, still: bool) -> AmbientLook {
         let cover = self.ambient_cover.get();
         let (light, dark) = ambient::line_colors(&cover, still);
         let color = |[r, g, b]: Rgb| slint::Color::from_rgb_f32(r as f32, g as f32, b as f32);
         let strands: Vec<AmbientStrand> = self
             .ambient
             .borrow()
-            .strands(&cover, density, still)
+            .strands(&cover, density, slot, still)
             .into_iter()
             .map(|strand| AmbientStrand {
                 commands: strand.commands.into(),
                 breath: strand.breath as f32,
                 sound: strand.sound as f32,
-                tone: color(strand.tone),
+                tone_light: color(ambient_breath::tone(strand.tone, false)),
+                tone_dark: color(ambient_breath::tone(strand.tone, true)),
+                width: strand.width as f32,
             })
             .collect();
         AmbientLook {
@@ -6868,10 +6876,16 @@ mod tests {
         app.flyout.set_now_playing_title("A track title".into());
         app.flyout.set_now_playing_subtitle("Artist".into());
         app.ambient.borrow_mut().advance(1.0, || None);
-        app.main
-            .set_now_playing_ambient(app.ambient_look(ambient::WINDOW_DENSITY, false));
-        app.flyout
-            .set_now_playing_ambient(app.ambient_look(ambient::FLYOUT_DENSITY, false));
+        app.main.set_now_playing_ambient(app.ambient_look(
+            ambient::WINDOW_DENSITY,
+            ambient::WINDOW_SLOT,
+            false,
+        ));
+        app.flyout.set_now_playing_ambient(app.ambient_look(
+            ambient::FLYOUT_DENSITY,
+            ambient::FLYOUT_SLOT,
+            false,
+        ));
         app.equalizer.show().expect("the equalizer shows headless");
         app.equalizer.invoke_enabled_toggled(true);
         app.equalizer.invoke_gain_changed(1, 6.0);
@@ -7902,7 +7916,7 @@ mod tests {
     fn the_now_playing_art_moves_only_while_its_card_shows() {
         use i_slint_backend_testing::ElementHandle;
         let backend = MockBackend::new();
-        let peak = backend.sound_peak.clone();
+        let bands = backend.sound_bands.clone();
         let app = app_over(backend);
         let weak = Rc::downgrade(&app);
         app.main.global::<Motion>().set_on(true);
@@ -7919,7 +7933,7 @@ mod tests {
         assert_eq!(look.strands.row_count(), 3);
 
         for loud in [0.9, 0.4, 0.9, 0.4, 0.9, 0.4] {
-            peak.set(Some(loud));
+            bands.set(Some([loud; 3]));
             let before = std::time::Instant::now().checked_sub(Duration::from_millis(100));
             app.ambient_frame_at.set(before.expect("the clock runs"));
             app.tick_ambient();
@@ -7954,7 +7968,7 @@ mod tests {
     fn the_now_playing_art_breathes_while_nothing_is_streamed() {
         use crate::window_rules::ambient_breath::OPACITY;
         let backend = MockBackend::new();
-        let peak = backend.sound_peak.clone();
+        let bands = backend.sound_bands.clone();
         let app = app_over(backend);
         let weak = Rc::downgrade(&app);
         app.main.global::<Motion>().set_on(true);
@@ -7962,7 +7976,7 @@ mod tests {
         app.main.show().expect("the main window shows");
         app.follow_ambient(&weak);
         let tick = |loud: Option<f32>| {
-            peak.set(loud);
+            bands.set(loud.map(|loud| [loud; 3]));
             let before = std::time::Instant::now().checked_sub(Duration::from_millis(100));
             app.ambient_frame_at.set(before.expect("the clock runs"));
             app.tick_ambient();

@@ -53,6 +53,15 @@ final class CoreDelayRing {
     /// Any thread: the largest sample magnitude written since the last call
     /// (1 is full scale), for the input level meter.
     func takePeak() -> Float { asc_ring_take_peak(handle) }
+    /// Any thread: the peak of the bass, mid and treble bands written since
+    /// the last call, for a capture at `rate` Hz; zeros for a rate the core
+    /// doesn't take. The first call turns the band split on.
+    func takeBandPeaks(captureRate rate: Double) -> [Float] {
+        var bands: [Float] = [0, 0, 0]
+        guard let hz = CoreRate.hz(rate) else { return bands }
+        _ = bands.withUnsafeMutableBufferPointer { asc_ring_take_band_peaks(handle, hz, $0.baseAddress) }
+        return bands
+    }
     /// Any thread: the session lead of the ring's renderers in capture
     /// frames, once every counted renderer has published its start lead (S208).
     var publishedSessionLeadFrames: Int64? {

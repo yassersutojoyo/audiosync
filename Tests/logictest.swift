@@ -7759,42 +7759,27 @@ do {
 
 // MARK: Now Playing art at rest (WindowRules.swift AmbientMode, AmbientBreath)
 do {
-    func modeRun(_ seconds: Double, _ mode: inout AmbientMode, sounding: (Double) -> Bool) -> [Double] {
-        (0..<Int((seconds * 10).rounded())).map { tick in
-            mode.step(sounding: sounding(Double(tick) / 10), dt: 0.1)
-            return mode.live
-        }
-    }
-    check(!AmbientMode.sounding(meter: nil) && !AmbientMode.sounding(meter: 0) && AmbientMode.sounding(meter: 0.3),
-          "music art: only captured sound counts; streaming off or silence is not sound")
     check(!AmbientMode.follows(running: false, source: .system) && !AmbientMode.follows(running: true, source: .input(uid: "mic"))
             && AmbientMode.follows(running: true, source: .system) && AmbientMode.follows(running: true, source: .app(bundleID: "a.b")),
           "music art: it takes peaks only while streaming captures apps or the system")
     var stoppedTide = Tide()
     var stoppedMode = AmbientMode()
-    for tick in 0..<30 { AmbientMode.poll(&stoppedTide, &stoppedMode, meter: tick % 3 == 0 ? 1 : 0.3, dt: 0.1) }
+    var stoppedBand = 0.0
+    for tick in 0..<30 {
+        stoppedTide.step(level: tick % 3 == 0 ? 1 : 0.3, dt: 0.1)
+        stoppedBand = AmbientBands.follow(stoppedBand, to: tick % 3 == 0 ? 1 : 0.3, dt: 0.1)
+        stoppedMode.step(loudest: stoppedBand, dt: 0.1)
+    }
     let wasLive = stoppedMode.live
     let stopped = (0..<200).map { _ in
-        AmbientMode.poll(&stoppedTide, &stoppedMode, meter: nil, dt: 0.1)
+        stoppedTide.step(level: nil, dt: 0.1)
+        stoppedBand = AmbientBands.follow(stoppedBand, to: 0, dt: 0.1)
+        stoppedMode.step(loudest: stoppedBand, dt: 0.1)
         return (live: stoppedMode.live, env: stoppedTide.env)
     }
-    check(wasLive == 1 && stopped.dropFirst(14).allSatisfy { $0.live == 0 } && stopped.dropFirst(140).allSatisfy { $0.env == 0 },
+    check(wasLive == 1 && stopped.dropFirst(15).allSatisfy { $0.live == 0 } && stopped.dropFirst(140).allSatisfy { $0.env == 0 },
           "music art: once nothing is captured it goes back to the breath within 1.5 s and the tint is gone by 14 s, however loud it was",
-          "\(wasLive), \(stopped[14]), \(stopped[140])")
-    var mode = AmbientMode()
-    let start = mode.live
-    let rising = modeRun(0.5, &mode) { _ in true }
-    let held = modeRun(0.9, &mode) { _ in false }
-    let falling = modeRun(0.8, &mode) { _ in false }
-    check(start == 0 && rising[0] > 0 && rising[0] < 1 && rising.last == 1 && held.allSatisfy { $0 == 1 }
-            && falling.contains { $0 > 0 && $0 < 1 } && falling.last == 0,
-          "music art: it blends into the sound's motion over 0.4 s and back to the breath only after 1 s of quiet",
-          "\(start), \(rising), \(held), \(falling)")
-    var gaps = AmbientMode()
-    let gapRun = modeRun(6, &gaps) { t in t.truncatingRemainder(dividingBy: 1.4) < 0.8 }
-    check(gapRun.dropFirst(5).allSatisfy { $0 == 1 },
-          "music art: short gaps and quiet passages keep the sound's motion", "\(gapRun)")
-
+          "\(wasLive), \(stopped[15]), \(stopped[140])")
     func bandModeRun(_ seconds: Double, _ mode: inout AmbientMode, loudest: Double) -> [Double] {
         (0..<Int((seconds * 20).rounded())).map { _ in
             mode.step(loudest: loudest, dt: 0.05)
@@ -7895,12 +7880,9 @@ do {
             && abs(AmbientBreath.motion(env: 0.9, live: 1, breath: 0.2) - 0.9) < 1e-9
             && AmbientBreath.motion(env: 0, live: 1, breath: 0.2) == 0.2,
           "music art: the breath gives way to the sound's motion, never to a dead line")
-    let idleLayers = AmbientBreath.layers(live: 0, env: 0.8)
-    let liveLayers = AmbientBreath.layers(live: 1, env: 0.8)
-    check(idleLayers.breath == AmbientBreath.opacity && idleLayers.sound == 0 && liveLayers.breath == 0 && liveLayers.sound == 1
-            && AmbientBreath.opacity < 1,
-          "music art: the breath shows a little translucent and the sound's strands replace it",
-          "\(idleLayers), \(liveLayers)")
+    let idleLayers = AmbientBreath.layers(live: 0)
+    check(idleLayers.breath == AmbientBreath.opacity && idleLayers.sound == 0 && AmbientBreath.opacity < 1,
+          "music art: the breath shows a little translucent", "\(idleLayers)")
     check(AmbientBreath.frameInterval(onScreen: false, reduceMotion: false, live: 1) == nil
             && AmbientBreath.frameInterval(onScreen: true, reduceMotion: true, live: 1) == nil
             && (AmbientBreath.frameInterval(onScreen: true, reduceMotion: false, live: 0) ?? 0) >= 1.0 / 20

@@ -110,18 +110,21 @@ struct Tide: Equatable {
     }
 }
 
-/// Which of the Now Playing art's two motions shows: the sound's (`live` 1)
-/// while streaming captures sound, else a slow breath (`live` 0). It turns
-/// over `blend` seconds, and back to the breath only after `settle` seconds of
-/// quiet, so a quiet passage or the gap between songs doesn't flip it.
+/// Which of the Now Playing art's two motions shows: the bands' (`live` 1)
+/// while captured sound drives it, else a slow breath (`live` 0). Sound held
+/// `onset` seconds above `enter` turns it live, `settle` seconds below `leave`
+/// turns it back, and it cross-fades over `blend` seconds, so a click, a
+/// faint passage or a short gap doesn't flip it.
 struct AmbientMode: Equatable {
-    static let blend: TimeInterval = 0.4
-    static let settle: TimeInterval = 1
+    static let blend: TimeInterval = 0.5
+    static let onset: TimeInterval = 0.5
+    static let settle: TimeInterval = 0.3
+    /// Band levels that start the bands' motion and keep it.
+    static let enter = 0.1
+    static let leave = 0.05
     private(set) var live = 0.0
-    private var quiet = AmbientMode.settle
-
-    /// `meter` is the meter's 0-to-1 reading, nil when nothing is captured.
-    static func sounding(meter: Double?) -> Bool { (meter ?? 0) > Tide.stopAt }
+    private var on = false
+    private var held: TimeInterval = 0
 
     /// Whether the art may take the engine's peaks: only while streaming runs,
     /// and never from an input device, whose peaks belong to the input meter.
@@ -130,21 +133,16 @@ struct AmbientMode: Equatable {
         return running
     }
 
-    /// One poll of the art; `meter` is nil when nothing is captured.
-    static func poll(_ tide: inout Tide, _ mode: inout AmbientMode, meter: Double?, dt: TimeInterval) {
-        tide.step(level: meter, dt: dt)
-        mode.step(sounding: sounding(meter: meter), dt: dt)
-    }
-
     /// `loudest` is the loudest band's level, 0 to 1.
     mutating func step(loudest: Double, dt: TimeInterval) {
-        step(sounding: loudest > Tide.stopAt, dt: dt)
-    }
-
-    mutating func step(sounding: Bool, dt: TimeInterval) {
-        quiet = sounding ? 0 : quiet + dt
-        // 1e-9: ten 0.1 s steps sum to just under 1 s.
-        let target = quiet < Self.settle - 1e-9 ? 1.0 : 0.0
+        let sounding = loudest > (on ? Self.leave : Self.enter)
+        held = sounding == on ? 0 : held + dt
+        // 1e-9: ten 0.05 s steps sum to just under 0.5 s.
+        if held >= (on ? Self.settle : Self.onset) - 1e-9 {
+            on.toggle()
+            held = 0
+        }
+        let target = on ? 1.0 : 0.0
         let move = dt / Self.blend
         live = abs(target - live) <= move + 1e-9 ? target : live + (target > live ? move : -move)
     }
@@ -153,7 +151,7 @@ struct AmbientMode: Equatable {
 /// The art's calm motion, its colour against the hero card, and how often it draws.
 enum AmbientBreath {
     static let period: TimeInterval = 5
-    /// In `Tide.env` units, a quarter of the sound's widest.
+    /// In band level units, a quarter of the sound's widest.
     static let spread = 0.25
     static let opacity = 0.8
     static let minContrast = 3.0
@@ -185,25 +183,33 @@ enum AmbientBreath {
     }
 
     /// Opacity of the breath's contrasting line and of the sound's cover-coloured
-    /// strands; the line stays while the strands are still faint.
-    static func layers(live: Double, env: Double) -> (breath: Double, sound: Double) {
-        (opacity * (1 - live * min(1, env * 2.5)), live * min(1, 0.25 + env * 2.5))
-    }
-
+    /// strands: the line cross-fades into the strands.
     static func layers(live: Double) -> (breath: Double, sound: Double) {
-        layers(live: live, env: 0)
+        (opacity * (1 - live), live)
     }
 
     static let taperFloor = 0.4
     static let edgeFade = 0.09
 
-    static func taper(x: Double) -> Double { sin(.pi * x) }
+    /// How far a strand reaches at `x` (0 to 1 across): fully in the middle
+    /// and `taperFloor` of it at the ends, so the strands never meet in a point.
+    static func taper(x: Double) -> Double { taperFloor + (1 - taperFloor) * sin(.pi * x) }
 
-    static func edge(x: Double) -> Double { 1 }
+    /// A strand's opacity at `x`: it fades out over the outer `edgeFade` of each side.
+    static func edge(x: Double) -> Double { min(1, max(0, min(x, 1 - x) / edgeFade)) }
 
-    static func stroke(live: Double) -> Double { 1.6 }
+    static let restStroke = 1.6
+    static let liveStroke = 2.0
 
-    static func tone(_ color: BrandRGB, dark: Bool) -> BrandRGB { color }
+    static func stroke(live: Double) -> Double { restStroke + (liveStroke - restStroke) * live }
+
+    /// `color` as a live strand draws it: moved toward black on the light
+    /// card or white on the dark one until it keeps `minContrast`.
+    static func tone(_ color: BrandRGB, dark: Bool) -> BrandRGB {
+        let card = dark ? darkCard : lightCard
+        let far = dark ? BrandRGB(red: 1, green: 1, blue: 1) : BrandRGB(red: 0, green: 0, blue: 0)
+        return (0...10).lazy.map { over(far, color, opacity: Double($0) / 10) }.first { contrast($0, card) >= minContrast } ?? far
+    }
 
     /// Seconds between frames, nil for none.
     static func frameInterval(onScreen: Bool, reduceMotion: Bool, live: Double) -> TimeInterval? {
@@ -248,9 +254,18 @@ enum AmbientBands {
     /// The quietest band peak that moves a strand, in dBFS.
     static let floorDb = -48.0
 
-    static func level(peak: Float) -> Double { Double(peak) }
+    /// A band's peak (1 is full scale) on a dB scale from `floorDb` to 0 dBFS.
+    static func level(peak: Float) -> Double {
+        guard peak.isFinite, peak > 0 else { return 0 }
+        return min(1, max(0, (20 * log10(Double(peak)) - floorDb) / -floorDb))
+    }
 
-    static func follow(_ level: Double, to target: Double, dt: TimeInterval) -> Double { target }
+    /// `level` moved `dt` seconds toward `target`; below 0.001 it rests at 0.
+    static func follow(_ level: Double, to target: Double, dt: TimeInterval) -> Double {
+        let tau = target > level ? attack : release
+        let next = level + (target - level) * (1 - exp(-dt / tau))
+        return next < 0.001 ? 0 : next
+    }
 }
 
 /// A title or name too long for its line scrolls: it rests at its start,

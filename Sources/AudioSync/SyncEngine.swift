@@ -352,6 +352,10 @@ final class StreamEngine {
     /// scale), for the input level meter; nil while no session runs.
     func takePeak() -> Float? { parts?.ring.takePeak() }
 
+    /// The bass, mid and treble peaks captured since the last call, for the
+    /// Now Playing art; nil while no session runs.
+    func takeBandPeaks() -> [Float]? { parts?.ring.takeBandPeaks(captureRate: capture.sampleRate) }
+
     /// The local outputs' session lead in ms once each has reported its
     /// start lead (S208), for the debug log; nil before that.
     func sessionLeadMs() -> Double? {

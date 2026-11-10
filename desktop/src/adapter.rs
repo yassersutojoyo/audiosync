@@ -5896,8 +5896,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         self.audio.input_peak()
     }
 
-    fn sound_peak(&mut self) -> Option<f32> {
-        self.audio.sound_peak()
+    fn sound_bands(&mut self) -> Option<[f32; 3]> {
+        self.audio.sound_bands()
     }
 
     /// Also writes the settings file when anything changed since the last

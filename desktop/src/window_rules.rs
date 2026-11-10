@@ -66,53 +66,6 @@ pub mod main_zoom {
     }
 }
 
-/// How much the Now Playing art moves, `env`, 0 when still. It follows the
-/// meter level's rises above its own recent average, not the loudness, so a
-/// long flat note calms it and silence stills it.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Tide {
-    env: f64,
-    drive: f64,
-    mean: f64,
-}
-
-impl Tide {
-    pub const ONSET: f64 = 0.35;
-    pub const RISE: f64 = 0.45;
-    pub const FALL: f64 = 1.6;
-    pub const TAIL: f64 = 3.0;
-    pub const AVERAGE: f64 = 1.4;
-    pub const STOP_AT: f64 = 0.02;
-    /// Drive per second of a level 1.0 above its average.
-    pub const GAIN: f64 = 40.0;
-
-    pub fn env(&self) -> f64 {
-        self.env
-    }
-
-    /// `level` is the meter's 0-to-1 reading, `None` when nothing is captured.
-    pub fn step(&mut self, level: Option<f64>, dt: f64) {
-        let now = level.unwrap_or(0.0);
-        self.drive = (self.drive * (-dt / Self::ONSET).exp()
-            + (now - self.mean).max(0.0) * Self::GAIN * dt)
-            .min(1.2);
-        self.mean += (now - self.mean) * (1.0 - (-dt / Self::AVERAGE).exp());
-        let playing = now > Self::STOP_AT;
-        let tau = if self.drive > self.env {
-            Self::RISE
-        } else if playing {
-            Self::FALL
-        } else {
-            Self::TAIL
-        };
-        self.env += (self.drive - self.env) * (1.0 - (-dt / tau).exp());
-        let floor = if playing { 0.004 } else { Self::STOP_AT };
-        if self.env < floor {
-            self.env = 0.0;
-        }
-    }
-}
-
 /// A line too long for its room rests at its start, moves to its end at
 /// `SPEED`, rests, moves back, and repeats. The Slint `Marquee` global runs
 /// the same table; a test pins its numbers to these.
@@ -233,48 +186,45 @@ pub fn fold_phase(progress: f64, reduce_motion: bool) -> FoldPhase {
     }
 }
 
-/// Which of the Now Playing art's two motions shows: the sound's (`live` 1)
-/// while captured sound drives it, else a slow breath (`live` 0). It turns
-/// over `BLEND` seconds, and back to the breath only after `SETTLE` seconds of
-/// quiet, so a quiet passage or the gap between songs doesn't flip it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Which of the Now Playing art's two motions shows: the bands' (`live` 1)
+/// while captured sound drives it, else a slow breath (`live` 0). Sound held
+/// `ONSET` seconds above `ENTER` turns it live, `SETTLE` seconds below `LEAVE`
+/// turns it back, and it cross-fades over `BLEND` seconds, so a click, a
+/// faint passage or a short gap doesn't flip it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AmbientMode {
     live: f64,
-    quiet: f64,
-}
-
-impl Default for AmbientMode {
-    fn default() -> Self {
-        Self {
-            live: 0.0,
-            quiet: Self::SETTLE,
-        }
-    }
+    on: bool,
+    held: f64,
 }
 
 impl AmbientMode {
-    pub const BLEND: f64 = 0.4;
-    pub const SETTLE: f64 = 1.0;
+    pub const BLEND: f64 = 0.5;
+    pub const ONSET: f64 = 0.5;
+    pub const SETTLE: f64 = 0.3;
+    /// Band levels that start the bands' motion and keep it.
+    pub const ENTER: f64 = 0.1;
+    pub const LEAVE: f64 = 0.05;
 
     pub fn live(&self) -> f64 {
         self.live
     }
 
-    /// `meter` is the 0-to-1 reading, `None` when streaming is off or nothing is captured.
-    pub fn sounding(meter: Option<f64>) -> bool {
-        meter.unwrap_or(0.0) > Tide::STOP_AT
-    }
-
     /// `loudest` is the loudest band's level, 0 to 1.
     pub fn step(&mut self, loudest: f64, dt: f64) {
-        let sounding = loudest > Tide::STOP_AT;
-        self.quiet = if sounding { 0.0 } else { self.quiet + dt };
-        // 1e-9: ten 0.1 s steps sum to just under 1 s.
-        let target = if self.quiet < Self::SETTLE - 1e-9 {
-            1.0
-        } else {
+        let sounding = loudest > if self.on { Self::LEAVE } else { Self::ENTER };
+        self.held = if sounding == self.on {
             0.0
+        } else {
+            self.held + dt
         };
+        let hold = if self.on { Self::SETTLE } else { Self::ONSET };
+        // 1e-9: ten 0.05 s steps sum to just under 0.5 s.
+        if self.held >= hold - 1e-9 {
+            self.on = !self.on;
+            self.held = 0.0;
+        }
+        let target = if self.on { 1.0 } else { 0.0 };
         let step = dt / Self::BLEND;
         self.live = if (target - self.live).abs() <= step + 1e-9 {
             target
@@ -293,7 +243,7 @@ pub mod ambient_breath {
     use super::Rgb;
 
     pub const PERIOD: f64 = 5.0;
-    /// In `Tide` env units, a quarter of the sound's widest.
+    /// In band level units, a quarter of the sound's widest.
     pub const SPREAD: f64 = 0.25;
     pub const OPACITY: f64 = 0.8;
     pub const MIN_CONTRAST: f64 = 3.0;
@@ -333,32 +283,44 @@ pub mod ambient_breath {
             + idle * SWAY * 22.0 / slot * swing
     }
 
-    /// `(breath, sound)` opacities: the breath's line stays while the sound's strands are faint.
+    /// `(breath, sound)` opacities: the breath's line cross-fades into the sound's strands.
     pub fn layers(live: f64) -> (f64, f64) {
-        let env = 0.0;
-        (
-            OPACITY * (1.0 - live * (env * 2.5_f64).min(1.0)),
-            live * (0.25 + env * 2.5_f64).min(1.0),
-        )
+        (OPACITY * (1.0 - live), live)
     }
 
     pub const TAPER_FLOOR: f64 = 0.4;
     pub const EDGE_FADE: f64 = 0.09;
 
+    /// How far a strand reaches at `x` (0 to 1 across): fully in the middle
+    /// and `TAPER_FLOOR` of it at the ends, so the strands never meet in a point.
     pub fn taper(x: f64) -> f64 {
-        (std::f64::consts::PI * x).sin()
+        TAPER_FLOOR + (1.0 - TAPER_FLOOR) * (std::f64::consts::PI * x).sin()
     }
 
-    pub fn edge(_x: f64) -> f64 {
-        1.0
+    /// A strand's opacity at `x`: it fades out over the outer `EDGE_FADE` of each side.
+    pub fn edge(x: f64) -> f64 {
+        (x.min(1.0 - x) / EDGE_FADE).clamp(0.0, 1.0)
     }
 
-    pub fn stroke(_live: f64) -> f64 {
-        1.6
+    pub const STROKE: f64 = 1.6;
+    pub const LIVE_STROKE: f64 = 2.0;
+
+    pub fn stroke(live: f64) -> f64 {
+        STROKE + (LIVE_STROKE - STROKE) * live
     }
 
-    pub fn tone(color: Rgb, _dark: bool) -> Rgb {
-        color
+    /// `color` as a live strand draws it: moved toward black on the light
+    /// card or white on the dark one until it keeps `MIN_CONTRAST`.
+    pub fn tone(color: Rgb, dark: bool) -> Rgb {
+        let (card, far) = if dark {
+            (DARK_CARD, [1.0; 3])
+        } else {
+            (LIGHT_CARD, [0.0; 3])
+        };
+        (0..=10)
+            .map(|step| over(far, color, f64::from(step) / 10.0))
+            .find(|mixed| contrast(*mixed, card) >= MIN_CONTRAST)
+            .unwrap_or(far)
     }
 
     /// Seconds between frames, `None` for none.
@@ -418,12 +380,20 @@ pub mod ambient_bands {
     /// The quietest band peak that moves a strand, in dBFS.
     pub const FLOOR_DB: f64 = -48.0;
 
+    /// A band's peak (1 is full scale) on a dB scale from `FLOOR_DB` to 0 dBFS.
     pub fn level(peak: f32) -> f64 {
-        f64::from(peak)
+        let peak = f64::from(peak);
+        if !(peak.is_finite() && peak > 0.0) {
+            return 0.0;
+        }
+        ((20.0 * peak.log10() - FLOOR_DB) / -FLOOR_DB).clamp(0.0, 1.0)
     }
 
-    pub fn follow(_level: f64, target: f64, _dt: f64) -> f64 {
-        target
+    /// `level` moved `dt` seconds toward `target`; below 0.001 it rests at 0.
+    pub fn follow(level: f64, target: f64, dt: f64) -> f64 {
+        let tau = if target > level { ATTACK } else { RELEASE };
+        let next = level + (target - level) * (1.0 - (-dt / tau).exp());
+        if next < 0.001 { 0.0 } else { next }
     }
 }
 
@@ -556,51 +526,6 @@ mod tests {
         assert_eq!((edge.y, edge.height), (100.0, 600.0));
     }
 
-    fn tide_run(seconds: f64, tide: &mut Tide, level: impl Fn(f64) -> Option<f64>) -> Vec<f64> {
-        (0..(seconds * 10.0) as usize)
-            .map(|tick| {
-                tide.step(level(tick as f64 / 10.0), 0.1);
-                tide.env()
-            })
-            .collect()
-    }
-
-    #[test]
-    fn tide_is_still_in_silence_and_calms_on_a_flat_note() {
-        let mut silent = Tide::default();
-        assert!(
-            tide_run(5.0, &mut silent, |_| Some(0.0))
-                .iter()
-                .all(|e| *e == 0.0)
-        );
-        assert!(
-            tide_run(5.0, &mut silent, |_| None)
-                .iter()
-                .all(|e| *e == 0.0)
-        );
-        let mut flat = Tide::default();
-        let run = tide_run(20.0, &mut flat, |_| Some(0.6));
-        assert!(run[..10].iter().any(|e| *e > 0.3), "{run:?}");
-        assert_eq!(run.last(), Some(&0.0));
-    }
-
-    #[test]
-    fn tide_keeps_moving_with_changing_sound_and_settles_after_it_stops() {
-        let mut song = Tide::default();
-        let playing = tide_run(10.0, &mut song, |t| {
-            Some(if (t * 2.0) as i64 % 2 == 0 { 0.35 } else { 0.6 })
-        });
-        let stop = tide_run(15.0, &mut song, |_| None);
-        assert!(playing[playing.len() - 20..].iter().any(|e| *e > 0.3));
-        assert!(
-            stop[30] > 0.0 && stop[140] == 0.0,
-            "{} {}",
-            stop[30],
-            stop[140]
-        );
-        assert!(stop.windows(2).all(|w| w[1] <= w[0]));
-    }
-
     #[test]
     fn marquee_scrolls_only_what_runs_past_its_line() {
         assert_eq!(marquee::overflow(300.0, 200.0, false), 100.0);
@@ -715,13 +640,6 @@ mod tests {
                 mode.live()
             })
             .collect()
-    }
-
-    #[test]
-    fn ambient_counts_only_captured_sound() {
-        assert!(!AmbientMode::sounding(None));
-        assert!(!AmbientMode::sounding(Some(0.0)));
-        assert!(AmbientMode::sounding(Some(0.3)));
     }
 
     #[test]

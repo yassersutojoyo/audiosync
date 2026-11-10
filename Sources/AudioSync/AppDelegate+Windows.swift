@@ -77,10 +77,13 @@ extension AppDelegate {
 
     /// The Now Playing art moves while the main window or the panel shows it.
     private func followSoundTide() {
-        SoundTide.shared.follow(nowPlayingOnScreen || panelOnScreen ? { [weak self] in
+        SoundTide.shared.follow(nowPlayingOnScreen || panelOnScreen ? (peak: { [weak self] in
             guard let self, AmbientMode.follows(running: self.engine.isRunning, source: self.audioSource) else { return nil }
             return self.engine.takePeak()
-        } : nil)
+        }, bands: { [weak self] in
+            guard let self, self.engine.isRunning else { return nil }
+            return self.engine.takeBandPeaks()
+        }) : nil)
     }
 
     private func equalizerChanged(_ settings: Equalizer.Settings) {
