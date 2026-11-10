@@ -710,11 +710,47 @@ mod tests {
         let faint = mode_run(2.0, &mut mode, |_| 0.07);
         assert!(faint.iter().all(|l| *l == 1.0), "faint keeps it live");
         let gap = mode_run(0.2, &mut mode, |_| 0.0);
-        assert!(gap.iter().all(|l| *l == 1.0), "a short gap keeps it live");
+        assert!(
+            gap.iter().all(|l| *l > 0.8),
+            "a short gap keeps it nearly live"
+        );
         mode_run(0.5, &mut mode, |_| 0.8);
         let quiet = mode_run(1.0, &mut mode, |_| 0.0);
-        assert!(quiet[..5].iter().all(|l| *l == 1.0), "{quiet:?}");
+        assert!(quiet[0] < 1.0, "{quiet:?}");
         assert_eq!(quiet.get(16), Some(&0.0), "{quiet:?}");
+    }
+
+    // Through the bands' own fall at 30 reads a second, as the art runs it.
+    fn pause_run(
+        seconds: f64,
+        mode: &mut AmbientMode,
+        band: &mut f64,
+        target: f64,
+    ) -> Vec<(f64, f64)> {
+        (0..(seconds / ambient_bands::POLL).round() as usize)
+            .map(|_| {
+                *band = ambient_bands::follow(*band, target, ambient_bands::POLL);
+                mode.step(*band, ambient_bands::POLL);
+                (mode.live(), *band)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ambient_fades_into_the_breath_while_the_strands_still_fall() {
+        let (mut mode, mut band) = (AmbientMode::default(), 0.0);
+        pause_run(1.5, &mut mode, &mut band, 0.8);
+        let pause = pause_run(1.5, &mut mode, &mut band, 0.0);
+        assert!(pause[0].0 < 1.0, "{pause:?}");
+        assert!(pause.windows(2).all(|w| w[1].0 <= w[0].0), "{pause:?}");
+        let half = pause.iter().find(|(live, _)| *live <= 0.5);
+        assert!(half.is_some_and(|(_, band)| *band > 0.05), "{half:?}");
+        assert_eq!(pause[(0.8 / ambient_bands::POLL).round() as usize].0, 0.0);
+        pause_run(1.5, &mut mode, &mut band, 0.8);
+        let mut gap = pause_run(0.2, &mut mode, &mut band, 0.0);
+        gap.extend(pause_run(0.5, &mut mode, &mut band, 0.8));
+        assert!(gap.iter().all(|(live, _)| *live > 0.8), "{gap:?}");
+        assert_eq!(gap.last().map(|g| g.0), Some(1.0));
     }
 
     #[test]

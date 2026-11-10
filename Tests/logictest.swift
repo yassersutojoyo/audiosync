@@ -7797,7 +7797,7 @@ do {
     let bandQuiet = bandModeRun(1, &bandMode, loudest: 0)
     check(blip.allSatisfy { $0 == 0 } && tooFaint.allSatisfy { $0 == 0 } && bandRising.prefix(9).allSatisfy { $0 == 0 }
             && (8...10).contains(bandFade) && bandRising.last == 1 && keptFaint.allSatisfy { $0 == 1 }
-            && shortGap.allSatisfy { $0 == 1 } && bandQuiet.prefix(5).allSatisfy { $0 == 1 } && bandQuiet[16] == 0,
+            && shortGap.allSatisfy { $0 > 0.8 } && bandQuiet[0] < 1 && bandQuiet[16] == 0,
           "music art: held sound turns it live over half a second, a click or faint sound does not, and quiet rests it soon",
           "\(blip), \(bandRising), \(bandQuiet)")
     // -50 dBFS bands: music at a low player volume, on the input meter's -60 dB scale.
@@ -7806,6 +7806,28 @@ do {
     let quietBandRun = bandModeRun(1.5, &quietBandMode, loudest: quietBandLevel)
     check(quietBandRun.last == 1, "music art: music as quiet as the input meter shows turns it live",
           "\(quietBandLevel), \(quietBandRun.last ?? -1)")
+    // Through the bands' own fall at 30 reads a second, as the art runs it.
+    func pauseRun(_ seconds: Double, _ mode: inout AmbientMode, _ band: inout Double, to target: Double) -> [(live: Double, band: Double)] {
+        (0..<Int((seconds / AmbientBands.poll).rounded())).map { _ in
+            band = AmbientBands.follow(band, to: target, dt: AmbientBands.poll)
+            mode.step(loudest: band, dt: AmbientBands.poll)
+            return (mode.live, band)
+        }
+    }
+    var pauseMode = AmbientMode()
+    var pauseBand = 0.0
+    _ = pauseRun(1.5, &pauseMode, &pauseBand, to: 0.8)
+    let pauseLive = pauseRun(1.5, &pauseMode, &pauseBand, to: 0)
+    let pauseHalf = pauseLive.first { $0.live <= 0.5 }
+    check(pauseLive[0].live < 1 && zip(pauseLive, pauseLive.dropFirst()).allSatisfy { $1.live <= $0.live }
+            && (pauseHalf?.band ?? 0) > 0.05 && pauseLive[Int((0.8 / AmbientBands.poll).rounded())].live == 0,
+          "music art: on pause the breath fades in from the first frame while the strands still fall, and is whole within 0.8 s",
+          "\(pauseLive.prefix(12).map(\.live)), \(String(describing: pauseHalf))")
+    _ = pauseRun(1.5, &pauseMode, &pauseBand, to: 0.8)
+    let gapLive = pauseRun(0.2, &pauseMode, &pauseBand, to: 0) + pauseRun(0.5, &pauseMode, &pauseBand, to: 0.8)
+    check(gapLive.allSatisfy { $0.live > 0.8 } && gapLive.last?.live == 1,
+          "music art: a 0.2 s gap in the music barely moves it toward the breath, and it is whole again soon after",
+          "\(gapLive.map(\.live))")
     var bandLevel = 0.0
     var bandPolls = 0
     while bandLevel < 0.9 && bandPolls < 10 {

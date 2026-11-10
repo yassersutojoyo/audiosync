@@ -203,7 +203,7 @@ mod tests {
             Some(Duration::from_secs_f64(frame))
         );
         run(&mut driver, 0.2, frame, None);
-        assert_eq!(driver.mode.live(), 1.0, "a short gap keeps it live");
+        assert!(driver.mode.live() > 0.8, "a short gap keeps it nearly live");
         run(&mut driver, 1.5, frame, None);
         assert_eq!(driver.mode.live(), 0.0, "back to the breath");
         assert_eq!(
