@@ -188,20 +188,23 @@ pub fn fold_phase(progress: f64, reduce_motion: bool) -> FoldPhase {
 
 /// Which of the Now Playing art's two motions shows: the bands' (`live` 1)
 /// while captured sound drives it, else a slow breath (`live` 0). Sound held
-/// `ONSET` seconds above `ENTER` turns it live, `SETTLE` seconds below `LEAVE`
-/// turns it back, and it cross-fades over `BLEND` seconds, so a click, a
-/// faint passage or a short gap doesn't flip it.
+/// `ONSET` seconds above `ENTER` turns it live and fades in over `BLEND`
+/// seconds. Once the bands fall freely (or sit below `LEAVE`) the breath eases
+/// in at once, slowly at first so a short gap barely shows, and is whole after
+/// `FADE` seconds.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AmbientMode {
     live: f64,
     on: bool,
     held: f64,
+    quiet: f64,
+    last: f64,
 }
 
 impl AmbientMode {
     pub const BLEND: f64 = 0.5;
     pub const ONSET: f64 = 0.5;
-    pub const SETTLE: f64 = 0.3;
+    pub const FADE: f64 = 0.7;
     /// Band levels that start the bands' motion and keep it.
     pub const ENTER: f64 = 0.1;
     pub const LEAVE: f64 = 0.05;
@@ -212,26 +215,36 @@ impl AmbientMode {
 
     /// `loudest` is the loudest band's level, 0 to 1.
     pub fn step(&mut self, loudest: f64, dt: f64) {
-        let sounding = loudest > if self.on { Self::LEAVE } else { Self::ENTER };
-        self.held = if sounding == self.on {
-            0.0
+        // Falling at the bands' release rate means their input went silent; 1% absorbs rounding.
+        let free = self.last * (-dt / ambient_bands::RELEASE).exp();
+        let falling = loudest < Self::LEAVE || (loudest - free).abs() <= free * 0.01;
+        self.last = loudest;
+        let mut target = 0.0;
+        if self.on {
+            self.quiet = if falling { self.quiet + dt } else { 0.0 };
+            target = (1.0 - (self.quiet / Self::FADE).powi(2)).max(0.0);
+            // 1e-9: fourteen 0.05 s steps sum to just under 0.7 s.
+            if self.quiet >= Self::FADE - 1e-9 {
+                self.on = false;
+                self.quiet = 0.0;
+            }
         } else {
-            self.held + dt
-        };
-        let hold = if self.on { Self::SETTLE } else { Self::ONSET };
-        // 1e-9: ten 0.05 s steps sum to just under 0.5 s.
-        if self.held >= hold - 1e-9 {
-            self.on = !self.on;
-            self.held = 0.0;
+            self.held = if loudest > Self::ENTER {
+                self.held + dt
+            } else {
+                0.0
+            };
+            if self.held >= Self::ONSET - 1e-9 {
+                self.on = true;
+                self.held = 0.0;
+                target = 1.0;
+            }
         }
-        let target = if self.on { 1.0 } else { 0.0 };
         let step = dt / Self::BLEND;
-        self.live = if (target - self.live).abs() <= step + 1e-9 {
+        self.live = if target - self.live <= step + 1e-9 {
             target
-        } else if target > self.live {
-            self.live + step
         } else {
-            self.live - step
+            self.live + step
         };
     }
 }

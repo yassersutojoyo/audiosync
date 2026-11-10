@@ -112,19 +112,22 @@ struct Tide: Equatable {
 
 /// Which of the Now Playing art's two motions shows: the bands' (`live` 1)
 /// while captured sound drives it, else a slow breath (`live` 0). Sound held
-/// `onset` seconds above `enter` turns it live, `settle` seconds below `leave`
-/// turns it back, and it cross-fades over `blend` seconds, so a click, a
-/// faint passage or a short gap doesn't flip it.
+/// `onset` seconds above `enter` turns it live and fades in over `blend`
+/// seconds. Once the bands fall freely (or sit below `leave`) the breath eases
+/// in at once, slowly at first so a short gap barely shows, and is whole after
+/// `fade` seconds.
 struct AmbientMode: Equatable {
     static let blend: TimeInterval = 0.5
     static let onset: TimeInterval = 0.5
-    static let settle: TimeInterval = 0.3
+    static let fade: TimeInterval = 0.7
     /// Band levels that start the bands' motion and keep it.
     static let enter = 0.1
     static let leave = 0.05
     private(set) var live = 0.0
     private var on = false
     private var held: TimeInterval = 0
+    private var quiet: TimeInterval = 0
+    private var last = 0.0
 
     /// Whether the art may take the engine's peaks: only while streaming runs,
     /// and never from an input device, whose peaks belong to the input meter.
@@ -135,16 +138,29 @@ struct AmbientMode: Equatable {
 
     /// `loudest` is the loudest band's level, 0 to 1.
     mutating func step(loudest: Double, dt: TimeInterval) {
-        let sounding = loudest > (on ? Self.leave : Self.enter)
-        held = sounding == on ? 0 : held + dt
-        // 1e-9: ten 0.05 s steps sum to just under 0.5 s.
-        if held >= (on ? Self.settle : Self.onset) - 1e-9 {
-            on.toggle()
-            held = 0
+        // Falling at the bands' release rate means their input went silent; 1% absorbs rounding.
+        let free = last * exp(-dt / AmbientBands.release)
+        let falling = loudest < Self.leave || abs(loudest - free) <= free * 0.01
+        last = loudest
+        var target = 0.0
+        if on {
+            quiet = falling ? quiet + dt : 0
+            target = max(0, 1 - (quiet / Self.fade) * (quiet / Self.fade))
+            // 1e-9: fourteen 0.05 s steps sum to just under 0.7 s.
+            if quiet >= Self.fade - 1e-9 {
+                on = false
+                quiet = 0
+            }
+        } else {
+            held = loudest > Self.enter ? held + dt : 0
+            if held >= Self.onset - 1e-9 {
+                on = true
+                held = 0
+                target = 1
+            }
         }
-        let target = on ? 1.0 : 0.0
         let move = dt / Self.blend
-        live = abs(target - live) <= move + 1e-9 ? target : live + (target > live ? move : -move)
+        live = target - live <= move + 1e-9 ? target : live + move
     }
 }
 
