@@ -4,8 +4,36 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Added
+
+- On Windows, there's an installer, `AudioSync-Setup.exe` for x64 and `AudioSync-Setup-arm64.exe` for Arm, next to the zips. It installs for all users or only for you, with a Start menu shortcut and an uninstall entry in Settings > Apps. A copy installed for all users can't update itself: Download and Install offers the release page instead, and the update is the newer installer.
+- On Linux, there's an `.rpm` for Fedora on x86_64.
+- On the Mac, the built-in speakers' row shows a System value where other local rows show their delay. It opens a panel with the macOS volume slider and follows changes you make in macOS.
+- On the Mac, a new Settings switch, Hide Dock Icon When Window Closes, on by default: AudioSync leaves the Dock when its last window closes and keeps running in the menu bar. Opening a window brings the icon back.
+
+### Changed
+
+- On the Mac, AudioSync remembers the macOS volume each local output last played at through it, sets it again before the output's first audio, and puts back the level it found when the output stops or AudioSync quits.
+- On the Mac, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, in the main window and the menu bar panel. The Edited mark and the dots for the preset in use are gone.
+- On the Mac, the Presets row in the main window folds open into a list: one click recalls a preset, each row's options button renames, updates or deletes it, and Save as Preset is the last row.
+- On the Mac, a new zone and a saved equalizer curve are named in place instead of in an alert.
+- On the Mac, Check for Updates, Check Setup, Open Settings, Unhide, Open Local Network Settings and Add by Address share one teal-tinted button look.
+- On the Mac, the menu bar panel got a pass: folding a zone no longer shakes the panel, Open AudioSync is back next to Quit, Add by Address is in the main window only, the source name lines up with the title and artist, the volume slider is shorter and shows its number, and the gaps between rows are even.
+- On the Mac, the main window's left column lines up: Presets, Equalizer and Calibrate start on the volume icon's column, Add by Address is a plain row like its neighbours, and the zone label reads In a zone.
+- On the Mac, a long title, artist or curve name scrolls with a softer fade at its edges, and a long Equalizer curve name scrolls again instead of ending in "…".
+- On the Mac, a notice opening or closing in the main window eases the columns along with it, the Waiting for audio notice included. Before, they jumped in one frame. A notice that is closing no longer takes clicks or VoiceOver.
+- On the Mac, zones and the delay panes fold open and shut in one quarter-second motion, in the main window and the menu bar panel, with the rows below following along.
+- On the Mac, Now Playing reads the player every half second while the card or the menu bar panel shows a track, and drops a track that's gone after about 4 seconds of empty readings.
+- On the Mac, the strands under the cover art follow bass, mid and treble, and rest as a slow breath when no sound drives them, so a quiet or paused song no longer leaves an empty gap under the cover. With Reduce Motion they hold one still line.
+- On Windows and Linux, the header matches the Mac's: the real mark, which breathes while no network speaker has been found, the wordmark in the sync teal and the Mac's speaker badges. Focus rings show only after you press Tab.
+- On Windows and Linux, the strands under the cover art follow the sound while streaming, as on the Mac.
+- On Windows and Linux, zones, Several Apps and the AirPlay delay fold open and shut over a quarter second, Escape folds Several Apps, and long names fade at their edges.
+- On Windows and Linux, the tray panel's top block is laid out like the Mac panel's: the cover or the source's icon beside the source menu, with the song under it.
+- On Linux, clicking the tray icon opens the tray panel by the pointer, as on Windows. Where the desktop only shows the tray menu, Open AudioSync stays in it.
+
 ### Fixed
 
+- On the Mac, the Settings window opens at its full height again. Before, it could open with only its title bar showing.
 - A Cast speaker that reports itself idle for a moment while it starts a stream no longer makes the stream fail; AudioSync keeps waiting for it to start playing.
 
 ## [0.9.2] - 2026-11-08
