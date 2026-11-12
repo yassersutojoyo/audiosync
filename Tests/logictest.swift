@@ -18470,6 +18470,14 @@ do {
     check(quitAsked == nil && quitWaitsFirst && quitStops == .stop && quitStopEnds == nil
             && quitFlow.stoppedForQuit && quitFlow.request(true) == nil,
           "engine transition: quitting during a start waits for it, then stops, and no start follows")
+    let tapSource = (try? String(contentsOfFile: "Sources/AudioSync/ProcessTapCapture.swift", encoding: .utf8)) ?? ""
+    let destroyBody = tapSource.components(separatedBy: "private static func destroy(_ objects: TapObjects) {")
+        .dropFirst().first?.components(separatedBy: "\n    }\n").first ?? ""
+    let stampAt = destroyBody.range(of: "lastDestroy = ProcessInfo.processInfo.systemUptime")
+    let handOffAt = destroyBody.range(of: "teardown.async")
+    // covers: S227 (g)
+    check(stampAt != nil && handOffAt != nil && stampAt!.lowerBound < handOffAt!.lowerBound,
+          "capture teardown: a tap's destroy is stamped on the main thread before it moves to the background queue, so the whole system's wait after an app quits sees it at once")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
