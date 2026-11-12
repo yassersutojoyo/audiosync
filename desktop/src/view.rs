@@ -9273,7 +9273,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 600.0, 466.0);
+        click(window, 600.0, 448.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -9286,7 +9286,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 600.0, 466.0);
+        click(window, 600.0, 448.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -9296,22 +9296,18 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 600.0, 466.0);
+        click(window, 600.0, 448.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
-        click(window, 600.0, 162.0);
+        click(window, 600.0, 144.0);
         assert_eq!(delay_of(&app, "local:desk"), Some(300.0));
         assert!(open(&app).is_empty());
     }
 
-    fn ctrl_s(window: &slint::Window) {
-        window.dispatch_event(WindowEvent::KeyPressed {
-            text: Key::Control.into(),
-        });
-        press(window, "s");
-        window.dispatch_event(WindowEvent::KeyReleased {
-            text: Key::Control.into(),
-        });
+    /// Ctrl+S as the main window's key filter passes it on, before any
+    /// focused control sees it (`frameless::WindowKeys`).
+    fn ctrl_s(main: &MainWindow) {
+        assert!(main.invoke_shortcut("s".into(), true, false));
     }
 
     // covers: S221
@@ -9324,7 +9320,7 @@ mod tests {
         app.main.invoke_airplay_delay_edited("2100".into());
         app.main.invoke_focus_streaming_switch();
         draw_frames();
-        ctrl_s(app.main.window());
+        ctrl_s(&app.main);
         assert_eq!(delay_of(&app, "local:desk"), Some(400.0));
         assert_eq!(delay_of(&app, "local:bt"), Some(-200.0));
         assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
@@ -9907,10 +9903,10 @@ mod tests {
         // fonts set how tall the cards are), then on the blank part of a row in each speaker section, which the
         // row's own TouchArea takes.
         for place in [
-            Some((500.0, 60.0)),
+            Some((500.0, 42.0)),
             None,
-            Some((600.0, 162.0)),
-            Some((600.0, 389.0)),
+            Some((600.0, 144.0)),
+            Some((600.0, 371.0)),
         ] {
             let app = app_over(MockBackend::new());
             draw_frames();
@@ -10026,7 +10022,7 @@ mod tests {
         );
 
         press(window, "1");
-        ctrl_s(window);
+        ctrl_s(&app.main);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(12091.0),
@@ -16884,6 +16880,29 @@ mod tests {
         let heading = app.zone_dialog.get_heading();
         ctrl(app.equalizer.window(), "n");
         assert_eq!(app.zone_dialog.get_heading(), heading);
+    }
+
+    /// The main window draws its own menus, so it runs their shortcuts
+    /// itself: only with Ctrl alone, and Ctrl+S only while a delay is typed.
+    #[test]
+    fn the_main_window_runs_its_menu_shortcuts_itself() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+        assert!(!preset_rows(&app)[0].1);
+
+        assert!(!app.main.invoke_shortcut("1".into(), true, true));
+        assert!(!app.main.invoke_shortcut("2".into(), true, false));
+        assert!(!app.main.invoke_shortcut("s".into(), true, false));
+        assert!(!app.main.invoke_shortcut("e".into(), false, false));
+        assert!(!preset_rows(&app)[0].1);
+        assert!(app.main.invoke_shortcut("1".into(), true, false));
+        assert!(preset_rows(&app)[0].1, "Ctrl+1");
+
+        assert!(app.main.invoke_shortcut("e".into(), true, false));
+        assert!(app.equalizer.window().is_visible(), "Ctrl+E");
+        assert!(app.main.invoke_shortcut(Key::F1.into(), false, false));
+        assert!(app.help.window().is_visible(), "F1");
     }
 
     #[test]
