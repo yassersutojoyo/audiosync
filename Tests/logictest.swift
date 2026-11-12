@@ -18520,6 +18520,14 @@ do {
           && !SystemVolumeCue.panelOpen(toggled: true, isReference: true, level: nil)
           && !SystemVolumeCue.panelOpen(toggled: true, isReference: false, level: 0.5),
           "system volume: the panel shows once its row is clicked open, and closes when the volume stops being settable")
+    check(svcText.systemVolumeValue(60, muted: true) == "System muted",
+          "system volume: the value button says the output is muted in macOS", svcText.systemVolumeValue(60, muted: true))
+    let svcHeld = [SystemVolumeCue.shownLevel(read: 0.3, held: true, shown: 0.5),
+                   SystemVolumeCue.shownLevel(read: 0.3, held: false, shown: 0.5),
+                   SystemVolumeCue.shownLevel(read: nil, held: true, shown: 0.5)]
+    check(svcHeld == [0.5, 0.3, nil],
+          "system volume: while the slider is held the device's reports wait, so an earlier step can't pull it back; "
+              + "a device whose volume stops being settable still closes it", "\(svcHeld)")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

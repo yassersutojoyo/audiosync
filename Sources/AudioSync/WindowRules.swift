@@ -1138,4 +1138,8 @@ enum SystemVolumeCue {
     static func panelOpen(toggled: Bool, isReference: Bool, level: Double?) -> Bool {
         toggled && shown(isReference: isReference, level: level)
     }
+
+    /// The level the slider and button show: while the user holds the slider
+    /// the device's reports wait, so a report of an earlier step can't pull it back.
+    static func shownLevel(read: Double?, held: Bool, shown: Double?) -> Double? { read }
 }
