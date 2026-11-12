@@ -490,6 +490,7 @@ extension AppDelegate {
                        subject: SpeakerKey.make(id: uid, airplay: false),
                        shortName: text.speakerLostNoticeName(shownName(local: uid, system: localDevices[uid]?.name ?? "")))
         }
+        followLocalVolumes(listing: listing)   // before the renderers start
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
         let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
                                                 .subtracting(stallRetry.held(nowS: now))

@@ -112,6 +112,12 @@ struct AppSettings: Equatable {
         /// Every local output UID listed so far, for the Bluetooth seed's
         /// first listing (S455); missing until a build with the seed lists one.
         static let seenLocalOutputs = "seenLocalOutputUIDs"
+        /// Each local output's macOS volume (0…1) when it last played, by
+        /// device UID (`LocalVolumeMemory.remembered`).
+        static let systemVolumesRemembered = "systemVolumeRememberedByUID"
+        /// The macOS volume each playing output had before AudioSync set it,
+        /// by device UID (`LocalVolumeMemory.found`).
+        static let systemVolumesFound = "systemVolumeFoundByUID"
     }
 
     /// Where a speaker without a volume of its own starts (S71, S399).
@@ -149,6 +155,8 @@ struct AppSettings: Equatable {
     var inputPairs: [String: Int] = [:]
     var webRemote = false
     var webRemotePort = RemotePort.default
+    var systemVolumesRemembered: [String: Double] = [:]
+    var systemVolumesFound: [String: Double] = [:]
 
     /// Whether AUDIOSYNC_AIRPLAY2=1 turns the sender's AirPlay 2 path on; the
     /// core reads it too, and CI and debug runs use it (P2).
@@ -207,6 +215,8 @@ struct AppSettings: Equatable {
         s.inputPairs = channelPairs(read(Keys.inputChannelPairs))
         s.webRemote = read(Keys.webRemote) as? Bool ?? false
         s.webRemotePort = read(Keys.webRemotePort).flatMap(number).flatMap(RemotePort.stored) ?? RemotePort.default
+        s.systemVolumesRemembered = levels(read(Keys.systemVolumesRemembered)) { min(1, max(0, $0)) }
+        s.systemVolumesFound = levels(read(Keys.systemVolumesFound)) { min(1, max(0, $0)) }
         return s
     }
 

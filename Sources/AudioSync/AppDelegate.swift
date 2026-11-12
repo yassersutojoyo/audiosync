@@ -44,6 +44,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let localNetworkProbe = LocalNetworkProbe()
     /// The own volume and mute of the local outputs that are on (`+DeviceVolume`).
     private(set) lazy var deviceVolumes = makeDeviceVolumes()
+    /// Each local output's remembered and found macOS volume (`LocalVolumeMemory`).
+    var localVolumeMemory = LocalVolumeMemory()
     /// Every user-facing text.
     let text = UIStrings()
     /// What the main window, the menu bar panel and the menu bar icon render.
@@ -373,6 +375,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         volumeKeys = saved.volumeKeys
         appearance = saved.appearance
         inputPairs = saved.inputPairs
+        localVolumeMemory = LocalVolumeMemory(remembered: saved.systemVolumesRemembered, found: saved.systemVolumesFound)
         super.init()
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
@@ -438,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         observeDeviceList()
         observeSecondLaunch()
 
+        recoverLocalVolumes()   // before anything plays
         reconcileLocal()   // lists the local speakers; auto-connect may start streaming
         startSafetyNet()
         if AppLifecycle.opensMainWindow(loginItemLaunch: loginItem) { showMainWindow() }
@@ -793,6 +797,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         localNetworkProbe.onChange = { _ in }
         stopEngine(.quitting)
         engine.finishStopping()   // local outputs finish their fades and capture halts before the sender's teardown
+        putBackLocalVolumes(localVolumeMemory.playing)
         nativeAirPlay?.shutdown()   // AudioSync's own sender: every speaker gets its TEARDOWN
         nowPlaying.stopWatching()
         localNetworkProbe.stopBrowsing()
