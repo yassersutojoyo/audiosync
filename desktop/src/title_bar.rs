@@ -111,6 +111,9 @@ pub struct MenuKeys {
 }
 
 impl MenuKeys {
+    /// The window lost or gained the focus: a held Alt went to another window.
+    pub fn focus_changed(&mut self) {}
+
     pub fn key(
         &mut self,
         key: MenuKeyInput,
@@ -278,6 +281,14 @@ mod tests {
         press(&mut keys, MenuKeyInput::Alt);
         press(&mut keys, MenuKeyInput::Char('v'));
         assert_eq!(release(&mut keys, MenuKeyInput::Alt), None);
+    }
+
+    #[test]
+    fn alt_released_after_the_focus_moved_does_nothing() {
+        let mut keys = MenuKeys::default();
+        press(&mut keys, MenuKeyInput::Alt);
+        keys.focus_changed();
+        assert_eq!(release(&mut keys, MenuKeyInput::Alt), None, "Alt+Tab");
     }
 
     #[test]
