@@ -18444,13 +18444,19 @@ do {
 
 // MARK: Next and Previous sweep one edge across the Now Playing cover, title and artist (WindowRules.swift, MainWindow.swift)
 do {
-    check(TrackWipe.direction(pressed: .next, secondsSincePress: 0.5, reduceMotion: false) == .next
-            && TrackWipe.direction(pressed: .previous, secondsSincePress: 1, reduceMotion: false) == .previous
-            && TrackWipe.direction(pressed: nil, secondsSincePress: 0.5, reduceMotion: false) == nil
-            && TrackWipe.direction(pressed: .next, secondsSincePress: TrackWipe.pressWindow + 1, reduceMotion: false) == nil
-            && TrackWipe.direction(pressed: .next, secondsSincePress: -1, reduceMotion: false) == nil
-            && TrackWipe.direction(pressed: .next, secondsSincePress: 0.5, reduceMotion: true) == nil,
-          "track wipe: a change soon after Next or Previous sweeps that way; one without a press, a late one or one under Reduce Motion is instant")
+    check(TrackWipe.direction(pressed: .next, secondsSincePress: 0.5) == .next
+            && TrackWipe.direction(pressed: .previous, secondsSincePress: 1) == .previous
+            && TrackWipe.direction(pressed: nil, secondsSincePress: 0.5) == nil
+            && TrackWipe.direction(pressed: .next, secondsSincePress: TrackWipe.pressWindow + 1) == nil
+            && TrackWipe.direction(pressed: .next, secondsSincePress: -1) == nil,
+          "track wipe: a change soon after Next or Previous sweeps that way; one without a press or a late one is instant")
+    check(TrackWipe.seconds(reduceMotion: false) == 0.34 && TrackWipe.seconds(reduceMotion: true) == 0.15
+            && TrackWipe.edge(.next, progress: 0.25, reduceMotion: false) == 0.75
+            && TrackWipe.edge(.previous, progress: 0.25, reduceMotion: false) == 0.25
+            && TrackWipe.edge(.next, progress: 0.25, reduceMotion: true) == nil
+            && TrackWipe.edge(.next, progress: 0, reduceMotion: false) == nil
+            && TrackWipe.edge(.next, progress: 1, reduceMotion: false) == nil,
+          "track wipe: a thin line rides the sweeping edge and is gone at rest; under Reduce Motion the tracks cross-fade in 0.15 s with no line")
     let start = TrackWipe.parts(.next, progress: 0), nextQuarter = TrackWipe.parts(.next, progress: 0.25)
     let previousQuarter = TrackWipe.parts(.previous, progress: 0.25), end = TrackWipe.parts(.previous, progress: 1)
     check(start.old == 0...1 && start.new.lowerBound == 1 && nextQuarter.old == 0...0.75 && nextQuarter.new == 0.75...1

@@ -266,20 +266,26 @@ struct ArtClock {
 
 /// A Next or Previous press makes the track change after it sweep one edge
 /// across the Now Playing cover, title and artist: right to left for Next,
-/// left to right for Previous. Other changes, and every change under Reduce
-/// Motion, are instant.
+/// left to right for Previous, with a thin line on the edge. Under Reduce
+/// Motion the two tracks cross-fade instead; changes without a press are instant.
 enum TrackWipe {
     enum Direction: Equatable { case next, previous }
     static let duration: TimeInterval = 0.34
+    static let fadeDuration: TimeInterval = 0.15
     /// A change this long after a press still counts as the press's.
     static let pressWindow: TimeInterval = 3
     /// The longest a new track whose cover hasn't come yet keeps the old one up.
     static let artHold: TimeInterval = 1
 
-    static func direction(pressed: Direction?, secondsSincePress: TimeInterval, reduceMotion: Bool) -> Direction? {
-        guard !reduceMotion, (0...pressWindow).contains(secondsSincePress) else { return nil }
+    static func direction(pressed: Direction?, secondsSincePress: TimeInterval) -> Direction? {
+        guard (0...pressWindow).contains(secondsSincePress) else { return nil }
         return pressed
     }
+
+    static func seconds(reduceMotion: Bool) -> TimeInterval { duration }
+
+    /// The edge line's place as a fraction from the left; none at rest or in a cross-fade.
+    static func edge(_ direction: Direction, progress: Double, reduceMotion: Bool) -> Double? { nil }
 
     /// Another song, not the same one playing, pausing or getting its cover.
     static func isNewSong(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {

@@ -1031,8 +1031,7 @@ final class TrackWipeState: ObservableObject {
         }
         guard let old, let new, TrackWipe.isNewSong(old, new), let press = pressed,
               let direction = TrackWipe.direction(pressed: press.direction,
-                                                  secondsSincePress: Date.now.timeIntervalSince(press.at),
-                                                  reduceMotion: reduceMotion)
+                                                  secondsSincePress: Date.now.timeIntervalSince(press.at))
         else { return }
         pressed = nil
         self.direction = direction
