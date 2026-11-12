@@ -7647,10 +7647,15 @@ do {
     check(NoticeMotion.fade.duration < NoticeMotion.grow.duration && NoticeMotion.grow.duration <= 0.3,
           "notices: the open and close stay short, the Reduce Motion fade shorter still",
           "\(NoticeMotion.grow.duration), \(NoticeMotion.fade.duration)")
-    check(NoticeMotion.grow.closeDelay > 0 && NoticeMotion.grow.closeDelay < NoticeMotion.grow.fade
-            && NoticeMotion.grow.fade <= NoticeMotion.grow.duration && NoticeMotion.fade.closeDelay == 0,
-          "notices: a closing notice fades before its room starts to close, and its fade fits the open",
-          "\(NoticeMotion.grow.closeDelay), \(NoticeMotion.grow.fade)")
+    let noticeFrames = stride(from: 0.0, through: 1.0, by: 1 / (60 * NoticeMotion.grow.duration)).map { $0 } + [1.0]
+    let noticeSteps = zip(noticeFrames.dropFirst(), noticeFrames).map { NoticeMotion.room($0) - NoticeMotion.room($1) }
+    check(NoticeMotion.room(0) == 0 && NoticeMotion.room(1) == 1 && noticeSteps.allSatisfy { $0 >= 0 && $0 <= 0.15 }
+            && noticeSteps.first! <= 0.05 && noticeSteps.last! <= 0.05,
+          "notices: at 60 fps the room eases open and shut with no jump, overshoot or big first step either way",
+          "\(noticeSteps)")
+    check(NoticeMotion.opacity(0) == 0 && NoticeMotion.opacity(1) == 1 && NoticeMotion.opacity(0.75) < 1
+            && NoticeMotion.room(0.75) == 1 && NoticeMotion.opacity(0.5) == 0 && NoticeMotion.room(0.5) > 0.5,
+          "notices: a notice fades in once most of its room is open, and a closing one fades before its room shuts")
     // Source checks. On the Mac the columns jumped back 8 pt at 0.06 s, when the fade's own delayed animation
     // began, and a closing notice moved them 32.5 pt in its first frame on the front-loaded curve.
     let noticeMotionSource = (try? String(contentsOfFile: "Sources/AudioSync/NoticeMotion.swift", encoding: .utf8)) ?? ""

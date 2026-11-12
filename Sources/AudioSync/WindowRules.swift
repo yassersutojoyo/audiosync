@@ -395,12 +395,14 @@ enum NoticeMotion: Equatable {
     /// Seconds.
     var duration: TimeInterval { self == .grow ? 0.24 : 0.15 }
 
-    /// Seconds a closing notice fades before its room starts to close, so the
-    /// columns don't slide up under it while it still shows.
-    var closeDelay: TimeInterval { self == .grow ? 0.09 : 0 }
+    /// How open a notice's room is at `progress` through its move, 0 shut to 1 open. A closing
+    /// notice runs the same progress backwards, so it fades before its room starts to shut.
+    static func room(_ progress: Double) -> Double { ease(min(progress / 0.75, 1)) }
 
-    /// Seconds a notice takes to fade in or out.
-    var fade: TimeInterval { self == .grow ? 0.18 : duration }
+    /// Its opacity at `progress`: in over the last half, once most of its room is open.
+    static func opacity(_ progress: Double) -> Double { ease(max(progress * 2 - 1, 0)) }
+
+    private static func ease(_ t: Double) -> Double { t * t * (3 - 2 * t) }
 }
 
 /// What a click on the menu bar icon does to its panel. The press on the icon

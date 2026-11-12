@@ -227,7 +227,6 @@ struct MainView: View {
     @StateObject private var sheetRoom = SheetRoom()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var windowWidth = WindowWidth()
-    @StateObject private var noticeCount = NoticeCount()
     @StateObject private var heroHover = HoverState()
     @StateObject private var masterDrag = VolumeDrag()
     @StateObject private var wipe = TrackWipeState()
@@ -313,10 +312,7 @@ struct MainView: View {
             }
             .padding(.top, NoticeStack.windowGap)
         }
-        .animation(NoticeMotion.of(reduceMotion: reduceMotion)
-                    .columns(closing: model.notices.items.count < noticeCount.shown),
-                   value: model.notices)
-        .onChange(of: model.notices.items.count, initial: true) { noticeCount.shown = model.notices.items.count }
+        .animation(NoticeMotion.of(reduceMotion: reduceMotion).columns, value: model.notices)
         .padding(.horizontal, BrandTokens.Spacing.windowMargin)
         .padding(.top, 4)
         .padding(.bottom, 20)
@@ -762,13 +758,6 @@ private struct LocalNetworkHintView: View {
 }
 
 /// The main window's width, which sets its left column's (`MainColumns`).
-/// How many notices the main window last showed: read while the next list
-/// renders, it tells a closing notice from an opening one. Not published, as
-/// updating it needs no new render.
-private final class NoticeCount: ObservableObject {
-    var shown = 0
-}
-
 private final class WindowWidth: ObservableObject {
     @Published var points: CGFloat = 0
 }
