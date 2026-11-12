@@ -459,6 +459,12 @@ extension AppDelegate {
 
     // MARK: - Local renderers (the running engine follows the speakers that are on)
 
+    /// The local outputs switched on that no retry holds back: those a sync attaches.
+    func attachableLocal(nowS: Double) -> Set<String> {
+        enabledLocal.subtracting(freshLinks.held).subtracting(stallRetry.held(nowS: nowS))
+            .subtracting(refusalRetry.held(nowS: nowS))
+    }
+
     /// Starts a renderer for every local speaker that is on and present, and
     /// stops the renderers of speakers switched off (`LocalOutputSync.plan`).
     /// `provided` is a device list the caller has just read; without one the
@@ -492,9 +498,7 @@ extension AppDelegate {
         }
         followLocalVolumes(listing: listing)   // before the renderers start
         let afterStall = stallRetry.afterStall(formatReopens: formatReopens)
-        let applied = LocalOutputSync.apply(enabled: enabledLocal.subtracting(freshLinks.held)
-                                                .subtracting(stallRetry.held(nowS: now))
-                                                .subtracting(refusalRetry.held(nowS: now)), listing: listing,
+        let applied = LocalOutputSync.apply(enabled: attachableLocal(nowS: now), listing: listing,
                                             to: engine,
                                             bound: localBoundDevices, relinked: { noteRelinked($0) },
                                             holdBacks: localHoldBackTargets(), gain: { effectiveGain($0) })

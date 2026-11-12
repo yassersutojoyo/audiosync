@@ -306,7 +306,7 @@ final class DeviceVolumes {
     }
 
     /// Sets the device's own volume on each of its volume controls; false
-    /// when it has none or one refused.
+    /// when it has none or every one refused, so a partial write still gets put back.
     @discardableResult
     func setLevel(_ device: AudioDeviceID, _ level: Double) -> Bool {
         let controls = DeviceVolumeControls.find(on: device, access)
@@ -314,7 +314,7 @@ final class DeviceVolumes {
         let results = controls.volume.map {
             access.write(device, DeviceVolumeControl(part: .volume, element: $0), min(1, max(0, level)))
         }
-        return results.allSatisfy { $0 == noErr }
+        return results.contains(noErr)
     }
 
     /// The fix the user clicked under output `uid` (S197): reads the device

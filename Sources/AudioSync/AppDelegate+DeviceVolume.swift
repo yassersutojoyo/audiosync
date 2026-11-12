@@ -72,7 +72,8 @@ extension AppDelegate {
             }
         }
         if localVolumeMemory != before { saveLocalVolumes() }
-        let stopped = localVolumeMemory.playing.subtracting(outputs.keys)
+        // An unplugged one waits until it is listed again, so no push reschedules it.
+        let stopped = localVolumeMemory.playing.subtracting(outputs.keys).filter { localDevices[$0] != nil }
         guard !stopped.isEmpty else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + LocalVolumeMemory.putBackAfterS) { [weak self] in
             guard let self else { return }
@@ -111,9 +112,10 @@ extension AppDelegate {
     }
 
     /// The local outputs that play through AudioSync, or are about to: those
-    /// switched on and listed while a session runs.
+    /// a sync attaches, listed, while a session runs.
     private func playingLocalVolumes(_ listing: [AudioDevices.Device]) -> [String: AudioDeviceID] {
-        engine.isRunning ? DeviceVolumes.wanted(enabled: enabledLocal, listed: listing) : [:]
+        guard engine.isRunning else { return [:] }
+        return DeviceVolumes.wanted(enabled: attachableLocal(nowS: ProcessInfo.processInfo.systemUptime), listed: listing)
     }
 
     private func saveLocalVolumes() {
