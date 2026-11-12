@@ -550,4 +550,58 @@ pub mod tests {
         assert_eq!(installed, Installed::ReadOnly);
         assert_eq!(exe, b"old exe");
     }
+
+    /// Fails the test if the consent prompt would show.
+    #[cfg(windows)]
+    struct NoPrompt;
+
+    #[cfg(windows)]
+    impl Elevate for NoPrompt {
+        fn machine_dirs(&self) -> Vec<PathBuf> {
+            Vec::new()
+        }
+
+        fn run(&self, _: &[OsString]) -> io::Result<u32> {
+            panic!("the elevated copy started");
+        }
+    }
+
+    // covers: S460
+    #[cfg(windows)]
+    #[test]
+    fn a_signature_that_is_not_base64_never_reaches_the_prompt() {
+        use crate::updater::flow::tests::{fixture, update_of};
+        use std::sync::Arc;
+
+        let mut f = fixture(
+            "elevated-quote",
+            false,
+            Arc::new(RealFiles),
+            DebugLog::default(),
+        );
+        f.env.elevate = Arc::new(NoPrompt);
+        let mut update = update_of(&f.env);
+        let zip = f.env.temp_root.join("update.zip");
+        for planted in [r#"abc" "C:\x"#, "", "abc def"] {
+            update.enclosure.signature = Some(planted.to_owned());
+            assert_eq!(
+                install(&f.env, &update, &zip),
+                Installed::BadSignature,
+                "{planted:?}"
+            );
+        }
+    }
+
+    // covers: S460
+    #[test]
+    fn the_elevated_copy_takes_no_install_folder_from_its_arguments() {
+        let key = signature::test_key::new().verifying_key();
+        let args = [MARKER, "update.zip", "0.9.0", "c2ln", r"C:\Windows"].map(OsString::from);
+        let running = Version::parse("0.8.0").unwrap();
+        let log = DebugLog::default();
+        assert_eq!(
+            run_args(&args, &key, &running, Arch::X64, &RealFiles, &log),
+            None
+        );
+    }
 }
