@@ -7632,6 +7632,10 @@ do {
             && NoticeMotion.grow.fade <= NoticeMotion.grow.duration && NoticeMotion.fade.closeDelay == 0,
           "notices: a closing notice fades before its room starts to close, and its fade fits the open",
           "\(NoticeMotion.grow.closeDelay), \(NoticeMotion.grow.fade)")
+    let noticeRevealSource = ((try? String(contentsOfFile: "Sources/AudioSync/NoticeMotion.swift", encoding: .utf8)) ?? "")
+        .components(separatedBy: "struct NoticeReveal").dropFirst().first ?? ""
+    check(noticeRevealSource.contains(": ViewModifier, Animatable") && noticeRevealSource.contains("PaneHeight(fraction: progress)"),
+          "notices: a notice's room is laid out frame by frame, so the columns' scroll views ease down with it instead of jumping")
     let calibrateRowSource = ((try? String(contentsOfFile: "Sources/AudioSync/CalibrateAllViews.swift", encoding: .utf8)) ?? "")
         .components(separatedBy: "struct CalibrateAllButton").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
