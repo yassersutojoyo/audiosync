@@ -264,6 +264,39 @@ struct ArtClock {
     }
 }
 
+/// A Next or Previous press makes the track change after it sweep one edge
+/// across the Now Playing cover, title and artist: right to left for Next,
+/// left to right for Previous. Other changes, and every change under Reduce
+/// Motion, are instant.
+enum TrackWipe {
+    enum Direction: Equatable { case next, previous }
+    static let duration: TimeInterval = 0.34
+    /// A change this long after a press still counts as the press's.
+    static let pressWindow: TimeInterval = 3
+    /// The longest a new track whose cover hasn't come yet keeps the old one up.
+    static let artHold: TimeInterval = 1
+
+    static func direction(pressed: Direction?, secondsSincePress: TimeInterval, reduceMotion: Bool) -> Direction? {
+        nil
+    }
+
+    /// Another song, not the same one playing, pausing or getting its cover.
+    static func isNewSong(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {
+        false
+    }
+
+    /// The old and the new track's parts of the width, as fractions from the
+    /// left, at `progress` 0 to 1 of the sweep.
+    static func parts(_ direction: Direction, progress: Double) -> (old: ClosedRange<Double>, new: ClosedRange<Double>) {
+        (0...1, 0...0)
+    }
+
+    /// The old cover stays up instead of a blank one while the new one loads.
+    static func waitsForArt(oldHasArt: Bool, newHasArt: Bool) -> Bool {
+        false
+    }
+}
+
 /// Each live strand follows one band of the captured sound, bass, mid and
 /// treble, as an equalizer's bars do: up at once, down slowly.
 enum AmbientBands {

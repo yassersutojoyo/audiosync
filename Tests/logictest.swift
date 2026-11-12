@@ -18442,5 +18442,38 @@ do {
           "scrolling title: a title at its start shows its first letter in full", "\(startStops)")
 }
 
+// MARK: Next and Previous sweep one edge across the Now Playing cover, title and artist (WindowRules.swift, MainWindow.swift)
+do {
+    check(TrackWipe.direction(pressed: .next, secondsSincePress: 0.5, reduceMotion: false) == .next
+            && TrackWipe.direction(pressed: .previous, secondsSincePress: 1, reduceMotion: false) == .previous
+            && TrackWipe.direction(pressed: nil, secondsSincePress: 0.5, reduceMotion: false) == nil
+            && TrackWipe.direction(pressed: .next, secondsSincePress: TrackWipe.pressWindow + 1, reduceMotion: false) == nil
+            && TrackWipe.direction(pressed: .next, secondsSincePress: -1, reduceMotion: false) == nil
+            && TrackWipe.direction(pressed: .next, secondsSincePress: 0.5, reduceMotion: true) == nil,
+          "track wipe: a change soon after Next or Previous sweeps that way; one without a press, a late one or one under Reduce Motion is instant")
+    let start = TrackWipe.parts(.next, progress: 0), nextQuarter = TrackWipe.parts(.next, progress: 0.25)
+    let previousQuarter = TrackWipe.parts(.previous, progress: 0.25), end = TrackWipe.parts(.previous, progress: 1)
+    check(start.old == 0...1 && start.new.lowerBound == 1 && nextQuarter.old == 0...0.75 && nextQuarter.new == 0.75...1
+            && previousQuarter.new == 0...0.25 && previousQuarter.old == 0.25...1 && end.new == 0...1 && end.old.lowerBound == 1
+            && TrackWipe.duration == 0.34,
+          "track wipe: Next's edge moves right to left and Previous's left to right in 0.34 s, the new track on the side the edge has passed",
+          "\(nextQuarter) \(previousQuarter)")
+    let song = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
+                                       album: "B", isPlaying: true, artwork: nil)
+    let paused = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
+                                         album: "B", isPlaying: false, artwork: nil)
+    let other = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "Two", artist: "A",
+                                        album: "B", isPlaying: true, artwork: nil)
+    check(TrackWipe.isNewSong(song, other) && !TrackWipe.isNewSong(song, paused),
+          "track wipe: another song sweeps, the same song pausing does not")
+    check(TrackWipe.waitsForArt(oldHasArt: true, newHasArt: false) && !TrackWipe.waitsForArt(oldHasArt: true, newHasArt: true)
+            && !TrackWipe.waitsForArt(oldHasArt: false, newHasArt: false) && TrackWipe.artHold <= 1,
+          "track wipe: a new song whose cover is still loading keeps the old cover up, for 1 s at most, then changes once")
+    let main = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    check(main.components(separatedBy: "wipe.press(.next)").count == 2 && main.components(separatedBy: "wipe.press(.previous)").count == 2
+            && main.components(separatedBy: "TrackWipe.parts(").count == 2,
+          "track wipe: the main window's Next and Previous buttons start the sweep over the cover, title and artist")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
