@@ -192,7 +192,7 @@ struct FoldTurn: ViewModifier, Animatable {
 }
 
 /// Its content's full height times `fraction`, the content pinned to the top.
-private struct PaneHeight: Layout {
+struct PaneHeight: Layout {
     let fraction: Double
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
