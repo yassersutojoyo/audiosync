@@ -17472,10 +17472,10 @@ do {
     let ringWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let ringPanel = (try? String(contentsOfFile: "Sources/AudioSync/PanelZoneHeader.swift", encoding: .utf8)) ?? ""
     func ringCount(_ source: String, _ needle: String) -> Int { source.components(separatedBy: needle).count - 1 }
-    check(ringCount(ringWindow, "returnDelayFocus($delayFocused)") == 2
+    check(ringCount(ringWindow, "returnDelayFocus($delayFocused)") == 3
             && ringWindow.contains("if NSApp.isFullKeyboardAccessEnabled { focus.wrappedValue = true }")
             && ringWindow.contains("NSApp.keyWindow?.makeFirstResponder(nil)"),
-          "delay pane focus: a speaker's and the AirPlay pane closing hand the focus to the delay value only under keyboard navigation, else the window keeps it")
+          "delay pane focus: a speaker's, the built-in speakers' System and the AirPlay pane closing hand the focus to the delay value only under keyboard navigation, else the window keeps it")
     check(ringCount(ringWindow, ".focusable(!nonePresent)") == 0 && ringCount(ringPanel, ".focusable(!nonePresent)") == 0
             && ringCount(ringWindow, ".modifier(SkipsFocus(skip: nonePresent))") == 1
             && ringCount(ringPanel, ".modifier(SkipsFocus(skip: nonePresent))") == 1,
@@ -18373,8 +18373,8 @@ do {
     check(disclosedWindow.contains("struct DisclosedPane: ViewModifier, Animatable")
             && disclosedWindow.contains("ease(min(progress * 2, 1))")
             && disclosedWindow.contains("ease(max(progress * 2 - 1, 0))")
-            && disclosedCount(".modifier(DisclosedPane(") == 3,
-          "disclosed pane source: a speaker's, the AirPlay delay's and a zone's pane fold on one progress, the content fading only while the edge holds still")
+            && disclosedCount(".modifier(DisclosedPane(") == 4,
+          "disclosed pane source: a speaker's, the built-in speakers' System, the AirPlay delay's and a zone's pane fold on one progress, the content fading only while the edge holds still")
     check(!disclosedWindow.contains("value: model.delayPanels)")
             && disclosedMenuBar.contains("reduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)")
             && disclosedWindow.contains("withAnimation(reduceMotion ? nil : AppModel.delayPanelAnimation) {\n                                        scroll.scrollTo("),
