@@ -8523,6 +8523,48 @@ do {
             && !PresetPanel.showsRow([]) && PresetPanel.showsRow(presetRows(["A"])),
           "presets: no presets, the submenu holds No Presets and the panel row is hidden")
 
+    // covers: item 31 (the preset in use keeps its name; the window's preset list and its open state)
+    do {
+        let kitchen = PresetScene(on: [.init(key: "lc:kitchen", volume: 50)], zones: [], master: 80, gains: presetFlat)
+        let tvOnly = PresetScene(on: [.init(key: "lc:tv", volume: 70)], zones: [livingZone], master: 80, gains: presetFlat)
+        let eveningOnly = PresetEdit.saving("Evening", scene: evening, id: "e", to: [], numbered: numbered) ?? []
+        let sameTwice = PresetEdit.saving("Late", scene: evening, id: "l", to: eveningOnly, numbered: numbered) ?? []
+        let inUseList = PresetEdit.saving("Kitchen", scene: kitchen, id: "k", to: sameTwice, numbered: numbered) ?? []
+        func inUse(_ chosen: String?, _ scene: PresetScene) -> PresetInUse {
+            PresetInUse.resolve(chosen: chosen, presets: inUseList, scene: scene)
+        }
+        check(inUse("e", evening) == .exact("e") && inUse("l", evening) == .exact("l") && inUse(nil, evening) == .exact("e"),
+              "presets in use: the chosen preset is named while the room plays it, even when an earlier one plays the same",
+              "\(inUse("l", evening))")
+        check(inUse("e", louder) == .edited("e") && inUse("e", tvOnly) == .edited("e") && inUse(nil, louder) == .notInUse,
+              "presets in use: a change keeps the chosen preset's name, marked edited, while one of its speakers is on",
+              "\(inUse("e", louder)), \(inUse("e", tvOnly))")
+        check(inUse("e", silent) == .notInUse && inUse("e", kitchen) == .exact("k") && inUse("gone", louder) == .notInUse,
+              "presets in use: the name goes once none of its speakers is on or it is deleted; an exact match then shows",
+              "\(inUse("e", silent)), \(inUse("e", kitchen))")
+
+        let listRows = PresetCore.rows(inUseList, louder, chosen: "e")
+        check(listRows.map(\.id) == ["e", "l", "k"] && listRows.map(\.edited) == [true, false, false]
+                && !listRows.contains(where: \.current) && listRows.map(\.speakers) == [2, 2, 1]
+                && listRows.map(\.master) == [80, 80, 80] && PresetPanel.label(listRows) == "Evening",
+              "presets list: rows in list order, the chosen one marked edited and still named in the window and the panel",
+              "\(listRows)")
+        check(presetText.presetSummary(speakers: 2, master: 80) == "2 speakers, master 80%"
+                && presetText.presetSummary(speakers: 1, master: 39.6) == "1 speaker, master 40%"
+                && presetText.presetInUse("Evening", edited: true) == "Evening, edited"
+                && presetText.presetInUse("Evening", edited: false) == "Evening",
+              "presets list: a row's second line says how many speakers and which master volume the preset holds",
+              presetText.presetSummary(speakers: 1, master: 39.6))
+
+        final class FoldValues { var values: [String: Any] = [:] }
+        let foldValues = FoldValues()
+        let foldStore = SettingsStore(read: { foldValues.values[$0] }, write: { value, key in foldValues.values[key] = value })
+        let foldedAtFirst = !foldStore.load().presetsListOpen
+        foldStore.save(presetsListOpen: true)
+        check(foldedAtFirst && foldStore.load().presetsListOpen,
+              "presets list: folded at first, and open or closed is remembered across launches")
+    }
+
     let presetTexts: [(String, String)] = [
         (presetText.presets, "Presets"),
         (presetText.savePreset, "Save as Preset…"),

@@ -140,6 +140,8 @@ struct AppSettings: Equatable {
     /// The groups became zones and no launch said so yet.
     var zonesNoticeDue = false
     var presets: [SpeakerPreset] = []
+    /// The main window's preset list is folded open (item 31).
+    var presetsListOpen = false
     var autoConnect: Set<String> = []
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
@@ -510,6 +512,8 @@ struct SettingsStore {
     func save(webRemote: Bool) { write(webRemote, Keys.webRemote) }
 
     func save(webRemotePort: Int) { write(webRemotePort, Keys.webRemotePort) }
+
+    func save(presetsListOpen: Bool) {}
 
     /// On a first install the Mac's own output starts on, once: the UID to
     /// switch on, or nil. An empty list (Core Audio not answering yet) waits

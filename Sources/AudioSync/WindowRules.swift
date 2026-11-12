@@ -1123,3 +1123,23 @@ enum StoredEqualizer {
         try? JSONEncoder().encode(settings)
     }
 }
+
+/// The preset in use (item 31): the one last chosen keeps its name, edited
+/// once the room no longer plays it, until another is chosen, it is deleted or
+/// none of its speakers is on; with none chosen, the first exact match.
+enum PresetInUse: Equatable {
+    case notInUse
+    case exact(String)
+    case edited(String)
+
+    var id: String? {
+        switch self {
+        case .notInUse: return nil
+        case .exact(let id), .edited(let id): return id
+        }
+    }
+
+    static func resolve(chosen: String?, presets: [SpeakerPreset], scene: PresetScene) -> PresetInUse {
+        PresetCore.current(presets, scene).map(PresetInUse.exact) ?? .notInUse
+    }
+}

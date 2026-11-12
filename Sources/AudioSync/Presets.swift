@@ -180,8 +180,13 @@ enum PresetMigration {
 struct PresetRow: Identifiable, Equatable {
     let id: String
     let name: String
-    /// The first preset that plays exactly as saved (S253).
+    /// The preset in use plays exactly as saved (S253, item 31).
     var current = false
+    /// The preset in use no longer plays exactly as saved (item 31).
+    var edited = false
+    var speakers = 0
+    /// The master volume it holds, 0…100.
+    var master: Double = 0
 }
 
 /// What plays now, as a preset captures it (S251) and is matched against it
@@ -248,10 +253,13 @@ extension PresetCore {
         presets.first { matches($0, scene) }?.id
     }
 
-    /// The rows the windows show, the current one marked.
-    static func rows(_ presets: [SpeakerPreset], _ scene: PresetScene) -> [PresetRow] {
-        let current = current(presets, scene)
-        return presets.map { PresetRow(id: $0.id, name: $0.name, current: $0.id == current) }
+    /// The rows the windows show, the preset in use marked (`PresetInUse`).
+    static func rows(_ presets: [SpeakerPreset], _ scene: PresetScene, chosen: String? = nil) -> [PresetRow] {
+        let inUse = PresetInUse.resolve(chosen: chosen, presets: presets, scene: scene)
+        return presets.map {
+            PresetRow(id: $0.id, name: $0.name, current: inUse == .exact($0.id), edited: inUse == .edited($0.id),
+                      speakers: $0.members.count, master: $0.master)
+        }
     }
 }
 
