@@ -1059,7 +1059,7 @@ final class TrackWipeState: ObservableObject {
             release()
             return
         }
-        guard let old, let new, TrackWipe.isNewSong(old, new), let press = pressed,
+        guard let old, let new, TrackWipe.isSkip(old, new), let press = pressed,
               let direction = TrackWipe.direction(pressed: press.direction,
                                                   secondsSincePress: Date.now.timeIntervalSince(press.at))
         else { return }

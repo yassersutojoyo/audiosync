@@ -18470,8 +18470,10 @@ do {
                                          album: "B", isPlaying: false, artwork: nil)
     let other = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "Two", artist: "A",
                                         album: "B", isPlaying: true, artwork: nil)
-    check(TrackWipe.isNewSong(song, other) && !TrackWipe.isNewSong(song, paused),
-          "track wipe: another song sweeps, the same song pausing does not")
+    let spotify = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two", artist: "A",
+                                          album: "B", isPlaying: true, artwork: nil)
+    check(TrackWipe.isSkip(song, other) && !TrackWipe.isSkip(song, paused) && !TrackWipe.isSkip(song, spotify),
+          "track wipe: another song in the same player sweeps; the same song pausing or another app taking over does not")
     check(TrackWipe.waitsForArt(oldHasArt: true, newHasArt: false) && !TrackWipe.waitsForArt(oldHasArt: true, newHasArt: true)
             && !TrackWipe.waitsForArt(oldHasArt: false, newHasArt: false) && TrackWipe.artHold <= 1,
           "track wipe: a new song whose cover is still loading keeps the old cover up, for 1 s at most, then changes once")

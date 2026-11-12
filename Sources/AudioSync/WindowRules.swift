@@ -290,8 +290,9 @@ enum TrackWipe {
         return direction == .next ? 1 - progress : progress
     }
 
-    /// Another song, not the same one playing, pausing or getting its cover.
-    static func isNewSong(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {
+    /// Another song in the same player, not the same one pausing or getting
+    /// its cover, and not another app taking over.
+    static func isSkip(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {
         (old.bundleID, old.title, old.artist, old.album) != (new.bundleID, new.title, new.artist, new.album)
     }
 
