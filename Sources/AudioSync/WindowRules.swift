@@ -277,23 +277,25 @@ enum TrackWipe {
     static let artHold: TimeInterval = 1
 
     static func direction(pressed: Direction?, secondsSincePress: TimeInterval, reduceMotion: Bool) -> Direction? {
-        nil
+        guard !reduceMotion, (0...pressWindow).contains(secondsSincePress) else { return nil }
+        return pressed
     }
 
     /// Another song, not the same one playing, pausing or getting its cover.
     static func isNewSong(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {
-        false
+        (old.bundleID, old.title, old.artist, old.album) != (new.bundleID, new.title, new.artist, new.album)
     }
 
     /// The old and the new track's parts of the width, as fractions from the
     /// left, at `progress` 0 to 1 of the sweep.
     static func parts(_ direction: Direction, progress: Double) -> (old: ClosedRange<Double>, new: ClosedRange<Double>) {
-        (0...1, 0...0)
+        let p = min(1, max(0, progress))
+        return direction == .next ? (0...(1 - p), (1 - p)...1) : (p...1, 0...p)
     }
 
     /// The old cover stays up instead of a blank one while the new one loads.
     static func waitsForArt(oldHasArt: Bool, newHasArt: Bool) -> Bool {
-        false
+        oldHasArt && !newHasArt
     }
 }
 

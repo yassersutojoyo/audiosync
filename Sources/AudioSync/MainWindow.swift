@@ -225,6 +225,7 @@ struct MainView: View {
     @StateObject private var noticeCount = NoticeCount()
     @StateObject private var heroHover = HoverState()
     @StateObject private var masterDrag = VolumeDrag()
+    @StateObject private var wipe = TrackWipeState()
     @FocusState private var modeFocus: TransportMode?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -405,30 +406,36 @@ struct MainView: View {
             }
         }
         .onHover { heroHover.isHovered = $0 }
+        .onChange(of: model.nowPlaying) { old, new in wipe.change(from: old, to: new, reduceMotion: reduceMotion) }
     }
 
     private func nowPlaying(_ track: NowPlayingMonitor.Track, _ t: UIStrings) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Color.clear
-                .aspectRatio(1, contentMode: .fit)
-                .overlay {
-                    if let art = track.artwork {
-                        Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        ZStack {
-                            Color.secondary.opacity(0.15)
-                            Image(systemName: "music.note").font(.system(size: 28)).foregroundStyle(.secondary)
+        let shown = wipe.held ?? track
+        return VStack(alignment: .leading, spacing: 4) {
+            wiped(shown) { track in
+                Color.clear
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay {
+                        if let art = track.artwork {
+                            Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
+                        } else {
+                            ZStack {
+                                Color.secondary.opacity(0.15)
+                                Image(systemName: "music.note").font(.system(size: 28)).foregroundStyle(.secondary)
+                            }
                         }
                     }
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .padding(.top, 2)
-                .accessibilityHidden(true)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .padding(.top, 2)
+            .accessibilityHidden(true)
             AmbientArt(tide: SoundTide.shared, colors: CoverColors.of(track.artwork))
                 .padding(.vertical, 3)
-            ScrollingTitle(text: track.title).font(.title3.weight(.semibold))
-            ScrollingTitle(text: track.artist.isEmpty ? track.appName : track.artist)
-                .font(.callout).foregroundStyle(Brand.secondaryText)
+            wiped(shown) { ScrollingTitle(text: $0.title).font(.title3.weight(.semibold)) }
+            wiped(shown) {
+                ScrollingTitle(text: $0.artist.isEmpty ? $0.appName : $0.artist)
+                    .font(.callout).foregroundStyle(Brand.secondaryText)
+            }
             HStack(spacing: MainColumns.transportSpacing(
                 modes: track.shuffle != nil || track.repeatMode != nil)) {
                 if let shuffle = track.shuffle {
@@ -457,13 +464,35 @@ struct MainView: View {
         }
     }
 
+    /// `content` for `shown`, and during a sweep for the outgoing track too,
+    /// each on its side of the edge. Full width, so one edge crosses the cover,
+    /// title and artist at the same place.
+    private func wiped<Content: View>(_ shown: NowPlayingMonitor.Track,
+                                      @ViewBuilder _ content: (NowPlayingMonitor.Track) -> Content) -> some View {
+        ZStack {
+            if let outgoing = wipe.outgoing {
+                content(outgoing)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .mask(WipeMask(direction: wipe.direction, progress: wipe.progress, showsNew: false))
+                    .transition(.identity)
+                    .accessibilityHidden(true)
+            }
+            content(shown)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .mask(WipeMask(direction: wipe.direction, progress: wipe.progress, showsNew: true))
+        }
+    }
+
     /// Shuffle and Repeat wait one step away: hover or keyboard focus on the
     /// hero shows them, and VoiceOver always finds them.
     private var modesShown: Bool { heroHover.isHovered || modeFocus != nil || voiceOver }
 
     private func transportButton(_ symbol: String, _ command: NowPlayingMonitor.Command,
                                  label: String) -> some View {
-        Button { model.actions.transport(command) } label: {
+        Button {
+            if command == .next { wipe.press(.next) } else if command == .previous { wipe.press(.previous) }
+            model.actions.transport(command)
+        } label: {
             Image(systemName: symbol)
         }
         .buttonStyle(.plain)
@@ -958,6 +987,89 @@ private struct Reveal: ViewModifier {
             .opacity(shown ? 1 : 0)
             .offset(x: shown || reduceMotion ? 0 : 4)
             .animation(MainMotion.reveal(reduceMotion: reduceMotion), value: shown)
+    }
+}
+
+/// One side of the track wipe's edge (`TrackWipe.parts`).
+private struct WipeMask: Shape {
+    let direction: TrackWipe.Direction
+    var progress: Double
+    let showsNew: Bool
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let parts = TrackWipe.parts(direction, progress: progress)
+        let part = showsNew ? parts.new : parts.old
+        return Path(CGRect(x: rect.minX + rect.width * part.lowerBound, y: rect.minY,
+                           width: rect.width * (part.upperBound - part.lowerBound), height: rect.height))
+    }
+}
+
+/// The Now Playing block's side of `TrackWipe`: the press it waits on, the
+/// old track kept up while a new cover loads, and the outgoing one during a
+/// sweep. An object rather than @State, for the Command Line Tools toolchain.
+final class TrackWipeState: ObservableObject {
+    @Published private(set) var held: NowPlayingMonitor.Track?
+    @Published private(set) var outgoing: NowPlayingMonitor.Track?
+    @Published private(set) var progress: Double = 1
+    private(set) var direction = TrackWipe.Direction.next
+    private var pressed: (direction: TrackWipe.Direction, at: Date)?
+    private var current: NowPlayingMonitor.Track?
+    private var sweeps = 0
+
+    func press(_ direction: TrackWipe.Direction) { pressed = (direction, .now) }
+
+    func change(from old: NowPlayingMonitor.Track?, to new: NowPlayingMonitor.Track?, reduceMotion: Bool) {
+        current = new
+        if held != nil {
+            release()
+            return
+        }
+        guard let old, let new, TrackWipe.isNewSong(old, new), let press = pressed,
+              let direction = TrackWipe.direction(pressed: press.direction,
+                                                  secondsSincePress: Date.now.timeIntervalSince(press.at),
+                                                  reduceMotion: reduceMotion)
+        else { return }
+        pressed = nil
+        self.direction = direction
+        guard TrackWipe.waitsForArt(oldHasArt: old.artwork != nil, newHasArt: new.artwork != nil) else {
+            sweep(from: old)
+            return
+        }
+        held = old
+        sweeps += 1
+        let mark = sweeps
+        DispatchQueue.main.asyncAfter(deadline: .now() + TrackWipe.artHold) { [weak self] in
+            guard let self, self.sweeps == mark else { return }
+            self.release()
+        }
+    }
+
+    private func release() {
+        guard let held else { return }
+        self.held = nil
+        if current != nil { sweep(from: held) }
+    }
+
+    private func sweep(from old: NowPlayingMonitor.Track) {
+        sweeps += 1
+        let mark = sweeps
+        outgoing = old
+        progress = 0
+        // The masks have to draw once at 0 before the animation can run from there.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.sweeps == mark else { return }
+            withAnimation(.timingCurve(0.2, 0.8, 0.2, 1, duration: TrackWipe.duration)) {
+                self.progress = 1
+            } completion: { [weak self] in
+                guard let self, self.sweeps == mark else { return }
+                self.outgoing = nil
+            }
+        }
     }
 }
 
