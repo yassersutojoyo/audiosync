@@ -6705,6 +6705,15 @@ do {
     check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral
             && stalled.dropped == .unreadable(dropAfter),
           "now playing: \(dropAfter) empty readings in a row after a playing track send the fallback")
+    var fastEmpty = NowPlayingMonitor.EmptyReadings()
+    var fastShown = fastEmpty.next(reading: playing, last: nil, lastPlayerRuns: true, interval: 0.5)
+    for _ in 1..<9 { fastShown = fastEmpty.next(reading: nil, last: fastShown, lastPlayerRuns: true, interval: 0.5) }
+    let fastKept = fastShown?.title == "Tune"
+    fastShown = fastEmpty.next(reading: nil, last: fastShown, lastPlayerRuns: true, interval: 0.5)
+    // covers: S218
+    check(fastKept && fastShown == nil && fastEmpty.dropped == .unreadable(9)
+            && NowPlayingMonitor.EmptyReadings.readingsToDrop(interval: 2) == dropAfter,
+          "now playing: a playing track goes after about 4 s of empty readings at the 0.5 s poll, as at the 2 s poll")
     var quit = NowPlayingMonitor.EmptyReadings()
     shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
     // covers: S218
