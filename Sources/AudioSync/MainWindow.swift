@@ -654,6 +654,12 @@ struct MainView: View {
             .padding(.trailing, BrandTokens.Spacing.rowPaddingX)
             .padding(.top, ZoneLook.labelTop)
             .padding(.bottom, ZoneLook.labelBottom)
+            .overlay(alignment: .leading) {
+                ZoneLabelJoin()
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
+                    .frame(width: ZoneLook.nameColumn - ZoneLook.labelLineGap)
+                    .accessibilityHidden(true)
+            }
             VStack(spacing: ZoneLook.groupGap) {
                 ForEach(ZoneLayout.byZone(speakers) { model.zone(holding: $0.key)?.id }) { group in
                     if let zone = model.zones.first(where: { $0.id == group.zone }) {
@@ -814,6 +820,22 @@ private struct ZoneMemberGroup<Content: View>: View {
             .overlay(alignment: .leading) {
                 Rectangle().fill(Color(nsColor: .separatorColor)).frame(width: 1).accessibilityHidden(true)
             }
+    }
+}
+
+/// The In a zone label's left rule, in a frame as tall as the label row: it
+/// leaves the text's middle and turns down into the first zone's bar at x 0.
+private struct ZoneLabelJoin: Shape {
+    func path(in rect: CGRect) -> Path {
+        let y = ZoneLook.labelTop + (rect.height - ZoneLook.labelTop - ZoneLook.labelBottom) / 2
+        // The bar is a 1 pt rectangle from x 0, so the stroke's centre sits at 0.5.
+        let x = rect.minX + 0.5
+        var path = Path()
+        path.move(to: CGPoint(x: rect.maxX, y: y))
+        path.addArc(tangent1End: CGPoint(x: x, y: y), tangent2End: CGPoint(x: x, y: rect.maxY),
+                    radius: ZoneLook.labelJoinRadius)
+        path.addLine(to: CGPoint(x: x, y: rect.maxY))
+        return path
     }
 }
 

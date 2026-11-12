@@ -514,6 +514,8 @@ enum ZoneLook {
     static let labelTop: CGFloat = 9
     static let labelBottom: CGFloat = 5
     static let labelLineGap: CGFloat = 8
+    /// Where the label's left rule turns down into the zone bar.
+    static let labelJoinRadius: CGFloat = 6
 
     /// The Go to Zone chip after a compact row's name.
     static let chipHeight: CGFloat = 18
