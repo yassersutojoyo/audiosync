@@ -112,7 +112,9 @@ pub struct MenuKeys {
 
 impl MenuKeys {
     /// The window lost or gained the focus: a held Alt went to another window.
-    pub fn focus_changed(&mut self) {}
+    pub fn focus_changed(&mut self) {
+        self.alt_alone = false;
+    }
 
     pub fn key(
         &mut self,

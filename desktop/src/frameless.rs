@@ -77,6 +77,14 @@ impl WindowKeys {
                 self.mods = mods.state();
                 return None;
             }
+            WindowEvent::Focused(_) => {
+                self.menus.focus_changed();
+                return None;
+            }
+            // winit makes these up for keys held while the focus moves (Alt+Tab).
+            WindowEvent::KeyboardInput {
+                is_synthetic: true, ..
+            } => return None,
             WindowEvent::KeyboardInput { event, .. } => event,
             _ => return None,
         };
