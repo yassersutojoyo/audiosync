@@ -18435,5 +18435,42 @@ do {
           "scrolling title: a title at its start shows its first letter in full", "\(startStops)")
 }
 
+// MARK: Streaming on and off while a start or stop runs off the main thread (AppLifecycle.swift)
+do {
+    var flip = EngineTransition()
+    let flipStarts = flip.request(true)
+    let flipStartedNext = flip.finished()
+    check(flipStarts == .start && flipStartedNext == nil && flip.running && flip.request(true) == nil,
+          "engine transition: on starts once; asking for on again while it runs does nothing")
+    var coalesce = EngineTransition()
+    let coalesceFirst = coalesce.request(true)
+    let coalesceOff = coalesce.request(false)
+    let coalesceOn = coalesce.request(true)
+    let coalesceNext = coalesce.finished()
+    check(coalesceFirst == .start && coalesceOff == nil && coalesceOn == nil && coalesceNext == nil && coalesce.running,
+          "engine transition: off then on during a start coalesce into the start alone")
+    var stopDuringStart = EngineTransition()
+    _ = stopDuringStart.request(true)
+    let stopAsked = stopDuringStart.request(false)
+    let stopFollows = stopDuringStart.finished()
+    let stopEnds = stopDuringStart.finished()
+    check(stopAsked == nil && stopFollows == .stop && stopEnds == nil && !stopDuringStart.running,
+          "engine transition: a stop asked for during a start runs once the start ends, and streaming ends off")
+    var failedStart = EngineTransition()
+    _ = failedStart.request(true)
+    let failedNext = failedStart.finished(succeeded: false)
+    check(failedNext == nil && !failedStart.running && failedStart.inFlight == nil,
+          "engine transition: a start that fails ends off and is not tried again on its own")
+    var quitFlow = EngineTransition()
+    _ = quitFlow.request(true)
+    let quitAsked = quitFlow.quit()
+    let quitWaitsFirst = !quitFlow.stoppedForQuit
+    let quitStops = quitFlow.finished()
+    let quitStopEnds = quitFlow.finished()
+    check(quitAsked == nil && quitWaitsFirst && quitStops == .stop && quitStopEnds == nil
+            && quitFlow.stoppedForQuit && quitFlow.request(true) == nil,
+          "engine transition: quitting during a start waits for it, then stops, and no start follows")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
