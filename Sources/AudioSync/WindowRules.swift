@@ -1141,5 +1141,7 @@ enum SystemVolumeCue {
 
     /// The level the slider and button show: while the user holds the slider
     /// the device's reports wait, so a report of an earlier step can't pull it back.
-    static func shownLevel(read: Double?, held: Bool, shown: Double?) -> Double? { read }
+    static func shownLevel(read: Double?, held: Bool, shown: Double?) -> Double? {
+        held && read != nil ? shown ?? read : read
+    }
 }

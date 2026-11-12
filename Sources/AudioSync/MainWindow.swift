@@ -1960,7 +1960,9 @@ private struct SystemVolumePanel: View {
             HStack(spacing: 8) {
                 Slider(value: Binding(get: { (model.builtInVolume ?? level) * 100 },
                                       set: { model.setBuiltInVolume(id, $0 / 100) }),
-                       in: 0...100)
+                       in: 0...100, onEditingChanged: { model.holdBuiltInVolume(id, $0) })
+                    // A panel closed mid-drag never sees the release.
+                    .onDisappear { if model.builtInVolumeHeld { model.holdBuiltInVolume(id, false) } }
                     .controlSize(.small)
                     .focused(focus)
                     .accessibilityLabel(t.systemVolumeSlider(of: name))

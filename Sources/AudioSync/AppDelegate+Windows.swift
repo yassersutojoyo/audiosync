@@ -463,7 +463,7 @@ extension AppDelegate {
             self?.pushModel()
         }
         a.fixDeviceVolume = { [weak self] uid in self?.fixDeviceVolume(uid) }
-        a.setSystemVolume = { [weak self] uid, level in self?.setSystemVolume(uid, level) ?? false }
+        a.setSystemVolume = { [weak self] uid, level, save in self?.setSystemVolume(uid, level, save: save) ?? false }
         a.readBuiltInVolume = { [weak self] in self?.publishBuiltInVolume() }
         a.fixCalibrationVolume = { [weak self] in
             if let uid = self?.localReference { self?.fixDeviceVolume(uid) }
@@ -806,7 +806,9 @@ extension AppDelegate {
 
     /// The built-in speakers' macOS volume their row's button shows.
     func publishBuiltInVolume() {
-        publish(\.builtInVolume, localReference.flatMap { systemVolume($0) })
+        publish(\.builtInVolume, SystemVolumeCue.shownLevel(read: localReference.flatMap { systemVolume($0) },
+                                                             held: appModel.builtInVolumeHeld,
+                                                             shown: appModel.builtInVolume))
     }
 
     /// Sets one model value, only when it differs: every assignment to a

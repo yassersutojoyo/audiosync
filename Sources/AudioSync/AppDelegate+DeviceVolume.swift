@@ -46,13 +46,14 @@ extension AppDelegate {
     }
 
     /// The user set that volume on the output's slider: it is written to the
-    /// device and becomes the remembered level. False when the device refused it.
+    /// device and becomes the remembered level, stored when `save` (a drag
+    /// saves once, on release). False when the device refused it.
     @discardableResult
-    func setSystemVolume(_ uid: String, _ level: Double) -> Bool {
+    func setSystemVolume(_ uid: String, _ level: Double, save: Bool = true) -> Bool {
         let level = min(1, max(0, level))
         guard let device = localDevices[uid], deviceVolumes.setLevel(device.id, level) else { return false }
         localVolumeMemory.chosen(uid, level: level)
-        saveLocalVolumes()
+        if save { saveLocalVolumes() }
         return true
     }
 
