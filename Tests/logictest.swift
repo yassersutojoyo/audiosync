@@ -18480,5 +18480,28 @@ do {
           "capture teardown: a tap's destroy is stamped on the main thread before it moves to the background queue, so the whole system's wait after an app quits sees it at once")
 }
 
+do {
+    let unitSource = (try? String(contentsOfFile: "Sources/AudioSync/OutputRenderer.swift", encoding: .utf8)) ?? ""
+    let engineSource = (try? String(contentsOfFile: "Sources/AudioSync/SyncEngine.swift", encoding: .utf8)) ?? ""
+    func unitPart(_ source: String, _ head: String) -> String {
+        source.components(separatedBy: head).dropFirst().first?.components(separatedBy: "\n    }\n").first ?? ""
+    }
+    let haltBody = unitPart(unitSource, "private func halt(inline: Bool) {")
+    let handOff = haltBody.components(separatedBy: "Self.teardownQueue.async {").dropFirst().first ?? ""
+    // covers: S134
+    check(haltBody.contains("guard !inline") && handOff.contains("Self.tearDown(live, started: true, initialized: true)")
+            && handOff.contains("withExtendedLifetime((self, rendering))"),
+          "output stop: a halted unit is stopped and disposed of on a background queue, which keeps the output and its render target alive until then")
+    check(unitPart(unitSource, "    deinit {").contains("halt(inline: true)"),
+          "output stop: an output let go while running stops its unit before its memory goes")
+    let startBody = unitPart(unitSource, "func start(on device: AudioObjectID, captureRate: Double, delayMs: Double) throws {")
+    let waitAt = startBody.range(of: "Self.finishTeardowns()")
+    let makeAt = startBody.range(of: "Self.makeUnit()")
+    check(waitAt != nil && makeAt != nil && waitAt!.lowerBound < makeAt!.lowerBound,
+          "output start: a unit starts only once every earlier one queued for stopping is gone, so a quick off and on never plays two units of one output")
+    check(unitPart(engineSource, "func finishStopping() {").contains("OutputRenderer.finishTeardowns()"),
+          "output stop: quitting waits for the units still being stopped off the main thread")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
