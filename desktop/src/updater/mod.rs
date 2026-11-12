@@ -6,6 +6,7 @@
 pub mod appcast;
 pub mod appimage;
 pub mod archive;
+pub mod elevated;
 pub mod fetch;
 pub mod files;
 pub mod flow;
@@ -832,6 +833,10 @@ pub fn for_this_exe(log: DebugLog) -> Option<Updater> {
         max_download: flow::MAX_DOWNLOAD,
         log,
         launch: Arc::new(relaunch::ProcessLaunch),
+        #[cfg(windows)]
+        elevate: Arc::new(elevated::RunAs),
+        #[cfg(not(windows))]
+        elevate: Arc::new(elevated::Never),
         start_wait: relaunch::START_WAIT,
         pause: Arc::new(files::Pause::real()),
     }))

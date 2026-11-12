@@ -29,7 +29,7 @@ AppSupportURL=https://github.com/yassersutojoyo/audiosync/issues
 AppUpdatesURL=https://github.com/yassersutojoyo/audiosync/releases
 ; "Only for me" needs no administrator: {autopf} is then %LOCALAPPDATA%\Programs,
 ; where scripts/install.ps1 installs. "All users" asks for administrator once and
-; goes to Program Files, where the app's own updater can't write (docs/ENGINE_SPEC.md S302).
+; goes to Program Files, where each in-app update asks once more (docs/ENGINE_SPEC.md S460).
 PrivilegesRequired={#DefaultInstallMode}
 PrivilegesRequiredOverridesAllowed=dialog
 DefaultDirName={autopf}\AudioSync
@@ -49,7 +49,15 @@ OutputBaseFilename=AudioSync-Setup-arm64
 #else
   #error Arch must be x64 or arm64
 #endif
-WizardStyle=modern
+WizardStyle=modern dynamic
+; The app icon on the last page and in the corner of the others, on the app's
+; window background (brand/tokens.json "background").
+WizardImageFile=..\res\audiosync-256.png
+WizardSmallImageFile=..\res\audiosync-256.png
+WizardImageStretch=no
+WizardImageBackColor=#F1F7F6
+WizardImageBackColorDynamicDark=#1E1E1E
+InfoBeforeFile=privacy.txt
 Compression=lzma2
 SolidCompression=yes
 ; A running copy holds audiosync.exe; install.ps1 stops it too. The app is
@@ -66,7 +74,7 @@ Name: "{autoprograms}\AudioSync"; Filename: "{app}\audiosync.exe"; WorkingDir: "
 
 [Run]
 ; postinstall entries run as the user who started Setup, never elevated.
-Filename: "{app}\audiosync.exe"; Description: "{cm:LaunchProgram,AudioSync}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\audiosync.exe"; Description: "Open AudioSync"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; What the app's updater leaves next to the files above (S301, S304).
@@ -74,3 +82,23 @@ Type: files; Name: "{app}\audiosync.exe.bak"
 Type: files; Name: "{app}\audiosync.exe.new"
 Type: files; Name: "{app}\THIRD-PARTY-NOTICES.txt.bak"
 Type: files; Name: "{app}\THIRD-PARTY-NOTICES.txt.new"
+
+[Messages]
+SetupWindowTitle=Install %1
+PrivilegesRequiredOverrideTitle=Who uses AudioSync?
+PrivilegesRequiredOverrideInstruction=Install for everyone or only for you
+PrivilegesRequiredOverrideText1=For everyone on this PC needs an administrator now, and once more for each update. Only for you needs neither.
+PrivilegesRequiredOverrideText2=Only for you needs no administrator. For everyone on this PC needs one now, and once more for each update.
+PrivilegesRequiredOverrideAllUsers=For &everyone on this PC
+PrivilegesRequiredOverrideAllUsersRecommended=For &everyone on this PC
+PrivilegesRequiredOverrideCurrentUser=Only for &me
+WizardInfoBefore=Privacy
+InfoBeforeLabel=What AudioSync sends and what it keeps on this PC.
+InfoBeforeClickLabel=Select Next to continue.
+WizardReady=Ready to install
+ReadyLabel1=AudioSync is ready to install.
+ReadyLabel2b=Select Install to continue.
+FinishedHeadingLabel=AudioSync is installed
+FinishedLabelNoIcons=You can open it now.
+FinishedLabel=Find it in the Start menu, or open it now.
+ClickFinish=Select Finish to close Setup.

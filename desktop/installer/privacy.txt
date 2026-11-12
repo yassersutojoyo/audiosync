@@ -1,0 +1,9 @@
+AudioSync has no account, no analytics and no crash reporter.
+
+It plays audio only on the speakers you turn on. It looks for network speakers on your own network, and the Web Remote stays off until you turn it on.
+
+The one request it makes past your network on its own is the update check: at launch and once a day it reads the release list on GitHub to see whether a newer version is out. Nothing downloads until you say yes. To turn the check off, open AudioSync and choose File > Check for Updates Automatically.
+
+Your settings and speaker pairings stay on this computer, in %LOCALAPPDATA%\AudioSync.
+
+The full privacy note: https://github.com/yassersutojoyo/audiosync/blob/main/PRIVACY.md
