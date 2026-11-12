@@ -1439,6 +1439,15 @@ struct SpeakerRow: View {
 
     private var showSync: Bool { model.delayPanels.isOpen(speaker.id) }
 
+    /// The built-in speakers' macOS volume, nil on every other row and while it isn't settable.
+    private var systemLevel: Double? {
+        SystemVolumeCue.shown(isReference: speaker.isReference, level: model.builtInVolume) ? model.builtInVolume : nil
+    }
+
+    private var systemPanelOpen: Bool {
+        SystemVolumeCue.panelOpen(toggled: showSync, isReference: speaker.isReference, level: model.builtInVolume)
+    }
+
     private var state: SpeakerState { model.state(of: speaker) }
 
     /// Keyboard focus on the volume slider and on the device volume fix: the
@@ -1447,6 +1456,7 @@ struct SpeakerRow: View {
     @FocusState private var deviceVolumeFixFocused: Bool
     /// The delay value, which takes the focus back when its panel closes.
     @FocusState private var delayFocused: Bool
+    @FocusState private var systemSliderFocused: Bool
     /// The switch, which takes the focus when a neighbouring row is hidden.
     @FocusState private var switchFocused: Bool
     /// The volume slider is held; a row closed mid-drag never sees the release.
@@ -1525,6 +1535,10 @@ struct SpeakerRow: View {
                                 .modifier(Reveal(shown: oneStepShown || delayFocused || showSync
                                                      || (model.savedDelay(of: speaker.id) ?? 0) != 0))
                         }
+                        if let level = systemLevel {
+                            SystemVolumeButton(model: model, id: speaker.id, name: speaker.name, level: level,
+                                               expanded: systemPanelOpen, focus: $delayFocused)
+                        }
                         optionsMenu(t)
                             .focused($optionsFocused)
                             .modifier(Reveal(shown: oneStepShown || optionsFocused))
@@ -1591,6 +1605,19 @@ struct SpeakerRow: View {
                 }
                 .modifier(DisclosedPane(open: showSync, gap: 8))
             }
+            if let level = systemLevel {
+                SystemVolumePanel(model: model, id: speaker.id, name: speaker.name, level: level,
+                                  focus: $systemSliderFocused)
+                    .padding(.leading, 44)
+                    .modifier(DisclosedPane(open: systemPanelOpen, gap: 8))
+            }
+        }
+        .onChange(of: systemPanelOpen) { _, open in
+            // A switched-off output isn't followed, so its level is read as the panel opens.
+            if open { model.actions.readBuiltInVolume() } else {
+                model.builtInVolumeRefused = false
+                if systemSliderFocused { returnDelayFocus($delayFocused) }
+            }
         }
         .onChange(of: showSync) { _, open in
             if !open, model.draft(for: speaker.id).fieldFocused || model.delayFocusLeftByClick == speaker.id {
@@ -1613,8 +1640,8 @@ struct SpeakerRow: View {
         .onHover { hover.isHovered = $0 }
         // A click on the row's box, between its dividers and its open
         // panel's blank space included, works like its delay value; a row
-        // without one (AirPlay, the reference) is outside every panel. The
-        // delay value stays the keyboard's way in.
+        // without one (AirPlay, a reference with no settable macOS volume)
+        // is outside every panel. The value stays the keyboard's way in.
         .contentShape(Rectangle())
         .onTapGesture { rowTapped() }
         .contextMenu { menuItems(t) }
@@ -1624,7 +1651,8 @@ struct SpeakerRow: View {
     private var oneStepShown: Bool { hover.isHovered || voiceOver }
 
     private func rowTapped() {
-        if speaker.offsetMs != nil { model.toggleDelayPanel(speaker.id) } else { model.closeDelayPanels() }
+        if speaker.offsetMs != nil || systemLevel != nil { model.toggleDelayPanel(speaker.id) }
+        else { model.closeDelayPanels() }
     }
 
     @ViewBuilder
@@ -1877,6 +1905,78 @@ private struct DelayValueButton: View {
         .onChange(of: draft.applied) { _, _ in
             guard draft.fieldFocused, let shown = model.savedDelayText(of: id) else { return }
             AccessibilityNotification.Announcement(t.delaySet(label, to: shown)).post()
+        }
+    }
+}
+
+/// The built-in speakers' macOS volume, where other local rows show their
+/// delay value; it opens and closes the panel holding that volume's slider.
+private struct SystemVolumeButton: View {
+    @ObservedObject var model: AppModel
+    let id: String
+    let name: String
+    let level: Double
+    let expanded: Bool
+    var focus: FocusState<Bool>.Binding
+
+    var body: some View {
+        let t = model.text
+        let percent = SystemVolumeCue.percent(level)
+        Button {
+            model.toggleDelayPanel(id)
+        } label: {
+            Text(t.systemVolumeValue(percent))
+                .font(.subheadline)
+                .monospacedDigit()
+                // Small text: the readable teal (≥ 4.5:1), not the brand teal.
+                .foregroundStyle(expanded ? Brand.tealText : Brand.secondaryText)
+        }
+        .buttonStyle(.plain)
+        .focused(focus)
+        .help(t.systemVolumeHelp(name: name))
+        .accessibilityLabel(t.systemVolumeButton)
+        .accessibilityValue(t.percent(percent))
+        .accessibilityHint(t.systemVolumeHelp(name: name))
+    }
+}
+
+/// The built-in speakers' panel: their macOS volume and no delay controls.
+/// The slider follows the device, so a change in Control Center moves it.
+private struct SystemVolumePanel: View {
+    @ObservedObject var model: AppModel
+    let id: String
+    let name: String
+    let level: Double
+    var focus: FocusState<Bool>.Binding
+
+    var body: some View {
+        let t = model.text
+        let percent = SystemVolumeCue.percent(level)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(t.systemVolumeTitle)
+                .font(.caption)
+                .foregroundStyle(Brand.secondaryText)
+                .accessibilityHidden(true)
+            HStack(spacing: 8) {
+                Slider(value: Binding(get: { (model.builtInVolume ?? level) * 100 },
+                                      set: { model.setBuiltInVolume(id, $0 / 100) }),
+                       in: 0...100)
+                    .controlSize(.small)
+                    .focused(focus)
+                    .accessibilityLabel(t.systemVolumeSlider(of: name))
+                    .accessibilityValue(t.percent(percent))
+                Text(t.percent(percent))
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(Brand.secondaryText)
+                    .frame(width: 34, alignment: .trailing)
+                    .accessibilityHidden(true)
+            }
+            if model.builtInVolumeRefused {
+                Text(t.systemVolumeRefused)
+                    .font(.caption)
+                    .foregroundStyle(Brand.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }

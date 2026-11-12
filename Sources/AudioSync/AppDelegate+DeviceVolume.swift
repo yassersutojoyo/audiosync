@@ -15,6 +15,7 @@ extension AppDelegate {
             let before = self.localVolumeMemory
             self.localVolumeMemory.reported(uid, level: level)
             if self.localVolumeMemory != before { self.saveLocalVolumes() }
+            if uid == self.localReference { self.publishBuiltInVolume() }
         }
         return volumes
     }

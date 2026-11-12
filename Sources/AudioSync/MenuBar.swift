@@ -230,6 +230,10 @@ final class AppModel: ObservableObject {
         var retryAirPlay: () -> Void = {}
         /// The device volume fix the user clicked under a local output (S197).
         var fixDeviceVolume: (String) -> Void = { _ in }
+        /// Sets a local output's macOS volume, 0 to 1; false when its device refused it.
+        var setSystemVolume: (String, Double) -> Bool = { _, _ in false }
+        /// Reads the built-in speakers' macOS volume again: one switched off isn't followed.
+        var readBuiltInVolume: () -> Void = {}
         /// The same fix on the calibration reference, from "Before you start".
         var fixCalibrationVolume: () -> Void = {}
         /// Calibrate this local speaker with the microphone (S232), and cancel it.
@@ -323,6 +327,11 @@ final class AppModel: ObservableObject {
     /// The device volume hints of the switched-on local outputs, by device
     /// UID: only outputs whose macOS volume is low or muted (S196).
     @Published var deviceVolumes: [String: DeviceVolumeHint] = [:]
+    /// The macOS volume of the built-in speakers (the reference), 0 to 1;
+    /// nil when their device has no settable volume, so their row has no button.
+    @Published var builtInVolume: Double?
+    /// Their device turned down the last level set on their panel's slider.
+    @Published var builtInVolumeRefused = false
     /// The microphone calibration under way or the last one's result (S232).
     @Published var calibration = CalibrationStatus()
     /// Calibrate All Speakers: its run, sheet and status (S235 to S240).
@@ -476,6 +485,13 @@ final class AppModel: ObservableObject {
     func deviceVolume(of speaker: Speaker) -> DeviceVolumeHint? {
         DeviceVolumes.hint(for: speaker.id, airPlay: speaker.isAirPlay || speaker.isCast, enabled: speaker.enabled,
                            in: deviceVolumes)
+    }
+
+    /// The built-in speakers' panel slider moved to `level`, 0 to 1.
+    func setBuiltInVolume(_ id: String, _ level: Double) {
+        let taken = actions.setSystemVolume(id, level)
+        builtInVolumeRefused = !taken
+        if taken { builtInVolume = level }
     }
 
     /// A click on a speaker's switch, whatever kind it is; the web remote's
