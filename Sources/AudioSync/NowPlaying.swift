@@ -124,6 +124,8 @@ final class NowPlayingMonitor {
         }
         /// Why the last call dropped the track shown; nil when it didn't.
         private(set) var dropped: Drop?
+        /// Seconds the empty readings behind the last drop spanned; 0 for a drop at the first one.
+        private(set) var droppedAfter: TimeInterval = 0
 
         /// The track to show after a reading: `reading` when it found one.
         /// Else `last` goes at once when its player quit (or is no longer a
@@ -136,6 +138,7 @@ final class NowPlayingMonitor {
         mutating func next(reading: Track?, last: Track?, lastPlayerRuns: Bool,
                            lastPlayer: Empty = .unreadable, readAt: TimeInterval = 0) -> Track? {
             dropped = nil
+            droppedAfter = 0
             guard reading == nil, let last else {
                 inARow = 0
                 return reading
@@ -153,6 +156,7 @@ final class NowPlayingMonitor {
                     inARow += 1
                     if readAt - firstEmptyAt < Self.dropSpan { return last }
                     dropped = lastPlayer == .playingNameless ? .playingNameless(inARow) : .unreadable(inARow)
+                    droppedAfter = readAt - firstEmptyAt
                 }
             }
             inARow = 0
@@ -533,13 +537,18 @@ final class NowPlayingMonitor {
                 if self.isRunning { self.reading = next }
                 let promised = self.pending.reconcile(next, readAt: readAt)
                 let last = self.track
-                let lastPlayerRuns = last.map { self.candidates().contains($0.bundleID) && Self.isRunning($0.bundleID) }
-                    ?? false
+                let lastIsCandidate = last.map { self.candidates().contains($0.bundleID) } ?? false
+                let lastRuns = last.map { Self.isRunning($0.bundleID) } ?? false
+                let lastPlayerRuns = lastIsCandidate && lastRuns
                 let lastPlayer = last.flatMap { empties[$0.bundleID] } ?? .unreadable
                 let shown = self.emptyReadings.next(reading: promised, last: last, lastPlayerRuns: lastPlayerRuns,
                                                     lastPlayer: lastPlayer, readAt: readAt)
                 if let drop = self.emptyReadings.dropped, let last {
-                    DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason))")
+                    DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason)) after "
+                                   + String(format: "%.1f s", self.emptyReadings.droppedAfter)
+                                   + "; read: \(empties[last.bundleID].map { "\($0)" } ?? "none")"
+                                   + ", candidate: \(lastIsCandidate), running: \(lastRuns)"
+                                   + ", was playing: \(last.isPlaying)")
                 }
                 self.played.note(shown: shown, last: last, dropped: self.emptyReadings.dropped != nil)
                 self.publish(shown, reading: true)
