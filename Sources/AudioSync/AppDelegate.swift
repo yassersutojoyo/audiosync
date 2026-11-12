@@ -191,6 +191,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var presetNotice: PresetNotice.Cause?
     /// The preset last recalled or saved, until `PresetInUse` lets it go.
     var chosenPreset: String?
+    /// The preset recalled, saved or updated last; only another such choice
+    /// replaces it, so the Presets row's height never follows the room (`ChoiceLine`).
+    var pickedPreset: String?
     var presetsListOpen: Bool {
         didSet { if presetsListOpen != oldValue { store.save(presetsListOpen: presetsListOpen) } }
     }

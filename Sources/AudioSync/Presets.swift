@@ -182,8 +182,8 @@ struct PresetRow: Identifiable, Equatable {
     let name: String
     /// The preset in use plays exactly as saved (S253, S264).
     var current = false
-    /// The preset in use no longer plays exactly as saved (S264).
-    var edited = false
+    /// Recalled, saved or updated last, so the Presets row names it (`ChoiceLine`).
+    var picked = false
     var speakers = 0
     /// The master volume it holds, 0…100.
     var master: Double = 0
@@ -253,11 +253,12 @@ extension PresetCore {
         presets.first { matches($0, scene) }?.id
     }
 
-    /// The rows the windows show, the preset in use marked (`PresetInUse`).
-    static func rows(_ presets: [SpeakerPreset], _ scene: PresetScene, chosen: String? = nil) -> [PresetRow] {
+    /// The rows the windows show, the preset in use (`PresetInUse`) and the one picked last marked.
+    static func rows(_ presets: [SpeakerPreset], _ scene: PresetScene, chosen: String? = nil,
+                     picked: String? = nil) -> [PresetRow] {
         let inUse = PresetInUse.resolve(chosen: chosen, presets: presets, scene: scene)
         return presets.map {
-            PresetRow(id: $0.id, name: $0.name, current: inUse == .exact($0.id), edited: inUse == .edited($0.id),
+            PresetRow(id: $0.id, name: $0.name, current: inUse == .exact($0.id), picked: $0.id == picked,
                       speakers: $0.members.count, master: $0.master)
         }
     }
@@ -504,7 +505,4 @@ enum PresetMenu {
 enum PresetPanel {
     /// Hidden with no preset: the empty state lives in the window.
     static func showsRow(_ rows: [PresetRow]) -> Bool { !rows.isEmpty }
-
-    /// The preset in use, exact or edited; nil for "Choose a Preset".
-    static func inUse(_ rows: [PresetRow]) -> PresetRow? { rows.first { $0.current || $0.edited } }
 }

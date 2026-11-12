@@ -849,6 +849,8 @@ enum PanelLayout {
     static let presetInset: CGFloat = 9.5, rowInset: CGFloat = 5
     /// What a borderless menu draws left of its label and right of its chevron.
     static let menuLeadingInset: CGFloat = 2.5, menuChevronInset: CGFloat = 8
+    /// The preset row's label after its 18 pt icon and 9 pt gap, where the preset's name starts under it.
+    static let presetNameColumn: CGFloat = 18 + 9
     /// The now playing card's padding.
     static let cardPadding: CGFloat = 10
 
@@ -1229,6 +1231,50 @@ enum PresetInUse: Equatable {
             return PresetCore.matches(preset, scene) ? .exact(chosen) : .edited(chosen)
         }
         return PresetCore.current(presets, scene).map(PresetInUse.exact) ?? .notInUse
+    }
+}
+
+/// A row that opens a choice: its name, then the choice in use
+/// as a grey second line, or a plain row while none is.
+enum ChoiceLine {
+    /// The Presets row's: the preset recalled, saved or updated last, until it is deleted.
+    static func preset(_ rows: [PresetRow]) -> String? { rows.first(where: \.picked)?.name }
+
+    /// The Equalizer row's: the curve while it is on, Custom once shaped by hand.
+    static func equalizer(on: Bool, curve: String) -> String? { on ? curve : nil }
+
+    /// Whether the row takes the new line's height. A band moved by hand turns the
+    /// curve to `adjusted`, which keeps the height until a choice is picked or cleared.
+    static func resizes(from old: String?, to new: String?, adjusted: String?) -> Bool {
+        old != new && (old == nil || new == nil || new != adjusted)
+    }
+}
+
+/// What a choice's second line shows (`ChoiceLineView`).
+struct ChoiceLineHold: Equatable {
+    /// The line whose height the row keeps.
+    var held: String?
+    var shown: String?
+    /// Kept while the line folds away, so it doesn't empty first.
+    var last: String
+
+    init(_ line: String?) {
+        held = line
+        shown = line
+        last = line ?? ""
+    }
+
+    /// A choice picked or cleared: the row takes the line's height.
+    mutating func set(_ line: String?) {
+        if let line { last = line }
+        held = line
+        shown = line
+    }
+
+    /// The text changed at the same height, as a curve shaped by hand does.
+    mutating func adjust(_ line: String?) {
+        if let line { last = line }
+        shown = line
     }
 }
 

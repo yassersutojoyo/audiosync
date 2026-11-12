@@ -1342,18 +1342,14 @@ struct UIStrings {
     /// The Presets submenu while there is none.
     let noPresets = "No Presets"
     let presetsEmpty = "No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset."
-    /// The panel's preset row while no preset is current.
+    /// VoiceOver, on the Presets rows while no preset is picked.
     let choosePreset = "Choose a Preset"
-    /// Beside the preset in use once the room no longer plays it as saved (S264).
-    let presetEdited = "Edited"
-    /// VoiceOver, on the list row of the preset that plays as saved.
+    /// VoiceOver, on the list row of the preset the Presets row names.
     let presetInUseMark = "In use"
     /// A preset list row's second line: what the preset holds.
     func presetSummary(speakers: Int, master: Double) -> String {
         "\(speakers) \(speakers == 1 ? "speaker" : "speakers"), master \(Int(master.rounded()))%"
     }
-    /// The Presets row's VoiceOver value while a preset is in use.
-    func presetInUse(_ name: String, edited: Bool) -> String { edited ? "\(name), edited" : name }
     let showPresetList = "Show presets"
     let hidePresetList = "Hide presets"
     /// What VoiceOver says after Save, Update and Delete.
@@ -2001,9 +1997,9 @@ struct UIStrings {
           list. Delays and the preamp aren't saved. To recall a preset, click
           it in that list or in the menu bar panel, or press Control-Command-1
           to 9 for the first nine (they're also in Window > Presets). The
-          preset you chose last stays named beside Presets, marked Edited once
-          what plays differs from it. Speakers you hid are never saved in a
-          preset, and recalling one leaves them hidden. To rename, update or
+          preset you chose last stays named under Presets until you choose
+          another or delete it. Speakers you hid are never saved in a preset,
+          and recalling one leaves them hidden. To rename, update or
           delete a preset, use its ⋯ button in the list.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           Auto-Connect When Available. AudioSync then turns it on whenever it

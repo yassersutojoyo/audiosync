@@ -552,29 +552,19 @@ struct MainView: View {
     }
 
     private func equalizerRow(_ t: UIStrings) -> some View {
-        let name = model.equalizerOn ? model.equalizerCurve : t.off
-        return Button { model.actions.openEqualizer() } label: {
-            HStack(spacing: 8) {
+        Button { model.actions.openEqualizer() } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 QuickRowIcon("slider.vertical.3")
-                Text(t.equalizer).lineLimit(1).layoutPriority(1)
-                Spacer(minLength: 8)
-                // Right-aligned against the chevron, so a long curve name takes the room before it.
-                HStack(spacing: 4) {
-                    // The teal dot is the row's one state mark: the curve is on.
-                    if model.equalizerOn {
-                        Circle().fill(accent).frame(width: 6, height: 6).transition(.opacity)
-                    }
-                    // Faded like the preset in use's name, so the two rows read as a pair.
-                    ScrollingTitle(text: name)
-                        .foregroundStyle(Brand.secondaryText)
-                        .help(name)
-                        .id(name)
-                        .transition(.opacity)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Brand.secondaryText)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(t.equalizer).lineLimit(1)
+                    ChoiceLineView(line: ChoiceLine.equalizer(on: model.equalizerOn, curve: model.equalizerCurve),
+                                   adjusted: t.equalizerCustom)
                 }
-                .animation(MainMotion.names(reduceMotion: reduceMotion), value: name)
+                .padding(.vertical, ChoiceLineView.rowPadding)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Brand.secondaryText)
             }
             .contentShape(Rectangle())
         }
@@ -878,7 +868,7 @@ private struct SectionTitle: View {
     }
 }
 
-/// The Presets row (S259): the preset in use beside its name, and a
+/// The Presets row (S259): the preset picked last under its name, and a
 /// list that folds open in place, as a zone does, to recall, save, rename,
 /// update and delete.
 private struct PresetsRow: View {
@@ -888,15 +878,18 @@ private struct PresetsRow: View {
 
     var body: some View {
         let t = model.text
-        let inUse = PresetPanel.inUse(model.presets)
+        let line = ChoiceLine.preset(model.presets)
         let open = model.presetsListOpen
         VStack(alignment: .leading, spacing: 0) {
             Button { fold() } label: {
-                HStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     QuickRowIcon("square.stack.3d.up")
-                    Text(t.presets).lineLimit(1).layoutPriority(1)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(t.presets).lineLimit(1)
+                        ChoiceLineView(line: line)
+                    }
+                    .padding(.vertical, ChoiceLineView.rowPadding)
                     Spacer(minLength: 8)
-                    PresetInUseLabel(row: inUse, text: t)
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Brand.secondaryText)
@@ -908,7 +901,7 @@ private struct PresetsRow: View {
             .modifier(QuickRow())
             .help(open ? t.hidePresetList : t.showPresetList)
             .accessibilityLabel(t.presets)
-            .accessibilityValue(inUse.map { t.presetInUse($0.name, edited: $0.edited) } ?? t.choosePreset)
+            .accessibilityValue(line ?? t.choosePreset)
             .accessibilityHint(open ? t.hidePresetList : t.showPresetList)
             PresetList(model: model, draft: draft)
                 .modifier(DisclosedPane(open: open))
@@ -923,57 +916,13 @@ private struct PresetsRow: View {
     }
 }
 
-/// The preset in use: a teal dot while it plays as saved, an Edited mark once
-/// it doesn't, so color is never the only sign. Only opacity moves.
-private struct PresetInUseLabel: View {
-    let row: PresetRow?
-    let text: UIStrings
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if let row {
-                if row.current {
-                    Circle().fill(accent).frame(width: 6, height: 6).transition(.opacity)
-                }
-                Text(row.name)
-                    .lineLimit(1)
-                    .foregroundStyle(Brand.secondaryText)
-                    .id(row.id)
-                    .transition(.opacity)
-                if row.edited {
-                    PresetEditedMark(text: text).transition(.opacity)
-                }
-            }
-        }
-        .animation(MainMotion.names(reduceMotion: reduceMotion), value: row)
-        // The row's VoiceOver value says it.
-        .accessibilityHidden(true)
-    }
-}
-
-/// "Edited" in a hairline box, beside a preset that no longer plays as saved.
-private struct PresetEditedMark: View {
-    let text: UIStrings
-
-    var body: some View {
-        Text(text.presetEdited)
-            .font(.system(size: 10))
-            .foregroundStyle(Brand.secondaryText)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
-            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
-            .fixedSize()
-    }
-}
-
 /// The preset list's sizes: five rows show, more scroll inside the card.
 private enum PresetListLayout {
     static let visibleRows = 5
     static let rowHeight: CGFloat = 40
-    /// The dot and its gap, so every name starts on the Presets label's column.
-    static let dotColumn: CGFloat = 14
-    static let indent = MainColumns.rowInset + 28 - dotColumn
+    /// So every name starts on the Presets label's column.
+    static let nameColumn: CGFloat = 14
+    static let indent = MainColumns.rowInset + 28 - nameColumn
     /// Half a row past five, so the cut row says the list goes on.
     static let scrollHeight = rowHeight * (CGFloat(visibleRows) + 0.5)
     static let saveRowID = "save-as-preset"
@@ -992,7 +941,7 @@ private struct PresetList: View {
                     .font(.caption)
                     .foregroundStyle(Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, PresetListLayout.dotColumn)
+                    .padding(.leading, PresetListLayout.nameColumn)
                     .padding(.vertical, 6)
             }
             ForEach(model.presets) { row in
@@ -1026,7 +975,7 @@ private struct PresetList: View {
     private func saveRow(_ t: UIStrings) -> some View {
         if draft.target == PresetNameDraft.Target.new {
             PresetNameField(draft: draft, target: .new, placeholder: t.presetPlaceholder, text: t)
-                .padding(.leading, PresetListLayout.dotColumn)
+                .padding(.leading, PresetListLayout.nameColumn)
                 .frame(minHeight: PresetListLayout.rowHeight)
                 .id(PresetListLayout.saveRowID)
         } else {
@@ -1037,7 +986,7 @@ private struct PresetList: View {
             }
             .buttonStyle(.plain)
             .contentShape(.focusEffect, RoundedRectangle(cornerRadius: 6))
-            .padding(.leading, PresetListLayout.dotColumn)
+            .padding(.leading, PresetListLayout.nameColumn)
             .id(PresetListLayout.saveRowID)
         }
         if draft.needsSpeakers && !model.presetsCanSave {
@@ -1045,7 +994,7 @@ private struct PresetList: View {
                 .font(.caption)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, PresetListLayout.dotColumn)
+                .padding(.leading, PresetListLayout.nameColumn)
                 .padding(.bottom, 6)
         }
     }
@@ -1077,18 +1026,12 @@ private struct PresetListRow: View {
     var body: some View {
         let t = model.text
         HStack(spacing: 8) {
-            Circle().fill(accent).frame(width: 6, height: 6)
-                .opacity(row.current ? 1 : 0)
-                .accessibilityHidden(true)
             if draft.target == PresetNameDraft.Target.rename(row.id) {
                 PresetNameField(draft: draft, target: .rename(row.id), placeholder: row.name, text: t)
             } else {
                 Button { model.actions.recallPreset(row.id) } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(row.name).lineLimit(1)
-                            if row.edited { PresetEditedMark(text: t) }
-                        }
+                        Text(row.name).lineLimit(1)
                         Text(t.presetSummary(speakers: row.speakers, master: row.master))
                             .font(.caption)
                             .foregroundStyle(Brand.secondaryText)
@@ -1115,6 +1058,7 @@ private struct PresetListRow: View {
                 .modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))
             }
         }
+        .padding(.leading, PresetListLayout.nameColumn)
         .padding(.vertical, 4)
         .padding(.trailing, 4)
         .frame(minHeight: PresetListLayout.rowHeight)
@@ -1124,7 +1068,7 @@ private struct PresetListRow: View {
     }
 
     private func value(_ t: UIStrings) -> String {
-        let state: String? = row.current ? t.presetInUseMark : row.edited ? t.presetEdited : nil
+        let state: String? = row.picked ? t.presetInUseMark : nil
         let summary = t.presetSummary(speakers: row.speakers, master: row.master)
         return state.map { "\($0), \(summary)" } ?? summary
     }
@@ -1221,8 +1165,8 @@ struct QuickRowIcon: View {
     }
 }
 
-/// A left-column row below the hero: one fixed height and gap, so the rows read as one list,
-/// with a faint fill under the pointer.
+/// A left-column row below the hero: one height and gap, so the rows read as one list, taller
+/// only by a choice's second line (`ChoiceLineView`), with a faint fill under the pointer.
 struct QuickRow: ViewModifier {
     static let height: CGFloat = 28
     static let gap: CGFloat = 6
@@ -1230,7 +1174,7 @@ struct QuickRow: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .frame(height: QuickRow.height)
+            .frame(minHeight: QuickRow.height)
             .padding(.horizontal, MainColumns.rowInset)
             .background(RoundedRectangle(cornerRadius: 8)
                 .fill(Color.primary.opacity(hover.isHovered ? 0.05 : 0)))
@@ -1238,6 +1182,66 @@ struct QuickRow: ViewModifier {
             .animation(hover.isHovered ? .linear(duration: 0.08) : nil, value: hover.isHovered)
             .onHover { hover.isHovered = $0 }
     }
+}
+
+/// The grey second line of a row that opens a choice (`ChoiceLine`). It folds
+/// in and out on the main window's fold, or on `fold` (the panel's, which
+/// resizes the panel with it), and keeps its height while a band moved by hand
+/// turns the curve to `adjusted`.
+struct ChoiceLineView: View {
+    /// Above the row's name and below its line, so a plain row keeps `QuickRow.height`.
+    static let rowPadding: CGFloat = 6
+    let line: String?
+    var adjusted: String?
+    var fold: ((() -> Void) -> Void)?
+    @StateObject private var state: ChoiceLineState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(line: String?, adjusted: String? = nil, fold: ((() -> Void) -> Void)? = nil) {
+        self.line = line
+        self.adjusted = adjusted
+        self.fold = fold
+        _state = StateObject(wrappedValue: ChoiceLineState(line))
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            text(state.hold.held ?? state.hold.last).hidden()
+            text(state.hold.shown ?? state.hold.last)
+                .id(state.hold.shown ?? state.hold.last)
+                .transition(.opacity)
+        }
+        .animation(MainMotion.names(reduceMotion: reduceMotion), value: state.hold.shown)
+        .modifier(DisclosedPane(open: state.hold.held != nil))
+        // The row's VoiceOver value says it.
+        .accessibilityHidden(true)
+        .onChange(of: line) { _, new in
+            guard ChoiceLine.resizes(from: state.hold.held, to: new, adjusted: adjusted) else {
+                state.hold.adjust(new)
+                return
+            }
+            if let fold {
+                fold { state.hold.set(new) }
+            } else {
+                withAnimation(AppModel.delayPanelMotion(reduceMotion: reduceMotion)) { state.hold.set(new) }
+            }
+        }
+    }
+
+    private func text(_ line: String) -> some View {
+        Text(line)
+            .font(.system(size: 11))
+            .foregroundStyle(Brand.secondaryText)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+@MainActor
+final class ChoiceLineState: ObservableObject {
+    @Published var hold: ChoiceLineHold
+
+    init(_ line: String?) { hold = ChoiceLineHold(line) }
 }
 
 /// A control that waits one step away: it slides 4 pt in and shows on hover

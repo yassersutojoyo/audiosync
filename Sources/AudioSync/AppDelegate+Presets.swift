@@ -25,7 +25,7 @@ extension AppDelegate {
 
     /// The rows the windows show, worked out again on every push (S264).
     func presetSnapshot() -> [PresetRow] {
-        PresetCore.rows(presets, presetScene(), chosen: chosenPreset)
+        PresetCore.rows(presets, presetScene(), chosen: chosenPreset, picked: pickedPreset)
     }
 
     // MARK: - Recall
@@ -68,6 +68,7 @@ extension AppDelegate {
         DebugTrace.log("[AudioSync] preset \"\(preset.name)\" recalled (\(plan.action)), \(leftOff.count) left off")
         // Chosen even when nothing changes: the room may already play it.
         chosenPreset = id
+        pickedPreset = id
         guard plan.action != .nothing else {
             showPresetNotice(preset, leftOff: leftOff, nothingChanged: true)
             pushModel()
@@ -192,6 +193,7 @@ extension AppDelegate {
         }
         presets = saved
         chosenPreset = saved.last?.id
+        pickedPreset = saved.last?.id
         pushModel()
         AccessibilityNotification.Announcement(text.presetSaved(name)).post()
     }
@@ -223,6 +225,7 @@ extension AppDelegate {
         }
         presets = updated
         chosenPreset = id
+        pickedPreset = id
         pushModel()
         AccessibilityNotification.Announcement(text.presetUpdated(name)).post()
     }
@@ -232,6 +235,7 @@ extension AppDelegate {
     func deletePreset(_ id: String) {
         guard let name = presets.first(where: { $0.id == id })?.name else { return }
         presets = PresetEdit.deleting(id, from: presets)
+        if pickedPreset == id { pickedPreset = nil }
         if presetNotice?.presetID == id { clearPresetNotice() }
         pushModel()
         AccessibilityNotification.Announcement(text.presetDeleted(name)).post()

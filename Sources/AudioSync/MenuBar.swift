@@ -2469,51 +2469,51 @@ struct SourcePicker: View {
 }
 
 /// The panel's preset row (S260): recall only, the current one checked, the
-/// preset in use named with its Edited mark (S264). Choosing one leaves the
+/// preset picked last named under it (`ChoiceLine`). Choosing one leaves the
 /// panel open.
 struct PresetPicker: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
         let t = model.text
-        let inUse = PresetPanel.inUse(model.presets)
-        let current = inUse.map { t.presetInUse($0.name, edited: $0.edited) }
-        Menu {
-            ForEach(model.presets) { preset in
-                Toggle(preset.name, isOn: Binding(get: { preset.current },
-                                                  set: { _ in model.actions.recallPreset(preset.id) }))
+        let line = ChoiceLine.preset(model.presets)
+        // The name sits under the menu, as the pull-down's label shows one line of text and an image only.
+        VStack(alignment: .leading, spacing: 0) {
+            Menu {
+                ForEach(model.presets) { preset in
+                    Toggle(preset.name, isOn: Binding(get: { preset.current },
+                                                      set: { _ in model.actions.recallPreset(preset.id) }))
+                }
+            } label: {
+                HStack(spacing: 9) {
+                    SourcePicker.unnamedSymbol("square.stack.3d.up.fill")
+                        .frame(width: 18, height: 18)
+                        .foregroundStyle(Brand.secondaryText)
+                        .accessibilityHidden(true)
+                    Text(t.presets)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(t.presets)
+                .accessibilityValue(line ?? t.choosePreset)
             }
-        } label: {
-            HStack(spacing: 9) {
-                SourcePicker.unnamedSymbol("square.stack.3d.up.fill")
-                    .frame(width: 18, height: 18)
-                    .foregroundStyle(Brand.secondaryText)
-                    .accessibilityHidden(true)
-                label(inUse, t)
-                    .foregroundStyle(current == nil ? Brand.secondaryText : .primary)
-                    .lineLimit(1)
-                Spacer()
-            }
-            .accessibilityElement(children: .ignore)
+            .menuStyle(.borderlessButton)
+            // As the card's source menu, so its icon and chevron read as the volume icon and the card's chevron do.
+            .tint(Brand.secondaryText)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, -PanelLayout.menuLeadingInset)
+            .help(line ?? t.choosePreset)
             .accessibilityLabel(t.presets)
-            .accessibilityValue(current ?? t.choosePreset)
+            .accessibilityValue(line ?? t.choosePreset)
+            // A wrapped name grows the panel on the zone fold, so the panel doesn't shake.
+            ChoiceLineView(line: line, fold: model.foldPanelZone)
+                .padding(.leading, PanelLayout.presetNameColumn)
         }
-        .menuStyle(.borderlessButton)
-        // As the card's source menu, so its icon and chevron read as the volume icon and the card's chevron do.
-        .tint(Brand.secondaryText)
+        // Both lines fit in the row's 34 pt; only a wrapped name adds a line.
         .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
-        .padding(.leading, -PanelLayout.menuLeadingInset)
         .padding(.trailing, PanelLayout.presetTrailing)
-        .help(current ?? t.choosePreset)
-        .accessibilityLabel(t.presets)
-        .accessibilityValue(current ?? t.choosePreset)
-    }
-
-    /// One Text, since the pull-down's label shows text and an image only.
-    private func label(_ inUse: PresetRow?, _ t: UIStrings) -> Text {
-        guard let inUse else { return Text(t.choosePreset) }
-        guard inUse.edited else { return Text(inUse.name) }
-        return Text(inUse.name) + Text("  " + t.presetEdited).font(.caption).foregroundStyle(Brand.secondaryText)
     }
 }
 

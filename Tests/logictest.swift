@@ -8559,7 +8559,7 @@ do {
     var boosted = louder
     boosted.gains[3] = 3
     check(PresetCore.current(updated, louder) == "p1" && PresetCore.current(updated, boosted) == nil
-            && PresetPanel.inUse(PresetCore.rows(updated, boosted)) == nil,
+            && !PresetCore.rows(updated, boosted).contains(where: \.current),
           "presets: the current mark follows a band change")
 
     check(PresetMenu.entries([], text: presetText) == [.empty("No Presets"), .separator, .save("Save as Preset…")]
@@ -8586,16 +8586,14 @@ do {
               "presets in use: the name goes once none of its speakers is on or it is deleted; an exact match then shows",
               "\(inUse("e", silent)), \(inUse("e", kitchen))")
 
-        let listRows = PresetCore.rows(inUseList, louder, chosen: "e")
-        check(listRows.map(\.id) == ["e", "l", "k"] && listRows.map(\.edited) == [true, false, false]
+        let listRows = PresetCore.rows(inUseList, louder, chosen: "e", picked: "e")
+        check(listRows.map(\.id) == ["e", "l", "k"] && listRows.map(\.picked) == [true, false, false]
                 && !listRows.contains(where: \.current) && listRows.map(\.speakers) == [2, 2, 1]
-                && listRows.map(\.master) == [80, 80, 80] && PresetPanel.inUse(listRows)?.name == "Evening",
-              "presets list: rows in list order, the chosen one marked edited and still named in the window and the panel",
+                && listRows.map(\.master) == [80, 80, 80] && ChoiceLine.preset(listRows) == "Evening",
+              "presets list: rows in list order, the one picked last still named in the window and the panel",
               "\(listRows)")
         check(presetText.presetSummary(speakers: 2, master: 80) == "2 speakers, master 80%"
-                && presetText.presetSummary(speakers: 1, master: 39.6) == "1 speaker, master 40%"
-                && presetText.presetInUse("Evening", edited: true) == "Evening, edited"
-                && presetText.presetInUse("Evening", edited: false) == "Evening",
+                && presetText.presetSummary(speakers: 1, master: 39.6) == "1 speaker, master 40%",
               "presets list: a row's second line says how many speakers and which master volume the preset holds",
               presetText.presetSummary(speakers: 1, master: 39.6))
 
@@ -8615,12 +8613,44 @@ do {
                 && chosenBeforeNothing,
               "presets in use: recalling a preset the room already plays makes it the one in use, though the recall changes nothing")
 
-        let renamedInUse = PresetCore.rows(PresetEdit.renaming("e", to: "Dinner", in: inUseList), louder, chosen: "e")
+        let renamedInUse = PresetCore.rows(PresetEdit.renaming("e", to: "Dinner", in: inUseList), louder, chosen: "e",
+                                           picked: "e")
         let afterDeleteInUse = PresetEdit.deleting("e", from: inUseList)
-        check(PresetPanel.inUse(renamedInUse)?.name == "Dinner" && PresetPanel.inUse(renamedInUse)?.edited == true
+        check(ChoiceLine.preset(renamedInUse) == "Dinner"
                 && PresetInUse.resolve(chosen: "e", presets: afterDeleteInUse, scene: louder) == .notInUse
                 && PresetInUse.resolve(chosen: "e", presets: afterDeleteInUse, scene: evening) == .exact("l"),
               "presets in use: a rename keeps the preset in use under its new name; a delete lets it go")
+
+        // covers: S259, S264 (a row that opens a choice names it on a second line)
+        func pickedLine(_ list: [SpeakerPreset], _ scene: PresetScene, picked: String?) -> String? {
+            ChoiceLine.preset(PresetCore.rows(list, scene, chosen: picked, picked: picked))
+        }
+        check(pickedLine(inUseList, evening, picked: "e") == "Evening" && pickedLine(inUseList, louder, picked: "e") == "Evening"
+                && pickedLine(inUseList, silent, picked: "e") == "Evening",
+              "value rows: the Presets row names the preset picked last, unchanged when the room no longer plays it or its speakers go off",
+              "\(String(describing: pickedLine(inUseList, louder, picked: "e")))")
+        check(pickedLine(inUseList, evening, picked: nil) == nil && pickedLine(inUseList, kitchen, picked: nil) == nil
+                && pickedLine(PresetEdit.renaming("e", to: "Dinner", in: inUseList), louder, picked: "e") == "Dinner"
+                && pickedLine(PresetEdit.deleting("e", from: inUseList), evening, picked: "e") == nil,
+              "value rows: a volume that matches a preset adds no line; a rename renames it; deleting the picked preset clears it")
+        check(ChoiceLine.equalizer(on: true, curve: "Rock") == "Rock" && ChoiceLine.equalizer(on: true, curve: "Custom") == "Custom"
+                && ChoiceLine.equalizer(on: false, curve: "Rock") == nil,
+              "value rows: the Equalizer row names its curve while on, Custom for a curve shaped by hand, and nothing while off")
+        check(ChoiceLine.resizes(from: nil, to: "Evening", adjusted: nil) && ChoiceLine.resizes(from: "Evening", to: nil, adjusted: nil)
+                && ChoiceLine.resizes(from: "Evening", to: "Late", adjusted: nil)
+                && ChoiceLine.resizes(from: nil, to: "Rock", adjusted: "Custom") && ChoiceLine.resizes(from: "Rock", to: nil, adjusted: "Custom")
+                && ChoiceLine.resizes(from: "Rock", to: "Jazz", adjusted: "Custom")
+                && !ChoiceLine.resizes(from: "A Long Saved Curve Name", to: "Custom", adjusted: "Custom")
+                && !ChoiceLine.resizes(from: "Rock", to: "Rock", adjusted: "Custom"),
+              "value rows: a row takes a new height only when a choice is picked or cleared, never when a band moved by hand turns the curve to Custom")
+        var curveHold = ChoiceLineHold("Rock")
+        curveHold.adjust("Custom")
+        let shapedByHand = curveHold
+        curveHold.set(nil)
+        check(shapedByHand.held == "Rock" && shapedByHand.shown == "Custom" && curveHold.held == nil
+                && curveHold.last == "Custom",
+              "value rows: a curve shaped by hand shows Custom at the old height, and switching the equalizer off folds Custom away, not the old curve",
+              "\(shapedByHand), \(curveHold)")
 
         final class FoldValues { var values: [String: Any] = [:] }
         let foldValues = FoldValues()
@@ -17920,6 +17950,14 @@ do {
     check(!panelView.contains("t.castAddByAddress") && panelView.contains("MasterMuteButton(model: model, text: t, panel: true)")
             && panelView.contains("Text(t.volumeValue(model.master))") && presetSource.contains(".tint(Brand.secondaryText)"),
           "menu bar panel source: no Add by Address; the volume shows its number, its icon in the preset icon's size and grey; the preset chevron in the card chevron's grey")
+    let valueRowMain = read("Sources/AudioSync/MainWindow.swift")
+    let valueRowText = read("Sources/AudioSync/Localization.swift")
+    check(!valueRowMain.contains("PresetEditedMark") && !valueRowMain.contains("PresetInUseLabel")
+            && !valueRowMain.contains("Circle().fill(accent)") && !panelSource.contains("presetEdited")
+            && !valueRowText.contains("let presetEdited") && presetSource.contains("model.foldPanelZone")
+            && valueRowMain.contains("let line = ChoiceLine.preset(model.presets)") && valueRowMain.contains("ChoiceLineView(line: line)")
+            && valueRowMain.contains("ChoiceLineView(line: ChoiceLine.equalizer(on: model.equalizerOn"),
+          "value rows source: no Edited mark or in-use dot; Presets and Equalizer name their choice on a second line, the panel's growing through the zone fold")
     check(panelView.contains(".animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: rowPlaces)")
             && panelView.contains("Text(model.statusText)") && panelView.contains(".id(model.statusText)"),
           "menu bar panel source: rows move on one ease-out, at once with Reduce Motion; the status text cross-fades in place")
@@ -18130,11 +18168,12 @@ do {
             && flatGuide.contains("choose Refresh Devices in the gear menu or press Command-R."),
           "guide: names the New Zone, Equalizer and Refresh Devices shortcuts of the main menu, as on Windows")
     // covers: S407
-    check(flatGuide.contains("marked Edited once what plays differs from it.")
+    check(flatGuide.contains("The preset you chose last stays named under Presets until you choose another or delete it.")
+            && !flatGuide.contains("Edited")
             && flatGuide.contains("To rename, update or delete a preset, use its ⋯ button in the list.")
             && flatGuide.contains("Leave it empty to go back to the device's own name; while a speaker is renamed, its tooltip also shows the device's own name.")
             && !flatGuide.contains("Presets card") && !flatGuide.contains("tooltip keeps showing"),
-          "guide: the Presets line names the list's ⋯ button and the Edited mark, and the tooltip shows the device's name only while renamed")
+          "guide: the Presets line names the list's ⋯ button and the preset named under Presets, and the tooltip shows the device's name only while renamed")
 }
 
 // MARK: Equalizer band keyboard focus and accessibility role (VerticalSlider)
