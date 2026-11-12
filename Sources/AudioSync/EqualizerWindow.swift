@@ -5,17 +5,23 @@ import SwiftUI
 final class EqualizerWindowController {
     private var window: NSWindow?
     let model: EqualizerModel
+    private let curveName = CurveNameDraft()
 
     init(model: EqualizerModel) { self.model = model }
 
     func show() {
         if window == nil {
-            let view = EqualizerView(model: model,
+            let view = EqualizerView(model: model, curveName: curveName,
                                      curvesFull: { [weak self] in self?.informCurvesFull() },
                                      askRename: { [weak self] index in self?.promptRenameCurve(index) })
             let host = NSHostingController(rootView: view)
             let panel = EqualizerPanel(contentViewController: host)
             panel.title = UIStrings().equalizerTitle
+            panel.dropName = { [weak self] in
+                guard let draft = self?.curveName, draft.open else { return false }
+                draft.open = false
+                return true
+            }
             panel.styleMask = [.titled, .closable]
             panel.isReleasedWhenClosed = false   // kept and shown again by the next show()
             panel.isExcludedFromWindowsMenu = true   // the Window menu has its own Equalizer item
@@ -69,9 +75,9 @@ final class EqualizerWindowController {
     }
 }
 
-/// The curve name typed by Save Curve…. An object rather than @State, which
-/// the Command Line Tools can't expand.
-private final class CurveNameDraft: ObservableObject {
+/// The curve name typed by Save Curve…, held by the window's controller so
+/// Escape at the window can drop it.
+final class CurveNameDraft: ObservableObject {
     @Published var open = false
     @Published var text = ""
     var suggested = ""
@@ -101,9 +107,13 @@ private struct CurveNameField: View {
     }
 }
 
-/// Escape closes the equalizer, as it does the Guide.
+/// Escape closes the equalizer, as it does the Guide, except while the curve
+/// name field is open: then it drops the name, even before the field has the focus.
 private final class EqualizerPanel: NSWindow {
+    var dropName: () -> Bool = { false }
+
     override func cancelOperation(_ sender: Any?) {
+        if dropName() { return }
         performClose(sender)
     }
 }
@@ -117,10 +127,10 @@ private final class SliderClick: ObservableObject {
 
 struct EqualizerView: View {
     @ObservedObject var model: EqualizerModel
+    @ObservedObject var curveName: CurveNameDraft
     let curvesFull: () -> Void
     let askRename: (Int) -> Void
     private let text = UIStrings()
-    @StateObject private var curveName = CurveNameDraft()
 
     var body: some View {
         let s = model.settings

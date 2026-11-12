@@ -280,30 +280,26 @@ extension AppDelegate {
     /// New Zone from Active Speakers: the speakers that are on, in the
     /// windows' order, leave their zones for the new one.
     func promptNewZone() {
-        let outcome = NewZoneFromActive.run(
-            onKeys: {
-                let layout = appModel.layout
-                return (layout.thisMac + layout.connected).filter(\.enabled).map(\.key)
-            },
-            askName: { "" })
+        let outcome = NewZoneFromActive.run(onKeys: {
+            let layout = appModel.layout
+            return (layout.thisMac + layout.connected).filter(\.enabled).map(\.key)
+        })
         switch outcome {
         case .needsSpeakers:
             menuBar?.close()
             showAlert(text.newZoneNeedsSpeakers, style: .informational)
-        case .cancelled:
-            break
-        case let .create(name, members):
-            nameInPlace(addZone(named: name, members: members))
+        case let .create(members):
+            nameInPlace(addZone(members: members))
         }
     }
 
     /// New Zone… in a speaker's Move to Zone menu: a zone of that speaker.
     func promptNewZone(with key: String, name: String) {
-        nameInPlace(addZone(named: "", members: [key]))
+        nameInPlace(addZone(members: [key]))
     }
 
-    private func addZone(named typed: String, members: [String]) -> String {
-        let name = GroupName.forNewGroup(typed: typed, existing: zones.map(\.name), numbered: text.numberedZone)
+    private func addZone(members: [String]) -> String {
+        let name = GroupName.forNewGroup(typed: "", existing: zones.map(\.name), numbered: text.numberedZone)
         let id = UUID().uuidString
         zones = ZoneEdit.adding(id: id, name: name, members: members, to: zones)
         pushModel()

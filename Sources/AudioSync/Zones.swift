@@ -205,11 +205,19 @@ enum ZoneEdit {
         return out
     }
 
-    /// Zone `id` named `typed`, cleaned as a speaker name is; a blank name keeps the current one.
+    /// Zone `id` named `typed`, cleaned as a speaker name is; a blank name
+    /// keeps the current one, and one another zone has gets the next free number.
     static func renaming(_ id: String, to typed: String, in zones: [SpeakerZone]) -> [SpeakerZone] {
         guard let index = zones.firstIndex(where: { $0.id == id }) else { return zones }
         var out = zones
-        out[index].name = GroupName.afterRename(typed: SpeakerNames.clean(typed), current: zones[index].name)
+        let name = GroupName.afterRename(typed: SpeakerNames.clean(typed), current: zones[index].name)
+        let others = Set(zones.filter { $0.id != id }.map(\.name))
+        var n = 2
+        out[index].name = name
+        while others.contains(out[index].name) {
+            out[index].name = "\(name) \(n)"
+            n += 1
+        }
         return out
     }
 
@@ -242,20 +250,16 @@ enum ZoneEdit {
 }
 
 /// New Zone from Active Speakers (S245): `onKeys` gives the speakers that are
-/// on, in the windows' order, and `askName` runs the name prompt.
+/// on, in the windows' order; the zone is named in place once it exists.
 enum NewZoneFromActive {
     enum Outcome: Equatable {
         case needsSpeakers
-        case cancelled
-        case create(name: String, members: [String])
+        case create(members: [String])
     }
 
-    static func run(onKeys: () -> [String], askName: () -> String?) -> Outcome {
-        guard !onKeys().isEmpty else { return .needsSpeakers }
-        guard let typed = askName() else { return .cancelled }
-        // Read again: a phone or an unplug can turn a speaker off while the prompt is open.
+    static func run(onKeys: () -> [String]) -> Outcome {
         let members = onKeys()
-        return members.isEmpty ? .needsSpeakers : .create(name: typed, members: members)
+        return members.isEmpty ? .needsSpeakers : .create(members: members)
     }
 }
 

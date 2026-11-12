@@ -8260,17 +8260,12 @@ do {
     // covers: S245
     check(added.map(\.members) == [["ap:native:den"], [], ["lc:usb", "cc:kitchen"]] && added[2].volume == 100,
           "zones: a new zone takes its speakers from their zones, once each, at full volume")
-    func newZoneOutcome(_ reads: [[String]], typed: String?) -> NewZoneFromActive.Outcome {
-        var onReads = reads
-        return NewZoneFromActive.run(onKeys: { onReads.removeFirst() }, askName: { typed })
-    }
     // covers: S245
-    check(newZoneOutcome([["lc:usb", "ap:native:den"], ["ap:native:den"]], typed: "Desk")
-          == .create(name: "Desk", members: ["ap:native:den"]),
-          "zones: New Zone from Active Speakers leaves out a speaker turned off while its name prompt is open")
+    check(NewZoneFromActive.run(onKeys: { ["lc:usb", "ap:native:den"] }) == .create(members: ["lc:usb", "ap:native:den"]),
+          "zones: New Zone from Active Speakers takes the speakers that are on")
     // covers: S245
-    check(newZoneOutcome([["lc:usb"], []], typed: "Desk") == .needsSpeakers,
-          "zones: New Zone from Active Speakers makes no zone when every speaker turned off while its name prompt is open")
+    check(NewZoneFromActive.run(onKeys: { [] }) == .needsSpeakers,
+          "zones: New Zone from Active Speakers makes no zone when no speaker is on")
     // covers: S245
     check(ZoneEdit.removing("cc:kitchen", from: [kitchen]).map(\.members) == [[]],
           "zones: Remove from Zone leaves the emptied zone in place")
@@ -9852,8 +9847,8 @@ do {
     check(renamedZones.map(\.name) == ["Lounge", "Kitchen"] && renamedZones[0].members == [usb]
               && ZoneEdit.renaming("zone-1", to: "   ", in: zonesBefore) == zonesBefore
               && ZoneEdit.renaming("gone", to: "Den", in: zonesBefore) == zonesBefore
-              && ZoneEdit.renaming("zone-2", to: "Living", in: zonesBefore).map(\.name) == ["Living", "Living"],
-          "zone rename: the typed name is trimmed, a blank one keeps the name, and a name another zone uses is allowed",
+              && ZoneEdit.renaming("zone-2", to: "Living", in: zonesBefore).map(\.name) == ["Living", "Living 2"],
+          "zone rename: the typed name is trimmed, a blank one keeps the name, and a name another zone uses gets the next free number",
           "\(renamedZones.map(\.name))")
     check(ZoneEdit.renaming("zone-1", to: " " + String(repeating: "a", count: 65) + "\n", in: zonesBefore)[0].name
               == String(repeating: "a", count: SpeakerNames.maxLength)
