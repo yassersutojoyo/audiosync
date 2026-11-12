@@ -247,15 +247,21 @@ struct MainView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         hero(t)
                         masterVolume(t).padding(.top, 16)
-                        Divider().padding(.vertical, 10)
+                        Divider().padding(.top, MainColumns.separatorPadding.top)
+                            .padding(.bottom, MainColumns.separatorPadding.bottom)
+                        // Icons on the master volume icon's column; the hover fill reaches past it.
                         VStack(alignment: .leading, spacing: QuickRow.gap) {
                             PresetsRow(model: model)
                             equalizerRow(t)
                             CalibrateAllButton(model: model)
                         }
+                        .padding(.horizontal, -MainColumns.rowInset)
                     }
+                    .padding(.horizontal, MainColumns.rowInset)
                 }
-                .frame(width: MainColumns.left(window: windowWidth.points))
+                // Wider by the rows' fill on each side, so the scroll view doesn't clip it.
+                .frame(width: MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset)
+                .padding(.horizontal, -MainColumns.rowInset)
                 FadingScroll(onBlankTap: blankTap) {
                     let all = model.layout
                     let layout = model.zonelessLayout
@@ -605,12 +611,22 @@ struct MainView: View {
                 }
                 if connected && model.castCanAdd {
                     if lines.castAdd { Divider() }
-                    Button(model.text.castAddByAddress) { model.castAddShown = true }
-                        .controlSize(.small)
-                        .help(model.text.castAddBody)
-                        .accessibilityHint(model.text.castAddBody)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
+                    Button { model.castAddShown = true } label: {
+                        HStack(spacing: 8) {
+                            QuickRowIcon("plus").accessibilityHidden(true)
+                            Text(model.text.castAddByAddress).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .modifier(QuickRow())
+                    .help(model.text.castAddBody)
+                    .accessibilityLabel(model.text.castAddByAddress)
+                    .accessibilityHint(model.text.castAddBody)
+                    // The icon on the speaker rows' badge column (rowPaddingX).
+                    .padding(.horizontal, BrandTokens.Spacing.rowPaddingX - MainColumns.rowInset)
+                    .padding(.vertical, 6)
                 }
             }
         }
@@ -886,7 +902,7 @@ struct QuickRowIcon: View {
     var body: some View {
         Image(systemName: name)
             .font(.system(size: 15))
-            .frame(width: 20)
+            .frame(width: 20, alignment: .leading)
     }
 }
 

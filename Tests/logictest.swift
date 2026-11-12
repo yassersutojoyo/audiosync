@@ -7683,6 +7683,22 @@ do {
             && oneRowEach.isEmpty && calibrateRow.contains(".modifier(QuickRow())"),
           "left column: Presets, Equalizer and Calibrate All Speakers share one row height and one gap, the Calibrate note below its row",
           "rows without exactly one QuickRow: \(oneRowEach)")
+    let rowIcon = part("MainWindow.swift", "struct QuickRowIcon: View", "\n}\n")
+    let columnFrame = part("MainWindow.swift", "hero(t)\n", "let all = model.layout")
+    check(rowIcon.contains(".frame(width: 20, alignment: .leading)")
+            && column.contains("}\n                        .padding(.horizontal, -MainColumns.rowInset)")
+            && column.contains(".padding(.horizontal, MainColumns.rowInset)")
+            && columnFrame.contains(".frame(width: MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset)"),
+          "left column: the Presets, Equalizer and Calibrate icons start on the master volume icon's column, their fill reaching past it")
+    check(MainColumns.separatorPadding.top == 11 && MainColumns.separatorPadding.bottom == 5
+            && column.contains("Divider().padding(.top, MainColumns.separatorPadding.top)")
+            && column.contains(".padding(.bottom, MainColumns.separatorPadding.bottom)"),
+          "left column: the slider knob and the Presets icon sit 12 pt from the hairline between them",
+          "\(MainColumns.separatorPadding)")
+    let castAdd = part("MainWindow.swift", "if lines.castAdd { Divider() }", "\n                }\n")
+    check(castAdd.contains(".buttonStyle(.plain)") && castAdd.contains(".modifier(QuickRow())")
+            && castAdd.contains("QuickRowIcon(") && !castAdd.contains(".controlSize(.small)"),
+          "speaker list: Add by Address is a row like the left column's, not a default push button")
 }
 
 // MARK: Main window v3.1: zoom, motion, and what waits one step away (WindowRules.swift, MainWindow.swift)
@@ -18374,9 +18390,9 @@ do {
     check(auditTitle.contains(".mask(MarqueeEdges(") && auditTitle.contains("Marquee.edges(offset:"),
           "scrolling title source: a running name fades out at the edge it is cut on, so no cut letter meets the dot beside it")
     let auditEdges = ([0, 3, 30, 57, 60] as [CGFloat]).map { Marquee.edges(offset: $0, overflow: 60) }
-    check(auditEdges.map(\.leading) == [0, 3, 16, 16, 16] && auditEdges.map(\.trailing) == [8, 8, 8, 3, 0]
+    check(auditEdges.map(\.leading) == [0, 3, 8, 8, 8] && auditEdges.map(\.trailing) == [4, 4, 4, 3, 0]
             && Marquee.edges(offset: 0, overflow: 0) == (0, 0),
-          "scrolling title: only an edge that cuts a letter fades, the leading one up to 16 pt so no sliver of a cut letter shows at the scroll end")
+          "scrolling title: only an edge that cuts a letter fades, the leading one up to 8 pt so the first letter while it scrolls stays near the artist's, the trailing one half that")
     let auditZone = auditPart("MainWindow.swift", "ZoneCard: View")
     check(auditZone.contains(".modifier(FoldTurn(open: expanded))")
             && !auditZone.contains(".rotationEffect(.degrees(expanded ? 90 : 0))")
