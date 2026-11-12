@@ -43,8 +43,39 @@ pub struct Layout {
     pub maximized: bool,
 }
 
-pub fn hit_test(_x: f32, _y: f32, _layout: Layout) -> Region {
-    Region::Client
+pub fn hit_test(x: f32, y: f32, layout: Layout) -> Region {
+    if !layout.maximized {
+        let west = x < RESIZE_BORDER;
+        let east = x >= layout.width - RESIZE_BORDER;
+        let north = y < RESIZE_BORDER;
+        let south = y >= layout.height - RESIZE_BORDER;
+        let edge = match (north, south, west, east) {
+            (true, _, true, _) => Some(Edge::NorthWest),
+            (true, _, _, true) => Some(Edge::NorthEast),
+            (_, true, true, _) => Some(Edge::SouthWest),
+            (_, true, _, true) => Some(Edge::SouthEast),
+            (true, ..) => Some(Edge::North),
+            (_, true, ..) => Some(Edge::South),
+            (_, _, true, _) => Some(Edge::West),
+            (_, _, _, true) => Some(Edge::East),
+            _ => None,
+        };
+        if let Some(edge) = edge {
+            return Region::Resize(edge);
+        }
+    }
+    if y >= ROW_HEIGHT {
+        return Region::Client;
+    }
+    let buttons = layout.width - 3.0 * BUTTON_WIDTH;
+    let maximize = layout.width - 2.0 * BUTTON_WIDTH;
+    if x >= maximize && x < maximize + BUTTON_WIDTH {
+        Region::Maximize
+    } else if x >= layout.caption_start && x < buttons {
+        Region::Caption
+    } else {
+        Region::Client
+    }
 }
 
 /// A key as the menu row reads it.
@@ -82,12 +113,36 @@ pub struct MenuKeys {
 impl MenuKeys {
     pub fn key(
         &mut self,
-        _key: MenuKeyInput,
-        _pressed: bool,
-        _mods: Mods,
-        _titles: &[&str],
+        key: MenuKeyInput,
+        pressed: bool,
+        mods: Mods,
+        titles: &[&str],
     ) -> Option<MenuKey> {
-        None
+        let alt_alone = std::mem::take(&mut self.alt_alone);
+        match (key, pressed) {
+            (MenuKeyInput::Alt, true) => {
+                self.alt_alone = true;
+                None
+            }
+            (MenuKeyInput::Alt, false) => alt_alone.then_some(MenuKey::FocusRow),
+            (MenuKeyInput::F10, true) if !mods.alt && !mods.ctrl && !mods.shift => {
+                Some(MenuKey::FocusRow)
+            }
+            (MenuKeyInput::Char(c), true) if mods.alt && !mods.ctrl => {
+                let c = c.to_lowercase().next()?;
+                titles
+                    .iter()
+                    .position(|title| {
+                        title
+                            .chars()
+                            .next()
+                            .and_then(|first| first.to_lowercase().next())
+                            == Some(c)
+                    })
+                    .map(MenuKey::Open)
+            }
+            _ => None,
+        }
     }
 }
 
