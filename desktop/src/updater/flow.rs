@@ -14,6 +14,7 @@ use ed25519_dalek::VerifyingKey;
 use super::appcast::{self, Arch, Os, Update};
 use super::appimage;
 use super::archive;
+use super::elevated::{self, Elevate};
 use super::fetch::{self, Fetch, FetchError, Kind};
 #[cfg(windows)]
 use super::files::is_locked;
@@ -50,6 +51,8 @@ pub struct Env {
     pub max_download: u64,
     pub log: DebugLog,
     pub launch: Arc<dyn Launch>,
+    /// Runs the swap of an install for all users elevated (spec S460).
+    pub elevate: Arc<dyn Elevate>,
     /// How long Restart Now waits for the new version's start signal.
     pub start_wait: Duration,
     /// The waits before lock retries (spec S315), which a quit cuts short.
@@ -429,6 +432,18 @@ fn install_in(
             .log(|| format!("updater: swap {step} (error {code})"));
     }
     match swapped {
+        Err(SwapError::ReadOnly)
+            if elevated::elevates(&env.install_dir, &env.elevate.machine_dirs()) =>
+        {
+            elevated::install(env, update, &zip)
+        }
+        swapped => outcome(swapped),
+    }
+}
+
+/// What a swap's result tells the user.
+pub fn outcome(swapped: Result<Swapped, SwapError>) -> Installed {
+    match swapped {
         Ok(swapped) => Installed::Done(swapped),
         Err(SwapError::ReadOnly) => Installed::ReadOnly,
         Err(SwapError::InUse) => Installed::InUse,
@@ -657,6 +672,7 @@ pub mod tests {
                 max_download: MAX_DOWNLOAD,
                 log,
                 launch: Arc::new(NoLaunch),
+                elevate: Arc::new(elevated::tests::NoElevate),
                 start_wait: Duration::from_millis(300),
                 pause: Arc::new(Pause::real()),
             },

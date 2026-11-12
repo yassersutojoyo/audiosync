@@ -75,6 +75,35 @@ pub struct Progress {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Swapped(Vec<Progress>);
 
+impl Swapped {
+    /// What each file's swap did as bits, which an elevated swap's exit
+    /// code carries back (spec S460): the exe set aside and put in place,
+    /// then the notices present, set aside and put in place.
+    pub fn bits(&self) -> u32 {
+        self.0.iter().fold(0, |bits, part| {
+            let shift = if part.exe { 0 } else { 2 };
+            let present = if part.exe { 0 } else { 1 << 4 };
+            bits | present
+                | u32::from(part.renamed_aside) << shift
+                | u32::from(part.renamed_in) << (shift + 1)
+        })
+    }
+
+    pub fn from_bits(exe_name: &str, bits: u32) -> Swapped {
+        let part = |name: &str, exe: bool, shift: u32| Progress {
+            name: name.to_owned(),
+            exe,
+            renamed_aside: bits >> shift & 1 == 1,
+            renamed_in: bits >> (shift + 1) & 1 == 1,
+        };
+        let mut parts = vec![part(exe_name, true, 0)];
+        if bits & 1 << 4 != 0 {
+            parts.push(part(NOTICES_NAME, false, 2));
+        }
+        Swapped(parts)
+    }
+}
+
 /// Installs `exe` (and `notices`) into `dir` in place of the running files,
 /// the exe under `exe_name`.
 pub fn swap(
