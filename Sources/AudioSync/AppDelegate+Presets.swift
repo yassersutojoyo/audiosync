@@ -25,7 +25,7 @@ extension AppDelegate {
 
     /// The rows the windows show, worked out again on every push (S264).
     func presetSnapshot() -> [PresetRow] {
-        PresetCore.rows(presets, presetScene())
+        PresetCore.rows(presets, presetScene(), chosen: chosenPreset)
     }
 
     // MARK: - Recall
@@ -66,6 +66,8 @@ extension AppDelegate {
                                         key: member.key)
         }
         DebugTrace.log("[AudioSync] preset \"\(preset.name)\" recalled (\(plan.action)), \(leftOff.count) left off")
+        // Chosen even when nothing changes: the room may already play it.
+        chosenPreset = id
         guard plan.action != .nothing else {
             showPresetNotice(preset, leftOff: leftOff, nothingChanged: true)
             pushModel()
@@ -117,6 +119,8 @@ extension AppDelegate {
         stopIfIdle()
         retimeLocalOutputs()
         showPresetNotice(preset, leftOff: leftOff, nothingChanged: false)
+        // Again: the master's push above ran before its speakers were on, which lets it go.
+        chosenPreset = id
         pushModel()
     }
 
@@ -174,7 +178,12 @@ extension AppDelegate {
         }
         guard let typed = askPresetName(title: text.savePresetTitle, message: text.savePresetMessage,
                                         button: text.save) else { return }
-        // The last speaker can go off while the name dialog is open.
+        savePreset(named: typed)
+    }
+
+    /// The name typed in the window's preset list or the Save Preset alert.
+    func savePreset(named typed: String) {
+        // The last speaker can go off while the name is typed.
         guard let saved = PresetEdit.saving(typed, scene: presetScene(), id: UUID().uuidString, to: presets,
                                             numbered: text.numberedPreset),
               let name = saved.last?.name else {
@@ -182,15 +191,13 @@ extension AppDelegate {
             return
         }
         presets = saved
+        chosenPreset = saved.last?.id
         pushModel()
         AccessibilityNotification.Announcement(text.presetSaved(name)).post()
     }
 
-    /// Rename…; a blank name keeps the current one.
-    func promptRenamePreset(_ id: String) {
-        guard let current = presets.first(where: { $0.id == id })?.name,
-              let typed = askPresetName(title: text.renamePresetTitle, message: text.renameMessage(current),
-                                        current: current, button: text.rename) else { return }
+    /// Rename… typed in the preset's row; a blank name keeps the current one.
+    func renamePreset(_ id: String, to typed: String) {
         let renamed = PresetEdit.renaming(id, to: typed, in: presets)
         guard renamed != presets else { return }
         presets = renamed
@@ -215,6 +222,7 @@ extension AppDelegate {
             return
         }
         presets = updated
+        chosenPreset = id
         pushModel()
         AccessibilityNotification.Announcement(text.presetUpdated(name)).post()
     }
@@ -231,14 +239,13 @@ extension AppDelegate {
 
     /// The name typed in a preset's name alert, which the user opened; nil
     /// when cancelled.
-    private func askPresetName(title: String, message: String, current: String = "", button: String) -> String? {
+    private func askPresetName(title: String, message: String, button: String) -> String? {
         menuBar?.close()
         NSApp.activate(ignoringOtherApps: true)
         let prompt = NSAlert()
         prompt.messageText = title
         prompt.informativeText = message
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.stringValue = current
         field.placeholderString = text.presetPlaceholder
         field.setAccessibilityLabel(text.presetFieldLabel)
         prompt.accessoryView = field

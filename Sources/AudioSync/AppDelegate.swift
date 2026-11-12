@@ -189,6 +189,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
     /// What the preset notice says, so it follows its preset and members (S262, S265).
     var presetNotice: PresetNotice.Cause?
+    /// The preset last recalled or saved, until `PresetInUse` lets it go.
+    var chosenPreset: String?
+    var presetsListOpen: Bool {
+        didSet { if presetsListOpen != oldValue { store.save(presetsListOpen: presetsListOpen) } }
+    }
     /// Speaker keys switched on as soon as they appear.
     var autoConnect: Set<String> {
         didSet { if autoConnect != oldValue { store.save(ids: autoConnect, forKey: Keys.autoConnect) } }
@@ -372,6 +377,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         zones = saved.zones
         zonesNoticeDue = saved.zonesNoticeDue
         presets = saved.presets
+        presetsListOpen = saved.presetsListOpen
         autoConnect = saved.autoConnect
         speakerNames = saved.speakerNames.castKeysMoved()
         showVirtualDevices = saved.showVirtualDevices

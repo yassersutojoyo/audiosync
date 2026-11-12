@@ -7748,15 +7748,13 @@ do {
         window.components(separatedBy: marker).dropFirst().first?.components(separatedBy: "\n}\n").first ?? ""
     }
     func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
-    let presets = part(after: "private enum PresetsRowMenu")
-    check(count(part(after: "private struct PresetsRow"), "PresetsRowMenu.make(") == 1
-            && count(presets, "model.actions.recallPreset(row.id)") == 1 && count(presets, "row.current ? .on : .off") == 1
-            && count(presets, "model.actions.savePreset()") == 1
-            && count(presets, "model.actions.renamePreset(row.id)") == 1 && count(presets, "model.actions.updatePreset(row.id)") == 1
-            && count(presets, "model.actions.deletePreset(row.id)") == 1 && count(presets, "PresetEdit.canUpdate(row)") == 1,
-          "main window presets: one row whose menu still recalls, saves, renames, updates and deletes every preset")
-    check(count(presets, "currentRow") == 0 && count(presets, "for row in model.presets {") == 2,
-          "main window presets: every preset has its own Rename…, Update to Current Settings and Delete, so a preset that isn't current can be updated")
+    let presetRow = part(after: "private struct PresetListRow")
+    check(count(presetRow, "model.actions.recallPreset(row.id)") == 1 && count(presetRow, "model.actions.renamePreset(row.id, $0)") == 1
+            && count(presetRow, "model.actions.updatePreset(row.id)") == 1 && count(presetRow, "model.actions.deletePreset(row.id)") == 1
+            && count(presetRow, ".disabled(!PresetEdit.canUpdate(row))") == 1
+            && count(part(after: "private struct PresetList: View"), "model.actions.savePreset(typed)") == 1
+            && count(part(after: "private struct PresetsRow"), ".modifier(DisclosedPane(open: open))") == 1,
+          "main window presets: the Presets row folds open a list whose every row recalls, renames, updates and deletes its preset, and whose last row saves one")
     let speakerRow = part(after: "struct SpeakerRow: View")
     check(count(speakerRow, ".modifier(Reveal(shown: oneStepShown || optionsFocused))") == 1
             && count(speakerRow, "(model.savedDelay(of: speaker.id) ?? 0) != 0") == 1
@@ -8539,12 +8537,77 @@ do {
     var boosted = louder
     boosted.gains[3] = 3
     check(PresetCore.current(updated, louder) == "p1" && PresetCore.current(updated, boosted) == nil
-            && PresetPanel.label(PresetCore.rows(updated, boosted)) == nil,
+            && PresetPanel.inUse(PresetCore.rows(updated, boosted)) == nil,
           "presets: the current mark follows a band change")
 
     check(PresetMenu.entries([], text: presetText) == [.empty("No Presets"), .separator, .save("Save as Preset…")]
             && !PresetPanel.showsRow([]) && PresetPanel.showsRow(presetRows(["A"])),
           "presets: no presets, the submenu holds No Presets and the panel row is hidden")
+
+    // covers: S259, S264 (the preset in use keeps its name; the window's preset list and its open state)
+    do {
+        let kitchen = PresetScene(on: [.init(key: "lc:kitchen", volume: 50)], zones: [], master: 80, gains: presetFlat)
+        let tvOnly = PresetScene(on: [.init(key: "lc:tv", volume: 70)], zones: [livingZone], master: 80, gains: presetFlat)
+        let eveningOnly = PresetEdit.saving("Evening", scene: evening, id: "e", to: [], numbered: numbered) ?? []
+        let sameTwice = PresetEdit.saving("Late", scene: evening, id: "l", to: eveningOnly, numbered: numbered) ?? []
+        let inUseList = PresetEdit.saving("Kitchen", scene: kitchen, id: "k", to: sameTwice, numbered: numbered) ?? []
+        func inUse(_ chosen: String?, _ scene: PresetScene) -> PresetInUse {
+            PresetInUse.resolve(chosen: chosen, presets: inUseList, scene: scene)
+        }
+        check(inUse("e", evening) == .exact("e") && inUse("l", evening) == .exact("l") && inUse(nil, evening) == .exact("e"),
+              "presets in use: the chosen preset is named while the room plays it, even when an earlier one plays the same",
+              "\(inUse("l", evening))")
+        check(inUse("e", louder) == .edited("e") && inUse("e", tvOnly) == .edited("e") && inUse(nil, louder) == .notInUse,
+              "presets in use: a change keeps the chosen preset's name, marked edited, while one of its speakers is on",
+              "\(inUse("e", louder)), \(inUse("e", tvOnly))")
+        check(inUse("e", silent) == .notInUse && inUse("e", kitchen) == .exact("k") && inUse("gone", louder) == .notInUse,
+              "presets in use: the name goes once none of its speakers is on or it is deleted; an exact match then shows",
+              "\(inUse("e", silent)), \(inUse("e", kitchen))")
+
+        let listRows = PresetCore.rows(inUseList, louder, chosen: "e")
+        check(listRows.map(\.id) == ["e", "l", "k"] && listRows.map(\.edited) == [true, false, false]
+                && !listRows.contains(where: \.current) && listRows.map(\.speakers) == [2, 2, 1]
+                && listRows.map(\.master) == [80, 80, 80] && PresetPanel.inUse(listRows)?.name == "Evening",
+              "presets list: rows in list order, the chosen one marked edited and still named in the window and the panel",
+              "\(listRows)")
+        check(presetText.presetSummary(speakers: 2, master: 80) == "2 speakers, master 80%"
+                && presetText.presetSummary(speakers: 1, master: 39.6) == "1 speaker, master 40%"
+                && presetText.presetInUse("Evening", edited: true) == "Evening, edited"
+                && presetText.presetInUse("Evening", edited: false) == "Evening",
+              "presets list: a row's second line says how many speakers and which master volume the preset holds",
+              presetText.presetSummary(speakers: 1, master: 39.6))
+
+        let partOfEvening = PresetScene(on: [.init(key: "lc:usb:out", volume: 40)], zones: [livingZone], master: 80,
+                                        gains: presetFlat)
+        let editedThenPlayed = (PresetEdit.saving("Part", scene: partOfEvening, id: "b", to: [], numbered: numbered) ?? [])
+            + eveningOnly
+        let presetSource = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Presets.swift", encoding: .utf8)) ?? ""
+        let recallBody = presetSource.components(separatedBy: "func recallPreset(").dropFirst().first ?? ""
+        let chosenBeforeNothing: Bool = {
+            guard let chosen = recallBody.range(of: "chosenPreset = id"),
+                  let nothing = recallBody.range(of: "guard plan.action != .nothing") else { return false }
+            return chosen.lowerBound < nothing.lowerBound
+        }()
+        check(PresetInUse.resolve(chosen: "b", presets: editedThenPlayed, scene: evening) == .edited("b")
+                && PresetInUse.resolve(chosen: "e", presets: editedThenPlayed, scene: evening) == .exact("e")
+                && chosenBeforeNothing,
+              "presets in use: recalling a preset the room already plays makes it the one in use, though the recall changes nothing")
+
+        let renamedInUse = PresetCore.rows(PresetEdit.renaming("e", to: "Dinner", in: inUseList), louder, chosen: "e")
+        let afterDeleteInUse = PresetEdit.deleting("e", from: inUseList)
+        check(PresetPanel.inUse(renamedInUse)?.name == "Dinner" && PresetPanel.inUse(renamedInUse)?.edited == true
+                && PresetInUse.resolve(chosen: "e", presets: afterDeleteInUse, scene: louder) == .notInUse
+                && PresetInUse.resolve(chosen: "e", presets: afterDeleteInUse, scene: evening) == .exact("l"),
+              "presets in use: a rename keeps the preset in use under its new name; a delete lets it go")
+
+        final class FoldValues { var values: [String: Any] = [:] }
+        let foldValues = FoldValues()
+        let foldStore = SettingsStore(read: { foldValues.values[$0] }, write: { value, key in foldValues.values[key] = value })
+        let foldedAtFirst = !foldStore.load().presetsListOpen
+        foldStore.save(presetsListOpen: true)
+        check(foldedAtFirst && foldStore.load().presetsListOpen,
+              "presets list: folded at first, and open or closed is remembered across launches")
+    }
 
     let presetTexts: [(String, String)] = [
         (presetText.presets, "Presets"),
@@ -8557,7 +8620,6 @@ do {
         (presetText.presetPlaceholder, "Evening, Party…"),
         (presetText.numberedPreset(3), "Preset 3"),
         (presetText.renamePreset, "Rename…"),
-        (presetText.renamePresetTitle, "Rename Preset"),
         (presetText.updatePreset, "Update to Current Settings"),
         (presetText.deletePreset, "Delete"),
         (presetText.noPresets, "No Presets"),
@@ -18046,10 +18108,11 @@ do {
             && flatGuide.contains("choose Refresh Devices in the gear menu or press Command-R."),
           "guide: names the New Zone, Equalizer and Refresh Devices shortcuts of the main menu, as on Windows")
     // covers: S407
-    check(flatGuide.contains("update or delete a preset, point to its name in the Presets menu in the window and choose Rename…, Update to Current Settings or Delete.")
+    check(flatGuide.contains("marked Edited once what plays differs from it.")
+            && flatGuide.contains("To rename, update or delete a preset, use its ⋯ button in the list.")
             && flatGuide.contains("Leave it empty to go back to the device's own name; while a speaker is renamed, its tooltip also shows the device's own name.")
             && !flatGuide.contains("Presets card") && !flatGuide.contains("tooltip keeps showing"),
-          "guide: the Presets line names the Presets menu's items, and the tooltip shows the device's name only while renamed")
+          "guide: the Presets line names the list's ⋯ button and the Edited mark, and the tooltip shows the device's name only while renamed")
 }
 
 // MARK: Equalizer band keyboard focus and accessibility role (VerticalSlider)
@@ -18403,8 +18466,8 @@ do {
     check(disclosedWindow.contains("struct DisclosedPane: ViewModifier, Animatable")
             && disclosedWindow.contains("ease(min(progress * 2, 1))")
             && disclosedWindow.contains("ease(max(progress * 2 - 1, 0))")
-            && disclosedCount(".modifier(DisclosedPane(") == 4,
-          "disclosed pane source: a speaker's, the built-in speakers' System, the AirPlay delay's and a zone's pane fold on one progress, the content fading only while the edge holds still")
+            && disclosedCount(".modifier(DisclosedPane(") == 5,
+          "disclosed pane source: a speaker's, the built-in speakers' System, the AirPlay delay's, a zone's and the preset list's pane fold on one progress, the content fading only while the edge holds still")
     check(!disclosedWindow.contains("value: model.delayPanels)")
             && disclosedMenuBar.contains("reduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)")
             && disclosedWindow.contains("withAnimation(reduceMotion ? nil : AppModel.delayPanelAnimation) {\n                                        scroll.scrollTo("),

@@ -74,6 +74,8 @@ struct AppSettings: Equatable {
         static let equalizerCurves = "equalizerCurves"
         static let webRemote = "webRemoteEnabled"
         static let webRemotePort = "webRemotePort"
+        /// The main window's preset list is folded open (S259).
+        static let presetsListOpen = "presetsListOpen"
         /// Google Cast devices added by address (C18), as `CastManualAddress.text` strings.
         static let castManualAddresses = "castManualAddresses"
         /// The `id` a browse found at each of those addresses (C18), by
@@ -147,6 +149,8 @@ struct AppSettings: Equatable {
     /// The groups became zones and no launch said so yet.
     var zonesNoticeDue = false
     var presets: [SpeakerPreset] = []
+    /// The main window's preset list is folded open (S259).
+    var presetsListOpen = false
     var autoConnect: Set<String> = []
     var speakerNames = SpeakerNames()
     var hiddenSpeakers = HiddenSpeakers()
@@ -211,6 +215,7 @@ struct AppSettings: Equatable {
         s.zones = decodeZones(read(Keys.zones) as? Data)
         s.zonesNoticeDue = read(Keys.zonesNoticeDue) as? Bool ?? false
         s.presets = decodePresets(read(Keys.presets) as? Data)
+        s.presetsListOpen = read(Keys.presetsListOpen) as? Bool ?? false
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.volumeKeys = read(Keys.volumeKeys) as? Bool ?? true
         s.hidesDockIcon = read(Keys.hidesDockIcon) as? Bool ?? true
@@ -525,6 +530,8 @@ struct SettingsStore {
     func save(webRemote: Bool) { write(webRemote, Keys.webRemote) }
 
     func save(webRemotePort: Int) { write(webRemotePort, Keys.webRemotePort) }
+
+    func save(presetsListOpen: Bool) { write(presetsListOpen, Keys.presetsListOpen) }
 
     /// On a first install the Mac's own output starts on, once: the UID to
     /// switch on, or nil. An empty list (Core Audio not answering yet) waits

@@ -64,6 +64,8 @@ enum MainMotion {
     static let rowMove: TimeInterval = 0.35
     static let control: TimeInterval = 0.44
     static let reducedFade: TimeInterval = 0.15
+    /// The preset in use's name and the Equalizer row's curve fade over this (S264).
+    static let nameFade: TimeInterval = 0.2
     /// The window's spring when the zoom button widens or narrows it.
     static let zoom: TimeInterval = 0.56
 }
@@ -1194,5 +1196,29 @@ enum SystemVolumeCue {
     /// the device's reports wait, so a report of an earlier step can't pull it back.
     static func shownLevel(read: Double?, held: Bool, shown: Double?) -> Double? {
         held && read != nil ? shown ?? read : read
+    }
+}
+
+/// The preset in use (S264): the one last chosen keeps its name, edited
+/// once the room no longer plays it, until another is chosen, it is deleted or
+/// none of its speakers is on; with none chosen, the first exact match.
+enum PresetInUse: Equatable {
+    case notInUse
+    case exact(String)
+    case edited(String)
+
+    var id: String? {
+        switch self {
+        case .notInUse: return nil
+        case .exact(let id), .edited(let id): return id
+        }
+    }
+
+    static func resolve(chosen: String?, presets: [SpeakerPreset], scene: PresetScene) -> PresetInUse {
+        if let chosen, let preset = presets.first(where: { $0.id == chosen }),
+           preset.members.contains(where: { member in scene.on.contains { $0.key == member.key } }) {
+            return PresetCore.matches(preset, scene) ? .exact(chosen) : .edited(chosen)
+        }
+        return PresetCore.current(presets, scene).map(PresetInUse.exact) ?? .notInUse
     }
 }

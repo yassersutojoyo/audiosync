@@ -208,8 +208,11 @@ final class AppModel: ObservableObject {
         var onlyThisSpeaker: (String) -> Void = { _ in }
         /// Preset ID (S265).
         var recallPreset: (String) -> Void = { _ in }
-        var savePreset: () -> Void = {}
-        var renamePreset: (String) -> Void = { _ in }
+        /// The name typed (`PresetEdit.saving`).
+        var savePreset: (String) -> Void = { _ in }
+        /// Preset ID, the name typed (`PresetEdit.renaming`).
+        var renamePreset: (String, String) -> Void = { _, _ in }
+        var setPresetsListOpen: (Bool) -> Void = { _ in }
         var updatePreset: (String) -> Void = { _ in }
         var deletePreset: (String) -> Void = { _ in }
         /// Zone ID, the member's key: its target takes its place (S247).
@@ -345,6 +348,10 @@ final class AppModel: ObservableObject {
     @Published var zones: [Zone] = []
     /// The presets in list order, the current one marked (S259, S264).
     @Published var presets: [PresetRow] = []
+    /// The main window's preset list is folded open (S259).
+    @Published var presetsListOpen = false
+    /// A speaker is on, so Save as Preset… can save (S262).
+    @Published var presetsCanSave = false
     @Published var hidden = HiddenState()
     /// The row whose switch takes the keyboard focus once it is built (H11).
     @Published var focusSwitch: String?
@@ -2461,14 +2468,16 @@ struct SourcePicker: View {
     }
 }
 
-/// The panel's preset row (S260): recall only, the current one checked.
-/// Choosing one leaves the panel open.
+/// The panel's preset row (S260): recall only, the current one checked, the
+/// preset in use named with its Edited mark (S264). Choosing one leaves the
+/// panel open.
 struct PresetPicker: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
         let t = model.text
-        let current = PresetPanel.label(model.presets)
+        let inUse = PresetPanel.inUse(model.presets)
+        let current = inUse.map { t.presetInUse($0.name, edited: $0.edited) }
         Menu {
             ForEach(model.presets) { preset in
                 Toggle(preset.name, isOn: Binding(get: { preset.current },
@@ -2480,7 +2489,7 @@ struct PresetPicker: View {
                     .frame(width: 18, height: 18)
                     .foregroundStyle(Brand.secondaryText)
                     .accessibilityHidden(true)
-                Text(current ?? t.choosePreset)
+                label(inUse, t)
                     .foregroundStyle(current == nil ? Brand.secondaryText : .primary)
                     .lineLimit(1)
                 Spacer()
@@ -2498,6 +2507,13 @@ struct PresetPicker: View {
         .help(current ?? t.choosePreset)
         .accessibilityLabel(t.presets)
         .accessibilityValue(current ?? t.choosePreset)
+    }
+
+    /// One Text, since the pull-down's label shows text and an image only.
+    private func label(_ inUse: PresetRow?, _ t: UIStrings) -> Text {
+        guard let inUse else { return Text(t.choosePreset) }
+        guard inUse.edited else { return Text(inUse.name) }
+        return Text(inUse.name) + Text("  " + t.presetEdited).font(.caption).foregroundStyle(Brand.secondaryText)
     }
 }
 
