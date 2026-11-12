@@ -2,15 +2,15 @@
 // same order. Header (mark, wordmark, status, streaming switch), notices,
 // then a left column (audio source, Now Playing, master volume, equalizer,
 // calibration) and the speaker list (This PC, Zones, Connected Speakers).
-// The menu bar carries the Windows shortcuts. Tab order follows the reading
-// order.
+// Its own top row carries the menus and the window buttons. Tab order
+// follows the reading order.
 
 import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, PowerSwitch, QuietText, SecondaryText, SectionTitle, SpeakerRow, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, MenuName, NoticeStack, PairPicker, PowerSwitch, QuietText, ResizeEdge, SecondaryText, SectionTitle, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -1680,6 +1680,15 @@ export component MainWindow inherits Window {
     callback notice-update-button-pressed(UpdateButton);
     callback close-requested();
     callback exit-requested();
+    // The top row's drag area and resize edges, and the pointer on its
+    // maximize button as Windows reports it.
+    in property <bool> maximize-hovered;
+    in property <bool> maximize-pressed;
+    callback drag-requested();
+    callback window-menu-requested(length, length);
+    callback resize-requested(int);
+    // Where the menus end and the drag area begins.
+    out property <length> caption-start: title-row.padding-left + menus.width;
     callback about-requested();
     // Help > AudioSync Guide: open the Guide.
     callback help-requested();
@@ -1720,6 +1729,79 @@ export component MainWindow inherits Window {
 
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-256.png");
+    no-frame: true;
+
+    // The menu at `index` (wrapping around) takes the focus, after Alt or F10.
+    public function focus-menu(index: int) {
+        let i = Math.mod(index, 4);
+        if i == 0 {
+            file-name.focus();
+        } else if i == 1 {
+            speakers-name.focus();
+        } else if i == 2 {
+            view-name.focus();
+        } else {
+            help-name.focus();
+        }
+    }
+
+    public function open-menu(index: int) {
+        root.focus-menu(index);
+        if index == 0 {
+            file-menu.show({ x: 0, y: file-name.height });
+        } else if index == 1 {
+            speakers-menu.show({ x: 0, y: speakers-name.height });
+        } else if index == 2 {
+            view-menu.show({ x: 0, y: view-name.height });
+        } else if index == 3 {
+            help-menu.show({ x: 0, y: help-name.height });
+        }
+    }
+
+    // The menus' shortcuts, which a system menu bar took before the window
+    // drew its own: true when `text` with Ctrl (`control`) and no other
+    // modifier (`others`) ran one.
+    public function shortcut(text: string, control: bool, others: bool) -> bool {
+        if others {
+            return false;
+        }
+        if !control {
+            if text == Key.F1 {
+                root.help-requested();
+                return true;
+            }
+            if text == Key.F5 {
+                root.refresh-devices();
+                return true;
+            }
+            return false;
+        }
+        if text == "s" && root.delay-typing {
+            root.delay-apply-requested();
+            return true;
+        }
+        if text == "w" {
+            root.close-requested();
+            return true;
+        }
+        if text == "q" {
+            root.exit-requested();
+            return true;
+        }
+        if text == "n" {
+            root.new-zone-requested();
+            return true;
+        }
+        if text == "e" {
+            root.equalizer-requested();
+            return true;
+        }
+        if text.is-float() && text.to-float() >= 1 && text.to-float() <= 9 && text.to-float() <= root.presets.length && text.character-count == 1 {
+            root.preset-recall-requested(root.presets[text.to-float() - 1].id);
+            return true;
+        }
+        return false;
+    }
     // The Mac's slim window (main_zoom in src/window_rules.rs), and short
     // enough for a 1366 x 768 screen at 150 % (both columns scroll).
     min-width: 696px;
@@ -1751,259 +1833,6 @@ export component MainWindow inherits Window {
         power.checked = root.running;
     }
 
-    MenuBar {
-        Menu {
-            title: Strings.menu-file;
-
-            MenuItem {
-                title: Strings.menu-apply-delay;
-                shortcut: @keys(Control + S);
-                enabled: root.delay-typing;
-                activated => {
-                    root.delay-apply-requested();
-                }
-            }
-
-            MenuItem {
-                title: Strings.menu-close-window;
-                shortcut: @keys(Control + W);
-                activated => {
-                    root.close-requested();
-                }
-            }
-
-            MenuSeparator { }
-
-            MenuItem {
-                title: Strings.switch-source-on-quit;
-                checkable: true;
-                checked: root.switch-source-on-quit;
-                activated => {
-                    root.switch-source-on-quit-toggled(!root.switch-source-on-quit);
-                }
-            }
-
-            MenuItem {
-                title: Strings.launch-at-login;
-                checkable: true;
-                checked: root.launch-at-login;
-                activated => {
-                    root.launch-at-login-toggled(!root.launch-at-login);
-                }
-            }
-
-            if root.updater-available: MenuItem {
-                title: Strings.check-updates-automatically;
-                checkable: true;
-                checked: root.check-updates-automatically;
-                activated => {
-                    root.check-updates-automatically-toggled(!root.check-updates-automatically);
-                }
-            }
-
-            if Platform.os == OperatingSystemType.windows: MenuItem {
-                title: Strings.menu-check-setup;
-                activated => {
-                    root.setup-requested();
-                }
-            }
-
-            MenuSeparator { }
-
-            MenuItem {
-                title: Strings.menu-exit;
-                shortcut: @keys(Control + Q);
-                activated => {
-                    root.exit-requested();
-                }
-            }
-        }
-
-        Menu {
-            title: Strings.menu-speakers;
-
-            MenuItem {
-                title: root.running ? Strings.menu-turn-streaming-off : Strings.menu-turn-streaming-on;
-                activated => {
-                    root.power-toggled(!root.running);
-                }
-            }
-
-            if root.volume-keys-available: MenuItem {
-                title: Strings.volume-keys;
-                checkable: true;
-                checked: root.volume-keys;
-                activated => {
-                    root.volume-keys-toggled(!root.volume-keys);
-                }
-            }
-
-            MenuSeparator { }
-
-            MenuItem {
-                title: Strings.new-zone;
-                shortcut: @keys(Control + N);
-                activated => {
-                    root.new-zone-requested();
-                }
-            }
-
-            MenuItem {
-                title: Strings.refresh-devices;
-                shortcut: @keys(F5);
-                activated => {
-                    root.refresh-devices();
-                }
-            }
-
-            Menu {
-                title: Strings.hidden-speakers;
-
-                if root.hidden-speakers.length == 0: MenuItem {
-                    title: Strings.no-hidden-speakers;
-                    enabled: false;
-                }
-
-                for hidden in root.hidden-speakers: MenuItem {
-                    title: Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present);
-                    activated => {
-                        root.speaker-unhide-requested(hidden.id);
-                    }
-                }
-            }
-
-            MenuItem {
-                title: Strings.cast-add-address;
-                enabled: root.cast-by-address;
-                activated => {
-                    root.cast-add-address-requested();
-                }
-            }
-        }
-
-        Menu {
-            title: Strings.menu-view;
-
-            MenuItem {
-                title: Strings.equalizer;
-                shortcut: @keys(Control + E);
-                activated => {
-                    root.equalizer-requested();
-                }
-            }
-
-            // Rebuilt with the list, so Ctrl+1 to Ctrl+9 work while it is
-            // closed (spec S261).
-            Menu {
-                title: Strings.presets;
-
-                if root.presets.length == 0: MenuItem {
-                    title: Strings.no-presets;
-                    enabled: false;
-                }
-
-                for preset[index] in root.presets: MenuItem {
-                    title: preset.name;
-                    checkable: true;
-                    checked: preset.current;
-                    shortcut: index == 0 ? @keys(Control + "1") : index == 1 ? @keys(Control + "2") : index == 2 ? @keys(Control + "3") : index == 3 ? @keys(Control + "4") : index == 4 ? @keys(Control + "5") : index == 5 ? @keys(Control + "6") : index == 6 ? @keys(Control + "7") : index == 7 ? @keys(Control + "8") : index == 8 ? @keys(Control + "9") : @keys();
-                    activated => {
-                        root.preset-recall-requested(preset.id);
-                    }
-                }
-
-                MenuSeparator { }
-
-                MenuItem {
-                    title: Strings.save-preset;
-                    enabled: root.can-save-preset;
-                    activated => {
-                        root.save-preset-requested();
-                    }
-                }
-            }
-
-            MenuItem {
-                title: Strings.menu-remote;
-                activated => {
-                    root.remote-requested();
-                }
-            }
-
-            MenuSeparator { }
-
-            MenuItem {
-                title: Strings.show-virtual-devices;
-                checkable: true;
-                checked: root.show-virtual-devices;
-                activated => {
-                    root.show-virtual-devices-toggled(!root.show-virtual-devices);
-                }
-            }
-
-            MenuSeparator { }
-
-            Menu {
-                title: Strings.appearance;
-
-                MenuItem {
-                    title: Strings.appearance-system;
-                    checkable: true;
-                    checked: root.appearance == Appearance.system;
-                    activated => {
-                        root.appearance-chosen(Appearance.system);
-                    }
-                }
-
-                MenuItem {
-                    title: Strings.appearance-light;
-                    checkable: true;
-                    checked: root.appearance == Appearance.light;
-                    activated => {
-                        root.appearance-chosen(Appearance.light);
-                    }
-                }
-
-                MenuItem {
-                    title: Strings.appearance-dark;
-                    checkable: true;
-                    checked: root.appearance == Appearance.dark;
-                    activated => {
-                        root.appearance-chosen(Appearance.dark);
-                    }
-                }
-            }
-        }
-
-        Menu {
-            title: Strings.menu-help;
-
-            MenuItem {
-                title: Strings.help-title;
-                shortcut: @keys(F1);
-                activated => {
-                    root.help-requested();
-                }
-            }
-
-            if root.updater-available: MenuItem {
-                title: Strings.menu-check-for-updates;
-                activated => {
-                    root.check-for-updates-requested();
-                }
-            }
-
-            MenuSeparator { }
-
-            MenuItem {
-                title: Strings.menu-about;
-                activated => {
-                    root.about-requested();
-                }
-            }
-        }
-    }
-
     // Under everything else, so only clicks no control takes reach it.
     TouchArea {
         clicked => {
@@ -2013,6 +1842,7 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: Fluent.window-margin;
+        padding-top: title-row.height + Fluent.window-margin / 2;
         // The notices and the columns bring their gap above them, so a
         // notice opens and closes its gap with it.
         spacing: 0px;
@@ -2804,5 +2634,441 @@ export component MainWindow inherits Window {
 
     Announcer {
         said: root.notice-announcement;
+    }
+
+    // The top row in place of the system title bar: the menus, room to drag
+    // the window by, and the window's own buttons (src/title_bar.rs hit-tests
+    // the same sizes for Windows).
+    title-row := HorizontalLayout {
+        y: 0;
+        height: 32px;
+        padding-left: 6px;
+
+        menus := HorizontalLayout {
+            spacing: 2px;
+            padding-top: 0;
+            file-name := MenuName {
+                title: Strings.menu-file;
+                open => {
+                    file-menu.show({ x: 0, y: self.height });
+                }
+                step(by) => {
+                    root.focus-menu(0 + by);
+                }
+
+                file-menu := ContextMenuArea {
+                    Menu {
+                        MenuItem {
+                            title: Strings.with-keys(Strings.menu-apply-delay, "Ctrl+S");
+                            enabled: root.delay-typing;
+                            activated => {
+                                root.delay-apply-requested();
+                            }
+                        }
+
+                        MenuItem {
+                            title: Strings.with-keys(Strings.menu-close-window, "Ctrl+W");
+                            activated => {
+                                root.close-requested();
+                            }
+                        }
+
+                        MenuSeparator { }
+
+                        MenuItem {
+                            title: Strings.switch-source-on-quit;
+                            checkable: true;
+                            checked: root.switch-source-on-quit;
+                            activated => {
+                                root.switch-source-on-quit-toggled(!root.switch-source-on-quit);
+                            }
+                        }
+
+                        MenuItem {
+                            title: Strings.launch-at-login;
+                            checkable: true;
+                            checked: root.launch-at-login;
+                            activated => {
+                                root.launch-at-login-toggled(!root.launch-at-login);
+                            }
+                        }
+
+                        if root.updater-available: MenuItem {
+                            title: Strings.check-updates-automatically;
+                            checkable: true;
+                            checked: root.check-updates-automatically;
+                            activated => {
+                                root.check-updates-automatically-toggled(!root.check-updates-automatically);
+                            }
+                        }
+
+                        if Platform.os == OperatingSystemType.windows: MenuItem {
+                            title: Strings.menu-check-setup;
+                            activated => {
+                                root.setup-requested();
+                            }
+                        }
+
+                        MenuSeparator { }
+
+                        MenuItem {
+                            title: Strings.with-keys(Strings.menu-exit, "Ctrl+Q");
+                            activated => {
+                                root.exit-requested();
+                            }
+                        }
+                    }
+                }
+            }
+
+            speakers-name := MenuName {
+                title: Strings.menu-speakers;
+                open => {
+                    speakers-menu.show({ x: 0, y: self.height });
+                }
+                step(by) => {
+                    root.focus-menu(1 + by);
+                }
+
+                speakers-menu := ContextMenuArea {
+                    Menu {
+                        MenuItem {
+                            title: root.running ? Strings.menu-turn-streaming-off : Strings.menu-turn-streaming-on;
+                            activated => {
+                                root.power-toggled(!root.running);
+                            }
+                        }
+
+                        if root.volume-keys-available: MenuItem {
+                            title: Strings.volume-keys;
+                            checkable: true;
+                            checked: root.volume-keys;
+                            activated => {
+                                root.volume-keys-toggled(!root.volume-keys);
+                            }
+                        }
+
+                        MenuSeparator { }
+
+                        MenuItem {
+                            title: Strings.with-keys(Strings.new-zone, "Ctrl+N");
+                            activated => {
+                                root.new-zone-requested();
+                            }
+                        }
+
+                        MenuItem {
+                            title: Strings.with-keys(Strings.refresh-devices, "F5");
+                            activated => {
+                                root.refresh-devices();
+                            }
+                        }
+
+                        Menu {
+                            title: Strings.hidden-speakers;
+
+                            if root.hidden-speakers.length == 0: MenuItem {
+                                title: Strings.no-hidden-speakers;
+                                enabled: false;
+                            }
+
+                            for hidden in root.hidden-speakers: MenuItem {
+                                title: Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present);
+                                activated => {
+                                    root.speaker-unhide-requested(hidden.id);
+                                }
+                            }
+                        }
+
+                        MenuItem {
+                            title: Strings.cast-add-address;
+                            enabled: root.cast-by-address;
+                            activated => {
+                                root.cast-add-address-requested();
+                            }
+                        }
+                    }
+                }
+            }
+
+            view-name := MenuName {
+                title: Strings.menu-view;
+                open => {
+                    view-menu.show({ x: 0, y: self.height });
+                }
+                step(by) => {
+                    root.focus-menu(2 + by);
+                }
+
+                view-menu := ContextMenuArea {
+                    Menu {
+                        MenuItem {
+                            title: Strings.with-keys(Strings.equalizer, "Ctrl+E");
+                            activated => {
+                                root.equalizer-requested();
+                            }
+                        }
+
+                        // Rebuilt with the list, so Ctrl+1 to Ctrl+9 work while it is
+                        // closed (spec S261).
+                        Menu {
+                            title: Strings.presets;
+
+                            if root.presets.length == 0: MenuItem {
+                                title: Strings.no-presets;
+                                enabled: false;
+                            }
+
+                            for preset[index] in root.presets: MenuItem {
+                                title: Strings.with-keys(preset.name, index < 9 ? "Ctrl+" + (index + 1) : "");
+                                checkable: true;
+                                checked: preset.current;
+                                activated => {
+                                    root.preset-recall-requested(preset.id);
+                                }
+                            }
+
+                            MenuSeparator { }
+
+                            MenuItem {
+                                title: Strings.save-preset;
+                                enabled: root.can-save-preset;
+                                activated => {
+                                    root.save-preset-requested();
+                                }
+                            }
+                        }
+
+                        MenuItem {
+                            title: Strings.menu-remote;
+                            activated => {
+                                root.remote-requested();
+                            }
+                        }
+
+                        MenuSeparator { }
+
+                        MenuItem {
+                            title: Strings.show-virtual-devices;
+                            checkable: true;
+                            checked: root.show-virtual-devices;
+                            activated => {
+                                root.show-virtual-devices-toggled(!root.show-virtual-devices);
+                            }
+                        }
+
+                        MenuSeparator { }
+
+                        Menu {
+                            title: Strings.appearance;
+
+                            MenuItem {
+                                title: Strings.appearance-system;
+                                checkable: true;
+                                checked: root.appearance == Appearance.system;
+                                activated => {
+                                    root.appearance-chosen(Appearance.system);
+                                }
+                            }
+
+                            MenuItem {
+                                title: Strings.appearance-light;
+                                checkable: true;
+                                checked: root.appearance == Appearance.light;
+                                activated => {
+                                    root.appearance-chosen(Appearance.light);
+                                }
+                            }
+
+                            MenuItem {
+                                title: Strings.appearance-dark;
+                                checkable: true;
+                                checked: root.appearance == Appearance.dark;
+                                activated => {
+                                    root.appearance-chosen(Appearance.dark);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            help-name := MenuName {
+                title: Strings.menu-help;
+                open => {
+                    help-menu.show({ x: 0, y: self.height });
+                }
+                step(by) => {
+                    root.focus-menu(3 + by);
+                }
+
+                help-menu := ContextMenuArea {
+                    Menu {
+                        MenuItem {
+                            title: Strings.with-keys(Strings.help-title, "F1");
+                            activated => {
+                                root.help-requested();
+                            }
+                        }
+
+                        if root.updater-available: MenuItem {
+                            title: Strings.menu-check-for-updates;
+                            activated => {
+                                root.check-for-updates-requested();
+                            }
+                        }
+
+                        MenuSeparator { }
+
+                        MenuItem {
+                            title: Strings.menu-about;
+                            activated => {
+                                root.about-requested();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        TouchArea {
+            horizontal-stretch: 1;
+            double-clicked => {
+                root.maximized = !root.maximized;
+            }
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                    root.drag-requested();
+                }
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.right {
+                    root.window-menu-requested(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                }
+            }
+        }
+
+        WindowButton {
+            shape: "minimize";
+            label: Strings.window-minimize;
+            clicked => {
+                root.minimized = true;
+            }
+        }
+
+        WindowButton {
+            shape: root.maximized ? "restore" : "maximize";
+            label: root.maximized ? Strings.window-restore : Strings.window-maximize;
+            system-hover: root.maximize-hovered;
+            system-pressed: root.maximize-pressed;
+            clicked => {
+                root.maximized = !root.maximized;
+            }
+        }
+
+        WindowButton {
+            shape: "close";
+            label: Strings.window-close;
+            clicked => {
+                root.close-requested();
+            }
+        }
+    }
+
+    // On top of everything, along the edges, in title_bar::Edge's order.
+    if !root.maximized: Rectangle {
+        ResizeEdge {
+            edge: 0;
+            x: 8px;
+            y: 8px;
+            width: parent.width - 16px;
+            height: 8px;
+            mouse-cursor: ns-resize;
+            resize(edge) => {
+                root.resize-requested(edge);
+            }
+        }
+
+        ResizeEdge {
+            edge: 1;
+            x: 8px;
+            y: parent.height - 8px;
+            width: parent.width - 16px;
+            height: 8px;
+            mouse-cursor: ns-resize;
+            resize(edge) => {
+                root.resize-requested(edge);
+            }
+        }
+
+        ResizeEdge {
+            edge: 2;
+            x: parent.width - 8px;
+            y: 8px;
+            width: 8px;
+            height: parent.height - 16px;
+            mouse-cursor: ew-resize;
+            resize(edge) => {
+                root.resize-requested(edge);
+            }
+        }
+
+        ResizeEdge {
+            edge: 3;
+            x: 0;
+            y: 8px;
+            width: 8px;
+            height: parent.height - 16px;
+            mouse-cursor: ew-resize;
+            resize(edge) => {
+                root.resize-requested(edge);
+            }
+        }
+
+        ResizeEdge {
+            edge: 4;
+            x: parent.width - 8px;
+            y: 0;
+            width: 8px;
+            height: 8px;
+            mouse-cursor: nesw-resize;
+            resize(edge) => {
+                root.resize-requested(edge);
+            }
+        }
+
+        ResizeEdge {
+            edge: 5;
+            x: 0;
+            y: 0;
+            width: 8px;
+            height: 8px;
+            mouse-cursor: nwse-resize;
+            resize(edge) => {
+                root.resize-requested(edge);
+            }
+        }
+
+        ResizeEdge {
+            edge: 6;
+            x: parent.width - 8px;
+            y: parent.height - 8px;
+            width: 8px;
+            height: 8px;
+            mouse-cursor: nwse-resize;
+            resize(edge) => {
+                root.resize-requested(edge);
+            }
+        }
+
+        ResizeEdge {
+            edge: 7;
+            x: 0;
+            y: parent.height - 8px;
+            width: 8px;
+            height: 8px;
+            mouse-cursor: nesw-resize;
+            resize(edge) => {
+                root.resize-requested(edge);
+            }
+        }
     }
 }

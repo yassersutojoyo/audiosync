@@ -49,6 +49,7 @@ mod contrast;
 mod crash_dump;
 mod data_folder;
 mod debug_log;
+mod frameless;
 mod guide;
 mod launch_at_login;
 mod network_profile;

@@ -2042,9 +2042,25 @@ impl App {
         // The main window's first event comes once its native window exists,
         // with or without the focus; outside this filter, as it resizes.
         let min_held = std::cell::Cell::new(kind != Titled::Main);
+        let keys = RefCell::new(crate::frameless::WindowKeys::default());
         window(self).on_winit_window_event(move |_, event| {
             if let Some(input) = focus_input(event) {
                 with_app(&weak, |app| app.note_focus_input(input));
+            }
+            if kind == Titled::Main {
+                let mut outcome = None;
+                with_app(&weak, |app| {
+                    outcome = keys.borrow_mut().event(&app.main, event);
+                    if outcome == Some(crate::frameless::KeyOutcome::MenuFocused) {
+                        app.note_focus_input(crate::window_rules::FocusInput::Tab);
+                    }
+                    if matches!(event, WindowEvent::Resized(_)) {
+                        crate::frameless::note_layout(&app.main);
+                    }
+                });
+                if outcome == Some(crate::frameless::KeyOutcome::Taken) {
+                    return EventResult::PreventDefault;
+                }
             }
             if !min_held.replace(true) {
                 let weak = weak.clone();
@@ -2058,6 +2074,7 @@ impl App {
                 WindowEvent::Focused(true) => with_app(&weak, |app| {
                     if kind == Titled::Main {
                         keep_main_min_size(window(app));
+                        crate::frameless::attach_native(&app.main);
                     }
                     if kind == Titled::Dialog {
                         window(app).with_winit_window(|window| {
@@ -3337,6 +3354,7 @@ impl App {
             });
             apply_rename_left(&w);
         });
+        crate::frameless::connect(main);
         let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
         main.on_exit_requested(|| {
