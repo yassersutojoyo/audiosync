@@ -93,9 +93,10 @@ final class NowPlayingMonitor {
     /// Whether a reading that finds no track replaces the track shown, kept
     /// apart from AppKit so the logic suite can drive it.
     struct EmptyReadings {
-        // Three in a row is about 4 s at the 2 s poll.
-        static let dropAfter = 3
+        static let dropSpan: TimeInterval = 4
         private(set) var inARow = 0
+        /// When the first empty reading of `inARow` started.
+        private var firstEmptyAt: TimeInterval = 0
 
         /// What the last track's player answered when no track was read.
         enum Empty {
@@ -129,11 +130,11 @@ final class NowPlayingMonitor {
         /// candidate), said it stopped or refuses Apple Events. A paused
         /// `last` stays through any number of unreadable readings, since a
         /// long-paused Spotify answers with errors or an empty name for
-        /// minutes; it goes after `dropAfter` readings in a row that play
-        /// something without a name, and a playing `last` after `dropAfter`
-        /// empty readings of any kind.
+        /// minutes; it goes once readings in a row that play something without a
+        /// name span `dropSpan` by their `readAt`, and a playing `last` once
+        /// empty readings of any kind do.
         mutating func next(reading: Track?, last: Track?, lastPlayerRuns: Bool,
-                           lastPlayer: Empty = .unreadable) -> Track? {
+                           lastPlayer: Empty = .unreadable, readAt: TimeInterval = 0) -> Track? {
             dropped = nil
             guard reading == nil, let last else {
                 inARow = 0
@@ -148,8 +149,9 @@ final class NowPlayingMonitor {
                 case .unreadable, .playingNameless:
                     // A paused track's unreadable reading neither counts nor restarts the count.
                     guard last.isPlaying || lastPlayer == .playingNameless else { return last }
+                    if inARow == 0 { firstEmptyAt = readAt }
                     inARow += 1
-                    if inARow < Self.dropAfter { return last }
+                    if readAt - firstEmptyAt < Self.dropSpan { return last }
                     dropped = lastPlayer == .playingNameless ? .playingNameless(inARow) : .unreadable(inARow)
                 }
             }
@@ -343,8 +345,18 @@ final class NowPlayingMonitor {
     static let changeNotices = [Notification.Name("com.apple.Music.playerInfo"),
                                 Notification.Name("com.spotify.client.PlaybackStateChanged")]
 
+    /// Seconds between readings of the players. A play/pause key goes to the
+    /// player, not to AudioSync, so only a reading shows it on the card.
+    static func pollInterval(onScreen: Bool, playerRuns: Bool) -> TimeInterval {
+        onScreen && playerRuns ? 0.5 : 2.0
+    }
+
     // Main thread.
     private var timer: Timer?
+    /// The Now Playing card or the menu bar panel is on screen.
+    var onScreen = false {
+        didSet { retime() }
+    }
     private let notices = ChangeNotices()
     /// A change notice came in while a reading was under way, which may have read the player before it.
     private var readAgain = false
@@ -402,7 +414,7 @@ final class NowPlayingMonitor {
         hasReading = false
         emptyReadings.reset()
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in self?.refresh() }
+        schedule()
         notices.posted = { [weak self] in
             guard let self else { return }
             if self.refreshing { self.readAgain = true } else { self.refresh() }
@@ -426,6 +438,19 @@ final class NowPlayingMonitor {
         startedAt = nil
         hasReading = false
         reading = nil
+    }
+
+    private func schedule() {
+        let interval = Self.pollInterval(onScreen: onScreen, playerRuns: track != nil)
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.refresh() }
+    }
+
+    /// Main thread. Restarts a running poll whose interval no longer fits.
+    private func retime() {
+        guard let timer, timer.timeInterval != Self.pollInterval(onScreen: onScreen, playerRuns: track != nil)
+        else { return }
+        timer.invalidate()
+        schedule()
     }
 
     /// The player `send` drives now, by bundle ID: the one read, else the
@@ -512,7 +537,7 @@ final class NowPlayingMonitor {
                     ?? false
                 let lastPlayer = last.flatMap { empties[$0.bundleID] } ?? .unreadable
                 let shown = self.emptyReadings.next(reading: promised, last: last, lastPlayerRuns: lastPlayerRuns,
-                                                    lastPlayer: lastPlayer)
+                                                    lastPlayer: lastPlayer, readAt: readAt)
                 if let drop = self.emptyReadings.dropped, let last {
                     DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason))")
                 }
@@ -535,6 +560,7 @@ final class NowPlayingMonitor {
         if first { hasReading = true }
         guard next != track || first || Position.jumped(from: track?.position, to: next?.position) else { return }
         track = next
+        retime()
         onChange?(next)
     }
 
