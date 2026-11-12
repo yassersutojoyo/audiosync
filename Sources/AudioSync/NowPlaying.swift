@@ -93,15 +93,10 @@ final class NowPlayingMonitor {
     /// Whether a reading that finds no track replaces the track shown, kept
     /// apart from AppKit so the logic suite can drive it.
     struct EmptyReadings {
-        /// Readings in a row at the 2 s poll; they span `dropSpan`.
-        static let dropAfter = 3
         static let dropSpan: TimeInterval = 4
-
-        /// Readings in a row that span `dropSpan` at `interval`, so a faster poll doesn't drop sooner.
-        static func readingsToDrop(interval: TimeInterval) -> Int {
-            Int((dropSpan / interval).rounded()) + 1
-        }
         private(set) var inARow = 0
+        /// When the first empty reading of `inARow` started.
+        private var firstEmptyAt: TimeInterval = 0
 
         /// What the last track's player answered when no track was read.
         enum Empty {
@@ -135,11 +130,11 @@ final class NowPlayingMonitor {
         /// candidate), said it stopped or refuses Apple Events. A paused
         /// `last` stays through any number of unreadable readings, since a
         /// long-paused Spotify answers with errors or an empty name for
-        /// minutes; it goes after `readingsToDrop` readings in a row that play
-        /// something without a name, and a playing `last` after as many
-        /// empty readings of any kind, `interval` apart.
+        /// minutes; it goes once readings in a row that play something without a
+        /// name span `dropSpan` by their `readAt`, and a playing `last` once
+        /// empty readings of any kind do.
         mutating func next(reading: Track?, last: Track?, lastPlayerRuns: Bool,
-                           lastPlayer: Empty = .unreadable, interval: TimeInterval = 2) -> Track? {
+                           lastPlayer: Empty = .unreadable, readAt: TimeInterval = 0) -> Track? {
             dropped = nil
             guard reading == nil, let last else {
                 inARow = 0
@@ -154,8 +149,9 @@ final class NowPlayingMonitor {
                 case .unreadable, .playingNameless:
                     // A paused track's unreadable reading neither counts nor restarts the count.
                     guard last.isPlaying || lastPlayer == .playingNameless else { return last }
+                    if inARow == 0 { firstEmptyAt = readAt }
                     inARow += 1
-                    if inARow < Self.readingsToDrop(interval: interval) { return last }
+                    if readAt - firstEmptyAt < Self.dropSpan { return last }
                     dropped = lastPlayer == .playingNameless ? .playingNameless(inARow) : .unreadable(inARow)
                 }
             }
@@ -541,8 +537,7 @@ final class NowPlayingMonitor {
                     ?? false
                 let lastPlayer = last.flatMap { empties[$0.bundleID] } ?? .unreadable
                 let shown = self.emptyReadings.next(reading: promised, last: last, lastPlayerRuns: lastPlayerRuns,
-                                                    lastPlayer: lastPlayer,
-                                                    interval: self.timer?.timeInterval ?? 2)
+                                                    lastPlayer: lastPlayer, readAt: readAt)
                 if let drop = self.emptyReadings.dropped, let last {
                     DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason))")
                 }
