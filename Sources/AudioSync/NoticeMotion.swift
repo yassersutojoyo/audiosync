@@ -16,18 +16,22 @@ extension NoticeMotion {
         return AnyTransition.asymmetric(
             insertion: .opacity.animation(.easeOut(duration: fade).delay(duration - fade)),
             removal: .opacity.animation(.easeOut(duration: fade)))
-            .combined(with: .modifier(active: NoticeReveal(open: false), identity: NoticeReveal(open: true)))
+            .combined(with: .modifier(active: NoticeReveal(progress: 0), identity: NoticeReveal(progress: 1)))
     }
 }
 
-/// A notice's height opening from its top edge. Clipped, so a closing one
-/// never shows past the room it has left.
-private struct NoticeReveal: ViewModifier {
-    let open: Bool
+/// A notice's height opening from its top edge, laid out at each animated `progress` so the AppKit
+/// scroll views below follow it (an animated frame alone jumped them); clipped to the room it has.
+private struct NoticeReveal: ViewModifier, Animatable {
+    var progress: Double
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
 
     func body(content: Content) -> some View {
-        content
-            .frame(height: open ? nil : 0, alignment: .top)
+        PaneHeight(fraction: progress) { content }
             .clipped()
     }
 }
