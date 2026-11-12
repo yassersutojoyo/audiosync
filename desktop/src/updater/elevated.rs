@@ -5,7 +5,6 @@
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use ed25519_dalek::VerifyingKey;
 
@@ -18,8 +17,8 @@ use super::swap::{self, Rename, StepLog, Swapped};
 use super::version::Version;
 use crate::debug_log::DebugLog;
 
-/// The elevated copy's first argument; the zip, the version, the signature
-/// and the install folder follow.
+/// The elevated copy's first argument; the zip, the version and the
+/// signature follow. It installs into its own exe's folder.
 pub const MARKER: &str = "--install-update-elevated";
 
 /// What Windows answers when the user declines the consent prompt.
@@ -56,12 +55,21 @@ pub fn elevates(install_dir: &Path, machine_dirs: &[PathBuf]) -> bool {
 /// Runs the elevated copy for the verified download `zip` and reads its
 /// outcome; a declined prompt counts as Cancel.
 pub fn install(env: &Env, update: &Update, zip: &Path) -> Installed {
+    let base64 = |text: &str| {
+        !text.is_empty()
+            && text
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"+/=".contains(&byte))
+    };
+    // Anything else could carry quotes into the elevated command line.
+    if !update.enclosure.signature.as_deref().is_some_and(base64) {
+        return Installed::BadSignature;
+    }
     let args = [
         OsStr::new(MARKER),
         zip.as_os_str(),
         OsStr::new(&update.version_text),
         OsStr::new(update.enclosure.signature.as_deref().unwrap_or("")),
-        env.install_dir.as_os_str(),
     ]
     .map(OsStr::to_os_string);
     let ran = env.elevate.run(&args);
@@ -146,16 +154,25 @@ pub fn from_command_line() -> Option<i32> {
     if args.first().map(OsString::as_os_str) != Some(OsStr::new(MARKER)) {
         return None;
     }
-    let log = DebugLog::appending_from_env();
+    // No debug log: the user's own %TEMP% may redirect an elevated write.
+    let log = DebugLog::default();
     let key = signature::key(signature::RELEASE_KEY);
     let running = Version::parse(env!("CARGO_PKG_VERSION"));
-    let code = match (key, running) {
-        (Some(key), Some(running)) => {
-            run_args(&args, &key, &running, Arch::own(), &RealFiles, &log).unwrap_or(FAILED)
-        }
+    let exe = std::env::current_exe().ok();
+    let install_dir = exe.as_deref().and_then(Path::parent);
+    let code = match (key, running, install_dir) {
+        (Some(key), Some(running), Some(install_dir)) => run_args(
+            &args,
+            install_dir,
+            &key,
+            &running,
+            Arch::own(),
+            &RealFiles,
+            &log,
+        )
+        .unwrap_or(FAILED),
         _ => FAILED,
     };
-    log.flush(Duration::from_secs(1));
     Some(code as i32)
 }
 
@@ -163,13 +180,14 @@ pub fn from_command_line() -> Option<i32> {
 /// answers the exit code, or nothing when this is no elevated copy.
 pub fn run_args(
     args: &[OsString],
+    install_dir: &Path,
     key: &VerifyingKey,
     running: &Version,
     arch: Arch,
     files: &dyn Files,
     log: &DebugLog,
 ) -> Option<u32> {
-    let [marker, zip, version, signature, install_dir] = args else {
+    let [marker, zip, version, signature] = args else {
         return None;
     };
     if marker != MARKER {
@@ -180,7 +198,7 @@ pub fn run_args(
         Path::new(zip),
         &version.to_string_lossy(),
         signature,
-        Path::new(install_dir),
+        install_dir,
         key,
         running,
         arch,
@@ -484,6 +502,7 @@ pub mod tests {
     #[cfg(windows)]
     struct InProcess {
         dirs: Vec<PathBuf>,
+        install_dir: PathBuf,
         key: VerifyingKey,
         declined: bool,
     }
@@ -500,8 +519,16 @@ pub mod tests {
             }
             let running = Version::parse("0.8.0").unwrap();
             let log = DebugLog::default();
-            run_args(args, &self.key, &running, Arch::X64, &RealFiles, &log)
-                .ok_or_else(|| io::Error::other("no elevated copy"))
+            run_args(
+                args,
+                &self.install_dir,
+                &self.key,
+                &running,
+                Arch::X64,
+                &RealFiles,
+                &log,
+            )
+            .ok_or_else(|| io::Error::other("no elevated copy"))
         }
     }
 
@@ -532,6 +559,7 @@ pub mod tests {
             move |env: &Env| -> Arc<dyn Elevate> {
                 Arc::new(InProcess {
                     dirs: vec![env.install_dir.parent().unwrap().to_owned()],
+                    install_dir: env.install_dir.clone(),
                     key: env.key,
                     declined,
                 })
@@ -600,7 +628,15 @@ pub mod tests {
         let running = Version::parse("0.8.0").unwrap();
         let log = DebugLog::default();
         assert_eq!(
-            run_args(&args, &key, &running, Arch::X64, &RealFiles, &log),
+            run_args(
+                &args,
+                Path::new("install"),
+                &key,
+                &running,
+                Arch::X64,
+                &RealFiles,
+                &log
+            ),
             None
         );
     }
