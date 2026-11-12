@@ -7656,21 +7656,27 @@ do {
     check(NoticeMotion.opacity(0) == 0 && NoticeMotion.opacity(1) == 1 && NoticeMotion.opacity(0.75) < 1
             && NoticeMotion.room(0.75) == 1 && NoticeMotion.opacity(0.5) == 0 && NoticeMotion.room(0.5) > 0.5,
           "notices: a notice fades in once most of its room is open, and a closing one fades before its room shuts")
+    check(NoticeMotion.room(0.75) == 1 && NoticeMotion.opacity(1 - 1 / (60 * NoticeMotion.grow.duration)) < 1
+            && NoticeMotion.room(1 - 0.06 / NoticeMotion.grow.duration) == 1
+            && NoticeMotion.room(1 - 0.07 / NoticeMotion.grow.duration) < 1,
+          "notices: a closing notice starts fading in its first frame and its room starts to shut 0.06 s later")
     // Source checks. On the Mac the columns jumped back 8 pt at 0.06 s, when the fade's own delayed animation
     // began, and a closing notice moved them 32.5 pt in its first frame on the front-loaded curve.
     let noticeMotionSource = (try? String(contentsOfFile: "Sources/AudioSync/NoticeMotion.swift", encoding: .utf8)) ?? ""
     let noticeRevealSource = noticeMotionSource.components(separatedBy: "struct NoticeReveal").dropFirst().first ?? ""
-    let growTransition = noticeMotionSource.components(separatedBy: "guard self == .grow else { return .opacity")
-        .dropFirst().first?.components(separatedBy: "struct NoticeReveal").first ?? ""
+    // The Mac's round 3 recording: with the window animating on the notice list, the columns slid on that
+    // linear animation from the first frame, ahead of the room, and covered a closing notice still opaque.
+    let noticeColumnsSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     check(noticeRevealSource.contains(": ViewModifier, Animatable")
             && noticeRevealSource.contains("PaneHeight(fraction: NoticeMotion.room(progress))")
             && noticeRevealSource.contains(".opacity(NoticeMotion.opacity(progress))")
-            && !growTransition.isEmpty && !growTransition.contains(".animation(") && !noticeMotionSource.contains("timingCurve"),
-          "notices: a notice's room and fade are laid out frame by frame from one progress, with no animation of their own")
-    let noticeColumnsSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
-    check(noticeColumnsSource.contains(".animation(NoticeMotion.of(reduceMotion: reduceMotion).columns, value: model.notices)")
-            && !noticeColumnsSource.contains("columns(closing:"),
-          "notices: the columns move on the notice's one progress, opening and closing alike, with no delay of their own")
+            && noticeMotionSource.components(separatedBy: ".animation(").count == 2
+            && noticeMotionSource.contains(".animation(.linear(duration: duration))")
+            && !noticeMotionSource.contains("timingCurve") && !noticeMotionSource.contains(".delay("),
+          "notices: a notice's room and fade are laid out frame by frame from one linear progress, the only animation they follow")
+    check(!noticeColumnsSource.contains("value: model.notices)")
+            && !noticeColumnsSource.contains("NoticeMotion.of(reduceMotion: reduceMotion).columns"),
+          "notices: the columns follow the notice's room frame by frame, with no animation of the notice list around them")
     let calibrateRowSource = ((try? String(contentsOfFile: "Sources/AudioSync/CalibrateAllViews.swift", encoding: .utf8)) ?? "")
         .components(separatedBy: "struct CalibrateAllButton").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
