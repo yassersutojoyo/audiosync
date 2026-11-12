@@ -282,10 +282,13 @@ enum TrackWipe {
         return pressed
     }
 
-    static func seconds(reduceMotion: Bool) -> TimeInterval { duration }
+    static func seconds(reduceMotion: Bool) -> TimeInterval { reduceMotion ? fadeDuration : duration }
 
     /// The edge line's place as a fraction from the left; none at rest or in a cross-fade.
-    static func edge(_ direction: Direction, progress: Double, reduceMotion: Bool) -> Double? { nil }
+    static func edge(_ direction: Direction, progress: Double, reduceMotion: Bool) -> Double? {
+        guard !reduceMotion, progress > 0, progress < 1 else { return nil }
+        return direction == .next ? 1 - progress : progress
+    }
 
     /// Another song, not the same one playing, pausing or getting its cover.
     static func isNewSong(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {

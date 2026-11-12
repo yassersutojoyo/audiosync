@@ -473,13 +473,20 @@ struct MainView: View {
             if let outgoing = wipe.outgoing {
                 content(outgoing)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .mask(WipeMask(direction: wipe.direction, progress: wipe.progress, showsNew: false))
+                    .mask(WipeMask(direction: wipe.direction, progress: wipe.fades ? 0 : wipe.progress, showsNew: false))
+                    .opacity(wipe.fades ? 1 - wipe.progress : 1)
                     .transition(.identity)
                     .accessibilityHidden(true)
             }
             content(shown)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .mask(WipeMask(direction: wipe.direction, progress: wipe.progress, showsNew: true))
+                .mask(WipeMask(direction: wipe.direction, progress: wipe.fades ? 1 : wipe.progress, showsNew: true))
+                .opacity(wipe.fades ? wipe.progress : 1)
+        }
+        .overlay {
+            WipeEdge(direction: wipe.direction, progress: wipe.progress, fades: wipe.fades)
+                .stroke(Color.primary.opacity(0.4), lineWidth: 1)
+                .accessibilityHidden(true)
         }
     }
 
@@ -1009,6 +1016,27 @@ private struct WipeMask: Shape {
     }
 }
 
+/// The thin line on the sweeping edge (`TrackWipe.edge`).
+private struct WipeEdge: Shape {
+    let direction: TrackWipe.Direction
+    var progress: Double
+    let fades: Bool
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        guard let edge = TrackWipe.edge(direction, progress: progress, reduceMotion: fades) else { return path }
+        let x = rect.minX + rect.width * edge
+        path.move(to: CGPoint(x: x, y: rect.minY))
+        path.addLine(to: CGPoint(x: x, y: rect.maxY))
+        return path
+    }
+}
+
 /// The Now Playing block's side of `TrackWipe`: the press it waits on, the
 /// old track kept up while a new cover loads, and the outgoing one during a
 /// sweep. An object rather than @State, for the Command Line Tools toolchain.
@@ -1017,6 +1045,8 @@ final class TrackWipeState: ObservableObject {
     @Published private(set) var outgoing: NowPlayingMonitor.Track?
     @Published private(set) var progress: Double = 1
     private(set) var direction = TrackWipe.Direction.next
+    /// Reduce Motion: the tracks cross-fade instead of sweeping.
+    private(set) var fades = false
     private var pressed: (direction: TrackWipe.Direction, at: Date)?
     private var current: NowPlayingMonitor.Track?
     private var sweeps = 0
@@ -1035,6 +1065,7 @@ final class TrackWipeState: ObservableObject {
         else { return }
         pressed = nil
         self.direction = direction
+        fades = reduceMotion
         guard TrackWipe.waitsForArt(oldHasArt: old.artwork != nil, newHasArt: new.artwork != nil) else {
             sweep(from: old)
             return
@@ -1062,7 +1093,8 @@ final class TrackWipeState: ObservableObject {
         // The masks have to draw once at 0 before the animation can run from there.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.sweeps == mark else { return }
-            withAnimation(.timingCurve(0.2, 0.8, 0.2, 1, duration: TrackWipe.duration)) {
+            let seconds = TrackWipe.seconds(reduceMotion: self.fades)
+            withAnimation(self.fades ? .linear(duration: seconds) : .timingCurve(0.2, 0.8, 0.2, 1, duration: seconds)) {
                 self.progress = 1
             } completion: { [weak self] in
                 guard let self, self.sweeps == mark else { return }
