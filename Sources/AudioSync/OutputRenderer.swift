@@ -389,6 +389,7 @@ final class OutputRenderer: FadingOutput {
         let rendering = target
         Self.teardownQueue.async {
             Self.tearDown(live, started: true, initialized: true)
+            // The last reference may go here: deinit then runs on this queue and touches nothing main-only.
             withExtendedLifetime((self, rendering)) {}
         }
     }
