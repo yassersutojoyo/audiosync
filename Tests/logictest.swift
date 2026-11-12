@@ -6727,6 +6727,12 @@ do {
     // covers: S218
     check(shown == nil && shows(shown).fields == untitled && quit.dropped == .quit,
           "now playing: a player that quit sends the fallback at the first empty reading")
+    var notRunning = NowPlayingMonitor.EmptyReadings()
+    var notRunningShown = notRunning.next(reading: playing, last: nil, lastPlayerRuns: true, readAt: 0)
+    notRunningShown = notRunning.next(reading: nil, last: notRunningShown, lastPlayerRuns: false, readAt: 0.5)
+    // covers: S218
+    check(notRunningShown?.title == "Tune" && notRunning.dropped == nil,
+          "now playing: one reading that finds a playing track's player not running keeps the track")
     var nameless = NowPlayingMonitor.EmptyReadings()
     shown = nameless.next(reading: paused, last: nil, lastPlayerRuns: true, readAt: 0)
     shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless, readAt: 2)
