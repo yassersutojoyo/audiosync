@@ -223,6 +223,7 @@ final class AppModel: ObservableObject {
         var setLaunchAtLogin: (Bool) -> Void = { _ in }
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
         var setVolumeKeys: (Bool) -> Void = { _ in }
+        var setHidesDockIcon: (Bool) -> Void = { _ in }
         var openAccessibilitySettings: () -> Void = {}
         var setAppearance: (AppAppearance) -> Void = { _ in }
         var transport: (NowPlayingMonitor.Command) -> Void = { _ in }
@@ -338,6 +339,7 @@ final class AppModel: ObservableObject {
     @Published var launchAtLogin = false
     @Published var showVirtualDevices = false
     @Published var volumeKeys = true
+    @Published var hidesDockIcon = true
     /// The switch is on, but macOS hasn't given AudioSync Accessibility access.
     @Published var volumeKeysNeedAccess = false
     /// Show Virtual Devices is off and left at least one output out (S434).

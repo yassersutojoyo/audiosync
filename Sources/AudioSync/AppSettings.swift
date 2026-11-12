@@ -62,6 +62,7 @@ struct AppSettings: Equatable {
         static let showVirtualDevices = "showVirtualOutputDevices"
         /// Volume Keys Control AudioSync (S429), on unless turned off.
         static let volumeKeys = "volumeKeysControlAudioSync"
+        static let hidesDockIcon = "hideDockIconWhenWindowCloses"
         /// `AppAppearance.defaultsValue` (S155).
         static let appearance = "appearance"
         /// The channel pair (`InputChannelPair.index`) each input device plays,
@@ -145,6 +146,7 @@ struct AppSettings: Equatable {
     var hiddenSpeakers = HiddenSpeakers()
     var showVirtualDevices = false
     var volumeKeys = true
+    var hidesDockIcon = true
     var appearance = AppAppearance.system
     var inputPairs: [String: Int] = [:]
     var webRemote = false
@@ -203,6 +205,7 @@ struct AppSettings: Equatable {
         s.presets = decodePresets(read(Keys.presets) as? Data)
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.volumeKeys = read(Keys.volumeKeys) as? Bool ?? true
+        s.hidesDockIcon = read(Keys.hidesDockIcon) as? Bool ?? true
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
         s.inputPairs = channelPairs(read(Keys.inputChannelPairs))
         s.webRemote = read(Keys.webRemote) as? Bool ?? false
@@ -504,6 +507,8 @@ struct SettingsStore {
     func save(showVirtualDevices: Bool) { write(showVirtualDevices, Keys.showVirtualDevices) }
 
     func save(volumeKeys: Bool) { write(volumeKeys, Keys.volumeKeys) }
+
+    func save(hidesDockIcon: Bool) { write(hidesDockIcon, Keys.hidesDockIcon) }
 
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
 

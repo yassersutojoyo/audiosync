@@ -1168,3 +1168,9 @@ enum StoredEqualizer {
         try? JSONEncoder().encode(settings)
     }
 }
+
+/// Whether AudioSync shows its Dock icon. `windows` counts the regular windows
+/// on screen or minimized: main, Settings, Equalizer, Guide, Web Remote, Setup.
+enum DockIcon {
+    static func shows(windows: Int, hidesWhenClosed: Bool) -> Bool { !hidesWhenClosed || windows > 0 }
+}
