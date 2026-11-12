@@ -6,6 +6,7 @@
 pub mod appcast;
 pub mod appimage;
 pub mod archive;
+pub mod elevated;
 pub mod fetch;
 pub mod files;
 pub mod flow;
