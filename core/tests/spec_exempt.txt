@@ -220,3 +220,4 @@ S451 Mac host only: the notice for a capture that goes silent after sound; the M
 S452 Windows host only: the two-tone keyboard focus ring on the controls and sliders; the desktop tests marked S452 check it.
 S453 Windows host only: the equalizer band's fill from 0 dB, its tick, Home and End, and the Custom label; the desktop tests marked S453 check it.
 S454 hosts and the remote crate: the app's notices on the Web Remote page; the remote crate, desktop and Mac logic tests marked S454 check it.
+S456 Mac host only: the remembered system level of the built-in speakers; the Mac logic suite checks it.
