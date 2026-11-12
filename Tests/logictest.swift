@@ -18524,6 +18524,13 @@ do {
             && InPlaceName.applied(typed: "  ", suggested: "Curve 2", returned: true) == "Curve 2"
             && InPlaceName.applied(typed: "", suggested: "Curve 2", returned: false) == nil,
           "name typed in place: Return with nothing typed takes the suggested name, the focus leaving with nothing typed applies nothing")
+    let houseLiving = SpeakerZone(id: "z1", name: "Living", members: [], volume: 100)
+    let houseNew = SpeakerZone(id: "z2", name: "Zone 2", members: [], volume: 100)
+    let houseRenamed = ZoneEdit.renaming("z2", to: " Living ", in: [houseLiving, houseNew]).map(\.name)
+    let houseKept = ZoneEdit.renaming("z1", to: "Living", in: [houseLiving, houseNew]).map(\.name)
+    check(houseRenamed == ["Living", "Living 2"] && houseKept == ["Living", "Zone 2"],
+          "zone name typed in place: a name another zone has gets the next free number, a zone keeps its own name",
+          "\(houseRenamed) \(houseKept)")
     let houseSettings = (try? String(contentsOfFile: "Sources/AudioSync/SettingsWindow.swift", encoding: .utf8)) ?? ""
     let houseMain = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let houseZones = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Zones.swift", encoding: .utf8)) ?? ""
