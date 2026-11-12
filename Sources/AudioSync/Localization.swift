@@ -1234,7 +1234,9 @@ struct UIStrings {
     let deviceVolumeHelp = "macOS has its own volume for each output, and it limits AudioSync's slider."
 
     /// The built-in speakers' value button, where other local rows show their delay: "System 60%".
-    func systemVolumeValue(_ value: Int, muted: Bool = false) -> String { "System \(percent(value))" }
+    func systemVolumeValue(_ value: Int, muted: Bool = false) -> String {
+        muted ? "System muted" : "System \(percent(value))"
+    }
 
     /// That button's tooltip and VoiceOver hint.
     func systemVolumeHelp(name: String) -> String { "Sets the macOS volume of \(name)" }

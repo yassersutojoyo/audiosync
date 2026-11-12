@@ -45,13 +45,20 @@ extension AppDelegate {
         localDevices[uid].flatMap { deviceVolumes.level($0.id) }
     }
 
+    /// Local output `uid`'s device is muted in macOS.
+    func systemMuted(_ uid: String) -> Bool {
+        localDevices[uid].map { deviceVolumes.muted($0.id) } ?? false
+    }
+
     /// The user set that volume on the output's slider: it is written to the
-    /// device and becomes the remembered level, stored when `save` (a drag
-    /// saves once, on release). False when the device refused it.
+    /// device, unmuting it, and becomes the remembered level, stored when
+    /// `save` (a drag saves once, on release). False when the device refused it.
     @discardableResult
     func setSystemVolume(_ uid: String, _ level: Double, save: Bool = true) -> Bool {
         let level = min(1, max(0, level))
-        guard let device = localDevices[uid], deviceVolumes.setLevel(device.id, level) else { return false }
+        guard let device = localDevices[uid] else { return false }
+        if deviceVolumes.muted(device.id) { deviceVolumes.unmute(device.id) }
+        guard deviceVolumes.setLevel(device.id, level) else { return false }
         localVolumeMemory.chosen(uid, level: level)
         if save { saveLocalVolumes() }
         return true

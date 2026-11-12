@@ -305,6 +305,18 @@ final class DeviceVolumes {
         read(device).volume
     }
 
+    /// The device is muted in macOS.
+    func muted(_ device: AudioDeviceID) -> Bool {
+        read(device).muted == true
+    }
+
+    /// Unmutes the device on each of its mute controls; false when every one refused.
+    @discardableResult
+    func unmute(_ device: AudioDeviceID) -> Bool {
+        let controls = DeviceVolumeControls.find(on: device, access)
+        return controls.mute.map { access.write(device, DeviceVolumeControl(part: .mute, element: $0), 0) }.contains(noErr)
+    }
+
     /// Sets the device's own volume on each of its volume controls; false
     /// when it has none or every one refused, so a partial write still gets put back.
     @discardableResult

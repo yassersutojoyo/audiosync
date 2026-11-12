@@ -809,6 +809,7 @@ extension AppDelegate {
         publish(\.builtInVolume, SystemVolumeCue.shownLevel(read: localReference.flatMap { systemVolume($0) },
                                                              held: appModel.builtInVolumeHeld,
                                                              shown: appModel.builtInVolume))
+        publish(\.builtInMuted, localReference.map { systemMuted($0) } ?? false)
     }
 
     /// Sets one model value, only when it differs: every assignment to a

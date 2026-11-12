@@ -1926,7 +1926,7 @@ private struct SystemVolumeButton: View {
         Button {
             model.toggleDelayPanel(id)
         } label: {
-            Text(t.systemVolumeValue(percent))
+            Text(t.systemVolumeValue(percent, muted: model.builtInMuted))
                 .font(.subheadline)
                 .monospacedDigit()
                 // Small text: the readable teal (≥ 4.5:1), not the brand teal.
@@ -1936,7 +1936,7 @@ private struct SystemVolumeButton: View {
         .focused(focus)
         .help(t.systemVolumeHelp(name: name))
         .accessibilityLabel(t.systemVolumeButton)
-        .accessibilityValue(t.percent(percent))
+        .accessibilityValue(model.builtInMuted ? t.deviceVolumeHint(.muted) : t.percent(percent))
         .accessibilityHint(t.systemVolumeHelp(name: name))
     }
 }

@@ -331,6 +331,8 @@ final class AppModel: ObservableObject {
     /// The macOS volume of the built-in speakers (the reference), 0 to 1;
     /// nil when their device has no settable volume, so their row has no button.
     @Published var builtInVolume: Double?
+    /// Their device is muted in macOS; moving their panel's slider unmutes it.
+    @Published var builtInMuted = false
     /// Their device turned down the last level set on their panel's slider.
     @Published var builtInVolumeRefused = false
     /// The user holds that slider: the level is stored once, on release.
@@ -498,7 +500,10 @@ final class AppModel: ObservableObject {
     func setBuiltInVolume(_ id: String, _ level: Double) {
         let taken = actions.setSystemVolume(id, level, !builtInVolumeHeld)
         builtInVolumeRefused = !taken
-        if taken { builtInVolume = level }
+        if taken {
+            builtInVolume = level
+            builtInMuted = false
+        }
     }
 
     /// The built-in speakers' panel slider is held or let go: on release the
