@@ -18396,5 +18396,17 @@ do {
           "scrolling title: a title at its start shows its first letter in full", "\(startStops)")
 }
 
+// MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)
+do {
+    check(DockIcon.shows(windows: 1, hidesWhenClosed: true) && DockIcon.shows(windows: 3, hidesWhenClosed: true)
+            && !DockIcon.shows(windows: 0, hidesWhenClosed: true),
+          "Dock icon: with Hide Dock Icon When Window Closes on, it stays while any window is open and goes when the last one closes")
+    check(DockIcon.shows(windows: 0, hidesWhenClosed: false) && DockIcon.shows(windows: 2, hidesWhenClosed: false),
+          "Dock icon: with the switch off, it stays after every window closes")
+    check(AppSettings.load { _ in nil }.hidesDockIcon
+            && !AppSettings.load { key -> Any? in key == AppSettings.Keys.hidesDockIcon ? false : nil }.hidesDockIcon,
+          "Dock icon: Hide Dock Icon When Window Closes is on unless turned off")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
