@@ -7676,13 +7676,15 @@ do {
             && noticeMotionSource.contains("shape.animation(animation)")
             && !noticeMotionSource.contains("timingCurve") && !noticeMotionSource.contains(".delay("),
           "notices: a notice's room and fade are laid out frame by frame from one linear progress, the only animation they follow")
-    // Round 4: with nothing animating the list, a closing notice left the layout at once, the columns
-    // jumped 75 pt in one frame and its fade played over them where it had been.
-    check(noticeColumnsSource.components(separatedBy: "value: model.notices").count == 2
-            && noticeColumnsSource.contains("NoticeStack(model: model)\n"
-                + "                .animation(NoticeMotion.of(reduceMotion: reduceMotion).animation, value: model.notices.items.map(\\.id))")
-            && !noticeColumnsSource.contains("NoticeMotion.of(reduceMotion: reduceMotion).columns"),
-          "notices: one animation on the notice stack, keyed on its notices, carries an opening and a closing notice on the notice curve")
+    // Rounds 4 and 5: a notice gone from the model left the layout at once, whatever animated its removal;
+    // the Mac saw both columns' scroll views move 75 pt in one 4 ms poll and the fade play over them.
+    let noticeStackSource = ((try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? "")
+        .components(separatedBy: "struct NoticeStack: View").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(!noticeColumnsSource.contains("value: model.notices") && !noticeStackSource.contains(".transition(")
+            && !noticeStackSource.contains("ForEach(list.items)") && noticeStackSource.contains("TimelineView(.animation")
+            && noticeStackSource.contains(".onChange(of: list.items"),
+          "notices: the window lays its notices out from a room of its own, each on its own progress, so a dismissed notice keeps its room until it has shut")
     let calibrateRowSource = ((try? String(contentsOfFile: "Sources/AudioSync/CalibrateAllViews.swift", encoding: .utf8)) ?? "")
         .components(separatedBy: "struct CalibrateAllButton").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
