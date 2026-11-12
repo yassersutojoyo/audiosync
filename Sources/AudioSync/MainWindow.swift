@@ -1616,6 +1616,7 @@ struct SpeakerRow: View {
             // A switched-off output isn't followed, so its level is read as the panel opens.
             if open { model.actions.readBuiltInVolume() } else {
                 model.builtInVolumeRefused = false
+                if speaker.offsetMs == nil { model.forgetDelayPanel(speaker.id) }
                 if systemSliderFocused { returnDelayFocus($delayFocused) }
             }
         }
@@ -1979,6 +1980,9 @@ private struct SystemVolumePanel: View {
                     .foregroundStyle(Brand.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+        .onChange(of: model.builtInVolumeRefused) { _, refused in
+            if refused { AccessibilityNotification.Announcement(t.systemVolumeRefused).post() }
         }
     }
 }

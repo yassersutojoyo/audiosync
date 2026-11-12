@@ -433,6 +433,10 @@ final class AppModel: ObservableObject {
         guard !delayPanels.open.isEmpty else { return }
         withAnimation(Self.delayPanelAnimation) { delayPanels.closeAll() }
     }
+    /// A panel left with nothing to hold: the built-in speakers' volume stopped being settable.
+    func forgetDelayPanel(_ id: String) {
+        if delayPanels.isOpen(id) { delayPanels.toggle(id) }
+    }
     /// Escape in a delay panel.
     func dropDelayTyping() {
         dropDelayDrafts()
