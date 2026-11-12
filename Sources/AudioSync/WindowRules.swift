@@ -1174,3 +1174,25 @@ enum StoredEqualizer {
 enum DockIcon {
     static func shows(windows: Int, hidesWhenClosed: Bool) -> Bool { !hidesWhenClosed || windows > 0 }
 }
+
+/// The built-in speakers' macOS volume on their row: a value button, where
+/// other local rows show their delay, opens a panel holding its slider.
+enum SystemVolumeCue {
+    /// The level as the button and the slider show it: a whole percent, 0 to 100.
+    static func percent(_ level: Double) -> Int { Int((min(1, max(0, level)) * 100).rounded()) }
+
+    /// Only the reference output, the built-in speakers, has the button and
+    /// the panel, and only while its device has a settable volume.
+    static func shown(isReference: Bool, level: Double?) -> Bool { isReference && level != nil }
+
+    /// The panel shows while its row toggled it open and the button shows.
+    static func panelOpen(toggled: Bool, isReference: Bool, level: Double?) -> Bool {
+        toggled && shown(isReference: isReference, level: level)
+    }
+
+    /// The level the slider and button show: while the user holds the slider
+    /// the device's reports wait, so a report of an earlier step can't pull it back.
+    static func shownLevel(read: Double?, held: Bool, shown: Double?) -> Double? {
+        held && read != nil ? shown ?? read : read
+    }
+}

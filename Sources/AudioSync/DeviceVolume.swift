@@ -10,10 +10,11 @@ import Foundation
 // Sound menu. The host reads both for every listed local output that is
 // switched on, follows their changes, and shows a hint with a one-click fix
 // on the row. The core decides what a reading means and what the fix writes
-// (`asc_device_volume_*`); the only write is that fix, when the user clicks
-// it, and the row follows what the device reports afterwards, never the
-// values written. Nothing here runs on an audio thread or touches the
-// renderers or AudioSync's own volumes.
+// (`asc_device_volume_*`); the only writes are that fix, when the user clicks
+// it, and the levels `LocalVolumeMemory` remembers or puts back; the row
+// follows what the device reports afterwards, never the values written.
+// Nothing here runs on an audio thread or touches the renderers or
+// AudioSync's own volumes.
 
 // MARK: - What a reading means (the core decides, S196, S197, S201)
 
@@ -223,12 +224,14 @@ struct DeviceVolumeControls: Equatable {
 /// hint. Core Audio reports a change on the access's own queue; the change
 /// is handed to the main thread, where both parts are read again (several
 /// notifications before that turn make one update) and a changed decision
-/// gets a log line. The only write is `fix`, on the user's click.
+/// gets a log line. The writes are `fix`, on the user's click, and `setLevel`.
 final class DeviceVolumes {
     /// What each followed output's row shows, by device UID: only those with a hint.
     private(set) var hints: [String: DeviceVolumeHint] = [:]
     /// Called on the main thread after a change notification changed `hints`.
     var onChange: () -> Void = {}
+    /// Called on the main thread with a followed output's volume after a change notification.
+    var onLevel: (String, Double) -> Void = { _, _ in }
 
     private struct Followed {
         let device: AudioDeviceID
@@ -294,6 +297,36 @@ final class DeviceVolumes {
     /// One reading of `device`, followed or not; follows and writes nothing.
     func read(_ device: AudioDeviceID) -> DeviceVolumeReading {
         DeviceVolumeControls.find(on: device, access).read(device, access)
+    }
+
+    /// The device's own volume, 0 to 1; nil when it has no settable volume or
+    /// doesn't answer.
+    func level(_ device: AudioDeviceID) -> Double? {
+        read(device).volume
+    }
+
+    /// The device is muted in macOS.
+    func muted(_ device: AudioDeviceID) -> Bool {
+        read(device).muted == true
+    }
+
+    /// Unmutes the device on each of its mute controls; false when every one refused.
+    @discardableResult
+    func unmute(_ device: AudioDeviceID) -> Bool {
+        let controls = DeviceVolumeControls.find(on: device, access)
+        return controls.mute.map { access.write(device, DeviceVolumeControl(part: .mute, element: $0), 0) }.contains(noErr)
+    }
+
+    /// Sets the device's own volume on each of its volume controls; false
+    /// when it has none or every one refused, so a partial write still gets put back.
+    @discardableResult
+    func setLevel(_ device: AudioDeviceID, _ level: Double) -> Bool {
+        let controls = DeviceVolumeControls.find(on: device, access)
+        guard !controls.volume.isEmpty else { return false }
+        let results = controls.volume.map {
+            access.write(device, DeviceVolumeControl(part: .volume, element: $0), min(1, max(0, level)))
+        }
+        return results.contains(noErr)
     }
 
     /// The fix the user clicked under output `uid` (S197): reads the device
@@ -407,6 +440,7 @@ final class DeviceVolumes {
         }
         entry.verdict = verdict
         followed[uid] = entry
+        if let volume = reading.volume { onLevel(uid, volume) }
     }
 
     private func refreshHints() {

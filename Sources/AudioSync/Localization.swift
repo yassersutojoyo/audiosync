@@ -1233,6 +1233,26 @@ struct UIStrings {
     /// The tooltip of the hint in the main window.
     let deviceVolumeHelp = "macOS has its own volume for each output, and it limits AudioSync's slider."
 
+    /// The built-in speakers' value button, where other local rows show their delay: "System 60%".
+    func systemVolumeValue(_ value: Int, muted: Bool = false) -> String {
+        muted ? "System muted" : "System \(percent(value))"
+    }
+
+    /// That button's tooltip and VoiceOver hint.
+    func systemVolumeHelp(name: String) -> String { "Sets the macOS volume of \(name)" }
+
+    /// That button's VoiceOver label, its visible word first so Voice Control finds it.
+    let systemVolumeButton = "System volume"
+
+    /// The line above the slider in the built-in speakers' panel.
+    let systemVolumeTitle = "macOS volume"
+
+    /// The panel's slider, for VoiceOver.
+    func systemVolumeSlider(of name: String) -> String { "macOS volume of \(name)" }
+
+    /// Under that slider when the device turned down the level set on it.
+    let systemVolumeRefused = "This output didn't accept the new volume."
+
     let noSpeakers = "No speakers found"
     /// The menu bar panel's list with no speaker and nothing hidden: "No
     /// speakers found" waits for AirPlay's first look, as on Windows.
@@ -2141,8 +2161,13 @@ struct UIStrings {
         speaker itself.
         When a local speaker that is on is turned down low or muted in macOS,
         a line under its slider says so, with a button that fixes it. AudioSync
-        changes the macOS volume only when you click that button, or the same
-        one in the \(calibrateAll) window.
+        changes the macOS volume only when you click that button, the same one
+        in the \(calibrateAll) window, or move the System slider on the
+        built-in speakers' row, and a local output you switch on gets the
+        macOS volume it last played at, which goes back to what it was when
+        the output stops.
+        On the built-in speakers' row, the System value (System 60%, for
+        example) opens a slider for their macOS volume.
 
         Notes
         - AirPlay speakers are kept in step with each other by AudioSync's AirPlay

@@ -15212,8 +15212,13 @@ do {
     // covers: S407
     check(guideWords.contains("When a local speaker that is on is turned down low or muted in macOS, a line under its slider "
                 + "says so, with a button that fixes it. AudioSync changes the macOS volume only when you click that "
-                + "button, or the same one in the \(t.calibrateAll) window."),
-          "guide, volume: the low macOS volume line says only its button or Calibrate All Speakers' changes it")
+                + "button, the same one in the \(t.calibrateAll) window, or move the System slider on the built-in "
+                + "speakers' row, and a local output you switch on gets the macOS volume it last played at, which goes "
+                + "back to what it was when the output stops.")
+            && guideWords.contains("On the built-in speakers' row, the System value (System 60%, for example) opens a "
+                + "slider for their macOS volume."),
+          "guide, volume: the macOS volume changes only through its fix buttons, the built-in speakers' System slider, "
+              + "which their row's System value opens, and the level an output last played at (S456)")
     // covers: S407
     check(guideWords.contains("Several Apps opens a submenu where you check apps and choose "
                 + "\(t.sourceMixOnly) or \(t.sourceMixAllExcept).")
@@ -17490,10 +17495,10 @@ do {
     let ringWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let ringPanel = (try? String(contentsOfFile: "Sources/AudioSync/PanelZoneHeader.swift", encoding: .utf8)) ?? ""
     func ringCount(_ source: String, _ needle: String) -> Int { source.components(separatedBy: needle).count - 1 }
-    check(ringCount(ringWindow, "returnDelayFocus($delayFocused)") == 2
+    check(ringCount(ringWindow, "returnDelayFocus($delayFocused)") == 3
             && ringWindow.contains("if NSApp.isFullKeyboardAccessEnabled { focus.wrappedValue = true }")
             && ringWindow.contains("NSApp.keyWindow?.makeFirstResponder(nil)"),
-          "delay pane focus: a speaker's and the AirPlay pane closing hand the focus to the delay value only under keyboard navigation, else the window keeps it")
+          "delay pane focus: a speaker's, the built-in speakers' System and the AirPlay pane closing hand the focus to the delay value only under keyboard navigation, else the window keeps it")
     check(ringCount(ringWindow, ".focusable(!nonePresent)") == 0 && ringCount(ringPanel, ".focusable(!nonePresent)") == 0
             && ringCount(ringWindow, ".modifier(SkipsFocus(skip: nonePresent))") == 1
             && ringCount(ringPanel, ".modifier(SkipsFocus(skip: nonePresent))") == 1,
@@ -18398,8 +18403,8 @@ do {
     check(disclosedWindow.contains("struct DisclosedPane: ViewModifier, Animatable")
             && disclosedWindow.contains("ease(min(progress * 2, 1))")
             && disclosedWindow.contains("ease(max(progress * 2 - 1, 0))")
-            && disclosedCount(".modifier(DisclosedPane(") == 3,
-          "disclosed pane source: a speaker's, the AirPlay delay's and a zone's pane fold on one progress, the content fading only while the edge holds still")
+            && disclosedCount(".modifier(DisclosedPane(") == 4,
+          "disclosed pane source: a speaker's, the built-in speakers' System, the AirPlay delay's and a zone's pane fold on one progress, the content fading only while the edge holds still")
     check(!disclosedWindow.contains("value: model.delayPanels)")
             && disclosedMenuBar.contains("reduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)")
             && disclosedWindow.contains("withAnimation(reduceMotion ? nil : AppModel.delayPanelAnimation) {\n                                        scroll.scrollTo("),
@@ -18516,6 +18521,97 @@ do {
     check(AppSettings.load { _ in nil }.hidesDockIcon
             && !AppSettings.load { key -> Any? in key == AppSettings.Keys.hidesDockIcon ? false : nil }.hidesDockIcon,
           "Dock icon: Hide Dock Icon When Window Closes is on unless turned off")
+}
+
+// MARK: A local output's macOS volume is remembered while it plays and put back after (LocalVolumeMemory.swift)
+do {
+    var lvm = LocalVolumeMemory()
+    let lvmFirst = lvm.switchedOn("a", current: 0.4)
+    check(lvmFirst == nil && lvm.remembered["a"] == 0.4 && lvm.found["a"] == 0.4 && lvm.playing == ["a"],
+          "macOS volume: the first time an output plays, its level is left as found and remembered", "\(lvm)")
+    lvm.reported("a", level: 0.7)
+    let lvmOff = lvm.switchedOff("a")
+    check(lvmOff == 0.4 && lvm.remembered["a"] == 0.7 && lvm.found["a"] == nil && lvm.playing.isEmpty,
+          "macOS volume: a level changed in macOS while it plays is remembered, and the found level is put back when it stops",
+          "\(String(describing: lvmOff)) \(lvm)")
+    lvm.reported("a", level: 0.2)
+    check(lvm.remembered["a"] == 0.7, "macOS volume: a change while the output doesn't play through AudioSync is not remembered")
+    let lvmAgain = lvm.switchedOn("a", current: 0.2)
+    let lvmTwice = lvm.switchedOn("a", current: 0.7)
+    check(lvmAgain == 0.7 && lvmTwice == nil && lvm.found["a"] == 0.2,
+          "macOS volume: switched on again, the output gets its remembered level once, and the level found then is the one put back",
+          "\(String(describing: lvmAgain)) \(String(describing: lvmTwice)) \(lvm)")
+    check(lvm.switchedOff("a") == 0.2 && lvm.switchedOff("a") == nil,
+          "macOS volume: the found level is put back once")
+
+    var lvmSame = LocalVolumeMemory(remembered: ["s": 0.5], found: [:])
+    check(lvmSame.switchedOn("s", current: 0.5) == nil, "macOS volume: an output already at its remembered level gets no write")
+
+    var lvmRefuse = LocalVolumeMemory(remembered: ["b": 0.9], found: [:])
+    let lvmRefuseSet = lvmRefuse.switchedOn("b", current: 0.3)
+    lvmRefuse.refused("b")
+    check(lvmRefuseSet == 0.9 && lvmRefuse.switchedOff("b") == nil && lvmRefuse.remembered["b"] == 0.9,
+          "macOS volume: a device that refuses the write keeps its level, and nothing is put back on it", "\(lvmRefuse)")
+
+    var lvmUnread = LocalVolumeMemory()
+    check(lvmUnread.switchedOn("c", current: nil) == nil && lvmUnread.switchedOff("c") == nil && lvmUnread.remembered.isEmpty,
+          "macOS volume: an output without a readable, settable volume is never written")
+
+    var lvmChosen = LocalVolumeMemory()
+    lvmChosen.chosen("e", level: 0.5)
+    check(lvmChosen.switchedOn("e", current: 0.3) == 0.5,
+          "macOS volume: a level the user sets on the slider while the output is off is the one it gets when it plays")
+
+    var lvmBefore = LocalVolumeMemory(remembered: ["a": 0.8, "d": 0.6], found: [:])
+    _ = lvmBefore.switchedOn("a", current: 0.2)
+    _ = lvmBefore.switchedOn("d", current: 0.1)
+    var lvmCrash = LocalVolumeMemory(remembered: lvmBefore.remembered, found: lvmBefore.found)
+    let lvmRecovered = lvmCrash.recover(listed: ["a"])
+    check(lvmRecovered == ["a": 0.2] && lvmCrash.found == ["d": 0.1] && lvmCrash.playing.isEmpty,
+          "macOS volume: after a crash, the next launch puts back the found level of each listed output; an unlisted one waits",
+          "\(lvmRecovered) \(lvmCrash)")
+    let lvmLate = lvmCrash.switchedOn("d", current: 0.6)
+    check(lvmLate == nil && lvmCrash.switchedOff("d") == 0.1,
+          "macOS volume: an output a crash left at its remembered level gets the level it had before AudioSync put back",
+          "\(String(describing: lvmLate)) \(lvmCrash)")
+    check(LocalVolumeMemory.putBackAfterS > 0.5,
+          "macOS volume: the found level is put back only after the output's fade-out, which ends within 500 ms (S186)")
+
+    let lvmStored: [String: Any] = [AppSettings.Keys.systemVolumesRemembered: ["a": 0.5, "b": 3.0, "c": "x"] as [String: Any],
+                                    AppSettings.Keys.systemVolumesFound: ["a": 0.25]]
+    let lvmSettings = AppSettings.load { lvmStored[$0] }
+    check(lvmSettings.systemVolumesRemembered == ["a": 0.5, "b": 1.0] && lvmSettings.systemVolumesFound == ["a": 0.25],
+          "macOS volume: the remembered and found levels are stored per device UID, from 0 to 1",
+          "\(lvmSettings.systemVolumesRemembered) \(lvmSettings.systemVolumesFound)")
+}
+
+// MARK: The built-in speakers' row shows and sets their macOS volume (SystemVolumeCue in WindowRules.swift)
+do {
+    let svcPercents = [0.6, 0.004, 0.996, 1.4, -0.2, 0.125].map(SystemVolumeCue.percent)
+    check(svcPercents == [60, 0, 100, 100, 0, 13],
+          "system volume: the row shows the macOS level as a whole percent, from 0 to 100", "\(svcPercents)")
+    let svcText = UIStrings()
+    check(svcText.systemVolumeValue(60) == "System 60%" && svcText.systemVolumeValue(0) == "System 0%",
+          "system volume: the value button reads System and the level", svcText.systemVolumeValue(60))
+    check(svcText.systemVolumeHelp(name: "MacBook Air Speakers") == "Sets the macOS volume of MacBook Air Speakers",
+          "system volume: the button's tooltip and VoiceOver hint say it sets the macOS volume of this output",
+          svcText.systemVolumeHelp(name: "MacBook Air Speakers"))
+    check(SystemVolumeCue.shown(isReference: true, level: 0.5) && SystemVolumeCue.shown(isReference: true, level: 0)
+          && !SystemVolumeCue.shown(isReference: true, level: nil) && !SystemVolumeCue.shown(isReference: false, level: 0.5),
+          "system volume: only the built-in speakers' row, with a settable volume, has the button")
+    check(SystemVolumeCue.panelOpen(toggled: true, isReference: true, level: 0.5)
+          && !SystemVolumeCue.panelOpen(toggled: false, isReference: true, level: 0.5)
+          && !SystemVolumeCue.panelOpen(toggled: true, isReference: true, level: nil)
+          && !SystemVolumeCue.panelOpen(toggled: true, isReference: false, level: 0.5),
+          "system volume: the panel shows once its row is clicked open, and closes when the volume stops being settable")
+    check(svcText.systemVolumeValue(60, muted: true) == "System muted",
+          "system volume: the value button says the output is muted in macOS", svcText.systemVolumeValue(60, muted: true))
+    let svcHeld = [SystemVolumeCue.shownLevel(read: 0.3, held: true, shown: 0.5),
+                   SystemVolumeCue.shownLevel(read: 0.3, held: false, shown: 0.5),
+                   SystemVolumeCue.shownLevel(read: nil, held: true, shown: 0.5)]
+    check(svcHeld == [0.5, 0.3, nil],
+          "system volume: while the slider is held the device's reports wait, so an earlier step can't pull it back; "
+              + "a device whose volume stops being settable still closes it", "\(svcHeld)")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
