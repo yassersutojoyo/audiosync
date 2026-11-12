@@ -8737,9 +8737,7 @@ do {
     let foldStep = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359.5),
                                            to: CGSize(width: 280, height: 401.37))
     let followSource = bar.components(separatedBy: "private func followFold(").dropFirst().first?
-        .components(separatedBy: "
-    }
-").first ?? ""
+        .components(separatedBy: "\n    }\n").first ?? ""
     check(foldStep.maxY == window.maxY && foldStep.height == foldStep.height.rounded()
             && followSource.contains("height: (height + foldInset).rounded(.up)"),
           "menu bar panel: each frame of a fold sizes the window in whole points, its top edge fixed, so the content never shakes",
@@ -17783,9 +17781,7 @@ do {
             && panelView.contains(".help(t.openApp)") && panelView.contains("SourcePicker(model: model, hero: true)"),
           "menu bar panel source: Open AudioSync sits next to Quit; the header also opens the main window; the source sits in the hero")
     let presetSource = panelSource.components(separatedBy: "struct PresetPicker: View {").dropFirst().first?
-        .components(separatedBy: "
-}
-").first ?? ""
+        .components(separatedBy: "\n}\n").first ?? ""
     check(!panelView.contains("t.castAddByAddress") && panelView.contains("MasterMuteButton(model: model, text: t, panel: true)")
             && panelView.contains("Text(t.volumeValue(model.master))") && presetSource.contains(".tint(Brand.secondaryText)"),
           "menu bar panel source: no Add by Address; the volume shows its number, its icon in the preset icon's size and grey; the preset chevron in the card chevron's grey")
