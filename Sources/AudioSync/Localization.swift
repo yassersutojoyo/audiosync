@@ -1233,6 +1233,12 @@ struct UIStrings {
     /// The tooltip of the hint in the main window.
     let deviceVolumeHelp = "macOS has its own volume for each output, and it limits AudioSync's slider."
 
+    /// The built-in speakers' value button, where other local rows show their delay: "System 60%".
+    func systemVolumeValue(_ percent: Int) -> String { "" }
+
+    /// That button's tooltip and VoiceOver hint.
+    func systemVolumeHelp(name: String) -> String { "" }
+
     let noSpeakers = "No speakers found"
     /// The menu bar panel's list with no speaker and nothing hidden: "No
     /// speakers found" waits for AirPlay's first look, as on Windows.

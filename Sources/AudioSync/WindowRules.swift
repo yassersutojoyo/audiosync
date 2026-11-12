@@ -1123,3 +1123,17 @@ enum StoredEqualizer {
         try? JSONEncoder().encode(settings)
     }
 }
+
+/// The built-in speakers' macOS volume on their row: a value button, where
+/// other local rows show their delay, opens a panel holding its slider.
+enum SystemVolumeCue {
+    /// The level as the button and the slider show it: a whole percent, 0 to 100.
+    static func percent(_ level: Double) -> Int { 0 }
+
+    /// Only the reference output, the built-in speakers, has the button and
+    /// the panel, and only while its device has a settable volume.
+    static func shown(isReference: Bool, level: Double?) -> Bool { false }
+
+    /// The panel shows while its row toggled it open and the button shows.
+    static func panelOpen(toggled: Bool, isReference: Bool, level: Double?) -> Bool { false }
+}

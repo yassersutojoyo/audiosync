@@ -18497,5 +18497,26 @@ do {
           "\(lvmSettings.systemVolumesRemembered) \(lvmSettings.systemVolumesFound)")
 }
 
+// MARK: The built-in speakers' row shows and sets their macOS volume (SystemVolumeCue in WindowRules.swift)
+do {
+    let svcPercents = [0.6, 0.004, 0.996, 1.4, -0.2, 0.125].map(SystemVolumeCue.percent)
+    check(svcPercents == [60, 0, 100, 100, 0, 13],
+          "system volume: the row shows the macOS level as a whole percent, from 0 to 100", "\(svcPercents)")
+    let svcText = UIStrings()
+    check(svcText.systemVolumeValue(60) == "System 60%" && svcText.systemVolumeValue(0) == "System 0%",
+          "system volume: the value button reads System and the level", svcText.systemVolumeValue(60))
+    check(svcText.systemVolumeHelp(name: "MacBook Air Speakers") == "Sets the macOS volume of MacBook Air Speakers",
+          "system volume: the button's tooltip and VoiceOver hint say it sets the macOS volume of this output",
+          svcText.systemVolumeHelp(name: "MacBook Air Speakers"))
+    check(SystemVolumeCue.shown(isReference: true, level: 0.5) && SystemVolumeCue.shown(isReference: true, level: 0)
+          && !SystemVolumeCue.shown(isReference: true, level: nil) && !SystemVolumeCue.shown(isReference: false, level: 0.5),
+          "system volume: only the built-in speakers' row, with a settable volume, has the button")
+    check(SystemVolumeCue.panelOpen(toggled: true, isReference: true, level: 0.5)
+          && !SystemVolumeCue.panelOpen(toggled: false, isReference: true, level: 0.5)
+          && !SystemVolumeCue.panelOpen(toggled: true, isReference: true, level: nil)
+          && !SystemVolumeCue.panelOpen(toggled: true, isReference: false, level: 0.5),
+          "system volume: the panel shows once its row is clicked open, and closes when the volume stops being settable")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
