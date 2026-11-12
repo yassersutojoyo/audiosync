@@ -1,29 +1,51 @@
 import SwiftUI
 
-extension NoticeMotion {
-    /// A notice's linear move, opening or closing alike, which `room` and `opacity` shape. The notice
-    /// stack animates on it too: without that a closing notice left the layout at once and faded on top.
-    var animation: Animation { .linear(duration: duration) }
+/// A notice or the Dismiss All link under them, as one slot of the main window's `NoticeRoom`.
+enum NoticeSlot: Hashable {
+    case notice(String)
+    case dismissAll
+}
 
-    var transition: AnyTransition {
-        let shape: AnyTransition = self == .grow
-            ? .modifier(active: NoticeReveal(progress: 0), identity: NoticeReveal(progress: 1)) : .opacity
-        return shape.animation(animation)
+/// The main window's `NoticeRoom`, with the closing notices kept to draw until they have shut.
+/// An object rather than @State, for the Command Line Tools toolchain.
+final class NoticeRoomState: ObservableObject {
+    @Published private(set) var room: NoticeRoom<NoticeSlot>
+    private(set) var kept: [String: Notice]
+
+    init(_ notices: [Notice]) {
+        room = NoticeRoom(Self.slots(notices))
+        kept = Dictionary(notices.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    func follow(_ notices: [Notice], motion: NoticeMotion) {
+        for notice in notices { kept[notice.id] = notice }
+        room.follow(Self.slots(notices), at: Date(), duration: motion.duration)
+        // Pauses the timeline once the move is over and lets a shut notice go.
+        DispatchQueue.main.asyncAfter(deadline: .now() + motion.duration + 0.02) { [weak self] in
+            guard let self else { return }
+            self.room.prune(at: Date(), duration: motion.duration)
+            let listed = Set(self.room.slots.compactMap { slot -> String? in
+                if case .notice(let id) = slot.id { return id }
+                return nil
+            })
+            self.kept = self.kept.filter { listed.contains($0.key) }
+            self.objectWillChange.send()
+        }
+    }
+
+    private static func slots(_ notices: [Notice]) -> [NoticeSlot] {
+        notices.map { .notice($0.id) } + (notices.count > 1 ? [.dismissAll] : [])
     }
 }
 
-/// A notice's height opening from its top edge, laid out at each animated `progress` so the AppKit
-/// scroll views below follow it (an animated frame alone jumped them); clipped to the room it has.
-private struct NoticeReveal: ViewModifier, Animatable {
-    var progress: Double
-
-    var animatableData: Double {
-        get { progress }
-        set { progress = newValue }
-    }
+/// A slot's room and fade at `progress`, laid out every frame, so the AppKit scroll views
+/// below follow it; clipped to the room it has.
+struct NoticeReveal: ViewModifier {
+    let progress: Double
+    let motion: NoticeMotion
 
     func body(content: Content) -> some View {
-        PaneHeight(fraction: NoticeMotion.room(progress)) { content.opacity(NoticeMotion.opacity(progress)) }
+        PaneHeight(fraction: motion.room(at: progress)) { content.opacity(motion.opacity(at: progress)) }
             .clipped()
     }
 }

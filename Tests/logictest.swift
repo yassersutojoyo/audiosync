@@ -7668,14 +7668,11 @@ do {
     // The Mac's round 3 recording: with the window animating on the notice list, the columns slid on that
     // linear animation from the first frame, ahead of the room, and covered a closing notice still opaque.
     let noticeColumnsSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
-    check(noticeRevealSource.contains(": ViewModifier, Animatable")
-            && noticeRevealSource.contains("PaneHeight(fraction: NoticeMotion.room(progress))")
-            && noticeRevealSource.contains(".opacity(NoticeMotion.opacity(progress))")
-            && noticeMotionSource.components(separatedBy: ".animation(").count == 2
-            && noticeMotionSource.contains("var animation: Animation { .linear(duration: duration) }")
-            && noticeMotionSource.contains("shape.animation(animation)")
+    check(noticeRevealSource.contains("PaneHeight(fraction: motion.room(at: progress))")
+            && noticeRevealSource.contains(".opacity(motion.opacity(at: progress))")
+            && !noticeMotionSource.contains(".animation(") && !noticeMotionSource.contains("withAnimation")
             && !noticeMotionSource.contains("timingCurve") && !noticeMotionSource.contains(".delay("),
-          "notices: a notice's room and fade are laid out frame by frame from one linear progress, the only animation they follow")
+          "notices: a notice's room and fade are laid out frame by frame from one linear progress, with no animation of their own")
     // Rounds 4 and 5: a notice gone from the model left the layout at once, whatever animated its removal;
     // the Mac saw both columns' scroll views move 75 pt in one 4 ms poll and the fade play over them.
     let noticeStackSource = ((try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? "")
@@ -7685,6 +7682,46 @@ do {
             && !noticeStackSource.contains("ForEach(list.items)") && noticeStackSource.contains("TimelineView(.animation")
             && noticeStackSource.contains(".onChange(of: list.items"),
           "notices: the window lays its notices out from a room of its own, each on its own progress, so a dismissed notice keeps its room until it has shut")
+    do {
+        let duration = NoticeMotion.grow.duration
+        let posted = Date(timeIntervalSinceReferenceDate: 0)
+        let dismissed = posted + 1
+        let frames = (0...Int((duration * 60).rounded(.up)) + 1).map { Double($0) / 60 }
+        let roomHeight = { (room: NoticeRoom<String>, at: Date) -> Double in
+            room.slots.map { NoticeMotion.grow.room(at: NoticeRoom<String>.progress($0, at: at, duration: duration)) }.reduce(0, +)
+        }
+        let roomSteps = { (values: [Double]) in zip(values.dropFirst(), values).map { abs($0 - $1) } }
+        var room = NoticeRoom<String>([])
+        room.follow(["waiting"], at: posted, duration: duration)
+        let opening = frames.map { roomHeight(room, posted + $0) }
+        room.follow([], at: dismissed, duration: duration)
+        let keptAtDismissal = room.slots.map(\.id)
+        let closing = frames.map { roomHeight(room, dismissed + $0) }
+        check(keptAtDismissal == ["waiting"] && opening.first == 0 && opening.last == 1
+                && closing.first == 1 && closing.last == 0
+                && (roomSteps(opening) + roomSteps(closing)).allSatisfy { $0 <= 0.14 },
+              "notices: a dismissed notice keeps its room, which opens and shuts on one eased curve, no 60 fps frame past 14% of its travel",
+              "\(keptAtDismissal), \(roomSteps(opening).max() ?? 0), \(roomSteps(closing).max() ?? 0)")
+        let firstFade = NoticeMotion.grow.opacity(at: NoticeRoom<String>.progress(room.slots[0], at: dismissed + 1.0 / 60, duration: duration))
+        check(firstFade < 1 && roomHeight(room, dismissed + 0.059) == 1 && roomHeight(room, dismissed + 0.07) < 1,
+              "notices: a closing notice fades from its first frame and its room starts to shut 0.06 s later")
+        let turning = dismissed + 0.1
+        let beforeRepost = roomHeight(room, turning)
+        var reposted = room
+        reposted.follow(["waiting"], at: turning, duration: duration)
+        room.prune(at: dismissed + duration / 2, duration: duration)
+        let halfway = room.slots.count
+        room.prune(at: dismissed + duration + 0.01, duration: duration)
+        check(abs(roomHeight(reposted, turning) - beforeRepost) < 1e-9 && roomHeight(reposted, turning + duration) == 1
+                && halfway == 1 && room.slots.isEmpty
+                && !room.moving(at: dismissed + duration, duration: duration) && reposted.moving(at: turning, duration: duration),
+              "notices: a notice posted again while it closes turns back from where it is, and a closing one leaves only once shut")
+        var twoRoom = NoticeRoom(["older"])
+        twoRoom.follow(["newer", "older"], at: posted, duration: duration)
+        twoRoom.follow(["newer"], at: dismissed, duration: duration)
+        check(twoRoom.slots.map(\.id) == ["newer", "older"] && twoRoom.slots.map(\.closing) == [false, true],
+              "notices: a closing notice keeps its place among the others")
+    }
     let calibrateRowSource = ((try? String(contentsOfFile: "Sources/AudioSync/CalibrateAllViews.swift", encoding: .utf8)) ?? "")
         .components(separatedBy: "struct CalibrateAllButton").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""

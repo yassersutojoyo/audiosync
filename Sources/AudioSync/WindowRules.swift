@@ -410,6 +410,64 @@ enum NoticeMotion: Equatable {
         if t > 0.75 { return 1 - speed * (1 - t) * (1 - t) * 2 }
         return speed * (t - 0.125)
     }
+
+    /// The room at `progress` on this motion: Reduce Motion's fade opens and shuts it at once,
+    /// a closing notice keeping its room until it has faded.
+    func room(at progress: Double) -> Double { self == .grow ? Self.room(progress) : (progress > 0 ? 1 : 0) }
+
+    func opacity(at progress: Double) -> Double { self == .grow ? Self.opacity(progress) : progress }
+}
+
+/// The main window's notices as laid out: the listed ones and those still closing, each on its
+/// own linear progress from when it came or went. A notice leaves the model at once, so its room
+/// comes from here; laid out from the model, the columns shut in one frame whatever animated it.
+struct NoticeRoom<ID: Hashable>: Equatable {
+    struct Slot: Equatable {
+        let id: ID
+        var closing: Bool
+        var start: Date
+    }
+
+    private(set) var slots: [Slot]
+
+    /// Already open, as the notices listed when the window opens are.
+    init(_ ids: [ID]) { slots = ids.map { Slot(id: $0, closing: false, start: .distantPast) } }
+
+    /// 0 shut to 1 open.
+    static func progress(_ slot: Slot, at now: Date, duration: TimeInterval) -> Double {
+        let run = duration > 0 ? min(max(now.timeIntervalSince(slot.start) / duration, 0), 1) : 1
+        return slot.closing ? 1 - run : run
+    }
+
+    /// Opens what `ids` adds and closes what it drops, each from where it is, so a notice posted
+    /// again while it closes turns back without a jump. A closing slot keeps its place.
+    mutating func follow(_ ids: [ID], at now: Date, duration: TimeInterval) {
+        let old = slots
+        var next = ids.map { id -> Slot in
+            guard let slot = old.first(where: { $0.id == id }) else { return Slot(id: id, closing: false, start: now) }
+            guard slot.closing else { return slot }
+            let progress = Self.progress(slot, at: now, duration: duration)
+            return Slot(id: id, closing: false, start: now - progress * duration)
+        }
+        for (index, slot) in old.enumerated() where !ids.contains(slot.id) {
+            let progress = Self.progress(slot, at: now, duration: duration)
+            guard progress > 0 else { continue }
+            let closing = slot.closing ? slot : Slot(id: slot.id, closing: true, start: now - (1 - progress) * duration)
+            next.insert(closing, at: min(index, next.count))
+        }
+        slots = next
+    }
+
+    mutating func prune(at now: Date, duration: TimeInterval) {
+        slots.removeAll { $0.closing && Self.progress($0, at: now, duration: duration) == 0 }
+    }
+
+    func moving(at now: Date, duration: TimeInterval) -> Bool {
+        slots.contains {
+            let progress = Self.progress($0, at: now, duration: duration)
+            return $0.closing ? progress > 0 : progress < 1
+        }
+    }
 }
 
 /// What a click on the menu bar icon does to its panel. The press on the icon

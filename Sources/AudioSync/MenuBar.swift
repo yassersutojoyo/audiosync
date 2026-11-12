@@ -2568,7 +2568,14 @@ struct LiveInputAirPlayNote: View {
 struct NoticeStack: View {
     @ObservedObject var model: AppModel
     var compact = false
+    @StateObject private var room: NoticeRoomState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(model: AppModel, compact: Bool = false) {
+        self.model = model
+        self.compact = compact
+        _room = StateObject(wrappedValue: NoticeRoomState(model.notices.items))
+    }
 
     /// The main window's gap above a notice and above the columns.
     static let windowGap: CGFloat = 14
@@ -2593,27 +2600,43 @@ struct NoticeStack: View {
                     if list.count > 1 { footer(t, more: list.count - 1) }
                 }
             }
-        } else if !list.isEmpty {
-            // Each gap sits inside what comes or goes with it, so none is left to jump shut after.
+        } else {
+            TimelineView(.animation(paused: !room.room.moving(at: Date(), duration: motion.duration))) { context in
+                windowList(t, list: list, at: context.date, motion: motion)
+            }
+            .onChange(of: list.items.map(\.id)) { _, _ in room.follow(model.notices.items, motion: motion) }
+        }
+    }
+
+    /// Each gap sits inside what comes or goes with it, so none is left to jump shut after.
+    @ViewBuilder
+    private func windowList(_ t: UIStrings, list: NoticeList, at now: Date, motion: NoticeMotion) -> some View {
+        let slots = room.room.slots
+        let open = slots.map { NoticeRoom<NoticeSlot>.progress($0, at: now, duration: motion.duration) }.max() ?? 0
+        if !slots.isEmpty {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(list.items) { notice in
-                    NoticeBanner(notice: notice, text: t, showsTime: true, lineLimit: nil, card: true,
-                                 dismiss: { model.actions.dismissNotice(notice.subject) },
-                                 retry: { model.actions.retryAirPlay() }) { EmptyView() }
+                ForEach(slots, id: \.id) { slot in
+                    let progress = NoticeRoom<NoticeSlot>.progress(slot, at: now, duration: motion.duration)
+                    switch slot.id {
+                    case .notice(let id):
+                        if let notice = list.items.first(where: { $0.id == id }) ?? room.kept[id] {
+                            NoticeBanner(notice: notice, text: t, showsTime: true, lineLimit: nil, card: true,
+                                         dismiss: { model.actions.dismissNotice(notice.subject) },
+                                         retry: { model.actions.retryAirPlay() }) { EmptyView() }
+                                .padding(.top, Self.listGap)
+                                .modifier(NoticeReveal(progress: progress, motion: motion))
+                        }
+                    case .dismissAll:
+                        HStack {
+                            Spacer()
+                            NoticeLink(title: t.dismissAllNotices) { model.actions.dismissAllNotices() }
+                        }
                         .padding(.top, Self.listGap)
-                        .transition(motion.transition)
-                }
-                if list.count > 1 {
-                    HStack {
-                        Spacer()
-                        NoticeLink(title: t.dismissAllNotices) { model.actions.dismissAllNotices() }
+                        .modifier(NoticeReveal(progress: progress, motion: motion))
                     }
-                    .padding(.top, Self.listGap)
-                    .transition(motion.transition)
                 }
             }
-            .padding(.top, Self.windowGap - Self.listGap)
-            .transition(motion.transition)
+            .padding(.top, (Self.windowGap - Self.listGap) * motion.room(at: open))
         }
     }
 
