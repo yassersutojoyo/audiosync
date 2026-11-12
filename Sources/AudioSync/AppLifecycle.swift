@@ -484,3 +484,48 @@ enum SessionStop: CaseIterable {
     /// stopped it on a capture interruption it reports afterwards.
     static func logs(running: Bool, interrupted: Bool) -> Bool { running || interrupted }
 }
+
+/// Streaming on and off while a start or stop runs off the main thread: one
+/// step at a time, the latest request wins, requests made during a step
+/// coalesce, and quitting ends stopped with no start after it.
+struct EngineTransition: Equatable {
+    enum Step: Equatable { case start, stop }
+
+    private(set) var running = false
+    private(set) var inFlight: Step?
+    private(set) var wanted = false
+    private(set) var quitting = false
+
+    /// Asks for streaming on or off; returns the step to begin now, if any.
+    mutating func request(_ on: Bool) -> Step? {
+        guard !quitting else { return nil }
+        wanted = on
+        return next()
+    }
+
+    /// The step under way ended; `succeeded` is false for a start that failed,
+    /// which also drops the wish for on so it isn't tried again by itself.
+    mutating func finished(succeeded: Bool = true) -> Step? {
+        guard let step = inFlight else { return nil }
+        inFlight = nil
+        running = step == .start && succeeded
+        if step == .start && !succeeded { wanted = false }
+        return next()
+    }
+
+    /// Quitting: whatever runs stops once the step under way ends.
+    mutating func quit() -> Step? {
+        quitting = true
+        wanted = false
+        return next()
+    }
+
+    /// Quitting may go on: nothing runs and no step is under way.
+    var stoppedForQuit: Bool { quitting && inFlight == nil && !running }
+
+    private mutating func next() -> Step? {
+        guard inFlight == nil, wanted != running else { return nil }
+        inFlight = wanted ? .start : .stop
+        return inFlight
+    }
+}
