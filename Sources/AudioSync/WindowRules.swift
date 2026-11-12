@@ -1151,21 +1151,26 @@ enum PresetInUse: Equatable {
 }
 
 /// The house push button that replaces the system bezel on the plain
-/// buttons: the brand teal at `fill` opacity behind `text`.
+/// buttons: the brand teal at `fill` opacity behind `text`. The text is a step
+/// past the small-text teal, which falls to 3.8:1 pressed on the windows' grey.
 enum HouseButton {
     static func fill(hovered: Bool, pressed: Bool, dark: Bool) -> Double {
-        dark ? 0.14 : 0.12
+        if pressed { return dark ? 0.30 : 0.28 }
+        if hovered { return dark ? 0.20 : 0.18 }
+        return dark ? 0.14 : 0.12
     }
 
     static func text(dark: Bool) -> BrandRGB {
-        dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText
+        dark ? BrandTokens.Dark.logo : BrandTokens.Light.tealDeep
     }
 }
 
 /// A name typed in place where one is suggested, as the placeholder (a saved
-/// curve's): what to apply, nil for nothing.
+/// curve's): what to apply, nil for nothing. As a new preset's name, clicking
+/// away from an empty field saves nothing.
 enum InPlaceName {
     static func applied(typed: String, suggested: String, returned: Bool) -> String? {
-        typed
+        if !typed.trimmingCharacters(in: .whitespaces).isEmpty { return typed }
+        return returned ? suggested : nil
     }
 }

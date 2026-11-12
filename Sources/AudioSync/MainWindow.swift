@@ -620,22 +620,14 @@ struct MainView: View {
                 }
                 if connected && model.castCanAdd {
                     if lines.castAdd { Divider() }
-                    Button { model.castAddShown = true } label: {
-                        HStack(spacing: 8) {
-                            QuickRowIcon("plus").accessibilityHidden(true)
-                            Text(model.text.castAddByAddress).lineLimit(1)
-                            Spacer(minLength: 0)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .modifier(QuickRow())
-                    .help(model.text.castAddBody)
-                    .accessibilityLabel(model.text.castAddByAddress)
-                    .accessibilityHint(model.text.castAddBody)
-                    // The icon on the speaker rows' badge column (rowPaddingX).
-                    .padding(.horizontal, BrandTokens.Spacing.rowPaddingX - MainColumns.rowInset)
-                    .padding(.vertical, 6)
+                    Button(model.text.castAddByAddress) { model.castAddShown = true }
+                        .buttonStyle(HouseButtonStyle(small: true))
+                        .help(model.text.castAddBody)
+                        .accessibilityHint(model.text.castAddBody)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        // On the speaker rows' badge column (rowPaddingX).
+                        .padding(.horizontal, BrandTokens.Spacing.rowPaddingX - MainColumns.rowInset)
+                        .padding(.vertical, 6)
                 }
             }
         }
@@ -720,7 +712,7 @@ private struct LocalNetworkHintView: View {
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
             Button(text.openLocalNetworkSettings) { NSWorkspace.shared.open(PrivacyPane.localNetwork.url) }
-                .controlSize(.small)
+                .buttonStyle(HouseButtonStyle(small: true))
                 .accessibilityHint(text.openSettingsHint)
                 .help(text.openSettingsHint)
         }

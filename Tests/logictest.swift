@@ -7696,9 +7696,8 @@ do {
           "left column: the slider knob and the Presets icon sit 12 pt from the hairline between them",
           "\(MainColumns.separatorPadding)")
     let castAdd = part("MainWindow.swift", "if lines.castAdd { Divider() }", "\n                }\n")
-    check(castAdd.contains(".buttonStyle(.plain)") && castAdd.contains(".modifier(QuickRow())")
-            && castAdd.contains("QuickRowIcon(") && !castAdd.contains(".controlSize(.small)"),
-          "speaker list: Add by Address is a row like the left column's, not a default push button")
+    check(castAdd.contains(".buttonStyle(HouseButtonStyle(small: true))") && !castAdd.contains(".controlSize(.small)"),
+          "speaker list: Add by Address is the house button, not a default push button")
 }
 
 // MARK: Main window v3.1: zoom, motion, and what waits one step away (WindowRules.swift, MainWindow.swift)
