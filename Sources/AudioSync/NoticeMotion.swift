@@ -1,13 +1,14 @@
 import SwiftUI
 
 extension NoticeMotion {
-    /// A notice's own linear move, opening or closing alike, which `room` and `opacity` shape. Nothing
-    /// around it animates the notice list, so the columns below follow its room frame by frame instead
-    /// of sliding ahead on an animation of their own.
+    /// A notice's linear move, opening or closing alike, which `room` and `opacity` shape. The notice
+    /// stack animates on it too: without that a closing notice left the layout at once and faded on top.
+    var animation: Animation { .linear(duration: duration) }
+
     var transition: AnyTransition {
         let shape: AnyTransition = self == .grow
             ? .modifier(active: NoticeReveal(progress: 0), identity: NoticeReveal(progress: 1)) : .opacity
-        return shape.animation(.linear(duration: duration))
+        return shape.animation(animation)
     }
 }
 

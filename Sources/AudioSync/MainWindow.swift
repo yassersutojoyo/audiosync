@@ -246,6 +246,7 @@ struct MainView: View {
         VStack(alignment: .leading, spacing: 0) {
             header(t)
             NoticeStack(model: model)
+                .animation(NoticeMotion.of(reduceMotion: reduceMotion).animation, value: model.notices.items.map(\.id))
             HStack(alignment: .top, spacing: BrandTokens.Spacing.columnGap) {
                 FadingScroll(onBlankTap: blankTap) {
                     // One hero, then plain rows split by a hairline instead of a card each.

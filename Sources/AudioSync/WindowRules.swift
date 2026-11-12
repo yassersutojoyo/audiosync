@@ -402,7 +402,14 @@ enum NoticeMotion: Equatable {
     /// Its opacity at `progress`: in over the last half, once most of its room is open.
     static func opacity(_ progress: Double) -> Double { ease(max(progress * 2 - 1, 0)) }
 
-    private static func ease(_ t: Double) -> Double { t * t * (3 - 2 * t) }
+    /// Speeds up over the first quarter, holds, slows over the last: a lower top speed than a
+    /// smoothstep, so no 60 fps frame moves more than an eighth of the room.
+    private static func ease(_ t: Double) -> Double {
+        let speed = 4.0 / 3
+        if t < 0.25 { return speed * t * t * 2 }
+        if t > 0.75 { return 1 - speed * (1 - t) * (1 - t) * 2 }
+        return speed * (t - 0.125)
+    }
 }
 
 /// What a click on the menu bar icon does to its panel. The press on the icon

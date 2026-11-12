@@ -7649,8 +7649,9 @@ do {
           "\(NoticeMotion.grow.duration), \(NoticeMotion.fade.duration)")
     let noticeFrames = stride(from: 0.0, through: 1.0, by: 1 / (60 * NoticeMotion.grow.duration)).map { $0 } + [1.0]
     let noticeSteps = zip(noticeFrames.dropFirst(), noticeFrames).map { NoticeMotion.room($0) - NoticeMotion.room($1) }
-    check(NoticeMotion.room(0) == 0 && NoticeMotion.room(1) == 1 && noticeSteps.allSatisfy { $0 >= 0 && $0 <= 0.15 }
+    check(NoticeMotion.room(0) == 0 && NoticeMotion.room(1) == 1 && noticeSteps.allSatisfy { $0 >= 0 && $0 <= 0.125 }
             && noticeSteps.first! <= 0.05 && noticeSteps.last! <= 0.05,
+          // The Mac measured 20-27% of the travel in one mid frame on the round 3 ease; its limit is about 14%.
           "notices: at 60 fps the room eases open and shut with no jump, overshoot or big first step either way",
           "\(noticeSteps)")
     check(NoticeMotion.opacity(0) == 0 && NoticeMotion.opacity(1) == 1 && NoticeMotion.opacity(0.75) < 1
@@ -7671,12 +7672,17 @@ do {
             && noticeRevealSource.contains("PaneHeight(fraction: NoticeMotion.room(progress))")
             && noticeRevealSource.contains(".opacity(NoticeMotion.opacity(progress))")
             && noticeMotionSource.components(separatedBy: ".animation(").count == 2
-            && noticeMotionSource.contains(".animation(.linear(duration: duration))")
+            && noticeMotionSource.contains("var animation: Animation { .linear(duration: duration) }")
+            && noticeMotionSource.contains("shape.animation(animation)")
             && !noticeMotionSource.contains("timingCurve") && !noticeMotionSource.contains(".delay("),
           "notices: a notice's room and fade are laid out frame by frame from one linear progress, the only animation they follow")
-    check(!noticeColumnsSource.contains("value: model.notices)")
+    // Round 4: with nothing animating the list, a closing notice left the layout at once, the columns
+    // jumped 75 pt in one frame and its fade played over them where it had been.
+    check(noticeColumnsSource.components(separatedBy: "value: model.notices").count == 2
+            && noticeColumnsSource.contains("NoticeStack(model: model)\n"
+                + "                .animation(NoticeMotion.of(reduceMotion: reduceMotion).animation, value: model.notices.items.map(\\.id))")
             && !noticeColumnsSource.contains("NoticeMotion.of(reduceMotion: reduceMotion).columns"),
-          "notices: the columns follow the notice's room frame by frame, with no animation of the notice list around them")
+          "notices: one animation on the notice stack, keyed on its notices, carries an opening and a closing notice on the notice curve")
     let calibrateRowSource = ((try? String(contentsOfFile: "Sources/AudioSync/CalibrateAllViews.swift", encoding: .utf8)) ?? "")
         .components(separatedBy: "struct CalibrateAllButton").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
