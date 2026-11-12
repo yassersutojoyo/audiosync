@@ -2160,7 +2160,9 @@ struct UIStrings {
         a line under its slider says so, with a button that fixes it. AudioSync
         changes the macOS volume only when you click that button, the same one
         in the \(calibrateAll) window, or move the System slider on the
-        built-in speakers' row.
+        built-in speakers' row, and a local output you switch on gets the
+        macOS volume it last played at, which goes back to what it was when
+        the output stops.
         On the built-in speakers' row, the System value (System 60%, for
         example) opens a slider for their macOS volume.
 
