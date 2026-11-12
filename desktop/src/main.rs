@@ -64,6 +64,7 @@ mod setup_check;
 #[cfg(any(os_backend, target_os = "linux", test))]
 mod single_instance;
 mod speaker_names;
+mod title_bar;
 // Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
 #[cfg(test)]
 #[rustfmt::skip]
