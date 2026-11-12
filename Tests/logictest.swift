@@ -6691,48 +6691,54 @@ do {
     let playing = NowPlayingMonitor.Track(bundleID: spotify, appName: "Spotify", title: "Tune", artist: "Band",
                                           album: "Record", isPlaying: true,
                                           artwork: NSImage(size: NSSize(width: 1, height: 1)))
-    let dropAfter = NowPlayingMonitor.EmptyReadings.dropAfter
     var stalled = NowPlayingMonitor.EmptyReadings()
-    shown = stalled.next(reading: playing, last: nil, lastPlayerRuns: true)
-    shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true)
-    shown = stalled.next(reading: playing, last: shown, lastPlayerRuns: true)
-    for _ in 1..<dropAfter { shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true) }
+    shown = stalled.next(reading: playing, last: nil, lastPlayerRuns: true, readAt: 0)
+    shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true, readAt: 2)
+    shown = stalled.next(reading: playing, last: shown, lastPlayerRuns: true, readAt: 4)
+    for at in [6.0, 8] { shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true, readAt: at) }
     // covers: S218
     check(shows(shown).fields.title == "Tune",
           "now playing: a real reading in between starts the count of empty readings after a playing track again")
-    shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true)
+    shown = stalled.next(reading: nil, last: shown, lastPlayerRuns: true, readAt: 10)
     // covers: S218
     check(shown == nil && shows(shown).fields == untitled && shows(shown).artwork == .neutral
-            && stalled.dropped == .unreadable(dropAfter),
-          "now playing: \(dropAfter) empty readings in a row after a playing track send the fallback")
+            && stalled.dropped == .unreadable(3),
+          "now playing: empty readings 2 s apart after a playing track send the fallback once they span 4 s")
     var fastEmpty = NowPlayingMonitor.EmptyReadings()
-    var fastShown = fastEmpty.next(reading: playing, last: nil, lastPlayerRuns: true, interval: 0.5)
-    for _ in 1..<9 { fastShown = fastEmpty.next(reading: nil, last: fastShown, lastPlayerRuns: true, interval: 0.5) }
+    var fastShown = fastEmpty.next(reading: playing, last: nil, lastPlayerRuns: true, readAt: 0)
+    for n in 1..<9 {
+        fastShown = fastEmpty.next(reading: nil, last: fastShown, lastPlayerRuns: true, readAt: 0.5 * Double(n))
+    }
     let fastKept = fastShown?.title == "Tune"
-    fastShown = fastEmpty.next(reading: nil, last: fastShown, lastPlayerRuns: true, interval: 0.5)
+    fastShown = fastEmpty.next(reading: nil, last: fastShown, lastPlayerRuns: true, readAt: 4.5)
     // covers: S218
-    check(fastKept && fastShown == nil && fastEmpty.dropped == .unreadable(9)
-            && NowPlayingMonitor.EmptyReadings.readingsToDrop(interval: 2) == dropAfter,
+    check(fastKept && fastShown == nil && fastEmpty.dropped == .unreadable(9),
           "now playing: a playing track goes after about 4 s of empty readings at the 0.5 s poll, as at the 2 s poll")
+    var hungPlayer = NowPlayingMonitor.EmptyReadings()
+    var hungShown = hungPlayer.next(reading: playing, last: nil, lastPlayerRuns: true, readAt: 0)
+    for at in [2.5, 5] { hungShown = hungPlayer.next(reading: nil, last: hungShown, lastPlayerRuns: true, readAt: at) }
+    let hungKept = hungShown?.title == "Tune"
+    hungShown = hungPlayer.next(reading: nil, last: hungShown, lastPlayerRuns: true, readAt: 7.5)
+    // covers: S218
+    check(hungKept && hungShown == nil && hungPlayer.dropped == .unreadable(3),
+          "now playing: empty readings 2.5 s apart (a hung player at the 0.5 s poll) drop a playing track once they span 4 s")
     var quit = NowPlayingMonitor.EmptyReadings()
     shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
     // covers: S218
     check(shown == nil && shows(shown).fields == untitled && quit.dropped == .quit,
           "now playing: a player that quit sends the fallback at the first empty reading")
     var nameless = NowPlayingMonitor.EmptyReadings()
-    shown = nameless.next(reading: paused, last: nil, lastPlayerRuns: true)
-    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
-    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true)
-    for _ in 2..<dropAfter {
-        shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
-    }
+    shown = nameless.next(reading: paused, last: nil, lastPlayerRuns: true, readAt: 0)
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless, readAt: 2)
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, readAt: 4)
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless, readAt: 5)
     // covers: S218
     check(shows(shown).fields.title == "Song",
-          "now playing: a paused track stays through fewer than \(dropAfter) readings that play without a name")
-    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless)
+          "now playing: a paused track stays through readings that play without a name for less than 4 s")
+    shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless, readAt: 7)
     // covers: S218
-    check(shown == nil && shows(shown).fields == untitled && nameless.dropped == .playingNameless(dropAfter),
-          "now playing: \(dropAfter) readings that play something without a name drop a paused track")
+    check(shown == nil && shows(shown).fields == untitled && nameless.dropped == .playingNameless(3),
+          "now playing: readings that play something without a name for 4 s drop a paused track")
     var denied = NowPlayingMonitor.EmptyReadings()
     shown = denied.next(reading: nil, last: paused, lastPlayerRuns: true, lastPlayer: .denied)
     // covers: S218
