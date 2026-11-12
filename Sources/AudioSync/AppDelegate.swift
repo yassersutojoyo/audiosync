@@ -203,6 +203,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var volumeKeys: Bool {
         didSet { if volumeKeys != oldValue { store.save(volumeKeys: volumeKeys) } }
     }
+    var hidesDockIcon: Bool {
+        didSet { if hidesDockIcon != oldValue { store.save(hidesDockIcon: hidesDockIcon) } }
+    }
     /// Set exactly while the volume keys move the master (`followVolumeKeys`).
     var volumeKeyTap: VolumeKeyTap?
     /// macOS refused the tap while the keys were wanted; tried again once they aren't.
@@ -371,6 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         speakerNames = saved.speakerNames.castKeysMoved()
         showVirtualDevices = saved.showVirtualDevices
         volumeKeys = saved.volumeKeys
+        hidesDockIcon = saved.hidesDockIcon
         appearance = saved.appearance
         inputPairs = saved.inputPairs
         super.init()
@@ -437,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         observeApps()
         observeDeviceList()
         observeSecondLaunch()
+        observeWindowClose()
 
         reconcileLocal()   // lists the local speakers; auto-connect may start streaming
         startSafetyNet()
@@ -747,6 +752,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             DebugTrace.log("[AudioSync] opened again; showing the window")
             center.postNotificationName(AppDelegate.showReply, object: nil, userInfo: nil, deliverImmediately: true)
             self?.showMainWindow()
+        })
+    }
+
+    private func observeWindowClose() {
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,
+                                                                object: nil, queue: .main) { [weak self] note in
+            self?.updateDockIcon(closing: note.object as? NSWindow)
         })
     }
 

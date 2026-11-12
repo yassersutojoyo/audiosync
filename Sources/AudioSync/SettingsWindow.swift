@@ -178,6 +178,8 @@ struct SettingsView: View {
                 Divider()
                 SwitchRow(title: t.launchAtLogin, isOn: Binding(get: { model.launchAtLogin },
                                                                 set: { model.actions.setLaunchAtLogin($0) }))
+                Divider()
+                dockIconRow(t)
             }
             SettingsBox(title: t.menuSpeakers) {
                 volumeKeysRow(t)
@@ -216,6 +218,18 @@ struct SettingsView: View {
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: onHeight)
         .scaleEffect(motion.atRest ? 1 : 0.97, anchor: .top)
         .offset(y: motion.atRest ? 0 : 8)
+    }
+
+    private func dockIconRow(_ t: UIStrings) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SwitchRow(title: t.hideDockIcon, isOn: Binding(get: { model.hidesDockIcon },
+                                                           set: { model.actions.setHidesDockIcon($0) }))
+            Text(t.hideDockIconOn + " " + t.hideDockIconOff)
+                .font(.subheadline)
+                .foregroundStyle(Brand.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.bottom, 10)
     }
 
     /// The switch, what it does, and while macOS keeps the keys, why and where to change it.

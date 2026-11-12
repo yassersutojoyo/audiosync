@@ -224,6 +224,7 @@ extension AppDelegate {
         setupWindow = setup
         setup.model.checking = checking
         refreshSetup()
+        showDockIcon()
         setup.show()
         showPermissionOffer()
     }
@@ -454,6 +455,7 @@ extension AppDelegate {
         a.setLaunchAtLogin = { [weak self] on in self?.setLaunchAtLogin(on) }
         a.setShowVirtualDevices = { [weak self] on in self?.setShowVirtualDevices(on) }
         a.setVolumeKeys = { [weak self] on in self?.setVolumeKeys(on) }
+        a.setHidesDockIcon = { [weak self] on in self?.setHidesDockIcon(on) }
         a.openAccessibilitySettings = { NSWorkspace.shared.open(PrivacyPane.accessibility.url) }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
         a.transport = { [weak self] command in self?.sendTransport(command) }
@@ -640,6 +642,7 @@ extension AppDelegate {
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.volumeKeys, volumeKeys)
+        publish(\.hidesDockIcon, hidesDockIcon)
         publish(\.volumeKeysNeedAccess, followVolumeKeys())
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
@@ -814,21 +817,25 @@ extension AppDelegate {
     /// on the Dock icon end. The panel closes first, as it floats above.
     func showMainWindow() {
         menuBar?.close()
+        showDockIcon()
         mainWindow?.show()
     }
 
     private func openEqualizerWindow() {
         menuBar?.close()
+        showDockIcon()
         equalizerWindow?.show()
     }
 
     private func openWebRemoteWindow() {
         menuBar?.close()
+        showDockIcon()
         webRemoteWindow?.show()
     }
 
     private func openSettingsWindow() {
         menuBar?.close()
+        showDockIcon()
         MainActor.assumeIsolated { settingsWindow?.show() }
     }
 
@@ -838,8 +845,33 @@ extension AppDelegate {
         menuBar?.close()
         let guide = helpWindow ?? makeGuideWindow()
         helpWindow = guide
+        showDockIcon()
         NSApp.activate(ignoringOtherApps: true)
         guide.makeKeyAndOrderFront(nil)
+    }
+
+    func setHidesDockIcon(_ on: Bool) {
+        guard on != hidesDockIcon else { return }
+        hidesDockIcon = on
+        DebugTrace.log("[AudioSync] Dock: Hide Dock Icon When Window Closes turned \(on ? "on" : "off")")
+        pushModel()
+    }
+
+    /// Set before the window activates the app, so the app comes forward with its menu bar.
+    private func showDockIcon() {
+        if NSApp.activationPolicy() != .regular { NSApp.setActivationPolicy(.regular) }
+    }
+
+    /// Alerts, sheets and the menu bar panel don't count as windows here.
+    func updateDockIcon(closing: NSWindow?) {
+        let open = NSApp.windows.filter {
+            $0 !== closing && !($0 is NSPanel) && $0.styleMask.contains(.titled) && $0.sheetParent == nil
+                && ($0.isVisible || $0.isMiniaturized)
+        }
+        guard !DockIcon.shows(windows: open.count, hidesWhenClosed: hidesDockIcon),
+              NSApp.activationPolicy() == .regular else { return }
+        NSApp.setActivationPolicy(.accessory)
+        DebugTrace.log("[AudioSync] Dock: the last window closed; the icon leaves the Dock, the menu bar item stays")
     }
 
     private func makeGuideWindow() -> NSWindow {
