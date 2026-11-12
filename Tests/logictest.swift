@@ -6725,7 +6725,7 @@ do {
     var quit = NowPlayingMonitor.EmptyReadings()
     shown = quit.next(reading: nil, last: paused, lastPlayerRuns: false)
     // covers: S218
-    check(shown == nil && shows(shown).fields == untitled && quit.dropped == .quit,
+    check(shown == nil && shows(shown).fields == untitled && quit.dropped == .quit(1),
           "now playing: a player that quit sends the fallback at the first empty reading")
     var notRunning = NowPlayingMonitor.EmptyReadings()
     var notRunningShown = notRunning.next(reading: playing, last: nil, lastPlayerRuns: true, readAt: 0)
@@ -6733,6 +6733,15 @@ do {
     // covers: S218
     check(notRunningShown?.title == "Tune" && notRunning.dropped == nil,
           "now playing: one reading that finds a playing track's player not running keeps the track")
+    for n in 2..<9 {
+        notRunningShown = notRunning.next(reading: nil, last: notRunningShown, lastPlayerRuns: false,
+                                          readAt: 0.5 * Double(n))
+    }
+    let notRunningKept = notRunningShown?.title == "Tune"
+    notRunningShown = notRunning.next(reading: nil, last: notRunningShown, lastPlayerRuns: false, readAt: 4.5)
+    // covers: S218
+    check(notRunningKept && notRunningShown == nil && notRunning.dropped == .quit(9),
+          "now playing: a playing track whose player reads as not running for 4 s goes")
     var nameless = NowPlayingMonitor.EmptyReadings()
     shown = nameless.next(reading: paused, last: nil, lastPlayerRuns: true, readAt: 0)
     shown = nameless.next(reading: nil, last: shown, lastPlayerRuns: true, lastPlayer: .playingNameless, readAt: 2)
