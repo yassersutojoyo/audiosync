@@ -51,6 +51,7 @@ enum MainColumns {
     static let heroPadding: CGFloat = 14
     /// The space between the left column's edge and a row's icon, which its hover fill covers.
     static let rowInset: CGFloat = 8
+    static let separatorPadding: (top: CGFloat, bottom: CGFloat) = (10, 10)
 }
 
 /// The main window's motion: one ease-out for rows that move or open, a
