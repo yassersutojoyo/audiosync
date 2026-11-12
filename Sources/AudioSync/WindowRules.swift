@@ -51,7 +51,10 @@ enum MainColumns {
     static let heroPadding: CGFloat = 14
     /// The space between the left column's edge and a row's icon, which its hover fill covers.
     static let rowInset: CGFloat = 8
-    static let separatorPadding: (top: CGFloat, bottom: CGFloat) = (10, 10)
+    /// The hairline under the master volume, padded so the knob and the Presets icon both sit
+    /// `cardGap` (12 pt) from it: at 10 pt each they sat 11 and 17 pt away, measured on the Mac.
+    static let separatorPadding: (top: CGFloat, bottom: CGFloat) =
+        (BrandTokens.Spacing.cardGap - 1, BrandTokens.Spacing.cardGap - 7)
 }
 
 /// The main window's motion: one ease-out for rows that move or open, a
@@ -309,10 +312,11 @@ enum Marquee {
     }
 
     /// The trailing edge's fade.
-    static let edgeFade: CGFloat = 8
+    static let edgeFade: CGFloat = 4
     /// Longer at the leading edge: at the scroll end a sliver of the cut
     /// letter there read as a thin line beside the dot before the name.
-    static let leadingFade: CGFloat = 16
+    /// At 16 pt the first letter shown while scrolling sat well right of the artist's.
+    static let leadingFade: CGFloat = 8
 
     /// How far each edge of the line fades at `offset`: only an edge that
     /// cuts a letter, so the start and the end of the title read in full.
