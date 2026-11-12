@@ -50,6 +50,9 @@ enum Brand {
     /// Icons beside text may stay `.secondary`: non-text graphics need only 3:1.
     static let secondaryText = Color.primary.opacity(BrandTokens.Opacity.secondaryText)
 
+    /// Behind a row whose list is folded open, tying the row to its list.
+    static let openRowFill = Color.primary.opacity(0.04)
+
     /// Under the menu bar panel's content, so its text and icons keep their
     /// contrast whatever window is behind the material (see PanelColors.swift).
     static let panelBacking = Color(nsColor: .audioSyncPanelBacking)

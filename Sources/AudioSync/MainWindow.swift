@@ -874,7 +874,7 @@ private struct PresetsRow: View {
             PresetList(model: model, draft: draft)
                 .modifier(DisclosedPane(open: open))
         }
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(open ? 0.04 : 0)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Brand.openRowFill.opacity(open ? 1 : 0)))
     }
 
     private func fold() {
