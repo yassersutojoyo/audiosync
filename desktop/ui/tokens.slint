@@ -74,8 +74,8 @@ export global Tokens {
     // Secondary text: the text color at the secondary-text opacity, as on the Mac.
     out property <color> secondary-text: root.text.with-alpha(root.secondary-text-opacity);
 
-    // The wordmark typeface (SIL OFL 1.1). Tracking is in em. User interface text uses the system
-    // font (SF Pro on macOS, Segoe UI Variable on Windows).
+    // The wordmark typeface (SIL OFL 1.1). Tracking is in em. The desktop app sets its text in
+    // Inter (Fluent.font in widgets.slint); the Mac app uses the system font.
     out property <string> brand-font: "Poppins";
     out property <int> brand-font-weight: 500;
     // Letter spacing of the wordmark, in em.

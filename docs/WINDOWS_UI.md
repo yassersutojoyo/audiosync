@@ -10,7 +10,7 @@ Mac app's `UIStrings`; all of it lives in `desktop/ui/strings.slint`.
 Colors, the wordmark typeface and the font sizes come from the shared design
 tokens (`brand/tokens.json`, see `brand/README.md`). The rest follows Windows
 11 and lives only in the Windows app (the `Fluent` values in
-`desktop/ui/widgets.slint`): text in Segoe UI Variable, 14 px for body text and
+`desktop/ui/widgets.slint`): text in Inter (bundled), 14 px for body text and
 12 px for notes and captions, an 18 px wordmark, 12 px card padding, 48 px
 speaker rows, a 16 px window edge and 12 px gaps, 8 px corners on cards,
 notices and the tray panel and 4 px on buttons and rows, 1 px card edges, hover and

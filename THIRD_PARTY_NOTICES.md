@@ -222,6 +222,7 @@ release.
 | [Slint](https://slint.dev) 1.18, © SixtyFPS GmbH (the user interface toolkit) | GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0; public builds of AudioSync use it under GPL-3.0-only |
 | [tray-icon](https://github.com/tauri-apps/tray-icon) 0.26 and [muda](https://github.com/tauri-apps/muda) 0.21, © the Tauri Programme within The Commons Conservancy (the notification-area icon and its menu) | MIT OR Apache-2.0 |
 | [Poppins](https://github.com/itfoundry/Poppins) Medium, © 2020 The Poppins Project Authors (the wordmark typeface, compiled into the executable from `brand/fonts/`) | SIL Open Font License 1.1 |
+| [Inter](https://github.com/rsms/inter) 4.1 Regular, Medium, SemiBold and Bold, © 2016 The Inter Project Authors (the text typeface, compiled into the executable from `desktop/res/fonts/`; license in `desktop/res/fonts/OFL.txt`) | SIL Open Font License 1.1 |
 | [Inno Setup](https://jrsoftware.org/isinfo.php) 6.7, © Jordan Russell, portions © Martijn Laan (the setup and uninstall program of the Windows installer, `AudioSync-Setup.exe`; not in the zip or the exe) | [Inno Setup License](https://jrsoftware.org/files/is/license.txt) |
 
 The app's About dialog, which the top-level menu opens (Help > About
@@ -311,8 +312,8 @@ supply.
 The Linux build of `desktop/` shows its tray icon as a StatusNotifier item
 through tray-icon's ksni backend: [ksni](https://github.com/iovxw/ksni)
 (Unlicense) and [zbus](https://github.com/dbus2/zbus) 5 (MIT), with `png`
-(MIT OR Apache-2.0) for the icon. Its text uses the system's font through
-fontconfig, and the app includes no font for it. fontconfig, PipeWire,
+(MIT OR Apache-2.0) for the icon. Its text is set in the bundled Inter, as on
+Windows; fontconfig supplies fallback fonts for glyphs Inter lacks. fontconfig, PipeWire,
 OpenSSL and the X11, Wayland and OpenGL libraries come from the system at run
 time; none of them is part of the program or the AppImage. CI writes the
 build's `THIRD-PARTY-NOTICES.txt` with `scripts/windows_notices.py

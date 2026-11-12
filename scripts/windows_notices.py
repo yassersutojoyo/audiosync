@@ -1048,6 +1048,8 @@ def build(target):
     # The interface embeds Poppins when a .slint file imports the font file.
     poppins = any("brand/fonts/Poppins" in read_text(os.path.join(WINDOWS, "ui", name))
                   for name in sorted(os.listdir(os.path.join(WINDOWS, "ui"))) if name.endswith(".slint"))
+    inter = any("res/fonts/Inter" in read_text(os.path.join(WINDOWS, "ui", name))
+                for name in sorted(os.listdir(os.path.join(WINDOWS, "ui"))) if name.endswith(".slint"))
 
     own = own_license(local)
     linux = target in LINUX_TARGETS
@@ -1106,6 +1108,12 @@ def build(target):
                 "typeface, compiled into the executable. SIL Open Font License 1.1.",
                 "https://github.com/itfoundry/Poppins")
         out.text("brand/fonts/OFL.txt", read_text(os.path.join(REPO, "brand", "fonts", "OFL.txt")), "AudioSync")
+    if inter:
+        out.add("", "", "Inter Regular, Medium, SemiBold and Bold, (c) 2016 The Inter Project",
+                "Authors, the text typeface, compiled into the executable. SIL Open Font",
+                "License 1.1.",
+                "https://github.com/rsms/inter")
+        out.text("desktop/res/fonts/OFL.txt", read_text(os.path.join(WINDOWS, "res", "fonts", "OFL.txt")), "AudioSync")
     out.add("", "", "Fluent UI System Icons, (c) Microsoft Corporation: Slint's Fluent style",
             "compiles icons from this set into the interface. MIT License.",
             "https://github.com/microsoft/fluentui-system-icons")
