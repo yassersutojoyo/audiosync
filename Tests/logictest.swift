@@ -7729,7 +7729,7 @@ do {
     check(count(presetRow, "model.actions.recallPreset(row.id)") == 1 && count(presetRow, "model.actions.renamePreset(row.id, $0)") == 1
             && count(presetRow, "model.actions.updatePreset(row.id)") == 1 && count(presetRow, "model.actions.deletePreset(row.id)") == 1
             && count(presetRow, ".disabled(!PresetEdit.canUpdate(row))") == 1
-            && count(part(after: "private struct PresetList: View"), "model.actions.savePreset($0)") == 1
+            && count(part(after: "private struct PresetList: View"), "model.actions.savePreset(typed)") == 1
             && count(part(after: "private struct PresetsRow"), ".modifier(DisclosedPane(open: open))") == 1,
           "main window presets: the Presets row folds open a list whose every row recalls, renames, updates and deletes its preset, and whose last row saves one")
     let speakerRow = part(after: "struct SpeakerRow: View")
@@ -18431,8 +18431,8 @@ do {
     check(disclosedWindow.contains("struct DisclosedPane: ViewModifier, Animatable")
             && disclosedWindow.contains("ease(min(progress * 2, 1))")
             && disclosedWindow.contains("ease(max(progress * 2 - 1, 0))")
-            && disclosedCount(".modifier(DisclosedPane(") == 3,
-          "disclosed pane source: a speaker's, the AirPlay delay's and a zone's pane fold on one progress, the content fading only while the edge holds still")
+            && disclosedCount(".modifier(DisclosedPane(") == 4,
+          "disclosed pane source: a speaker's, the AirPlay delay's, a zone's and the preset list's pane fold on one progress, the content fading only while the edge holds still")
     check(!disclosedWindow.contains("value: model.delayPanels)")
             && disclosedMenuBar.contains("reduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)")
             && disclosedWindow.contains("withAnimation(reduceMotion ? nil : AppModel.delayPanelAnimation) {\n                                        scroll.scrollTo("),
