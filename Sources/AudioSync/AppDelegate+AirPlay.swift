@@ -250,6 +250,7 @@ extension AppDelegate {
         let casting = sendsCastTrackInfo
         let polling = nowPlayingOnScreen || panelOnScreen || sending || casting
             || webRemote?.showsNowPlaying == true
+        nowPlaying.onScreen = nowPlayingOnScreen || panelOnScreen
         if polling != nowPlaying.isRunning {
             if polling {
                 updateNowPlayingTarget()

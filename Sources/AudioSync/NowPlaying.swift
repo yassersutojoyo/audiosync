@@ -343,8 +343,18 @@ final class NowPlayingMonitor {
     static let changeNotices = [Notification.Name("com.apple.Music.playerInfo"),
                                 Notification.Name("com.spotify.client.PlaybackStateChanged")]
 
+    /// Seconds between readings of the players. A play/pause key goes to the
+    /// player, not to AudioSync, so only a reading shows it on the card.
+    static func pollInterval(onScreen: Bool, playerRuns: Bool) -> TimeInterval {
+        onScreen && playerRuns ? 0.5 : 2.0
+    }
+
     // Main thread.
     private var timer: Timer?
+    /// The Now Playing card or the menu bar panel is on screen.
+    var onScreen = false {
+        didSet { retime() }
+    }
     private let notices = ChangeNotices()
     /// A change notice came in while a reading was under way, which may have read the player before it.
     private var readAgain = false
@@ -402,7 +412,7 @@ final class NowPlayingMonitor {
         hasReading = false
         emptyReadings.reset()
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in self?.refresh() }
+        schedule()
         notices.posted = { [weak self] in
             guard let self else { return }
             if self.refreshing { self.readAgain = true } else { self.refresh() }
@@ -426,6 +436,19 @@ final class NowPlayingMonitor {
         startedAt = nil
         hasReading = false
         reading = nil
+    }
+
+    private func schedule() {
+        let interval = Self.pollInterval(onScreen: onScreen, playerRuns: track != nil)
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.refresh() }
+    }
+
+    /// Main thread. Restarts a running poll whose interval no longer fits.
+    private func retime() {
+        guard let timer, timer.timeInterval != Self.pollInterval(onScreen: onScreen, playerRuns: track != nil)
+        else { return }
+        timer.invalidate()
+        schedule()
     }
 
     /// The player `send` drives now, by bundle ID: the one read, else the
@@ -535,6 +558,7 @@ final class NowPlayingMonitor {
         if first { hasReading = true }
         guard next != track || first || Position.jumped(from: track?.position, to: next?.position) else { return }
         track = next
+        retime()
         onChange?(next)
     }
 
