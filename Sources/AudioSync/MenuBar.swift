@@ -1326,7 +1326,7 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
     private func followFold(_ height: CGFloat) {
         contentHeight = height
         guard presented, host.sizing.followsContent, folding, let window = host.view.window else { return }
-        let size = NSSize(width: (rest?.content ?? popover.contentSize).width, height: height + foldInset)
+        let size = NSSize(width: (rest?.content ?? popover.contentSize).width, height: (height + foldInset).rounded(.up))
         guard size != (rest?.content ?? popover.contentSize) else { return }
         resizeStep += 1
         let icon = iconMiddle
@@ -1644,7 +1644,7 @@ struct MenuBarView: View {
     private var chromeHeight: CGFloat {
         PanelChrome.height(notices: model.notices.items.count, permissionCard: model.permissionOffer != nil,
                            airPlayNote: model.airPlayProblem != nil || model.localNetworkHint != .none,
-                           castAddRow: castAddRow != .none, presets: PresetPanel.showsRow(model.presets),
+                           presets: PresetPanel.showsRow(model.presets),
                            liveInputHint: model.liveInputAirPlayHint != nil, noSpeakerOn: showsNoSpeakerOn)
     }
 
@@ -1652,12 +1652,6 @@ struct MenuBarView: View {
         let layout = model.zonelessLayout
         return StreamingPolicy.showsNoSpeakerOnLine(
             noSpeakerOn: model.noSpeakerOn, rows: layout.thisMac.count + model.zones.count + layout.connected.count)
-    }
-
-    /// While the Google Cast search finds nothing, the panel offers adding
-    /// a speaker by address.
-    private var castAddRow: CastAddRow {
-        CastAddRow.state(canAdd: model.castCanAdd, list: model.castList)
     }
 
     private var maxListHeight: CGFloat {
@@ -1675,34 +1669,19 @@ struct MenuBarView: View {
             }
             if PresetPanel.showsRow(model.presets) { PresetPicker(model: model).modifier(IntroPart(intro: intro, index: 3)) }
             // The Mac's own speakers belong with the volume, above the one
-            // divider, drawn tight together as one block.
-            VStack(alignment: .leading, spacing: 2) {
+            // divider, one gap apart (`PanelLayout`).
+            VStack(alignment: .leading, spacing: 0) {
                 masterRow(t)
                 thisMacRows(t)
+                Divider().padding(.top, PanelLayout.rowsToDivider)
             }
+            .padding(.top, PresetPanel.showsRow(model.presets) ? PanelLayout.presetToVolume : 0)
+            .padding(.bottom, PanelLayout.dividerToList)
             .modifier(IntroPart(intro: intro, index: 4))
-            Divider().padding(.vertical, -4)   // 6 pt on both sides
             if showsNoSpeakerOn { noSpeakerOnLine(t) }
             speakerList(t)
                 .id(model.panelSession)
                 .modifier(IntroPart(intro: intro, index: 5))
-            if castAddRow != .none {
-                let shown = castAddRow == .shown
-                // The sheet belongs to the main window, which has room for it.
-                NoticeLink(title: t.castAddByAddress) {
-                    model.actions.openMainWindow()
-                    if MainWindowSheet.castAdd.mayOpen(calibrateShown: model.calibrateAll.shown,
-                                                       castAddShown: model.castAddShown) {
-                        model.castAddShown = true
-                    }
-                }
-                .help(t.castAddBody)
-                .accessibilityHint(t.castAddBody)
-                .opacity(shown ? 1 : 0)
-                .animation(.easeOut(duration: CastAddRow.fadeIn), value: shown)
-                .disabled(!shown)
-                .accessibilityHidden(!shown)
-            }
             // AirPlay comes last in the list, so what's wrong with AirPlay goes
             // right after it.
             if let problem = model.airPlayProblem {
@@ -1715,8 +1694,8 @@ struct MenuBarView: View {
                                  detail: t.localNetworkHint(model.localNetworkHint, short: false) ?? hint)
             }
             Divider().padding(.top, -2)
-            // The logo and status in the header open the main window.
             HStack(spacing: 0) {
+                PanelButton(title: t.openApp) { model.actions.openMainWindow() }
                 Spacer(minLength: 8)
                 PanelButton(title: t.quitShort) { model.actions.quit() }
                     .accessibilityLabel(t.quitApp)
@@ -1771,14 +1750,20 @@ struct MenuBarView: View {
 
     private func masterRow(_ t: UIStrings) -> some View {
         HStack(spacing: 8) {
-            MasterMuteButton(model: model, text: t)
+            MasterMuteButton(model: model, text: t, panel: true)
             Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }), in: 0...100)
                 .controlSize(.small)
                 .tint(.primary)   // teal marks state only; a level is not one
                 .accessibilityLabel(t.masterVolume)
                 .accessibilityValue(t.volumeValue(model.master))
                 .help(t.masterVolume)
+            Text(t.volumeValue(model.master))
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(Brand.secondaryText)
+                .frame(width: 26, alignment: .trailing)
+                .accessibilityHidden(true)
         }
+        .padding(.trailing, PanelLayout.volumeTrailing)
     }
 
     @ViewBuilder
@@ -1849,6 +1834,7 @@ struct MenuBarView: View {
                 }
             }
             .padding(.horizontal, -6)
+            .padding(.top, PanelLayout.volumeToRows)
             .id(model.panelSession)
         }
     }
@@ -2402,7 +2388,8 @@ struct SourcePicker: View {
         // teal fell near 2:1 on the panel's material over a dark window.
         .tint(hero ? Brand.secondaryText : .primary)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, hero ? 0 : 10)
+        .padding(.leading, hero ? PanelLayout.sourceLeading : 10)
+        .padding(.trailing, hero ? 0 : 10)
         .padding(.vertical, hero ? 0 : large ? 8 : 6)
         .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(hero ? 0 : 0.6)))
         .accessibilityLabel(t.sourceLabel)
@@ -2464,8 +2451,11 @@ struct PresetPicker: View {
             .accessibilityValue(current ?? t.choosePreset)
         }
         .menuStyle(.borderlessButton)
-        .tint(.primary)   // as the source picker: the teal falls under 4.5:1 on the panel
+        // As the card's source menu, so its icon and chevron read as the volume icon and the card's chevron do.
+        .tint(Brand.secondaryText)
         .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+        .padding(.leading, -PanelLayout.menuLeadingInset)
+        .padding(.trailing, PanelLayout.presetTrailing)
         .help(current ?? t.choosePreset)
         .accessibilityLabel(t.presets)
         .accessibilityValue(current ?? t.choosePreset)
@@ -2773,18 +2763,20 @@ struct PowerSwitch: View {
 struct MasterMuteButton: View {
     @ObservedObject var model: AppModel
     let text: UIStrings
+    /// The menu bar panel's size and grey, those of the preset icon above it.
+    var panel = false
 
     var body: some View {
         let label = MasterMute.isMuted(model.master) ? text.unmuteMaster : text.muteMaster
         Button { model.toggleMasterMute() } label: {
             Image(systemName: MasterMute.symbol(level: model.master))
                 // A fixed width, so the slider holds still as the waves come and go.
-                .frame(width: 18, height: 18, alignment: .leading)
+                .frame(width: panel ? 20 : 18, height: 18, alignment: .leading)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .font(.caption)
+        .foregroundStyle(panel ? AnyShapeStyle(Brand.secondaryText) : AnyShapeStyle(.secondary))
+        .font(panel ? .system(size: 13) : .caption)
         .accessibilityLabel(label)
         .help(label)
     }

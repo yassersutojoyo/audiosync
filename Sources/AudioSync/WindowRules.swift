@@ -454,7 +454,7 @@ enum PanelSizing: Equatable {
 /// volume, footer, margins), plus room for what may show around it.
 enum PanelChrome {
     static func height(notices: Int, permissionCard: Bool = false, airPlayNote: Bool = false,
-                       castAddRow: Bool = false, presets: Bool = false, liveInputHint: Bool = false,
+                       presets: Bool = false, liveInputHint: Bool = false,
                        noSpeakerOn: Bool = false) -> CGFloat {
         var height: CGFloat = 280   // the hero, with a song and its art, and the 36 pt This Mac row
         // The compact panel shows the newest notice, with a footer line when others wait.
@@ -462,7 +462,6 @@ enum PanelChrome {
         if notices > 1 { height += 30 }
         if permissionCard { height += 140 }
         if airPlayNote { height += 70 }
-        if castAddRow { height += 20 }
         if presets { height += 38 }
         if liveInputHint { height += 48 }
         if noSpeakerOn { height += 32 }
@@ -590,10 +589,12 @@ struct PanelResize: Equatable {
 
     /// The popover's window frame for content of `size`, its top edge (under
     /// the icon) and its middle where they are. The popover itself would set
-    /// it in one frame.
+    /// it in one frame. Its height is in whole points: AppKit rounds a
+    /// window's origin, which moved the top edge 1 pt on a fold's odd frames.
     static func windowFrame(_ frame: CGRect, content: CGSize, to size: CGSize) -> CGRect {
-        let dw = size.width - content.width, dh = size.height - content.height
-        return CGRect(x: frame.minX - dw / 2, y: frame.minY - dh, width: frame.width + dw, height: frame.height + dh)
+        let dw = size.width - content.width
+        let height = (frame.height + size.height - content.height).rounded(.up)
+        return CGRect(x: frame.minX - dw / 2, y: frame.maxY - height, width: frame.width + dw, height: height)
     }
 }
 
@@ -772,6 +773,41 @@ struct PanelFold: Equatable {
     /// room to spare, so focus rings aren't cut.
     static func clip(_ rect: CGRect, moving: Bool) -> CGRect {
         moving ? rect : rect.insetBy(dx: -40, dy: -40)
+    }
+}
+
+/// The menu bar panel's spacing and columns, from 2x captures on the Mac.
+/// One gap separates what shows of the preset row, the volume knob, This
+/// Mac's circles, the divider and the list's first circle.
+enum PanelLayout {
+    static let gap: CGFloat = 12
+    /// The panel stack's spacing.
+    static let spacing: CGFloat = 10
+    /// The preset icon sits this far inside its 34 pt row, a speaker's
+    /// circle inside its 36 pt row; the slider's knob fills its row.
+    static let presetInset: CGFloat = 9.5, rowInset: CGFloat = 5
+    /// What a borderless menu draws left of its label and right of its chevron.
+    static let menuLeadingInset: CGFloat = 2.5, menuChevronInset: CGFloat = 8
+    /// The now playing card's padding.
+    static let cardPadding: CGFloat = 10
+
+    /// Above the volume, under the preset row (on top of the stack's spacing).
+    static let presetToVolume: CGFloat = gap - presetInset - spacing
+    /// Between the volume and This Mac's rows.
+    static let volumeToRows: CGFloat = gap - rowInset
+    /// Above the divider, under This Mac's rows.
+    static let rowsToDivider: CGFloat = gap - rowInset
+    /// Under the divider (on top of the stack's spacing).
+    static let dividerToList: CGFloat = gap - spacing - rowInset
+    /// The source menu's leading padding in the card.
+    static let sourceLeading: CGFloat = -menuLeadingInset
+    /// The preset menu's and the volume row's trailing padding.
+    static let presetTrailing: CGFloat = cardPadding, volumeTrailing: CGFloat = cardPadding + menuChevronInset
+
+    /// The gaps that show, top to bottom.
+    static var gaps: [CGFloat] {
+        [presetInset + spacing + presetToVolume, volumeToRows + rowInset,
+         rowInset + rowsToDivider, spacing + dividerToList + rowInset]
     }
 }
 
