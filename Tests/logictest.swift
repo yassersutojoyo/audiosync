@@ -7727,7 +7727,10 @@ do {
     let calibrateRow = calibrate.components(separatedBy: "if let off").first ?? ""
     let oneRowEach = rows.filter { $0.1.components(separatedBy: ".modifier(QuickRow())").count != 2 }.map(\.0)
     // The blocker note hangs below Calibrate's row; inside the row it pushed the button to the top.
-    check(quickRow.contains(".frame(height: QuickRow.height)") && !quickRow.contains("minHeight")
+    // A value row grows only by its second line; its padding keeps the plain row at QuickRow.height.
+    let valueRowsPadded = rows.prefix(2).allSatisfy { $0.1.contains(".padding(.vertical, ChoiceLineView.rowPadding)") }
+    check(quickRow.contains(".frame(minHeight: QuickRow.height)") && !quickRow.contains("maxHeight")
+            && !quickRow.contains(".frame(height:") && valueRowsPadded
             && column.contains("VStack(alignment: .leading, spacing: QuickRow.gap) {")
             && column.contains("PresetsRow(model: model)\n")
             && column.contains("CalibrateAllButton(model: model)\n") && !column.contains("CalibrateAllButton(model: model).modifier")
@@ -18513,10 +18516,15 @@ do {
             && syncPanel.contains(".help(model.shownRunning ? t.turnOff : t.turnOn)"),
           "streaming switch source: the status lines and the Calibrate row cross-fade with the switch")
     let syncEqualizer = syncPart("MainWindow.swift", "func equalizerRow(", "\n    }\n")
-    check(syncEqualizer.contains("Spacer(minLength: 8)") && syncEqualizer.contains(".help(name)"),
-          "equalizer row source: the dot and the curve name sit right against the chevron, using the room before them")
-    check(syncEqualizer.contains("ScrollingTitle(text: name)") && !syncEqualizer.contains(".minimumScaleFactor("),
-          "equalizer row source: a curve name too long for its room scrolls, cut with an ellipsis only under Reduce Motion")
+    let syncOrder = ["Text(t.equalizer)", "ChoiceLineView(", "Spacer(minLength: 8)", "chevron.right"]
+        .compactMap { syncEqualizer.range(of: $0)?.lowerBound }
+    check(syncOrder.count == 4 && syncOrder == syncOrder.sorted(),
+          "equalizer row source: the curve name sits under the row's name, using the room up to the chevron")
+    let syncChoiceText = syncPart("MainWindow.swift", "struct ChoiceLineView: View {")
+        .components(separatedBy: "private func text(").dropFirst().first ?? ""
+    check(syncChoiceText.contains(".lineLimit(2)") && syncChoiceText.contains(".fixedSize(horizontal: false, vertical: true)")
+            && !syncChoiceText.contains(".minimumScaleFactor(") && !syncChoiceText.contains("ScrollingTitle("),
+          "equalizer row source: a curve name too long for its room wraps to a second line, then ends in an ellipsis, never shrinking")
 }
 
 // MARK: A disclosed pane and the rows below it move as one, its content still while they move (MainWindow.swift, MenuBar.swift)
