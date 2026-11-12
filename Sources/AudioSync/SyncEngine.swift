@@ -432,6 +432,7 @@ final class StreamEngine {
     /// (S186). For a start after a stop, and for quitting.
     func finishStopping() {
         retirement.finishAll()
+        OutputRenderer.finishTeardowns()
         watchFades()
     }
 

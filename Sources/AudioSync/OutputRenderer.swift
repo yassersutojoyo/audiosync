@@ -192,7 +192,7 @@ final class OutputRenderer: FadingOutput {
     }
 
     deinit {
-        halt()
+        halt(inline: true)   // a teardown queued with self would outlive its memory
     }
 
     /// Linear gain; set before `start` it applies from the first callback,
@@ -285,6 +285,7 @@ final class OutputRenderer: FadingOutput {
     /// without a fade. Throws the step that failed and leaves nothing running.
     func start(on device: AudioObjectID, captureRate: Double, delayMs: Double) throws {
         halt()
+        Self.finishTeardowns()   // never two units of one output playing at once
         // A hogged device holds the start on the main thread for seconds (measured 7.5 s) before refusing it.
         if let owner = Self.hogOwner(device), owner != getpid() {
             throw StartFailure.deviceDidNotStart(OSStatus(kAudioDevicePermissionsError))
@@ -351,9 +352,13 @@ final class OutputRenderer: FadingOutput {
                 + OutputObservation.rejectionText(rejectedNs: rejectedNs, usedNs: latencyNs))
     }
 
-    /// Stops the unit at once, without a fade; once this returns no render
-    /// callback runs (S134). Idempotent.
+    /// Stops the unit without a fade on a background queue, which keeps what
+    /// its render callback uses until the unit is gone (S134). Idempotent.
     func halt() {
+        halt(inline: false)
+    }
+
+    private func halt(inline: Bool) {
         generation &+= 1
         uninstallDeviceAliveListener()
         uninstallOverloadListener()
@@ -377,7 +382,25 @@ final class OutputRenderer: FadingOutput {
             stopNote = "stopped without a fade-out"
         }
         halUnit = nil
-        Self.tearDown(live, started: true, initialized: true)
+        guard !inline else {
+            Self.tearDown(live, started: true, initialized: true)
+            return
+        }
+        let rendering = target
+        Self.teardownQueue.async {
+            Self.tearDown(live, started: true, initialized: true)
+            withExtendedLifetime((self, rendering)) {}
+        }
+    }
+
+    /// Stopping and disposing of a unit holds its thread for tens of
+    /// milliseconds, which on the main thread is a visible hitch.
+    private static let teardownQueue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.output-teardown",
+                                                     qos: .userInitiated)
+
+    /// Waits until every unit halted so far is gone.
+    static func finishTeardowns() {
+        teardownQueue.sync {}
     }
 
     /// Takes `instance` down from the stage it reached: stopped if it

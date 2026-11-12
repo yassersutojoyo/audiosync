@@ -62,7 +62,7 @@ protocol FadingOutput: AnyObject {
     /// Whether its device has played the fade-out by host time `nowNs`, or
     /// has nothing left to play (its device is gone or its IO stopped).
     func hasFaded(nowNs: UInt64) -> Bool
-    /// Stops its IO at once.
+    /// Stops its IO at once, possibly finishing after this returns.
     func halt()
 }
 
