@@ -17587,6 +17587,13 @@ do {
             && count(zoned, "if divided { Divider() }") == 0
             && count(zoned, "ZoneMemberGroup {") == 1,
           "In zones label: in capitals on the name column with its line as the separator, rows in a zone box")
+    let strings = read("Sources/AudioSync/Localization.swift")
+    let join = part(window, after: "private struct ZoneLabelJoin")
+    check(count(strings, "let inZones = \"In a zone\"") == 1 && count(strings, "\"In zones\"") == 0,
+          "In a zone label: reads In a zone, right for one zone or many")
+    check(count(zoned, "ZoneLabelJoin()") == 1 && count(zoned, ".frame(width: ZoneLook.nameColumn - ZoneLook.labelLineGap)") == 1
+            && count(join, "radius: ZoneLook.labelJoinRadius") == 1 && count(join, "rect.maxY") >= 1,
+          "In a zone label: a rule on its left runs from the zone bar and turns down into it with a rounded corner")
     check(count(window, "padding(.leading, 52)") == 0 && count(window, "Divider().padding(.leading, ZoneLook.nameColumn)") == 4,
           "zone look: every row separator starts at the name column")
     let compact = part(window, after: "private struct ZoneMemberCompactRow")
