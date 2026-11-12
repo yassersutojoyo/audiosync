@@ -17773,7 +17773,7 @@ do {
     check(card >= 120, "panel chrome: the permission card's room is kept", "\(card)")
 }
 
-// MARK: The panel's v3.1 look: song in the hero, no Open AudioSync, one row motion (MenuBar.swift)
+// MARK: The panel's v3.1 look: song in the hero, Open AudioSync by Quit, one row motion (MenuBar.swift)
 do {
     func read(_ path: String) -> String { (try? String(contentsOfFile: path, encoding: .utf8)) ?? "" }
     let panelSource = read("Sources/AudioSync/MenuBar.swift")
