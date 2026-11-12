@@ -1271,13 +1271,6 @@ struct UIStrings {
     let zones = "Zones"
     /// The gear menu and the Speakers menu (Command-N).
     let newZone = "New Zone from Active Speakers…"
-    let newZoneTitle = "New Zone"
-    let newZoneMessage = "The speakers that are on right now move into this zone. A speaker in another zone leaves that zone."
-    /// New Zone… in a speaker's Move to Zone menu.
-    func newZoneForSpeaker(_ name: String) -> String { "\(name) moves into this zone." }
-    let newZonePlaceholder = "Living room, Kitchen…"
-    /// VoiceOver label of the name field in the New Zone alert.
-    let newZoneFieldLabel = "Zone name"
     let newZoneNeedsSpeakers = "Turn on the speakers you want in the zone first, then create it."
     /// A speaker's ⋯ menu: a submenu of the other zones, then New Zone….
     let moveToZone = "Move to Zone"
@@ -1433,7 +1426,6 @@ struct UIStrings {
         virtualHidden ? panelVirtualDevicesHidden + "\n" + networkEmpty : networkEmpty
     }
     let panelVirtualDevicesHidden = "Virtual devices are hidden. Open AudioSync and turn on Show Virtual Devices in Settings."
-    let create = "Create"
     let cancel = "Cancel"
     let autoConnect = "Auto-Connect When Available"
     let launchAtLogin = "Launch at Login"

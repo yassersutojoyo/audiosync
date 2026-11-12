@@ -274,7 +274,7 @@ func mainWindowShot(_ model: AppModel, look: Look) -> NSBitmapImageRep {
 
 /// The equalizer window as EqualizerWindowController sets it up.
 func equalizerShot(_ model: EqualizerModel, look: Look) -> NSBitmapImageRep {
-    let window = ShotWindow(contentViewController: NSHostingController(rootView: EqualizerView(model: model, askSave: {}, askRename: { _ in })))
+    let window = ShotWindow(contentViewController: NSHostingController(rootView: EqualizerView(model: model, curveName: CurveNameDraft(), curvesFull: {}, askRename: { _ in })))
     window.appearance = look.appearance
     window.title = UIStrings().equalizerTitle
     window.styleMask = [.titled, .closable]

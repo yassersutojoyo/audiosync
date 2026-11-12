@@ -280,34 +280,38 @@ extension AppDelegate {
     /// New Zone from Active Speakers: the speakers that are on, in the
     /// windows' order, leave their zones for the new one.
     func promptNewZone() {
-        let outcome = NewZoneFromActive.run(
-            onKeys: {
-                let layout = appModel.layout
-                return (layout.thisMac + layout.connected).filter(\.enabled).map(\.key)
-            },
-            askName: { askZoneName(title: text.newZoneTitle, message: text.newZoneMessage, button: text.create) })
+        let outcome = NewZoneFromActive.run(onKeys: {
+            let layout = appModel.layout
+            return (layout.thisMac + layout.connected).filter(\.enabled).map(\.key)
+        })
         switch outcome {
         case .needsSpeakers:
             menuBar?.close()
             showAlert(text.newZoneNeedsSpeakers, style: .informational)
-        case .cancelled:
-            break
-        case let .create(name, members):
-            addZone(named: name, members: members)
+        case let .create(members):
+            nameInPlace(addZone(members: members))
         }
     }
 
     /// New Zone… in a speaker's Move to Zone menu: a zone of that speaker.
     func promptNewZone(with key: String, name: String) {
-        guard let typed = askZoneName(title: text.newZoneTitle, message: text.newZoneForSpeaker(name),
-                                      button: text.create) else { return }
-        addZone(named: typed, members: [key])
+        nameInPlace(addZone(members: [key]))
     }
 
-    private func addZone(named typed: String, members: [String]) {
-        let name = GroupName.forNewGroup(typed: typed, existing: zones.map(\.name), numbered: text.numberedZone)
-        zones = ZoneEdit.adding(id: UUID().uuidString, name: name, members: members, to: zones)
+    private func addZone(members: [String]) -> String {
+        let name = GroupName.forNewGroup(typed: "", existing: zones.map(\.name), numbered: text.numberedZone)
+        let id = UUID().uuidString
+        zones = ZoneEdit.adding(id: id, name: name, members: members, to: zones)
         pushModel()
+        return id
+    }
+
+    /// The new zone's name field opens empty in its header, its numbered name
+    /// as the placeholder, which Return on nothing or Escape keeps.
+    private func nameInPlace(_ id: String) {
+        showMainWindow()
+        guard let zone = appModel.zones.first(where: { $0.id == id }) else { return }
+        appModel.startRename(zone, typing: "")
     }
 
     /// The name typed in zone `id`'s header; a blank name keeps the current one.
@@ -317,24 +321,6 @@ extension AppDelegate {
         zones = renamed   // saved by `zones`' didSet
         rereadCalibrateZoneSheet()
         pushModel()
-    }
-
-    /// The name typed in a zone's name alert, which the user opened; nil
-    /// when cancelled.
-    private func askZoneName(title: String, message: String, button: String) -> String? {
-        menuBar?.close()
-        NSApp.activate(ignoringOtherApps: true)
-        let prompt = NSAlert()
-        prompt.messageText = title
-        prompt.informativeText = message
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-        field.placeholderString = text.newZonePlaceholder
-        field.setAccessibilityLabel(text.newZoneFieldLabel)
-        prompt.accessoryView = field
-        prompt.addButton(withTitle: button)
-        prompt.addButton(withTitle: text.cancel)
-        prompt.window.initialFirstResponder = field
-        return prompt.runModal() == .alertFirstButtonReturn ? field.stringValue : nil
     }
 
     /// Delete Zone: its members return to the plain lists; nothing else changes.

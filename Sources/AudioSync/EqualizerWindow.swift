@@ -5,17 +5,23 @@ import SwiftUI
 final class EqualizerWindowController {
     private var window: NSWindow?
     let model: EqualizerModel
+    private let curveName = CurveNameDraft()
 
     init(model: EqualizerModel) { self.model = model }
 
     func show() {
         if window == nil {
-            let view = EqualizerView(model: model,
-                                     askSave: { [weak self] in self?.promptSaveCurve() },
+            let view = EqualizerView(model: model, curveName: curveName,
+                                     curvesFull: { [weak self] in self?.informCurvesFull() },
                                      askRename: { [weak self] index in self?.promptRenameCurve(index) })
             let host = NSHostingController(rootView: view)
             let panel = EqualizerPanel(contentViewController: host)
             panel.title = UIStrings().equalizerTitle
+            panel.dropName = { [weak self] in
+                guard let draft = self?.curveName, draft.open else { return false }
+                draft.open = false
+                return true
+            }
             panel.styleMask = [.titled, .closable]
             panel.isReleasedWhenClosed = false   // kept and shown again by the next show()
             panel.isExcludedFromWindowsMenu = true   // the Window menu has its own Equalizer item
@@ -26,17 +32,9 @@ final class EqualizerWindowController {
         window?.makeKeyAndOrderFront(nil)
     }
 
-    /// The name field starts with the saved curve the picker shows, so saving
-    /// again updates it, or with the next "Curve N".
-    private func promptSaveCurve() {
+    private func informCurvesFull() {
         let text = UIStrings()
-        let shown = model.shownSavedIndex.map { model.curves[$0].name }
-        guard let typed = promptName(title: text.saveCurveTitle, message: text.saveCurveMessage,
-                                     name: shown ?? text.numberedCurve(model.curves.count + 1),
-                                     confirm: text.save) else { return }
-        if Equalizer.curveName(typed) != nil, !model.saveCurve(named: typed) {
-            inform(text.saveCurveTitle, text.curvesFull(Equalizer.maxCurves))
-        }
+        inform(text.saveCurveTitle, text.curvesFull(Equalizer.maxCurves))
     }
 
     private func promptRenameCurve(_ index: Int) {
@@ -77,9 +75,45 @@ final class EqualizerWindowController {
     }
 }
 
-/// Escape closes the equalizer, as it does the Guide.
+/// The curve name typed by Save Curve…, held by the window's controller so
+/// Escape at the window can drop it.
+final class CurveNameDraft: ObservableObject {
+    @Published var open = false
+    @Published var text = ""
+    var suggested = ""
+}
+
+/// Return or the focus leaving saves, Escape drops the typing.
+private struct CurveNameField: View {
+    @ObservedObject var draft: CurveNameDraft
+    let text: UIStrings
+    let finish: (Bool) -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(draft.suggested, text: $draft.text)
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel(text.curveNameField)
+            .accessibilityHint(text.zoneNameFieldHint)
+            .help(text.saveCurveMessage)
+            .focused($focused)
+            .onSubmit { finish(true) }
+            .onExitCommand { draft.open = false }
+            // Save Curve… is a menu item: the field takes the focus once the menu has closed.
+            .onAppear { DispatchQueue.main.async { focused = true } }
+            .onChange(of: focused) { _, now in
+                if !now { finish(false) }
+            }
+    }
+}
+
+/// Escape closes the equalizer, as it does the Guide, except while the curve
+/// name field is open: then it drops the name, even before the field has the focus.
 private final class EqualizerPanel: NSWindow {
+    var dropName: () -> Bool = { false }
+
     override func cancelOperation(_ sender: Any?) {
+        if dropName() { return }
         performClose(sender)
     }
 }
@@ -93,7 +127,8 @@ private final class SliderClick: ObservableObject {
 
 struct EqualizerView: View {
     @ObservedObject var model: EqualizerModel
-    let askSave: () -> Void
+    @ObservedObject var curveName: CurveNameDraft
+    let curvesFull: () -> Void
     let askRename: (Int) -> Void
     private let text = UIStrings()
 
@@ -107,10 +142,15 @@ struct EqualizerView: View {
                 .toggleStyle(.switch)
                 .font(.headline)
                 Spacer()
-                Text(text.equalizerCurve)
-                    .accessibilityHidden(true)   // the picker carries the label
-                curvePicker
-                    .frame(width: 170)
+                if curveName.open {
+                    CurveNameField(draft: curveName, text: text, finish: finishCurveName)
+                        .frame(width: 220)
+                } else {
+                    Text(text.equalizerCurve)
+                        .accessibilityHidden(true)   // the picker carries the label
+                    curvePicker
+                        .frame(width: 170)
+                }
             }
 
             HStack(alignment: .bottom, spacing: 6) {
@@ -156,7 +196,7 @@ struct EqualizerView: View {
                 }
             }
             Divider()
-            Button(text.equalizerSaveCurve) { askSave() }
+            Button(text.equalizerSaveCurve) { startCurveName() }
             if let saved, model.curves.indices.contains(saved) {
                 let name = model.curves[saved].name
                 Button(text.equalizerRenameCurve(name)) { askRename(saved) }
@@ -172,6 +212,24 @@ struct EqualizerView: View {
         }
         .accessibilityLabel(text.equalizerCurve)
         .accessibilityValue(shown)
+    }
+
+    /// Save Curve… names the curve in place of the picker. The suggestion is
+    /// the saved curve the picker shows, so saving again updates it, or the
+    /// next "Curve N".
+    private func startCurveName() {
+        curveName.suggested = model.shownSavedIndex.map { model.curves[$0].name }
+            ?? text.numberedCurve(model.curves.count + 1)
+        curveName.text = ""
+        curveName.open = true
+    }
+
+    private func finishCurveName(returned: Bool) {
+        guard curveName.open else { return }
+        curveName.open = false
+        guard let typed = InPlaceName.applied(typed: curveName.text, suggested: curveName.suggested,
+                                              returned: returned) else { return }
+        if Equalizer.curveName(typed) != nil, !model.saveCurve(named: typed) { curvesFull() }
     }
 
     /// `label` is the short text under the slider; `name` is what VoiceOver reads.

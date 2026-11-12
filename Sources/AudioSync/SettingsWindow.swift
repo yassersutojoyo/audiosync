@@ -204,12 +204,14 @@ struct SettingsView: View {
                     Divider()
                     SettingsRow {
                         Button(t.menuCheckForUpdates) { AppUpdater.checkForUpdates() }
+                            .buttonStyle(HouseButtonStyle())
                     }
                 }
             }
             SettingsBox(title: t.setupTitle) {
                 SettingsRow {
                     Button(t.setupMenu, action: setUpPermissions)
+                        .buttonStyle(HouseButtonStyle())
                 }
             }
         }
@@ -248,7 +250,7 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Button(t.openSettings) { model.actions.openAccessibilitySettings() }
-                        .controlSize(.small)
+                        .buttonStyle(HouseButtonStyle(small: true))
                         .accessibilityLabel(t.setupOpenSettings(.accessibility))
                         .accessibilityHint(t.openSettingsHint)
                         .help(t.openSettingsHint)
@@ -273,6 +275,7 @@ struct SettingsView: View {
                     Text(entry.title)
                     Spacer(minLength: 12)
                     Button(t.unhide) { model.unhide(entry) }
+                        .buttonStyle(HouseButtonStyle(small: true))
                         .accessibilityLabel(t.unhideLabel(entry.title))
                 }
                 .transition(.opacity)

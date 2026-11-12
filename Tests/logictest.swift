@@ -7719,9 +7719,8 @@ do {
           "left column: the slider knob and the Presets icon sit 12 pt from the hairline between them",
           "\(MainColumns.separatorPadding)")
     let castAdd = part("MainWindow.swift", "if lines.castAdd { Divider() }", "\n                }\n")
-    check(castAdd.contains(".buttonStyle(.plain)") && castAdd.contains(".modifier(QuickRow())")
-            && castAdd.contains("QuickRowIcon(") && !castAdd.contains(".controlSize(.small)"),
-          "speaker list: Add by Address is a row like the left column's, not a default push button")
+    check(castAdd.contains(".buttonStyle(HouseButtonStyle(small: true))") && !castAdd.contains(".controlSize(.small)"),
+          "speaker list: Add by Address is the house button, not a default push button")
 }
 
 // MARK: Main window v3.1: zoom, motion, and what waits one step away (WindowRules.swift, MainWindow.swift)
@@ -8284,17 +8283,12 @@ do {
     // covers: S245
     check(added.map(\.members) == [["ap:native:den"], [], ["lc:usb", "cc:kitchen"]] && added[2].volume == 100,
           "zones: a new zone takes its speakers from their zones, once each, at full volume")
-    func newZoneOutcome(_ reads: [[String]], typed: String?) -> NewZoneFromActive.Outcome {
-        var onReads = reads
-        return NewZoneFromActive.run(onKeys: { onReads.removeFirst() }, askName: { typed })
-    }
     // covers: S245
-    check(newZoneOutcome([["lc:usb", "ap:native:den"], ["ap:native:den"]], typed: "Desk")
-          == .create(name: "Desk", members: ["ap:native:den"]),
-          "zones: New Zone from Active Speakers leaves out a speaker turned off while its name prompt is open")
+    check(NewZoneFromActive.run(onKeys: { ["lc:usb", "ap:native:den"] }) == .create(members: ["lc:usb", "ap:native:den"]),
+          "zones: New Zone from Active Speakers takes the speakers that are on")
     // covers: S245
-    check(newZoneOutcome([["lc:usb"], []], typed: "Desk") == .needsSpeakers,
-          "zones: New Zone from Active Speakers makes no zone when every speaker turned off while its name prompt is open")
+    check(NewZoneFromActive.run(onKeys: { [] }) == .needsSpeakers,
+          "zones: New Zone from Active Speakers makes no zone when no speaker is on")
     // covers: S245
     check(ZoneEdit.removing("cc:kitchen", from: [kitchen]).map(\.members) == [[]],
           "zones: Remove from Zone leaves the emptied zone in place")
@@ -9876,8 +9870,8 @@ do {
     check(renamedZones.map(\.name) == ["Lounge", "Kitchen"] && renamedZones[0].members == [usb]
               && ZoneEdit.renaming("zone-1", to: "   ", in: zonesBefore) == zonesBefore
               && ZoneEdit.renaming("gone", to: "Den", in: zonesBefore) == zonesBefore
-              && ZoneEdit.renaming("zone-2", to: "Living", in: zonesBefore).map(\.name) == ["Living", "Living"],
-          "zone rename: the typed name is trimmed, a blank one keeps the name, and a name another zone uses is allowed",
+              && ZoneEdit.renaming("zone-2", to: "Living", in: zonesBefore).map(\.name) == ["Living", "Living 2"],
+          "zone rename: the typed name is trimmed, a blank one keeps the name, and a name another zone uses gets the next free number",
           "\(renamedZones.map(\.name))")
     check(ZoneEdit.renaming("zone-1", to: " " + String(repeating: "a", count: 65) + "\n", in: zonesBefore)[0].name
               == String(repeating: "a", count: SpeakerNames.maxLength)
@@ -18675,6 +18669,55 @@ do {
     check(svcHeld == [0.5, 0.3, nil],
           "system volume: while the slider is held the device's reports wait, so an earlier step can't pull it back; "
               + "a device whose volume stops being settable still closes it", "\(svcHeld)")
+}
+
+// MARK: One house button for the plain buttons, zone and curve names typed in place (WindowRules.swift and the views)
+do {
+    let houseGrounds: [(dark: Bool, ground: BrandRGB)] = [
+        (false, BrandRGB(red: 1, green: 1, blue: 1)), (false, BrandRGB(red: 236 / 255, green: 236 / 255, blue: 236 / 255)),
+        (true, BrandRGB(red: 30 / 255, green: 30 / 255, blue: 30 / 255)), (true, BrandRGB(red: 50 / 255, green: 50 / 255, blue: 50 / 255)),
+    ]
+    let houseStates: [(hovered: Bool, pressed: Bool)] = [(false, false), (true, false), (false, true)]
+    let houseRatios = houseGrounds.flatMap { g in
+        houseStates.map { s in
+            AmbientBreath.contrast(HouseButton.text(dark: g.dark),
+                                   AmbientBreath.over(BrandTokens.Light.teal, g.ground,
+                                                      opacity: HouseButton.fill(hovered: s.hovered, pressed: s.pressed, dark: g.dark)))
+        }
+    }
+    check(houseRatios.allSatisfy { $0 >= 4.5 },
+          "house button: its text keeps 4.5:1 at rest, hovered and pressed, on white, the windows' grey, and both dark backgrounds",
+          "\(houseRatios.map { (($0 * 100).rounded()) / 100 })")
+    check([false, true].allSatisfy { dark in
+              HouseButton.fill(hovered: false, pressed: false, dark: dark) < HouseButton.fill(hovered: true, pressed: false, dark: dark)
+                  && HouseButton.fill(hovered: true, pressed: false, dark: dark) < HouseButton.fill(hovered: false, pressed: true, dark: dark)
+          },
+          "house button: the teal tint deepens on hover and again while pressed")
+    check(InPlaceName.applied(typed: "Rock", suggested: "Curve 2", returned: true) == "Rock"
+            && InPlaceName.applied(typed: "Rock", suggested: "Curve 2", returned: false) == "Rock"
+            && InPlaceName.applied(typed: "  ", suggested: "Curve 2", returned: true) == "Curve 2"
+            && InPlaceName.applied(typed: "", suggested: "Curve 2", returned: false) == nil,
+          "name typed in place: Return with nothing typed takes the suggested name, the focus leaving with nothing typed applies nothing")
+    let houseLiving = SpeakerZone(id: "z1", name: "Living", members: [], volume: 100)
+    let houseNew = SpeakerZone(id: "z2", name: "Zone 2", members: [], volume: 100)
+    let houseRenamed = ZoneEdit.renaming("z2", to: " Living ", in: [houseLiving, houseNew]).map(\.name)
+    let houseKept = ZoneEdit.renaming("z1", to: "Living", in: [houseLiving, houseNew]).map(\.name)
+    check(houseRenamed == ["Living", "Living 2"] && houseKept == ["Living", "Zone 2"],
+          "zone name typed in place: a name another zone has gets the next free number, a zone keeps its own name",
+          "\(houseRenamed) \(houseKept)")
+    let houseSettings = (try? String(contentsOfFile: "Sources/AudioSync/SettingsWindow.swift", encoding: .utf8)) ?? ""
+    let houseMain = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let houseZones = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Zones.swift", encoding: .utf8)) ?? ""
+    let houseEqualizer = (try? String(contentsOfFile: "Sources/AudioSync/EqualizerWindow.swift", encoding: .utf8)) ?? ""
+    let houseHint = houseMain.components(separatedBy: "private struct LocalNetworkHintView").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(houseSettings.components(separatedBy: ".buttonStyle(HouseButtonStyle(").count == 5
+            && houseHint.contains(".buttonStyle(HouseButtonStyle(small: true))")
+            && houseMain.components(separatedBy: ".buttonStyle(HouseButtonStyle(small: true))").count == 3,
+          "settings and main window source: Check for Updates, Check Setup, Open Settings, Unhide, Open Local Network Settings and Add by Address use the house button")
+    check(!houseZones.contains("NSAlert()") && houseZones.contains(".startRename(")
+            && !houseEqualizer.contains("promptSaveCurve") && houseEqualizer.contains("InPlaceName.applied("),
+          "zone and equalizer source: a new zone and a saved curve are named in place, with no name alert")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

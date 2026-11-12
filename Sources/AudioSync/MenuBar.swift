@@ -394,9 +394,9 @@ final class AppModel: ObservableObject {
         let target = InlineRename.Target(id: speaker.id, key: speaker.key, system: speaker.systemName)
         apply(rename.start(target, name: speaker.name, in: place))
     }
-    func startRename(_ zone: Zone) {
+    func startRename(_ zone: Zone, typing: String? = nil) {
         let target = InlineRename.Target(id: zone.id, key: zone.id, system: zone.name, kind: .zone)
-        apply(rename.start(target, name: zone.name))
+        apply(rename.start(target, name: typing ?? zone.name))
     }
     func commitRename(id: String) { apply(rename.commit(id: id)) }
     /// Quit applies the open rename as the focus leaving would.
