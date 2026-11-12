@@ -1149,3 +1149,23 @@ enum PresetInUse: Equatable {
         return PresetCore.current(presets, scene).map(PresetInUse.exact) ?? .notInUse
     }
 }
+
+/// The house push button that replaces the system bezel on the plain
+/// buttons: the brand teal at `fill` opacity behind `text`.
+enum HouseButton {
+    static func fill(hovered: Bool, pressed: Bool, dark: Bool) -> Double {
+        dark ? 0.14 : 0.12
+    }
+
+    static func text(dark: Bool) -> BrandRGB {
+        dark ? BrandTokens.Dark.tealText : BrandTokens.Light.tealText
+    }
+}
+
+/// A name typed in place where one is suggested, as the placeholder (a saved
+/// curve's): what to apply, nil for nothing.
+enum InPlaceName {
+    static func applied(typed: String, suggested: String, returned: Bool) -> String? {
+        typed
+    }
+}

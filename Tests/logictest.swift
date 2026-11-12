@@ -18498,5 +18498,47 @@ do {
           "scrolling title: a title at its start shows its first letter in full", "\(startStops)")
 }
 
+// MARK: One house button for the plain buttons, zone and curve names typed in place (WindowRules.swift and the views)
+do {
+    let houseGrounds: [(dark: Bool, ground: BrandRGB)] = [
+        (false, BrandRGB(red: 1, green: 1, blue: 1)), (false, BrandRGB(red: 236 / 255, green: 236 / 255, blue: 236 / 255)),
+        (true, BrandRGB(red: 30 / 255, green: 30 / 255, blue: 30 / 255)), (true, BrandRGB(red: 50 / 255, green: 50 / 255, blue: 50 / 255)),
+    ]
+    let houseStates: [(hovered: Bool, pressed: Bool)] = [(false, false), (true, false), (false, true)]
+    let houseRatios = houseGrounds.flatMap { g in
+        houseStates.map { s in
+            AmbientBreath.contrast(HouseButton.text(dark: g.dark),
+                                   AmbientBreath.over(BrandTokens.Light.teal, g.ground,
+                                                      opacity: HouseButton.fill(hovered: s.hovered, pressed: s.pressed, dark: g.dark)))
+        }
+    }
+    check(houseRatios.allSatisfy { $0 >= 4.5 },
+          "house button: its text keeps 4.5:1 at rest, hovered and pressed, on white, the windows' grey, and both dark backgrounds",
+          "\(houseRatios.map { (($0 * 100).rounded()) / 100 })")
+    check([false, true].allSatisfy { dark in
+              HouseButton.fill(hovered: false, pressed: false, dark: dark) < HouseButton.fill(hovered: true, pressed: false, dark: dark)
+                  && HouseButton.fill(hovered: true, pressed: false, dark: dark) < HouseButton.fill(hovered: false, pressed: true, dark: dark)
+          },
+          "house button: the teal tint deepens on hover and again while pressed")
+    check(InPlaceName.applied(typed: "Rock", suggested: "Curve 2", returned: true) == "Rock"
+            && InPlaceName.applied(typed: "Rock", suggested: "Curve 2", returned: false) == "Rock"
+            && InPlaceName.applied(typed: "  ", suggested: "Curve 2", returned: true) == "Curve 2"
+            && InPlaceName.applied(typed: "", suggested: "Curve 2", returned: false) == nil,
+          "name typed in place: Return with nothing typed takes the suggested name, the focus leaving with nothing typed applies nothing")
+    let houseSettings = (try? String(contentsOfFile: "Sources/AudioSync/SettingsWindow.swift", encoding: .utf8)) ?? ""
+    let houseMain = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let houseZones = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Zones.swift", encoding: .utf8)) ?? ""
+    let houseEqualizer = (try? String(contentsOfFile: "Sources/AudioSync/EqualizerWindow.swift", encoding: .utf8)) ?? ""
+    let houseHint = houseMain.components(separatedBy: "private struct LocalNetworkHintView").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(houseSettings.components(separatedBy: ".buttonStyle(HouseButtonStyle(").count == 5
+            && houseHint.contains(".buttonStyle(HouseButtonStyle(small: true))")
+            && houseMain.components(separatedBy: ".buttonStyle(HouseButtonStyle(small: true))").count == 3,
+          "settings and main window source: Check for Updates, Check Setup, Open Settings, Unhide, Open Local Network Settings and Add by Address use the house button")
+    check(!houseZones.contains("NSAlert()") && houseZones.contains(".startRename(")
+            && !houseEqualizer.contains("promptSaveCurve") && houseEqualizer.contains("InPlaceName.applied("),
+          "zone and equalizer source: a new zone and a saved curve are named in place, with no name alert")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)
