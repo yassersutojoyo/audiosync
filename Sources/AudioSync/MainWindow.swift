@@ -878,6 +878,7 @@ private struct PresetsRow: View {
     }
 
     private func fold() {
+        if model.presetsListOpen { draft.cancel() }
         withAnimation(AppModel.delayPanelMotion(reduceMotion: reduceMotion)) { model.presetsListOpen.toggle() }
         model.actions.setPresetsListOpen(model.presetsListOpen)
     }
@@ -936,6 +937,7 @@ private enum PresetListLayout {
     static let indent = MainColumns.rowInset + 28 - dotColumn
     /// Half a row past five, so the cut row says the list goes on.
     static let scrollHeight = rowHeight * (CGFloat(visibleRows) + 0.5)
+    static let saveRowID = "save-as-preset"
 }
 
 /// The list under the Presets row: one row per preset, then Save as Preset….
@@ -963,29 +965,62 @@ private struct PresetList: View {
         .padding(.trailing, 6)
         .padding(.bottom, 6)
         if model.presets.count > PresetListLayout.visibleRows {
-            ScrollView(.vertical) { list }
-                .frame(height: PresetListLayout.scrollHeight)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) { list }
+                    .frame(height: PresetListLayout.scrollHeight)
+                    // A preset saved past the fifth row comes into view; the sixth arrives with the scroll view.
+                    .onAppear { scrollToSaved(proxy) }
+                    .onChange(of: draft.scrollToEnd) { _, _ in scrollToSaved(proxy) }
+            }
         } else {
             list
         }
     }
 
+    private func scrollToSaved(_ proxy: ScrollViewProxy) {
+        guard draft.scrollToEnd else { return }
+        draft.scrollToEnd = false
+        proxy.scrollTo(PresetListLayout.saveRowID, anchor: .bottom)
+    }
+
     @ViewBuilder
     private func saveRow(_ t: UIStrings) -> some View {
         if draft.target == PresetNameDraft.Target.new {
-            PresetNameField(draft: draft, target: .new, placeholder: t.presetPlaceholder, text: t) {
-                model.actions.savePreset($0)
-            }
-            .padding(.leading, PresetListLayout.dotColumn)
-            .frame(minHeight: PresetListLayout.rowHeight)
+            PresetNameField(draft: draft, target: .new, placeholder: t.presetPlaceholder, text: t)
+                .padding(.leading, PresetListLayout.dotColumn)
+                .frame(minHeight: PresetListLayout.rowHeight)
+                .id(PresetListLayout.saveRowID)
         } else {
-            Button { draft.start(.new, name: "") } label: {
+            Button { startSave(t) } label: {
                 Text(t.savePreset)
                     .frame(maxWidth: .infinity, minHeight: PresetListLayout.rowHeight, alignment: .leading)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contentShape(.focusEffect, RoundedRectangle(cornerRadius: 6))
             .padding(.leading, PresetListLayout.dotColumn)
+            .id(PresetListLayout.saveRowID)
+        }
+        if draft.needsSpeakers && !model.presetsCanSave {
+            Text(t.savePresetNeedsSpeakers)
+                .font(.caption)
+                .foregroundStyle(Brand.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.leading, PresetListLayout.dotColumn)
+                .padding(.bottom, 6)
+        }
+    }
+
+    /// With no speaker on, the row says so instead of opening a name field that couldn't save.
+    private func startSave(_ t: UIStrings) {
+        guard model.presetsCanSave else {
+            draft.needsSpeakers = true
+            AccessibilityNotification.Announcement(t.savePresetNeedsSpeakers).post()
+            return
+        }
+        draft.start(.new, name: "") { typed in
+            model.actions.savePreset(typed)
+            draft.scrollToEnd = model.presets.count > PresetListLayout.visibleRows
         }
     }
 }
@@ -1007,9 +1042,7 @@ private struct PresetListRow: View {
                 .opacity(row.current ? 1 : 0)
                 .accessibilityHidden(true)
             if draft.target == PresetNameDraft.Target.rename(row.id) {
-                PresetNameField(draft: draft, target: .rename(row.id), placeholder: row.name, text: t) {
-                    model.actions.renamePreset(row.id, $0)
-                }
+                PresetNameField(draft: draft, target: .rename(row.id), placeholder: row.name, text: t)
             } else {
                 Button { model.actions.recallPreset(row.id) } label: {
                     VStack(alignment: .leading, spacing: 2) {
@@ -1026,6 +1059,7 @@ private struct PresetListRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .contentShape(.focusEffect, RoundedRectangle(cornerRadius: 6))
                 .accessibilityLabel(row.name)
                 .accessibilityValue(value(t))
 
@@ -1058,7 +1092,9 @@ private struct PresetListRow: View {
 
     @ViewBuilder
     private func menuItems(_ t: UIStrings) -> some View {
-        Button(t.renamePreset) { draft.start(.rename(row.id), name: row.name) }
+        Button(t.renamePreset) {
+            draft.start(.rename(row.id), name: row.name) { model.actions.renamePreset(row.id, $0) }
+        }
         Button(t.updatePreset) { model.actions.updatePreset(row.id) }
             .disabled(!PresetEdit.canUpdate(row))
         Divider()
@@ -1067,19 +1103,45 @@ private struct PresetListRow: View {
 }
 
 /// The name typed in the preset list, a new preset's or a rename's. An object
-/// rather than @State, for the same reason as ZoneDisclosure.
+/// rather than @State, for the same reason as ZoneDisclosure. Starting another
+/// applies the open one first, so no typing is lost.
 final class PresetNameDraft: ObservableObject {
     enum Target: Equatable {
         case new
         case rename(String)
     }
 
-    @Published var target: Target?
+    @Published private(set) var target: Target?
     @Published var text = ""
+    /// Save as Preset… was clicked with no speaker on.
+    @Published var needsSpeakers = false
+    /// A preset was just saved from the list, which brings its end into view.
+    @Published var scrollToEnd = false
+    private var apply: ((String) -> Void)?
 
-    func start(_ next: Target, name: String) {
+    func start(_ next: Target, name: String, apply: @escaping (String) -> Void) {
+        finish(returned: false)
         text = name
+        needsSpeakers = false
         target = next
+        self.apply = apply
+    }
+
+    /// Return or the focus leaving. Clicking away from an empty new name saves
+    /// nothing; Return saves it as "Preset n".
+    func finish(returned: Bool) {
+        guard let target, let apply else { return }
+        self.target = nil
+        self.apply = nil
+        let blank = text.trimmingCharacters(in: .whitespaces).isEmpty
+        if target == .new && blank && !returned { return }
+        apply(text)
+    }
+
+    /// Escape, or the list folding closed.
+    func cancel() {
+        target = nil
+        apply = nil
     }
 }
 
@@ -1090,7 +1152,6 @@ private struct PresetNameField: View {
     let target: PresetNameDraft.Target
     let placeholder: String
     let text: UIStrings
-    let apply: (String) -> Void
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -1099,22 +1160,13 @@ private struct PresetNameField: View {
             .accessibilityLabel(text.presetFieldLabel)
             .accessibilityHint(text.zoneNameFieldHint)
             .focused($focused)
-            .onSubmit { finish(returned: true) }
-            .onExitCommand { draft.target = nil }
+            .onSubmit { draft.finish(returned: true) }
+            .onExitCommand { draft.cancel() }
             // A menu item starts the rename: the field takes the focus once the menu has closed.
             .onAppear { DispatchQueue.main.async { focused = true } }
             .onChange(of: focused) { _, now in
-                if !now { finish(returned: false) }
+                if !now && draft.target == target { draft.finish(returned: false) }
             }
-    }
-
-    /// Clicking away from an empty new name saves nothing; Return saves it as "Preset n".
-    private func finish(returned: Bool) {
-        guard draft.target == target else { return }
-        draft.target = nil
-        let blank = draft.text.trimmingCharacters(in: .whitespaces).isEmpty
-        if target == .new && blank && !returned { return }
-        apply(draft.text)
     }
 }
 

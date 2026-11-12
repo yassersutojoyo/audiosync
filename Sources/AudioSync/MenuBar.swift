@@ -335,6 +335,8 @@ final class AppModel: ObservableObject {
     @Published var presets: [PresetRow] = []
     /// The main window's preset list is folded open (S259).
     @Published var presetsListOpen = false
+    /// A speaker is on, so Save as Preset… can save (S262).
+    @Published var presetsCanSave = false
     @Published var hidden = HiddenState()
     /// The row whose switch takes the keyboard focus once it is built (H11).
     @Published var focusSwitch: String?

@@ -119,6 +119,7 @@ extension AppDelegate {
         let rows = presetSnapshot()
         followPresetNotice(current: rows.first(where: \.current)?.id)
         publish(\.presets, rows)
+        publish(\.presetsCanSave, !presetScene().on.isEmpty)
         MainActor.assumeIsolated { PresetsMenu.update(rows) }
     }
 
