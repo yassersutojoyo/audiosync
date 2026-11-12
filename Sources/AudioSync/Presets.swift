@@ -180,9 +180,9 @@ enum PresetMigration {
 struct PresetRow: Identifiable, Equatable {
     let id: String
     let name: String
-    /// The preset in use plays exactly as saved (S253, item 31).
+    /// The preset in use plays exactly as saved (S253, S264).
     var current = false
-    /// The preset in use no longer plays exactly as saved (item 31).
+    /// The preset in use no longer plays exactly as saved (S264).
     var edited = false
     var speakers = 0
     /// The master volume it holds, 0…100.
@@ -505,6 +505,6 @@ enum PresetPanel {
     /// Hidden with no preset: the empty state lives in the window.
     static func showsRow(_ rows: [PresetRow]) -> Bool { !rows.isEmpty }
 
-    /// The row's label: the current preset's name, else nil for "Choose a Preset".
-    static func label(_ rows: [PresetRow]) -> String? { rows.first(where: \.current)?.name }
+    /// The preset in use, exact or edited; nil for "Choose a Preset".
+    static func inUse(_ rows: [PresetRow]) -> PresetRow? { rows.first { $0.current || $0.edited } }
 }

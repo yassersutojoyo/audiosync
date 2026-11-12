@@ -214,6 +214,11 @@ private extension MainMotion {
     static func reveal(reduceMotion: Bool) -> Animation {
         reduceMotion ? .linear(duration: reducedFade) : .spring(duration: control, bounce: 0)
     }
+
+    /// A shown name changing: opacity only, at once under Reduce Motion.
+    static func names(reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .easeInOut(duration: nameFade)
+    }
 }
 
 struct MainView: View {
@@ -515,7 +520,8 @@ struct MainView: View {
     }
 
     private func equalizerRow(_ t: UIStrings) -> some View {
-        Button { model.actions.openEqualizer() } label: {
+        let name = model.equalizerOn ? model.equalizerCurve : t.off
+        return Button { model.actions.openEqualizer() } label: {
             HStack(spacing: 8) {
                 QuickRowIcon("slider.vertical.3")
                 Text(t.equalizer).lineLimit(1).layoutPriority(1)
@@ -524,16 +530,19 @@ struct MainView: View {
                 HStack(spacing: 4) {
                     // The teal dot is the row's one state mark: the curve is on.
                     if model.equalizerOn {
-                        Circle().fill(accent).frame(width: 6, height: 6)
+                        Circle().fill(accent).frame(width: 6, height: 6).transition(.opacity)
                     }
-                    let name = model.equalizerOn ? model.equalizerCurve : t.off
+                    // Faded like the preset in use's name, so the two rows read as a pair.
                     ScrollingTitle(text: name)
                         .foregroundStyle(Brand.secondaryText)
                         .help(name)
+                        .id(name)
+                        .transition(.opacity)
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(Brand.secondaryText)
                 }
+                .animation(MainMotion.names(reduceMotion: reduceMotion), value: name)
             }
             .contentShape(Rectangle())
         }
@@ -830,67 +839,282 @@ private struct SectionTitle: View {
     }
 }
 
-/// The Presets row (S259): a menu that recalls a preset, saves one, and
-/// renames, updates or deletes each one.
+/// The Presets row (S259): the preset in use beside its name, and a
+/// list that folds open in place, as a zone does, to recall, save, rename,
+/// update and delete.
 private struct PresetsRow: View {
     @ObservedObject var model: AppModel
-    @StateObject private var anchor = MenuAnchor.Box()
+    @StateObject private var draft = PresetNameDraft()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let t = model.text
-        let current = PresetPanel.label(model.presets)
-        // A button, not a Menu: AppKit laid out a Menu's label with its own icon width and gap.
-        Button {
-            if let view = anchor.view { PresetsRowMenu.make(model: model, text: t).popUp(under: view) }
-        } label: {
-            HStack(spacing: 8) {
-                QuickRowIcon("square.stack.3d.up")
-                Text(t.presets).lineLimit(1)
-                Spacer(minLength: 0)
+        let inUse = PresetPanel.inUse(model.presets)
+        let open = model.presetsListOpen
+        VStack(alignment: .leading, spacing: 0) {
+            Button { fold() } label: {
+                HStack(spacing: 8) {
+                    QuickRowIcon("square.stack.3d.up")
+                    Text(t.presets).lineLimit(1).layoutPriority(1)
+                    Spacer(minLength: 8)
+                    PresetInUseLabel(row: inUse, text: t)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Brand.secondaryText)
+                        .modifier(FoldTurn(open: open))
+                }
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .modifier(QuickRow())
+            .help(open ? t.hidePresetList : t.showPresetList)
+            .accessibilityLabel(t.presets)
+            .accessibilityValue(inUse.map { t.presetInUse($0.name, edited: $0.edited) } ?? t.choosePreset)
+            .accessibilityHint(open ? t.hidePresetList : t.showPresetList)
+            PresetList(model: model, draft: draft)
+                .modifier(DisclosedPane(open: open))
         }
-        .buttonStyle(.plain)
-        .background(MenuAnchor(box: anchor).accessibilityHidden(true))
-        .modifier(QuickRow())
-        .help(current ?? t.choosePreset)
-        .accessibilityLabel(t.presets)
-        .accessibilityValue(current ?? t.choosePreset)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(open ? 0.04 : 0)))
+    }
+
+    private func fold() {
+        withAnimation(AppModel.delayPanelMotion(reduceMotion: reduceMotion)) { model.presetsListOpen.toggle() }
+        model.actions.setPresetsListOpen(model.presetsListOpen)
     }
 }
 
-/// The Presets row's menu, built at each click from the model.
-@MainActor
-private enum PresetsRowMenu {
-    static func make(model: AppModel, text t: UIStrings) -> NSMenu {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        if model.presets.isEmpty {
-            let empty = NSMenuItem(title: t.presetsEmpty, action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            menu.addItem(empty)
+/// The preset in use: a teal dot while it plays as saved, an Edited mark once
+/// it doesn't, so color is never the only sign. Only opacity moves.
+private struct PresetInUseLabel: View {
+    let row: PresetRow?
+    let text: UIStrings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let row {
+                if row.current {
+                    Circle().fill(accent).frame(width: 6, height: 6).transition(.opacity)
+                }
+                Text(row.name)
+                    .lineLimit(1)
+                    .foregroundStyle(Brand.secondaryText)
+                    .id(row.id)
+                    .transition(.opacity)
+                if row.edited {
+                    PresetEditedMark(text: text).transition(.opacity)
+                }
+            }
         }
-        for row in model.presets {
-            let recall = MenuAction.item(row.name) { model.actions.recallPreset(row.id) }
-            recall.state = row.current ? .on : .off
-            menu.addItem(recall)
+        .animation(MainMotion.names(reduceMotion: reduceMotion), value: row)
+        // The row's VoiceOver value says it.
+        .accessibilityHidden(true)
+    }
+}
+
+/// "Edited" in a hairline box, beside a preset that no longer plays as saved.
+private struct PresetEditedMark: View {
+    let text: UIStrings
+
+    var body: some View {
+        Text(text.presetEdited)
+            .font(.system(size: 10))
+            .foregroundStyle(Brand.secondaryText)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+            .fixedSize()
+    }
+}
+
+/// The preset list's sizes: five rows show, more scroll inside the card.
+private enum PresetListLayout {
+    static let visibleRows = 5
+    static let rowHeight: CGFloat = 40
+    /// The dot and its gap, so every name starts on the Presets label's column.
+    static let dotColumn: CGFloat = 14
+    static let indent = MainColumns.rowInset + 28 - dotColumn
+    /// Half a row past five, so the cut row says the list goes on.
+    static let scrollHeight = rowHeight * (CGFloat(visibleRows) + 0.5)
+}
+
+/// The list under the Presets row: one row per preset, then Save as Preset….
+private struct PresetList: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var draft: PresetNameDraft
+
+    var body: some View {
+        let t = model.text
+        let list = VStack(alignment: .leading, spacing: 0) {
+            if model.presets.isEmpty {
+                Text(t.presetsEmpty)
+                    .font(.caption)
+                    .foregroundStyle(Brand.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, PresetListLayout.dotColumn)
+                    .padding(.vertical, 6)
+            }
+            ForEach(model.presets) { row in
+                PresetListRow(model: model, draft: draft, row: row)
+            }
+            saveRow(t)
         }
-        menu.addItem(.separator())
-        menu.addItem(MenuAction.item(t.savePreset) { model.actions.savePreset() })
-        menu.addItem(.separator())
-        for row in model.presets {
-            let edit = NSMenu()
-            edit.autoenablesItems = false
-            edit.addItem(MenuAction.item(t.renamePreset) { model.actions.renamePreset(row.id) })
-            let update = MenuAction.item(t.updatePreset) { model.actions.updatePreset(row.id) }
-            update.isEnabled = PresetEdit.canUpdate(row)
-            edit.addItem(update)
-            edit.addItem(MenuAction.item(t.deletePreset) { model.actions.deletePreset(row.id) })
-            let item = NSMenuItem(title: row.name, action: nil, keyEquivalent: "")
-            item.submenu = edit
-            menu.addItem(item)
+        .padding(.leading, PresetListLayout.indent)
+        .padding(.trailing, 6)
+        .padding(.bottom, 6)
+        if model.presets.count > PresetListLayout.visibleRows {
+            ScrollView(.vertical) { list }
+                .frame(height: PresetListLayout.scrollHeight)
+        } else {
+            list
         }
-        return menu
+    }
+
+    @ViewBuilder
+    private func saveRow(_ t: UIStrings) -> some View {
+        if draft.target == PresetNameDraft.Target.new {
+            PresetNameField(draft: draft, target: .new, placeholder: t.presetPlaceholder, text: t) {
+                model.actions.savePreset($0)
+            }
+            .padding(.leading, PresetListLayout.dotColumn)
+            .frame(minHeight: PresetListLayout.rowHeight)
+        } else {
+            Button { draft.start(.new, name: "") } label: {
+                Text(t.savePreset)
+                    .frame(maxWidth: .infinity, minHeight: PresetListLayout.rowHeight, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.leading, PresetListLayout.dotColumn)
+        }
+    }
+}
+
+/// One preset: a click recalls it; its ⋯ button, shown on hover and focus,
+/// renames, updates or deletes it.
+private struct PresetListRow: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var draft: PresetNameDraft
+    let row: PresetRow
+    @StateObject private var hover = HoverState()
+    @FocusState private var optionsFocused: Bool
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+
+    var body: some View {
+        let t = model.text
+        HStack(spacing: 8) {
+            Circle().fill(accent).frame(width: 6, height: 6)
+                .opacity(row.current ? 1 : 0)
+                .accessibilityHidden(true)
+            if draft.target == PresetNameDraft.Target.rename(row.id) {
+                PresetNameField(draft: draft, target: .rename(row.id), placeholder: row.name, text: t) {
+                    model.actions.renamePreset(row.id, $0)
+                }
+            } else {
+                Button { model.actions.recallPreset(row.id) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(row.name).lineLimit(1)
+                            if row.edited { PresetEditedMark(text: t) }
+                        }
+                        Text(t.presetSummary(speakers: row.speakers, master: row.master))
+                            .font(.caption)
+                            .foregroundStyle(Brand.secondaryText)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(row.name)
+                .accessibilityValue(value(t))
+
+                Menu { menuItems(t) } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .tint(Brand.secondaryText)   // grey: teal is kept for state
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel(t.speakerOptions(name: row.name))
+                .help(t.speakerOptions(name: row.name))
+                .focused($optionsFocused)
+                .modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))
+            }
+        }
+        .padding(.vertical, 4)
+        .padding(.trailing, 4)
+        .frame(minHeight: PresetListLayout.rowHeight)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hover.isHovered ? 0.05 : 0)))
+        .onHover { hover.isHovered = $0 }
+        .contextMenu { menuItems(t) }
+    }
+
+    private func value(_ t: UIStrings) -> String {
+        let state: String? = row.current ? t.presetInUseMark : row.edited ? t.presetEdited : nil
+        let summary = t.presetSummary(speakers: row.speakers, master: row.master)
+        return state.map { "\($0), \(summary)" } ?? summary
+    }
+
+    @ViewBuilder
+    private func menuItems(_ t: UIStrings) -> some View {
+        Button(t.renamePreset) { draft.start(.rename(row.id), name: row.name) }
+        Button(t.updatePreset) { model.actions.updatePreset(row.id) }
+            .disabled(!PresetEdit.canUpdate(row))
+        Divider()
+        Button(t.deletePreset) { model.actions.deletePreset(row.id) }
+    }
+}
+
+/// The name typed in the preset list, a new preset's or a rename's. An object
+/// rather than @State, for the same reason as ZoneDisclosure.
+final class PresetNameDraft: ObservableObject {
+    enum Target: Equatable {
+        case new
+        case rename(String)
+    }
+
+    @Published var target: Target?
+    @Published var text = ""
+
+    func start(_ next: Target, name: String) {
+        text = name
+        target = next
+    }
+}
+
+/// A preset's name typed in its row, as a speaker's is: Return or the focus
+/// leaving applies it, Escape drops it.
+private struct PresetNameField: View {
+    @ObservedObject var draft: PresetNameDraft
+    let target: PresetNameDraft.Target
+    let placeholder: String
+    let text: UIStrings
+    let apply: (String) -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(placeholder, text: $draft.text)
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel(text.presetFieldLabel)
+            .accessibilityHint(text.zoneNameFieldHint)
+            .focused($focused)
+            .onSubmit { finish(returned: true) }
+            .onExitCommand { draft.target = nil }
+            // A menu item starts the rename: the field takes the focus once the menu has closed.
+            .onAppear { DispatchQueue.main.async { focused = true } }
+            .onChange(of: focused) { _, now in
+                if !now { finish(returned: false) }
+            }
+    }
+
+    /// Clicking away from an empty new name saves nothing; Return saves it as "Preset n".
+    private func finish(returned: Bool) {
+        guard draft.target == target else { return }
+        draft.target = nil
+        let blank = draft.text.trimmingCharacters(in: .whitespaces).isEmpty
+        if target == .new && blank && !returned { return }
+        apply(draft.text)
     }
 }
 

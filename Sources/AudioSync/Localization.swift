@@ -1318,13 +1318,12 @@ struct UIStrings {
     let savePresetTitle = "Save Preset"
     let savePresetMessage = "The speakers that are on, their volumes, the zone volumes, the master volume and the curve are saved. Delays and the preamp are not."
     let savePresetNeedsSpeakers = "Turn on the speakers you want in the preset first, then save it."
-    /// VoiceOver label of the name field in the Save Preset and Rename Preset alerts.
+    /// VoiceOver label of the preset name field, in the window's preset list and the Save Preset alert.
     let presetFieldLabel = "Preset name"
     let presetPlaceholder = "Evening, Party…"
     /// A new preset's name when none was typed.
     func numberedPreset(_ n: Int) -> String { "Preset \(n)" }
     let renamePreset = "Rename…"
-    let renamePresetTitle = "Rename Preset"
     let updatePreset = "Update to Current Settings"
     let deletePreset = "Delete"
     /// The Presets submenu while there is none.
@@ -1332,12 +1331,18 @@ struct UIStrings {
     let presetsEmpty = "No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset."
     /// The panel's preset row while no preset is current.
     let choosePreset = "Choose a Preset"
-    /// Beside the preset in use once the room no longer plays it as saved (item 31).
+    /// Beside the preset in use once the room no longer plays it as saved (S264).
     let presetEdited = "Edited"
+    /// VoiceOver, on the list row of the preset that plays as saved.
+    let presetInUseMark = "In use"
     /// A preset list row's second line: what the preset holds.
-    func presetSummary(speakers: Int, master: Double) -> String { "" }
+    func presetSummary(speakers: Int, master: Double) -> String {
+        "\(speakers) \(speakers == 1 ? "speaker" : "speakers"), master \(Int(master.rounded()))%"
+    }
     /// The Presets row's VoiceOver value while a preset is in use.
-    func presetInUse(_ name: String, edited: Bool) -> String { "" }
+    func presetInUse(_ name: String, edited: Bool) -> String { edited ? "\(name), edited" : name }
+    let showPresetList = "Show presets"
+    let hidePresetList = "Hide presets"
     /// What VoiceOver says after Save, Update and Delete.
     func presetSaved(_ name: String) -> String { "\(name) saved" }
     func presetUpdated(_ name: String) -> String { "\(name) updated" }
@@ -1976,14 +1981,15 @@ struct UIStrings {
           right-click it or use its ⋯ button. Deleting a zone gives its speakers
           their full rows back.
         - Presets: turn on the speakers you want and set their volumes, the
-          zone volumes, Master Volume and the equalizer curve, then choose
-          Save as Preset… in the Presets menu in the window. Delays and the
-          preamp aren't saved. To recall a preset, pick it in that menu or in
-          the menu bar panel, or press Control-Command-1 to 9 for the first
-          nine (they're also in Window > Presets). Speakers you hid are never
-          saved in a preset, and recalling one leaves them hidden. To rename,
-          update or delete a preset, point to its name in the Presets menu in
-          the window and choose Rename…, Update to Current Settings or Delete.
+          zone volumes, Master Volume and the equalizer curve, then click
+          Presets in the window and choose Save as Preset… at the end of its
+          list. Delays and the preamp aren't saved. To recall a preset, click
+          it in that list or in the menu bar panel, or press Control-Command-1
+          to 9 for the first nine (they're also in Window > Presets). The
+          preset you chose last stays named beside Presets, marked Edited once
+          what plays differs from it. Speakers you hid are never saved in a
+          preset, and recalling one leaves them hidden. To rename, update or
+          delete a preset, use its ⋯ button in the list.
         - Auto-connect: right-click a speaker, or use its ⋯ button, and turn on
           Auto-Connect When Available. AudioSync then turns it on whenever it
           appears. At launch, AudioSync starts streaming only when such a speaker

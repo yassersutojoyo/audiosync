@@ -115,6 +115,7 @@ extension AppDelegate {
 
     /// After the speaker rows, which the current mark is worked out from.
     private func publishPresets() {
+        chosenPreset = PresetInUse.resolve(chosen: chosenPreset, presets: presets, scene: presetScene()).id
         let rows = presetSnapshot()
         followPresetNotice(current: rows.first(where: \.current)?.id)
         publish(\.presets, rows)
@@ -442,8 +443,9 @@ extension AppDelegate {
         a.removeFromZone = { [weak self] key in self?.removeFromZone(key) }
         a.onlyThisSpeaker = { [weak self] key in self?.onlyThisSpeaker(key) }
         a.recallPreset = { [weak self] id in self?.recallPreset(id, from: .app) }
-        a.savePreset = { [weak self] in self?.promptSavePreset() }
-        a.renamePreset = { [weak self] id in self?.promptRenamePreset(id) }
+        a.savePreset = { [weak self] typed in self?.savePreset(named: typed) }
+        a.renamePreset = { [weak self] id, typed in self?.renamePreset(id, to: typed) }
+        a.setPresetsListOpen = { [weak self] open in self?.presetsListOpen = open }
         a.updatePreset = { [weak self] id in self?.updatePreset(id) }
         a.deletePreset = { [weak self] id in self?.deletePreset(id) }
         a.useTargetInstead = { [weak self] id, key in self?.useTargetInstead(in: id, for: key) }
@@ -637,6 +639,7 @@ extension AppDelegate {
         publish(\.zones, zoneSnapshot())
         appModel.zonesListed(Set(appModel.zones.map(\.id)))
         publishPresets()
+        publish(\.presetsListOpen, presetsListOpen)
         publish(\.launchAtLogin, launchAtLogin)
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.volumeKeys, volumeKeys)
