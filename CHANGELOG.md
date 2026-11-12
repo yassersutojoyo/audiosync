@@ -31,6 +31,12 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, the tray panel's top block is laid out like the Mac panel's: the cover or the source's icon beside the source menu, with the song under it.
 - On Linux, clicking the tray icon opens the tray panel by the pointer, as on Windows. Where the desktop only shows the tray menu, Open AudioSync stays in it.
 
+<!-- Pending train 1113a: move these into Added and Changed once it is on main, and drop the "can't update itself" sentence from the installer line.
+- On Windows, the installer installs for everyone on the PC by default, or only for you, and shows a privacy page on what AudioSync sends and what it keeps on the PC. An install for everyone updates from Download and Install after one administrator prompt per update.
+- On Windows and Linux, the main window draws its own top row, with the menus, the window buttons and the drag area, in place of the system frame and menu bar. Alt, F10 and the menu shortcut letters still work.
+- On Windows and Linux, the app's text is set in Inter, built into the app, so it looks the same on every PC.
+-->
+
 ### Fixed
 
 - On the Mac, the Settings window opens at its full height again. Before, it could open with only its title bar showing.
