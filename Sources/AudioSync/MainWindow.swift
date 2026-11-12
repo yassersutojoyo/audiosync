@@ -1038,8 +1038,9 @@ private struct WipeEdge: Shape {
 }
 
 /// The Now Playing block's side of `TrackWipe`: the press it waits on, the
-/// old track kept up while a new cover loads, and the outgoing one during a
-/// sweep. An object rather than @State, for the Command Line Tools toolchain.
+/// old track kept up while a new cover loads or the running sweep ends, and
+/// the outgoing one during a sweep. An object rather than @State, for the
+/// Command Line Tools toolchain.
 final class TrackWipeState: ObservableObject {
     @Published private(set) var held: NowPlayingMonitor.Track?
     @Published private(set) var outgoing: NowPlayingMonitor.Track?
@@ -1049,14 +1050,17 @@ final class TrackWipeState: ObservableObject {
     private(set) var fades = false
     private var pressed: (direction: TrackWipe.Direction, at: Date)?
     private var current: NowPlayingMonitor.Track?
+    /// The way the held track leaves once it is let go.
+    private var pending = (direction: TrackWipe.Direction.next, fades: false)
     private var sweeps = 0
+    private var holds = 0
 
     func press(_ direction: TrackWipe.Direction) { pressed = (direction, .now) }
 
     func change(from old: NowPlayingMonitor.Track?, to new: NowPlayingMonitor.Track?, reduceMotion: Bool) {
         current = new
         if held != nil {
-            release()
+            if outgoing == nil { release() }
             return
         }
         guard let old, let new, TrackWipe.isSkip(old, new), let press = pressed,
@@ -1064,17 +1068,18 @@ final class TrackWipeState: ObservableObject {
                                                   secondsSincePress: Date.now.timeIntervalSince(press.at))
         else { return }
         pressed = nil
-        self.direction = direction
-        fades = reduceMotion
+        held = old
+        pending = (direction, reduceMotion)
+        // A running sweep finishes first; its end lets the held track go.
+        guard outgoing == nil else { return }
         guard TrackWipe.waitsForArt(oldHasArt: old.artwork != nil, newHasArt: new.artwork != nil) else {
-            sweep(from: old)
+            release()
             return
         }
-        held = old
-        sweeps += 1
-        let mark = sweeps
+        holds += 1
+        let mark = holds
         DispatchQueue.main.asyncAfter(deadline: .now() + TrackWipe.artHold) { [weak self] in
-            guard let self, self.sweeps == mark else { return }
+            guard let self, self.holds == mark, self.outgoing == nil else { return }
             self.release()
         }
     }
@@ -1082,7 +1087,9 @@ final class TrackWipeState: ObservableObject {
     private func release() {
         guard let held else { return }
         self.held = nil
-        if current != nil { sweep(from: held) }
+        guard current != nil else { return }
+        (direction, fades) = pending
+        sweep(from: held)
     }
 
     private func sweep(from old: NowPlayingMonitor.Track) {
@@ -1099,6 +1106,7 @@ final class TrackWipeState: ObservableObject {
             } completion: { [weak self] in
                 guard let self, self.sweeps == mark else { return }
                 self.outgoing = nil
+                self.release()
             }
         }
     }
