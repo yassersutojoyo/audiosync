@@ -15190,11 +15190,12 @@ do {
     check(guideWords.contains("When a local speaker that is on is turned down low or muted in macOS, a line under its slider "
                 + "says so, with a button that fixes it. AudioSync changes the macOS volume only when you click that "
                 + "button, the same one in the \(t.calibrateAll) window, or move the System slider on the built-in "
-                + "speakers' row.")
+                + "speakers' row, and a local output you switch on gets the macOS volume it last played at, which goes "
+                + "back to what it was when the output stops.")
             && guideWords.contains("On the built-in speakers' row, the System value (System 60%, for example) opens a "
                 + "slider for their macOS volume."),
-          "guide, volume: the macOS volume changes only through its fix buttons or the built-in speakers' System slider, "
-              + "which their row's System value opens")
+          "guide, volume: the macOS volume changes only through its fix buttons, the built-in speakers' System slider, "
+              + "which their row's System value opens, and the level an output last played at (S456)")
     // covers: S407
     check(guideWords.contains("Several Apps opens a submenu where you check apps and choose "
                 + "\(t.sourceMixOnly) or \(t.sourceMixAllExcept).")
