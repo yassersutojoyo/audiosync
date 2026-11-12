@@ -292,18 +292,19 @@ final class OutputRenderer: FadingOutput {
         }
         // Its channels, against the rate the unit binds at: a move during the start sends no notice (S325's relink).
         let boundFormat = Self.deviceFormat(device)
-        let fresh = try Self.makeUnit()
+        let fresh = try MainBlock.timed("the output unit's creation") { try Self.makeUnit() }
         let bluetooth = BluetoothIOBuffer.isBluetooth(
             transport: Self.uint32(device, kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal) ?? 0)
         let started: (channels: Int, rate: Double, unitRate: Double)
         var initialized = false
         do {
-            started = try configure(fresh, device: device, captureRate: captureRate, delayMs: delayMs,
-                                    bluetooth: bluetooth)
-            let initStatus = AudioUnitInitialize(fresh)
+            started = try MainBlock.timed("the output unit's setup") {
+                try configure(fresh, device: device, captureRate: captureRate, delayMs: delayMs, bluetooth: bluetooth)
+            }
+            let initStatus = MainBlock.timed("the output unit's initialize") { AudioUnitInitialize(fresh) }
             guard initStatus == noErr else { throw StartFailure.unitNotInitialized(initStatus) }
             initialized = true
-            let startStatus = AudioOutputUnitStart(fresh)
+            let startStatus = MainBlock.timed("the output device's start") { AudioOutputUnitStart(fresh) }
             guard startStatus == noErr else { throw StartFailure.deviceDidNotStart(startStatus) }
         } catch let failure {
             Self.tearDown(fresh, started: false, initialized: initialized)
@@ -319,7 +320,9 @@ final class OutputRenderer: FadingOutput {
         fadeOutRequested = false
         startedDevice = device
         stopNote = "running"
-        let reportedNs = Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
+        let reportedNs = MainBlock.timed("the output latency's read") {
+            Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
+        }
         let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
         let lastPlausibleNs = uid.flatMap { Self.plausibleLatencyNs[$0] } ?? 0
         latencyNs = target?.renderer.setReportedLatency(reportedNs, lastPlausibleNs: lastPlausibleNs) ?? reportedNs
