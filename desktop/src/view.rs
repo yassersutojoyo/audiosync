@@ -462,10 +462,10 @@ const DIALOG_NOTICE_ID: u64 = UPDATER_NOTICE_ID - 1;
 /// window before it gives up (about two seconds).
 const NATIVE_WINDOW_TRIES: u8 = 100;
 
-/// Roughly what the main window's outer frame adds to its inner size, in
-/// logical pixels: the borders, the title bar and the menu bar. Used to fit
-/// a saved size to a monitor, where a little extra room does no harm.
-const MAIN_WINDOW_CHROME: (f64, f64) = (16.0, 64.0);
+/// What the main window's outer frame adds to its inner size, in logical
+/// pixels: nothing, since it draws its own top row. Used to fit a saved size
+/// to a monitor.
+const MAIN_WINDOW_CHROME: (f64, f64) = (0.0, 0.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the zone rows,
@@ -826,7 +826,6 @@ pub struct App {
     /// Windows by themselves, after it AudioSync sets their palette and
     /// frame, for Match System too.
     themed_by_hand: Cell<bool>,
-    menu_bar_theme: MenuBarTheme,
     /// Whether each window got its Windows 11 frame, as last logged.
     frames: RefCell<HashMap<&'static str, bool>>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
@@ -899,25 +898,6 @@ fn deliver_volume_key(key: VolumeKey) {
     let _ = slint::invoke_from_event_loop(move || {
         VOLUME_KEY_APP.with(|app| with_app(&app.borrow(), |app| app.volume_key(key)));
     });
-}
-
-/// The main window's native window and the menu bar theme last sent to it.
-/// muda answers that message by toggling the window's activation, which comes
-/// back as a focus that applies the frame again, so it is sent only when it
-/// changed.
-#[derive(Default)]
-struct MenuBarTheme(Cell<Option<(isize, bool)>>);
-
-impl MenuBarTheme {
-    /// Records `dark` for native window `id`; `true` when the message is due.
-    fn due(&self, id: isize, dark: bool) -> bool {
-        self.0.replace(Some((id, dark))) != Some((id, dark))
-    }
-
-    /// Makes the next `due` true, after Windows gave the menu bar its own theme.
-    fn forget(&self) {
-        self.0.set(None);
-    }
 }
 
 /// Runs `action` on the app if it still exists.
@@ -1222,7 +1202,6 @@ impl App {
             tray_available: Cell::new(false),
             appearance: Cell::new(ui_model::Appearance::System),
             themed_by_hand: Cell::new(false),
-            menu_bar_theme: MenuBarTheme::default(),
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
@@ -1897,30 +1876,13 @@ impl App {
             self.setup.window(),
         ] {
             self.theme_frame(window);
-            if std::ptr::eq(window, self.main.window()) {
-                self.theme_menu_bar();
-            } else {
-                crate::platform::repaint_frame(window, false, dark);
-            }
-        }
-    }
-
-    /// Sends the main window's menu bar the appearance, unless that native
-    /// window already has it (`menu_bar_theme`).
-    fn theme_menu_bar(&self) {
-        let window = self.main.window();
-        let Some(id) = crate::platform::native_id(window) else {
-            return;
-        };
-        let dark = self.shows_dark();
-        if self.menu_bar_theme.due(id, dark) {
-            crate::platform::repaint_frame(window, true, dark);
+            crate::platform::repaint_frame(window, false, dark);
         }
     }
 
     /// With Light or Dark, gives every window the appearance again after
     /// Windows switches between light and dark, which may repaint a title bar
-    /// or the menu bar in the Windows theme. Match System hears that switch
+    /// in the Windows theme. Match System hears that switch
     /// from winit (`follow_titled_frame`).
     fn follow_windows_theme(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
@@ -1933,7 +1895,6 @@ impl App {
                 app.log.log(|| {
                     "Windows switched light and dark; the appearance applied again".to_owned()
                 });
-                app.menu_bar_theme.forget();
                 app.follow_appearance();
             });
         }));
@@ -1961,11 +1922,6 @@ impl App {
         self.use_brand_accent(window);
         self.theme_frame(window);
         crate::platform::follow_color_set(window);
-        // Slint gives the main window's menu bar the Windows theme when it
-        // creates it.
-        if self.themed_by_hand.get() && std::ptr::eq(window, self.main.window()) {
-            self.theme_menu_bar();
-        }
         // Before the event loop runs there is no native window yet; the
         // window's first focus (see `follow_frame`) tries again.
         let Some(applied) = crate::backdrop::apply(window, frame) else {
@@ -2087,14 +2043,13 @@ impl App {
                     app.apply_frame(window(app), name, Frame::Titled);
                 }),
                 // Slint reads the Windows accent and theme after this filter
-                // returns, and gives the menu bar the Windows theme.
+                // returns.
                 WindowEvent::ThemeChanged(_) => {
                     let weak = weak.clone();
                     Timer::single_shot(Duration::ZERO, move || {
                         with_app(&weak, |app| {
                             app.use_brand_accent(window(app));
                             if app.themed_by_hand.get() {
-                                app.menu_bar_theme.forget();
                                 app.follow_appearance();
                             }
                         });
@@ -4218,10 +4173,8 @@ impl App {
         let window = self.main.window();
         let size = slint::LogicalSize::new(frame.width as f32, frame.height as f32);
         window.set_size(size);
-        // The native menu bar is attached when the native window is created
-        // and takes its height out of a size set before that, so the window
-        // would shrink by the menu bar at every restart: set the size again
-        // once the native window exists (and maximize it after that).
+        // Set the size again once the native window exists (and maximize it
+        // after that), which may size itself when it is created.
         set_size_once_native(
             self.main.as_weak(),
             size,
@@ -6745,20 +6698,6 @@ mod tests {
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
-
-    #[test]
-    fn the_menu_bar_hears_a_theme_once_per_native_window() {
-        let theme = MenuBarTheme::default();
-        assert!(theme.due(7, true), "the first theme is sent");
-        // The focus muda's activation toggle brings back must not send it again.
-        assert!(!theme.due(7, true));
-        assert!(!theme.due(7, true));
-        assert!(theme.due(7, false), "a new appearance is sent");
-        assert!(theme.due(8, false), "a new native window gets it too");
-        assert!(!theme.due(8, false));
-        theme.forget();
-        assert!(theme.due(8, false), "after Windows repainted the menu bar");
-    }
 
     /// A platform without native windows, so a test can build the whole App
     /// and drive it through the windows' callbacks or keys.
@@ -11395,8 +11334,8 @@ mod tests {
         );
         // Never below the window's smallest size, never above the saved one.
         let tiny = crate::placement::Bounds {
-            width: 700.0,
-            height: 500.0,
+            width: 600.0,
+            height: 400.0,
             ..laptop
         };
         let fitted = fitted_main_frame(saved, tiny, 1.0, true);
