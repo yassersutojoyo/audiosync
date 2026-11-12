@@ -7677,11 +7677,16 @@ do {
     // the Mac saw both columns' scroll views move 75 pt in one 4 ms poll and the fade play over them.
     let noticeStackSource = ((try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? "")
         .components(separatedBy: "struct NoticeStack: View").dropFirst().first?
-        .components(separatedBy: "\n}\n").first ?? ""
+        .components(separatedBy: "/// A small text button inside or under a notice.").first ?? ""
     check(!noticeColumnsSource.contains("value: model.notices") && !noticeStackSource.contains(".transition(")
             && !noticeStackSource.contains("ForEach(list.items)") && noticeStackSource.contains("TimelineView(.animation")
             && noticeStackSource.contains(".onChange(of: list.items"),
           "notices: the window lays its notices out from a room of its own, each on its own progress, so a dismissed notice keeps its room until it has shut")
+    let noticeStackOnly = noticeStackSource.components(separatedBy: "\n}\n").first ?? ""
+    check(noticeStackSource.components(separatedBy: "closing: slot.closing))").count == 3
+            && noticeRevealSource.contains(".allowsHitTesting(!closing)") && noticeRevealSource.contains(".accessibilityHidden(closing)")
+            && !noticeStackOnly.contains("NoticeRoomState"),
+          "notices: a closing notice and a closing Dismiss All take no click and leave VoiceOver at once, and the panel keeps no notice room")
     do {
         let duration = NoticeMotion.grow.duration
         let posted = Date(timeIntervalSinceReferenceDate: 0)

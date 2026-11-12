@@ -39,13 +39,16 @@ final class NoticeRoomState: ObservableObject {
 }
 
 /// A slot's room and fade at `progress`, laid out every frame, so the AppKit scroll views
-/// below follow it; clipped to the room it has.
+/// below follow it; clipped to the room it has. A closing one is already gone for clicks and VoiceOver.
 struct NoticeReveal: ViewModifier {
     let progress: Double
     let motion: NoticeMotion
+    let closing: Bool
 
     func body(content: Content) -> some View {
         PaneHeight(fraction: motion.room(at: progress)) { content.opacity(motion.opacity(at: progress)) }
             .clipped()
+            .allowsHitTesting(!closing)
+            .accessibilityHidden(closing)
     }
 }

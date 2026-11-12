@@ -2568,18 +2568,11 @@ struct LiveInputAirPlayNote: View {
 struct NoticeStack: View {
     @ObservedObject var model: AppModel
     var compact = false
-    @StateObject private var room: NoticeRoomState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    init(model: AppModel, compact: Bool = false) {
-        self.model = model
-        self.compact = compact
-        _room = StateObject(wrappedValue: NoticeRoomState(model.notices.items))
-    }
 
     /// The main window's gap above a notice and above the columns.
     static let windowGap: CGFloat = 14
-    private static let listGap: CGFloat = 6
+    fileprivate static let listGap: CGFloat = 6
 
     var body: some View {
         let t = model.text
@@ -2601,16 +2594,42 @@ struct NoticeStack: View {
                 }
             }
         } else {
-            TimelineView(.animation(paused: !room.room.moving(at: Date(), duration: motion.duration))) { context in
-                windowList(t, list: list, at: context.date, motion: motion)
-            }
-            .onChange(of: list.items.map(\.id)) { _, _ in room.follow(model.notices.items, motion: motion) }
+            NoticeWindowList(model: model, motion: motion)
         }
+    }
+
+    private func footer(_ t: UIStrings, more: Int) -> some View {
+        HStack {
+            NoticeLink(title: t.moreNotices(more)) { model.actions.openMainWindow() }
+            Spacer()
+            NoticeLink(title: t.dismissAllNotices) { model.actions.dismissAllNotices() }
+        }
+    }
+}
+
+/// The main window's notices, laid out from their own room (`NoticeRoomState`).
+private struct NoticeWindowList: View {
+    @ObservedObject var model: AppModel
+    let motion: NoticeMotion
+    @StateObject private var room: NoticeRoomState
+
+    init(model: AppModel, motion: NoticeMotion) {
+        self.model = model
+        self.motion = motion
+        _room = StateObject(wrappedValue: NoticeRoomState(model.notices.items))
+    }
+
+    var body: some View {
+        let list = model.notices
+        TimelineView(.animation(paused: !room.room.moving(at: Date(), duration: motion.duration))) { context in
+            windowList(model.text, list: list, at: context.date)
+        }
+        .onChange(of: list.items.map(\.id)) { _, _ in room.follow(model.notices.items, motion: motion) }
     }
 
     /// Each gap sits inside what comes or goes with it, so none is left to jump shut after.
     @ViewBuilder
-    private func windowList(_ t: UIStrings, list: NoticeList, at now: Date, motion: NoticeMotion) -> some View {
+    private func windowList(_ t: UIStrings, list: NoticeList, at now: Date) -> some View {
         let slots = room.room.slots
         let open = slots.map { NoticeRoom<NoticeSlot>.progress($0, at: now, duration: motion.duration) }.max() ?? 0
         if !slots.isEmpty {
@@ -2623,28 +2642,20 @@ struct NoticeStack: View {
                             NoticeBanner(notice: notice, text: t, showsTime: true, lineLimit: nil, card: true,
                                          dismiss: { model.actions.dismissNotice(notice.subject) },
                                          retry: { model.actions.retryAirPlay() }) { EmptyView() }
-                                .padding(.top, Self.listGap)
-                                .modifier(NoticeReveal(progress: progress, motion: motion))
+                                .padding(.top, NoticeStack.listGap)
+                                .modifier(NoticeReveal(progress: progress, motion: motion, closing: slot.closing))
                         }
                     case .dismissAll:
                         HStack {
                             Spacer()
                             NoticeLink(title: t.dismissAllNotices) { model.actions.dismissAllNotices() }
                         }
-                        .padding(.top, Self.listGap)
-                        .modifier(NoticeReveal(progress: progress, motion: motion))
+                        .padding(.top, NoticeStack.listGap)
+                        .modifier(NoticeReveal(progress: progress, motion: motion, closing: slot.closing))
                     }
                 }
             }
-            .padding(.top, (Self.windowGap - Self.listGap) * motion.room(at: open))
-        }
-    }
-
-    private func footer(_ t: UIStrings, more: Int) -> some View {
-        HStack {
-            NoticeLink(title: t.moreNotices(more)) { model.actions.openMainWindow() }
-            Spacer()
-            NoticeLink(title: t.dismissAllNotices) { model.actions.dismissAllNotices() }
+            .padding(.top, (NoticeStack.windowGap - NoticeStack.listGap) * motion.room(at: open))
         }
     }
 }
