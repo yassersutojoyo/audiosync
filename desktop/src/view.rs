@@ -462,10 +462,10 @@ const DIALOG_NOTICE_ID: u64 = UPDATER_NOTICE_ID - 1;
 /// window before it gives up (about two seconds).
 const NATIVE_WINDOW_TRIES: u8 = 100;
 
-/// Roughly what the main window's outer frame adds to its inner size, in
-/// logical pixels: the borders, the title bar and the menu bar. Used to fit
-/// a saved size to a monitor, where a little extra room does no harm.
-const MAIN_WINDOW_CHROME: (f64, f64) = (16.0, 64.0);
+/// What the main window's outer frame adds to its inner size, in logical
+/// pixels: nothing, since it draws its own top row. Used to fit a saved size
+/// to a monitor.
+const MAIN_WINDOW_CHROME: (f64, f64) = (0.0, 0.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the zone rows,
@@ -826,7 +826,6 @@ pub struct App {
     /// Windows by themselves, after it AudioSync sets their palette and
     /// frame, for Match System too.
     themed_by_hand: Cell<bool>,
-    menu_bar_theme: MenuBarTheme,
     /// Whether each window got its Windows 11 frame, as last logged.
     frames: RefCell<HashMap<&'static str, bool>>,
     /// Called after every refresh, e.g. to update the tray icon and tooltip.
@@ -899,25 +898,6 @@ fn deliver_volume_key(key: VolumeKey) {
     let _ = slint::invoke_from_event_loop(move || {
         VOLUME_KEY_APP.with(|app| with_app(&app.borrow(), |app| app.volume_key(key)));
     });
-}
-
-/// The main window's native window and the menu bar theme last sent to it.
-/// muda answers that message by toggling the window's activation, which comes
-/// back as a focus that applies the frame again, so it is sent only when it
-/// changed.
-#[derive(Default)]
-struct MenuBarTheme(Cell<Option<(isize, bool)>>);
-
-impl MenuBarTheme {
-    /// Records `dark` for native window `id`; `true` when the message is due.
-    fn due(&self, id: isize, dark: bool) -> bool {
-        self.0.replace(Some((id, dark))) != Some((id, dark))
-    }
-
-    /// Makes the next `due` true, after Windows gave the menu bar its own theme.
-    fn forget(&self) {
-        self.0.set(None);
-    }
 }
 
 /// Runs `action` on the app if it still exists.
@@ -1222,7 +1202,6 @@ impl App {
             tray_available: Cell::new(false),
             appearance: Cell::new(ui_model::Appearance::System),
             themed_by_hand: Cell::new(false),
-            menu_bar_theme: MenuBarTheme::default(),
             frames: RefCell::default(),
             on_refresh: RefCell::new(None),
             notice_announcer: RefCell::default(),
@@ -1897,30 +1876,13 @@ impl App {
             self.setup.window(),
         ] {
             self.theme_frame(window);
-            if std::ptr::eq(window, self.main.window()) {
-                self.theme_menu_bar();
-            } else {
-                crate::platform::repaint_frame(window, false, dark);
-            }
-        }
-    }
-
-    /// Sends the main window's menu bar the appearance, unless that native
-    /// window already has it (`menu_bar_theme`).
-    fn theme_menu_bar(&self) {
-        let window = self.main.window();
-        let Some(id) = crate::platform::native_id(window) else {
-            return;
-        };
-        let dark = self.shows_dark();
-        if self.menu_bar_theme.due(id, dark) {
-            crate::platform::repaint_frame(window, true, dark);
+            crate::platform::repaint_frame(window, false, dark);
         }
     }
 
     /// With Light or Dark, gives every window the appearance again after
     /// Windows switches between light and dark, which may repaint a title bar
-    /// or the menu bar in the Windows theme. Match System hears that switch
+    /// in the Windows theme. Match System hears that switch
     /// from winit (`follow_titled_frame`).
     fn follow_windows_theme(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
@@ -1933,7 +1895,6 @@ impl App {
                 app.log.log(|| {
                     "Windows switched light and dark; the appearance applied again".to_owned()
                 });
-                app.menu_bar_theme.forget();
                 app.follow_appearance();
             });
         }));
@@ -1961,11 +1922,6 @@ impl App {
         self.use_brand_accent(window);
         self.theme_frame(window);
         crate::platform::follow_color_set(window);
-        // Slint gives the main window's menu bar the Windows theme when it
-        // creates it.
-        if self.themed_by_hand.get() && std::ptr::eq(window, self.main.window()) {
-            self.theme_menu_bar();
-        }
         // Before the event loop runs there is no native window yet; the
         // window's first focus (see `follow_frame`) tries again.
         let Some(applied) = crate::backdrop::apply(window, frame) else {
@@ -2042,9 +1998,25 @@ impl App {
         // The main window's first event comes once its native window exists,
         // with or without the focus; outside this filter, as it resizes.
         let min_held = std::cell::Cell::new(kind != Titled::Main);
+        let keys = RefCell::new(crate::frameless::WindowKeys::default());
         window(self).on_winit_window_event(move |_, event| {
             if let Some(input) = focus_input(event) {
                 with_app(&weak, |app| app.note_focus_input(input));
+            }
+            if kind == Titled::Main {
+                let mut outcome = None;
+                with_app(&weak, |app| {
+                    outcome = keys.borrow_mut().event(&app.main, event);
+                    if outcome == Some(crate::frameless::KeyOutcome::MenuFocused) {
+                        app.note_focus_input(crate::window_rules::FocusInput::Tab);
+                    }
+                    if matches!(event, WindowEvent::Resized(_)) {
+                        crate::frameless::note_layout(&app.main);
+                    }
+                });
+                if outcome == Some(crate::frameless::KeyOutcome::Taken) {
+                    return EventResult::PreventDefault;
+                }
             }
             if !min_held.replace(true) {
                 let weak = weak.clone();
@@ -2058,6 +2030,7 @@ impl App {
                 WindowEvent::Focused(true) => with_app(&weak, |app| {
                     if kind == Titled::Main {
                         keep_main_min_size(window(app));
+                        crate::frameless::attach_native(&app.main);
                     }
                     if kind == Titled::Dialog {
                         window(app).with_winit_window(|window| {
@@ -2070,14 +2043,13 @@ impl App {
                     app.apply_frame(window(app), name, Frame::Titled);
                 }),
                 // Slint reads the Windows accent and theme after this filter
-                // returns, and gives the menu bar the Windows theme.
+                // returns.
                 WindowEvent::ThemeChanged(_) => {
                     let weak = weak.clone();
                     Timer::single_shot(Duration::ZERO, move || {
                         with_app(&weak, |app| {
                             app.use_brand_accent(window(app));
                             if app.themed_by_hand.get() {
-                                app.menu_bar_theme.forget();
                                 app.follow_appearance();
                             }
                         });
@@ -3337,6 +3309,7 @@ impl App {
             });
             apply_rename_left(&w);
         });
+        crate::frameless::connect(main);
         let w = weak.clone();
         main.on_close_requested(move || with_app(&w, App::close_main));
         main.on_exit_requested(|| {
@@ -4200,10 +4173,8 @@ impl App {
         let window = self.main.window();
         let size = slint::LogicalSize::new(frame.width as f32, frame.height as f32);
         window.set_size(size);
-        // The native menu bar is attached when the native window is created
-        // and takes its height out of a size set before that, so the window
-        // would shrink by the menu bar at every restart: set the size again
-        // once the native window exists (and maximize it after that).
+        // Set the size again once the native window exists (and maximize it
+        // after that), which may size itself when it is created.
         set_size_once_native(
             self.main.as_weak(),
             size,
@@ -6728,20 +6699,6 @@ mod tests {
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
 
-    #[test]
-    fn the_menu_bar_hears_a_theme_once_per_native_window() {
-        let theme = MenuBarTheme::default();
-        assert!(theme.due(7, true), "the first theme is sent");
-        // The focus muda's activation toggle brings back must not send it again.
-        assert!(!theme.due(7, true));
-        assert!(!theme.due(7, true));
-        assert!(theme.due(7, false), "a new appearance is sent");
-        assert!(theme.due(8, false), "a new native window gets it too");
-        assert!(!theme.due(8, false));
-        theme.forget();
-        assert!(theme.due(8, false), "after Windows repainted the menu bar");
-    }
-
     /// A platform without native windows, so a test can build the whole App
     /// and drive it through the windows' callbacks or keys.
     struct Headless;
@@ -9255,7 +9212,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 600.0, 466.0);
+        click(window, 600.0, 448.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -9268,7 +9225,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 600.0, 466.0);
+        click(window, 600.0, 448.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -9278,22 +9235,18 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 600.0, 466.0);
+        click(window, 600.0, 448.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
-        click(window, 600.0, 162.0);
+        click(window, 600.0, 144.0);
         assert_eq!(delay_of(&app, "local:desk"), Some(300.0));
         assert!(open(&app).is_empty());
     }
 
-    fn ctrl_s(window: &slint::Window) {
-        window.dispatch_event(WindowEvent::KeyPressed {
-            text: Key::Control.into(),
-        });
-        press(window, "s");
-        window.dispatch_event(WindowEvent::KeyReleased {
-            text: Key::Control.into(),
-        });
+    /// Ctrl+S as the main window's key filter passes it on, before any
+    /// focused control sees it (`frameless::WindowKeys`).
+    fn ctrl_s(main: &MainWindow) {
+        assert!(main.invoke_shortcut("s".into(), true, false));
     }
 
     // covers: S221
@@ -9306,7 +9259,7 @@ mod tests {
         app.main.invoke_airplay_delay_edited("2100".into());
         app.main.invoke_focus_streaming_switch();
         draw_frames();
-        ctrl_s(app.main.window());
+        ctrl_s(&app.main);
         assert_eq!(delay_of(&app, "local:desk"), Some(400.0));
         assert_eq!(delay_of(&app, "local:bt"), Some(-200.0));
         assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0));
@@ -9889,10 +9842,10 @@ mod tests {
         // fonts set how tall the cards are), then on the blank part of a row in each speaker section, which the
         // row's own TouchArea takes.
         for place in [
-            Some((500.0, 60.0)),
+            Some((500.0, 42.0)),
             None,
-            Some((600.0, 162.0)),
-            Some((600.0, 389.0)),
+            Some((600.0, 144.0)),
+            Some((600.0, 371.0)),
         ] {
             let app = app_over(MockBackend::new());
             draw_frames();
@@ -10008,7 +9961,7 @@ mod tests {
         );
 
         press(window, "1");
-        ctrl_s(window);
+        ctrl_s(&app.main);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(12091.0),
@@ -11381,8 +11334,8 @@ mod tests {
         );
         // Never below the window's smallest size, never above the saved one.
         let tiny = crate::placement::Bounds {
-            width: 700.0,
-            height: 500.0,
+            width: 600.0,
+            height: 400.0,
             ..laptop
         };
         let fitted = fitted_main_frame(saved, tiny, 1.0, true);
@@ -16866,6 +16819,29 @@ mod tests {
         let heading = app.zone_dialog.get_heading();
         ctrl(app.equalizer.window(), "n");
         assert_eq!(app.zone_dialog.get_heading(), heading);
+    }
+
+    /// The main window draws its own menus, so it runs their shortcuts
+    /// itself: only with Ctrl alone, and Ctrl+S only while a delay is typed.
+    #[test]
+    fn the_main_window_runs_its_menu_shortcuts_itself() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+        assert!(!preset_rows(&app)[0].1);
+
+        assert!(!app.main.invoke_shortcut("1".into(), true, true));
+        assert!(!app.main.invoke_shortcut("2".into(), true, false));
+        assert!(!app.main.invoke_shortcut("s".into(), true, false));
+        assert!(!app.main.invoke_shortcut("e".into(), false, false));
+        assert!(!preset_rows(&app)[0].1);
+        assert!(app.main.invoke_shortcut("1".into(), true, false));
+        assert!(preset_rows(&app)[0].1, "Ctrl+1");
+
+        assert!(app.main.invoke_shortcut("e".into(), true, false));
+        assert!(app.equalizer.window().is_visible(), "Ctrl+E");
+        assert!(app.main.invoke_shortcut(Key::F1.into(), false, false));
+        assert!(app.help.window().is_visible(), "F1");
     }
 
     #[test]

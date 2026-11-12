@@ -49,6 +49,7 @@ mod contrast;
 mod crash_dump;
 mod data_folder;
 mod debug_log;
+mod frameless;
 mod guide;
 mod launch_at_login;
 mod network_profile;
@@ -64,6 +65,7 @@ mod setup_check;
 #[cfg(any(os_backend, target_os = "linux", test))]
 mod single_instance;
 mod speaker_names;
+mod title_bar;
 // Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
 #[cfg(test)]
 #[rustfmt::skip]
@@ -609,7 +611,8 @@ mod tests {
             "the About dialog shows the copyright and the license"
         );
         assert!(
-            main.contains("MenuBar {") && main.contains("root.about-requested();"),
+            main.contains("help-menu := ContextMenuArea {")
+                && main.contains("root.about-requested();"),
             "the top-level menu opens the About dialog"
         );
     }
@@ -671,18 +674,23 @@ mod tests {
     fn each_mac_menu_shortcut_has_its_windows_key_in_the_menu_and_the_docs() {
         let main = include_str!("../ui/main.slint");
         let docs = include_str!("../../docs/WINDOWS_UI.md");
-        let menu = &main[main.find("MenuBar {").expect("the menu bar is there")..];
+        let menu = &main[main.find("title-row := ").expect("the menus are there")..];
+        let shortcuts = &main[main
+            .find("public function shortcut(")
+            .expect("the window runs the shortcuts")..];
         let mut seen = std::collections::BTreeSet::new();
         for (mac, title, keys, written) in MENU_SHORTCUTS {
-            let item = menu
-                .find(&format!("title: Strings.{title};"))
-                .unwrap_or_else(|| panic!("{mac}: the menu has its item"));
-            let rest = &menu[item..];
-            let end = rest.find('}').expect("the item ends");
             assert!(
-                rest[..end].contains(&format!("shortcut: @keys({keys});")),
-                "{mac}: the item shows {keys}"
+                menu.contains(&format!(
+                    "title: Strings.with-keys(Strings.{title}, \"{written}\");"
+                )),
+                "{mac}: the menu shows its item with {written}"
             );
+            let key = match keys.strip_prefix("Control + ") {
+                Some(letter) => format!("text == \"{}\"", letter.to_lowercase()),
+                None => format!("text == Key.{keys}"),
+            };
+            assert!(shortcuts.contains(&key), "{mac}: {keys} runs it");
             assert!(seen.insert(*keys), "{keys} is used once");
             assert!(
                 !RESERVED_BY_WINDOWS.contains(keys),
@@ -693,7 +701,7 @@ mod tests {
                 "{mac}: docs/WINDOWS_UI.md lists {written} under Keyboard"
             );
         }
-        let shown = menu.matches("shortcut: @keys(").count();
+        let shown = menu.matches("Strings.with-keys(Strings.").count();
         assert_eq!(
             shown,
             MENU_SHORTCUTS.len(),

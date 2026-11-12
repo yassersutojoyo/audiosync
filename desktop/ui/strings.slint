@@ -386,6 +386,15 @@ export global Strings {
     out property <string> menu-view: @tr("View");
     out property <string> menu-help: @tr("Help");
     out property <string> menu-about: @tr("About AudioSync");
+    // A menu item with its keys, which a Windows menu shows after the tab.
+    public pure function with-keys(title: string, keys: string) -> string {
+        return Platform.os == OperatingSystemType.windows && keys != "" ? title + "\u{9}" + keys : title;
+    }
+    // The main window's own buttons in its top row.
+    out property <string> window-minimize: @tr("Minimize");
+    out property <string> window-maximize: @tr("Maximize");
+    out property <string> window-restore: @tr("Restore Down");
+    out property <string> window-close: @tr("Close");
     // File > Launch at Sign-In and the tray menu's check item: AudioSync
     // starts in the tray when the user signs in to Windows.
     out property <string> launch-at-login: @tr("Launch at Sign-In");

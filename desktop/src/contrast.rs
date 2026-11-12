@@ -652,16 +652,11 @@ fn every_icon_has_a_drawing_off_windows() {
 #[test]
 fn keyboard_shortcuts_are_declared() {
     let main = include_str!("../ui/main.slint");
-    for keys in [
-        "@keys(Control + W)",
-        "@keys(Control + N)",
-        "@keys(Control + E)",
-        "@keys(F5)",
-    ] {
-        assert!(main.contains(keys), "the menu bar has {keys}");
+    for keys in ["\"Ctrl+W\")", "\"Ctrl+N\")", "\"Ctrl+E\")", "\"F5\")"] {
+        assert!(main.contains(keys), "the menus show {keys}");
     }
     for (file, source) in UI_FILES {
-        if source.contains("inherits Window") && !source.contains("MenuBar {") {
+        if source.contains("inherits Window") && !source.contains("public function shortcut(") {
             assert!(
                 source.contains("Key.Escape"),
                 "{file}: Escape closes the window"
@@ -1121,10 +1116,14 @@ fn no_text_asks_for_a_pin() {
 fn the_audiosync_guide_is_wired_and_worded_in_strings() {
     let main = include_str!("../ui/main.slint");
     let item = main
-        .find("title: Strings.help-title;")
-        .expect("the Help menu has the Guide");
+        .find("title: Strings.with-keys(Strings.help-title, \"F1\");")
+        .expect("the Help menu has the Guide, with F1");
     let item = &main[item..item + 200];
-    assert!(item.contains("@keys(F1)") && item.contains("root.help-requested();"));
+    assert!(item.contains("root.help-requested();"));
+    assert!(main.contains(
+        "if text == Key.F1 {
+                root.help-requested();"
+    ));
     assert!(main.contains("export { HelpWindow } from \"help.slint\";"));
 
     let help = include_str!("../ui/help.slint");
