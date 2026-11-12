@@ -175,8 +175,8 @@ final class OutputRetirement {
     func poll() {
         while let index = finishable() {
             let batch = batches.remove(at: index)
-            batch.stopCapture?()
-            for output in batch.outputs { output.halt() }
+            MainBlock.timed("the capture's stop") { batch.stopCapture?() }
+            MainBlock.timed("the outputs' stop") { for output in batch.outputs { output.halt() } }
             for step in batch.after { step() }
         }
     }

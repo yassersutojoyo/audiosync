@@ -81,6 +81,21 @@ enum DebugTrace {
     }
 }
 
+/// Times a step of a streaming start or stop on the main thread for the debug
+/// log, so a hitch in the panel or window can be traced to the step behind it.
+enum MainBlock {
+    @discardableResult
+    static func timed<T>(_ step: String, _ body: () throws -> T) rethrows -> T {
+        guard DebugTrace.enabled else { return try body() }
+        let began = DispatchTime.now().uptimeNanoseconds
+        defer {
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - began) / 1_000_000
+            DebugTrace.log("[AudioSync] main thread blocked \(String(format: "%.1f", ms)) ms in \(step)")
+        }
+        return try body()
+    }
+}
+
 /// A debug launch that switches no speaker on by itself and starts with every
 /// speaker off, so a soak or a test run never reaches the household's
 /// speakers. Nothing is saved: the next launch starts from the settings as

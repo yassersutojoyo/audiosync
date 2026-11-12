@@ -25,7 +25,8 @@ extension AppDelegate {
             autoStartFailed = false
             clearNotices([Notice.source, Notice.start, Notice.capture])
         }
-        defer { refreshStreamingViews() }   // every path, including failures, refreshes the switch
+        // every path, including failures, refreshes the switch
+        defer { MainBlock.timed("the start's view refresh") { refreshStreamingViews() } }
         let hasSpeaker = StreamingPolicy.hasSpeaker(enabledAirPlay: playableAirPlay.union(castSwitchedOn),
                                                     enabledLocal: enabledLocal)
         let continuing = rebuild || switching != nil
@@ -76,7 +77,9 @@ extension AppDelegate {
         runawayRetry.reset()
         refusalRetry.reset()
         do {
-            try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild)
+            try MainBlock.timed("the session start") {
+                try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild)
+            }
         } catch {
             DebugTrace.log("[AudioSync] engine start failed: \(error)")   // codes stay in the log
             if rebuild, let quit = AppLifecycle.sourceQuit(.rebuildFailed(error), source: audioSource,
@@ -107,12 +110,13 @@ extension AppDelegate {
         sessionHadSpeaker = hasSpeaker || (continuing && sessionHadSpeaker)
         session += 1
         nativeCaptureStarted()   // a new capture is an underrun to AudioSync's own sender, never a FLUSH (P143)
-        applyAirPlaySelection()   // the sender's speakers join, each at its own volume
-        syncCast()   // the Cast speaker that is on connects
-        syncLocalOutputs(origin: origin)
+        // the sender's speakers join, each at its own volume
+        MainBlock.timed("the AirPlay speakers' join") { applyAirPlaySelection() }
+        MainBlock.timed("the Cast sync") { syncCast() }   // the Cast speaker that is on connects
+        MainBlock.timed("the local outputs' start") { syncLocalOutputs(origin: origin) }
         DebugTrace.log("[AudioSync] " + LocalDelay.leadDescription(networkMs: networkWaitMs))
         logSessionLead(session: session)
-        startInputLevel()
+        MainBlock.timed("the input level's start") { startInputLevel() }
         verifyAudioFlowing(origin: origin)
         offerVolumeKeysAccess()
         if let switching { finishSwitch(switching, outcome, fromRate: fromRate, origin: origin) }
@@ -414,11 +418,13 @@ extension AppDelegate {
             DebugTrace.log(reason.logLine(detail: detail()))
         }
         let wasRunning = engine.isRunning
-        engine.stop()   // the outputs and the AirPlay input fade out, then capture and the outputs end (S186)
-        syncNativeSpeakers()   // nothing streams: AudioSync's own sender's speakers leave
+        // the outputs and the AirPlay input fade out, then capture and the outputs end (S186)
+        MainBlock.timed("the session stop") { engine.stop() }
+        // nothing streams: AudioSync's own sender's speakers leave
+        MainBlock.timed("the AirPlay speakers' leave") { syncNativeSpeakers() }
         endNativePinSessions(.stopped(reason), streaming: wasRunning, midRebuild: midRebuild)
         midRebuild = false
-        syncCast()   // and the Cast session ends
+        MainBlock.timed("the Cast sync") { syncCast() }   // and the Cast session ends
         // About this session's audio, which just ended; a notice about why it
         // ended is posted after this.
         clearNotices(wasRunning ? [Notice.capture, Notice.source] : [Notice.capture])
@@ -426,7 +432,7 @@ extension AppDelegate {
         clearNotices(runawayRetry.struggling.map { SpeakerKey.make(id: $0, airplay: false) })
         clearNotices(goneNotices.stop().map { SpeakerKey.make(id: $0, airplay: false) })
         runawayRetry.reset()
-        refreshStreamingViews()
+        MainBlock.timed("the stop's view refresh") { refreshStreamingViews() }
     }
 
     private func verifyAudioFlowing(origin: StartOrigin) {

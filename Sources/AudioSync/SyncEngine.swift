@@ -203,13 +203,15 @@ final class StreamEngine {
         }
         if !retirement.isIdle {
             DebugTrace.log("[AudioSync] session start waits for the last outputs to fade out")
-            finishStopping()
+            MainBlock.timed("the wait for the last outputs' fades") { finishStopping() }
         }
-        guard let parts = EngineParts.make(equalizer: equalizerSettings) else {
+        guard let parts = MainBlock.timed("the engine parts' setup", { EngineParts.make(equalizer: equalizerSettings) }) else {
             DebugTrace.log("[AudioSync] session not started: \(StartError.coreUnavailable)")
             throw StartError.coreUnavailable
         }
-        try capture.start(source: source, parts: parts, inputPair: inputPair, rebuild: rebuild)
+        try MainBlock.timed("the capture's start") {
+            try capture.start(source: source, parts: parts, inputPair: inputPair, rebuild: rebuild)
+        }
         run(parts, captureRate: capture.sampleRate)
         startFlowWatch(source: source, inputPair: inputPair)
         DebugTrace.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")
