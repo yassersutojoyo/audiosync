@@ -205,7 +205,9 @@ final class StreamEngine {
             DebugTrace.log("[AudioSync] session start waits for the last outputs to fade out")
             MainBlock.timed("the wait for the last outputs' fades") { finishStopping() }
         }
-        guard let parts = MainBlock.timed("the engine parts' setup", { EngineParts.make(equalizer: equalizerSettings) }) else {
+        guard let parts = MainBlock.timed("the engine parts' setup", {
+            EngineParts.make(equalizer: equalizerSettings)
+        }) else {
             DebugTrace.log("[AudioSync] session not started: \(StartError.coreUnavailable)")
             throw StartError.coreUnavailable
         }

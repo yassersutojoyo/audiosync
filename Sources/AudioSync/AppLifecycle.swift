@@ -487,7 +487,8 @@ enum SessionStop: CaseIterable {
 
 /// Streaming on and off while a start or stop runs off the main thread: one
 /// step at a time, the latest request wins, requests made during a step
-/// coalesce, and quitting ends stopped with no start after it.
+/// coalesce, and quitting ends stopped with no start after it. Not called yet:
+/// it is for the start moving off the main thread, which is still to come.
 struct EngineTransition: Equatable {
     enum Step: Equatable { case start, stop }
 

@@ -432,16 +432,13 @@ final class SourceCapture {
     }
 
     private static func destroy(_ objects: TapObjects) {
+        lastDestroy = ProcessInfo.processInfo.systemUptime
         SourceCapture.teardown.async {
             let began = DispatchTime.now().uptimeNanoseconds
             objects.destroy()
             let ms = Double(DispatchTime.now().uptimeNanoseconds - began) / 1_000_000
-            let at = ProcessInfo.processInfo.systemUptime
-            DispatchQueue.main.async {
-                SourceCapture.lastDestroy = at
-                DebugTrace.log("[AudioSync] capture: an earlier tap and its aggregate device destroyed, "
-                               + "\(String(format: "%.1f", ms)) ms off the main thread")
-            }
+            DebugTrace.log("[AudioSync] capture: an earlier tap and its aggregate device destroyed, "
+                           + "\(String(format: "%.1f", ms)) ms off the main thread")
         }
     }
 
