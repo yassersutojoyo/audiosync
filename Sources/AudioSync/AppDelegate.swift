@@ -445,7 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         reconcileLocal()   // lists the local speakers; auto-connect may start streaming
         startSafetyNet()
-        if AppLifecycle.opensMainWindow(loginItemLaunch: loginItem) { showMainWindow() }
+        if AppLifecycle.opensMainWindow(loginItemLaunch: loginItem) { showMainWindow() } else { updateDockIcon(closing: nil) }
         openPermissionSetupIfFirstRun()   // before the sender, whose discovery would offer Local Network alone
         // AudioSync's own sender and its discovery start, after the window,
         // so a Local Network prompt they raise comes up in front of it.
