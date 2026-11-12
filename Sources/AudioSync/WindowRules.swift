@@ -775,6 +775,41 @@ struct PanelFold: Equatable {
     }
 }
 
+/// The menu bar panel's spacing and columns, from 2x captures on the Mac.
+/// One gap separates what shows of the preset row, the volume knob, This
+/// Mac's circles, the divider and the list's first circle.
+enum PanelLayout {
+    static let gap: CGFloat = 12
+    /// The panel stack's spacing.
+    static let spacing: CGFloat = 10
+    /// The preset icon sits this far inside its 34 pt row, a speaker's
+    /// circle inside its 36 pt row; the slider's knob fills its row.
+    static let presetInset: CGFloat = 9.5, rowInset: CGFloat = 5
+    /// What a borderless menu draws left of its label and right of its chevron.
+    static let menuLeadingInset: CGFloat = 2.5, menuChevronInset: CGFloat = 8
+    /// The now playing card's padding.
+    static let cardPadding: CGFloat = 10
+
+    /// Above the volume, under the preset row (on top of the stack's spacing).
+    static let presetToVolume: CGFloat = 0
+    /// Between the volume and This Mac's rows.
+    static let volumeToRows: CGFloat = 2
+    /// Above the divider, under This Mac's rows.
+    static let rowsToDivider: CGFloat = 6
+    /// Under the divider (on top of the stack's spacing).
+    static let dividerToList: CGFloat = 4
+    /// The source menu's leading padding in the card.
+    static let sourceLeading: CGFloat = 0
+    /// The preset menu's and the volume row's trailing padding.
+    static let presetTrailing: CGFloat = 0, volumeTrailing: CGFloat = 0
+
+    /// The gaps that show, top to bottom.
+    static var gaps: [CGFloat] {
+        [presetInset + spacing + presetToVolume, volumeToRows + rowInset,
+         rowInset + rowsToDivider, spacing + dividerToList + rowInset]
+    }
+}
+
 /// Which answers of a background read of macOS's state still hold when they
 /// reach the main thread: only the newest read's, and its login item status
 /// only if Launch at Login wasn't switched while it ran, and its apps and

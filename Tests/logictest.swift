@@ -8734,6 +8734,26 @@ do {
     check(PanelFold.clip(zoneArea, moving: true) == zoneArea
             && PanelFold.clip(zoneArea, moving: false).contains(zoneArea.insetBy(dx: -6, dy: -6)),
           "menu bar panel: while a fold moves, a zone's rows stay inside its own edge; at rest nothing is cut, focus rings included")
+    let foldStep = PanelResize.windowFrame(window, content: CGSize(width: 280, height: 359.5),
+                                           to: CGSize(width: 280, height: 401.37))
+    let followSource = bar.components(separatedBy: "private func followFold(").dropFirst().first?
+        .components(separatedBy: "
+    }
+").first ?? ""
+    check(foldStep.maxY == window.maxY && foldStep.height == foldStep.height.rounded()
+            && followSource.contains("height: (height + foldInset).rounded(.up)"),
+          "menu bar panel: each frame of a fold sizes the window in whole points, its top edge fixed, so the content never shakes",
+          "\(foldStep)")
+    check(PanelLayout.gaps.allSatisfy { $0 == PanelLayout.gap },
+          "menu bar panel: one gap between the preset row, the volume knob, This Mac's circles, the divider and the list",
+          "\(PanelLayout.gaps)")
+    check(PanelLayout.menuLeadingInset + PanelLayout.sourceLeading == 0,
+          "menu bar panel: the source name starts on the title's and the artist's column")
+    let cardChevron = PanelLayout.cardPadding + PanelLayout.menuChevronInset
+    check(PanelLayout.presetTrailing + PanelLayout.menuChevronInset == cardChevron
+            && PanelLayout.volumeTrailing == cardChevron,
+          "menu bar panel: the preset chevron and the volume number end on the card chevron's column",
+          "\(PanelLayout.presetTrailing) \(PanelLayout.volumeTrailing)")
     let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
@@ -17759,9 +17779,16 @@ do {
     let panelSource = read("Sources/AudioSync/MenuBar.swift")
     let panelView = panelSource.components(separatedBy: "struct MenuBarView: View {").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
-    check(!panelView.isEmpty && !panelView.contains("PanelButton(title: t.openApp)")
+    check(!panelView.isEmpty && panelView.contains("PanelButton(title: t.openApp) { model.actions.openMainWindow() }")
             && panelView.contains(".help(t.openApp)") && panelView.contains("SourcePicker(model: model, hero: true)"),
-          "menu bar panel source: Open AudioSync is gone; the header still opens the main window; the source sits in the hero")
+          "menu bar panel source: Open AudioSync sits next to Quit; the header also opens the main window; the source sits in the hero")
+    let presetSource = panelSource.components(separatedBy: "struct PresetPicker: View {").dropFirst().first?
+        .components(separatedBy: "
+}
+").first ?? ""
+    check(!panelView.contains("t.castAddByAddress") && panelView.contains("MasterMuteButton(model: model, text: t, panel: true)")
+            && panelView.contains("Text(t.volumeValue(model.master))") && presetSource.contains(".tint(Brand.secondaryText)"),
+          "menu bar panel source: no Add by Address; the volume shows its number, its icon in the preset icon's size and grey; the preset chevron in the card chevron's grey")
     check(panelView.contains(".animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: rowPlaces)")
             && panelView.contains("Text(model.statusText)") && panelView.contains(".id(model.statusText)"),
           "menu bar panel source: rows move on one ease-out, at once with Reduce Motion; the status text cross-fades in place")
