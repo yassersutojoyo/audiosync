@@ -66,6 +66,8 @@ extension AppDelegate {
                                         key: member.key)
         }
         DebugTrace.log("[AudioSync] preset \"\(preset.name)\" recalled (\(plan.action)), \(leftOff.count) left off")
+        // Chosen even when nothing changes: the room may already play it.
+        chosenPreset = id
         guard plan.action != .nothing else {
             showPresetNotice(preset, leftOff: leftOff, nothingChanged: true)
             pushModel()
@@ -117,6 +119,7 @@ extension AppDelegate {
         stopIfIdle()
         retimeLocalOutputs()
         showPresetNotice(preset, leftOff: leftOff, nothingChanged: false)
+        // Again: the master's push above ran before its speakers were on, which lets it go.
         chosenPreset = id
         pushModel()
     }
