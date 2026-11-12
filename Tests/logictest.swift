@@ -18527,8 +18527,8 @@ do {
     check(disclosedWindow.contains("struct DisclosedPane: ViewModifier, Animatable")
             && disclosedWindow.contains("ease(min(progress * 2, 1))")
             && disclosedWindow.contains("ease(max(progress * 2 - 1, 0))")
-            && disclosedCount(".modifier(DisclosedPane(") == 5,
-          "disclosed pane source: a speaker's, the built-in speakers' System, the AirPlay delay's, a zone's and the preset list's pane fold on one progress, the content fading only while the edge holds still")
+            && disclosedCount(".modifier(DisclosedPane(") == 6,
+          "disclosed pane source: a speaker's, the built-in speakers' System, the AirPlay delay's, a zone's, the preset list's and the chosen-value line's pane fold on one progress, the content fading only while the edge holds still")
     check(!disclosedWindow.contains("value: model.delayPanels)")
             && disclosedMenuBar.contains("reduceMotion ? .linear(duration: MainMotion.reducedFade) : .linear(duration: PowerMotion.duration)")
             && disclosedWindow.contains("withAnimation(reduceMotion ? nil : AppModel.delayPanelAnimation) {\n                                        scroll.scrollTo("),
