@@ -2156,8 +2156,11 @@ struct UIStrings {
         speaker itself.
         When a local speaker that is on is turned down low or muted in macOS,
         a line under its slider says so, with a button that fixes it. AudioSync
-        changes the macOS volume only when you click that button, or the same
-        one in the \(calibrateAll) window.
+        changes the macOS volume only when you click that button, the same one
+        in the \(calibrateAll) window, or move the System slider on the
+        built-in speakers' row.
+        On the built-in speakers' row, the System value (System 60%, for
+        example) opens a slider for their macOS volume.
 
         Notes
         - AirPlay speakers are kept in step with each other by AudioSync's AirPlay
