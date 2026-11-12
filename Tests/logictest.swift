@@ -8554,6 +8554,29 @@ do {
               "presets list: a row's second line says how many speakers and which master volume the preset holds",
               presetText.presetSummary(speakers: 1, master: 39.6))
 
+        let partOfEvening = PresetScene(on: [.init(key: "lc:usb:out", volume: 40)], zones: [livingZone], master: 80,
+                                        gains: presetFlat)
+        let editedThenPlayed = (PresetEdit.saving("Part", scene: partOfEvening, id: "b", to: [], numbered: numbered) ?? [])
+            + eveningOnly
+        let presetSource = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Presets.swift", encoding: .utf8)) ?? ""
+        let recallBody = presetSource.components(separatedBy: "func recallPreset(").dropFirst().first ?? ""
+        let chosenBeforeNothing: Bool = {
+            guard let chosen = recallBody.range(of: "chosenPreset = id"),
+                  let nothing = recallBody.range(of: "guard plan.action != .nothing") else { return false }
+            return chosen.lowerBound < nothing.lowerBound
+        }()
+        check(PresetInUse.resolve(chosen: "b", presets: editedThenPlayed, scene: evening) == .edited("b")
+                && PresetInUse.resolve(chosen: "e", presets: editedThenPlayed, scene: evening) == .exact("e")
+                && chosenBeforeNothing,
+              "presets in use: recalling a preset the room already plays makes it the one in use, though the recall changes nothing")
+
+        let renamedInUse = PresetCore.rows(PresetEdit.renaming("e", to: "Dinner", in: inUseList), louder, chosen: "e")
+        let afterDeleteInUse = PresetEdit.deleting("e", from: inUseList)
+        check(PresetPanel.inUse(renamedInUse)?.name == "Dinner" && PresetPanel.inUse(renamedInUse)?.edited == true
+                && PresetInUse.resolve(chosen: "e", presets: afterDeleteInUse, scene: louder) == .notInUse
+                && PresetInUse.resolve(chosen: "e", presets: afterDeleteInUse, scene: evening) == .exact("l"),
+              "presets in use: a rename keeps the preset in use under its new name; a delete lets it go")
+
         final class FoldValues { var values: [String: Any] = [:] }
         let foldValues = FoldValues()
         let foldStore = SettingsStore(read: { foldValues.values[$0] }, write: { value, key in foldValues.values[key] = value })
