@@ -17587,6 +17587,13 @@ do {
             && count(zoned, "if divided { Divider() }") == 0
             && count(zoned, "ZoneMemberGroup {") == 1,
           "In zones label: in capitals on the name column with its line as the separator, rows in a zone box")
+    let strings = read("Sources/AudioSync/Localization.swift")
+    let join = part(window, after: "private struct ZoneLabelJoin")
+    check(count(strings, "let inZones = \"In a zone\"") == 1 && count(strings, "\"In zones\"") == 0,
+          "In a zone label: reads In a zone, right for one zone or many")
+    check(count(zoned, "ZoneLabelJoin()") == 1 && count(zoned, ".frame(width: ZoneLook.nameColumn - ZoneLook.labelLineGap)") == 1
+            && count(join, "radius: ZoneLook.labelJoinRadius") == 1 && count(join, "rect.maxY") >= 1,
+          "In a zone label: a rule on its left runs from the zone bar and turns down into it with a rounded corner")
     check(count(window, "padding(.leading, 52)") == 0 && count(window, "Divider().padding(.leading, ZoneLook.nameColumn)") == 4,
           "zone look: every row separator starts at the name column")
     let compact = part(window, after: "private struct ZoneMemberCompactRow")
@@ -18433,6 +18440,47 @@ do {
     let startStops = Marquee.maskStops(fades: (0, 8), width: 256)
     check(startStops.map { $0.location } == [0, 0, 0, 0.96875, 1] && startStops.map { $0.opacity } == [0, 0, 1, 1, 0],
           "scrolling title: a title at its start shows its first letter in full", "\(startStops)")
+}
+
+// MARK: Next and Previous sweep one edge across the Now Playing cover, title and artist (WindowRules.swift, MainWindow.swift)
+do {
+    check(TrackWipe.direction(pressed: .next, secondsSincePress: 0.5) == .next
+            && TrackWipe.direction(pressed: .previous, secondsSincePress: 1) == .previous
+            && TrackWipe.direction(pressed: nil, secondsSincePress: 0.5) == nil
+            && TrackWipe.direction(pressed: .next, secondsSincePress: TrackWipe.pressWindow + 1) == nil
+            && TrackWipe.direction(pressed: .next, secondsSincePress: -1) == nil,
+          "track wipe: a change soon after Next or Previous sweeps that way; one without a press or a late one is instant")
+    check(TrackWipe.seconds(reduceMotion: false) == 0.34 && TrackWipe.seconds(reduceMotion: true) == 0.15
+            && TrackWipe.edge(.next, progress: 0.25, reduceMotion: false) == 0.75
+            && TrackWipe.edge(.previous, progress: 0.25, reduceMotion: false) == 0.25
+            && TrackWipe.edge(.next, progress: 0.25, reduceMotion: true) == nil
+            && TrackWipe.edge(.next, progress: 0, reduceMotion: false) == nil
+            && TrackWipe.edge(.next, progress: 1, reduceMotion: false) == nil,
+          "track wipe: a thin line rides the sweeping edge and is gone at rest; under Reduce Motion the tracks cross-fade in 0.15 s with no line")
+    let start = TrackWipe.parts(.next, progress: 0), nextQuarter = TrackWipe.parts(.next, progress: 0.25)
+    let previousQuarter = TrackWipe.parts(.previous, progress: 0.25), end = TrackWipe.parts(.previous, progress: 1)
+    check(start.old == 0...1 && start.new.lowerBound == 1 && nextQuarter.old == 0...0.75 && nextQuarter.new == 0.75...1
+            && previousQuarter.new == 0...0.25 && previousQuarter.old == 0.25...1 && end.new == 0...1 && end.old.lowerBound == 1
+            && TrackWipe.duration == 0.34,
+          "track wipe: Next's edge moves right to left and Previous's left to right in 0.34 s, the new track on the side the edge has passed",
+          "\(nextQuarter) \(previousQuarter)")
+    let song = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
+                                       album: "B", isPlaying: true, artwork: nil)
+    let paused = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
+                                         album: "B", isPlaying: false, artwork: nil)
+    let other = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "Two", artist: "A",
+                                        album: "B", isPlaying: true, artwork: nil)
+    let spotify = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two", artist: "A",
+                                          album: "B", isPlaying: true, artwork: nil)
+    check(TrackWipe.isSkip(song, other) && !TrackWipe.isSkip(song, paused) && !TrackWipe.isSkip(song, spotify),
+          "track wipe: another song in the same player sweeps; the same song pausing or another app taking over does not")
+    check(TrackWipe.waitsForArt(oldHasArt: true, newHasArt: false) && !TrackWipe.waitsForArt(oldHasArt: true, newHasArt: true)
+            && !TrackWipe.waitsForArt(oldHasArt: false, newHasArt: false) && TrackWipe.artHold <= 1,
+          "track wipe: a new song whose cover is still loading keeps the old cover up, for 1 s at most, then changes once")
+    let main = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    check(main.components(separatedBy: "wipe.press(.next)").count == 2 && main.components(separatedBy: "wipe.press(.previous)").count == 2
+            && main.components(separatedBy: "TrackWipe.parts(").count == 2,
+          "track wipe: the main window's Next and Previous buttons start the sweep over the cover, title and artist")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

@@ -264,6 +264,51 @@ struct ArtClock {
     }
 }
 
+/// A Next or Previous press makes the track change after it sweep one edge
+/// across the Now Playing cover, title and artist: right to left for Next,
+/// left to right for Previous, with a thin line on the edge. Under Reduce
+/// Motion the two tracks cross-fade instead; changes without a press are instant.
+enum TrackWipe {
+    enum Direction: Equatable { case next, previous }
+    static let duration: TimeInterval = 0.34
+    static let fadeDuration: TimeInterval = 0.15
+    /// A change this long after a press still counts as the press's.
+    static let pressWindow: TimeInterval = 3
+    /// The longest a new track whose cover hasn't come yet keeps the old one up.
+    static let artHold: TimeInterval = 1
+
+    static func direction(pressed: Direction?, secondsSincePress: TimeInterval) -> Direction? {
+        guard (0...pressWindow).contains(secondsSincePress) else { return nil }
+        return pressed
+    }
+
+    static func seconds(reduceMotion: Bool) -> TimeInterval { reduceMotion ? fadeDuration : duration }
+
+    /// The edge line's place as a fraction from the left; none at rest or in a cross-fade.
+    static func edge(_ direction: Direction, progress: Double, reduceMotion: Bool) -> Double? {
+        guard !reduceMotion, progress > 0, progress < 1 else { return nil }
+        return direction == .next ? 1 - progress : progress
+    }
+
+    /// Another song in the same player, not the same one pausing or getting
+    /// its cover, and not another app taking over.
+    static func isSkip(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {
+        old.bundleID == new.bundleID && (old.title, old.artist, old.album) != (new.title, new.artist, new.album)
+    }
+
+    /// The old and the new track's parts of the width, as fractions from the
+    /// left, at `progress` 0 to 1 of the sweep.
+    static func parts(_ direction: Direction, progress: Double) -> (old: ClosedRange<Double>, new: ClosedRange<Double>) {
+        let p = min(1, max(0, progress))
+        return direction == .next ? (0...(1 - p), (1 - p)...1) : (p...1, 0...p)
+    }
+
+    /// The old cover stays up instead of a blank one while the new one loads.
+    static func waitsForArt(oldHasArt: Bool, newHasArt: Bool) -> Bool {
+        oldHasArt && !newHasArt
+    }
+}
+
 /// Each live strand follows one band of the captured sound, bass, mid and
 /// treble, as an equalizer's bars do: up at once, down slowly.
 enum AmbientBands {

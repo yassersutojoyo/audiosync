@@ -1289,7 +1289,7 @@ struct UIStrings {
     /// A zone member's compact row under its own section, after the full
     /// rows: the label above them (shown in capitals), what VoiceOver reads
     /// for its switch and for the chip that goes to its zone, and its menu.
-    let inZones = "In zones"
+    let inZones = "In a zone"
     func inZoneLabel(_ speaker: String, zone: String) -> String { "\(speaker), in \(zone)" }
     func goToZoneLabel(_ zone: String) -> String { "Go to \(zone)" }
     let goToZone = "Go to Zone"
