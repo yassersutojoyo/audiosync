@@ -1,14 +1,13 @@
 import SwiftUI
 
 extension NoticeMotion {
-    /// The notice's move, opening or closing alike: linear, as `room` and `opacity` shape it, and
-    /// the only animation its room and fade follow (a second one made the columns jump back); none
-    /// with Reduce Motion.
-    var columns: Animation? { self == .grow ? .linear(duration: duration) : nil }
-
+    /// A notice's own linear move, opening or closing alike, which `room` and `opacity` shape. Nothing
+    /// around it animates the notice list, so the columns below follow its room frame by frame instead
+    /// of sliding ahead on an animation of their own.
     var transition: AnyTransition {
-        guard self == .grow else { return .opacity.animation(.linear(duration: duration)) }
-        return .modifier(active: NoticeReveal(progress: 0), identity: NoticeReveal(progress: 1))
+        let shape: AnyTransition = self == .grow
+            ? .modifier(active: NoticeReveal(progress: 0), identity: NoticeReveal(progress: 1)) : .opacity
+        return shape.animation(.linear(duration: duration))
     }
 }
 

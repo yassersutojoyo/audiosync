@@ -312,7 +312,6 @@ struct MainView: View {
             }
             .padding(.top, NoticeStack.windowGap)
         }
-        .animation(NoticeMotion.of(reduceMotion: reduceMotion).columns, value: model.notices)
         .padding(.horizontal, BrandTokens.Spacing.windowMargin)
         .padding(.top, 4)
         .padding(.bottom, 20)
