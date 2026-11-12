@@ -2672,7 +2672,7 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | track info call site: a paired phone that starts or stops showing Now Playing syncs track info | S361 |
 | track info call site: a source change that Now Playing notes sends track info again | S361 |
 | guide, zones: a zoned speaker's short row names the button that goes to its zone | S407 |
-| guide, volume: the low macOS volume line says only its button or Calibrate All Speakers' changes it | S407 |
+| guide, volume: the macOS volume changes only through its fix buttons, the built-in speakers' System slider, which their row's System value opens, and the level an output last played at (S456) | S407 |
 | guide, sources: Several Apps names its two modes and Now Playing shows no track for an input, as on Windows | S407 |
 | guide, zones: each zone has its own volume, and right-click reaches Move to Zone, as on Windows | S407 |
 | guide, calibration: headphones and virtual outputs have no calibrate button of their own, as on Windows | S407 |
