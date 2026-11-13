@@ -77,7 +77,7 @@ pub struct Swapped(Vec<Progress>);
 
 impl Swapped {
     /// What each file's swap did as bits, which an elevated swap's exit
-    /// code carries back (spec S460): the exe set aside and put in place,
+    /// code carries back (spec S457): the exe set aside and put in place,
     /// then the notices present, set aside and put in place.
     pub fn bits(&self) -> u32 {
         self.0.iter().fold(0, |bits, part| {

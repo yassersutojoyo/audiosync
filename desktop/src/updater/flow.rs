@@ -51,7 +51,7 @@ pub struct Env {
     pub max_download: u64,
     pub log: DebugLog,
     pub launch: Arc<dyn Launch>,
-    /// Runs the swap of an install for all users elevated (spec S460).
+    /// Runs the swap of an install for all users elevated (spec S457).
     pub elevate: Arc<dyn Elevate>,
     /// How long Restart Now waits for the new version's start signal.
     pub start_wait: Duration,

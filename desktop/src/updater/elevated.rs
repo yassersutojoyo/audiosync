@@ -1,4 +1,4 @@
-//! The update of an install for all users (spec S460): the install folder
+//! The update of an install for all users (spec S457): the install folder
 //! under Program Files refuses the user's own swap, so the running exe
 //! starts itself elevated to verify and swap the downloaded zip.
 
@@ -389,7 +389,7 @@ pub mod tests {
         ]
     }
 
-    // covers: S460
+    // covers: S457
     #[test]
     fn an_install_under_program_files_elevates() {
         assert!(elevates(
@@ -406,11 +406,11 @@ pub mod tests {
         ));
     }
 
-    // covers: S460
+    // covers: S457
     #[test]
     fn an_install_for_one_user_never_elevates() {
         assert!(!elevates(
-            Path::new(r"C:\Users\someone\AppData\Local\Programs\AudioSync"),
+            Path::new(r"D:\Profiles\someone\AppData\Local\Programs\AudioSync"),
             &machine()
         ));
         assert!(!elevates(
@@ -420,7 +420,7 @@ pub mod tests {
         assert!(!elevates(Path::new(r"C:\Program Files\AudioSync"), &[]));
     }
 
-    // covers: S460
+    // covers: S457
     #[test]
     fn the_elevated_exit_code_carries_the_outcome_back() {
         let exe = archive::EXE_NAME;
@@ -532,7 +532,7 @@ pub mod tests {
         }
     }
 
-    // covers: S460
+    // covers: S457
     #[cfg(windows)]
     #[test]
     fn a_refused_swap_under_a_program_folder_installs_through_the_elevated_copy() {
@@ -594,7 +594,7 @@ pub mod tests {
         }
     }
 
-    // covers: S460
+    // covers: S457
     #[cfg(windows)]
     #[test]
     fn a_signature_that_is_not_base64_never_reaches_the_prompt() {
@@ -620,7 +620,7 @@ pub mod tests {
         }
     }
 
-    // covers: S460
+    // covers: S457
     #[test]
     fn the_elevated_copy_takes_no_install_folder_from_its_arguments() {
         let key = signature::test_key::new().verifying_key();

@@ -148,7 +148,7 @@ const PREVIEW_PRESETS_VAR: &str = "AUDIOSYNC_PREVIEW_PRESETS";
 const PREVIEW_PLAY_VAR: &str = "AUDIOSYNC_PREVIEW_PLAY";
 
 fn main() -> ExitCode {
-    // The elevated copy of an update (spec S460) swaps files and ends; it
+    // The elevated copy of an update (spec S457) swaps files and ends; it
     // never claims the instance the waiting copy holds.
     if let Some(code) = updater::elevated::from_command_line() {
         std::process::exit(code);

@@ -29,7 +29,7 @@ AppSupportURL=https://github.com/yassersutojoyo/audiosync/issues
 AppUpdatesURL=https://github.com/yassersutojoyo/audiosync/releases
 ; "Only for me" needs no administrator: {autopf} is then %LOCALAPPDATA%\Programs,
 ; where scripts/install.ps1 installs. "All users" asks for administrator once and
-; goes to Program Files, where each in-app update asks once more (docs/ENGINE_SPEC.md S460).
+; goes to Program Files, where each in-app update asks once more (docs/ENGINE_SPEC.md S457).
 PrivilegesRequired={#DefaultInstallMode}
 PrivilegesRequiredOverridesAllowed=dialog
 DefaultDirName={autopf}\AudioSync
