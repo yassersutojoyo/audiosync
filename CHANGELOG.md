@@ -6,7 +6,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Added
 
-- On Windows, there's an installer, `AudioSync-Setup.exe` for x64 and `AudioSync-Setup-arm64.exe` for Arm, next to the zips. It installs for all users or only for you, with a Start menu shortcut and an uninstall entry in Settings > Apps. A copy installed for all users can't update itself: Download and Install offers the release page instead, and the update is the newer installer.
+- On Windows, there's an installer, `AudioSync-Setup.exe` for x64 and `AudioSync-Setup-arm64.exe` for Arm, next to the zips. It installs for everyone on the PC by default, or only for you, with a Start menu shortcut and an uninstall entry in Settings > Apps, and a page before the install says what AudioSync sends and what stays on the PC. An install for everyone updates from Download and Install after one administrator prompt per update.
 - On Linux, there's an `.rpm` for Fedora on x86_64.
 - On the Mac, the built-in speakers' row shows a System value where other local rows show their delay. It opens a panel with the macOS volume slider and follows changes you make in macOS.
 - On the Mac, a new Settings switch, Hide Dock Icon When Window Closes, on by default: AudioSync leaves the Dock when its last window closes and keeps running in the menu bar. Opening a window brings the icon back.
@@ -30,12 +30,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, zones, Several Apps and the AirPlay delay fold open and shut over a quarter second, Escape folds Several Apps, and long names fade at their edges.
 - On Windows and Linux, the tray panel's top block is laid out like the Mac panel's: the cover or the source's icon beside the source menu, with the song under it.
 - On Linux, clicking the tray icon opens the tray panel by the pointer, as on Windows. Where the desktop only shows the tray menu, Open AudioSync stays in it.
-
-<!-- Pending train 1113a: move these into Added and Changed once it is on main, and drop the "can't update itself" sentence from the installer line.
-- On Windows, the installer installs for everyone on the PC by default, or only for you, and shows a privacy page on what AudioSync sends and what it keeps on the PC. An install for everyone updates from Download and Install after one administrator prompt per update.
-- On Windows and Linux, the main window draws its own top row, with the menus, the window buttons and the drag area, in place of the system frame and menu bar. Alt, F10 and the menu shortcut letters still work.
+- On Windows and Linux, the main window draws its own top row, with the menus, the window buttons and the drag area, in place of the system frame and menu bar. Alt, F10 and the menu shortcut letters still work, and switching windows with Alt+Tab leaves the menus shut.
 - On Windows and Linux, the app's text is set in Inter, built into the app, so it looks the same on every PC.
--->
 
 ### Fixed
 
