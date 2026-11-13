@@ -110,24 +110,26 @@ final class NowPlayingMonitor {
         }
 
         enum Drop: Equatable {
-            case stopped, unreadable(Int), playingNameless(Int), quit, denied
+            case stopped, unreadable(Int), playingNameless(Int), quit(Int), denied
 
             var reason: String {
                 switch self {
                 case .stopped: return "stopped"
                 case .unreadable(let n): return "unreadable x\(n)"
                 case .playingNameless(let n): return "playing without a name x\(n)"
-                case .quit: return "quit"
+                case .quit(let n): return "quit x\(n)"
                 case .denied: return "Automation denied"
                 }
             }
         }
         /// Why the last call dropped the track shown; nil when it didn't.
         private(set) var dropped: Drop?
+        /// Seconds the empty readings behind the last drop spanned; 0 for a drop at the first one.
+        private(set) var droppedAfter: TimeInterval = 0
 
         /// The track to show after a reading: `reading` when it found one.
-        /// Else `last` goes at once when its player quit (or is no longer a
-        /// candidate), said it stopped or refuses Apple Events. A paused
+        /// Else a paused `last` goes at once when its player quit (or is no longer a
+        /// candidate), and any `last` when it said it stopped or refuses Apple Events. A paused
         /// `last` stays through any number of unreadable readings, since a
         /// long-paused Spotify answers with errors or an empty name for
         /// minutes; it goes once readings in a row that play something without a
@@ -136,14 +138,17 @@ final class NowPlayingMonitor {
         mutating func next(reading: Track?, last: Track?, lastPlayerRuns: Bool,
                            lastPlayer: Empty = .unreadable, readAt: TimeInterval = 0) -> Track? {
             dropped = nil
+            droppedAfter = 0
             guard reading == nil, let last else {
                 inARow = 0
                 return reading
             }
-            if !lastPlayerRuns {
-                dropped = .quit
+            if !lastPlayerRuns && !last.isPlaying {
+                dropped = .quit(1)
             } else {
-                switch lastPlayer {
+                // A running Spotify that was playing has been read as quit for a moment
+                // (debug log, 2026-11-12), so for a playing track that reading counts as empty.
+                switch lastPlayerRuns ? lastPlayer : .unreadable {
                 case .stopped: dropped = .stopped
                 case .denied: dropped = .denied
                 case .unreadable, .playingNameless:
@@ -152,7 +157,9 @@ final class NowPlayingMonitor {
                     if inARow == 0 { firstEmptyAt = readAt }
                     inARow += 1
                     if readAt - firstEmptyAt < Self.dropSpan { return last }
-                    dropped = lastPlayer == .playingNameless ? .playingNameless(inARow) : .unreadable(inARow)
+                    dropped = !lastPlayerRuns ? .quit(inARow)
+                        : lastPlayer == .playingNameless ? .playingNameless(inARow) : .unreadable(inARow)
+                    droppedAfter = readAt - firstEmptyAt
                 }
             }
             inARow = 0
@@ -533,13 +540,18 @@ final class NowPlayingMonitor {
                 if self.isRunning { self.reading = next }
                 let promised = self.pending.reconcile(next, readAt: readAt)
                 let last = self.track
-                let lastPlayerRuns = last.map { self.candidates().contains($0.bundleID) && Self.isRunning($0.bundleID) }
-                    ?? false
+                let lastIsCandidate = last.map { self.candidates().contains($0.bundleID) } ?? false
+                let lastRuns = last.map { Self.isRunning($0.bundleID) } ?? false
+                let lastPlayerRuns = lastIsCandidate && lastRuns
                 let lastPlayer = last.flatMap { empties[$0.bundleID] } ?? .unreadable
                 let shown = self.emptyReadings.next(reading: promised, last: last, lastPlayerRuns: lastPlayerRuns,
                                                     lastPlayer: lastPlayer, readAt: readAt)
                 if let drop = self.emptyReadings.dropped, let last {
-                    DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason))")
+                    DebugTrace.log("Now Playing: dropped \(last.appName)'s track (\(drop.reason)) after "
+                                   + String(format: "%.1f s", self.emptyReadings.droppedAfter)
+                                   + "; read: \(empties[last.bundleID].map { "\($0)" } ?? "none")"
+                                   + ", candidate: \(lastIsCandidate), running: \(lastRuns)"
+                                   + ", was playing: \(last.isPlaying)")
                 }
                 self.played.note(shown: shown, last: last, dropped: self.emptyReadings.dropped != nil)
                 self.publish(shown, reading: true)
