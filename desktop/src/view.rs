@@ -9555,9 +9555,18 @@ mod tests {
     // covers: S221
     #[test]
     fn a_click_on_the_no_airplay_note_alone_is_outside_every_row() {
+        use i_slint_backend_testing::ElementHandle;
         let app = app_with_the_no_airplay_note(false);
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(app.main.window(), 420.0, 388.0);
+        let note = ElementHandle::find_by_element_id(&app.main, "SpeakerSection::note-area")
+            .next()
+            .expect("the note shows");
+        let (at, size) = (note.absolute_position(), note.size());
+        click(
+            app.main.window(),
+            at.x + size.width / 2.0,
+            at.y + size.height / 2.0,
+        );
         assert_eq!(app.snapshot().airplay_delay_ms, Some(2100.0), "it applied");
         assert!(app.ui.borrow().sync_open.is_empty(), "and opened nothing");
     }

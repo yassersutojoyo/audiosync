@@ -64,7 +64,9 @@ check "no other .slint file words a menu item itself" none "$strays"
 # Every title in the UI (menu items, windows, sections) names a Strings
 # property or a model field, so a quoted title is a word strings.slint lacks.
 ui=${UPDATER_TEXT_UI:-desktop/ui}
-quoted=$(grep -n '^ *title:.*"' "$ui"/*.slint | grep -v '/strings\.slint:' || true)
+# A shortcut such as "Ctrl+S" after the title in Strings.with-keys is a key name, not a word.
+quoted=$(grep -n '^ *title:.*"' "$ui"/*.slint | grep -v '/strings\.slint:' |
+  sed -E 's/Strings\.with-keys\(([^,"]*),.*$/Strings.with-keys(\1)/' | grep '"' || true)
 check "no title outside strings.slint is a quoted literal" none "$quoted"
 
 notice=$(block desktop/src/view.rs '^fn update_notice_text\(')

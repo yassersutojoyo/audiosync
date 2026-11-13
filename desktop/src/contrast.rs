@@ -1120,7 +1120,8 @@ fn the_audiosync_guide_is_wired_and_worded_in_strings() {
         .expect("the Help menu has the Guide, with F1");
     let item = &main[item..item + 200];
     assert!(item.contains("root.help-requested();"));
-    assert!(main.contains(
+    // A Windows checkout may end the lines of main.slint with CRLF.
+    assert!(main.replace("\r\n", "\n").contains(
         "if text == Key.F1 {
                 root.help-requested();"
     ));
