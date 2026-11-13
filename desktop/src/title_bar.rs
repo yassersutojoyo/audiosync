@@ -3,12 +3,17 @@
 //! reach its menus.
 
 /// The top row's height and each window button's width, in logical pixels;
-/// the `TitleBar` in ui/main.slint draws them at these sizes.
+/// the `TitleBar` in ui/main.slint draws them at these sizes. The hit test
+/// that reads these items runs on Windows only.
+#[cfg(any(windows, test))]
 pub const ROW_HEIGHT: f32 = 32.0;
+#[cfg(any(windows, test))]
 pub const BUTTON_WIDTH: f32 = 46.0;
+#[cfg(any(windows, test))]
 /// How far inside the window's edge a press resizes it.
 pub const RESIZE_BORDER: f32 = 8.0;
 
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Edge {
     North,
@@ -21,6 +26,7 @@ pub enum Edge {
     SouthWest,
 }
 
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Region {
     /// The window's content and its own buttons, which Slint handles.
@@ -33,6 +39,7 @@ pub enum Region {
     Resize(Edge),
 }
 
+#[cfg(any(windows, test))]
 /// The window as the hit test reads it, in logical pixels.
 #[derive(Clone, Copy, Debug)]
 pub struct Layout {
@@ -43,6 +50,7 @@ pub struct Layout {
     pub maximized: bool,
 }
 
+#[cfg(any(windows, test))]
 pub fn hit_test(x: f32, y: f32, layout: Layout) -> Region {
     if !layout.maximized {
         let west = x < RESIZE_BORDER;
