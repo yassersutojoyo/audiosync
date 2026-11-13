@@ -136,6 +136,7 @@ for dev in devices {
     }
     let renderedWhileFading = r.framesRendered.load(ordering: .relaxed) - renderedBefore
     r.halt()
+    OutputRenderer.finishTeardowns()
     let playedFirst = fadedAfterNs != nil && r.stopNote == "stopped once its fade-out had played"
     var fadeDetail = "\(fadeStates); "
     if let fadedAfterNs {
@@ -148,7 +149,7 @@ for dev in devices {
     check(fadeStates.last == .closed && renderedWhileFading >= Int64(r.fadeFrames) && (playedFirst || beyondCap),
           "\(dev.name): stop fades out before the output stops", fadeDetail)
 
-    // covers: S134 (IO stopped when halt returns)
+    // covers: S134 (IO stopped once the teardowns finish)
     let renderedAtHalt = r.framesRendered.load(ordering: .relaxed)
     Thread.sleep(forTimeInterval: 0.2)
     let renderedAfterHalt = r.framesRendered.load(ordering: .relaxed) - renderedAtHalt

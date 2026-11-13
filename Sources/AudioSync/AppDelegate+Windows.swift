@@ -481,13 +481,15 @@ extension AppDelegate {
     /// The power switch. Switching off by hand also keeps auto-connect from
     /// starting streaming again until the user turns it back on.
     private func setStreaming(_ on: Bool, fromMenu: Bool = false) {
-        defer { pushModel() }
+        defer { MainBlock.timed("the switch's model push") { pushModel() } }
         guard on else {
             userStopped = true
-            stopEngine(fromMenu ? .menuItem : .powerSwitch, detail: Self.inputEventNote())
+            MainBlock.timed("streaming off") {
+                stopEngine(fromMenu ? .menuItem : .powerSwitch, detail: Self.inputEventNote())
+            }
             return
         }
-        startEngine(origin: .user)
+        MainBlock.timed("streaming on") { startEngine(origin: .user) }
     }
 
     /// The event AppKit is handling, for the debug log, so a stop by a key

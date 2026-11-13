@@ -62,7 +62,7 @@ protocol FadingOutput: AnyObject {
     /// Whether its device has played the fade-out by host time `nowNs`, or
     /// has nothing left to play (its device is gone or its IO stopped).
     func hasFaded(nowNs: UInt64) -> Bool
-    /// Stops its IO at once.
+    /// Stops its IO at once, possibly finishing after this returns.
     func halt()
 }
 
@@ -175,8 +175,8 @@ final class OutputRetirement {
     func poll() {
         while let index = finishable() {
             let batch = batches.remove(at: index)
-            batch.stopCapture?()
-            for output in batch.outputs { output.halt() }
+            MainBlock.timed("the capture's stop") { batch.stopCapture?() }
+            MainBlock.timed("the outputs' stop") { for output in batch.outputs { output.halt() } }
             for step in batch.after { step() }
         }
     }

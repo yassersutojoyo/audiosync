@@ -229,8 +229,8 @@ final class SourceCapture {
     }
 
     /// Stops capturing. No IOProc callback runs once this returns (S115); the
-    /// tap and its aggregate device go on the main queue's next turn
-    /// (`CaptureClose`). Idempotent.
+    /// tap and its aggregate device are handed on the main queue's next turn
+    /// to a background queue that destroys them (`CaptureClose`). Idempotent.
     func halt() {
         sessionMark &+= 1
         sessionListeners.removeAll()
@@ -422,15 +422,24 @@ final class SourceCapture {
     /// System uptime when a tap was last destroyed; main queue only.
     private static var lastDestroy: TimeInterval?
 
+    /// Destroys taps and their aggregate devices, which can hold a thread for
+    /// tens of milliseconds, away from the main thread (the stop's UI hitch).
+    private static let teardown = DispatchQueue(label: "AudioSync.capture-teardown", qos: .userInitiated)
+
     /// Seconds since a tap was last destroyed, nil when none was (S227 g).
     static var sinceLastDestroy: TimeInterval? {
         lastDestroy.map { ProcessInfo.processInfo.systemUptime - $0 }
     }
 
     private static func destroy(_ objects: TapObjects) {
-        objects.destroy()
         lastDestroy = ProcessInfo.processInfo.systemUptime
-        DebugTrace.log("[AudioSync] capture: an earlier tap and its aggregate device destroyed")
+        SourceCapture.teardown.async {
+            let began = DispatchTime.now().uptimeNanoseconds
+            objects.destroy()
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - began) / 1_000_000
+            DebugTrace.log("[AudioSync] capture: an earlier tap and its aggregate device destroyed, "
+                           + "\(String(format: "%.1f", ms)) ms off the main thread")
+        }
     }
 
     /// Runs `body` on a later turn of the main queue.
@@ -788,6 +797,8 @@ private extension SourceCapture {
         /// Makes the tap, reads its format, then makes an aggregate device
         /// holding only the tap.
         init(_ setup: CATapDescription) throws {
+            // A tap is made only once every earlier one queued for destroying is gone, as when both ran on main.
+            SourceCapture.teardown.sync {}
             SourceCapture.configureTap(setup)
             // A UUID of its own for every tap, so a new tap never shares one
             // with an earlier tap that has yet to be destroyed (`CaptureClose`).
