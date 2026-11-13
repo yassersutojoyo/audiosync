@@ -117,8 +117,8 @@ enum BrandTokens {
     }
 
     enum Typography {
-        /// The wordmark typeface (SIL OFL 1.1). Tracking is in em. User interface text uses the
-        /// system font (SF Pro on macOS, Segoe UI Variable on Windows).
+        /// The wordmark typeface (SIL OFL 1.1). Tracking is in em. The desktop app sets its text in
+        /// Inter (Fluent.font in widgets.slint); the Mac app uses the system font.
         static let brandFontName = "Poppins-Medium"
         /// Letter spacing of the wordmark, in em.
         static let brandTracking: CGFloat = -0.02
