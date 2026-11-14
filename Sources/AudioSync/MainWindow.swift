@@ -230,6 +230,7 @@ struct MainView: View {
     @StateObject private var heroHover = HoverState()
     @StateObject private var masterDrag = VolumeDrag()
     @StateObject private var wipe = TrackWipeState()
+    @Environment(\.displayScale) private var displayScale
     @FocusState private var modeFocus: TransportMode?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
@@ -672,7 +673,7 @@ struct MainView: View {
             .padding(.top, ZoneLook.labelTop)
             .padding(.bottom, ZoneLook.labelBottom)
             .overlay(alignment: .leading) {
-                ZoneLabelJoin()
+                ZoneLabelJoin(scale: displayScale)
                     .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
                     .frame(width: ZoneLook.nameColumn - ZoneLook.labelLineGap)
                     .accessibilityHidden(true)
@@ -836,8 +837,12 @@ private struct ZoneMemberGroup<Content: View>: View {
 /// The In a zone label's left rule, in a frame as tall as the label row: it
 /// leaves the text's middle and turns down into the first zone's bar at x 0.
 private struct ZoneLabelJoin: Shape {
+    let scale: CGFloat
+
     func path(in rect: CGRect) -> Path {
-        let y = ZoneLook.labelTop + (rect.height - ZoneLook.labelTop - ZoneLook.labelBottom) / 2
+        // On the right rule's centre: SwiftUI puts that 1 pt rectangle's top on the pixel grid, ties going down the window.
+        let top = ZoneLook.labelTop + (rect.height - ZoneLook.labelTop - ZoneLook.labelBottom - 1) / 2
+        let y = (top * scale).rounded(.toNearestOrAwayFromZero) / scale + 0.5
         // The bar is a 1 pt rectangle from x 0, so the stroke's centre sits at 0.5.
         let x = rect.minX + 0.5
         var path = Path()

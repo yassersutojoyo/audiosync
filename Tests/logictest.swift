@@ -17955,9 +17955,12 @@ do {
     let join = part(window, after: "private struct ZoneLabelJoin")
     check(count(strings, "let inZones = \"In a zone\"") == 1 && count(strings, "\"In zones\"") == 0,
           "In a zone label: reads In a zone, right for one zone or many")
-    check(count(zoned, "ZoneLabelJoin()") == 1 && count(zoned, ".frame(width: ZoneLook.nameColumn - ZoneLook.labelLineGap)") == 1
+    check(count(zoned, "ZoneLabelJoin(scale: displayScale)") == 1 && count(zoned, ".frame(width: ZoneLook.nameColumn - ZoneLook.labelLineGap)") == 1
             && count(join, "radius: ZoneLook.labelJoinRadius") == 1 && count(join, "rect.maxY") >= 1,
           "In a zone label: a rule on its left runs from the zone bar and turns down into it with a rounded corner")
+    // 14 Nov at 1x: the left rule straddled two pixel rows (grey 243) while the right one filled one (grey 230).
+    check(count(zoned, "ZoneLabelJoin(scale: displayScale)") == 1 && count(join, ".rounded(.toNearestOrAwayFromZero)") == 1,
+          "In a zone label: its left rule lies on the right rule's pixel row, 1 px tall at 1x")
     check(count(window, "padding(.leading, 52)") == 0 && count(window, "Divider().padding(.leading, ZoneLook.nameColumn)") == 4,
           "zone look: every row separator starts at the name column")
     let compact = part(window, after: "private struct ZoneMemberCompactRow")
