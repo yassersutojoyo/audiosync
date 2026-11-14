@@ -9106,6 +9106,10 @@ do {
         .components(separatedBy: "\n}\n").first ?? ""
     check(quickIconSource.contains(".font(.system(size: QuickRowIcon.point))"),
           "main window: the Presets, Equalizer and Calibrate icons share one size, the menu bar panel's icons' too")
+    check(muteSource.contains("Image(systemName: MasterMute.symbol(level: model.master), variableValue: model.master / 100)\n                .font(.system(size: QuickRowIcon.point))")
+            && muteSource.contains(".frame(width: panel ? PanelLayout.iconBox : 16, height: 18)")
+            && !muteSource.contains(".hidden()") && !muteSource.contains(".caption") && !muteSource.contains("alignment: panel"),
+          "master volume icon: the preset icons' size, centred on their column in the panel and the main window, never shrunk to a narrower glyph")
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
@@ -18507,9 +18511,8 @@ do {
 // MARK: Master mute
 do {
     let glyphs = [0, 0.4, 0.6, 33, 34, 66, 67, 100].map { MasterMute.symbol(level: $0) }
-    check(glyphs == ["speaker.slash.fill", "speaker.slash.fill", "speaker.wave.1.fill", "speaker.wave.1.fill",
-                     "speaker.wave.2.fill", "speaker.wave.2.fill", "speaker.wave.3.fill", "speaker.wave.3.fill"],
-          "master mute: the speaker is struck through at 0 and shows one, two or three waves by thirds",
+    check(glyphs == ["speaker.slash.fill", "speaker.slash.fill"] + Array(repeating: "speaker.wave.3.fill", count: 6),
+          "master mute: the speaker is struck through at 0 and otherwise keeps all three waves, lit by level, so its ink never shrinks",
           glyphs.joined(separator: ", "))
     func unmuteLevel(after levels: [Double]) -> Double {
         let kept = levels.reduce(MasterMute.fallback) { MasterMute.remembered(level: $1, previous: $0) }

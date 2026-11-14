@@ -2861,23 +2861,20 @@ struct PowerSwitch: View {
 struct MasterMuteButton: View {
     @ObservedObject var model: AppModel
     let text: UIStrings
-    /// The menu bar panel's size and grey, those of the preset icon above it.
+    /// The menu bar panel's icon box and grey, those of the preset icon above it.
     var panel = false
 
     var body: some View {
         let label = MasterMute.isMuted(model.master) ? text.unmuteMaster : text.muteMaster
         Button { model.toggleMasterMute() } label: {
-            // Sized by the widest symbol, so the speaker and the slider hold still as the waves come and go.
-            ZStack(alignment: .leading) {
-                Image(systemName: "speaker.wave.3.fill").hidden()
-                Image(systemName: MasterMute.symbol(level: model.master))
-            }
-            .frame(width: panel ? PanelLayout.iconBox : 18, height: 18, alignment: panel ? .center : .leading)
-            .contentShape(Rectangle())
+            Image(systemName: MasterMute.symbol(level: model.master), variableValue: model.master / 100)
+                .font(.system(size: QuickRowIcon.point))
+                // 16 pt centres it on the main window rows' icons, which sit 8 pt into their slot.
+                .frame(width: panel ? PanelLayout.iconBox : 16, height: 18)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(panel ? AnyShapeStyle(Brand.secondaryText) : AnyShapeStyle(.secondary))
-        .font(panel ? .system(size: QuickRowIcon.point) : .caption)
+        .foregroundStyle(panel ? AnyShapeStyle(Brand.secondaryText) : AnyShapeStyle(.primary))
         .accessibilityLabel(label)
         .help(label)
     }
