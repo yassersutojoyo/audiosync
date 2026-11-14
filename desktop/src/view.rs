@@ -12622,6 +12622,20 @@ mod tests {
         assert_eq!(menu.accessible_value().unwrap_or_default(), chosen);
     }
 
+    /// The source's name starts on the song title's line, as in the Mac
+    /// panel: the menu's hover box reaches left of it instead.
+    #[test]
+    fn the_flyout_source_name_starts_where_the_song_title_does() {
+        let app = app_over(MockBackend::new());
+        app.flyout.set_now_playing_shown(true);
+        app.flyout.set_now_playing_title("Song".into());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let name = flyout_element(&app, "SourceMenu::label");
+        let title = flyout_element(&app, "TrayFlyout::song-title");
+        assert_eq!(name.absolute_position().x, title.absolute_position().x);
+    }
+
     /// The flyout open with one preset, laid out, for the measuring tests.
     fn measured_flyout() -> Rc<App> {
         let app = app_over(MockBackend::new());

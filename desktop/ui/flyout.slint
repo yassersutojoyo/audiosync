@@ -190,7 +190,7 @@ component SourceMenu inherits Rectangle {
                     padding-right: 2px;
                     spacing: 6px;
 
-                    Text {
+                    label := Text {
                         text: root.name;
                         color: Tokens.secondary-text;
                         vertical-alignment: center;
@@ -998,6 +998,8 @@ export component TrayFlyout inherits Window {
 
                                     HorizontalLayout {
                                         alignment: start;
+                                        // The name on the title's line, its hover box reaching past it.
+                                        padding-left: -2px;
                                         SourceMenu {
                                             sources: root.sources;
                                             current: root.source-index;
@@ -1015,7 +1017,7 @@ export component TrayFlyout inherits Window {
                                         accessible-role: groupbox;
                                         accessible-label: Strings.now-playing;
 
-                                        MarqueeText {
+                                        song-title := MarqueeText {
                                             text: root.now-playing-title;
                                             font-size: Tokens.font-size-title3;
                                             font-weight: 600;
