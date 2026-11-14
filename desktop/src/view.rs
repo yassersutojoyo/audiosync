@@ -9286,7 +9286,7 @@ mod tests {
             .invoke_delay_edited("local:bt".into(), "-200".into());
 
         // The blank part of the desk's row, right of its name.
-        click(window, 600.0, 448.0);
+        click(window, 600.0, 357.0);
         assert_eq!(
             delay_of(&app, "local:bt"),
             Some(-200.0),
@@ -9299,7 +9299,7 @@ mod tests {
         app.main
             .invoke_delay_edited("local:desk".into(), "400".into());
         app.main.invoke_airplay_delay_edited("2100".into());
-        click(window, 600.0, 448.0);
+        click(window, 600.0, 357.0);
         assert_eq!(
             delay_of(&app, "local:desk"),
             Some(400.0),
@@ -9309,10 +9309,10 @@ mod tests {
         assert!(!open(&app).contains("local:desk"), "and closed it");
 
         // The reference row has no delay: a click there is outside.
-        click(window, 600.0, 448.0);
+        click(window, 600.0, 357.0);
         app.main
             .invoke_delay_edited("local:desk".into(), "300".into());
-        click(window, 600.0, 144.0);
+        click(window, 600.0, 124.0);
         assert_eq!(delay_of(&app, "local:desk"), Some(300.0));
         assert!(open(&app).is_empty());
     }
@@ -9927,8 +9927,8 @@ mod tests {
         for place in [
             Some((500.0, 42.0)),
             None,
-            Some((600.0, 144.0)),
-            Some((600.0, 371.0)),
+            Some((600.0, 124.0)),
+            Some((600.0, 305.0)),
         ] {
             let app = app_over(MockBackend::new());
             draw_frames();
@@ -10471,7 +10471,7 @@ mod tests {
         app.main
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         draw_frames();
-        click(app.main.window(), 600.0, 448.0);
+        click(app.main.window(), 600.0, 357.0);
         assert_eq!(name_of(&app, "local:desk"), "Desk");
         assert!(app.ui.borrow().rename.is_none());
         assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
@@ -10534,7 +10534,7 @@ mod tests {
         let mut others = Vec::new();
         // 12 px apart, so Slint never counts two tries as one double-click.
         for x in (380..=476).step_by(12) {
-            for y in (400..=716).step_by(12) {
+            for y in (316..=716).step_by(12) {
                 let (x, y) = (x as f32, y as f32);
                 click(window, x, y);
                 click(window, x, y);
@@ -10852,6 +10852,46 @@ mod tests {
             .set_size(slint::LogicalSize::new(776.0, 680.0));
         slint::platform::update_timers_and_animations();
         app
+    }
+
+    /// Speaker rows in one list step 52 px from badge to badge, divider
+    /// included, as the Mac's rows step 52 pt.
+    #[test]
+    fn speaker_rows_step_52_px_as_on_the_mac() {
+        let app = narrow_app(MockBackend::new());
+        let tops: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "SpeakerRow::badge",
+        )
+        .map(|badge| badge.absolute_position().y)
+        .collect();
+        let pitch = tops
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .fold(f32::MAX, f32::min);
+        assert_eq!(pitch, 52.0, "badge tops {tops:?}");
+        assert!(
+            tops.iter().all(|y| y.fract() == 0.0),
+            "on whole pixels: {tops:?}"
+        );
+    }
+
+    /// A zone's member rows are 36 px tall, as the Mac's compact rows: a
+    /// 24 px badge with 6 px above and below.
+    #[test]
+    fn zone_member_rows_are_36_px_as_on_the_mac() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:two", "Two", &["local:desk", "local:bt"]);
+        let app = narrow_app(backend);
+        scroll_to_end(&app);
+        let rows: Vec<(f32, f32)> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "ZoneMemberRow::badge",
+        )
+        .map(|badge| (badge.absolute_position().y, badge.size().height))
+        .collect();
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[1].0 - rows[0].0, 36.0, "{rows:?}");
     }
 
     /// A long-named copy of the mock's Kitchen speaker.

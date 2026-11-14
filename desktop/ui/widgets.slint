@@ -878,7 +878,13 @@ export component IconButton inherits Rectangle {
         }
     }
 
+    // A button set shorter than the 24 px pointer minimum keeps 24 px to hit
+    // and to ring, centred on it.
+    property <length> hit-height: max(root.height, 24px);
+
     touch := TouchArea {
+        y: (root.height - root.hit-height) / 2;
+        height: root.hit-height;
         enabled: root.enabled;
         clicked => {
             root.clicked();
@@ -902,6 +908,8 @@ export component IconButton inherits Rectangle {
     }
 
     FocusRing {
+        y: touch.y;
+        height: touch.height;
         visible-focus: focus.has-focus;
         border-radius: root.border-radius;
     }
@@ -2916,7 +2924,9 @@ export component SpeakerRow inherits Rectangle {
                 padding-left: 12px;
                 padding-right: 8px;
                 padding-top: Fluent.row-padding-y;
-                padding-bottom: Fluent.row-padding-y;
+                // A pixel less, so the divider keeps the Mac's 52 px step and
+                // the 32 px badge stays on whole pixels in its 40 px line.
+                padding-bottom: Fluent.row-padding-y - 1px;
                 spacing: 4px;
 
                 HorizontalLayout {
@@ -2953,7 +2963,7 @@ export component SpeakerRow inherits Rectangle {
                     // so a long name keeps the width the slider took.
                     VerticalLayout {
                         alignment: center;
-                        spacing: 2px;
+                        spacing: 4px;
                         horizontal-stretch: 1;
 
                         HorizontalLayout {
@@ -3164,7 +3174,7 @@ export component SpeakerRow inherits Rectangle {
 
                                 if root.item.has-delay: Rectangle {
                                     min-width: delay-row.preferred-width + 12px;
-                                    height: 32px;
+                                    height: 16px;
                                     opacity: root.revealed || root.item.delay-ms != 0 ? 1 : 0;
                                     animate opacity { duration: 120ms; }
                                     border-radius: Fluent.radius-control;
@@ -3209,7 +3219,10 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
+                                    // 24 px to hit and to ring around the 16 px line.
                                     delay-touch := TouchArea {
+                                        y: -4px;
+                                        height: 24px;
                                         clicked => {
                                             root.sync-toggled();
                                         }
@@ -3235,6 +3248,8 @@ export component SpeakerRow inherits Rectangle {
                                     }
 
                                     FocusRing {
+                                        y: delay-touch.y;
+                                        height: delay-touch.height;
                                         visible-focus: delay-focus.has-focus;
                                         border-radius: parent.border-radius;
                                     }
@@ -3244,6 +3259,8 @@ export component SpeakerRow inherits Rectangle {
                             VerticalLayout {
                                 alignment: center;
                                 options := IconButton {
+                                    // The name line's height, as the Mac's text-sized menu.
+                                    height: 16px;
                                     glyph: Glyphs.more;
                                     label: Strings.speaker-options(root.item.name);
                                     glyph-color: Tokens.text;
@@ -3273,7 +3290,7 @@ export component SpeakerRow inherits Rectangle {
                             // Moved left by the slider's own inset, so its track
                             // starts under the name, as on the Mac.
                             Rectangle {
-                                min-height: max(24px, volume-slider.min-height);
+                                min-height: volume-slider.min-height;
 
                                 volume-slider := VolumeSlider {
                                     x: -Fluent.slider-inset;
@@ -3556,8 +3573,8 @@ export component ZoneMemberRow inherits Rectangle {
             HorizontalLayout {
                 padding-left: 12px;
                 padding-right: 8px;
-                padding-top: 4px;
-                padding-bottom: 4px;
+                padding-top: 6px;
+                padding-bottom: 6px;
                 spacing: 8px;
 
                 // As wide as a full row's switch, so the names line up.
@@ -3688,6 +3705,8 @@ export component ZoneMemberRow inherits Rectangle {
                 VerticalLayout {
                     alignment: center;
                     options := IconButton {
+                        // The name line's height, as the Mac's text-sized menu.
+                        height: 16px;
                         glyph: Glyphs.more;
                         label: Strings.speaker-options(root.item.name);
                         glyph-color: Tokens.teal-text;
