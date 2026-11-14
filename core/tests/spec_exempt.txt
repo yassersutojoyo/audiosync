@@ -222,3 +222,4 @@ S453 Windows host only: the equalizer band's fill from 0 dB, its tick, Home and 
 S454 hosts and the remote crate: the app's notices on the Web Remote page; the remote crate, desktop and Mac logic tests marked S454 check it.
 S456 Mac host only: the remembered system level of the built-in speakers; the Mac logic suite checks it.
 S457 Windows host only: the elevated update of an install for all users (desktop/src/updater/elevated.rs); the desktop tests marked S457 check it.
+S458 Mac host only: a local output's device start off the main thread (Sources/AudioSync/OutputRenderer.swift); the Mac logic suite checks it.

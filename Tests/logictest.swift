@@ -18999,7 +18999,7 @@ do {
         source.components(separatedBy: head).dropFirst().first?.components(separatedBy: "\n    }\n").first ?? ""
     }
     let haltBody = unitPart(unitSource, "private func halt(inline: Bool) {")
-    let handOff = haltBody.components(separatedBy: "Self.teardownQueue.async {").dropFirst().first ?? ""
+    let handOff = haltBody.components(separatedBy: "Self.onUnitQueue {").dropFirst().first ?? ""
     // covers: S134
     check(haltBody.contains("guard !inline") && handOff.contains("Self.tearDown(live, started: true, initialized: true)")
             && handOff.contains("withExtendedLifetime((self, rendering))"),
@@ -19007,12 +19007,51 @@ do {
     check(unitPart(unitSource, "    deinit {").contains("halt(inline: true)"),
           "output stop: an output let go while running stops its unit before its memory goes")
     let startBody = unitPart(unitSource, "func start(on device: AudioObjectID, captureRate: Double, delayMs: Double) throws {")
-    let waitAt = startBody.range(of: "Self.finishTeardowns()")
-    let makeAt = startBody.range(of: "Self.makeUnit()")
-    check(waitAt != nil && makeAt != nil && waitAt!.lowerBound < makeAt!.lowerBound,
-          "output start: a unit starts only once every earlier one queued for stopping is gone, so a quick off and on never plays two units of one output")
+    let startHandOff = startBody.components(separatedBy: "Self.onUnitQueue {").dropFirst().first ?? ""
+    // covers: S458
+    check(startHandOff.contains("AudioOutputUnitStart(fresh)")
+            && startBody.components(separatedBy: "AudioOutputUnitStart(").count == 2,
+          "output start: the device start runs on the units' queue, never on the main thread")
+    check(!startBody.contains("finishTeardowns()"),
+          "output start: a quick off and on queues the new unit's start behind the old one's stop instead of waiting for it on the main thread")
+    check(startHandOff.contains("onStartFailed?(") && startHandOff.contains("generation == startGeneration"),
+          "output start: a device start that fails off the main thread is reported on the main queue, unless the output stopped or started again meanwhile")
+    check(unitPart(engineSource, "func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {")
+            .contains("handleOutputLost(uid, renderer, .stalled("),
+          "output start: a device that refuses the start off the main thread drops the output as a stall, its speaker on (S334)")
     check(unitPart(engineSource, "func finishStopping() {").contains("OutputRenderer.finishTeardowns()"),
           "output stop: quitting waits for the units still being stopped off the main thread")
+}
+
+do {
+    // Fake units on the real queue: a start that takes 200 ms, as a device's start after a wake can.
+    final class FakeUnits { var playing: Set<Int> = []; var most = 0 }
+    let fakeUnits = FakeUnits()
+    func fakeOn(_ unit: Int) {
+        OutputRenderer.onUnitQueue {
+            Thread.sleep(forTimeInterval: 0.2)
+            fakeUnits.playing.insert(unit)
+            fakeUnits.most = max(fakeUnits.most, fakeUnits.playing.count)
+        }
+    }
+    func fakeOff(_ unit: Int) { OutputRenderer.onUnitQueue { _ = fakeUnits.playing.remove(unit) } }
+    let fakeBegan = DispatchTime.now().uptimeNanoseconds
+    fakeOn(1)
+    let fakeHeldMs = Double(DispatchTime.now().uptimeNanoseconds - fakeBegan) / 1_000_000
+    // covers: S458
+    check(fakeHeldMs < 16, "output start off main: a slow device start holds the caller under 16 ms",
+          String(format: "%.1f ms", fakeHeldMs))
+    fakeOff(1)
+    OutputRenderer.finishTeardowns()
+    check(fakeUnits.playing.isEmpty, "output start off main: an off while the start runs leaves nothing playing",
+          "\(fakeUnits.playing)")
+    fakeOn(2)
+    fakeOff(2)
+    fakeOn(3)
+    OutputRenderer.finishTeardowns()
+    check(fakeUnits.playing == [3] && fakeUnits.most == 1,
+          "output start off main: a quick on, off and on leaves exactly one unit playing, never two at once",
+          "\(fakeUnits.playing), at most \(fakeUnits.most)")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

@@ -656,6 +656,15 @@ final class StreamEngine {
             guard let self, let renderer else { return }
             self.handleOutputLost(uid, renderer, .formatChanged(old: old, new: new))
         }
+        // A refusal that comes after the attach counts as a stall: the speaker stays on and reopens (S334, S458).
+        renderer.onStartFailed = { [weak self, weak renderer] status in
+            guard let self, let renderer else { return }
+            DebugTrace.log("[AudioSync] output \(self.outputNumber(uid)): its device refused the start (status \(status))")
+            let state = renderer.deviceState()
+            let sign = OutputStallSign.read(hogOwner: state.hogOwner, ownPID: getpid(), running: state.running)
+            renderer.noteStalled()
+            self.handleOutputLost(uid, renderer, .stalled(quietS: 0, sign: sign))
+        }
         try renderer.start(on: device, captureRate: capture.sampleRate, delayMs: delayMs)
         renderers[uid] = renderer
         attachTokens.attached(uid)

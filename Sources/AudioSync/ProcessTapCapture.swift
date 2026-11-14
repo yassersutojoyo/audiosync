@@ -377,7 +377,7 @@ final class SourceCapture {
         guard let parts, let sink else { throw CaptureError.ioProcNotStarted(kAudioHardwareNotRunningError) }
         let link = try IOLink(device: objects.aggregate, sink: sink)
         parts.prepare(captureRate: sampleRate)
-        do { try link.begin() } catch { link.close(); throw error }
+        do { try MainBlock.timed("the capture device's start") { try link.begin() } } catch { link.close(); throw error }
         tap = objects
         io = link
         watchTap(objects)
@@ -798,13 +798,13 @@ private extension SourceCapture {
         /// holding only the tap.
         init(_ setup: CATapDescription) throws {
             // A tap is made only once every earlier one queued for destroying is gone, as when both ran on main.
-            SourceCapture.teardown.sync {}
+            MainBlock.timed("the wait for the last tap's destroy") { SourceCapture.teardown.sync {} }
             SourceCapture.configureTap(setup)
             // A UUID of its own for every tap, so a new tap never shares one
             // with an earlier tap that has yet to be destroyed (`CaptureClose`).
             setup.uuid = UUID()
             var tap = AudioObjectID(kAudioObjectUnknown)
-            var status = AudioHardwareCreateProcessTap(setup, &tap)
+            var status = MainBlock.timed("the tap's creation") { AudioHardwareCreateProcessTap(setup, &tap) }
             guard status == noErr, tap != kAudioObjectUnknown else {
                 throw CaptureError.tapNotCreated(status == noErr ? kAudioHardwareUnspecifiedError : status)
             }
@@ -826,7 +826,9 @@ private extension SourceCapture {
                 ],
             ]
             var aggregate = AudioObjectID(kAudioObjectUnknown)
-            status = AudioHardwareCreateAggregateDevice(settings as CFDictionary, &aggregate)
+            status = MainBlock.timed("the aggregate device's creation") {
+                AudioHardwareCreateAggregateDevice(settings as CFDictionary, &aggregate)
+            }
             guard status == noErr, aggregate != kAudioObjectUnknown else {
                 AudioHardwareDestroyProcessTap(tap)
                 throw CaptureError.aggregateDeviceFailed(status == noErr ? kAudioHardwareUnspecifiedError : status)

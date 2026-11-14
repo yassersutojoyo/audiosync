@@ -138,6 +138,9 @@ final class OutputRenderer: FadingOutput {
     /// Called on the main queue, once per start, when the device's rate or
     /// output channel count no longer matches what the start read (S330).
     var onFormatChanged: ((OutputDeviceFormat, OutputDeviceFormat) -> Void)?
+    /// Called on the main queue with the device's status when the unit's
+    /// start, which runs off the main thread, failed. The output keeps its unit until `halt`.
+    var onStartFailed: ((OSStatus) -> Void)?
 
     /// The session's delay ring, which every start reads.
     private let delayRing: CoreDelayRing
@@ -282,10 +285,11 @@ final class OutputRenderer: FadingOutput {
 
     /// Starts rendering on `device`, reading the ring captured at
     /// `captureRate` Hz at `delayMs`. A running output is halted first,
-    /// without a fade. Throws the step that failed and leaves nothing running.
+    /// without a fade. Throws the step that failed and leaves nothing running;
+    /// the device start itself runs off the main thread and reports a failure
+    /// through `onStartFailed` (S458).
     func start(on device: AudioObjectID, captureRate: Double, delayMs: Double) throws {
         halt()
-        Self.finishTeardowns()   // never two units of one output playing at once
         // A hogged device holds the start on the main thread for seconds (measured 7.5 s) before refusing it.
         if let owner = Self.hogOwner(device), owner != getpid() {
             throw StartFailure.deviceDidNotStart(OSStatus(kAudioDevicePermissionsError))
@@ -304,12 +308,21 @@ final class OutputRenderer: FadingOutput {
             let initStatus = MainBlock.timed("the output unit's initialize") { AudioUnitInitialize(fresh) }
             guard initStatus == noErr else { throw StartFailure.unitNotInitialized(initStatus) }
             initialized = true
-            let startStatus = MainBlock.timed("the output device's start") { AudioOutputUnitStart(fresh) }
-            guard startStatus == noErr else { throw StartFailure.deviceDidNotStart(startStatus) }
         } catch let failure {
             Self.tearDown(fresh, started: false, initialized: initialized)
             guard let known = failure as? StartFailure else { throw failure }
             throw StartFailure.hogChecked(known, hogOwner: Self.hogOwner(device), ownPID: getpid())
+        }
+        // Queued behind every earlier unit's stop, so a quick off and on never plays two units of one output.
+        let startGeneration = generation
+        Self.onUnitQueue {
+            let status = AudioOutputUnitStart(fresh)
+            if status != noErr {
+                DispatchQueue.main.async {
+                    guard self.generation == startGeneration else { return }
+                    self.onStartFailed?(status)
+                }
+            }
         }
         halUnit = fresh
         renderRate = started.rate
@@ -390,21 +403,26 @@ final class OutputRenderer: FadingOutput {
             return
         }
         let rendering = target
-        Self.teardownQueue.async {
+        Self.onUnitQueue {
             Self.tearDown(live, started: true, initialized: true)
             // The last reference may go here: deinit then runs on this queue and touches nothing main-only.
             withExtendedLifetime((self, rendering)) {}
         }
     }
 
-    /// Stopping and disposing of a unit holds its thread for tens of
-    /// milliseconds, which on the main thread is a visible hitch.
-    private static let teardownQueue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.output-teardown",
-                                                     qos: .userInitiated)
+    /// Starting, stopping and disposing of a unit each hold their thread for
+    /// tens of milliseconds (seconds after a wake), a visible hitch on the main thread.
+    private static let unitQueue = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.output-units",
+                                                 qos: .userInitiated)
 
-    /// Waits until every unit halted so far is gone.
+    /// Runs `step` on the queue that starts and stops every unit, after the steps queued before it.
+    static func onUnitQueue(_ step: @escaping () -> Void) {
+        unitQueue.async(execute: step)
+    }
+
+    /// Waits until every unit start and stop queued so far has run.
     static func finishTeardowns() {
-        teardownQueue.sync {}
+        unitQueue.sync {}
     }
 
     /// Takes `instance` down from the stage it reached: stopped if it
