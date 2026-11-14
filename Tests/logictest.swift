@@ -2253,6 +2253,32 @@ check(NowPlayingMonitor.pollInterval(onScreen: true, playerRuns: true) == 0.25
         && NowPlayingMonitor.pollInterval(onScreen: true, playerRuns: false) == 2
         && NowPlayingMonitor.pollInterval(onScreen: false, playerRuns: true) == 2,
       "now playing: the players are read every 0.25 s while the card or panel shows a player's track, else every 2 s")
+// 14 Nov on the Mac: Spotify reports a pause 329-395 ms after F8, so one 0.25 s poll after its notice landed past 0.6 s.
+// covers: S218
+do {
+    var burst = NoticeBurst()
+    check(!burst.notice(shownPlaying: nil, at: 0) && !burst.running,
+          "now playing burst: a notice while no card or panel shows a track starts none")
+    check(burst.notice(shownPlaying: true, at: 10) && burst.running && !burst.notice(shownPlaying: false, at: 11),
+          "now playing burst: a player's change notice starts a burst while a track shows, and another notice during it starts no second one")
+    check(NowPlayingMonitor.pollInterval(onScreen: true, playerRuns: true, bursting: true) == 0.1
+            && NowPlayingMonitor.pollInterval(onScreen: false, playerRuns: true, bursting: true) == 2,
+          "now playing burst: the players are read every 0.1 s during a burst; with nothing on screen still every 2 s")
+    check(!burst.read(playing: true, at: 10.3) && burst.read(playing: false, at: 10.4) && !burst.running,
+          "now playing burst: the first reading whose play state differs from the one shown at the notice ends the burst")
+    _ = burst.notice(shownPlaying: false, at: 20)
+    check(!burst.read(playing: false, at: 21.9) && burst.read(playing: false, at: 22) && !burst.running,
+          "now playing burst: with no change read it ends 2 s after the notice")
+    var promise = NowPlayingMonitor.PendingPlayPause()
+    let pausedSong = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "One",
+                                             artist: "A", album: "B", isPlaying: false, artwork: nil)
+    var coverComing = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                              artist: "A", album: "B", isPlaying: false, artwork: nil)
+    coverComing.artPending = true
+    _ = promise.landed(pausedSong, target: "com.spotify.client", at: 0)
+    check(promise.reconcile(coverComing, readAt: 0.5)?.artPending == true,
+          "play-pause promise: the track it shows keeps its cover still on its way, so the old cover stays up for it")
+}
 // covers: S15 (the decision by permission status; the notice is the call site's)
 check(MicrophoneStart.decide(.authorized) == .start && MicrophoneStart.decide(.notDetermined) == .ask
         && MicrophoneStart.decide(.denied) == .fail && MicrophoneStart.decide(.restricted) == .fail,

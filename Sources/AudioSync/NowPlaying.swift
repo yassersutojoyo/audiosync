@@ -246,8 +246,8 @@ final class NowPlayingMonitor {
 
         private static func track(_ t: Track, playing: Bool) -> Track {
             Track(bundleID: t.bundleID, appName: t.appName, title: t.title, artist: t.artist, album: t.album,
-                  isPlaying: playing, artwork: t.artwork, position: t.position, playerState: t.playerState,
-                  shuffle: t.shuffle, repeatMode: t.repeatMode)
+                  isPlaying: playing, artwork: t.artwork, artPending: t.artPending, position: t.position,
+                  playerState: t.playerState, shuffle: t.shuffle, repeatMode: t.repeatMode)
         }
     }
 
@@ -356,8 +356,8 @@ final class NowPlayingMonitor {
 
     /// Seconds between readings of the players. A play/pause key goes to the
     /// player, not to AudioSync, so only a reading shows it on the card.
-    static func pollInterval(onScreen: Bool, playerRuns: Bool) -> TimeInterval {
-        onScreen && playerRuns ? 0.25 : 2.0
+    static func pollInterval(onScreen: Bool, playerRuns: Bool, bursting: Bool = false) -> TimeInterval {
+        onScreen && playerRuns ? (bursting ? 0.1 : 0.25) : 2.0
     }
 
     // Main thread.
@@ -369,6 +369,7 @@ final class NowPlayingMonitor {
     private let notices = ChangeNotices()
     /// A change notice came in while a reading was under way, which may have read the player before it.
     private var readAgain = false
+    private var burst = NoticeBurst()
     /// True while polling; a stopped monitor's last track may be stale.
     var isRunning: Bool { timer != nil }
     /// When polling started; nil while stopped.
@@ -426,6 +427,11 @@ final class NowPlayingMonitor {
         schedule()
         notices.posted = { [weak self] in
             guard let self else { return }
+            let shown = self.onScreen ? self.track?.isPlaying : nil
+            if self.burst.notice(shownPlaying: shown, at: ProcessInfo.processInfo.systemUptime) {
+                DebugTrace.log("Now Playing: a player's change notice; reading every 0.1 s until its play state changes")
+                self.retime()
+            }
             if self.refreshing { self.readAgain = true } else { self.refresh() }
         }
         for name in Self.changeNotices {
@@ -442,6 +448,7 @@ final class NowPlayingMonitor {
     func stopWatching() {
         noticeCenter.removeObserver(notices)
         readAgain = false
+        burst = NoticeBurst()
         timer?.invalidate()
         timer = nil
         startedAt = nil
@@ -450,13 +457,14 @@ final class NowPlayingMonitor {
     }
 
     private func schedule() {
-        let interval = Self.pollInterval(onScreen: onScreen, playerRuns: track != nil)
+        let interval = Self.pollInterval(onScreen: onScreen, playerRuns: track != nil, bursting: burst.running)
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.refresh() }
     }
 
     /// Main thread. Restarts a running poll whose interval no longer fits.
     private func retime() {
-        guard let timer, timer.timeInterval != Self.pollInterval(onScreen: onScreen, playerRuns: track != nil)
+        guard let timer,
+              timer.timeInterval != Self.pollInterval(onScreen: onScreen, playerRuns: track != nil, bursting: burst.running)
         else { return }
         timer.invalidate()
         schedule()
@@ -557,6 +565,7 @@ final class NowPlayingMonitor {
                 }
                 self.played.note(shown: shown, last: last, dropped: self.emptyReadings.dropped != nil)
                 self.publish(shown, reading: true)
+                if self.burst.read(playing: next?.isPlaying, at: ProcessInfo.processInfo.systemUptime) { self.retime() }
                 if self.isRunning { self.onReading?(startedAt) }
                 if self.readAgain {
                     self.readAgain = false
@@ -779,6 +788,32 @@ final class NowPlayingMonitor {
 private final class ChangeNotices: NSObject {
     var posted: () -> Void = {}
     @objc func post(_ notice: Notification) { posted() }
+}
+
+/// A player can post its change notice before its own reading changes
+/// (Spotify reads paused 329-395 ms after F8), so the notice starts a run of
+/// quick readings until the play state shown before it changes, 2 s at most.
+struct NoticeBurst {
+    static let length: TimeInterval = 2
+    private var before: Bool?
+    private var since: TimeInterval = 0
+    var running: Bool { before != nil }
+
+    /// `shownPlaying`: the shown track's play state, nil while no card or
+    /// panel shows one. True when a burst starts; a running one isn't stretched.
+    mutating func notice(shownPlaying: Bool?, at now: TimeInterval) -> Bool {
+        guard !running, let shownPlaying else { return false }
+        before = shownPlaying
+        since = now
+        return true
+    }
+
+    /// True when this reading ends the burst.
+    mutating func read(playing: Bool?, at now: TimeInterval) -> Bool {
+        guard let before, playing != before || now - since >= Self.length else { return false }
+        self.before = nil
+        return true
+    }
 }
 
 /// Whether Now Playing reads a player (S336). Until a player is known to be
