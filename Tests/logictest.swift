@@ -19101,6 +19101,46 @@ do {
           "art cache: past \(ArtCache<String>.limit) entries the cache starts over")
 }
 
+// MARK: Apple Music's next covers are loaded ahead (ArtAhead in NowPlaying.swift)
+// covers: S462
+do {
+    check(ArtAhead.positions(after: 3, of: 10, repeatMode: .off) == [4, 5, 6, 7]
+            && ArtAhead.positions(after: 8, of: 10, repeatMode: .one) == [9, 10]
+            && ArtAhead.positions(after: 10, of: 10, repeatMode: nil).isEmpty,
+          "art ahead: the next four songs of the playlist, none past its end unless it repeats all")
+    check(ArtAhead.positions(after: 9, of: 10, repeatMode: .all) == [10, 1, 2, 3]
+            && ArtAhead.positions(after: 2, of: 3, repeatMode: .all) == [3, 1]
+            && ArtAhead.positions(after: 0, of: 10, repeatMode: .off).isEmpty,
+          "art ahead: repeat all wraps to the top, never back to the song playing; no position reads nothing")
+    check(ArtAhead.reads(bundleID: NowPlayingMonitor.music, shuffle: false)
+            && !ArtAhead.reads(bundleID: NowPlayingMonitor.music, shuffle: true)
+            && !ArtAhead.reads(bundleID: NowPlayingMonitor.music, shuffle: nil)
+            && !ArtAhead.reads(bundleID: NowPlayingMonitor.spotify, shuffle: false),
+          "art ahead: only Music with shuffle off reads ahead")
+    var aheadCache = ArtCache<String>()
+    aheadCache.store("shown", track: "com.apple.Music|Now|LP", address: nil)
+    aheadCache.store("web", track: "com.spotify.client|Now|LP", address: "https://i.scdn.co/image/x")
+    check(ArtAhead.cached(aheadCache, bundleID: NowPlayingMonitor.music) == ["Now|LP"],
+          "art ahead: Music's songs already in the cache are skipped")
+    ArtAhead.warm(&aheadCache, bundleID: NowPlayingMonitor.music, songs: [("Next", "LP", "next")])
+    check(aheadCache.image(track: "com.apple.Music|Next|LP", address: nil) == "next"
+            && aheadCache.image(track: "com.apple.Music|Now|LP", address: nil) == "shown",
+          "art ahead: a cover read ahead is found by its song on the change")
+    var aheadFull = ArtCache<String>()
+    for n in 1..<ArtCache<String>.limit { aheadFull.store("c\(n)", track: "com.apple.Music|t\(n)|LP", address: nil) }
+    ArtAhead.warm(&aheadFull, bundleID: NowPlayingMonitor.music, songs: [("A", "LP", "a"), ("B", "LP", "b"), ("C", "LP", "c")])
+    check(aheadFull.count == ArtCache<String>.limit + 1 && aheadFull.image(track: "com.apple.Music|t1|LP", address: nil) == "c1"
+            && aheadFull.image(track: "com.apple.Music|B|LP", address: nil) == "b"
+            && aheadFull.image(track: "com.apple.Music|C|LP", address: nil) == nil,
+          "art ahead: warming stops before a store would start the cache over, so the covers in it stay")
+    check(ArtAhead.step(code: nil, commandsQueued: 0) == .next
+            && ArtAhead.step(code: nil, commandsQueued: 1) == .stop
+            && ArtAhead.step(code: -1728, commandsQueued: 0) == .stop
+            && ArtAhead.step(code: -1712, commandsQueued: 0) == .timedOut
+            && ArtAhead.step(code: -1712, commandsQueued: 2) == .timedOut,
+          "art ahead: the next cover is read only while no command waits; an error ends it and a timeout is told apart")
+}
+
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)
 do {
     check(DockIcon.shows(windows: 1, hidesWhenClosed: true) && DockIcon.shows(windows: 3, hidesWhenClosed: true)

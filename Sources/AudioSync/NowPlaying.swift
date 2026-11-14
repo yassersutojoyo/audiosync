@@ -412,6 +412,10 @@ final class NowPlayingMonitor {
     // Scripts queue only.
     private let scripts = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.nowplaying")
     private var artworkCache = ArtCache<NSImage>()      // "bundleID|title|album" or cover URL → image
+    private var aheadOf: String?                         // the song whose next covers were read
+    private var lastCode: Int?                           // the last script's error number, nil when it ran
+    private let commandLock = NSLock()
+    private var commandsQueued = 0                       // under commandLock: commands not yet started
     private var denied: Set<String> = []                 // players refusing our Apple Events
     private var modeTerms: [String: Bool] = [:]          // whether a player's mode script compiles
     private lazy var consent: AutomationConsent = {
@@ -495,8 +499,14 @@ final class NowPlayingMonitor {
     func send(_ command: Command) {
         guard let bundleID = controlledBundleID else { return }
         let verb = Self.verb(command, bundleID: bundleID)
+        commandLock.lock()
+        commandsQueued += 1
+        commandLock.unlock()
         scripts.async { [weak self] in
             guard let self else { return }
+            self.commandLock.lock()
+            self.commandsQueued -= 1
+            self.commandLock.unlock()
             guard self.consent.mayCommand(bundleID) else {
                 DebugTrace.log("Now Playing: dropped a command to \(bundleID), which AudioSync may not control yet")
                 return
@@ -556,6 +566,7 @@ final class NowPlayingMonitor {
             if var t = next {
                 (t.artwork, t.artPending) = self.artwork(for: t)
                 next = t
+                self.scripts.async { [t] in self.readAhead(after: t) }
             }
             DispatchQueue.main.async {
                 self.refreshing = false
@@ -781,6 +792,75 @@ final class NowPlayingMonitor {
         return (nil, false)
     }
 
+    /// Finds where `t` sits in Music's playlist, once per song, then reads the next covers (S462).
+    private func readAhead(after t: Track) {
+        let key = "\(t.bundleID)|\(t.title)|\(t.album)"
+        guard ArtAhead.reads(bundleID: t.bundleID, shuffle: t.shuffle), key != aheadOf else { return }
+        aheadOf = key
+        let sep = "\u{1F}"
+        let place = """
+            with timeout of 2 seconds
+                if application id "\(t.bundleID)" is running then
+                    tell application id "\(t.bundleID)" to return ((index of current track) as string) & "\(sep)" & ((count of tracks of current playlist) as string)
+                end if
+            end timeout
+            """
+        let parts = run(target: t.bundleID, place)?.stringValue?.components(separatedBy: sep) ?? []
+        guard aheadGoesOn(t), parts.count == 2, let current = Int(parts[0]), let total = Int(parts[1]) else { return }
+        let positions = ArtAhead.positions(after: current, of: total, repeatMode: t.repeatMode)
+        if !positions.isEmpty { scripts.async { self.readCover(after: t, key: key, positions: positions[...]) } }
+    }
+
+    /// One cover per turn of the scripts queue, so a command waits behind one read at most.
+    private func readCover(after t: Track, key: String, positions: ArraySlice<Int>) {
+        guard key == aheadOf, let position = positions.first,
+              artworkCache.count <= type(of: artworkCache).limit else { return }
+        let skip = ArtAhead.cached(artworkCache, bundleID: t.bundleID).map {
+            "\"" + $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        }
+        let cover = """
+            with timeout of 2 seconds
+                if application id "\(t.bundleID)" is not running then return {}
+                tell application id "\(t.bundleID)"
+                    set s to track \(position) of current playlist
+                    set n to name of s
+                    set a to album of s
+                    considering case
+                        if (n & "|" & a) is in {\(skip.joined(separator: ", "))} then return {}
+                    end considering
+                    try
+                        return {n, a, raw data of artwork 1 of s}
+                    on error number e
+                        if e is -1712 then error number e
+                    end try
+                    return {}
+                end tell
+            end timeout
+            """
+        if let song = run(target: t.bundleID, cover), song.numberOfItems == 3,
+           let title = song.atIndex(1)?.stringValue, let album = song.atIndex(2)?.stringValue,
+           let data = song.atIndex(3)?.data, let image = NSImage(data: data) {
+            ArtAhead.warm(&artworkCache, bundleID: t.bundleID, songs: [(title, album, image)])
+        }
+        if aheadGoesOn(t), positions.count > 1 {
+            scripts.async { self.readCover(after: t, key: key, positions: positions.dropFirst()) }
+        }
+    }
+
+    /// Scripts queue, right after a read-ahead script: whether the next one may run.
+    private func aheadGoesOn(_ t: Track) -> Bool {
+        commandLock.lock()
+        let queued = commandsQueued
+        commandLock.unlock()
+        switch ArtAhead.step(code: lastCode, commandsQueued: queued) {
+        case .next: return true
+        case .stop: return false
+        case .timedOut:
+            DebugTrace.log("Now Playing: \(t.appName) took over 2 s on the read-ahead, so the next covers are not read")
+            return false
+        }
+    }
+
     /// Runs `source`, which talks to the player `target`, and reports when
     /// macOS starts or stops refusing AudioSync's Apple Events to it.
     /// `command`: a button press, whose timeout is a real failure worth logging.
@@ -792,6 +872,7 @@ final class NowPlayingMonitor {
             DebugTrace.log(Self.scriptErrorLine(target: target, code: code, error: "\(error)"))
         }
         consent.noted(target, code: error == nil ? 0 : code ?? -1)
+        lastCode = error == nil ? nil : code ?? -1
         return error == nil ? result : nil
     }
 
@@ -817,6 +898,7 @@ struct ArtCache<Image> {
     static var limit: Int { 32 }
     private var images: [String: Image] = [:]
     var count: Int { images.count }
+    var keys: [String] { Array(images.keys) }
 
     func image(track: String, address: String?) -> Image? {
         images[track] ?? address.flatMap { images[$0] }
@@ -826,6 +908,46 @@ struct ArtCache<Image> {
         if images.count > Self.limit { images.removeAll() }
         images[track] = image
         if let address { images[address] = image }
+    }
+}
+
+/// Apple Music's next songs in its playlist, whose covers are read once per
+/// song change so Next shows its cover at once (S462).
+enum ArtAhead {
+    static let count = 4
+
+    /// With shuffle on or unknown, the playlist's order is not the playing order.
+    static func reads(bundleID: String, shuffle: Bool?) -> Bool {
+        bundleID == NowPlayingMonitor.music && shuffle == false
+    }
+
+    /// The 1-based playlist positions after `current`; only repeat all goes past the end.
+    static func positions(after current: Int, of total: Int, repeatMode: NowPlayingMonitor.RepeatMode?) -> [Int] {
+        guard current >= 1, current <= total else { return [] }
+        let steps = min(count, repeatMode == .all ? total - 1 : total - current)
+        return steps > 0 ? (1...steps).map { (current + $0 - 1) % total + 1 } : []
+    }
+
+    /// "title|album" of the player's songs already cached, which the read skips.
+    static func cached<Image>(_ cache: ArtCache<Image>, bundleID: String) -> [String] {
+        let prefix = bundleID + "|"
+        return cache.keys.filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+    }
+
+    /// Stops before a store would start the cache over, which would drop the covers it warmed.
+    static func warm<Image>(_ cache: inout ArtCache<Image>, bundleID: String,
+                            songs: [(title: String, album: String, image: Image)]) {
+        for song in songs where cache.count <= ArtCache<Image>.limit {
+            cache.store(song.image, track: "\(bundleID)|\(song.title)|\(song.album)", address: nil)
+        }
+    }
+
+    enum Step: Equatable { case next, stop, timedOut }
+
+    /// After one read: a command waiting behind it or any error ends the song's read-ahead.
+    static func step(code: Int?, commandsQueued: Int) -> Step {
+        if code == -1712 { return .timedOut }
+        return code == nil && commandsQueued == 0 ? .next : .stop
     }
 }
 
