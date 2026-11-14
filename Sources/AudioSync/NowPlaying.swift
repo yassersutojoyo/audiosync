@@ -587,7 +587,10 @@ final class NowPlayingMonitor {
     /// Gets the player's name. `mayPrompt`: waits up to `AutomationConsent.sendTimeout` for the user to answer
     /// macOS's prompt; otherwise macOS answers -1744 instead of prompting.
     private static func sendConsentEvent(_ bundleID: String, mayPrompt: Bool) -> Int {
-        let target = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+        // Spotify 1.3.9 leaves an event addressed by bundle ID unanswered and answers the same event addressed by pid.
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first(where: { !$0.isTerminated })
+        else { return -600 }
+        let target = NSAppleEventDescriptor(processIdentifier: app.processIdentifier)
         let event = NSAppleEventDescriptor(eventClass: AEEventClass(kAECoreSuite), eventID: AEEventID(kAEGetData),
                                            targetDescriptor: target, returnID: AEReturnID(kAutoGenerateReturnID),
                                            transactionID: AETransactionID(kAnyTransactionID))
@@ -824,6 +827,7 @@ final class AutomationConsent {
     }
 
     /// Any reply but a refusal proves the event got through; these never reached the player.
+    /// Spotify has no name property and replies -1728, which still counts as allowed.
     static func verdict(code: Int) -> Verdict {
         switch code {
         case NowPlayingMonitor.notPermitted: return .denied

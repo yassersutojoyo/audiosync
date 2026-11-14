@@ -2596,6 +2596,15 @@ do {
           "\(h.quietCalls(consentSpotify)) \(h.verdicts)")
 }
 do {
+    // 2026-11-14 on the Mac: Spotify 1.3.9 left the event addressed by bundle ID unanswered and answered it by pid in 0.03 s.
+    let consentSendSource = ((try? String(contentsOfFile: "Sources/AudioSync/NowPlaying.swift", encoding: .utf8)) ?? "")
+        .components(separatedBy: "func sendConsentEvent").dropFirst().first?
+        .components(separatedBy: "private func query").first ?? ""
+    check(consentSendSource.contains("NSAppleEventDescriptor(processIdentifier:")
+            && !consentSendSource.contains("NSAppleEventDescriptor(bundleIdentifier:"),
+          "EC14 automation consent: the consent event addresses the player's running process by pid, not by bundle ID")
+}
+do {
     // Allowed, then `tccutil reset`: the next 2 s reading times out, so the long send goes out instead of more readings.
     let h = ConsentHarness()
     _ = h.step(consentSpotify)
