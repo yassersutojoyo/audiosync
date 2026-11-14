@@ -37,15 +37,19 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a click anywhere on the menu bar panel's Presets row opens its menu.
 - On the Mac, the master volume row matches the rows around it, in the main window and the menu bar panel: the speaker icon sits in the other rows' icon spot, the slider is drawn to match the app, and the number lines up with the chevrons.
 - On Windows and Linux, switches, sliders and scroll bars look and work like the Mac's: clicking a switch's label flips it, the arrow keys, Page Up, Page Down, Home and End move a slider, and scroll bars show only while you scroll or point at the edge. The text uses the Mac's text sizes.
-- On Windows and Linux, the master volume icon shows three waves, the ones above the level dimmed, and a slashed speaker when muted.
 - On the Mac, the equalizer's Reset button, Add by Address and the Web Remote settings use the same buttons and fields as the rest of the app, with the brand color around a focused field. Forget All Remote Devices is red.
 - On Windows and Linux, the speaker list's note, Looking for speakers included, is set in smaller text with a little more room around it, as in the Mac window.
 - On Windows and Linux, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, as on the Mac, and the Presets rows keep naming the preset you used last until you delete it.
 - On the Mac, the line between zones runs from the zone name to its options button and hides beside the zone under the pointer, whose highlight sits a little inside the card.
-- On Windows and Linux, the master volume row has the Mac's look: the two-wave speaker, the drawn slider and the number on the right edge, in the window and the tray panel.
+- On Windows and Linux, the master volume row has the Mac's look: the speaker, the drawn slider and the number on the right edge, in the window and the tray panel.
 - On Windows and Linux, Next keeps the old song and cover up while the new cover loads, as on the Mac.
 - On Windows and Linux, a notice fades in as its room opens, as on the Mac.
 - On the Mac, when a player says it played or paused, Now Playing shows the change sooner still.
+- On the Mac, Windows and Linux, the master volume speaker shows one, two or three waves as the level goes up.
+- On the Mac, the next Spotify song from the same album shows its cover at once.
+- On the Mac, with shuffle off, Apple Music's next few playlist covers load ahead, so Next shows the cover at once.
+- On the Mac, Next eases the old cover, title and artist out while the next cover loads, instead of holding them still. A cover that comes late fades in.
+- On Windows and Linux, speaker and zone rows are spaced like the Mac's, and small controls in a row keep a 24 px click area.
 
 ### Fixed
 
@@ -58,6 +62,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the strands under the cover art move from the moment you pause, instead of lying flat first.
 - On the Mac, switching streaming on or off no longer freezes the app while the speakers start or stop.
 - On Windows and Linux, folding a zone no longer shakes the bottom edge of the tray panel.
+- On the Mac, turning streaming on no longer holds up the app while the capture opens, after a wake too.
 
 ## [0.9.2] - 2026-11-08
 
