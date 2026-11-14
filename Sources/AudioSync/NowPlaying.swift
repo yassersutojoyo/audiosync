@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 
 /// Track info and transport control for scriptable players (Spotify, Music).
 ///
@@ -764,7 +765,7 @@ final class NowPlayingMonitor {
                     return (cached, false)
                 }
                 let fetch = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-                    guard let self, let data, let image = NSImage(data: data) else { return }
+                    guard let self, let data, let image = Self.cover(data) else { return }
                     self.scripts.async { self.artworkCache.store(image, track: key, address: s) }
                     DispatchQueue.main.async {
                         guard var current = self.track, current.bundleID == t.bundleID,
@@ -785,11 +786,26 @@ final class NowPlayingMonitor {
                 end if
             end timeout
             """
-        if let data = run(target: t.bundleID, script)?.data, let image = NSImage(data: data) {
+        if let data = run(target: t.bundleID, script)?.data, let image = Self.cover(data) {
             artworkCache.store(image, track: key, address: nil)
             return (image, false)
         }
         return (nil, false)
+    }
+
+    /// `data`'s picture, decoded now: an image made from data decodes on its first draw, which on a
+    /// song change lands on the main thread in the frame the sweep starts.
+    static func cover(_ data: Data) -> NSImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              // At most 1000 px a side keeps the cache's bitmaps near 4 MB each; receivers get the same image.
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceShouldCacheImmediately: true,
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 1000,
+              ] as CFDictionary)
+        else { return nil }
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
     /// Finds where `t` sits in Music's playlist, once per song, then reads the next covers (S462).
@@ -839,7 +855,7 @@ final class NowPlayingMonitor {
             """
         if let song = run(target: t.bundleID, cover), song.numberOfItems == 3,
            let title = song.atIndex(1)?.stringValue, let album = song.atIndex(2)?.stringValue,
-           let data = song.atIndex(3)?.data, let image = NSImage(data: data) {
+           let data = song.atIndex(3)?.data, let image = Self.cover(data) {
             ArtAhead.warm(&artworkCache, bundleID: t.bundleID, songs: [(title, album, image)])
         }
         if aheadGoesOn(t), positions.count > 1 {

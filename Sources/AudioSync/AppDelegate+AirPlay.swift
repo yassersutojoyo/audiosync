@@ -344,10 +344,19 @@ extension AppDelegate: TrackInfoHost {
         }
         artHeldSince = nil
         guard appModel.nowPlaying != track else { return }
+        let timesChange = DebugTrace.enabled && appModel.nowPlaying?.title != track?.title
+        let began = DispatchTime.now().uptimeNanoseconds
         if TrackWipe.coverArrived(appModel.nowPlaying, track) {
             withAnimation(.easeInOut(duration: TrackWipe.coverFade)) { appModel.nowPlaying = track }
         } else {
             appModel.nowPlaying = track
+        }
+        if timesChange {
+            // The next turn of the main queue normally comes after the window's update for this change.
+            DispatchQueue.main.async {
+                let ms = Double(DispatchTime.now().uptimeNanoseconds - began) / 1_000_000
+                DebugTrace.log(String(format: "Now Playing: the song change held the main thread %.1f ms", ms))
+            }
         }
     }
 

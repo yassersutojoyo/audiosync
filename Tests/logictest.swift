@@ -19100,6 +19100,15 @@ do {
     check(coverCache.count <= ArtCache<String>.limit + 2
             && coverCache.image(track: "spotify|One|B", address: albumCover) == nil,
           "art cache: past \(ArtCache<String>.limit) entries the cache starts over")
+    let coverSource = (try? String(contentsOfFile: "Sources/AudioSync/NowPlaying.swift", encoding: .utf8)) ?? ""
+    check(!coverSource.isEmpty && !coverSource.contains("NSImage(data:"),
+          "art cache: every cover is decoded where it is read, off the main thread, so its first draw on a song change decodes nothing")
+    let coverPixels = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 3, bitsPerSample: 8, samplesPerPixel: 4,
+                                       hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+    let coverPNG = coverPixels?.representation(using: .png, properties: [:]) ?? Data()
+    check(NowPlayingMonitor.cover(coverPNG)?.size == NSSize(width: 2, height: 3)
+            && NowPlayingMonitor.cover(Data("not a picture".utf8)) == nil,
+          "art cache: a cover's bytes give a picture of their own size, and bytes that are no picture give none")
 }
 
 // MARK: Apple Music's next covers are loaded ahead (ArtAhead in NowPlaying.swift)
