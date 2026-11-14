@@ -3803,9 +3803,13 @@ export component ZoneHeader inherits Rectangle {
         }
     }
 
-    border-radius: Fluent.radius-control;
-    background: hover.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
+    hover-fill := Rectangle {
+        x: 4px;
+        width: parent.width - 8px;
+        border-radius: Fluent.radius-control;
+        background: hover.has-hover ? Fluent.hover : transparent;
+        animate background { duration: Fluent.fast; }
+    }
 
     hover := TouchArea {
         clicked => {

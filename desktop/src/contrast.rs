@@ -1829,9 +1829,22 @@ fn the_preset_and_equalizer_rows_name_their_choice_on_a_second_line() {
 fn a_zone_header_fills_only_on_hover() {
     let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
     assert!(
-        header.contains("    background: hover.has-hover ? Fluent.hover : transparent;"),
+        header.contains("        background: hover.has-hover ? Fluent.hover : transparent;"),
         "the header's fill follows only the hover"
     );
+}
+
+/// A zone header's hover fill stops 4 px inside each edge, as the Mac's
+/// highlight inset does.
+#[test]
+fn a_zone_headers_hover_fill_stops_4_px_inside_each_edge() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    let fill = header
+        .find("hover-fill := Rectangle {")
+        .map(|at| &header[at..at + header[at..].find("    }\n").expect("it ends")])
+        .expect("a hover fill of its own");
+    assert!(fill.contains("x: 4px;"), "{fill}");
+    assert!(fill.contains("width: parent.width - 8px;"), "{fill}");
 }
 
 /// A zone header works like a speaker row's box: only its badge switches the
