@@ -1,10 +1,10 @@
 // View > Web Remote…: the setting, and while it is on, the address with its QR
 // code, the pairing code and the paired devices. Closing it keeps the remote on.
 
-import { Button, ScrollView } from "std-widgets.slint";
+import { Button } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Announcer, Fluent, SecondaryText, SectionTitle, TextField, ToggleSwitch } from "widgets.slint";
+import { Announcer, Fluent, OverlayScrollView, SecondaryText, SectionTitle, TextField, ToggleSwitch } from "widgets.slint";
 
 // A label and its value, read by Narrator as one line.
 component AddressLine inherits VerticalLayout {
@@ -152,7 +152,7 @@ export component RemoteWindow inherits Window {
         }
 
         VerticalLayout {
-            scroll := ScrollView {
+            scroll := OverlayScrollView {
                 vertical-stretch: 1;
 
                 VerticalLayout {
@@ -375,7 +375,7 @@ export component RemoteWindow inherits Window {
                             if root.code != "" && !root.locked: Text {
                                 text: root.code;
                                 color: Tokens.text;
-                                font-size: Tokens.font-size-title;
+                                font-size: Tokens.font-size-pairing-code;
                                 font-weight: 600;
                                 letter-spacing: 4px;
                                 accessible-label: Strings.remote-code-label(root.code-spoken);

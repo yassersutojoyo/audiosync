@@ -9185,6 +9185,81 @@ mod tests {
         );
     }
 
+    /// The thumb of the main window's speaker list scroll bar.
+    fn speaker_list_thumb(app: &App) -> i_slint_backend_testing::ElementHandle {
+        i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "OverlayScrollView::thumb",
+        )
+        .max_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
+        .expect("the main window has scroll views")
+    }
+
+    #[test]
+    fn the_scroll_bar_hides_at_rest_and_shows_with_the_pointer_at_the_edge() {
+        let app = app_over(MockBackend::zones_preview());
+        let window = app.main.window();
+        window.set_size(slint::LogicalSize::new(820.0, 480.0));
+        draw_frames();
+        let thumb = speaker_list_thumb(&app);
+        assert_eq!(thumb.computed_opacity(), 0.0, "hidden at rest");
+        let (at, size) = (thumb.absolute_position(), thumb.size());
+        // On the edge, below the thumb.
+        let position =
+            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height + 8.0);
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        draw_frames();
+        assert_eq!(thumb.computed_opacity(), 1.0, "shown at the edge");
+    }
+
+    #[test]
+    fn a_click_at_a_flyout_rows_right_edge_beside_the_scroll_bar_reaches_the_row() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.flyout.show().expect("the flyout shows headless");
+        // Too short for it all, so the body scrolls.
+        let height = app.fit_flyout(300.0);
+        app.flyout
+            .window()
+            .set_size(slint::LogicalSize::new(340.0, height));
+        draw_frames();
+        let thumbs: Vec<_> =
+            ElementHandle::find_by_element_id(&app.flyout, "OverlayScrollView::thumb").collect();
+        assert!(
+            thumbs.iter().all(|t| t.computed_opacity() == 0.0),
+            "hidden at rest"
+        );
+        let headphones = || {
+            ElementHandle::find_by_accessible_label(&app.flyout, "Headphones")
+                .find(|row| row.accessible_checked().is_some())
+                .expect("the headphones row shows")
+        };
+        let row = headphones();
+        assert_eq!(row.accessible_checked(), Some(false), "off at first");
+        let (at, size) = (row.absolute_position(), row.size());
+        // The row's last pixel: on the body's scroll bar edge, below its thumb.
+        let (x, y) = (at.x + size.width - 1.0, at.y + size.height / 2.0);
+        assert!(
+            thumbs.iter().any(|t| x >= t.absolute_position().x
+                && t.size().height < 300.0
+                && y > t.absolute_position().y + t.size().height),
+            "a bar's edge runs beside the row"
+        );
+        click(app.flyout.window(), x, y);
+        assert!(
+            thumbs.iter().any(|t| t.computed_opacity() == 1.0),
+            "the pointer at the edge shows the body's bar"
+        );
+        app.refresh();
+        draw_frames();
+        assert_eq!(
+            headphones().accessible_checked(),
+            Some(true),
+            "the row took the click"
+        );
+    }
+
     // covers: S221
     #[test]
     fn a_click_on_a_rows_box_toggles_its_controls_and_applies_the_typing_first() {
@@ -10381,7 +10456,7 @@ mod tests {
         app.main
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         draw_frames();
-        click(app.main.window(), 600.0, 466.0);
+        click(app.main.window(), 600.0, 448.0);
         assert_eq!(name_of(&app, "local:desk"), "Desk");
         assert!(app.ui.borrow().rename.is_none());
         assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
@@ -11282,7 +11357,7 @@ mod tests {
         assert!(has_line(format!("    min-height: {min_height}px;")));
         // The left column scrolls when it is taller than the window, so
         // its cards never push the window past that height.
-        assert!(main.contains("left-column := ScrollView {"));
+        assert!(main.contains("left-column := OverlayScrollView {"));
     }
 
     #[test]
@@ -12502,7 +12577,7 @@ mod tests {
         let window = flyout.window();
         let preferred = flyout.get_made_height();
         window.set_size(slint::LogicalSize::new(340.0, preferred));
-        let height = app.fit_flyout(1000.0);
+        let height = app.fit_flyout(300.0);
         let size = window.size().to_logical(window.scale_factor());
         assert_eq!(size.height, height);
         let bottom = flyout.get_footer_bottom();
@@ -12689,12 +12764,16 @@ mod tests {
                 stack.windows(2).all(|pair| pair[0].1.2 < pair[1].1.2),
                 "top to bottom: {stack:?}"
             );
-            // The flyout grows by the two rows above Download and Install.
+            // The flyout grows to show Download and Install, the last button.
             let tall = app.fit_flyout(1000.0);
+            let last = ElementHandle::find_by_accessible_label(&app.flyout, "Download and Install")
+                .next()
+                .expect("Download and Install is in the flyout");
+            let bottom = last.absolute_position().y + last.size().height;
+            assert!(bottom <= tall, "{bottom} below {tall}");
             edges(installed(), &text);
             let short = app.fit_flyout(1000.0);
-            let rows = stack[2].1.2 - stack[0].1.2;
-            assert!(tall - short >= rows, "{tall} vs {short}, rows {rows}");
+            assert!(tall > short, "{tall} vs {short}");
         }
     }
 

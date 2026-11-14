@@ -6,7 +6,7 @@
 // focus ring while it has keyboard focus, acts on Space and Enter, and
 // carries an accessible role, label and (where it has one) value.
 
-import { Button, ComboBox, Slider, Switch } from "std-widgets.slint";
+import { Button, ComboBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
@@ -629,7 +629,7 @@ export component SectionTitle inherits HorizontalLayout {
 
     Text {
         text: root.text;
-        font-size: Tokens.font-size-body;
+        font-size: Tokens.font-size-subheadline;
         font-weight: 600;
         color: Tokens.text;
         accessible-role: none;
@@ -646,7 +646,7 @@ export component CardTitle inherits HorizontalLayout {
 
     Text {
         text: root.text.to-uppercase();
-        font-size: Tokens.font-size-caption;
+        font-size: Tokens.font-size-subheadline;
         font-weight: 600;
         color: Tokens.secondary-text;
         accessible-role: none;
@@ -1394,15 +1394,6 @@ export component BrandMark inherits Rectangle {
     }
 }
 
-// The on/off switch for streaming and the equalizer. Narrator hears a toggle
-// button: Slint 1.18 tells Windows that only some roles (button, check box,
-// slider and the like) take keyboard focus, so the standard `switch` role
-// read as not focusable although Tab reaches it. The look, Space and the
-// focus ring are the standard Switch's.
-export component ToggleSwitch inherits Switch {
-    accessible-role: button;
-}
-
 // The streaming switch, drawn as the Mac's (power_switch in
 // src/window_rules.rs): a 38 x 22 track, teal while on; the knob is 18 px on
 // and 21 px off, so off it meets the track's ring. Narrator hears a toggle
@@ -1475,6 +1466,60 @@ export component PowerSwitch inherits Rectangle {
     }
 }
 
+// A labeled on/off switch, as the Mac's switch toggles: the label, then the
+// streaming switch's track. Narrator hears a toggle button: Slint 1.18 tells
+// Windows that only some roles (button, check box, slider and the like) take
+// keyboard focus, so the `switch` role read as not focusable although Tab
+// reaches it.
+export component ToggleSwitch {
+    in-out property <bool> checked <=> track.checked;
+    in property <string> text;
+    out property <bool> has-focus: track.has-focus;
+    callback toggled();
+
+    forward-focus: track;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.checked = !root.checked;
+        root.toggled();
+    }
+
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled();
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 8px;
+
+        Text {
+            text: root.text;
+            color: Tokens.text;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            track := PowerSwitch {
+                text: root.text;
+                accessible-role: none;
+                toggled => {
+                    root.toggled();
+                }
+            }
+        }
+    }
+}
+
 // An input device's channel pair choice. It shows `chosen` again after a
 // pick, so it only moves once the backend took the pick.
 export component PairPicker inherits ComboBox {
@@ -1488,6 +1533,228 @@ export component PairPicker inherits ComboBox {
     selected => {
         root.picked(self.current-index);
         self.current-index = root.chosen;
+    }
+}
+
+// The Mac's small slider: a 4 px track filled in the text color up to a 16 px
+// white knob. Arrows move it by `step`, Page Up and Page Down by a tenth of
+// its range, Home and End to its ends; `released` ends each drag or key press.
+export component LevelSlider inherits Rectangle {
+    in property <float> minimum: 0;
+    in property <float> maximum: 100;
+    in-out property <float> value;
+    in property <float> step: 1;
+    in property <bool> enabled: true;
+    in property <Orientation> orientation: Orientation.horizontal;
+    out property <bool> has-focus: focus.has-focus;
+    callback changed(float);
+    callback released(float);
+    property <bool> vertical: root.orientation == Orientation.vertical;
+    property <length> knob: 16px;
+    property <length> span: (root.vertical ? root.height : root.width) - root.knob;
+    property <float> ratio: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
+
+    min-width: root.vertical ? root.knob : 48px;
+    min-height: root.vertical ? 48px : root.knob;
+    preferred-height: 22px;
+    forward-focus: focus;
+    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+    accessible-role: slider;
+    accessible-enabled: root.enabled;
+    accessible-value-minimum: root.minimum;
+    accessible-value-maximum: root.maximum;
+    accessible-value-step: root.step;
+    accessible-action-increment => {
+        root.move-to(root.value + root.step);
+        root.released(root.value);
+    }
+    accessible-action-decrement => {
+        root.move-to(root.value - root.step);
+        root.released(root.value);
+    }
+
+    function move-to(value: float) {
+        let next = max(root.minimum, min(root.maximum, value));
+        if next != root.value {
+            root.value = next;
+            root.changed(next);
+        }
+    }
+
+    function value-at(x: length, y: length) -> float {
+        let along = root.vertical ? root.height - root.knob / 2 - y : x - root.knob / 2;
+        root.minimum + (root.span > 0 ? max(0, min(1, along / root.span)) : 0) * (root.maximum - root.minimum)
+    }
+
+    function moves(key: string) -> bool {
+        key == Key.RightArrow || key == Key.UpArrow || key == Key.LeftArrow || key == Key.DownArrow || key == Key.PageUp || key == Key.PageDown || key == Key.Home || key == Key.End
+    }
+
+    focus := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if !root.enabled || event.modifiers.control || event.modifiers.alt || event.modifiers.shift || event.modifiers.meta || !root.moves(event.text) {
+                return reject;
+            }
+            let page = max(root.step, (root.maximum - root.minimum) / 10);
+            if event.text == Key.Home {
+                root.move-to(root.minimum);
+            } else if event.text == Key.End {
+                root.move-to(root.maximum);
+            } else if event.text == Key.PageUp || event.text == Key.PageDown {
+                root.move-to(root.value + (event.text == Key.PageUp ? page : -page));
+            } else if root.step > 0 {
+                root.move-to(root.value + (event.text == Key.RightArrow || event.text == Key.UpArrow ? root.step : -root.step));
+            }
+            accept
+        }
+        key-released(event) => {
+            if !root.moves(event.text) {
+                return reject;
+            }
+            root.released(root.value);
+            accept
+        }
+    }
+
+    Rectangle {
+        x: root.vertical ? (root.width - self.width) / 2 : root.knob / 2;
+        y: root.vertical ? root.knob / 2 : (root.height - self.height) / 2;
+        width: root.vertical ? 4px : root.span;
+        height: root.vertical ? root.span : 4px;
+        border-radius: 2px;
+        background: Tokens.text.with-alpha(0.15);
+    }
+
+    Rectangle {
+        x: root.vertical ? (root.width - self.width) / 2 : root.knob / 2;
+        y: root.vertical ? root.knob / 2 + root.span * (1 - root.ratio) : (root.height - self.height) / 2;
+        width: root.vertical ? 4px : root.span * root.ratio;
+        height: root.vertical ? root.span * root.ratio : 4px;
+        border-radius: 2px;
+        background: Tokens.text;
+    }
+
+    Rectangle {
+        width: root.knob;
+        height: root.knob;
+        x: root.vertical ? (root.width - self.width) / 2 : root.span * root.ratio;
+        y: root.vertical ? root.span * (1 - root.ratio) : (root.height - self.height) / 2;
+        border-radius: self.width / 2;
+        background: #ffffff;
+        border-width: max(0.5px, 1phx);
+        border-color: Tokens.secondary-text;
+        drop-shadow-blur: 2px;
+        drop-shadow-color: #00000040;
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        pointer-event(event) => {
+            if event.button != PointerEventButton.left {
+                return;
+            }
+            if event.kind == PointerEventKind.down {
+                focus.focus();
+                root.move-to(root.value-at(self.mouse-x, self.mouse-y));
+            } else if event.kind == PointerEventKind.up {
+                root.released(root.value);
+            }
+        }
+        moved => {
+            if self.pressed {
+                root.move-to(root.value-at(self.mouse-x, self.mouse-y));
+            }
+        }
+    }
+}
+
+// A scroll view whose bar shows only while it scrolls or the pointer is at
+// its right edge, as the Mac's overlay scroll bars do. Only the bar itself
+// takes the pointer, so clicks beside it reach the rows under it.
+export component OverlayScrollView {
+    out property <length> visible-width <=> flickable.width;
+    out property <length> visible-height <=> flickable.height;
+    in-out property <length> content-height <=> flickable.content-height;
+    in-out property <length> content-y <=> flickable.content-y;
+    // A click no row inside takes, which the window's own blank area would
+    // otherwise get.
+    callback blank-clicked();
+    property <length> overflow: flickable.content-height - flickable.height;
+    property <bool> scrolling;
+    property <bool> at-edge: hover.has-hover && hover.mouse-x >= root.width - bar.width;
+    property <bool> shown: root.overflow > 0 && (root.scrolling || root.at-edge || bar.has-hover || bar.pressed);
+    property <length> thumb-height: max(24px, root.height * root.height / max(1px, flickable.content-height));
+
+    min-height: 50px;
+    min-width: 50px;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+    preferred-height: 100%;
+    preferred-width: 100%;
+
+    changed content-y => {
+        root.scrolling = true;
+        settle.restart();
+    }
+
+    settle := Timer {
+        interval: 1s;
+        running: false;
+        triggered => {
+            root.scrolling = false;
+            self.stop();
+        }
+    }
+
+    // A parent sees the pointer before the rows inside do, so it tracks the
+    // edge without taking their clicks.
+    hover := TouchArea {
+        clicked => {
+            root.blank-clicked();
+        }
+
+        flickable := Flickable {
+            width: parent.width;
+            height: parent.height;
+
+            @children
+        }
+    }
+
+    bar := TouchArea {
+        property <length> grab-y;
+        property <length> grab-content;
+        x: root.width - self.width;
+        y: root.overflow > 0 ? (root.height - self.height) * (-flickable.content-y / root.overflow) : 0px;
+        width: 12px;
+        height: root.thumb-height;
+        enabled: root.shown;
+        pointer-event(event) => {
+            if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                self.grab-y = self.mouse-y;
+                self.grab-content = flickable.content-y;
+            }
+        }
+        moved => {
+            if self.pressed {
+                flickable.content-y = max(-root.overflow, min(0px, self.grab-content - (self.mouse-y - self.grab-y) * root.overflow / max(1px, root.height - self.height)));
+            }
+        }
+        scroll-event(event) => {
+            flickable.content-y = max(-root.overflow, min(0px, flickable.content-y + event.delta-y));
+            accept
+        }
+
+        thumb := Rectangle {
+            width: bar.has-hover || bar.pressed ? 8px : 6px;
+            x: parent.width - self.width - 2px;
+            border-radius: self.width / 2;
+            background: Tokens.text.with-alpha(0.45);
+            opacity: root.shown ? 1 : 0;
+            animate opacity { duration: Motion.on && !root.shown ? 300ms : 0ms; }
+            animate width { duration: Motion.on ? 150ms : 0ms; }
+        }
     }
 }
 
@@ -1524,32 +1791,9 @@ export component VolumeSlider inherits HorizontalLayout {
 
     out property <bool> slider-focused: slider.has-focus;
 
-    // Up and Down move it as Right and Left do, as on the Mac.
-    FocusScope {
-        focus-on-click: false;
-        focus-on-tab-navigation: false;
-        key-pressed(event) => {
-            if !root.enabled || root.step <= 0 || event.modifiers.control || event.modifiers.alt || event.modifiers.shift || event.modifiers.meta
-                || (event.text != Key.UpArrow && event.text != Key.DownArrow) {
-                return reject;
-            }
-            let value = clamp(slider.value + (event.text == Key.UpArrow ? root.step : -root.step), 0, 100);
-            if value != slider.value {
-                slider.value = value;
-                slider.changed(value);
-            }
-            accept
-        }
-        // The slider takes every key release, so its own ends only Right and Left.
-        capture-key-released(event) => {
-            if event.text == Key.UpArrow || event.text == Key.DownArrow {
-                slider.released(slider.value);
-            }
-            reject
-        }
-
+    Rectangle {
         HorizontalLayout {
-            slider := Slider {
+            slider := LevelSlider {
                 minimum: 0;
                 maximum: 100;
                 step: root.step;
@@ -1592,7 +1836,7 @@ export component VolumeSlider inherits HorizontalLayout {
         // the slider and drops below it.
         vertical-alignment: center;
         wrap: no-wrap;
-        font-size: Tokens.font-size-caption;
+        font-size: Tokens.font-size-subheadline;
     }
 }
 
@@ -2879,7 +3123,7 @@ export component SpeakerRow inherits Rectangle {
 
                                         Text {
                                             text: Strings.delay-value(root.item.delay-ms);
-                                            font-size: Tokens.font-size-caption;
+                                            font-size: Tokens.font-size-subheadline;
                                             color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
                                             vertical-alignment: center;
                                             accessible-role: none;

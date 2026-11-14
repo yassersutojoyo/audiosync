@@ -475,7 +475,7 @@ fn toggles_report_keyboard_focus_to_narrator() {
     }
     let widgets = include_str!("../ui/widgets.slint");
     let toggle = component_body(widgets, "ToggleSwitch");
-    assert!(toggle.contains("inherits Switch"));
+    assert!(toggle.contains("track := PowerSwitch"));
     assert!(toggle.contains("accessible-role: button;"));
     for name in ["SpeakerBadge", "PowerSwitch"] {
         let body = component_body(widgets, name);
