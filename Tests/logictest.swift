@@ -2584,6 +2584,18 @@ do {
           "\(undecidedStep) \(h.calls(consentSpotify)) \(h.quietCalls(consentSpotify)) \(h.verdicts)")
 }
 do {
+    // 2026-11-14 on the Mac: no reading came after the first, as when nothing shows Now Playing, and no quiet send followed.
+    let h = ConsentHarness()
+    _ = h.step(consentSpotify)
+    h.answerQuiet(consentSpotify, -1744)
+    let quietRepeatDeadline = Date().addingTimeInterval(AutomationConsent.quietEvery + 2)
+    while h.quietCalls(consentSpotify) < 2 && Date() < quietRepeatDeadline { Thread.sleep(forTimeInterval: 0.1) }
+    h.answerQuiet(consentSpotify, 0)
+    check(h.quietCalls(consentSpotify) == 2 && h.verdicts == ["Spotify allowed"],
+          "EC14 automation consent: the quiet send repeats every quietEvery while the waiting send is out, without a reading",
+          "\(h.quietCalls(consentSpotify)) \(h.verdicts)")
+}
+do {
     // Allowed, then `tccutil reset`: the next 2 s reading times out, so the long send goes out instead of more readings.
     let h = ConsentHarness()
     _ = h.step(consentSpotify)

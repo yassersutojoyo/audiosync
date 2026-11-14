@@ -804,7 +804,7 @@ final class AutomationConsent {
     private var sending: Set<String> = []
     private var prompting: Set<String> = []
     private var quietOut: Set<String> = []
-    private var quietSent: [String: Date] = [:]
+    private var quietSent: [String: TimeInterval] = [:]
 
     /// `send(app, mayPrompt, done)` must not block `queue`; it reports 0 or the Apple Event Manager's error.
     init(queue: DispatchQueue, send: @escaping (String, Bool, @escaping (Int) -> Void) -> Void) {
@@ -868,16 +868,27 @@ final class AutomationConsent {
 
     /// Only an allowed answer counts: -1744 means macOS still waits on the user, and a refusal is the waiting send's to report.
     private func sendQuietly(_ app: String) {
-        guard !quietOut.contains(app), quietSent[app].map({ Date().timeIntervalSince($0) >= Self.quietEvery }) ?? true else { return }
+        // Uptime, as `asyncAfter` counts it, so the repeat below never finds itself early.
+        let sent = ProcessInfo.processInfo.systemUptime
+        guard !quietOut.contains(app), quietSent[app].map({ sent - $0 >= Self.quietEvery }) ?? true else { return }
         quietOut.insert(app)
-        let sent = Date()
         quietSent[app] = sent
         send(app, false) { [weak self] code in
             guard let self else { return }
-            let waited = Date().timeIntervalSince(sent)
+            let waited = ProcessInfo.processInfo.systemUptime - sent
             self.queue.async {
                 self.quietOut.remove(app)
-                if Self.verdict(code: code) == .allowed { self.set(app, .allowed, code: code, waited: waited, quiet: true) }
+                DebugTrace.log(String(format: "Now Playing: the quiet send to %@ returned Apple event code %ld after %.1f s",
+                                      app, code, waited))
+                if Self.verdict(code: code) == .allowed {
+                    self.set(app, .allowed, code: code, waited: waited, quiet: true)
+                    return
+                }
+                // Readings stop while nothing shows or sends Now Playing, so the repeat can't wait for one.
+                self.queue.asyncAfter(deadline: .now() + Self.quietEvery) { [weak self] in
+                    guard let self, self.prompting.contains(app) else { return }
+                    self.sendQuietly(app)
+                }
             }
         }
     }
