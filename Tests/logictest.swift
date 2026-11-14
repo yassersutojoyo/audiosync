@@ -9091,6 +9091,10 @@ do {
           "\(PanelLayout.gaps)")
     check(PanelLayout.menuLeadingInset + PanelLayout.sourceLeading == 0,
           "menu bar panel: the source name starts on the title's and the artist's column")
+    // 14 Nov at 1x: the menu's label frame sat on the title's, but "Spotify"'s ink still started 1 pt right of it.
+    check(PanelLayout.sourceLeading == -3.5,
+          "menu bar panel: the source name's ink starts on the title's and the artist's ink",
+          "\(PanelLayout.sourceLeading)")
     check(Set(PanelLayout.trailingInk).count == 1,
           "menu bar panel: the card's chevron, the preset chevron and the volume number end on one edge",
           "\(PanelLayout.trailingInk)")

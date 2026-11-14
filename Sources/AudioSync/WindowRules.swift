@@ -922,8 +922,9 @@ enum PanelLayout {
     /// capture) and above its bottom, a speaker's circle inside its 36 pt
     /// row; the slider's knob fills its row.
     static let presetTopInset: CGFloat = 11.5, presetInset: CGFloat = 9.5, rowInset: CGFloat = 5
-    /// What a borderless menu draws left of its label and right of its chevron (14 Nov capture).
-    static let menuLeadingInset: CGFloat = 2.5, menuChevronInset: CGFloat = 6.5
+    /// What a borderless menu draws left of its label's ink and right of its chevron (14 Nov captures:
+    /// 2.5 pt to the label's frame, then its ink 1 pt right of the title's).
+    static let menuLeadingInset: CGFloat = 3.5, menuChevronInset: CGFloat = 6.5
     /// What the volume number's frame keeps right of its last digit.
     static let digitBearing: CGFloat = 1.5
     /// The now playing card's padding.
