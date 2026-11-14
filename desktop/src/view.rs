@@ -846,6 +846,8 @@ pub struct App {
     repeat_timer: Timer,
     /// Polls the backend; it stops when the app is dropped.
     poll_timer: Timer,
+    /// Shows the next song once the Now Playing card's cover hold runs out.
+    art_hold_timer: Timer,
     /// Moves a microphone calibration on while one holds the outputs.
     calibration_timer: Timer,
     /// Moves the input level meter while an input device is captured.
@@ -1208,6 +1210,7 @@ impl App {
             announcement_timer: Timer::default(),
             repeat_timer: Timer::default(),
             poll_timer: Timer::default(),
+            art_hold_timer: Timer::default(),
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
             meter_level: Cell::new(0.0),
@@ -1623,7 +1626,17 @@ impl App {
             || self.flyout.window().is_visible()
             || self.remote_listening();
         let source = self.now_playing_source.borrow().clone();
-        if !self.now_playing.borrow_mut().sync(source, shows) {
+        let changed = self.now_playing.borrow_mut().sync(source, shows);
+        if let Some(left) = self.now_playing.borrow().art_hold_left() {
+            let main = self.main.as_weak();
+            self.art_hold_timer
+                .start(TimerMode::SingleShot, left, move || {
+                    if let Some(main) = main.upgrade() {
+                        main.invoke_now_playing_read();
+                    }
+                });
+        }
+        if !changed {
             return false;
         }
         let card = self.now_playing.borrow();

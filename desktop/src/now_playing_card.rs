@@ -17,6 +17,7 @@
 #[cfg(any(windows, target_os = "linux", test))]
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::ui_model::AppState;
 
@@ -262,6 +263,23 @@ pub trait MediaControls {
     fn send(&mut self, command: Transport);
 }
 
+/// The longest the shown song stays up for the next one's cover, as the
+/// Mac's `ArtHold.limit`.
+pub const ART_HOLD: Duration = Duration::from_millis(1500);
+
+/// Whether `next` is another song from the player `shown` came from,
+/// without a cover yet while `shown` has one.
+fn waits_for_cover(shown: &CardTrack, next: &CardTrack) -> bool {
+    shown.artwork.is_some()
+        && next.artwork.is_none()
+        && shown.app_id == next.app_id
+        && (shown.title != next.title || shown.artist != next.artist)
+}
+
+fn same_song(a: &CardTrack, b: &CardTrack) -> bool {
+    a.app_id == b.app_id && a.title == b.title && a.artist == b.artist
+}
+
 /// The card's state between the windows and the sessions.
 #[derive(Default)]
 pub struct NowPlayingCard {
@@ -269,6 +287,8 @@ pub struct NowPlayingCard {
     /// What the sessions are read for; `None` while they aren't.
     following: Option<CardSource>,
     track: Option<CardTrack>,
+    /// The next song kept back while its cover loads, and since when.
+    held: Option<(CardTrack, Instant)>,
 }
 
 impl NowPlayingCard {
@@ -280,6 +300,10 @@ impl NowPlayingCard {
     /// Follows the chosen `source` while the main window `shows`, and takes
     /// the newest reading. Returns whether the card changed.
     pub fn sync(&mut self, source: Option<CardSource>, shows: bool) -> bool {
+        self.sync_at(source, shows, Instant::now())
+    }
+
+    fn sync_at(&mut self, source: Option<CardSource>, shows: bool, now: Instant) -> bool {
         let Some(controls) = self.controls.as_mut() else {
             return false;
         };
@@ -288,18 +312,40 @@ impl NowPlayingCard {
             controls.follow(following.clone());
             self.following = following;
         }
-        let mut next = self.track.clone();
+        let held = self.held.take();
+        let mut next = held
+            .as_ref()
+            .map(|(song, _)| song.clone())
+            .or(self.track.clone());
         if source.is_none() {
             next = None;
         }
         if let Some(reading) = controls.take_reading() {
             next = reading;
         }
+        if let (Some(shown), Some(song)) = (&self.track, &next)
+            && waits_for_cover(shown, song)
+        {
+            let since = held
+                .filter(|(kept, _)| same_song(kept, song))
+                .map_or(now, |(_, since)| since);
+            if now.duration_since(since) < ART_HOLD {
+                self.held = Some((song.clone(), since));
+                return false;
+            }
+        }
         if next == self.track {
             return false;
         }
         self.track = next;
         true
+    }
+
+    /// How long the shown song still waits for the next one's cover.
+    pub fn art_hold_left(&self) -> Option<Duration> {
+        self.held
+            .as_ref()
+            .map(|(_, since)| ART_HOLD.saturating_sub(since.elapsed()))
     }
 
     /// The track the card shows; `None` while the card is hidden.
@@ -486,6 +532,67 @@ mod tests {
         fake.read(Some(track("Spotify.exe", "Song", "Band", false)));
         assert!(card.sync(Some(CardSource::AnyApp), true));
         assert!(!card.track().unwrap().playing, "paused");
+    }
+
+    fn with_cover(mut track: CardTrack) -> CardTrack {
+        track.artwork = Some(CardArtwork {
+            side: 1,
+            rgba: Arc::from(vec![0u8; 4]),
+        });
+        track
+    }
+
+    /// The Mac's `ArtHold`: the shown song, cover, title and artist stay up
+    /// together while the next song from the same player has no cover yet,
+    /// then the next shows with its cover at once.
+    // covers: S459
+    #[test]
+    fn the_shown_song_stays_while_the_next_ones_cover_loads() {
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let source = || Some(CardSource::AnyApp);
+        fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
+        assert!(card.sync(source(), true));
+
+        fake.read(Some(track("Spotify.exe", "Two", "Band", true)));
+        assert!(!card.sync(source(), true), "the old song stays");
+        assert_eq!(card.track().map(|t| t.title.as_str()), Some("One"));
+
+        fake.read(Some(with_cover(track("Spotify.exe", "Two", "Band", true))));
+        assert!(card.sync(source(), true));
+        let shown = card.track().expect("the card shows");
+        assert_eq!(shown.title, "Two");
+        assert!(shown.artwork.is_some());
+
+        fake.read(Some(track("Music.exe", "Three", "Band", true)));
+        assert!(card.sync(source(), true), "another player shows at once");
+        assert_eq!(card.track().map(|t| t.title.as_str()), Some("Three"));
+    }
+
+    /// A cover still loading 1.5 s after the hold began gives way: the next
+    /// song shows without it.
+    // covers: S459
+    #[test]
+    fn a_cover_still_loading_after_1_5_s_gives_way() {
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let source = || Some(CardSource::AnyApp);
+        let start = Instant::now();
+        fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
+        assert!(card.sync_at(source(), true, start));
+        fake.read(Some(track("Spotify.exe", "Two", "Band", true)));
+        assert!(!card.sync_at(source(), true, start));
+        fake.read(Some(track("Spotify.exe", "Two", "Band", false)));
+        let almost = start + ART_HOLD - Duration::from_millis(1);
+        assert!(
+            !card.sync_at(source(), true, almost),
+            "a pause keeps the clock"
+        );
+        assert!(card.sync_at(source(), true, start + ART_HOLD));
+        let shown = card.track().expect("the card shows");
+        assert_eq!((shown.title.as_str(), shown.playing), ("Two", false));
+        assert!(shown.artwork.is_none());
+        assert_eq!(card.art_hold_left(), None);
     }
 
     #[test]
