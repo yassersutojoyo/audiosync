@@ -445,7 +445,7 @@ extension AppDelegate {
     /// Streaming off: the session stops, and AudioSync's own sender's
     /// speakers leave (`syncNativeSpeakers`); their switches stay as they are.
     func stopEngine(_ reason: SessionStop, detail: @autoclosure () -> String? = nil) {
-        if SessionStop.logs(running: engine.isRunning, interrupted: captureInterrupted) {
+        if SessionStop.logs(running: engine.isRunning || engine.isStarting, interrupted: captureInterrupted) {
             DebugTrace.log(reason.logLine(detail: detail()))
         }
         let wasRunning = engine.isRunning

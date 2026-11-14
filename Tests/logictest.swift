@@ -19736,6 +19736,19 @@ do {
             && tapOpenWindows.contains("setStreaming(!streamingShown, fromMenu: true)")
             && tapOpenWindows.contains("menuItem.title = streamingShown ?"),
           "capture start off main: the window's switch, the menu bar item and the menu show a pending start as on, so a second click turns it off")
+    // From the Mac: an on press during a stop's fades held the main thread 87 to 148 ms in the wait.
+    let fadeWaitStart = tapOpenPart(tapOpenEngine, "started: ((Error?) -> Void)? = nil) throws {")
+        .components(separatedBy: "guard let parts").first ?? ""
+    let fadeWaitAfter = fadeWaitStart.range(of: "retirement.afterSessionStop {")
+    let fadeWaitBlocking = fadeWaitStart.range(of: "finishStopping()")
+    check(fadeWaitAfter != nil && fadeWaitBlocking != nil && fadeWaitAfter!.lowerBound < fadeWaitBlocking!.lowerBound
+            && fadeWaitStart.contains("starting = true") && fadeWaitStart.contains("guard let self, self.starting"),
+          "capture start off main: a fresh start during a stop's fades doesn't wait on the main thread; it counts as pending and runs once the stop has finished, unless a stop ended it")
+    check(tapOpenStop.contains("if !retirement.stoppingSession { capture.halt() }")
+            && tapOpenPart(tapOpenEngine, "func macWillSleep() {").contains("if !retirement.stoppingSession { capture.halt() }"),
+          "capture start off main: a stop of a start still waiting for a stop's fades leaves the old capture running until those fades are done")
+    check(tapOpenPart(tapOpenAppEngine, "func stopEngine(").contains("running: engine.isRunning || engine.isStarting"),
+          "capture start off main: a stop of a pending start logs its reason")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")

@@ -69,6 +69,7 @@ final class StreamEngine {
     private(set) var isRunning = false
     /// A start waits for its capture to open off the main thread (S461).
     private var starting = false
+    private var pendingStart = 0
     var isStarting: Bool { starting }
 
     private let capture = SourceCapture()
@@ -197,9 +198,11 @@ final class StreamEngine {
     /// failure nothing is left running. While a session runs this does
     /// nothing: the host stops it first (S114). A stop still
     /// waiting for its outputs' fades finishes first, which takes at most
-    /// 500 ms (S186). An input source reads the channel pair stored as
-    /// `inputPair` (`InputChannelPair.index`). With `started`, a tap source's
-    /// capture opens off the main thread and the session runs once it is read;
+    /// 500 ms (S186); with `started`, a session's stop is not waited for on
+    /// the main thread: the start is pending until it ends (S461). An input
+    /// source reads the channel pair stored as `inputPair`
+    /// (`InputChannelPair.index`). With `started`, a tap source's capture
+    /// opens off the main thread and the session runs once it is read;
     /// `started` then reports that or the failure on the main queue, never
     /// after a stop (S461).
     func start(source: AudioSource, inputPair: Int = 0, rebuild: Bool = false,
@@ -210,6 +213,24 @@ final class StreamEngine {
         }
         if !retirement.isIdle {
             DebugTrace.log("[AudioSync] session start waits for the last outputs to fade out")
+            if let started, retirement.stoppingSession {
+                starting = true
+                pendingStart += 1
+                let ticket = pendingStart
+                retirement.afterSessionStop {
+                    DispatchQueue.main.async { [weak self] in
+                        // On, off, on inside one fade queues two; only the last may start.
+                        guard let self, self.starting, self.pendingStart == ticket else { return }
+                        self.starting = false
+                        do {
+                            try self.start(source: source, inputPair: inputPair, rebuild: rebuild, started: started)
+                        } catch {
+                            started(error)
+                        }
+                    }
+                }
+                return
+            }
             MainBlock.timed("the wait for the last outputs' fades") { finishStopping() }
         }
         guard let parts = MainBlock.timed("the engine parts' setup", {
@@ -307,7 +328,7 @@ final class StreamEngine {
         flowWatch.pause()
         if starting {   // a start still opening ends as at a stop (S461)
             starting = false
-            capture.halt()
+            if !retirement.stoppingSession { capture.halt() }
         }
     }
 
@@ -413,7 +434,8 @@ final class StreamEngine {
         guard isRunning, let parts else {
             if starting {   // a capture still opening is halted, so its tap is closed when it comes (S461)
                 starting = false
-                capture.halt()
+                // a start waiting for a stop's fades has no capture yet; the old one runs until they end
+                if !retirement.stoppingSession { capture.halt() }
             }
             if let completion { retirement.afterSessionStop(completion) }
             return
