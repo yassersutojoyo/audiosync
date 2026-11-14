@@ -19032,6 +19032,53 @@ do {
           "zone and equalizer source: a new zone and a saved curve are named in place, with no name alert")
 }
 
+// MARK: House look on the equalizer, Add by Address and Web Remote controls
+do {
+    func houseKitSource(_ file: String) -> String {
+        (try? String(contentsOfFile: "Sources/AudioSync/\(file)", encoding: .utf8)) ?? ""
+    }
+    let houseKitEqualizer = houseKitSource("EqualizerWindow.swift")
+    let houseKitView = houseKitEqualizer.components(separatedBy: "struct EqualizerView: View {").dropFirst().first?
+        .components(separatedBy: "struct VerticalSlider").first ?? ""
+    let houseKitCast = houseKitSource("CastAddressSheet.swift")
+    let houseKitRemote = houseKitSource("WebRemoteWindow.swift").components(separatedBy: "struct WebRemoteView: View {")
+        .dropFirst().first ?? ""
+    func houseKitCount(_ source: String, _ needle: String) -> Int { source.components(separatedBy: needle).count - 1 }
+    let houseKitSystem = [".bordered", ".roundedBorder", ".pickerStyle(.menu)", " Slider("]
+    check(houseKitCount(houseKitView, ".buttonStyle(HouseButtonStyle(") == 1
+            && houseKitCount(houseKitView, "VerticalSlider(") == 1,
+          "equalizer source: Reset is the house button and the bands are the drawn slider; the Curve pop-up stays the system one")
+    check(houseKitSource("HouseButtonStyle.swift").contains("focused ? Brand.focus :")
+            && houseKitSource("Brand.swift").contains("light: BrandTokens.Light.focus, dark: BrandTokens.Dark.focus"),
+          "house field source: the focus ring is the brand focus token, not a new teal")
+    check(houseKitCount(houseKitCast, ".buttonStyle(HouseButtonStyle(") == 2
+            && houseKitCount(houseKitCast, ".modifier(HouseFieldLook(") == 1,
+          "Add by Address source: Cancel and Add are house buttons and the address field has the teal focus ring")
+    check(houseKitCount(houseKitRemote, ".buttonStyle(HouseButtonStyle(") == 3
+            && houseKitCount(houseKitRemote, ".modifier(HouseFieldLook(") == 1,
+          "Web Remote source: New Code, Use Port and Forget All are house buttons and the Port field has the teal focus ring")
+    check(houseKitSystem.allSatisfy { !houseKitView.contains($0) && !houseKitCast.contains($0) && !houseKitRemote.contains($0) },
+          "equalizer, Add by Address and Web Remote source: no system bordered button, rounded-border field, menu picker or system slider")
+    let houseKitCurveName = houseKitEqualizer.components(separatedBy: "private struct CurveNameField: View {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(houseKitCurveName.contains(".modifier(HouseFieldLook(focused: focused))") && !houseKitCurveName.contains(".roundedBorder"),
+          "equalizer source: the curve-name field has the teal focus ring, as the other fields")
+    check(houseKitSource("HouseButtonStyle.swift").contains("configuration.role == .destructive")
+            && houseKitRemote.contains("Button(t.webRemoteForgetAll, role: .destructive)"),
+          "house button source: a destructive button, Forget All Remote Devices, draws in red")
+    let houseKitRedRatios = [(false, 255.0), (false, 236.0), (true, 30.0), (true, 50.0)].flatMap { dark, grey in
+        [(false, false), (true, false), (false, true)].map { hovered, pressed in
+            AmbientBreath.contrast(HouseButton.destructiveText(dark: dark),
+                                   AmbientBreath.over(HouseButton.destructiveText(dark: dark),
+                                                      BrandRGB(red: grey / 255, green: grey / 255, blue: grey / 255),
+                                                      opacity: HouseButton.fill(hovered: hovered, pressed: pressed, dark: dark) * 0.5))
+        }
+    }
+    check(houseKitRedRatios.allSatisfy { $0 >= 4.5 },
+          "house button: a destructive button's red text keeps 4.5:1 on its red tint at rest, hovered and pressed, in both themes",
+          "\(houseKitRedRatios.map { (($0 * 100).rounded()) / 100 })")
+}
+
 // MARK: Capture teardown off the main thread (ProcessTapCapture.swift)
 do {
     let tapSource = (try? String(contentsOfFile: "Sources/AudioSync/ProcessTapCapture.swift", encoding: .utf8)) ?? ""

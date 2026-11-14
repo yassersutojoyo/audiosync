@@ -29,9 +29,9 @@ struct CastAddressSheet: View {
             LabeledContent(t.castAddField) {
                 TextField(t.castAddField, text: $draft.typed)
                     .labelsHidden()
-                    .textFieldStyle(.roundedBorder)
                     .autocorrectionDisabled()
                     .focused($fieldFocused)
+                    .modifier(HouseFieldLook(focused: fieldFocused))
                     .disabled(draft.adding)
                     .onChange(of: draft.typed) { draft.problem = nil }
                     .onSubmit(add)
@@ -46,8 +46,10 @@ struct CastAddressSheet: View {
                 if draft.adding { ProgressView().controlSize(.small).accessibilityLabel(t.castAddChecking) }
                 Spacer(minLength: 0)
                 Button(t.cancel) { model.castAddShown = false }
+                    .buttonStyle(HouseButtonStyle())
                     .keyboardShortcut(.cancelAction)
                 Button(draft.adding ? t.castAddChecking : t.castAdd, action: add)
+                    .buttonStyle(HouseButtonStyle())
                     .keyboardShortcut(.defaultAction)
                     .disabled(draft.adding || draft.typed.trimmingCharacters(in: .whitespaces).isEmpty)
             }

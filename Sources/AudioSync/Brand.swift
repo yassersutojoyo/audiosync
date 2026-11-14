@@ -22,6 +22,9 @@ enum Brand {
     static let tealText = dynamic("AudioSyncTealText",
                                   light: BrandTokens.Light.tealText, dark: BrandTokens.Dark.tealText)
 
+    /// The keyboard focus ring on the house text fields: light #147167, dark #63DAC2.
+    static let focus = dynamic("AudioSyncFocus", light: BrandTokens.Light.focus, dark: BrandTokens.Dark.focus)
+
     /// A delay field's out-of-range outline and the caption that explains it:
     /// light #C42B1C, 5.66:1 on white; dark #FF99A4, 6.97:1 on #2B2B2B.
     static let errorText = dynamic("AudioSyncErrorText",

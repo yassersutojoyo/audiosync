@@ -1379,6 +1379,12 @@ enum HouseButton {
     static func text(dark: Bool) -> BrandRGB {
         dark ? BrandTokens.Dark.logo : BrandTokens.Light.tealDeep
     }
+
+    /// A destructive button's text, also its tint at half `fill`. The light red is
+    /// deeper than the error text, which falls under 4.5:1 on the windows' grey.
+    static func destructiveText(dark: Bool) -> BrandRGB {
+        dark ? BrandTokens.Dark.errorText : BrandRGB(red: 160 / 255, green: 24 / 255, blue: 16 / 255)
+    }
 }
 
 /// A name typed in place where one is suggested, as the placeholder (a saved

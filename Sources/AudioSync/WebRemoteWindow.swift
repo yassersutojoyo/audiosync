@@ -84,6 +84,7 @@ struct WebRemoteView: View {
     /// toolchain ships without SwiftUI's macro plugins.
     @StateObject private var port = PortDraft()
     @StateObject private var phone = PhoneChoice()
+    @FocusState private var portFocused: Bool
 
     var body: some View {
         let t = text
@@ -260,6 +261,7 @@ struct WebRemoteView: View {
                 }
                 Spacer(minLength: 0)
                 Button(t.webRemoteNewCode) { settings.actions.newCode() }
+                    .buttonStyle(HouseButtonStyle())
             }
             if !settings.locked {
                 Text(t.webRemoteCodeNote)
@@ -282,6 +284,7 @@ struct WebRemoteView: View {
                     // Read here, not on a change: a second failure in a row leaves forgetFailed true.
                     if settings.forgetFailed { announcer.say(t.webRemoteForgetFailed) }
                 }
+                    .buttonStyle(HouseButtonStyle())
                     .disabled(!RemoteDevicesFile.canForget(count: settings.deviceCount, failed: settings.forgetFailed))
             }
             if settings.forgetFailed {
@@ -300,11 +303,13 @@ struct WebRemoteView: View {
             HStack(spacing: 8) {
                 Text(t.webRemotePort).accessibilityHidden(true)
                 TextField(t.webRemotePort, text: $port.text)
-                    .textFieldStyle(.roundedBorder)
+                    .focused($portFocused)
+                    .modifier(HouseFieldLook(focused: portFocused))
                     .frame(width: 80)
                     .accessibilityLabel(t.webRemotePort)
                     .onSubmit { if let typed { settings.actions.usePort(typed) } }
                 Button(t.webRemoteUsePort) { if let typed { settings.actions.usePort(typed) } }
+                    .buttonStyle(HouseButtonStyle())
                     .disabled(typed == nil || (typed == settings.port && !failedOnPort))
             }
             if typed == nil {

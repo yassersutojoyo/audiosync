@@ -92,11 +92,11 @@ private struct CurveNameField: View {
 
     var body: some View {
         TextField(draft.suggested, text: $draft.text)
-            .textFieldStyle(.roundedBorder)
             .accessibilityLabel(text.curveNameField)
             .accessibilityHint(text.zoneNameFieldHint)
             .help(text.saveCurveMessage)
             .focused($focused)
+            .modifier(HouseFieldLook(focused: focused))
             .onSubmit { finish(true) }
             .onExitCommand { draft.open = false }
             // Save Curve… is a menu item: the field takes the focus once the menu has closed.
@@ -172,6 +172,7 @@ struct EqualizerView: View {
                     .font(.caption).foregroundStyle(Brand.secondaryText)
                 Spacer()
                 Button(text.equalizerReset) { model.reset() }
+                    .buttonStyle(HouseButtonStyle())
             }
         }
         .padding(18)
