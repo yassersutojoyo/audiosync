@@ -13,7 +13,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 
 ### Changed
 
-- On the Mac, AudioSync remembers the macOS volume each local output last played at through it, sets it again before the output's first audio, and puts back the level it found when the output stops or AudioSync quits.
+- On the Mac, AudioSync remembers the macOS volume each local output last played at through it, sets it again before the output's first audio, and puts back the level it found when the output stops or AudioSync quits. A level you set in macOS in between wins and becomes the remembered one.
 - On the Mac, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, in the main window and the menu bar panel. The Edited mark and the dots for the preset in use are gone.
 - On the Mac, the Presets row in the main window folds open into a list: one click recalls a preset, each row's options button renames, updates or deletes it, and Save as Preset is the last row.
 - On the Mac, a new zone and a saved equalizer curve are named in place instead of in an alert.
@@ -34,9 +34,22 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, the app's text is set in Inter, built into the app, so it looks the same on every PC.
 - On Windows and Linux, the tray panel's rows line up with the Mac panel's: the preset icon sits on the volume icon's column, Open AudioSync is back next to Exit, and Add by Address is in the main window only.
 - On the Mac, a click anywhere on the menu bar panel's Presets row opens its menu.
+- On the Mac, the master volume icon is the speaker with three waves, lit by the level, at the preset icons' size and on the same column as the other rows' icons.
+- On Windows and Linux, switches, sliders and scroll bars look and work like the Mac's: clicking a switch's label flips it, the arrow keys, Page Up, Page Down, Home and End move a slider, and scroll bars show only while you scroll or point at the edge. The text uses the Mac's text sizes.
+- On Windows and Linux, the master volume icon matches the Mac's: three waves, the ones above the level dimmed, and a slashed speaker when muted.
+
+<!-- Pending train 1114i: move these into Changed and Fixed once it is on main, and change "every half second" in the Now Playing line to "every quarter second".
+- On the Mac, the menu bar panel's source name starts exactly on the title's and artist's left edge.
+- On the Mac, a notice opening in the main window eases the columns down over about a quarter second, a little quicker than it closes.
+- On the Mac, a play/pause key press shows in Now Playing within 0.6 seconds.
+- On the Mac, the equalizer's Reset button, Add by Address and the Web Remote settings use the same buttons and fields as the rest of the app, with the brand color around a focused field. Forget All Remote Devices is red.
+- On the Mac, the Now Playing wipe no longer draws a grey line over the title and artist.
+- On the Mac, the two rules beside the In a zone label sit on the same pixel row.
+-->
 
 ### Fixed
 
+- On the Mac, Now Playing reads Spotify 1.3.9, which left AudioSync's permission request unanswered.
 - On the Mac, the Settings window opens at its full height again. Before, it could open with only its title bar showing.
 - A Cast speaker that reports itself idle for a moment while it starts a stream no longer makes the stream fail; AudioSync keeps waiting for it to start playing.
 - On the Mac, Now Playing reads Spotify again when AudioSync is allowed to but the macOS permission check never answers.
