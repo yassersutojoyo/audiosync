@@ -2278,6 +2278,28 @@ do {
     _ = promise.landed(pausedSong, target: "com.spotify.client", at: 0)
     check(promise.reconcile(coverComing, readAt: 0.5)?.artPending == true,
           "play-pause promise: the track it shows keeps its cover still on its way, so the old cover stays up for it")
+    // 14 Nov on the Mac: the card flipped 150-180 ms after Spotify's notice, the time one reading takes.
+    var noticePromise = NowPlayingMonitor.PendingPlayPause()
+    let notedSong = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "One",
+                                            artist: "A", album: "B", isPlaying: true, artwork: nil)
+    check(noticePromise.noticed(notedSong, player: "com.spotify.client", info: ["Name": "One", "Player State": "Paused"], at: 30)?
+            .isPlaying == false,
+          "notice state: a change notice naming Paused shows the playing track paused at once, before any reading")
+    check(noticePromise.reconcile(notedSong, readAt: 29.9)?.isPlaying == false,
+          "notice state: a reading started before the notice that still reads playing is stale")
+    check(noticePromise.reconcile(notedSong, readAt: 30.1)?.isPlaying == true,
+          "notice state: a reading started after the notice wins when it disagrees")
+    var stalePlaying = NowPlayingMonitor.PendingPlayPause()
+    check(stalePlaying.noticed(pausedSong, player: "com.spotify.client", info: ["Name": "One", "Player State": "Playing"], at: 0)?
+            .isPlaying == true,
+          "notice state: a change notice naming Playing shows the paused track playing at once")
+    check(stalePlaying.noticed(notedSong, player: "com.spotify.client", info: ["Name": "One", "Player State": "Playing"], at: 0) == nil
+            && stalePlaying.noticed(notedSong, player: "com.apple.Music", info: ["Name": "One", "Player State": "Paused"], at: 0) == nil
+            && stalePlaying.noticed(notedSong, player: "com.spotify.client", info: nil, at: 0) == nil
+            && stalePlaying.noticed(notedSong, player: "com.spotify.client",
+                                    info: ["Name": "Two", "Player State": "Paused"], at: 0) == nil
+            && stalePlaying.noticed(nil, player: "com.spotify.client", info: ["Name": "One", "Player State": "Paused"], at: 0) == nil,
+          "notice state: a notice in the state shown, from another player, without a state, naming another track or with no track changes nothing")
 }
 // covers: S15 (the decision by permission status; the notice is the call site's)
 check(MicrophoneStart.decide(.authorized) == .start && MicrophoneStart.decide(.notDetermined) == .ask

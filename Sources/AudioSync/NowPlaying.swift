@@ -235,6 +235,18 @@ final class NowPlayingMonitor {
             return Self.track(shown, playing: playing)
         }
 
+        /// A change notice from `player` at `uptime` names its play state in `info` (S218) for the track shown: the
+        /// track to show at once; until a reading started after the notice, a disagreeing one is stale.
+        mutating func noticed(_ shown: Track?, player: String, info: [AnyHashable: Any]?,
+                              at uptime: TimeInterval) -> Track? {
+            guard let shown, shown.bundleID == player, info?["Name"] as? String == shown.title,
+                  let state = info?["Player State"] as? String, (state == "Playing") != shown.isPlaying else { return nil }
+            bundleID = player
+            playing = !shown.isPlaying
+            until = uptime
+            return Self.track(shown, playing: playing)
+        }
+
         /// The track to show for a reading started at `readAt`.
         mutating func reconcile(_ reading: Track?, readAt: TimeInterval) -> Track? {
             guard let reading, reading.bundleID == bundleID, readAt < until, reading.isPlaying != playing else {
@@ -425,12 +437,18 @@ final class NowPlayingMonitor {
         emptyReadings.reset()
         refresh()
         schedule()
-        notices.posted = { [weak self] in
+        notices.posted = { [weak self] notice in
             guard let self else { return }
             let shown = self.onScreen ? self.track?.isPlaying : nil
-            if self.burst.notice(shownPlaying: shown, at: ProcessInfo.processInfo.systemUptime) {
+            let uptime = ProcessInfo.processInfo.systemUptime
+            if self.burst.notice(shownPlaying: shown, at: uptime) {
                 DebugTrace.log("Now Playing: a player's change notice; reading every 0.1 s until its play state changes")
                 self.retime()
+            }
+            let player = notice.name.rawValue.hasPrefix(NowPlayingMonitor.spotify) ? NowPlayingMonitor.spotify : NowPlayingMonitor.music
+            if let noticed = self.pending.noticed(self.track, player: player, info: notice.userInfo, at: uptime) {
+                DebugTrace.log("Now Playing: \(noticed.appName)'s change notice says \(noticed.isPlaying ? "playing" : "paused")")
+                self.publish(noticed, reading: false)
             }
             if self.refreshing { self.readAgain = true } else { self.refresh() }
         }
@@ -786,8 +804,8 @@ final class NowPlayingMonitor {
 /// The selector target for the players' change notices: only the selector form of
 /// `DistributedNotificationCenter` can ask for delivery while the app is inactive.
 private final class ChangeNotices: NSObject {
-    var posted: () -> Void = {}
-    @objc func post(_ notice: Notification) { posted() }
+    var posted: (Notification) -> Void = { _ in }
+    @objc func post(_ notice: Notification) { posted(notice) }
 }
 
 /// A player can post its change notice before its own reading changes
