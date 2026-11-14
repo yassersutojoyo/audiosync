@@ -3804,7 +3804,7 @@ export component ZoneHeader inherits Rectangle {
     }
 
     border-radius: Fluent.radius-control;
-    background: root.item.state == RowState.playing ? Tokens.playing-row : hover.has-hover ? Fluent.hover : transparent;
+    background: hover.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
 
     hover := TouchArea {

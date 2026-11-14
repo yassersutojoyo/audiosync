@@ -1823,6 +1823,17 @@ fn the_preset_and_equalizer_rows_name_their_choice_on_a_second_line() {
     }
 }
 
+/// A zone header is filled only under the pointer, as on the Mac: a playing
+/// zone shows it in its badge, not with a teal header.
+#[test]
+fn a_zone_header_fills_only_on_hover() {
+    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    assert!(
+        header.contains("    background: hover.has-hover ? Fluent.hover : transparent;"),
+        "the header's fill follows only the hover"
+    );
+}
+
 /// A zone header works like a speaker row's box: only its badge switches the
 /// zone, and a click anywhere else on the header shows or hides the speakers
 /// (on the name, once the double-click time has passed).
