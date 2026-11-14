@@ -76,8 +76,9 @@ for dev in devices {
           "\(dev.name): first audio fades in",
           "\(states) over \(r.fadeFrames) frames, first callback \(firstCallbackFrames) frames")
 
-    Thread.sleep(forTimeInterval: 0.7)
-    let rendered = r.framesRendered.load(ordering: .relaxed)
+    // Runs the main queue, where the start hands over its latency read (hasFaded waits for it).
+    RunLoop.main.run(until: Date().addingTimeInterval(0.7))
+    let rendered =r.framesRendered.load(ordering: .relaxed)
     check(rendered > 24000, "\(dev.name): renders audio", "\(rendered) frames in 1 s")
 
     // Lag ≈ delay − one device buffer, ± one producer chunk; each change
@@ -161,7 +162,7 @@ for dev in devices {
     do {
         try r.start(on: dev.id, captureRate: rate, delayMs: 150)
         r.setGain(linear: 0)
-        Thread.sleep(forTimeInterval: 0.4)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))   // the start's latency hand-off
         let retirement = OutputRetirement()
         let began = Date()
         retirement.remove([r])
