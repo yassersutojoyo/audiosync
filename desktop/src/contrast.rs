@@ -278,12 +278,13 @@ fn an_opening_notice_fades_in_as_its_room_lands() {
 }
 
 /// The master volume rows as on the Mac (MenuBar.swift `MasterSlider`): the
-/// two-wave speaker, crossed out at 0; the track and the knob's edge in the
+/// speaker with one, two or three waves by the level, crossed out at 0, in a
+/// fixed slot; the track and the knob's edge in the
 /// secondary text color, 3:1 on the window and the tray panel; the number
 /// in the row titles' size and color.
 // covers: S450
 #[test]
-fn the_master_volume_draws_two_waves_and_a_3_to_1_track() {
+fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     for appearance in [Appearance::Light, Appearance::Dark] {
         for background in ["background", "surface"] {
             let value = ratio("text@secondaryText", background, appearance);
@@ -299,9 +300,17 @@ fn the_master_volume_draws_two_waves_and_a_3_to_1_track() {
         .expect("Glyphs.master-volume");
     let function = &widgets[start..];
     let function = &function[..function.find("\n    }").expect("it ends")];
-    assert!(function.contains("return root.volume-mid;"));
-    assert!(!function.contains("volume-high") && !function.contains("volume-low"));
+    assert!(function.contains(
+        "if waves <= 0 {\n            return root.volume-muted;\n        }\n        \
+         if waves == 1 {\n            return root.volume-low;\n        }\n        \
+         if waves == 2 {\n            return root.volume-mid;\n        }\n        \
+         return root.volume-high;"
+    ));
     let master = component_body(&widgets, "MasterVolume");
+    assert!(
+        master.contains("width: 16px;\n            glyph: Glyphs.master-volume(root.waves);"),
+        "one slot for every wave count, so the slider never moves"
+    );
     assert!(master.contains("track: Tokens.secondary-text;"));
     assert!(
         !master.contains("Tokens.disabled-opacity"),

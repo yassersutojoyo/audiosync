@@ -9197,9 +9197,9 @@ do {
     check(quickIconSource.contains(".font(.system(size: QuickRowIcon.point))"),
           "main window: the Presets, Equalizer and Calibrate icons share one size, the menu bar panel's icons' too")
     check(muteSource.contains("Image(systemName: MasterMute.symbol(level: model.master))\n                .font(.system(size: QuickRowIcon.point))")
-            && muteSource.contains(".frame(width: panel ? PanelLayout.iconBox : QuickRowIcon.slot, height: 18, alignment: panel ? .center : .leading)")
+            && muteSource.contains(".frame(width: panel ? PanelLayout.iconBox : QuickRowIcon.slot, height: 18, alignment: .leading)")
             && !muteSource.contains("variableValue") && !muteSource.contains(".hidden()") && !muteSource.contains(".caption"),
-          "master volume icon: the preset icons' size and slot, the panel's centred box and the main window rows' left-aligned 20 pt one, with no faded waves")
+          "master volume icon: the preset icons' size and slot, the panel's box and the main window rows' 20 pt one, both left-aligned, with no faded waves")
     let mainMaster = mainSource.components(separatedBy: "private func masterVolume(").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
     let numberStyle = ".font(.body.monospacedDigit())\n                    .foregroundStyle(.primary)\n                    .frame(width: MasterTrack.numberWidth, alignment: .trailing)"
@@ -18688,10 +18688,45 @@ do {
 
 // MARK: Master mute
 do {
-    let glyphs = [0, 0.4, 0.6, 33, 34, 66, 67, 100].map { MasterMute.symbol(level: $0) }
-    check(glyphs == ["speaker.slash.fill", "speaker.slash.fill"] + Array(repeating: "speaker.wave.2.fill", count: 6),
-          "master mute: the speaker is struck through at 0 and otherwise is the two-wave speaker at every level, so its ink never changes",
+    let glyphs = [0, 0.4, 0.6, 33, 33.4, 33.5, 66, 66.4, 66.5, 100].map { MasterMute.symbol(level: $0) }
+    let one = "speaker.wave.1.fill", two = "speaker.wave.2.fill", three = "speaker.wave.3.fill"
+    check(glyphs == ["speaker.slash.fill", "speaker.slash.fill", one, one, one, two, two, two, three, three],
+          "master mute: the speaker is struck through at 0 and has one wave to 33, two to 66 and three above, by the number the row shows",
           glyphs.joined(separator: ", "))
+    // The icon slot is leading-aligned, so the body's ink starts at one x whatever the waves add to its right.
+    let barSource = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let popupSource = (try? String(contentsOfFile: "Sources/AudioSync/LevelPopup.swift", encoding: .utf8)) ?? ""
+    check(barSource.contains(".frame(width: panel ? PanelLayout.iconBox : QuickRowIcon.slot, height: 18, alignment: .leading)")
+            && popupSource.contains("Image(systemName: MasterMute.symbol(level: model.level))\n                    .frame(width: 20, alignment: .leading)"),
+          "master mute: the main window, menu bar panel and volume popup hold the speaker in a fixed slot, leading-aligned")
+    func inkStart(_ name: String) -> Int? {
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 15, weight: .regular)),
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 40, pixelsHigh: 40, bitsPerSample: 8,
+                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+        NSGraphicsContext.restoreGraphicsState()
+        return (0..<40).first { x in (0..<40).contains { y in (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 } }
+    }
+    // The panel's box once centred the two-wave symbol under the preset icon; its inset keeps every body there.
+    let panelWidth = NSImage(systemSymbolName: two, accessibilityDescription: nil)?
+        .withSymbolConfiguration(.init(pointSize: 15, weight: .regular))?.size.width ?? 0
+    let panelInset = (PanelLayout.iconBox - panelWidth) / 2
+    let centredBody = panelInset + CGFloat(inkStart(two) ?? -100)
+    let panelBodies = [one, two, three].map { panelInset + CGFloat(inkStart($0) ?? 100) }
+    check(panelWidth > 0 && panelBodies.allSatisfy { $0 == centredBody }
+            && MasterMute.panelInset(box: PanelLayout.iconBox, point: 15) == panelInset
+            && barSource.contains("private static let panelInset = MasterMute.panelInset(box: PanelLayout.iconBox, point: QuickRowIcon.point)")
+            && barSource.contains(".padding(.leading, panel ? Self.panelInset : 0)\n                .frame(width: panel ? PanelLayout.iconBox : QuickRowIcon.slot, height: 18, alignment: .leading)"),
+          "master mute: in the menu bar panel the one-, two- and three-wave bodies sit where the centred two-wave body sat, under the preset icon",
+          "centred \(centredBody), panel \(panelBodies)")
+    let bodies = [one, two, three].map(inkStart)
+    check(bodies[0] != nil && Set(bodies).count == 1,
+          "master mute: the one-, two- and three-wave speakers start their body at the same x in a leading slot",
+          "\(bodies)")
     func unmuteLevel(after levels: [Double]) -> Double {
         let kept = levels.reduce(MasterMute.fallback) { MasterMute.remembered(level: $1, previous: $0) }
         return MasterMute.toggled(level: levels.last ?? 0, remembered: kept)

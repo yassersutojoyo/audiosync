@@ -2859,13 +2859,15 @@ struct MasterMuteButton: View {
     let text: UIStrings
     /// The menu bar panel's icon box and grey, those of the preset icon above it.
     var panel = false
+    private static let panelInset = MasterMute.panelInset(box: PanelLayout.iconBox, point: QuickRowIcon.point)
 
     var body: some View {
         let label = MasterMute.isMuted(model.master) ? text.unmuteMaster : text.muteMaster
         Button { model.toggleMasterMute() } label: {
             Image(systemName: MasterMute.symbol(level: model.master))
                 .font(.system(size: QuickRowIcon.point))
-                .frame(width: panel ? PanelLayout.iconBox : QuickRowIcon.slot, height: 18, alignment: panel ? .center : .leading)
+                .padding(.leading, panel ? Self.panelInset : 0)
+                .frame(width: panel ? PanelLayout.iconBox : QuickRowIcon.slot, height: 18, alignment: .leading)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

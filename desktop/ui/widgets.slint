@@ -390,13 +390,19 @@ export global Glyphs {
         return "";
     }
 
-    // The master volume's speaker: crossed out at 0, else two waves at any
-    // level, as on the Mac; the slider shows the level.
+    // The master volume's speaker: crossed out at 0, else the level's one,
+    // two or three waves, as on the Mac.
     public pure function master-volume(waves: int) -> string {
         if waves <= 0 {
             return root.volume-muted;
         }
-        return root.volume-mid;
+        if waves == 1 {
+            return root.volume-low;
+        }
+        if waves == 2 {
+            return root.volume-mid;
+        }
+        return root.volume-high;
     }
 
     // The icon font's Repeat reads poorly at 16 px, so these two are drawn

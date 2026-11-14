@@ -1,4 +1,5 @@
 import CAudioSyncCore
+import AppKit
 import Foundation
 
 /// Slider position ↔ linear gain. Loudness is perceived roughly logarithmically,
@@ -28,9 +29,23 @@ enum MasterMute {
     /// Muted when the number beside the slider reads 0.
     static func isMuted(_ level: Double) -> Bool { level.rounded() == 0 }
 
-    /// Always the two-wave speaker when not muted, so the icon keeps one size; the slider shows the level.
+    /// One wave to 33, two to 66, three above, by the number beside the slider. The
+    /// symbols differ in width, so their slot is fixed and leading-aligned.
     static func symbol(level: Double) -> String {
-        isMuted(level) ? "speaker.slash.fill" : "speaker.wave.2.fill"
+        switch level.rounded() {
+        case ..<1: return "speaker.slash.fill"
+        case ..<34: return "speaker.wave.1.fill"
+        case ..<67: return "speaker.wave.2.fill"
+        default: return "speaker.wave.3.fill"
+        }
+    }
+
+    /// The inset that keeps a leading-aligned speaker's body where the two-wave symbol's sat
+    /// centred in `box`, measured since the symbol's width can change with macOS.
+    static func panelInset(box: CGFloat, point: CGFloat) -> CGFloat {
+        let width = NSImage(systemSymbolName: "speaker.wave.2.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: point, weight: .regular))?.size.width ?? box
+        return (box - width) / 2
     }
 
     /// What unmuting returns to before the master was ever at 5 or above this run.
