@@ -334,10 +334,28 @@ enum TrackWipe {
         reduceMotion ? fadeDuration : max(0.09, duration * (1 - reached))
     }
 
+    static let carrySeconds: TimeInterval = 1.0 / 60
+
     /// The sweep's progress `elapsed` after the change, from the width `start` the slow move reached.
-    static func sweepProgress(from start: Double, after elapsed: TimeInterval, reduceMotion: Bool) -> Double {
-        let t = elapsed / finishSeconds(fromReached: start, reduceMotion: reduceMotion)
-        return start + (1 - start) * (reduceMotion ? min(1, max(0, t)) : eased(sweepCurve, t))
+    /// For `carrySeconds` it carries on at the slow move's `speed`, then runs today's ease-out over the
+    /// rest, so the hand-off holds no frame; a frame dated just before the change moves on at `speed` too.
+    static func sweepProgress(from start: Double, speed: Double, after elapsed: TimeInterval,
+                              reduceMotion: Bool) -> Double {
+        let seconds = finishSeconds(fromReached: start, reduceMotion: reduceMotion)
+        if reduceMotion { return start + (1 - start) * min(1, max(0, elapsed / seconds)) }
+        let carried = start + speed * min(elapsed, carrySeconds)
+        return carried + (1 - carried) * eased(sweepCurve, (elapsed - carrySeconds) / (seconds - carrySeconds))
+    }
+
+    /// The slow move's speed, in widths a second, where the cover has moved out by `reached` of its width.
+    static func driftSpeed(atReached reached: Double) -> Double {
+        var low = 0.0, high = slowSeconds
+        for _ in 0..<40 {
+            let mid = (low + high) / 2
+            if artReach * slowFraction(after: mid) < reached { low = mid } else { high = mid }
+        }
+        let step = 0.001
+        return artReach * (slowFraction(after: low + step) - slowFraction(after: low)) / step
     }
 
     /// A slow move the player ignored, easing back from `reached` over `fadeDuration`.

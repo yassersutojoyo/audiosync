@@ -1337,22 +1337,26 @@ final class TrackWipeState: ObservableObject {
     @Published private var driftStart: Date?
     @Published private var settleStart: Date?
     @Published private var sweepStart: Date?
+    /// The press time of the slow move the sweep took over, which keeps moving the outgoing cover.
+    private var handedOff: Date?
     /// Where the slow move stopped: at the change, or when it began settling back.
     private var reached = 0.0
     private var sweepFrom = 1.0
+    private var sweepSpeed = 0.0
 
     var moving: Bool { driftStart != nil || settleStart != nil || sweepStart != nil }
 
     /// The slow move's progress at `now`, 0 to 1 (`TrackWipe.slowFraction`).
     func drift(at now: Date) -> Double {
-        if let start = driftStart { return TrackWipe.slowFraction(after: now.timeIntervalSince(start)) }
+        if let start = driftStart ?? handedOff { return TrackWipe.slowFraction(after: now.timeIntervalSince(start)) }
         if let start = settleStart { return TrackWipe.settledDrift(from: reached, after: now.timeIntervalSince(start)) }
         return reached
     }
 
     func progress(at now: Date) -> Double {
         guard let start = sweepStart else { return 1 }
-        return TrackWipe.sweepProgress(from: sweepFrom, after: now.timeIntervalSince(start), reduceMotion: fades)
+        return TrackWipe.sweepProgress(from: sweepFrom, speed: sweepSpeed, after: now.timeIntervalSince(start),
+                                       reduceMotion: fades)
     }
 
     func press(_ direction: TrackWipe.Direction) {
@@ -1397,6 +1401,7 @@ final class TrackWipeState: ObservableObject {
         }
         if driftStart != nil {
             reached = drift(at: Date.now)
+            handedOff = driftStart
             driftStart = nil
         }
         pressed = nil
@@ -1412,6 +1417,7 @@ final class TrackWipeState: ObservableObject {
         self.held = nil
         guard current != nil else {
             reached = 0
+            handedOff = nil
             return
         }
         (direction, fades) = pending
@@ -1423,6 +1429,7 @@ final class TrackWipeState: ObservableObject {
         let mark = sweeps
         outgoing = old
         sweepFrom = fades ? 0 : TrackWipe.artReach * reached
+        sweepSpeed = TrackWipe.driftSpeed(atReached: sweepFrom)
         sweepStart = Date.now
         let seconds = TrackWipe.finishSeconds(fromReached: sweepFrom, reduceMotion: fades)
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
@@ -1430,6 +1437,7 @@ final class TrackWipeState: ObservableObject {
             self.sweepStart = nil
             self.outgoing = nil
             self.reached = 0
+            self.handedOff = nil
             self.release()
         }
     }

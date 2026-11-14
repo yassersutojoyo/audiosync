@@ -19182,19 +19182,48 @@ do {
           "slow move: one clock draws the slow move and the sweep, so the sweep starts in the frame of the change "
             + "from where the cover is drawn, with no second commit")
     let handOff = TrackWipe.artReach * TrackWipe.slowFraction(after: 0.42)
-    let firstFrame = TrackWipe.sweepProgress(from: handOff, after: 1.0 / 60, reduceMotion: false)
+    let handOffSpeed = TrackWipe.driftSpeed(atReached: handOff)
+    let firstFrame = TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: 1.0 / 60, reduceMotion: false)
     let sweepEnd = TrackWipe.finishSeconds(fromReached: handOff, reduceMotion: false)
-    check(TrackWipe.sweepProgress(from: handOff, after: 0, reduceMotion: false) == handOff
-            && TrackWipe.sweepProgress(from: handOff, after: -0.01, reduceMotion: false) == handOff
-            && firstFrame > handOff + 0.05
-            && abs(TrackWipe.sweepProgress(from: handOff, after: sweepEnd, reduceMotion: false) - 1) < 1e-12
-            && TrackWipe.sweepProgress(from: 0, after: TrackWipe.fadeDuration / 2, reduceMotion: true) == 0.5,
+    check(TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: 0, reduceMotion: false) == handOff
+            && TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: -0.01, reduceMotion: false) < handOff
+            && firstFrame > handOff
+            && abs(TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: sweepEnd,
+                                           reduceMotion: false) - 1) < 1e-12
+            && TrackWipe.sweepProgress(from: 0, speed: 0, after: TrackWipe.fadeDuration / 2, reduceMotion: true) == 0.5,
           "slow move: the sweep starts from the width reached and moves in its first frame; Reduce Motion fades evenly",
           "\(handOff) \(firstFrame)")
     check(TrackWipe.settledDrift(from: 0.8, after: 0) == 0.8 && TrackWipe.settledDrift(from: 0.8, after: 0.05) < 0.8
             && TrackWipe.settledDrift(from: 0.8, after: TrackWipe.fadeDuration) == 0
             && TrackWipe.eased(TrackWipe.slowCurve, 0.4 / 1.5) == TrackWipe.slowFraction(after: 0.4),
           "slow move: an ignored press eases back from where it reached in 0.15 s")
+}
+
+// covers: S463
+do {
+    let frame = 1.0 / 60
+    for pressToChange in [0.15, 0.25, 0.35] {
+        let reached = TrackWipe.artReach * TrackWipe.slowFraction(after: pressToChange)
+        let lastDriftStep = reached - TrackWipe.artReach * TrackWipe.slowFraction(after: pressToChange - frame)
+        let speed = TrackWipe.driftSpeed(atReached: reached)
+        let before = TrackWipe.sweepProgress(from: reached, speed: speed, after: -frame / 2, reduceMotion: false)
+        let first = TrackWipe.sweepProgress(from: reached, speed: speed, after: frame, reduceMotion: false)
+        let second = TrackWipe.sweepProgress(from: reached, speed: speed, after: 2 * frame, reduceMotion: false)
+        check(before < reached && reached < first && first < second
+                && first - reached <= 1.5 * lastDriftStep && second - first > first - reached,
+              "hand-off: a frame dated before the change still moves, and the sweep's first frame moves at about "
+                + "the slow move's speed, then speeds up",
+              "\(pressToChange) s: drift step \(lastDriftStep), sweep steps \(first - reached) \(second - first)")
+    }
+    for pressToChange in [0.0, 0.15, 0.35] {
+        let reached = TrackWipe.artReach * TrackWipe.slowFraction(after: pressToChange)
+        let speed = TrackWipe.driftSpeed(atReached: reached)
+        let at90 = stride(from: 0.0, through: 1, by: 0.001).first {
+            TrackWipe.sweepProgress(from: reached, speed: speed, after: $0, reduceMotion: false) >= 0.9
+        } ?? 1
+        check(at90 <= 0.15, "hand-off: the sweep still covers 90% of the width within 0.15 s, as before",
+              "\(pressToChange) s: \(at90) s")
+    }
 }
 
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)
