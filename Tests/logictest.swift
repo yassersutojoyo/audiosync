@@ -18860,23 +18860,33 @@ do {
           "macOS volume: the first time an output plays, its level is left as found and remembered", "\(lvm)")
     lvm.reported("a", level: 0.7)
     let lvmOff = lvm.switchedOff("a")
-    check(lvmOff == 0.4 && lvm.remembered["a"] == 0.7 && lvm.found["a"] == nil && lvm.playing.isEmpty,
+    check(lvmOff == 0.4 && lvm.remembered["a"] == 0.7 && lvm.found["a"] == nil && lvm.left["a"] == 0.4 && lvm.playing.isEmpty,
           "macOS volume: a level changed in macOS while it plays is remembered, and the found level is put back when it stops",
           "\(String(describing: lvmOff)) \(lvm)")
-    lvm.reported("a", level: 0.2)
+    lvm.reported("a", level: 0.4)
     check(lvm.remembered["a"] == 0.7, "macOS volume: a change while the output doesn't play through AudioSync is not remembered")
-    let lvmAgain = lvm.switchedOn("a", current: 0.2)
+    let lvmAgain = lvm.switchedOn("a", current: 0.4)
     let lvmTwice = lvm.switchedOn("a", current: 0.7)
-    check(lvmAgain == 0.7 && lvmTwice == nil && lvm.found["a"] == 0.2,
+    check(lvmAgain == 0.7 && lvmTwice == nil && lvm.found["a"] == 0.4,
           "macOS volume: switched on again, the output gets its remembered level once, and the level found then is the one put back",
           "\(String(describing: lvmAgain)) \(String(describing: lvmTwice)) \(lvm)")
-    check(lvm.switchedOff("a") == 0.2 && lvm.switchedOff("a") == nil,
+    check(lvm.switchedOff("a") == 0.4 && lvm.switchedOff("a") == nil,
           "macOS volume: the found level is put back once")
 
     var lvmSame = LocalVolumeMemory(remembered: ["s": 0.5], found: [:])
     check(lvmSame.switchedOn("s", current: 0.5) == nil, "macOS volume: an output already at its remembered level gets no write")
 
-    var lvmRefuse = LocalVolumeMemory(remembered: ["b": 0.9], found: [:])
+    var lvmStale = LocalVolumeMemory(remembered: ["m": 0.63], found: [:])
+    let lvmStaleOn = lvmStale.switchedOn("m", current: 0.38)
+    check(lvmStaleOn == nil && lvmStale.remembered["m"] == 0.38,
+          "macOS volume: a level set in macOS since AudioSync last put one back is kept and remembered, not the stale one",
+          "\(String(describing: lvmStaleOn)) \(lvmStale)")
+    var lvmLeft = LocalVolumeMemory(remembered: ["m": 0.63], found: [:], left: ["m": 0.5])
+    let lvmLeftMoved = lvmLeft.switchedOn("m", current: 0.38)
+    check(lvmLeftMoved == nil && lvmLeft.remembered["m"] == 0.38 && lvmLeft.found["m"] == 0.38,
+          "macOS volume: a level changed in macOS after AudioSync put one back wins over the remembered one", "\(lvmLeft)")
+
+    var lvmRefuse = LocalVolumeMemory(remembered: ["b": 0.9], found: [:], left: ["b": 0.3])
     let lvmRefuseSet = lvmRefuse.switchedOn("b", current: 0.3)
     lvmRefuse.refused("b")
     check(lvmRefuseSet == 0.9 && lvmRefuse.switchedOff("b") == nil && lvmRefuse.remembered["b"] == 0.9,
@@ -18888,30 +18898,37 @@ do {
 
     var lvmChosen = LocalVolumeMemory()
     lvmChosen.chosen("e", level: 0.5)
-    check(lvmChosen.switchedOn("e", current: 0.3) == 0.5,
-          "macOS volume: a level the user sets on the slider while the output is off is the one it gets when it plays")
+    check(lvmChosen.switchedOn("e", current: 0.5) == nil && lvmChosen.remembered["e"] == 0.5,
+          "macOS volume: a level the user sets on the slider while the output is off is the one it plays at")
 
-    var lvmBefore = LocalVolumeMemory(remembered: ["a": 0.8, "d": 0.6], found: [:])
+    var lvmBefore = LocalVolumeMemory(remembered: ["a": 0.8, "d": 0.6], found: [:], left: ["a": 0.2, "d": 0.1])
     _ = lvmBefore.switchedOn("a", current: 0.2)
     _ = lvmBefore.switchedOn("d", current: 0.1)
     var lvmCrash = LocalVolumeMemory(remembered: lvmBefore.remembered, found: lvmBefore.found)
-    let lvmRecovered = lvmCrash.recover(listed: ["a"])
-    check(lvmRecovered == ["a": 0.2] && lvmCrash.found == ["d": 0.1] && lvmCrash.playing.isEmpty,
+    let lvmRecovered = lvmCrash.recover(current: ["a": 0.8])
+    check(lvmRecovered == ["a": 0.2] && lvmCrash.found == ["d": 0.1] && lvmCrash.left == ["a": 0.2] && lvmCrash.playing.isEmpty,
           "macOS volume: after a crash, the next launch puts back the found level of each listed output; an unlisted one waits",
           "\(lvmRecovered) \(lvmCrash)")
     let lvmLate = lvmCrash.switchedOn("d", current: 0.6)
     check(lvmLate == nil && lvmCrash.switchedOff("d") == 0.1,
           "macOS volume: an output a crash left at its remembered level gets the level it had before AudioSync put back",
           "\(String(describing: lvmLate)) \(lvmCrash)")
+    var lvmKill = LocalVolumeMemory(remembered: ["k": 0.63], found: ["k": 0.5])
+    let lvmKillBack = lvmKill.recover(current: ["k": 0.38])
+    check(lvmKillBack.isEmpty && lvmKill.found.isEmpty && lvmKill.left == ["k": 0.38] && lvmKill.remembered == ["k": 0.38],
+          "macOS volume: after a crash, a level changed in macOS since is kept and remembered, not overwritten by the found one",
+          "\(lvmKillBack) \(lvmKill)")
     check(LocalVolumeMemory.putBackAfterS > 0.5,
           "macOS volume: the found level is put back only after the output's fade-out, which ends within 500 ms (S186)")
 
     let lvmStored: [String: Any] = [AppSettings.Keys.systemVolumesRemembered: ["a": 0.5, "b": 3.0, "c": "x"] as [String: Any],
-                                    AppSettings.Keys.systemVolumesFound: ["a": 0.25]]
+                                    AppSettings.Keys.systemVolumesFound: ["a": 0.25],
+                                    AppSettings.Keys.systemVolumesLeft: ["a": 0.75]]
     let lvmSettings = AppSettings.load { lvmStored[$0] }
-    check(lvmSettings.systemVolumesRemembered == ["a": 0.5, "b": 1.0] && lvmSettings.systemVolumesFound == ["a": 0.25],
+    check(lvmSettings.systemVolumesRemembered == ["a": 0.5, "b": 1.0] && lvmSettings.systemVolumesFound == ["a": 0.25]
+            && lvmSettings.systemVolumesLeft == ["a": 0.75],
           "macOS volume: the remembered and found levels are stored per device UID, from 0 to 1",
-          "\(lvmSettings.systemVolumesRemembered) \(lvmSettings.systemVolumesFound)")
+          "\(lvmSettings.systemVolumesRemembered) \(lvmSettings.systemVolumesFound) \(lvmSettings.systemVolumesLeft)")
 }
 
 // MARK: The built-in speakers' row shows and sets their macOS volume (SystemVolumeCue in WindowRules.swift)

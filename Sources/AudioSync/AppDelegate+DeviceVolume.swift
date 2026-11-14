@@ -109,8 +109,10 @@ extension AppDelegate {
     /// unrestored go back on the outputs listed now.
     func recoverLocalVolumes() {
         let listing = devices.allOutputDevices()
-        let back = localVolumeMemory.recover(listed: Set(listing.map(\.uid)))
-        guard !back.isEmpty else { return }
+        let before = localVolumeMemory
+        let current = listing.reduce(into: [String: Double]()) { $0[$1.uid] = deviceVolumes.level($1.id) }
+        let back = localVolumeMemory.recover(current: current)
+        guard localVolumeMemory != before else { return }
         for (uid, level) in back.sorted(by: { $0.key < $1.key }) {
             guard let device = listing.first(where: { $0.uid == uid }) else { continue }
             deviceVolumes.setLevel(device.id, level)
@@ -130,6 +132,7 @@ extension AppDelegate {
     private func saveLocalVolumes() {
         store.save(levels: localVolumeMemory.remembered, forKey: AppSettings.Keys.systemVolumesRemembered)
         store.save(levels: localVolumeMemory.found, forKey: AppSettings.Keys.systemVolumesFound)
+        store.save(levels: localVolumeMemory.left, forKey: AppSettings.Keys.systemVolumesLeft)
     }
 
     private func publishDeviceVolumes() {

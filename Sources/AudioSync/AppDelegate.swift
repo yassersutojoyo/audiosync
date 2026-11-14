@@ -388,7 +388,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         hidesDockIcon = saved.hidesDockIcon
         appearance = saved.appearance
         inputPairs = saved.inputPairs
-        localVolumeMemory = LocalVolumeMemory(remembered: saved.systemVolumesRemembered, found: saved.systemVolumesFound)
+        localVolumeMemory = LocalVolumeMemory(remembered: saved.systemVolumesRemembered, found: saved.systemVolumesFound,
+                                              left: saved.systemVolumesLeft)
         super.init()
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }
