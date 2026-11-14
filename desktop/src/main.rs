@@ -821,8 +821,8 @@ mod tests {
         assert!(body.contains("root.notices-dismissed-all();"), "{body}");
     }
 
-    /// Add by Address… lives in the main window only, as on the Mac
-    /// (complaint #5): the flyout never offers it.
+    /// Add by Address… lives in the main window only, as on the Mac:
+    /// the flyout never offers it.
     // covers: S419
     #[test]
     fn the_flyout_leaves_add_by_address_to_the_main_window() {
@@ -982,11 +982,6 @@ mod tests {
                 "speaker-focused",
             ),
             (
-                "text: Strings.cast-add-address;",
-                "changed keyboard-focused",
-                "add-address-focused",
-            ),
-            (
                 "text: Strings.open-network-settings;",
                 "changed keyboard-focused",
                 "network-settings-focused",
@@ -1020,7 +1015,10 @@ mod tests {
         let at = |part: &str| flyout.find(part).unwrap_or_else(|| panic!("{part}"));
         let volume = at("MasterVolume {");
         let this_pc = at("for speaker in root.this-pc: FlyoutRow {");
-        let divider = volume + flyout[volume..].find("Divider { }").expect("a divider");
+        let divider = volume
+            + flyout[volume..]
+                .find("rows-divider := Divider {")
+                .expect("a divider");
         let zones = at("for zone in root.zones: VerticalLayout {");
         let connected = at("for speaker in root.speakers: FlyoutRow {");
         assert!(

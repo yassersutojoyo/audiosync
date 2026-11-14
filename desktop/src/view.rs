@@ -469,15 +469,14 @@ const MAIN_WINDOW_CHROME: (f64, f64) = (0.0, 0.0);
 
 /// The parts of the tray flyout that a refresh can remove, with the controls
 /// in them: the listed notice, the button for more notices, the zone rows,
-/// the speaker rows (a zone's members among them), the Add by Address link
-/// and the Open Network Settings link.
+/// the speaker rows (a zone's members among them) and the Open Network
+/// Settings link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutParts {
     notices: bool,
     more_notices: bool,
     zones: bool,
     speakers: bool,
-    add_address: bool,
     network_settings: bool,
 }
 
@@ -488,7 +487,6 @@ impl FlyoutParts {
             || (self.more_notices && other.more_notices)
             || (self.zones && other.zones)
             || (self.speakers && other.speakers)
-            || (self.add_address && other.add_address)
             || (self.network_settings && other.network_settings)
     }
 }
@@ -496,8 +494,7 @@ impl FlyoutParts {
 /// What the tray flyout shows: how many notices there are and how many of
 /// them it lists, how many zones, how many of this PC's and connected
 /// speakers in no zone, and the shape of the zones' member lists
-/// ([`zone_shape`]), and whether it shows the Add by Address link and the
-/// Open Network Settings link.
+/// ([`zone_shape`]), and whether it shows the Open Network Settings link.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FlyoutCounts {
     notices: usize,
@@ -506,7 +503,6 @@ struct FlyoutCounts {
     this_pc: usize,
     speakers: usize,
     zone_members: u64,
-    add_address: bool,
     network_settings: bool,
 }
 
@@ -527,7 +523,6 @@ impl FlyoutCounts {
             speakers: self.this_pc != next.this_pc
                 || self.speakers != next.speakers
                 || self.zone_members != next.zone_members,
-            add_address: self.add_address && !next.add_address,
             network_settings: self.network_settings && !next.network_settings,
         }
     }
@@ -2314,16 +2309,12 @@ impl App {
         self.flyout.set_airplay_searching(state.airplay_searching);
         self.main.set_no_speaker_on(state.no_speaker_on);
         self.flyout.set_no_speaker_on(state.no_speaker_on);
-        // Read before the flyout takes the new state, for `flyout_shown`.
-        let add_address_shown =
-            self.flyout.get_cast_by_address() && self.flyout.get_cast_list() == CastList::NoneFound;
         self.main.set_cast_list(cast_list(state.cast_list));
         self.flyout.set_cast_list(cast_list(state.cast_list));
         self.watch_network(
             state.airplay_none_found || state.cast_list == ui_model::CastList::NoneFound,
         );
         self.main.set_cast_by_address(state.cast_by_address);
-        self.flyout.set_cast_by_address(state.cast_by_address);
         self.main.set_this_pc_all_hidden(state.hidden_in(true));
         self.main.set_connected_all_hidden(state.hidden_in(false));
         self.flyout.set_all_hidden(state.all_hidden());
@@ -2484,7 +2475,6 @@ impl App {
             this_pc: m.flyout_this_pc.row_count(),
             speakers: m.flyout_connected.row_count(),
             zone_members: self.zone_shape_shown(),
-            add_address: add_address_shown,
             network_settings: none_found_shown
                 && m.zones.row_count() == 0
                 && m.flyout_connected.row_count() == 0,
@@ -2500,7 +2490,6 @@ impl App {
                     .iter()
                     .map(|zone| listed_members(zone.flyout_expanded, zone.members.len())),
             ),
-            add_address: state.cast_by_address && state.cast_list == ui_model::CastList::NoneFound,
             network_settings: state.airplay_none_found && zones.is_empty() && connected.is_empty(),
         });
         let main_lists = MainLists {
@@ -2819,7 +2808,6 @@ impl App {
             more_notices: flyout.get_more_notices_focused(),
             zones: flyout.get_zone_focused(),
             speakers: flyout.get_speaker_focused(),
-            add_address: flyout.get_add_address_focused(),
             network_settings: flyout.get_network_settings_focused(),
         };
         if focused.overlaps(removed) && flyout.window().is_visible() {
@@ -3410,13 +3398,6 @@ impl App {
         let w = weak.clone();
         flyout.on_notice_update_button_pressed(move |button| {
             with_app(&w, |app| app.press_update_button(button))
-        });
-        let w = weak.clone();
-        flyout.on_cast_add_address_requested(move || {
-            with_app(&w, |app| {
-                app.hide_flyout();
-                app.main.invoke_cast_add_address_requested();
-            })
         });
         let w = weak.clone();
         flyout.on_open_app(move || {
@@ -5071,10 +5052,13 @@ impl App {
                 height = flyout.get_fit_height();
             }
         }
-        let height = height.min(room);
         let window = flyout.window();
-        let size = window.size().to_logical(window.scale_factor());
-        if (size.height - height).abs() >= 0.5 {
+        let scale = window.scale_factor();
+        // Whole device pixels: the size and the place then round alike, and
+        // the bottom edge holds still while a zone folds.
+        let height = ((height * scale).ceil() / scale).min((room * scale).floor() / scale);
+        let size = window.size().to_logical(scale);
+        if (size.height - height).abs() >= 0.5 / scale {
             window.set_size(slint::LogicalSize::new(size.width, height));
         }
         height
@@ -12570,7 +12554,7 @@ mod tests {
     }
 
     /// The preset icon and the volume icon under it share one column, as
-    /// in the Mac panel (complaint #4).
+    /// in the Mac panel.
     #[test]
     fn the_flyout_preset_and_volume_icons_share_a_column() {
         use i_slint_backend_testing::ElementHandle;
@@ -12589,7 +12573,7 @@ mod tests {
         );
     }
 
-    /// The preset row's chevron is the hero card's: one size (complaint #13).
+    /// The preset row's chevron is the hero card's: one size.
     #[test]
     fn the_flyout_preset_chevron_matches_the_card_chevron() {
         let app = measured_flyout();
@@ -12600,7 +12584,7 @@ mod tests {
     }
 
     /// One 12 px gap on either side of the line under this PC's rows, as in
-    /// the Mac panel (complaint #8): the rows set their circle 5 px inside.
+    /// the Mac panel: the rows set their circle 5 px inside.
     #[test]
     fn the_flyout_divider_sits_one_gap_from_the_circles_on_both_sides() {
         let app = measured_flyout();
@@ -13906,26 +13890,12 @@ mod tests {
         this_pc: 1,
         speakers: 3,
         zone_members: 1,
-        add_address: false,
         network_settings: false,
     };
 
     #[test]
     fn a_refresh_removes_the_flyout_lists_whose_length_changes() {
         assert_eq!(FLYOUT.removed_by(FLYOUT), FlyoutParts::default());
-        // A Google Cast speaker is found: the Add by Address link goes.
-        let add_address = FlyoutCounts {
-            add_address: true,
-            ..FLYOUT
-        };
-        assert_eq!(
-            add_address.removed_by(FLYOUT),
-            FlyoutParts {
-                add_address: true,
-                ..FlyoutParts::default()
-            }
-        );
-        assert_eq!(FLYOUT.removed_by(add_address), FlyoutParts::default());
         // A speaker is found: the Open Network Settings link goes.
         let network_settings = FlyoutCounts {
             network_settings: true,
@@ -14048,7 +14018,6 @@ mod tests {
                 more_notices: true,
                 zones: true,
                 speakers: false,
-                add_address: true,
                 network_settings: true,
             }),
             "a focused speaker row keeps its focus when other parts change"
