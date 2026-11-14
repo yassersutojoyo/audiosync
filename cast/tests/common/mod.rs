@@ -56,6 +56,9 @@ pub enum OnLoad {
     NeverPlay,
     /// The reply, then `IDLE` with this reason before any `PLAYING`.
     IdleBeforePlaying(&'static str),
+    /// The reply, `IDLE` without an `idleReason`, then the fetch and
+    /// `PLAYING`, as a player that has not started the item yet.
+    IdleThenPlay,
     /// An error reply of this type with these extra fields.
     Error(&'static str, Value),
     Ignore,
@@ -744,12 +747,15 @@ impl Device {
             OnLoad::IdleBeforePlaying(reason) => {
                 replies.push(media_status(&transport, 0, session, "IDLE", Some(reason)));
             }
-            OnLoad::Play | OnLoad::NeverPlay => {
+            OnLoad::Play | OnLoad::NeverPlay | OnLoad::IdleThenPlay => {
+                if on_load == OnLoad::IdleThenPlay {
+                    replies.push(media_status(&transport, 0, session, "IDLE", None));
+                }
                 let url = payload["media"]["contentId"]
                     .as_str()
                     .unwrap_or("")
                     .to_owned();
-                let play = on_load == OnLoad::Play;
+                let play = on_load != OnLoad::NeverPlay;
                 self.stop_fetching.store(false, Ordering::SeqCst);
                 let stop = Arc::clone(&self.stop_fetching);
                 let fetches = Arc::clone(&self.fetches);

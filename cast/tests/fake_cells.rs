@@ -16,9 +16,11 @@ use audiosync_cast::discovery::{
     BrowseEvent, DeviceId, DeviceKey, DeviceKind, DeviceList, ListEvent, ServiceRecord,
 };
 use audiosync_cast::group::GroupRecords;
-use audiosync_cast::media::Metadata;
+use audiosync_cast::media::{IdleReason, MediaError, Metadata};
 use audiosync_cast::message::{DEFAULT_MEDIA_RECEIVER, NS_MEDIA, NS_RECEIVER, PLATFORM};
-use audiosync_cast::session::{CastSession, Diagnostics, SessionConfig, SessionEvent};
+use audiosync_cast::session::{
+    CastSession, Diagnostics, SessionConfig, SessionError, SessionEvent,
+};
 use common::{Behavior, Command, FakeDevice, OnLoad, app, json_message};
 use serde_json::{Value, json};
 
@@ -164,6 +166,15 @@ fn start_group(device: &FakeDevice) -> (CastSession, Feed) {
 
 /// With `held`, the feed writes nothing until [`Feed::hold`] releases it.
 fn start_as(device: &FakeDevice, group: Option<GroupRecords>, held: bool) -> (CastSession, Feed) {
+    let (session, feed) = try_start_as(device, group, held);
+    (session.expect("plays"), feed)
+}
+
+fn try_start_as(
+    device: &FakeDevice,
+    group: Option<GroupRecords>,
+    held: bool,
+) -> (Result<CastSession, SessionError>, Feed) {
     let (writer, reader) = audio_ring(48_000);
     let feed = feed(writer, held);
     let config = SessionConfig {
@@ -177,7 +188,7 @@ fn start_as(device: &FakeDevice, group: Option<GroupRecords>, held: bool) -> (Ca
         auth: None,
     };
     let selected = Arc::new(AtomicBool::new(true));
-    let session = CastSession::start(config, reader, selected, |_, _| {}).expect("plays");
+    let session = CastSession::start(config, reader, selected, |_, _| {});
     (session, feed)
 }
 
@@ -849,6 +860,69 @@ fn a_device_that_reports_playing_after_13_s_is_waited_for() {
         "C74",
         &format!(
             "PLAYING after {:.1} s: 1 LAUNCH, 1 LOAD, 1 fetch, no restart",
+            waited.as_secs_f64()
+        ),
+    );
+}
+
+// covers: C137
+#[test]
+fn an_idle_without_a_reason_before_playing_leaves_the_load_to_play() {
+    let device = FakeDevice::start(Behavior {
+        on_load: OnLoad::IdleThenPlay,
+        ..Behavior::default()
+    });
+    let started = Instant::now();
+    let (mut session, _feed) = start(&device);
+    let waited = started.elapsed();
+    let seen = run(&mut session, Duration::from_secs(1));
+    assert!(
+        !seen.iter().any(|event| matches!(
+            event,
+            SessionEvent::Ended(_)
+                | SessionEvent::Recovering(_)
+                | SessionEvent::FormatFallback { .. }
+        )),
+        "{seen:?}"
+    );
+    assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 1);
+    assert_eq!(device.fetches().len(), 1);
+    session.stop();
+    device.join();
+    cell(
+        "C137",
+        &format!(
+            "IDLE without idleReason, then PLAYING after {:.1} s: 1 LOAD, plays",
+            waited.as_secs_f64()
+        ),
+    );
+}
+
+/// The negative of C137: an `IDLE` that states `ERROR` fails the `LOAD`, and
+/// the FLAC retry (C84) fails the same way.
+// covers: C84
+#[test]
+fn an_idle_with_reason_error_before_playing_fails_the_load() {
+    let device = FakeDevice::start(Behavior {
+        on_load: OnLoad::IdleBeforePlaying("ERROR"),
+        ..Behavior::default()
+    });
+    let started = Instant::now();
+    let (result, _feed) = try_start_as(&device, None, false);
+    let waited = started.elapsed();
+    assert!(
+        matches!(
+            result,
+            Err(SessionError::Media(MediaError::Idle(IdleReason::Error)))
+        ),
+        "{result:?}"
+    );
+    assert_eq!(device.payloads(NS_MEDIA, "LOAD").len(), 2);
+    device.join();
+    cell(
+        "C137.error",
+        &format!(
+            "IDLE with idleReason ERROR fails the load after {:.1} s: 2 LOADs (WAV, FLAC)",
             waited.as_secs_f64()
         ),
     );
