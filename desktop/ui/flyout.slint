@@ -9,14 +9,14 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
+import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
 
-// The preset row under the source (spec S260): Presets and the current
-// preset's name, else "Choose a Preset"; its menu lists every preset, the
-// current one checked, and recalls the one chosen.
+// The preset row under the source (spec S260, S264): Presets, the name of
+// the preset picked last on a line under it; its menu lists every
+// preset, the current one checked, and recalls the one chosen.
 component PresetPicker inherits Rectangle {
     in property <[PresetItem]> presets;
-    // The current preset's name; empty while none is current.
+    // The name of the preset picked last; empty while none is.
     in property <string> current;
     callback recalled(string);
 
@@ -66,32 +66,51 @@ component PresetPicker inherits Rectangle {
                     // On the column of the volume icon below, centred in its 32 px button.
                     padding-left: 8px;
                     padding-right: 6px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
                     spacing: 8px;
 
-                    icon := Glyph {
-                        glyph: Glyphs.presets;
-                        color: Tokens.text;
-                        width: 16px;
+                    // The glyphs stay on the label's line when the name's line shows.
+                    VerticalLayout {
+                        alignment: center;
+                        icon := Glyph {
+                            glyph: Glyphs.presets;
+                            color: Tokens.text;
+                            width: 16px;
+                            height: label.preferred-height;
+                        }
+
+                        Rectangle {
+                            height: name.min-height;
+                        }
                     }
 
-                    Text {
-                        text: Strings.presets;
-                        color: Tokens.text;
-                        vertical-alignment: center;
-                        accessible-role: none;
-                    }
-
-                    MarqueeText {
-                        text: root.current != "" ? root.current : Strings.choose-preset;
-                        text-color: Tokens.secondary-text;
+                    VerticalLayout {
+                        alignment: center;
                         horizontal-stretch: 1;
-                        accessible-role: none;
+                        label := Text {
+                            text: Strings.presets;
+                            color: Tokens.text;
+                            accessible-role: none;
+                        }
+
+                        name := ChoiceLine {
+                            text: root.current;
+                        }
                     }
 
-                    chevron := Glyph {
-                        glyph: Glyphs.chevron-down;
-                        font-size: 10px;
-                        color: Tokens.secondary-text;
+                    VerticalLayout {
+                        alignment: center;
+                        chevron := Glyph {
+                            glyph: Glyphs.chevron-down;
+                            font-size: 10px;
+                            color: Tokens.secondary-text;
+                            height: label.preferred-height;
+                        }
+
+                        Rectangle {
+                            height: name.min-height;
+                        }
                     }
                 }
             }

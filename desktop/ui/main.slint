@@ -10,7 +10,7 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, MenuName, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, SecondaryText, SectionTitle, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, SecondaryText, SectionTitle, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -570,13 +570,14 @@ component SpeakerSection inherits VerticalLayout {
     }
 }
 
-// The Presets row (spec S259, S267): the current preset's name, and a menu
+// The Presets row (spec S259, S264, S267): the name of the preset picked
+// last, kept after a change until it is deleted, and a menu
 // that recalls a preset, saves one, and renames, updates or deletes one
 // through its submenu. A click, Space, Return, the Menu key or Shift+F10
 // open it.
 component PresetsCard inherits Rectangle {
     in property <[PresetItem]> presets;
-    // The current preset's name; empty while none is current.
+    // The name of the preset picked last; empty while none is.
     in property <string> current;
     // False at the most presets the app keeps (spec S251).
     in property <bool> can-save: true;
@@ -685,34 +686,51 @@ component PresetsCard inherits Rectangle {
                 HorizontalLayout {
                     padding-left: 8px;
                     padding-right: 8px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
                     spacing: 8px;
 
-                    Glyph {
-                        glyph: Glyphs.presets;
-                        color: Tokens.text;
-                        width: 16px;
+                    // The glyphs stay on the label's line when the name's line shows.
+                    VerticalLayout {
+                        alignment: center;
+                        Glyph {
+                            glyph: Glyphs.presets;
+                            color: Tokens.text;
+                            width: 16px;
+                            height: label.preferred-height;
+                        }
+
+                        Rectangle {
+                            height: name.min-height;
+                        }
                     }
 
-                    Text {
-                        text: Strings.presets;
-                        color: Tokens.text;
-                        vertical-alignment: center;
-                        accessible-role: none;
-                    }
-
-                    // Blank while none is current, so no fixed text is cut.
-                    MarqueeText {
-                        text: root.presets.length == 0 ? Strings.no-presets : root.current;
-                        text-color: Tokens.secondary-text;
-                        font-size: Tokens.font-size-caption;
+                    VerticalLayout {
+                        alignment: center;
                         horizontal-stretch: 1;
-                        accessible-role: none;
+                        label := Text {
+                            text: Strings.presets;
+                            color: Tokens.text;
+                            accessible-role: none;
+                        }
+
+                        name := ChoiceLine {
+                            text: root.current;
+                        }
                     }
 
-                    Glyph {
-                        glyph: Glyphs.chevron-down;
-                        font-size: Tokens.font-size-caption;
-                        color: Tokens.secondary-text;
+                    VerticalLayout {
+                        alignment: center;
+                        Glyph {
+                            glyph: Glyphs.chevron-down;
+                            font-size: Tokens.font-size-caption;
+                            color: Tokens.secondary-text;
+                            height: label.preferred-height;
+                        }
+
+                        Rectangle {
+                            height: name.min-height;
+                        }
                     }
                 }
             }
@@ -773,47 +791,48 @@ component EqualizerCard inherits Rectangle {
         padding-bottom: 6px;
         spacing: 8px;
 
-        icon := Glyph {
-            glyph: Glyphs.equalizer;
-            color: Tokens.text;
-            width: 16px;
-        }
-
-        label := Text {
-            text: Strings.equalizer;
-            color: Tokens.text;
-            vertical-alignment: center;
-            accessible-role: none;
-        }
-
-        // The preset after the name, on the same line, as on the Mac.
-        HorizontalLayout {
-            spacing: 6px;
-            horizontal-stretch: 1;
-
-            if root.on: VerticalLayout {
-                alignment: center;
-                Rectangle {
-                    width: 6px;
-                    height: 6px;
-                    border-radius: 3px;
-                    background: Tokens.teal;
-                }
+        // The glyphs stay on the label's line when the curve's line shows.
+        VerticalLayout {
+            alignment: center;
+            icon := Glyph {
+                glyph: Glyphs.equalizer;
+                color: Tokens.text;
+                width: 16px;
+                height: label.preferred-height;
             }
 
-            curve := MarqueeText {
-                text: root.on ? root.curve : Strings.off;
-                text-color: Tokens.secondary-text;
-                font-size: Tokens.font-size-caption;
-                horizontal-stretch: 1;
+            Rectangle {
+                height: curve.min-height;
+            }
+        }
+
+        // The curve under the name while the equalizer is on, as on the Mac.
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            label := Text {
+                text: Strings.equalizer;
+                color: Tokens.text;
                 accessible-role: none;
             }
+
+            curve := ChoiceLine {
+                text: root.on ? root.curve : "";
+            }
         }
 
-        Glyph {
-            glyph: Glyphs.chevron-right;
-            font-size: Tokens.font-size-caption;
-            color: Tokens.secondary-text;
+        VerticalLayout {
+            alignment: center;
+            Glyph {
+                glyph: Glyphs.chevron-right;
+                font-size: Tokens.font-size-caption;
+                color: Tokens.secondary-text;
+                height: label.preferred-height;
+            }
+
+            Rectangle {
+                height: curve.min-height;
+            }
         }
     }
 

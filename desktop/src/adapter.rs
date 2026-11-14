@@ -581,6 +581,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     /// The IDs of the presets saved before the reference output became a
     /// member (spec S252): their recall leaves it alone.
     presets_leaving_reference: BTreeSet<String>,
+    /// The preset recalled, saved or updated last (spec S264).
+    picked_preset: Option<String>,
     /// The highest zone and preset ID numbers given out (spec S245, S251).
     last_zone_id: u64,
     last_preset_id: u64,
@@ -793,6 +795,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             zones: Zones::default(),
             presets: Vec::new(),
             presets_leaving_reference: BTreeSet::new(),
+            picked_preset: None,
             last_zone_id: 0,
             last_preset_id: 0,
             preset_notice: None,
@@ -2611,6 +2614,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         keep_off: &[String],
     ) -> Option<Vec<(String, LeftOff)>> {
         let preset = self.presets.iter().find(|preset| preset.id == id)?.clone();
+        self.picked_preset = Some(preset.id.clone());
         let state = self.snapshot();
         let mut members: Vec<(SpeakerKey, Option<f64>, String, RecallMember)> = Vec::new();
         for member in &preset.members {
@@ -5051,6 +5055,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             equalizer_curves: self.equalizer_curves.clone(),
             presets: Vec::new(),
             current_preset: None,
+            picked_preset: self.picked_preset.clone(),
             notices: self
                 .notices
                 .iter()
@@ -5689,6 +5694,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let name = settings::cut(name.to_owned());
         let preset = self.capture_preset(&format!("preset:{n}"), &name)?;
         self.last_preset_id = n;
+        self.picked_preset = Some(preset.id.clone());
         self.log.log(|| {
             format!(
                 "preset \"{}\" saved with {} speaker(s)",
@@ -5725,12 +5731,16 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         let name = self.presets[index].name.clone();
         self.presets[index] = self.capture_preset(id, &name)?;
         self.presets_leaving_reference.remove(id);
+        self.picked_preset = Some(id.to_owned());
         self.log.log(|| format!("preset \"{name}\" updated"));
         Ok(())
     }
 
     fn delete_preset(&mut self, id: &str) {
         self.presets.retain(|preset| preset.id != id);
+        if self.picked_preset.as_deref() == Some(id) {
+            self.picked_preset = None;
+        }
         self.log.log(|| format!("preset {id} deleted"));
         if self
             .preset_notice
@@ -19009,6 +19019,41 @@ mod tests {
         assert_eq!(adapter.presets[0].name, "Evening");
         assert_eq!(adapter.presets[0].members.len(), 2);
         assert_eq!(adapter.current_preset().as_deref(), Some("preset:1"));
+    }
+
+    /// The Presets rows name the preset recalled, saved or updated last
+    /// until it is deleted, whatever changes after, as the Mac's do.
+    // covers: S264
+    #[test]
+    fn the_preset_picked_last_stays_named_until_it_is_deleted() {
+        let mut adapter = preset_adapter(vec![saved_preset(&[(key(SPEAKERS), None)])]);
+        assert_eq!(adapter.snapshot().picked_preset, None);
+        adapter.recall_preset("preset:1");
+        adapter.set_speaker_volume(&key(SPEAKERS), 36.0);
+        turn_on(&mut adapter, HEADPHONES);
+        assert_eq!(adapter.current_preset(), None);
+        assert_eq!(
+            adapter.snapshot().picked_preset.as_deref(),
+            Some("preset:1"),
+            "a change keeps the name"
+        );
+        Backend::save_preset(&mut adapter, "Evening").expect("saved");
+        assert_eq!(
+            adapter.snapshot().picked_preset.as_deref(),
+            Some("preset:2")
+        );
+        Backend::update_preset(&mut adapter, "preset:1").expect("updated");
+        assert_eq!(
+            adapter.snapshot().picked_preset.as_deref(),
+            Some("preset:1")
+        );
+        Backend::delete_preset(&mut adapter, "preset:2");
+        assert_eq!(
+            adapter.snapshot().picked_preset.as_deref(),
+            Some("preset:1")
+        );
+        Backend::delete_preset(&mut adapter, "preset:1");
+        assert_eq!(adapter.snapshot().picked_preset, None);
     }
 
     // covers: S251

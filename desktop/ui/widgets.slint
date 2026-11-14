@@ -258,6 +258,80 @@ export component MarqueeText inherits Rectangle {
     }
 }
 
+// A MarqueeText whose old text fades out as the new one fades in. Slint
+// gives a changed handler no old value, so two slots take turns.
+export component FadeName inherits Rectangle {
+    in property <string> text;
+    in property <color> text-color: Tokens.text;
+    in property <length> font-size;
+    property <string> first;
+    property <string> second;
+    property <bool> first-shown: true;
+
+    init => {
+        root.first = root.text;
+    }
+    changed text => {
+        if root.first-shown {
+            root.second = root.text;
+        } else {
+            root.first = root.text;
+        }
+        root.first-shown = !root.first-shown;
+    }
+
+    preferred-width: root.first-shown ? one.preferred-width : two.preferred-width;
+    preferred-height: one.preferred-height;
+    min-width: 0px;
+    accessible-role: none;
+
+    one := MarqueeText {
+        width: root.width;
+        height: root.height;
+        text: root.first;
+        text-color: root.text-color;
+        font-size: root.font-size;
+        opacity: root.first-shown ? 1 : 0;
+        animate opacity { duration: Motion.on ? 200ms : 0ms; }
+        accessible-role: none;
+    }
+
+    two := MarqueeText {
+        width: root.width;
+        height: root.height;
+        text: root.second;
+        text-color: root.text-color;
+        font-size: root.font-size;
+        opacity: root.first-shown ? 0 : 1;
+        animate opacity { duration: Motion.on ? 200ms : 0ms; }
+        accessible-role: none;
+    }
+}
+
+// The grey second line under a row's label that names its choice, as the
+// Mac's ChoiceLineView; folding shut, it keeps the last name.
+export component ChoiceLine inherits FoldPane {
+    in property <string> text;
+    property <string> held;
+
+    init => {
+        root.held = root.text;
+    }
+    changed text => {
+        if root.text != "" {
+            root.held = root.text;
+        }
+    }
+
+    open: root.text != "";
+
+    FadeName {
+        text: root.held;
+        text-color: Tokens.secondary-text;
+        font-size: Tokens.font-size-subheadline;
+    }
+}
+
 // The app cuts a speaker name to its limit while it is typed.
 export global NameField {
     pure callback fit(string) -> string;

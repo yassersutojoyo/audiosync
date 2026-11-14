@@ -1002,6 +1002,7 @@ pub(crate) mod tests {
             equalizer_curves: Vec::new(),
             presets: Vec::new(),
             current_preset: None,
+            picked_preset: None,
             notices: Vec::new(),
             pin_prompt: None,
             password_prompt: None,

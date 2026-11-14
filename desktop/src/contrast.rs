@@ -1710,6 +1710,43 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
     assert!(flyout.contains("if root.presets.length > 0: PresetPicker {"));
 }
 
+/// The Presets and Equalizer rows name their choice on a grey 11 px second
+/// line under the label, as the Mac's do (`ChoiceLineView`): it folds open
+/// and shut on the 0.25 s fold, a name that changes fades over 0.2 s, at
+/// once with animation effects off, and no dot marks it.
+// covers: S264
+#[test]
+fn the_preset_and_equalizer_rows_name_their_choice_on_a_second_line() {
+    let widgets = include_str!("../ui/widgets.slint");
+    let fade = component_body(widgets, "FadeName");
+    assert!(fade.contains("animate opacity { duration: Motion.on ? 200ms : 0ms; }"));
+    let line = component_body(widgets, "ChoiceLine");
+    for needle in [
+        "FoldPane {",
+        "FadeName {",
+        "text-color: Tokens.secondary-text;",
+        "font-size: Tokens.font-size-subheadline;",
+    ] {
+        assert!(line.contains(needle), "ChoiceLine has {needle}");
+    }
+    let main = include_str!("../ui/main.slint");
+    for (part, text) in [
+        (component_body(main, "PresetsCard"), "text: root.current;"),
+        (
+            component_body(main, "EqualizerCard"),
+            "text: root.on ? root.curve : \"\";",
+        ),
+        (
+            component_body(include_str!("../ui/flyout.slint"), "PresetPicker"),
+            "text: root.current;",
+        ),
+    ] {
+        assert!(part.contains("ChoiceLine {"), "{part}");
+        assert!(part.contains(text), "{part}");
+        assert!(!part.contains("Tokens.teal"), "no dot: {part}");
+    }
+}
+
 /// A zone header works like a speaker row's box: only its badge switches the
 /// zone, and a click anywhere else on the header shows or hides the speakers
 /// (on the name, once the double-click time has passed).

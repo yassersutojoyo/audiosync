@@ -6492,12 +6492,12 @@ fn preset_items(state: &AppState) -> Vec<PresetItem> {
         .collect()
 }
 
-/// The current preset's name; empty while none is current.
+/// The name of the preset picked last (spec S264); empty while none is.
 fn current_preset_name(state: &AppState) -> &str {
     state
         .presets
         .iter()
-        .find(|preset| state.current_preset.as_deref() == Some(preset.id.as_str()))
+        .find(|preset| state.picked_preset.as_deref() == Some(preset.id.as_str()))
         .map_or("", |preset| preset.name.as_str())
 }
 
@@ -7383,18 +7383,19 @@ mod tests {
         assert_eq!(text().absolute_position().x, start, "cut, not scrolled");
     }
 
-    /// The Equalizer row names its preset after "Equalizer" on the same
-    /// line, with room for "Electronic" in the narrow left column.
-    // covers: S450
+    /// The Equalizer row names its preset on a second line under
+    /// "Equalizer", as on the Mac, with room for "Electronic" in the narrow
+    /// left column.
+    // covers: S450, S264
     #[test]
-    fn the_equalizer_row_shows_its_preset_after_its_name() {
+    fn the_equalizer_row_shows_its_preset_under_its_name() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
         app.main
             .window()
             .set_size(slint::LogicalSize::new(776.0, 680.0));
-        app.main.global::<Motion>().set_on(true);
+        app.main.global::<Motion>().set_on(false);
         app.main.set_equalizer_on(true);
         app.main.set_equalizer_curve("Electronic".into());
         slint::platform::update_timers_and_animations();
@@ -7407,22 +7408,23 @@ mod tests {
             element("EqualizerCard::label"),
             element("EqualizerCard::curve"),
         );
-        let after = label.absolute_position().x + label.size().width;
+        let below = label.absolute_position().y + label.size().height;
         assert!(
-            curve.absolute_position().x >= after,
-            "the preset at {} sits after the name, which ends at {after}",
-            curve.absolute_position().x
+            curve.absolute_position().y >= below - 0.5,
+            "the preset at {} sits under the name, which ends at {below}",
+            curve.absolute_position().y
         );
-        let middle = |e: &ElementHandle| e.absolute_position().y + e.size().height / 2.0;
-        assert!((middle(&curve) - middle(&label)).abs() <= 1.0, "one line");
+        assert_eq!(curve.absolute_position().x, label.absolute_position().x);
         // A name that fits rests at the preset's width; a longer one takes
         // its own width to scroll. The room is drawn for Segoe UI, so other
         // hosts' fonts don't decide it.
         let text = ElementHandle::find_by_element_id(&app.main, "MarqueeText::label")
-            .find(|t| {
+            .filter(|t| {
                 (t.absolute_position().y - curve.absolute_position().y).abs() < 0.5
                     && (t.absolute_position().x - curve.absolute_position().x).abs() < 0.5
             })
+            // The crossfade's two slots overlap; the shown one holds the name.
+            .max_by(|a, b| a.size().width.total_cmp(&b.size().width))
             .expect("the preset's text");
         assert!(
             !cfg!(windows) || text.size().width <= curve.size().width + 0.5,
@@ -16904,6 +16906,15 @@ mod tests {
 
         app.update(|b| b.set_master_volume(31.0));
         assert!(preset_rows(&app).iter().all(|(_, current)| !current));
+        assert_eq!(
+            (
+                app.main.get_current_preset(),
+                app.flyout.get_current_preset()
+            ),
+            ("Preset 2".into(), "Preset 2".into()),
+            "the preset picked last stays named after a change, as on the Mac"
+        );
+        app.delete_preset("preset:2");
         assert_eq!(
             app.flyout.get_current_preset(),
             "",

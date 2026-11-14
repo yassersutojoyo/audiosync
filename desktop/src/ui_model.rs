@@ -1071,6 +1071,9 @@ pub struct AppState {
     pub presets: Vec<PresetItem>,
     /// The ID of the preset that plays exactly now (spec S253, S264).
     pub current_preset: Option<String>,
+    /// The ID of the preset recalled, saved or updated last this run, until
+    /// it is deleted: the Presets rows name it (spec S264).
+    pub picked_preset: Option<String>,
     /// Newest first.
     pub notices: Vec<Notice>,
     /// The PIN prompt to show, while a pairing asks for a PIN.
@@ -2213,6 +2216,7 @@ impl MockBackend {
             equalizer_curves: Vec::new(),
             presets: Vec::new(),
             current_preset: None,
+            picked_preset: None,
             notices: Vec::new(),
             pin_prompt: None,
             password_prompt: None,
@@ -2968,6 +2972,7 @@ impl Backend for MockBackend {
         let n = next_id("preset:", ids, self.last_preset_id);
         let preset = self.capture_preset(&format!("preset:{n}"), name)?;
         self.last_preset_id = n;
+        self.state.picked_preset = Some(preset.id.clone());
         self.presets.push(preset);
         Ok(())
     }
@@ -2992,11 +2997,15 @@ impl Backend for MockBackend {
         };
         let name = self.presets[index].name.clone();
         self.presets[index] = self.capture_preset(id, &name)?;
+        self.state.picked_preset = Some(id.to_owned());
         Ok(())
     }
 
     fn delete_preset(&mut self, id: &str) {
         self.presets.retain(|preset| preset.id != id);
+        if self.state.picked_preset.as_deref() == Some(id) {
+            self.state.picked_preset = None;
+        }
         if self.preset_notice.as_deref() == Some(id) {
             self.state.notices.retain(|n| n.subject != PRESETS);
             self.preset_notice = None;
@@ -3011,6 +3020,7 @@ impl Backend for MockBackend {
         let Some(preset) = self.presets.iter().find(|preset| preset.id == id).cloned() else {
             return;
         };
+        self.state.picked_preset = Some(preset.id.clone());
         let mut left_off = Vec::new();
         let mut members = Vec::new();
         // A phone's recall leaves the members that ask for a code off (S257).
