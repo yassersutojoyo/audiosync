@@ -412,6 +412,101 @@ enum CaptureClose {
     }
 }
 
+/// A session's tap made and started off the main thread (S461). What the
+/// background queue made comes back on the main queue and is kept only while
+/// its start is still current; otherwise its IOProc is closed and its tap and
+/// aggregate device destroyed, and nothing is reported.
+enum CaptureOpen {
+    enum Outcome<Objects, Link> {
+        case reading(Objects, Link)
+        case failed(Error)
+    }
+
+    /// Where a host's start opens its capture.
+    enum Start: Equatable {
+        case offMain
+        /// A start already opens off the main thread; it takes the speakers on now when it finishes.
+        case joinPending
+        /// A restart of a running session, a rebuild, a source switch and the
+        /// whole system's retries read their result in the same turn.
+        case onMain
+    }
+
+    static func start(running: Bool, starting: Bool, rebuild: Bool, switching: Bool, retrying: Bool) -> Start {
+        if running || rebuild || switching || retrying { return .onMain }
+        return starting ? .joinPending : .offMain
+    }
+
+    /// The power switch shows on from the click while the capture still opens.
+    static func switchOn(running: Bool, starting: Bool) -> Bool {
+        running || starting
+    }
+
+    /// `StreamingPolicy.isIdle`'s `hadSpeaker`: a pending start had one when
+    /// it began with a speaker on, a running session as it counted.
+    static func hadSpeaker(starting: Bool, startHad: Bool, sessionHad: Bool) -> Bool {
+        starting ? startHad : sessionHad
+    }
+
+    /// A start's IOProc while it may still need closing; touched only on the background queue.
+    final class Pending<Link> {
+        fileprivate var link: Link?
+    }
+
+    /// Closes `pending`'s IOProc on the background queue, so it is gone before
+    /// any start queued after this runs its device start. Idempotent.
+    static func cancel<Link>(_ pending: Pending<Link>, offMain: (@escaping () -> Void) -> Void,
+                             close: @escaping (Link) -> Void) {
+        offMain {
+            guard let link = pending.link else { return }
+            pending.link = nil
+            close(link)
+        }
+    }
+
+    /// - Parameters:
+    ///   - make: makes the tap and its aggregate device.
+    ///   - read: starts an IOProc on them; one that fails is closed by `read` itself.
+    ///   - current: whether the start is still the session's, read on the main queue.
+    @discardableResult
+    static func run<Objects, Link>(make: @escaping () throws -> Objects,
+                                   read: @escaping (Objects) throws -> Link,
+                                   offMain: @escaping (@escaping () -> Void) -> Void,
+                                   onMain: @escaping (@escaping () -> Void) -> Void,
+                                   current: @escaping () -> Bool,
+                                   close: @escaping (Link) -> Void,
+                                   retire: @escaping (Objects) -> Void,
+                                   done: @escaping (Outcome<Objects, Link>) -> Void) -> Pending<Link> {
+        let pending = Pending<Link>()
+        offMain {
+            let objects: Objects
+            do { objects = try make() } catch {
+                onMain { if current() { done(.failed(error)) } }
+                return
+            }
+            do {
+                let link = try read(objects)
+                pending.link = link
+                onMain {
+                    guard current() else {
+                        // The tap goes only after its IOProc, which may have been closed already.
+                        cancel(pending, offMain: offMain, close: close)
+                        offMain { onMain { retire(objects) } }
+                        return
+                    }
+                    done(.reading(objects, link))
+                }
+            } catch {
+                onMain {
+                    retire(objects)
+                    if current() { done(.failed(error)) }
+                }
+            }
+        }
+        return pending
+    }
+}
+
 /// Whether an input device's streams can be read as they are, and where the
 /// chosen channel pair sits in them (S14, S16).
 enum CaptureInputFormat: Equatable {

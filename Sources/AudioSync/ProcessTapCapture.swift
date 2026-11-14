@@ -175,6 +175,16 @@ final class SourceCapture {
     private var appsRunning: [String] = []
     /// Each source app's live processes at the last look (`AppTapFollow.runningPIDs`).
     private var seenPIDs: [String: [pid_t]] = [:]
+    /// Set by a start that opens its tap off the main thread (S461), until `openTap` takes it.
+    private var opening: ((Error?) -> Void)?
+    /// The session's tap is being made off the main thread.
+    private var tapOpening = false
+    /// A look at the source's processes came while the tap was being made.
+    private var lookAfterOpen = false
+    /// The IOProc of the tap being made, for a halt to close on the background queue.
+    private var pendingOpen: CaptureOpen.Pending<(link: IOLink, rate: Double)>?
+    /// A halted start may still be on the background queue (`settleCancelled`).
+    private var cancelQueued = false
 
     init() {}
 
@@ -185,9 +195,12 @@ final class SourceCapture {
     /// any failure everything is released again and the error is thrown. An
     /// input source reads the channel pair stored as `inputPair`. A `rebuild`
     /// (S20, S227 e) also counts the app processes the last session found.
-    /// A reopen (S335) passes the session's rate as `reopening`.
+    /// A reopen (S335) passes the session's rate as `reopening`. With
+    /// `opened`, a tap is made and started off the main thread and `opened`
+    /// is called on the main queue once it is read or failed, never after a
+    /// halt (S461); a source without a tap calls it before this returns.
     func start(source: AudioSource, parts: EngineParts, inputPair: Int = 0, rebuild: Bool = false,
-               reopening: Double? = nil) throws {
+               reopening: Double? = nil, opened: ((Error?) -> Void)? = nil) throws {
         halt()   // a start always follows a halt; this keeps a stray second start harmless
         sessionMark &+= 1
         self.source = source
@@ -196,7 +209,12 @@ final class SourceCapture {
         _ = Self.runHeard   // the static's lazy init runs here, never on the IO thread
         sink = CaptureSink(parts: parts, provesPermission: CaptureCheck.provesPermission(source))
         sampleRate = CaptureRate.untilRead(reopening: reopening)
+        opening = opened
         do { try startSource(source, rebuild: rebuild) } catch { halt(); throw error }
+        if let opened = opening {
+            opening = nil
+            opened(nil)
+        }
     }
 
     /// Opens the capture of a running session again after it stopped (S335),
@@ -247,6 +265,15 @@ final class SourceCapture {
         source = nil
         tapped = []
         interrupted = false
+        opening = nil
+        tapOpening = false
+        lookAfterOpen = false
+        // Queued behind the start itself, so its IOProc is gone before a later start's device start.
+        if let pendingOpen {
+            cancelQueued = true
+            CaptureOpen.cancel(pendingOpen, offMain: { Self.teardown.async(execute: $0) }, close: { $0.link.close() })
+        }
+        pendingOpen = nil
     }
 
     // MARK: - Sources
@@ -254,8 +281,9 @@ final class SourceCapture {
     /// Every process except AudioSync's own (S10, S11).
     private func startSystem() throws {
         guard let own = AudioProcesses.processObject(for: getpid()) else { throw CaptureError.ownProcessUnknown }
-        try openTap(CATapDescription(stereoGlobalTapButExcludeProcesses: [own]))
-        DebugTrace.log("[AudioSync] capture: whole system at \(sampleRate) Hz")
+        try openTap(CATapDescription(stereoGlobalTapButExcludeProcesses: [own])) {
+            "[AudioSync] capture: whole system at \($0) Hz"
+        }
     }
 
     /// One or more apps and the processes each is responsible for (S11), in
@@ -278,14 +306,16 @@ final class SourceCapture {
         guard !found.isEmpty else {
             // Running without an audio process yet (a browser starts its audio
             // helper once a page plays): nothing to tap until one appears.
+            settleCancelled()
             parts?.prepare(captureRate: sampleRate)
             DebugTrace.log("[AudioSync] capture: \(label) has no audio process yet; waiting for one")
             followWaitRecheck()
             return
         }
         tapped = found
-        try openTap(Self.describe(found, excluding: false))
-        DebugTrace.log("[AudioSync] capture: \(label) (\(found.count) audio processes) at \(sampleRate) Hz")
+        try openTap(Self.describe(found, excluding: false)) {
+            "[AudioSync] capture: \(label) (\(found.count) audio processes) at \($0) Hz"
+        }
     }
 
     /// Every process except AudioSync's own and the listed apps' (S10, S11).
@@ -295,9 +325,10 @@ final class SourceCapture {
         watchAppProcesses()
         let excluded = Set(Self.audioProcesses(of: bundleIDs.flatMap { Self.runningPIDs(of: $0) })).union([own]).sorted()
         tapped = excluded
-        try openTap(Self.describe(excluded, excluding: true))
-        DebugTrace.log("[AudioSync] capture: everything except \(bundleIDs.joined(separator: ", ")) "
-                + "(\(excluded.count - 1) audio processes left out) at \(sampleRate) Hz")
+        try openTap(Self.describe(excluded, excluding: true)) {
+            "[AudioSync] capture: everything except \(bundleIDs.joined(separator: ", ")) "
+                + "(\(excluded.count - 1) audio processes left out) at \($0) Hz"
+        }
     }
 
     /// The tap description for `processes`: their mixdown, or with
@@ -317,6 +348,7 @@ final class SourceCapture {
     /// An input device, read directly (S13, S14).
     private func startInput(_ uid: String) throws {
         guard let parts else { return }
+        settleCancelled()
         guard let device = HAL.device(uid: uid) else { throw CaptureError.inputNotFound(uid) }
         if AudioDevices.isHandsFreeInput(device) { throw CaptureError.inputHandsFree(uid) }
         // A start on a hogged output held the main thread 7.5 s before refusing, so a held input isn't started.
@@ -363,11 +395,81 @@ final class SourceCapture {
     // MARK: - The tap
 
     /// At a session's start: builds a tap for `description` with its aggregate
-    /// device, takes its rate as the session's (S16) and starts reading it.
-    private func openTap(_ description: CATapDescription) throws {
-        let objects = try TapObjects(description)
-        sampleRate = CaptureRate.session(reported: Self.rate(of: objects))
-        do { try startReading(objects) } catch { retire(objects); throw error }
+    /// device, takes its rate as the session's (S16) and starts reading it,
+    /// then logs `note` of that rate. A start with `opening` does all of it
+    /// off the main thread (S461).
+    private func openTap(_ description: CATapDescription, _ note: @escaping (Double) -> String) throws {
+        guard let opened = opening, let parts, let sink else {
+            let objects = try Self.makeTapOnMain(description)
+            sampleRate = CaptureRate.session(reported: Self.rate(of: objects))
+            do { try startReading(objects) } catch { retire(objects); throw error }
+            DebugTrace.log(note(sampleRate))
+            return
+        }
+        opening = nil
+        tapOpening = true
+        let mark = sessionMark
+        pendingOpen = CaptureOpen.run(
+            make: { () throws -> TapObjects in
+                try MainBlock.timedOffMain("the tap's creation") { try TapObjects(description) }
+            },
+            read: { (objects: TapObjects) throws -> (link: IOLink, rate: Double) in
+                let rate = CaptureRate.session(reported: SourceCapture.rate(of: objects))
+                let link = try IOLink(device: objects.aggregate, sink: sink)
+                parts.prepare(captureRate: rate)
+                do { try MainBlock.timedOffMain("the capture device's start") { try link.begin() } } catch {
+                    link.close()
+                    throw error
+                }
+                return (link, rate)
+            },
+            offMain: { Self.teardown.async(execute: $0) },
+            onMain: Self.nextTurn,
+            current: { [weak self] in self?.isCurrent(mark) ?? false },
+            close: { $0.link.close() },
+            retire: {
+                CaptureClose.run(closeIO: {}, objects: $0, destroy: SourceCapture.destroy, later: SourceCapture.nextTurn)
+            },
+            done: { [weak self] outcome in self?.tapOpened(outcome, note: note, opened: opened) })
+    }
+
+    /// On the main queue: the tap a start made off the main thread is read, or it failed.
+    private func tapOpened(_ outcome: CaptureOpen.Outcome<TapObjects, (link: IOLink, rate: Double)>,
+                           note: (Double) -> String, opened: (Error?) -> Void) {
+        tapOpening = false
+        pendingOpen = nil
+        switch outcome {
+        case .reading(let objects, let read):
+            sampleRate = read.rate
+            tap = objects
+            io = read.link
+            watchTap(objects)
+            DebugTrace.log(note(sampleRate))
+            opened(nil)
+            if lookAfterOpen {
+                lookAfterOpen = false
+                followApp()
+            }
+        case .failed(let error):
+            halt()
+            opened(error)
+        }
+    }
+
+    /// Before a capture opened on the main thread: a halted start still on the
+    /// background queue would set the senders' inputs to its tap's rate and
+    /// write them with its IOProc until its close there runs (S461).
+    private func settleCancelled() {
+        guard cancelQueued else { return }
+        cancelQueued = false
+        MainBlock.timed("the wait for a cancelled start") { Self.teardown.sync {} }
+    }
+
+    /// Makes a tap on the main thread once every earlier one queued for
+    /// destroying is gone, as when both ran on main.
+    private static func makeTapOnMain(_ description: CATapDescription) throws -> TapObjects {
+        MainBlock.timed("the wait for the last tap's destroy") { teardown.sync {} }
+        return try MainBlock.timed("the tap's creation") { try TapObjects(description) }
     }
 
     /// Starts an IOProc on the tap's aggregate device and makes the tap the
@@ -423,7 +525,8 @@ final class SourceCapture {
     private static var lastDestroy: TimeInterval?
 
     /// Destroys taps and their aggregate devices, which can hold a thread for
-    /// tens of milliseconds, away from the main thread (the stop's UI hitch).
+    /// tens of milliseconds, away from the main thread (the stop's UI hitch),
+    /// and makes a session's new tap (S461), in the order the main queue asked.
     private static let teardown = DispatchQueue(label: "AudioSync.capture-teardown", qos: .userInitiated)
 
     /// Seconds since a tap was last destroyed, nil when none was (S227 g).
@@ -449,6 +552,10 @@ final class SourceCapture {
 
     /// The apps' audio processes or the running apps changed: follow them (S11).
     private func followApp(secondLook: Bool = false) {
+        guard !tapOpening else {
+            lookAfterOpen = true
+            return
+        }
         guard let source else { return }
         let excluding = tapExcludes
         let apps: [String]
@@ -540,7 +647,7 @@ final class SourceCapture {
             outcome = try AppRetap.run(
                 updateInPlace: { updateTap(to: processes) },
                 makeTap: { () throws -> TapObjects in
-                    try TapObjects(Self.describe(processes, excluding: tapExcludes))
+                    try Self.makeTapOnMain(Self.describe(processes, excluding: tapExcludes))
                 },
                 rateFits: { !CaptureRate.needsRestart(current: sampleRate, reported: Self.rate(of: $0)) },
                 discard: { retire($0) },
@@ -797,14 +904,12 @@ private extension SourceCapture {
         /// Makes the tap, reads its format, then makes an aggregate device
         /// holding only the tap.
         init(_ setup: CATapDescription) throws {
-            // A tap is made only once every earlier one queued for destroying is gone, as when both ran on main.
-            MainBlock.timed("the wait for the last tap's destroy") { SourceCapture.teardown.sync {} }
             SourceCapture.configureTap(setup)
             // A UUID of its own for every tap, so a new tap never shares one
             // with an earlier tap that has yet to be destroyed (`CaptureClose`).
             setup.uuid = UUID()
             var tap = AudioObjectID(kAudioObjectUnknown)
-            var status = MainBlock.timed("the tap's creation") { AudioHardwareCreateProcessTap(setup, &tap) }
+            var status = AudioHardwareCreateProcessTap(setup, &tap)
             guard status == noErr, tap != kAudioObjectUnknown else {
                 throw CaptureError.tapNotCreated(status == noErr ? kAudioHardwareUnspecifiedError : status)
             }
@@ -826,9 +931,7 @@ private extension SourceCapture {
                 ],
             ]
             var aggregate = AudioObjectID(kAudioObjectUnknown)
-            status = MainBlock.timed("the aggregate device's creation") {
-                AudioHardwareCreateAggregateDevice(settings as CFDictionary, &aggregate)
-            }
+            status = AudioHardwareCreateAggregateDevice(settings as CFDictionary, &aggregate)
             guard status == noErr, aggregate != kAudioObjectUnknown else {
                 AudioHardwareDestroyProcessTap(tap)
                 throw CaptureError.aggregateDeviceFailed(status == noErr ? kAudioHardwareUnspecifiedError : status)

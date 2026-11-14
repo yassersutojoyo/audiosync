@@ -19455,5 +19455,193 @@ do {
           "\(fakeUnits.playing), at most \(fakeUnits.most)")
 }
 
+// MARK: Capture start off the main thread (CaptureSupport.swift, ProcessTapCapture.swift)
+do {
+    struct TapOpenFailure: Error {}
+    final class TapOpenSteps {
+        var log: [String] = []
+        var offMain: [() -> Void] = []
+        var onMain: [() -> Void] = []
+        var current = true
+    }
+    @discardableResult
+    func tapOpenRun(_ steps: TapOpenSteps, makeFails: Bool = false, readFails: Bool = false, name: String = "",
+                    current: (() -> Bool)? = nil) -> CaptureOpen.Pending<String> {
+        CaptureOpen.run(
+            make: { () throws -> String in
+                steps.log.append("make tap\(name)")
+                if makeFails { throw TapOpenFailure() }
+                return "tap\(name)"
+            },
+            read: { (tap: String) throws -> String in
+                steps.log.append("start \(tap)")
+                if readFails { throw TapOpenFailure() }
+                return "ioproc\(name)"
+            },
+            offMain: { steps.offMain.append($0) },
+            onMain: { steps.onMain.append($0) },
+            current: current ?? { steps.current },
+            close: { steps.log.append("close \($0)") },
+            retire: { steps.log.append("destroy \($0)") },
+            done: { outcome in
+                switch outcome {
+                case .reading(let tap, let link): steps.log.append("reading \(tap) \(link)")
+                case .failed: steps.log.append("failed")
+                }
+            })
+    }
+    func tapOpenDrain(_ steps: TapOpenSteps) {
+        while !steps.offMain.isEmpty || !steps.onMain.isEmpty {
+            let queued = steps.offMain
+            steps.offMain = []
+            queued.forEach { $0() }
+            let turns = steps.onMain
+            steps.onMain = []
+            turns.forEach { $0() }
+        }
+    }
+    // covers: S461
+    let tapOpenPlain = TapOpenSteps()
+    tapOpenRun(tapOpenPlain)
+    check(tapOpenPlain.log.isEmpty && tapOpenPlain.offMain.count == 1,
+          "capture start off main: the tap is made on the background queue, nothing of it on the caller's turn",
+          tapOpenPlain.log.joined(separator: ", "))
+    tapOpenPlain.offMain.forEach { $0() }
+    tapOpenPlain.offMain = []
+    check(tapOpenPlain.log == ["make tap", "start tap"] && tapOpenPlain.onMain.count == 1,
+          "capture start off main: the tap, its aggregate device and the device start run off the main thread, the result comes back on the main queue",
+          tapOpenPlain.log.joined(separator: ", "))
+    tapOpenDrain(tapOpenPlain)
+    check(tapOpenPlain.log == ["make tap", "start tap", "reading tap ioproc"],
+          "capture start off main: a start still current keeps the tap it made",
+          tapOpenPlain.log.joined(separator: ", "))
+    let tapOpenEarlyOff = TapOpenSteps()
+    tapOpenRun(tapOpenEarlyOff)
+    tapOpenEarlyOff.current = false
+    tapOpenDrain(tapOpenEarlyOff)
+    check(tapOpenEarlyOff.log == ["make tap", "start tap", "close ioproc", "destroy tap"],
+          "capture start off main: an off before the tap is made closes the IOProc and destroys the tap it made, and reports nothing",
+          tapOpenEarlyOff.log.joined(separator: ", "))
+    let tapOpenLateOff = TapOpenSteps()
+    tapOpenRun(tapOpenLateOff)
+    tapOpenLateOff.offMain.forEach { $0() }
+    tapOpenLateOff.offMain = []
+    tapOpenLateOff.current = false
+    tapOpenDrain(tapOpenLateOff)
+    check(tapOpenLateOff.log == ["make tap", "start tap", "close ioproc", "destroy tap"],
+          "capture start off main: an off while the result is on its way to the main queue leaves no tap or aggregate device behind",
+          tapOpenLateOff.log.joined(separator: ", "))
+    let tapOpenReadFail = TapOpenSteps()
+    tapOpenRun(tapOpenReadFail, readFails: true)
+    tapOpenDrain(tapOpenReadFail)
+    check(tapOpenReadFail.log == ["make tap", "start tap", "destroy tap", "failed"],
+          "capture start off main: a device start that fails destroys the tap, then reports the failure on the main queue",
+          tapOpenReadFail.log.joined(separator: ", "))
+    let tapOpenMakeFail = TapOpenSteps()
+    tapOpenRun(tapOpenMakeFail, makeFails: true)
+    tapOpenDrain(tapOpenMakeFail)
+    let tapOpenMakeFailOff = TapOpenSteps()
+    tapOpenRun(tapOpenMakeFailOff, makeFails: true)
+    tapOpenMakeFailOff.current = false
+    tapOpenDrain(tapOpenMakeFailOff)
+    check(tapOpenMakeFail.log == ["make tap", "failed"] && tapOpenMakeFailOff.log == ["make tap"],
+          "capture start off main: a tap that can't be made is reported, unless the start was switched off meanwhile",
+          (tapOpenMakeFail.log + ["|"] + tapOpenMakeFailOff.log).joined(separator: ", "))
+    // On, off and on again while the main thread is busy: the off's close is queued behind the first start.
+    let tapOpenRestart = TapOpenSteps()
+    var tapOpenLive = "1"
+    let tapOpenFirst = tapOpenRun(tapOpenRestart, name: "1", current: { tapOpenLive == "1" })
+    let tapOpenFirstJob = tapOpenRestart.offMain
+    tapOpenRestart.offMain = []
+    tapOpenFirstJob.forEach { $0() }
+    tapOpenLive = "2"
+    CaptureOpen.cancel(tapOpenFirst, offMain: { tapOpenRestart.offMain.append($0) },
+                       close: { tapOpenRestart.log.append("close \($0)") })
+    tapOpenRun(tapOpenRestart, name: "2", current: { tapOpenLive == "2" })
+    let tapOpenQueued = tapOpenRestart.offMain
+    tapOpenRestart.offMain = []
+    tapOpenQueued.forEach { $0() }
+    check(tapOpenRestart.log == ["make tap1", "start tap1", "close ioproc1", "make tap2", "start tap2"],
+          "capture start off main: an off queues the pending start's IOProc close on the background queue, so it is gone before the next start's device start, even with the main thread busy",
+          tapOpenRestart.log.joined(separator: ", "))
+    tapOpenDrain(tapOpenRestart)
+    check(tapOpenRestart.log == ["make tap1", "start tap1", "close ioproc1", "make tap2", "start tap2",
+                                 "reading tap2 ioproc2", "destroy tap1"],
+          "capture start off main: the cancelled start's tap is destroyed once, its IOProc closed once, and the next start is kept",
+          tapOpenRestart.log.joined(separator: ", "))
+
+    let tapOpenSource = (try? String(contentsOfFile: "Sources/AudioSync/ProcessTapCapture.swift", encoding: .utf8)) ?? ""
+    let tapOpenEngine = (try? String(contentsOfFile: "Sources/AudioSync/SyncEngine.swift", encoding: .utf8)) ?? ""
+    let tapOpenWindows = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
+    func tapOpenPart(_ source: String, _ head: String) -> String {
+        source.components(separatedBy: head).dropFirst().first?.components(separatedBy: "\n    }\n").first ?? ""
+    }
+    let tapOpenBody = tapOpenPart(tapOpenSource, "private func openTap(")
+    check(tapOpenBody.contains("CaptureOpen.run(") && tapOpenBody.contains("offMain: { Self.teardown.async(execute: $0) }"),
+          "capture start off main: a session's tap is made and started on the queue that destroys taps, so a switch's old tap still goes after the new one is made")
+    let tapObjectsInit = tapOpenSource.components(separatedBy: "init(_ setup: CATapDescription) throws {").dropFirst().first?
+        .components(separatedBy: "\n        }\n").first ?? ""
+    check(!tapObjectsInit.isEmpty && !tapObjectsInit.contains("teardown.sync") && !tapObjectsInit.contains("MainBlock.timed("),
+          "capture start off main: making a tap neither waits on the teardown queue, which would deadlock on it, nor times itself as main-thread work")
+    let tapOpenStop = tapOpenPart(tapOpenEngine, "func stop(then completion: (() -> Void)? = nil) {")
+        .components(separatedBy: "guard isRunning, let parts else {").dropFirst().first?
+        .components(separatedBy: "return").first ?? ""
+    check(tapOpenStop.contains("capture.halt()"),
+          "capture start off main: a stop while the capture is still opening halts it, so its tap is closed when it comes")
+    check(tapOpenPart(tapOpenSource, "    func halt() {").contains("CaptureOpen.cancel("),
+          "capture start off main: a halt queues the pending start's IOProc close on the background queue")
+    check(tapOpenPart(tapOpenEngine, "func macWillSleep() {").contains("capture.halt()"),
+          "capture start off main: the Mac going to sleep ends a start still opening, as a stop does")
+    let tapOpenOnMain = tapOpenPart(tapOpenEngine, "started: ((Error?) -> Void)? = nil) throws {")
+        .components(separatedBy: "guard let started else {").dropFirst().first?
+        .components(separatedBy: "began(parts").first ?? ""
+    check(tapOpenOnMain.contains("starting = false"),
+          "capture start off main: a start on the main thread ends a pending one, so the switch can't stay on after a later stop")
+    let tapOpenOutputs = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Outputs.swift", encoding: .utf8)) ?? ""
+    let tapOpenAppEngine = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Engine.swift", encoding: .utf8)) ?? ""
+    check(tapOpenPart(tapOpenOutputs, "func setSource(").contains("SourceSwitch.decide(from: audioSource, to: source, streaming: streamingShown)"),
+          "capture start off main: a source picked while a start opens restarts that start with the new source")
+    check(CaptureOpen.hadSpeaker(starting: true, startHad: true, sessionHad: false)
+            && !CaptureOpen.hadSpeaker(starting: true, startHad: false, sessionHad: true)
+            && CaptureOpen.hadSpeaker(starting: false, startHad: false, sessionHad: true)
+            && !CaptureOpen.hadSpeaker(starting: false, startHad: true, sessionHad: false),
+          "capture start off main: a pending start counts as having had a speaker only when it started with one, so one started with every speaker off waits for its first as a running session does")
+    check(tapOpenPart(tapOpenOutputs, "func stopIfIdle() {").contains(
+            "hadSpeaker: CaptureOpen.hadSpeaker(starting: engine.isStarting, startHad: startHadSpeaker,")
+            && tapOpenPart(tapOpenAppEngine, "func startEngine(").contains("startHadSpeaker = hasSpeaker"),
+          "capture start off main: the last speaker switched off while a start opens stops it, judged by the speakers that start had")
+    let tapOpenInputBody = tapOpenPart(tapOpenSource, "private func startInput(_ uid: String) throws {")
+    let tapOpenSettleAt = tapOpenInputBody.range(of: "settleCancelled()")
+    let tapOpenInputIOAt = tapOpenInputBody.range(of: "IOLink(device: device, sink: sink)")
+    check(tapOpenSettleAt != nil && tapOpenInputIOAt != nil && tapOpenSettleAt!.lowerBound < tapOpenInputIOAt!.lowerBound,
+          "capture start off main: an input opened on the main thread waits for a cancelled start still on the background queue, so that start's IOProc and rate never reach the senders' inputs after it")
+    let tapOpenWaiting = tapOpenPart(tapOpenSource, "private func startApps(_ bundleIDs: [String], rebuild: Bool) throws {")
+        .components(separatedBy: "guard !found.isEmpty else {").dropFirst().first ?? ""
+    let tapOpenWaitSettle = tapOpenWaiting.range(of: "settleCancelled()")
+    let tapOpenWaitPrepare = tapOpenWaiting.range(of: "parts?.prepare(captureRate: sampleRate)")
+    check(tapOpenWaitSettle != nil && tapOpenWaitPrepare != nil && tapOpenWaitSettle!.lowerBound < tapOpenWaitPrepare!.lowerBound
+            && tapOpenPart(tapOpenSource, "    func halt() {").contains("cancelQueued = true"),
+          "capture start off main: an app waiting for its audio process sets the senders' rate only after a cancelled start on the background queue is done")
+    check(CaptureOpen.start(running: false, starting: false, rebuild: false, switching: false, retrying: false) == .offMain,
+          "capture start off main: a fresh start (the switch, a speaker, a zone, auto-connect after a wake) opens its capture off the main thread")
+    check(CaptureOpen.start(running: false, starting: true, rebuild: false, switching: false, retrying: false) == .joinPending,
+          "capture start off main: a fresh start while one still opens joins it instead of starting the capture again, so auto-connect's repeats can't keep restarting it")
+    check(CaptureOpen.start(running: true, starting: false, rebuild: false, switching: false, retrying: false) == .onMain
+            && CaptureOpen.start(running: false, starting: false, rebuild: true, switching: false, retrying: false) == .onMain
+            && CaptureOpen.start(running: false, starting: true, rebuild: false, switching: true, retrying: false) == .onMain
+            && CaptureOpen.start(running: false, starting: false, rebuild: false, switching: false, retrying: true) == .onMain,
+          "capture start off main: a restart of a running session, a rebuild, a source switch and the whole system's retries still open on the main thread")
+    check(CaptureOpen.switchOn(running: false, starting: true) && CaptureOpen.switchOn(running: true, starting: false)
+            && !CaptureOpen.switchOn(running: false, starting: false),
+          "capture start off main: the power switch shows on from the click while the capture still opens, and off again once a start fails or is cancelled")
+    check(tapOpenPart(tapOpenAppEngine, "func startEngine(").contains("CaptureOpen.start(running: engine.isRunning, starting: engine.isStarting,"),
+          "capture start off main: every start decides through the same rule whether its capture opens off the main thread")
+    check(tapOpenPart(tapOpenWindows, "func pushModel() {").contains("publish(\\.running, streamingShown)")
+            && tapOpenPart(tapOpenWindows, "func pushModel() {").contains("menuBar?.setRunning(streamingShown)")
+            && tapOpenWindows.contains("setStreaming(!streamingShown, fromMenu: true)")
+            && tapOpenWindows.contains("menuItem.title = streamingShown ?"),
+          "capture start off main: the window's switch, the menu bar item and the menu show a pending start as on, so a second click turns it off")
+}
+
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
 exit(failedChecks > 0 ? 1 : 0)

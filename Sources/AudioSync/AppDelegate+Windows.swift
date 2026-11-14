@@ -478,6 +478,11 @@ extension AppDelegate {
 
     // MARK: - Actions behind the views
 
+    /// On while streaming runs and while its start still opens the capture (S461).
+    var streamingShown: Bool {
+        CaptureOpen.switchOn(running: engine.isRunning, starting: engine.isStarting)
+    }
+
     /// The power switch. Switching off by hand also keeps auto-connect from
     /// starting streaming again until the user turns it back on.
     private func setStreaming(_ on: Bool, fromMenu: Bool = false) {
@@ -605,7 +610,7 @@ extension AppDelegate {
     /// decides whether Now Playing polls and AirPlay receivers get the track,
     /// and when the next reconcile falls due (`scheduleDueReconcile`).
     func pushModel() {
-        publish(\.running, engine.isRunning)
+        publish(\.running, streamingShown)
         noteSessionSpeaker()
         publish(\.noSpeakerOn, StreamingPolicy.showsNoSpeakerOn(
             streaming: engine.isRunning, enabledAirPlay: playableAirPlay.union(castSwitchedOn), enabledLocal: enabledLocal))
@@ -657,7 +662,7 @@ extension AppDelegate {
         publishBuiltInVolume()
         followCalibrationContext()
         followCalibrateAll()
-        menuBar?.setRunning(engine.isRunning)
+        menuBar?.setRunning(streamingShown)
         syncStreamingActivity()
         syncTrackInfo()
         scheduleDueReconcile()
@@ -991,7 +996,7 @@ extension AppDelegate {
 
     @objc func showSettings(_ sender: Any?) { openSettingsWindow() }
 
-    @objc func toggleStreaming(_ sender: Any?) { setStreaming(!engine.isRunning, fromMenu: true) }
+    @objc func toggleStreaming(_ sender: Any?) { setStreaming(!streamingShown, fromMenu: true) }
 
     @objc func newZone(_ sender: Any?) { promptNewZone() }
 
@@ -1018,7 +1023,7 @@ extension AppDelegate {
         case #selector(applyTypedDelay(_:)):
             return appModel.hasDelayTyping
         case #selector(toggleStreaming(_:)):
-            menuItem.title = engine.isRunning ? text.menuTurnStreamingOff : text.menuTurnStreamingOn
+            menuItem.title = streamingShown ? text.menuTurnStreamingOff : text.menuTurnStreamingOn
         case #selector(addCastByAddress(_:)):
             return appModel.castCanAdd
         case #selector(recallPresetFromMenu(_:)):

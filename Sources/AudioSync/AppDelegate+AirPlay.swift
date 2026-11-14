@@ -194,6 +194,7 @@ extension AppDelegate {
             self.nativeAirPlay?.model.asleep = true
             self.castModel.asleep = true
             self.engine.macWillSleep()
+            self.refreshStreamingViews()   // a start still opening ended (S461)
             for uid in self.freshLinks.sleeping() {
                 DebugTrace.log("[AudioSync] fresh link: restart of Bluetooth output \(uid) cancelled: the Mac slept")
             }

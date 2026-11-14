@@ -14,8 +14,14 @@ extension AppDelegate {
     /// already stored; a new capture that fails gives way to the old one.
     /// `onCaptureFailure`: a capture that fails calls it instead of being
     /// handled as final, for a caller that tries again (S227 g).
+    /// A fresh start opens its capture off the main thread and finishes on
+    /// the main queue once it is open (S461, `CaptureOpen.start`).
     func startEngine(origin: StartOrigin, rebuild: Bool = false, switching: CaptureSwitch.Change? = nil,
                      onCaptureFailure: (() -> Void)? = nil) {
+        let opens = CaptureOpen.start(running: engine.isRunning, starting: engine.isStarting, rebuild: rebuild,
+                                      switching: switching != nil, retrying: onCaptureFailure != nil)
+        if opens == .joinPending { return }
+        let captureOffMain = opens == .offMain
         // The permission setup's capture would write the same AirPlay and Cast feed as this one.
         setupCaptureProbe?.halt()
         setupCaptureProbe = nil
@@ -69,18 +75,43 @@ extension AppDelegate {
             engine.stop()
             midRebuild = true
         }
-        var outcome = CaptureSwitch.Outcome.switched
         briefLoss.restart()   // a new session counts only the devices listed now (S328)
         clearNotices(stallRetry.lost.map { SpeakerKey.make(id: $0, airplay: false) })   // every output opens anew
         clearNotices(runawayRetry.struggling.map { SpeakerKey.make(id: $0, airplay: false) })
         stallRetry.reset()
         runawayRetry.reset()
         refusalRetry.reset()
+        func finish(_ failure: Error?) {
+            startFinished(failure, origin: origin, rebuild: rebuild, switching: switching,
+                          onCaptureFailure: onCaptureFailure, fromRate: fromRate, hasSpeaker: hasSpeaker,
+                          continuing: continuing)
+        }
+        var started: ((Error?) -> Void)?
+        if captureOffMain {
+            startHadSpeaker = hasSpeaker
+            started = { failure in
+                finish(failure)
+                self.refreshStreamingViews()
+            }
+        }
         do {
             try MainBlock.timed("the session start") {
-                try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild)
+                try engine.start(source: audioSource, inputPair: currentInputPair, rebuild: rebuild, started: started)
             }
         } catch {
+            finish(error)
+            return
+        }
+        if started == nil { finish(nil) }
+    }
+
+    /// The rest of `startEngine` once the engine's start is done, with
+    /// `failure` when it failed.
+    private func startFinished(_ failure: Error?, origin: StartOrigin, rebuild: Bool,
+                               switching: CaptureSwitch.Change?, onCaptureFailure: (() -> Void)?,
+                               fromRate: Double, hasSpeaker: Bool, continuing: Bool) {
+        var outcome = CaptureSwitch.Outcome.switched
+        if let error = failure {
             DebugTrace.log("[AudioSync] engine start failed: \(error)")   // codes stay in the log
             if rebuild, let quit = AppLifecycle.sourceQuit(.rebuildFailed(error), source: audioSource,
                                                            setting: .system) {

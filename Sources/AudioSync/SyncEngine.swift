@@ -67,6 +67,9 @@ final class StreamEngine {
     /// True from a successful `start` until `stop`; false while a stop's
     /// outputs still fade out.
     private(set) var isRunning = false
+    /// A start waits for its capture to open off the main thread (S461).
+    private var starting = false
+    var isStarting: Bool { starting }
 
     private let capture = SourceCapture()
     /// The running session's parts; nil while stopped or stopping.
@@ -195,8 +198,12 @@ final class StreamEngine {
     /// nothing: the host stops it first (S114). A stop still
     /// waiting for its outputs' fades finishes first, which takes at most
     /// 500 ms (S186). An input source reads the channel pair stored as
-    /// `inputPair` (`InputChannelPair.index`).
-    func start(source: AudioSource, inputPair: Int = 0, rebuild: Bool = false) throws {
+    /// `inputPair` (`InputChannelPair.index`). With `started`, a tap source's
+    /// capture opens off the main thread and the session runs once it is read;
+    /// `started` then reports that or the failure on the main queue, never
+    /// after a stop (S461).
+    func start(source: AudioSource, inputPair: Int = 0, rebuild: Bool = false,
+               started: ((Error?) -> Void)? = nil) throws {
         guard !isRunning else {
             DebugTrace.log("[AudioSync] session start ignored: a session is already running")
             return
@@ -211,9 +218,33 @@ final class StreamEngine {
             DebugTrace.log("[AudioSync] session not started: \(StartError.coreUnavailable)")
             throw StartError.coreUnavailable
         }
-        try MainBlock.timed("the capture's start") {
-            try capture.start(source: source, parts: parts, inputPair: inputPair, rebuild: rebuild)
+        guard let started else {
+            starting = false   // the capture's start below halts a pending one
+            try MainBlock.timed("the capture's start") {
+                try capture.start(source: source, parts: parts, inputPair: inputPair, rebuild: rebuild)
+            }
+            began(parts, source: source, inputPair: inputPair)
+            return
         }
+        starting = true
+        do {
+            try MainBlock.timed("the capture's start") {
+                try capture.start(source: source, parts: parts, inputPair: inputPair, rebuild: rebuild,
+                                  opened: { [weak self] failure in
+                    guard let self, self.starting else { return }
+                    self.starting = false
+                    if failure == nil { self.began(parts, source: source, inputPair: inputPair) }
+                    started(failure)
+                })
+            }
+        } catch {
+            starting = false
+            throw error
+        }
+    }
+
+    /// The session runs on `parts` now that its capture of `source` is open.
+    private func began(_ parts: EngineParts, source: AudioSource, inputPair: Int) {
         run(parts, captureRate: capture.sampleRate)
         startFlowWatch(source: source, inputPair: inputPair)
         DebugTrace.log("[AudioSync] session started: \(source) at \(capture.sampleRate) Hz")
@@ -274,6 +305,10 @@ final class StreamEngine {
         asleep = true
         stallWatch.pause()
         flowWatch.pause()
+        if starting {   // a start still opening ends as at a stop (S461)
+            starting = false
+            capture.halt()
+        }
     }
 
     /// The wake: both watches count again from now.
@@ -376,6 +411,10 @@ final class StreamEngine {
     /// under way has finished, or now. Idempotent.
     func stop(then completion: (() -> Void)? = nil) {
         guard isRunning, let parts else {
+            if starting {   // a capture still opening is halted, so its tap is closed when it comes (S461)
+                starting = false
+                capture.halt()
+            }
             if let completion { retirement.afterSessionStop(completion) }
             return
         }

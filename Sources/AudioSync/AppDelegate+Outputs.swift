@@ -64,7 +64,9 @@ extension AppDelegate {
     /// the session started that way and waits for its first speaker.
     func stopIfIdle() {
         noteSessionSpeaker()
-        if StreamingPolicy.isIdle(streaming: engine.isRunning, hadSpeaker: sessionHadSpeaker,
+        if StreamingPolicy.isIdle(streaming: streamingShown,
+                                  hadSpeaker: CaptureOpen.hadSpeaker(starting: engine.isStarting, startHad: startHadSpeaker,
+                                                                     sessionHad: sessionHadSpeaker),
                                   enabledAirPlay: playableAirPlay.union(castSwitchedOn), enabledLocal: enabledLocal) {
             stopEngine(.noSpeakerOn)
         }
@@ -307,7 +309,7 @@ extension AppDelegate {
     }
 
     func setSource(_ source: AudioSource, origin: StartOrigin) {
-        let change = SourceSwitch.decide(from: audioSource, to: source, streaming: engine.isRunning)
+        let change = SourceSwitch.decide(from: audioSource, to: source, streaming: streamingShown)
         clearNotices(SourceSwitch.noticesCleared(by: change, streaming: engine.isRunning,
                                                   inputWaiting: engine.waitsForInput))
         guard change != .none else {

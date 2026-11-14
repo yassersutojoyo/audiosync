@@ -251,6 +251,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var everyTimeGuard = EveryTimeGuard()
     /// A rebuild stopped the engine and has not started it again (S223).
     var midRebuild = false
+    /// The start still opening its capture began with a speaker on (S461).
+    var startHadSpeaker = false
     var airplayAccess: [String: AirPlayPairing.Access] = [:]
     /// The Mac is asleep: the AirPlay reconcile waits for the wake (EC3).
     var macAsleep = false
