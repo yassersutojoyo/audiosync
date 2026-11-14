@@ -18092,6 +18092,56 @@ do {
           String(format: "chip %.2f, secondary %.2f", worstChip, worstSecondary))
 }
 
+// MARK: The rule between zone cards and a hovered zone header's highlight (Zones.swift ZoneLook)
+do {
+    func slice(_ text: String, from marker: String, to end: String) -> String {
+        text.components(separatedBy: marker).dropFirst().first?.components(separatedBy: end).first ?? ""
+    }
+    func count(_ text: String, _ needle: String) -> Int { text.components(separatedBy: needle).count - 1 }
+    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+
+    // The approved mockup (14 Nov), 2x px in a 696 pt window: card from x 492, rule 632-1324, highlight 500-1344.
+    let slim: CGFloat = 696
+    let left = MainColumns.left(window: slim)
+    let column = slim - 2 * BrandTokens.Spacing.windowMargin - BrandTokens.Spacing.columnGap - left
+    let cardLeft = BrandTokens.Spacing.windowMargin + left + BrandTokens.Spacing.columnGap
+    func px(_ x: CGFloat) -> CGFloat { 2 * (cardLeft + x) }
+    let rule = (px(ZoneLook.dividerLeading), px(column - ZoneLook.dividerTrailing))
+    let highlight = (px(ZoneLook.highlightInset), px(column - ZoneLook.highlightInset))
+    // covers: S404
+    check(px(0) == 492 && rule == (632, 1324) && highlight == (500, 1344),
+          "zone card: the rule between zones runs from the title to the options button, the hover highlight 4 pt inside the card",
+          "rule \(rule), highlight \(highlight)")
+    // covers: S404
+    check(ZoneLook.dividerShows(above: "a", aboveExpanded: false, below: "b", hovered: nil)
+            && ZoneLook.dividerShows(above: "a", aboveExpanded: false, below: "b", hovered: "c")
+            && !ZoneLook.dividerShows(above: "a", aboveExpanded: false, below: "b", hovered: "a")
+            && ZoneLook.dividerShows(above: "a", aboveExpanded: true, below: "b", hovered: "a")
+            && !ZoneLook.dividerShows(above: "a", aboveExpanded: true, below: "b", hovered: "b")
+            && !ZoneLook.dividerShows(above: "a", aboveExpanded: false, below: "b", hovered: "b"),
+          "zone card: the rule above a hovered zone hides, and the one below it while it is folded")
+
+    let section = slice(window, from: "private func zonesSection(", to: "\n    }\n")
+    let header = slice(slice(window, from: "private struct ZoneCard", to: "\n}\n"),
+                       from: "private func header(_ t: UIStrings)", to: "\n    }\n")
+    let disclosure = slice(window, from: "final class ZoneDisclosure", to: "\n}\n")
+    // covers: S404
+    check(count(section, "Divider().padding(.leading, ZoneLook.dividerLeading).padding(.trailing, ZoneLook.dividerTrailing)") == 1
+            && count(section, "aboveExpanded: zoneDisclosure.isExpanded(zones[index - 1].id),") == 1
+            && count(section, "below: zone.id, hovered: zoneDisclosure.hovered) ? 1 : 0") == 1
+            && count(header, ".fill(Color.primary.opacity(hover.isHovered ? 0.05 : 0))\n                .padding(.horizontal, ZoneLook.highlightInset))") == 1
+            && count(header, "disclosure.hover(zone.id, $0)") == 1
+            && count(disclosure, "@Published private(set) var hovered: String?") == 1,
+          "zone card: the main window draws the rule and the highlight from ZoneLook and hides the rule by opacity")
+    // covers: S404
+    check(count(header, "HStack(spacing: ZoneLook.headerGap)") == 1
+            && count(header, ".frame(width: ZoneLook.chevronWidth, height: 32)") == 1
+            && count(header, "SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: shownState, size: ZoneLook.badgeColumn)") == 1
+            && count(header, ".padding(.trailing, ZoneLook.headerBadgeGap)") == 1
+            && count(header, ".padding(.leading, ZoneLook.headerPadding)") == 1,
+          "zone card: the header lays out from the constants the rule's start is summed from")
+}
+
 // MARK: The Presets row's colors in light and dark (MainWindow.swift PresetsRow)
 do {
     // covers: S268 (the Mac host)

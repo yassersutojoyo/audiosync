@@ -571,11 +571,17 @@ struct MainView: View {
     // MARK: Right column
 
     private func zonesSection(_ t: UIStrings) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let zones = model.zones
+        return VStack(alignment: .leading, spacing: 6) {
             SectionTitle(t.zones).padding(.leading, 4)
             VStack(spacing: 0) {
-                ForEach(Array(model.zones.enumerated()), id: \.element.id) { index, zone in
-                    if index > 0 { Divider() }
+                ForEach(Array(zones.enumerated()), id: \.element.id) { index, zone in
+                    if index > 0 {
+                        Divider().padding(.leading, ZoneLook.dividerLeading).padding(.trailing, ZoneLook.dividerTrailing)
+                            .opacity(ZoneLook.dividerShows(above: zones[index - 1].id,
+                                                           aboveExpanded: zoneDisclosure.isExpanded(zones[index - 1].id),
+                                                           below: zone.id, hovered: zoneDisclosure.hovered) ? 1 : 0)
+                    }
                     ZoneCard(model: model, disclosure: zoneDisclosure, zone: zone)
                         .id(ZoneAnchor(id: zone.id))
                 }
@@ -1356,8 +1362,14 @@ final class ZoneDisclosure: ObservableObject {
     /// True from a fold until its motion is over (`PanelFold`).
     @Published private(set) var moving = false
     private var folds = 0
+    /// The zone whose header the pointer is over.
+    @Published private(set) var hovered: String?
 
     func isExpanded(_ id: String) -> Bool { !collapsed.contains(id) }
+
+    func hover(_ id: String, _ inside: Bool) {
+        if inside { hovered = id } else if hovered == id { hovered = nil }
+    }
 
     func toggle(_ id: String) {
         if collapsed.remove(id) == nil { collapsed.insert(id) }
@@ -1481,12 +1493,12 @@ private struct ZoneCard: View {
     }
 
     private func header(_ t: UIStrings) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: ZoneLook.headerGap) {
             Button { hit(.chevron) } label: {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .modifier(FoldTurn(open: expanded))
-                    .frame(width: 16, height: 32)
+                    .frame(width: ZoneLook.chevronWidth, height: 32)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1500,7 +1512,7 @@ private struct ZoneCard: View {
             .onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }
 
             Button { hit(.zoneIcon) } label: {
-                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: shownState, size: 32)
+                SpeakerBadge(symbol: MenuBarView.zoneSymbol, state: shownState, size: ZoneLook.badgeColumn)
             }
             .buttonStyle(.plain)
             .contentShape(.focusEffect, Circle())
@@ -1517,7 +1529,7 @@ private struct ZoneCard: View {
             .focused($focused, equals: .zoneIcon)
             .onKeyPress(keys: [.leftArrow, .rightArrow]) { arrowKey($0) }
             // The badge's gap to the name, as in a speaker row.
-            .padding(.trailing, 4)
+            .padding(.trailing, ZoneLook.headerBadgeGap)
 
             VStack(alignment: .leading, spacing: 2) {
                 if model.isRenaming(zone) {
@@ -1566,12 +1578,16 @@ private struct ZoneCard: View {
             .modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))
         }
         .padding(.vertical, BrandTokens.Spacing.rowPaddingY)
-        .padding(.leading, 2)
+        .padding(.leading, ZoneLook.headerPadding)
         .padding(.trailing, BrandTokens.Spacing.rowPaddingX)
         .background(RoundedRectangle(cornerRadius: BrandTokens.Radius.row)
-            .fill(Color.primary.opacity(hover.isHovered ? 0.05 : 0)))
+            .fill(Color.primary.opacity(hover.isHovered ? 0.05 : 0))
+                .padding(.horizontal, ZoneLook.highlightInset))
         .animation(hover.isHovered ? .linear(duration: 0.08) : nil, value: hover.isHovered)
-        .onHover { hover.isHovered = $0 }
+        .onHover {
+            hover.isHovered = $0
+            disclosure.hover(zone.id, $0)
+        }
         // Like a speaker row's box opening its delay panel: everything but
         // the badge, the slider and the menu shows or hides the speakers.
         // The chevron stays the keyboard's way in.

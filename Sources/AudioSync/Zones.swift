@@ -525,4 +525,24 @@ enum ZoneLook {
     static let chipHeight: CGFloat = 18
     static let chipPaddingX: CGFloat = 7
     static let chipFill = 0.12
+
+    /// A zone header up to its title: padding, chevron, gap, badge, the badge's gap, gap.
+    static let headerPadding: CGFloat = 2
+    static let chevronWidth: CGFloat = 16
+    static let headerGap: CGFloat = 8
+    static let headerBadgeGap: CGFloat = 4
+
+    /// A hovered zone header's highlight stops this far inside the card on both sides.
+    static let highlightInset: CGFloat = 4
+    /// The rule between zone cards starts at the title and ends level with the ⋯ glyph,
+    /// which sits inside the header's trailing padding (approved mockup, 14 Nov).
+    static let dividerLeading = headerPadding + chevronWidth + headerGap + badgeColumn + headerBadgeGap + headerGap
+    static let dividerTrailing = BrandTokens.Spacing.rowPaddingX + highlightInset
+
+    /// Hidden by opacity, not removed, while the header it touches is hovered, so its highlight
+    /// never meets a rule and nothing moves. An expanded zone's member rows lie between its header
+    /// and the rule below it.
+    static func dividerShows(above: String, aboveExpanded: Bool, below: String, hovered: String?) -> Bool {
+        hovered != below && (hovered != above || aboveExpanded)
+    }
 }
