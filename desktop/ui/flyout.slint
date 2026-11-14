@@ -1073,6 +1073,11 @@ export component TrayFlyout inherits Window {
                         MasterVolume {
                             volume: root.master-volume;
                             waves: root.master-volume-waves;
+                            // As far from the track as the speaker: half the 32 px
+                            // button around its 16 px glyph, the spacing and half the knob.
+                            number-gap: 20px;
+                            // The number ends on the preset chevron's edge.
+                            padding-right: 6px;
                             mute-toggled => {
                                 root.master-mute-toggled();
                             }

@@ -247,6 +247,43 @@ fn the_level_meter_reaches_3_to_1_and_takes_no_focus() {
     }
 }
 
+/// The master volume rows as on the Mac (MenuBar.swift `MasterSlider`): the
+/// two-wave speaker, crossed out at 0; the track and the knob's edge in the
+/// secondary text color, 3:1 on the window and the tray panel; the number
+/// in the row titles' size and color.
+// covers: S450
+#[test]
+fn the_master_volume_draws_two_waves_and_a_3_to_1_track() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        for background in ["background", "surface"] {
+            let value = ratio("text@secondaryText", background, appearance);
+            assert!(
+                value >= MIN_GRAPHIC_CONTRAST,
+                "track on {background} ({appearance:?}): {value:.2}:1"
+            );
+        }
+    }
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let start = widgets
+        .find("public pure function master-volume(waves: int) -> string {")
+        .expect("Glyphs.master-volume");
+    let function = &widgets[start..];
+    let function = &function[..function.find("\n    }").expect("it ends")];
+    assert!(function.contains("return root.volume-mid;"));
+    assert!(!function.contains("volume-high") && !function.contains("volume-low"));
+    let master = component_body(&widgets, "MasterVolume");
+    assert!(master.contains("track: Tokens.secondary-text;"));
+    assert!(
+        !master.contains("Tokens.disabled-opacity"),
+        "no faint waves"
+    );
+    assert!(master.contains("font-size: Tokens.font-size-body;"));
+    assert!(master.contains("color: Tokens.text;"));
+    let slider = component_body(&widgets, "LevelSlider");
+    assert!(slider.contains("background: root.track;"));
+    assert!(slider.contains("border-color: Tokens.secondary-text;"));
+}
+
 /// The interface sources, for the checks below.
 const UI_FILES: &[(&str, &str)] = &[
     ("main.slint", include_str!("../ui/main.slint")),

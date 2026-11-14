@@ -390,19 +390,13 @@ export global Glyphs {
         return "";
     }
 
-    // The master volume's speaker: crossed out at 0, then one to three
-    // waves (`volume_waves` in view.rs sets the count).
+    // The master volume's speaker: crossed out at 0, else two waves at any
+    // level, as on the Mac; the slider shows the level.
     public pure function master-volume(waves: int) -> string {
         if waves <= 0 {
             return root.volume-muted;
         }
-        if waves == 1 {
-            return root.volume-low;
-        }
-        if waves == 2 {
-            return root.volume-mid;
-        }
-        return root.volume-high;
+        return root.volume-mid;
     }
 
     // The icon font's Repeat reads poorly at 16 px, so these two are drawn
@@ -1620,6 +1614,7 @@ export component LevelSlider inherits Rectangle {
     in property <float> step: 1;
     in property <bool> enabled: true;
     in property <Orientation> orientation: Orientation.horizontal;
+    in property <brush> track: Tokens.text.with-alpha(0.15);
     out property <bool> has-focus: focus.has-focus;
     callback changed(float);
     callback released(float);
@@ -1697,7 +1692,7 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? 4px : root.span;
         height: root.vertical ? root.span : 4px;
         border-radius: 2px;
-        background: Tokens.text.with-alpha(0.15);
+        background: root.track;
     }
 
     Rectangle {
@@ -1840,6 +1835,8 @@ export component VolumeSlider inherits HorizontalLayout {
     in property <bool> enabled: true;
     // How far an arrow key moves it; a drag is not snapped to it.
     in property <float> step: 1;
+    in property <brush> track <=> slider.track;
+    in property <bool> shows-value: true;
     callback changed(float);
     // True from the first move of a drag or key press to its release.
     callback editing(bool);
@@ -1902,7 +1899,7 @@ export component VolumeSlider inherits HorizontalLayout {
         }
     }
 
-    QuietText {
+    if root.shows-value: QuietText {
         text: Strings.volume-value(slider.value);
         width: 26px;
         horizontal-alignment: right;
@@ -1920,6 +1917,8 @@ export component MasterVolume inherits HorizontalLayout {
     in property <float> volume;
     // 0 while muted, else 1 to 3.
     in property <int> waves;
+    // From the track's end to the number.
+    in property <length> number-gap: 6px;
     out property <bool> slider-focused: slider.slider-focused;
     callback changed(float);
     callback mute-toggled();
@@ -1927,27 +1926,43 @@ export component MasterVolume inherits HorizontalLayout {
     spacing: 4px;
 
     IconButton {
-        glyph: Glyphs.master-volume(root.waves);
         label: root.waves == 0 ? Strings.unmute-master : Strings.mute-master;
         clicked => {
             root.mute-toggled();
         }
 
-        // All three waves under the level's, the rest faint, so the speaker
-        // keeps one size as the Mac's does.
         speaker := Glyph {
             x: (parent.width - self.width) / 2;
             width: 16px;
-            glyph: root.waves == 0 ? Glyphs.volume-muted : Glyphs.volume-high;
-            opacity: Tokens.disabled-opacity;
+            glyph: Glyphs.master-volume(root.waves);
         }
     }
 
-    slider := VolumeSlider {
-        volume: root.volume;
-        label: Strings.master-volume;
-        changed(value) => {
-            root.changed(value);
+    HorizontalLayout {
+        // The track ends half a knob inside the slider.
+        spacing: root.number-gap - 8px;
+
+        slider := VolumeSlider {
+            volume: root.volume;
+            label: Strings.master-volume;
+            track: Tokens.secondary-text;
+            shows-value: false;
+            changed(value) => {
+                root.changed(value);
+            }
+        }
+
+        // The slider's value says it for Narrator.
+        number := Text {
+            text: Strings.volume-value(root.volume);
+            // Fits "100", as the Mac's 25 pt does.
+            width: 25px;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            wrap: no-wrap;
+            font-size: Tokens.font-size-body;
+            color: Tokens.text;
+            accessible-role: none;
         }
     }
 }

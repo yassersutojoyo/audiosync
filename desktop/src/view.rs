@@ -12687,6 +12687,62 @@ mod tests {
         assert_eq!(speaker.size().width, row.size().width);
     }
 
+    /// Where the master volume's track starts and ends: between the knob's
+    /// centres at either end of the slider.
+    fn master_track(slider: &i_slint_backend_testing::ElementHandle) -> (f32, f32) {
+        let knob = 16.0;
+        let x = slider.absolute_position().x;
+        (x + knob / 2.0, x + slider.size().width - knob / 2.0)
+    }
+
+    fn right_edge(element: &i_slint_backend_testing::ElementHandle) -> f32 {
+        element.absolute_position().x + element.size().width
+    }
+
+    /// The tray panel's master volume number, as in the Mac panel: as far
+    /// from the track as the speaker is, and ending on the preset chevron's
+    /// edge.
+    // covers: S439
+    #[test]
+    fn the_flyout_volume_number_mirrors_the_speaker_gap_on_the_chevron_edge() {
+        let app = measured_flyout();
+        let number = flyout_element(&app, "MasterVolume::number");
+        let speaker = flyout_element(&app, "MasterVolume::speaker");
+        let (start, end) = master_track(&flyout_element(&app, "MasterVolume::slider"));
+        let speaker_gap = start - right_edge(&speaker);
+        let number_gap = number.absolute_position().x - end;
+        assert!(
+            (speaker_gap - number_gap).abs() < 0.5,
+            "speaker {speaker_gap} from the track, number {number_gap}"
+        );
+        let chevron = flyout_element(&app, "PresetPicker::chevron");
+        assert!((right_edge(&number) - right_edge(&chevron)).abs() < 0.5);
+    }
+
+    /// The main window's master volume number, as in the Mac window: 6 px
+    /// after the track, ending on the rows' chevron edge.
+    // covers: S450
+    #[test]
+    fn the_main_volume_number_sits_6_px_after_the_track_on_the_chevron_edge() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        draw_frames();
+        let element = |id: &str| {
+            ElementHandle::find_by_element_id(&app.main, id)
+                .next()
+                .unwrap_or_else(|| panic!("{id} is in the main window"))
+        };
+        let number = element("MasterVolume::number");
+        let (_, end) = master_track(&element("MasterVolume::slider"));
+        assert!((number.absolute_position().x - end - 6.0).abs() < 0.5);
+        let chevron = element("EqualizerCard::chevron");
+        assert!((right_edge(&number) - right_edge(&chevron)).abs() < 0.5);
+    }
+
     /// The preset row's chevron is the hero card's: one size.
     #[test]
     fn the_flyout_preset_chevron_matches_the_card_chevron() {
