@@ -12080,7 +12080,8 @@ do {
 // covers: S112
 do {
     // Pinned by type, so a renamed or reshaped call stops this suite from building.
-    let start: (StreamEngine) -> (AudioSource, Int, Bool) throws -> Void = StreamEngine.start(source:inputPair:rebuild:)
+    let start: (StreamEngine) -> (AudioSource, Int, Bool, ((Error?) -> Void)?) throws -> Void =
+        StreamEngine.start(source:inputPair:rebuild:started:)
     let stop: (StreamEngine) -> ((() -> Void)?) -> Void = StreamEngine.stop(then:)
     let running: KeyPath<StreamEngine, Bool> = \.isRunning
     let attach: (StreamEngine) -> (String, AudioObjectID, Double, Double) throws -> Void =
