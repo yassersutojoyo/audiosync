@@ -171,6 +171,8 @@ final class OutputRenderer: FadingOutput {
     private var startedFormat: OutputDeviceFormat?
     private var formatCheckQueued = false
     private var formatChanged = false
+    /// `finishStart` ran for the latest start: its latency and format baseline are read.
+    private var startFinished = false
     /// A fade-out was asked for since the latest start; `fadeEndNs` stays nil
     /// until its last frame renders, so a format check mid-fade can't use it.
     private var fadeOutRequested = false
@@ -317,11 +319,25 @@ final class OutputRenderer: FadingOutput {
         let startGeneration = generation
         Self.onUnitQueue {
             let status = AudioOutputUnitStart(fresh)
-            if status != noErr {
+            guard status == noErr else {
                 DispatchQueue.main.async {
                     guard self.generation == startGeneration else { return }
                     self.onStartFailed?(status)
                 }
+                return
+            }
+            // These reads wait while the device starts (up to 231 ms measured), so they stay off the main thread.
+            let reportedNs = MainBlock.timedOffMain("the output latency's read") {
+                Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
+            }
+            let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
+            let nowFormat = Self.deviceFormat(device)
+            let name = DebugTrace.enabled ? Self.deviceName(device) ?? "device \(device)" : ""
+            DispatchQueue.main.async {
+                guard self.generation == startGeneration else { return }
+                self.finishStart(device: device, captureRate: captureRate, delayMs: delayMs, started: started,
+                                 boundFormat: boundFormat, reportedNs: reportedNs, uid: uid,
+                                 nowFormat: nowFormat, name: name)
             }
         }
         halUnit = fresh
@@ -331,23 +347,29 @@ final class OutputRenderer: FadingOutput {
         formatChanged = false
         formatCheckQueued = false
         fadeOutRequested = false
+        startFinished = false
         startedDevice = device
         stopNote = "running"
-        let reportedNs = MainBlock.timed("the output latency's read") {
-            Self.measuredLatencyNs(unit: fresh, device: device, rate: started.rate)
-        }
-        let uid = Self.deviceString(device, kAudioDevicePropertyDeviceUID)
-        let lastPlausibleNs = uid.flatMap { Self.plausibleLatencyNs[$0] } ?? 0
-        latencyNs = target?.renderer.setReportedLatency(reportedNs, lastPlausibleNs: lastPlausibleNs) ?? reportedNs
-        let rejectedNs = target?.renderer.rejectedLatencyNs
-        if bluetooth, rejectedNs == nil, let uid { Self.plausibleLatencyNs[uid] = reportedNs }
         isBluetooth = bluetooth
         installDeviceAliveListener(device)
         installOverloadListener(device)
         installFormatListener(device)
-        let check = OutputFormatWatch.atStart(unitRate: started.unitRate, bound: boundFormat,
-                                              now: Self.deviceFormat(device))
+        startDebugReport()
+    }
+
+    /// The rest of a start once the units' queue started the device and read
+    /// what the start needs from it; main queue, same start only.
+    private func finishStart(device: AudioObjectID, captureRate: Double, delayMs: Double,
+                             started: (channels: Int, rate: Double, unitRate: Double),
+                             boundFormat: OutputDeviceFormat?, reportedNs: UInt64, uid: String?,
+                             nowFormat: OutputDeviceFormat?, name: String) {
+        let lastPlausibleNs = uid.flatMap { Self.plausibleLatencyNs[$0] } ?? 0
+        latencyNs = target?.renderer.setReportedLatency(reportedNs, lastPlausibleNs: lastPlausibleNs) ?? reportedNs
+        let rejectedNs = target?.renderer.rejectedLatencyNs
+        if isBluetooth, rejectedNs == nil, let uid { Self.plausibleLatencyNs[uid] = reportedNs }
+        let check = OutputFormatWatch.atStart(unitRate: started.unitRate, bound: boundFormat, now: nowFormat)
         startedFormat = check.baseline
+        startFinished = true
         if case .reopen(let old, let new) = check.verdict {
             if let uid, OutputFormatWatch.startReopens.take(uid), let listener = formatListener {
                 var address = Self.formatAddresses[0]
@@ -358,8 +380,13 @@ final class OutputRenderer: FadingOutput {
                     + "\(new.text); already reopened once for this, kept as is")
             }
         }
-        startDebugReport()
-        startLateCallbackReport(device: device)
+        // A notice since the queue's read was checked against no baseline yet; check it again against this one.
+        if formatCheckQueued, let listener = formatListener {
+            formatCheckQueued = false
+            var address = Self.formatAddresses[0]
+            listener.block(1, &address)
+        }
+        startLateCallbackReport(name: name)
         let extraLeadMs = target?.renderer.extraLeadMs ?? 0
         let lead = extraLeadMs > 0 ? ", Bluetooth, extra lead \(String(format: "%.1f", extraLeadMs)) ms" : ""
         DebugTrace.log("[AudioSync] output unit started on device \(device): \(started.channels) channels at "
@@ -449,6 +476,7 @@ final class OutputRenderer: FadingOutput {
     /// device is gone.
     func hasFaded(nowNs: UInt64) -> Bool {
         guard halUnit != nil, !reportedLoss, let renderer = target?.renderer else { return true }
+        guard startFinished else { return false }   // its latency isn't read yet
         return renderer.hasFaded(latencyNs: latencyNs, nowNs: nowNs)
     }
 
@@ -854,7 +882,8 @@ final class OutputRenderer: FadingOutput {
             guard let self, self.generation == mark, !self.formatCheckQueued else { return }
             self.formatCheckQueued = true
             DispatchQueue.main.asyncAfter(deadline: .now() + OutputFormatWatch.settleS) { [weak self] in
-                guard let self, self.generation == mark, !self.formatChanged, !self.reportedLoss else { return }
+                guard let self, self.generation == mark, !self.formatChanged, !self.reportedLoss,
+                      self.startFinished else { return }   // finishStart checks it again
                 self.formatCheckQueued = false
                 let now = OutputRenderer.deviceFormat(device)
                 guard case .reopen(let old, let new) = OutputFormatWatch.decide(
@@ -920,9 +949,8 @@ final class OutputRenderer: FadingOutput {
     /// rate followed above 1000 ppm for 10 s and each change of it after
     /// (S207). Polls the render callback's slot
     /// on that log's queue and reads only atomics.
-    private func startLateCallbackReport(device: AudioObjectID) {
+    private func startLateCallbackReport(name: String) {
         guard DebugTrace.enabled, let target else { return }
-        let name = Self.deviceName(device) ?? "device \(device)"
         var seen = target.lateCount.load(ordering: .acquiring)
         var reanchors = target.renderer.stallReanchors
         var lateReanchors = target.renderer.lateReanchors

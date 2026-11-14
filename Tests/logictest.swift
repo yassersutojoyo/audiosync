@@ -19048,6 +19048,30 @@ do {
           "output start: a quick off and on queues the new unit's start behind the old one's stop instead of waiting for it on the main thread")
     check(startHandOff.contains("onStartFailed?(") && startHandOff.contains("generation == startGeneration"),
           "output start: a device start that fails off the main thread is reported on the main queue, unless the output stopped or started again meanwhile")
+    let queuedReads = startHandOff.components(separatedBy: "AudioOutputUnitStart(fresh)").dropFirst().first?
+        .components(separatedBy: "DispatchQueue.main.async {").dropLast().last ?? ""
+    let latencyApply = startHandOff.components(separatedBy: "DispatchQueue.main.async {").last ?? ""
+    check(queuedReads.contains("measuredLatencyNs(") && startBody.components(separatedBy: "measuredLatencyNs(").count == 2
+            && queuedReads.contains("kAudioDevicePropertyDeviceUID")
+            && startBody.components(separatedBy: "kAudioDevicePropertyDeviceUID").count == 2
+            && queuedReads.contains("deviceFormat(device)")
+            && startBody.components(separatedBy: "deviceFormat(device)").count == 3,
+          "output start: the device's latency, UID and format after the start are read on the units' queue, never on the main thread")
+    check(!startBody.contains("MainBlock.timed(\"the output latency's read\"")
+            && queuedReads.contains("MainBlock.timedOffMain(\"the output latency's read\""),
+          "output start: the debug log times the latency read as off the main thread")
+    check(latencyApply.contains("generation == startGeneration"),
+          "output start: what the units' queue read lands on the main queue, unless the output stopped or started again meanwhile")
+    let finishBody = unitPart(unitSource, "private func finishStart(")
+    let formatWatchBody = unitPart(unitSource, "private func installFormatListener(")
+    check(startBody.contains("startFinished = false") && finishBody.contains("startFinished = true")
+            && unitPart(unitSource, "func hasFaded(nowNs: UInt64) -> Bool {").contains("guard startFinished else { return false }"),
+          "output start: a fade-out counts as played only once the start's latency is read, not against no latency")
+    check(formatWatchBody.contains("self.startFinished else { return }")
+            && finishBody.contains("if formatCheckQueued, let listener = formatListener {"),
+          "output start: a format notice before the start's baseline is read is checked again against it, never dropped")
+    check(!unitPart(unitSource, "private func startLateCallbackReport(").contains("deviceName("),
+          "output start: the late-callback log takes its device name from the units' queue, not from a main-thread read")
     check(unitPart(engineSource, "func attachOutput(uid: String, device: AudioObjectID, delayMs: Double, gain: Double) throws {")
             .contains("handleOutputLost(uid, renderer, .stalled("),
           "output start: a device that refuses the start off the main thread drops the output as a stall, its speaker on (S334)")

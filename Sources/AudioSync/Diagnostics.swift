@@ -94,6 +94,18 @@ enum MainBlock {
         }
         return try body()
     }
+
+    /// Times a step moved off the main thread, so the log shows it no longer blocks it.
+    @discardableResult
+    static func timedOffMain<T>(_ step: String, _ body: () throws -> T) rethrows -> T {
+        guard DebugTrace.enabled else { return try body() }
+        let began = DispatchTime.now().uptimeNanoseconds
+        defer {
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - began) / 1_000_000
+            DebugTrace.log("[AudioSync] off the main thread: \(String(format: "%.1f", ms)) ms in \(step)")
+        }
+        return try body()
+    }
 }
 
 /// A debug launch that switches no speaker on by itself and starts with every
