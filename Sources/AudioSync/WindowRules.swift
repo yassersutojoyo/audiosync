@@ -402,8 +402,8 @@ enum NoticeMotion: Equatable {
 
     static func of(reduceMotion: Bool) -> NoticeMotion { reduceMotion ? .fade : .grow }
 
-    /// Seconds.
-    var duration: TimeInterval { self == .grow ? 0.24 : 0.15 }
+    /// Seconds. The room opens over the first three quarters, 0.24 s, as the approved mockup does.
+    var duration: TimeInterval { self == .grow ? 0.32 : 0.15 }
 
     /// How open a notice's room is at `progress` through its move, 0 shut to 1 open. A closing
     /// notice runs the same progress backwards, so it fades before its room starts to shut.

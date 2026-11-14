@@ -7727,7 +7727,7 @@ do {
           "names: with Reduce Motion a name too long for its line stays put, cut with an ellipsis")
     check(NoticeMotion.of(reduceMotion: false) == .grow && NoticeMotion.of(reduceMotion: true) == .fade,
           "notices: a notice opens its height and moves the columns, with Reduce Motion it only cross-fades")
-    check(NoticeMotion.fade.duration < NoticeMotion.grow.duration && NoticeMotion.grow.duration <= 0.3,
+    check(NoticeMotion.fade.duration < NoticeMotion.grow.duration && NoticeMotion.grow.duration <= 0.35,
           "notices: the open and close stay short, the Reduce Motion fade shorter still",
           "\(NoticeMotion.grow.duration), \(NoticeMotion.fade.duration)")
     let noticeFrames = stride(from: 0.0, through: 1.0, by: 1 / (60 * NoticeMotion.grow.duration)).map { $0 } + [1.0]
@@ -7741,9 +7741,14 @@ do {
             && NoticeMotion.room(0.75) == 1 && NoticeMotion.opacity(0.5) == 0 && NoticeMotion.room(0.5) > 0.5,
           "notices: a notice fades in once most of its room is open, and a closing one fades before its room shuts")
     check(NoticeMotion.room(0.75) == 1 && NoticeMotion.opacity(1 - 1 / (60 * NoticeMotion.grow.duration)) < 1
-            && NoticeMotion.room(1 - 0.06 / NoticeMotion.grow.duration) == 1
-            && NoticeMotion.room(1 - 0.07 / NoticeMotion.grow.duration) < 1,
-          "notices: a closing notice starts fading in its first frame and its room starts to shut 0.06 s later")
+            && NoticeMotion.room(1 - 0.08 / NoticeMotion.grow.duration) == 1
+            && NoticeMotion.room(1 - 0.09 / NoticeMotion.grow.duration) < 1,
+          "notices: a closing notice starts fading in its first frame and its room starts to shut 0.08 s later")
+    // 14 Nov on the Mac: Waiting for audio pushed the columns 75 pt in 0.15-0.16 s; the approved option C takes 0.24 s.
+    let noticeOpenSeconds = (0...1000).map { Double($0) / 1000 }
+        .first { NoticeMotion.grow.room(at: min($0 / NoticeMotion.grow.duration, 1)) >= 1 } ?? 0
+    check(abs(noticeOpenSeconds - 0.24) < 0.002,
+          "notices: an opening notice eases the columns down over 0.24 s", "\(noticeOpenSeconds) s")
     // Source checks. On the Mac the columns jumped back 8 pt at 0.06 s, when the fade's own delayed animation
     // began, and a closing notice moved them 32.5 pt in its first frame on the front-loaded curve.
     let noticeMotionSource = (try? String(contentsOfFile: "Sources/AudioSync/NoticeMotion.swift", encoding: .utf8)) ?? ""
@@ -7791,8 +7796,8 @@ do {
               "notices: a dismissed notice keeps its room, which opens and shuts on one eased curve, no 60 fps frame past 14% of its travel",
               "\(keptAtDismissal), \(roomSteps(opening).max() ?? 0), \(roomSteps(closing).max() ?? 0)")
         let firstFade = NoticeMotion.grow.opacity(at: NoticeRoom<String>.progress(room.slots[0], at: dismissed + 1.0 / 60, duration: duration))
-        check(firstFade < 1 && roomHeight(room, dismissed + 0.059) == 1 && roomHeight(room, dismissed + 0.07) < 1,
-              "notices: a closing notice fades from its first frame and its room starts to shut 0.06 s later")
+        check(firstFade < 1 && roomHeight(room, dismissed + 0.079) == 1 && roomHeight(room, dismissed + 0.09) < 1,
+              "notices: a closing notice fades from its first frame and its room starts to shut 0.08 s later")
         let turning = dismissed + 0.1
         let beforeRepost = roomHeight(room, turning)
         var reposted = room
