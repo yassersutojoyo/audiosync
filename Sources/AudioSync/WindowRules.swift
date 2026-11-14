@@ -912,21 +912,40 @@ struct PanelFold: Equatable {
 }
 
 /// The menu bar panel's spacing and columns, from 2x captures on the Mac.
-/// One gap separates what shows of the preset row, the volume knob, This
-/// Mac's circles, the divider and the list's first circle.
+/// One gap separates what shows of the now playing card, the preset row, the
+/// volume knob, This Mac's circles, the divider and the list's first circle.
 enum PanelLayout {
     static let gap: CGFloat = 12
     /// The panel stack's spacing.
     static let spacing: CGFloat = 10
-    /// The preset icon sits this far inside its 34 pt row, a speaker's
-    /// circle inside its 36 pt row; the slider's knob fills its row.
-    static let presetInset: CGFloat = 9.5, rowInset: CGFloat = 5
-    /// What a borderless menu draws left of its label and right of its chevron.
-    static let menuLeadingInset: CGFloat = 2.5, menuChevronInset: CGFloat = 8
-    /// The preset row's label after its 18 pt icon and 9 pt gap, where the preset's name starts under it.
-    static let presetNameColumn: CGFloat = 18 + 9
+    /// The preset icon sits this far under its 34 pt row's top (14 Nov
+    /// capture) and above its bottom, a speaker's circle inside its 36 pt
+    /// row; the slider's knob fills its row.
+    static let presetTopInset: CGFloat = 11.5, presetInset: CGFloat = 9.5, rowInset: CGFloat = 5
+    /// What a borderless menu draws left of its label and right of its chevron (14 Nov capture).
+    static let menuLeadingInset: CGFloat = 2.5, menuChevronInset: CGFloat = 6.5
+    /// What the volume number's frame keeps right of its last digit.
+    static let digitBearing: CGFloat = 1.5
     /// The now playing card's padding.
     static let cardPadding: CGFloat = 10
+    /// The icon column's box, This Mac's circle's, and the gap before the text column.
+    static let iconBox: CGFloat = 26, iconGap: CGFloat = 9
+    /// Where the preset label and name, the slider and This Mac's names start.
+    static let textColumn = iconBox + iconGap
+    /// The preset row's own chevron, drawn at the card's chevron's size.
+    static let chevronPoint: CGFloat = 9
+    /// Between the slider and the volume number.
+    static let numberGap: CGFloat = 6
+    /// From the content's trailing edge: the card's chevron, the preset chevron and the volume number.
+    static var trailingInk: [CGFloat] {
+        [cardPadding + menuChevronInset, presetTrailing, volumeTrailing + digitBearing]
+    }
+    /// Above the preset row, under the card (on top of the stack's spacing).
+    static let cardToPreset: CGFloat = gap - spacing - presetTopInset
+    /// The card's bottom to the preset icon.
+    static let cardToPresetInk: CGFloat = spacing + presetTopInset + cardToPreset
+    /// Above the volume when no preset row shows (on top of the stack's spacing); the knob fills its row.
+    static let cardToVolume: CGFloat = gap - spacing
 
     /// Above the volume, under the preset row (on top of the stack's spacing).
     static let presetToVolume: CGFloat = gap - presetInset - spacing
@@ -939,11 +958,11 @@ enum PanelLayout {
     /// The source menu's leading padding in the card.
     static let sourceLeading: CGFloat = -menuLeadingInset
     /// The preset menu's and the volume row's trailing padding.
-    static let presetTrailing: CGFloat = cardPadding, volumeTrailing: CGFloat = cardPadding + menuChevronInset
+    static let presetTrailing: CGFloat = cardPadding + menuChevronInset, volumeTrailing: CGFloat = cardPadding + menuChevronInset - digitBearing
 
     /// The gaps that show, top to bottom.
     static var gaps: [CGFloat] {
-        [presetInset + spacing + presetToVolume, volumeToRows + rowInset,
+        [cardToPresetInk, spacing + cardToVolume, presetInset + spacing + presetToVolume, volumeToRows + rowInset,
          rowInset + rowsToDivider, spacing + dividerToList + rowInset]
     }
 }

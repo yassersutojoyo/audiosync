@@ -1154,12 +1154,14 @@ private struct PresetNameField: View {
 
 /// A left-column row's symbol, in the slot that starts every row's name on one line.
 struct QuickRowIcon: View {
+    /// The one symbol size, the menu bar panel's preset and volume icons' too.
+    static let point: CGFloat = 15
     let name: String
     init(_ name: String) { self.name = name }
 
     var body: some View {
         Image(systemName: name)
-            .font(.system(size: 15))
+            .font(.system(size: QuickRowIcon.point))
             .frame(width: 20, alignment: .leading)
     }
 }

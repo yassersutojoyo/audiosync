@@ -1713,7 +1713,9 @@ struct MenuBarView: View {
             if let hint = model.liveInputAirPlayHint {
                 LiveInputAirPlayNote(message: hint, font: .subheadline).padding(.top, -4)
             }
-            if PresetPanel.showsRow(model.presets) { PresetPicker(model: model).modifier(IntroPart(intro: intro, index: 3)) }
+            if PresetPanel.showsRow(model.presets) {
+                PresetPicker(model: model).padding(.top, PanelLayout.cardToPreset).modifier(IntroPart(intro: intro, index: 3))
+            }
             // The Mac's own speakers belong with the volume, above the one
             // divider, one gap apart (`PanelLayout`).
             VStack(alignment: .leading, spacing: 0) {
@@ -1721,7 +1723,7 @@ struct MenuBarView: View {
                 thisMacRows(t)
                 Divider().padding(.top, PanelLayout.rowsToDivider)
             }
-            .padding(.top, PresetPanel.showsRow(model.presets) ? PanelLayout.presetToVolume : 0)
+            .padding(.top, PresetPanel.showsRow(model.presets) ? PanelLayout.presetToVolume : PanelLayout.cardToVolume)
             .padding(.bottom, PanelLayout.dividerToList)
             .modifier(IntroPart(intro: intro, index: 4))
             if showsNoSpeakerOn { noSpeakerOnLine(t) }
@@ -1795,19 +1797,21 @@ struct MenuBarView: View {
     }
 
     private func masterRow(_ t: UIStrings) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: PanelLayout.iconGap) {
             MasterMuteButton(model: model, text: t, panel: true)
-            Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }), in: 0...100)
-                .controlSize(.small)
-                .tint(.primary)   // teal marks state only; a level is not one
-                .accessibilityLabel(t.masterVolume)
-                .accessibilityValue(t.volumeValue(model.master))
-                .help(t.masterVolume)
-            Text(t.volumeValue(model.master))
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(Brand.secondaryText)
-                .frame(width: 26, alignment: .trailing)
-                .accessibilityHidden(true)
+            HStack(spacing: PanelLayout.numberGap) {
+                Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }), in: 0...100)
+                    .controlSize(.small)
+                    .tint(.primary)   // teal marks state only; a level is not one
+                    .accessibilityLabel(t.masterVolume)
+                    .accessibilityValue(t.volumeValue(model.master))
+                    .help(t.masterVolume)
+                Text(t.volumeValue(model.master))
+                    .font(.body.monospacedDigit())
+                    .foregroundStyle(.primary)
+                    .frame(width: 26, alignment: .trailing)
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.trailing, PanelLayout.volumeTrailing)
     }
@@ -1992,8 +1996,8 @@ private struct CompactRow: View {
 
     var body: some View {
         Button(action: toggle) {
-            HStack(spacing: 9) {
-                SpeakerBadge(symbol: symbol, state: state, size: 26, ring: true, connecting: connecting)
+            HStack(spacing: PanelLayout.iconGap) {
+                SpeakerBadge(symbol: symbol, state: state, size: PanelLayout.iconBox, ring: true, connecting: connecting)
                 // The name goes before the availability note when both don't fit.
                 ScrollingTitle(text: name)
                     .font(.body)
@@ -2477,7 +2481,7 @@ struct PresetPicker: View {
     var body: some View {
         let t = model.text
         let line = ChoiceLine.preset(model.presets)
-        // The name sits under the menu, as the pull-down's label shows one line of text and an image only.
+        // A plain menu draws its label as laid out here, so the icon, the label and the chevron all open it.
         VStack(alignment: .leading, spacing: 0) {
             Menu {
                 ForEach(model.presets) { preset in
@@ -2485,31 +2489,36 @@ struct PresetPicker: View {
                                                       set: { _ in model.actions.recallPreset(preset.id) }))
                 }
             } label: {
-                HStack(spacing: 9) {
-                    SourcePicker.unnamedSymbol("square.stack.3d.up.fill")
-                        .frame(width: 18, height: 18)
+                HStack(spacing: PanelLayout.iconGap) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.system(size: QuickRowIcon.point))
                         .foregroundStyle(Brand.secondaryText)
-                        .accessibilityHidden(true)
+                        .frame(width: PanelLayout.iconBox)
                     Text(t.presets)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: PanelLayout.chevronPoint, weight: .semibold))
+                        .foregroundStyle(.tint)
                 }
+                .contentShape(Rectangle())
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(t.presets)
                 .accessibilityValue(line ?? t.choosePreset)
             }
-            .menuStyle(.borderlessButton)
-            // As the card's source menu, so its icon and chevron read as the volume icon and the card's chevron do.
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            // The card's source menu's grey, so the chevrons read alike.
             .tint(Brand.secondaryText)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, -PanelLayout.menuLeadingInset)
             .help(line ?? t.choosePreset)
             .accessibilityLabel(t.presets)
             .accessibilityValue(line ?? t.choosePreset)
             // A wrapped name grows the panel on the zone fold, so the panel doesn't shake.
             ChoiceLineView(line: line, fold: model.foldPanelZone)
-                .padding(.leading, PanelLayout.presetNameColumn)
+                .padding(.leading, PanelLayout.textColumn)
         }
         // Both lines fit in the row's 34 pt; only a wrapped name adds a line.
         .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
@@ -2858,14 +2867,17 @@ struct MasterMuteButton: View {
     var body: some View {
         let label = MasterMute.isMuted(model.master) ? text.unmuteMaster : text.muteMaster
         Button { model.toggleMasterMute() } label: {
-            Image(systemName: MasterMute.symbol(level: model.master))
-                // A fixed width, so the slider holds still as the waves come and go.
-                .frame(width: panel ? 20 : 18, height: 18, alignment: .leading)
-                .contentShape(Rectangle())
+            // Sized by the widest symbol, so the speaker and the slider hold still as the waves come and go.
+            ZStack(alignment: .leading) {
+                Image(systemName: "speaker.wave.3.fill").hidden()
+                Image(systemName: MasterMute.symbol(level: model.master))
+            }
+            .frame(width: panel ? PanelLayout.iconBox : 18, height: 18, alignment: panel ? .center : .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(panel ? AnyShapeStyle(Brand.secondaryText) : AnyShapeStyle(.secondary))
-        .font(panel ? .system(size: 13) : .caption)
+        .font(panel ? .system(size: QuickRowIcon.point) : .caption)
         .accessibilityLabel(label)
         .help(label)
     }

@@ -9066,16 +9066,34 @@ do {
           "menu bar panel: each frame of a fold sizes the window in whole points, its top edge fixed, so the content never shakes",
           "\(foldStep)")
     check(PanelLayout.gaps.allSatisfy { $0 == PanelLayout.gap },
-          "menu bar panel: one gap between the preset row, the volume knob, This Mac's circles, the divider and the list",
+          "menu bar panel: one gap between the now playing card, the preset row (or the volume knob when no preset row shows), the volume knob, This Mac's circles, the divider and the list",
           "\(PanelLayout.gaps)")
     check(PanelLayout.menuLeadingInset + PanelLayout.sourceLeading == 0,
           "menu bar panel: the source name starts on the title's and the artist's column")
-    let cardChevron = PanelLayout.cardPadding + PanelLayout.menuChevronInset
-    check(PanelLayout.presetTrailing + PanelLayout.menuChevronInset == cardChevron
-            && PanelLayout.volumeTrailing == cardChevron,
-          "menu bar panel: the preset chevron and the volume number end on the card chevron's column",
-          "\(PanelLayout.presetTrailing) \(PanelLayout.volumeTrailing)")
+    check(Set(PanelLayout.trailingInk).count == 1,
+          "menu bar panel: the card's chevron, the preset chevron and the volume number end on one edge",
+          "\(PanelLayout.trailingInk)")
+    let panelPresetSource = bar.components(separatedBy: "struct PresetPicker: View {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    let muteSource = bar.components(separatedBy: "struct MasterMuteButton: View {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    let masterRowSource = bar.components(separatedBy: "private func masterRow(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    check(bar.contains("HStack(spacing: PanelLayout.iconGap) {\n                SpeakerBadge(symbol: symbol, state: state, size: PanelLayout.iconBox")
+            && panelPresetSource.contains("HStack(spacing: PanelLayout.iconGap) {\n                    Image(systemName: \"square.stack.3d.up.fill\")")
+            && panelPresetSource.contains(".frame(width: PanelLayout.iconBox)\n                    Text(t.presets)")
+            && !panelPresetSource.contains(".overlay(") && !panelPresetSource.contains(".menuStyle(.borderlessButton)")
+            && masterRowSource.contains("HStack(spacing: PanelLayout.iconGap) {\n            MasterMuteButton(")
+            && muteSource.contains("PanelLayout.iconBox")
+            && bar.contains("? PanelLayout.presetToVolume : PanelLayout.cardToVolume)")
+            && panelPresetSource.contains(".font(.system(size: QuickRowIcon.point))")
+            && muteSource.contains(".system(size: QuickRowIcon.point)"),
+          "menu bar panel source: the preset and volume icons share This Mac's circle box, inside what opens them, and the main window rows' icon size; their text starts on the names' column; with no preset row the volume keeps the card's gap")
     let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let quickIconSource = mainSource.components(separatedBy: "struct QuickRowIcon: View {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(quickIconSource.contains(".font(.system(size: QuickRowIcon.point))"),
+          "main window: the Presets, Equalizer and Calibrate icons share one size, the menu bar panel's icons' too")
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
