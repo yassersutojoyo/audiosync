@@ -12793,6 +12793,34 @@ mod tests {
         assert_eq!((above + 5.0, below + 5.0), (12.0, 12.0));
     }
 
+    /// The same 12 px gap from the preset icon to the volume knob and from
+    /// the knob to this PC's first circle, as in the Mac panel; a preset's
+    /// name line moves the volume down with the row.
+    #[test]
+    fn the_flyout_volume_knob_sits_one_gap_from_the_presets_and_the_circles() {
+        let app = measured_flyout();
+        hold_clock();
+        let mut under_row = Vec::new();
+        for name in ["", "Evening"] {
+            app.flyout.set_current_preset(name.into());
+            draw_frames();
+            advance_clock(Duration::from_secs(1));
+            draw_frames();
+            let row = flyout_element(&app, "PresetPicker::row");
+            let icon = flyout_element(&app, "PresetPicker::icon");
+            let slider = flyout_element(&app, "MasterVolume::slider");
+            let rows = flyout_element(&app, "TrayFlyout::this-pc-view");
+            let knob = slider.absolute_position().y + slider.size().height / 2.0 - 8.0;
+            under_row.push(knob - (row.absolute_position().y + row.size().height));
+            assert_eq!(rows.absolute_position().y + 5.0 - (knob + 16.0), 12.0);
+            if name.is_empty() {
+                let icon_bottom = icon.absolute_position().y + icon.size().height / 2.0 + 8.0;
+                assert_eq!(knob - icon_bottom, 12.0);
+            }
+        }
+        assert_eq!(under_row[0], under_row[1]);
+    }
+
     /// The footer holds Open AudioSync at the left and Exit at the right,
     /// as the Mac panel holds Open AudioSync beside Quit.
     #[test]

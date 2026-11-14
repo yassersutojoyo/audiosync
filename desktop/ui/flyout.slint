@@ -62,7 +62,7 @@ component PresetPicker inherits Rectangle {
                     return reject;
                 }
 
-                HorizontalLayout {
+                row := HorizontalLayout {
                     // On the column of the volume icon below, centred in its 32 px button.
                     padding-left: 8px;
                     padding-right: 6px;
@@ -1070,7 +1070,10 @@ export component TrayFlyout inherits Window {
                     // This PC's speakers sit with the volume, above the divider, as
                     // in the Mac panel; the zones and connected speakers come after.
                     VerticalLayout {
-                        spacing: 2px;
+                        // The knob 12 px from the preset icon and this PC's first circle, as in the
+                        // Mac panel: the icon sits 10 px over its row's bottom, the knob 8 px inside.
+                        padding-top: root.presets.length > 0 ? -16px : 0px;
+                        spacing: -1px;
 
                         MasterVolume {
                             volume: root.master-volume;
@@ -1119,9 +1122,9 @@ export component TrayFlyout inherits Window {
                         // 12 px from this PC's circles to the line and on to the list's
                         // first, as in the Mac panel: rows set their circle 5 px inside.
                         Rectangle {
-                            height: 3px;
+                            height: 6px;
                             rows-divider := Divider {
-                                y: 5px;
+                                y: 8px;
                             }
                         }
                     }
