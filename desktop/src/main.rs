@@ -821,32 +821,14 @@ mod tests {
         assert!(body.contains("root.notices-dismissed-all();"), "{body}");
     }
 
-    /// While the Google Cast search finds nothing, the flyout offers Add by
-    /// Address… under the list, as the Mac panel does, and it opens the
-    /// main window's dialog.
+    /// Add by Address… lives in the main window only, as on the Mac:
+    /// the flyout never offers it.
     // covers: S419
     #[test]
-    fn the_flyout_offers_add_by_address_while_no_cast_speaker_is_found() {
+    fn the_flyout_leaves_add_by_address_to_the_main_window() {
         let flyout = include_str!("../ui/flyout.slint");
-        assert!(flyout.contains(
-            "if root.cast-by-address && root.cast-list == CastList.none-found: HorizontalLayout {"
-        ));
-        let body = handler_body(flyout, "text: Strings.cast-add-address;", "clicked");
-        assert!(
-            body.contains("root.cast-add-address-requested();"),
-            "{body}"
-        );
-
-        let view = include_str!("view.rs");
-        let wiring = &view[view
-            .find("flyout.on_cast_add_address_requested(")
-            .expect("the flyout's link is wired")..];
-        let wiring = &wiring[..wiring.find("});").expect("the wiring ends")];
-        assert!(wiring.contains("app.hide_flyout();"), "{wiring}");
-        assert!(
-            wiring.contains("app.main.invoke_cast_add_address_requested();"),
-            "{wiring}"
-        );
+        assert!(!flyout.contains("Strings.cast-add-address"));
+        assert!(include_str!("../ui/main.slint").contains("text: Strings.cast-add-address;"));
     }
 
     /// While AirPlay finds no speaker, the note in the main window and the
@@ -1000,11 +982,6 @@ mod tests {
                 "speaker-focused",
             ),
             (
-                "text: Strings.cast-add-address;",
-                "changed keyboard-focused",
-                "add-address-focused",
-            ),
-            (
                 "text: Strings.open-network-settings;",
                 "changed keyboard-focused",
                 "network-settings-focused",
@@ -1038,7 +1015,10 @@ mod tests {
         let at = |part: &str| flyout.find(part).unwrap_or_else(|| panic!("{part}"));
         let volume = at("MasterVolume {");
         let this_pc = at("for speaker in root.this-pc: FlyoutRow {");
-        let divider = volume + flyout[volume..].find("Divider { }").expect("a divider");
+        let divider = volume
+            + flyout[volume..]
+                .find("rows-divider := Divider {")
+                .expect("a divider");
         let zones = at("for zone in root.zones: VerticalLayout {");
         let connected = at("for speaker in root.speakers: FlyoutRow {");
         assert!(

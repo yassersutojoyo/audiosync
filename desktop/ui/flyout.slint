@@ -1,7 +1,7 @@
 // The tray flyout: what the macOS app's menu bar panel offers, opened by
 // clicking the AudioSync icon in the notification area. Streaming on and
 // off, the newest notice, the source, the master volume, every zone with
-// its speakers under it and every other speaker, then Exit; the mark and
+// its speakers under it and every other speaker, then Open AudioSync and Exit; the mark and
 // name open the main window. Escape or a click elsewhere closes it.
 
 import { Button, ScrollView } from "std-widgets.slint";
@@ -63,11 +63,12 @@ component PresetPicker inherits Rectangle {
                 }
 
                 HorizontalLayout {
-                    padding-left: 6px;
+                    // On the column of the volume icon below, centred in its 32 px button.
+                    padding-left: 8px;
                     padding-right: 6px;
                     spacing: 8px;
 
-                    Glyph {
+                    icon := Glyph {
                         glyph: Glyphs.presets;
                         color: Tokens.text;
                         width: 16px;
@@ -87,9 +88,9 @@ component PresetPicker inherits Rectangle {
                         accessible-role: none;
                     }
 
-                    Glyph {
+                    chevron := Glyph {
                         glyph: Glyphs.chevron-down;
-                        font-size: 12px;
+                        font-size: 10px;
                         color: Tokens.secondary-text;
                     }
                 }
@@ -179,7 +180,7 @@ component SourceMenu inherits Rectangle {
                         accessible-role: none;
                     }
 
-                    Glyph {
+                    chevron := Glyph {
                         glyph: Glyphs.chevron-down;
                         font-size: 10px;
                         color: Tokens.secondary-text;
@@ -529,6 +530,59 @@ component FlyoutZoneHeader inherits Rectangle {
     }
 }
 
+// A text button of the flyout's footer, as the Mac panel's Open AudioSync and Quit.
+component FooterButton inherits Rectangle {
+    in property <string> text;
+    in property <string> label;
+    callback clicked();
+
+    border-radius: Fluent.radius-control;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+    animate background { duration: Fluent.fast; }
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+
+        Text {
+            text: root.text;
+            font-size: Tokens.font-size-callout;
+            color: Tokens.text;
+            accessible-role: none;
+        }
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
 export component TrayFlyout inherits Window {
     in property <bool> running;
     // The header's mark breathes (mark_breath in src/window_rules.rs).
@@ -566,8 +620,6 @@ export component TrayFlyout inherits Window {
     // AirPlay discovery runs and has found no speaker yet, short of 20 s.
     in property <bool> airplay-searching;
     in property <CastList> cast-list;
-    // A Google Cast sender runs, so Add by Address… can list a speaker.
-    in property <bool> cast-by-address;
     // Streaming is on with every speaker off.
     in property <bool> no-speaker-on;
     // The newest notice only (or none); `notice-count` counts them all.
@@ -602,8 +654,6 @@ export component TrayFlyout inherits Window {
     callback notice-update-button-pressed(UpdateButton);
     // Open Network Settings under the no-speakers note.
     callback network-settings-requested();
-    // Add by Address…: the main window's dialog.
-    callback cast-add-address-requested();
     callback open-app();
     callback exit-app();
     callback close-requested();
@@ -636,7 +686,6 @@ export component TrayFlyout inherits Window {
     out property <bool> more-notices-focused;
     out property <bool> zone-focused;
     out property <bool> speaker-focused;
-    out property <bool> add-address-focused;
     out property <bool> network-settings-focused;
     // The height that shows every part down to the buttons, which the app
     // sizes the window to: Slint's own preferred height counts a wrapped
@@ -671,7 +720,6 @@ export component TrayFlyout inherits Window {
         root.more-notices-focused = false;
         root.zone-focused = false;
         root.speaker-focused = false;
-        root.add-address-focused = false;
         root.network-settings-focused = false;
         focus.focus();
     }
@@ -1041,9 +1089,16 @@ export component TrayFlyout inherits Window {
                                 }
                             }
                         }
-                    }
 
-                    Divider { }
+                        // 12 px from this PC's circles to the line and on to the list's
+                        // first, as in the Mac panel: rows set their circle 5 px inside.
+                        Rectangle {
+                            height: 3px;
+                            rows-divider := Divider {
+                                y: 5px;
+                            }
+                        }
+                    }
 
                     if root.no-speaker-on && (root.zones.length > 0 || root.speakers.length > 0 || root.this-pc.length > 0): SecondaryText {
                         text: Strings.no-speaker-on;
@@ -1095,7 +1150,7 @@ export component TrayFlyout inherits Window {
                         }
                     }
 
-                    if root.zones.length > 0 || root.speakers.length > 0: ScrollView {
+                    if root.zones.length > 0 || root.speakers.length > 0: list-view := ScrollView {
                         // Every row up to five or so, less this PC's rows above, then
                         // it scrolls; three rows at least.
                         height: min(list.preferred-height, max(108px, 260px - root.list-cut - this-pc-view.height));
@@ -1175,20 +1230,6 @@ export component TrayFlyout inherits Window {
                         text: Strings.flyout-connected-hidden;
                     }
 
-                    if root.cast-by-address && root.cast-list == CastList.none-found: HorizontalLayout {
-                        alignment: start;
-                        LinkButton {
-                            text: Strings.cast-add-address;
-                            label: Strings.cast-add-address;
-                            clicked => {
-                                root.cast-add-address-requested();
-                            }
-                            changed keyboard-focused => {
-                                root.add-address-focused = self.keyboard-focused;
-                            }
-                        }
-                    }
-
                     body-end := Rectangle {
                         height: 0px;
                     }
@@ -1198,53 +1239,21 @@ export component TrayFlyout inherits Window {
             Divider { }
 
             footer := HorizontalLayout {
-                alignment: end;
+                alignment: space-between;
 
-                exit := Rectangle {
-                    border-radius: Fluent.radius-control;
-                    background: exit-touch.pressed ? Fluent.pressed : exit-touch.has-hover ? Fluent.hover : transparent;
-                    animate background { duration: Fluent.fast; }
-                    forward-focus: exit-focus;
-                    accessible-role: button;
-                    accessible-label: Strings.exit-app;
-                    accessible-action-default => {
+                FooterButton {
+                    text: Strings.open-app;
+                    label: Strings.open-app;
+                    clicked => {
+                        root.open-app();
+                    }
+                }
+
+                FooterButton {
+                    text: Strings.exit-short;
+                    label: Strings.exit-app;
+                    clicked => {
                         root.exit-app();
-                    }
-
-                    exit-focus := FocusScope {
-                        focus-on-click: false;
-                        key-pressed(event) => {
-                            if event.text == " " || event.text == Key.Return {
-                                root.exit-app();
-                                return accept;
-                            }
-                            return reject;
-                        }
-                    }
-
-                    exit-touch := TouchArea {
-                        clicked => {
-                            root.exit-app();
-                        }
-                    }
-
-                    HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
-                        padding-top: 6px;
-                        padding-bottom: 6px;
-
-                        Text {
-                            text: Strings.exit-short;
-                            font-size: Tokens.font-size-callout;
-                            color: Tokens.text;
-                            accessible-role: none;
-                        }
-                    }
-
-                    FocusRing {
-                        visible-focus: exit-focus.has-focus;
-                        border-radius: parent.border-radius;
                     }
                 }
             }
