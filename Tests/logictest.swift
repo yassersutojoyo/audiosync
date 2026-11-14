@@ -18903,9 +18903,9 @@ do {
             && syncModel.contains("SpeakerState(enabled: zone.allOn, streaming: shownRunning)")
             && syncModel.contains("var statusText: String { shownRunning ?"),
           "streaming switch source: the badges and the status follow the switch's clicked position, not the engine")
-    check(syncSwitch.contains("guard model.pendingPower == nil else { return }")
+    check(syncSwitch.contains("let target = model.powerPresses.press(running: model.running)")
             && syncSwitch.contains("DispatchQueue.main.asyncAfter(deadline: .now() + PowerMotion.wait(reduceMotion: reduceMotion))")
-            && syncSwitch.contains("model.pendingPower = nil"),
+            && syncSwitch.components(separatedBy: "model.pendingPower = model.powerPresses.shown").count == 3,
           "streaming switch source: the engine starts or stops once every view has moved, then the views follow the model again")
     let syncMark = syncPart("MainWindow.swift", "struct BreathingMark: View")
     let syncBadge = syncPart("MenuBar.swift", "struct SpeakerBadge: View {")
@@ -18923,7 +18923,7 @@ do {
             && syncCalibrate.contains("model.pendingPower == false ? .notPlaying(.streaming)")
             && syncCalibrate.contains(".animation(PowerMotion.animation(reduceMotion: reduceMotion), value: off)")
             && syncCalibrate.contains("model.pendingPower == true && model.calibrateAll.blocker == .notPlaying(.streaming) ? nil")
-            && syncSwitch.contains("if model.running != target { model.actions.setPower(target) }")
+            && syncSwitch.contains("if model.powerPresses.turn(target, running: model.running) { model.actions.setPower(target) }")
             && syncHeader.contains(".help(model.shownRunning ? t.turnOff : t.turnOn)")
             && syncPanel.contains(".help(model.shownRunning ? t.turnOff : t.turnOn)"),
           "streaming switch source: the status lines and the Calibrate row cross-fade with the switch")
