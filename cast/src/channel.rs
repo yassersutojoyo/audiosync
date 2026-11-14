@@ -880,10 +880,12 @@ impl Channel {
             }
             PlayerState::Idle if !played => {
                 self.events.push_back(Event::MediaStatus(status));
+                let Some(reason) = reason else {
+                    return;
+                };
                 self.pending
                     .retain(|pending| !matches!(pending.request, Request::Load | Request::Playing));
                 self.media = None;
-                let reason = reason.unwrap_or(IdleReason::Other("IDLE".to_owned()));
                 self.events
                     .push_back(Event::LoadFailed(MediaError::Idle(reason)));
             }
