@@ -412,29 +412,35 @@ struct MainView: View {
     private func nowPlaying(_ track: NowPlayingMonitor.Track, _ t: UIStrings) -> some View {
         let shown = wipe.held ?? track
         return VStack(alignment: .leading, spacing: 4) {
-            wiped(shown) { track in
+            wiped(shown) { track, drift in
                 Color.clear
                     .aspectRatio(1, contentMode: .fit)
                     .overlay {
-                        if let art = track.artwork {
-                            Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
-                        } else {
-                            ZStack {
-                                Color.secondary.opacity(0.15)
-                                Image(systemName: "music.note").font(.system(size: 28)).foregroundStyle(.secondary)
-                            }
+                        // The strip the moving cover leaves shows the same cover blurred, never an empty card.
+                        if drift > 0, !reduceMotion { cover(track).blur(radius: 22).scaleEffect(1.2) }
+                    }
+                    .overlay {
+                        GeometryReader { proxy in
+                            cover(track)
+                                .frame(width: proxy.size.width, height: proxy.size.height)
+                                .offset(x: CGFloat(shift(TrackWipe.artReach, drift)) * proxy.size.width)
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .opacity(reduceMotion ? dimmed(drift) : 1)
             }
             .padding(.top, 2)
             .accessibilityHidden(true)
             AmbientArt(tide: SoundTide.shared, colors: CoverColors.of(track.artwork))
                 .padding(.vertical, 3)
-            wiped(shown) { ScrollingTitle(text: $0.title).font(.title3.weight(.semibold)) }
-            wiped(shown) {
-                ScrollingTitle(text: $0.artist.isEmpty ? $0.appName : $0.artist)
+            wiped(shown) { track, drift in
+                ScrollingTitle(text: track.title).font(.title3.weight(.semibold))
+                    .offset(x: shift(TrackWipe.textShift, drift)).opacity(dimmed(drift))
+            }
+            wiped(shown) { track, drift in
+                ScrollingTitle(text: track.artist.isEmpty ? track.appName : track.artist)
                     .font(.callout).foregroundStyle(Brand.secondaryText)
+                    .offset(x: shift(TrackWipe.textShift, drift)).opacity(dimmed(drift))
             }
             HStack(spacing: MainColumns.transportSpacing(
                 modes: track.shuffle != nil || track.repeatMode != nil)) {
@@ -467,22 +473,42 @@ struct MainView: View {
     /// `content` for `shown`, and during a sweep for the outgoing track too,
     /// each on its side of the edge. Full width, so one edge crosses the cover,
     /// title and artist at the same place.
+    /// `content` gets the slow move's progress (`TrackWipeState.drift`) for the
+    /// old track, and 0 for the new one.
     private func wiped<Content: View>(_ shown: NowPlayingMonitor.Track,
-                                      @ViewBuilder _ content: (NowPlayingMonitor.Track) -> Content) -> some View {
+                                      @ViewBuilder _ content: (NowPlayingMonitor.Track, Double) -> Content) -> some View {
         ZStack {
             if let outgoing = wipe.outgoing {
-                content(outgoing)
+                content(outgoing, wipe.drift)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .mask(WipeMask(direction: wipe.direction, progress: wipe.fades ? 0 : wipe.progress, showsNew: false))
                     .opacity(wipe.fades ? 1 - wipe.progress : 1)
                     .transition(.identity)
                     .accessibilityHidden(true)
             }
-            content(shown)
+            content(shown, wipe.outgoing == nil ? wipe.drift : 0)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .mask(WipeMask(direction: wipe.direction, progress: wipe.fades ? 1 : wipe.progress, showsNew: true))
                 .opacity(wipe.fades ? wipe.progress : 1)
         }
+    }
+
+    @ViewBuilder private func cover(_ track: NowPlayingMonitor.Track) -> some View {
+        if let art = track.artwork {
+            Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
+        } else {
+            ZStack {
+                Color.secondary.opacity(0.15)
+                Image(systemName: "music.note").font(.system(size: 28)).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func dimmed(_ drift: Double) -> Double { 1 - (1 - TrackWipe.dimTo) * drift }
+
+    /// The slow move's offset at `drift`, the way the wipe goes; none under Reduce Motion.
+    private func shift(_ distance: Double, _ drift: Double) -> Double {
+        reduceMotion ? 0 : (wipe.direction == .next ? -1 : 1) * distance * drift
     }
 
     /// Shuffle and Repeat wait one step away: hover or keyboard focus on the
@@ -1300,8 +1326,29 @@ final class TrackWipeState: ObservableObject {
     /// The way the held track leaves once it is let go.
     private var pending = (direction: TrackWipe.Direction.next, fades: false)
     private var sweeps = 0
+    /// The slow move from the press to the change, 0 to 1 (`TrackWipe.slowFraction`).
+    @Published private(set) var drift: Double = 0
+    private var driftStart: Date?
 
-    func press(_ direction: TrackWipe.Direction) { pressed = (direction, .now) }
+    func press(_ direction: TrackWipe.Direction) {
+        let now = Date.now
+        pressed = (direction, now)
+        guard held == nil, outgoing == nil, driftStart == nil else { return }
+        driftStart = now
+        self.direction = direction
+        withAnimation(.timingCurve(TrackWipe.slowCurve.x1, TrackWipe.slowCurve.y1, TrackWipe.slowCurve.x2,
+                                   TrackWipe.slowCurve.y2, duration: TrackWipe.slowSeconds)) { drift = 1 }
+        // A press the player ignores lets the old track settle back.
+        DispatchQueue.main.asyncAfter(deadline: .now() + TrackWipe.pressWindow) { [weak self] in
+            guard let self, self.driftStart == now else { return }
+            self.settle()
+        }
+    }
+
+    private func settle() {
+        driftStart = nil
+        withAnimation(.easeOut(duration: TrackWipe.fadeDuration)) { drift = 0 }
+    }
 
     func change(from old: NowPlayingMonitor.Track?, to new: NowPlayingMonitor.Track?, reduceMotion: Bool) {
         current = new
@@ -1312,7 +1359,18 @@ final class TrackWipeState: ObservableObject {
         guard let old, let new, TrackWipe.isSkip(old, new), let press = pressed,
               let direction = TrackWipe.direction(pressed: press.direction,
                                                   secondsSincePress: Date.now.timeIntervalSince(press.at))
-        else { return }
+        else {
+            // Another player taking over isn't the skip the press moved the card for.
+            if driftStart != nil, old?.bundleID != new?.bundleID { settle() }
+            return
+        }
+        if let start = driftStart {
+            driftStart = nil
+            // Without animation, so the move stops where it got to instead of jumping to its end.
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) { drift = TrackWipe.slowFraction(after: Date.now.timeIntervalSince(start)) }
+        }
         pressed = nil
         held = old
         pending = (direction, reduceMotion)
@@ -1324,7 +1382,10 @@ final class TrackWipeState: ObservableObject {
     private func release() {
         guard let held else { return }
         self.held = nil
-        guard current != nil else { return }
+        guard current != nil else {
+            drift = 0
+            return
+        }
         (direction, fades) = pending
         sweep(from: held)
     }
@@ -1333,16 +1394,18 @@ final class TrackWipeState: ObservableObject {
         sweeps += 1
         let mark = sweeps
         outgoing = old
-        progress = 0
-        // The masks have to draw once at 0 before the animation can run from there.
+        let start = fades ? 0 : TrackWipe.artReach * drift
+        progress = start
+        // The masks have to draw once at the start before the animation can run from there.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.sweeps == mark else { return }
-            let seconds = TrackWipe.seconds(reduceMotion: self.fades)
+            let seconds = TrackWipe.finishSeconds(fromReached: start, reduceMotion: self.fades)
             withAnimation(self.fades ? .linear(duration: seconds) : .timingCurve(0.2, 0.8, 0.2, 1, duration: seconds)) {
                 self.progress = 1
             } completion: { [weak self] in
                 guard let self, self.sweeps == mark else { return }
                 self.outgoing = nil
+                self.drift = 0
                 self.release()
             }
         }

@@ -227,3 +227,4 @@ S459 Mac, Windows and Linux hosts only: the Now Playing views' hold for the next
 S460 Mac host only: the Now Playing cover cache keyed by song and cover address (Sources/AudioSync/NowPlaying.swift ArtCache); the Mac logic suite checks it.
 S461 Mac host only: a capture's tap made and started off the main thread (Sources/AudioSync/ProcessTapCapture.swift, CaptureSupport.swift CaptureOpen); the Mac logic suite checks it.
 S462 Mac host only: Apple Music's next covers read ahead into the Now Playing cover cache (Sources/AudioSync/NowPlaying.swift ArtAhead); the Mac logic suite checks it.
+S463 Mac host only: Next easing the old song out while the next cover loads (Sources/AudioSync/WindowRules.swift TrackWipe, Sources/AudioSync/MainWindow.swift); the Mac logic suite checks it

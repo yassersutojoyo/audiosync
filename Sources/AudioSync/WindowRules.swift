@@ -300,6 +300,41 @@ enum TrackWipe {
         old.bundleID == new.bundleID && (old.title, old.artist, old.album) != (new.title, new.artist, new.album)
     }
 
+    /// From the press until the change, the old cover eases out by up to
+    /// `artReach` of the width and the title and artist by `textShift` points
+    /// toward `dimTo`, so Next never looks like it waits on a cover load.
+    static let slowSeconds: TimeInterval = 1.5
+    static let artReach = 0.22
+    static let textShift: Double = 12
+    static let dimTo = 0.6
+    static let coverFade: TimeInterval = 0.25
+    /// The view's slow move and `slowFraction` both read it, so the sweep starts where the drawn move is.
+    static let slowCurve = (x1: 0.25, y1: 0.6, x2: 0.35, y2: 1.0)
+
+    static func slowFraction(after elapsed: TimeInterval) -> Double {
+        let t = min(1, max(0, elapsed / slowSeconds))
+        func axis(_ a: Double, _ b: Double, _ s: Double) -> Double {
+            3 * a * s * (1 - s) * (1 - s) + 3 * b * s * s * (1 - s) + s * s * s
+        }
+        var low = 0.0, high = 1.0
+        for _ in 0..<40 {
+            let mid = (low + high) / 2
+            if axis(slowCurve.x1, slowCurve.x2, mid) < t { low = mid } else { high = mid }
+        }
+        return t == 0 ? 0 : t == 1 ? 1 : axis(slowCurve.y1, slowCurve.y2, (low + high) / 2)
+    }
+
+    /// Today's sweep speed over the part of the width the slow move left.
+    static func finishSeconds(fromReached reached: Double, reduceMotion: Bool) -> TimeInterval {
+        reduceMotion ? fadeDuration : max(0.09, duration * (1 - reached))
+    }
+
+    /// The same song getting the cover it went up without.
+    static func coverArrived(_ old: NowPlayingMonitor.Track?, _ new: NowPlayingMonitor.Track?) -> Bool {
+        guard let old, let new, old.artwork == nil, new.artwork != nil else { return false }
+        return old.bundleID == new.bundleID && (old.title, old.artist, old.album) == (new.title, new.artist, new.album)
+    }
+
     /// The old and the new track's parts of the width, as fractions from the
     /// left, at `progress` 0 to 1 of the sweep.
     static func parts(_ direction: Direction, progress: Double) -> (old: ClosedRange<Double>, new: ClosedRange<Double>) {

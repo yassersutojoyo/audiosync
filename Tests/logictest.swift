@@ -19142,6 +19142,40 @@ do {
           "art ahead: the next cover is read only while no command waits; an error ends it and a timeout is told apart")
 }
 
+// MARK: Next eases the old song out while the next one's cover loads (TrackWipe in WindowRules.swift, MainWindow.swift)
+// covers: S463
+do {
+    check(TrackWipe.slowSeconds == 1.5 && TrackWipe.artReach == 0.22 && TrackWipe.textShift == 12
+            && TrackWipe.dimTo == 0.6 && TrackWipe.coverFade == 0.25,
+          "slow move: the old cover eases out up to 22% over 1.5 s, the title and artist 12 px toward 0.6 opacity")
+    let early = TrackWipe.slowFraction(after: 0.4), late = TrackWipe.slowFraction(after: 1.2)
+    check(TrackWipe.slowFraction(after: 0) == 0 && early > 0.4 / 1.5 && early < late && late < 1
+            && abs(TrackWipe.slowFraction(after: 1.5) - 1) < 1e-6 && TrackWipe.slowFraction(after: 2) == 1,
+          "slow move: it starts at the press, eases out, and stops where it reached at 1.5 s", "\(early) \(late)")
+    let fromRest = TrackWipe.finishSeconds(fromReached: 0, reduceMotion: false)
+    let fromEnd = TrackWipe.finishSeconds(fromReached: TrackWipe.artReach, reduceMotion: false)
+    check(fromRest == TrackWipe.duration && abs(fromEnd - TrackWipe.duration * 0.78) < 1e-9
+            && TrackWipe.finishSeconds(fromReached: 0.95, reduceMotion: false) == 0.09
+            && TrackWipe.finishSeconds(fromReached: 0.22, reduceMotion: true) == TrackWipe.fadeDuration,
+          "slow move: the finishing sweep runs today's speed over the width left, 90 ms at least; Reduce Motion cross-fades",
+          "\(fromRest) \(fromEnd)")
+    let lateCover = NSImage(size: NSSize(width: 1, height: 1))
+    let placeholder = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                              artist: "A", album: "B", isPlaying: true, artwork: nil)
+    var withCover = placeholder
+    withCover.artwork = lateCover
+    let nextSong = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Three",
+                                           artist: "A", album: "B", isPlaying: true, artwork: lateCover)
+    check(TrackWipe.coverArrived(placeholder, withCover) && !TrackWipe.coverArrived(placeholder, nextSong)
+            && !TrackWipe.coverArrived(withCover, withCover) && !TrackWipe.coverArrived(nil, withCover),
+          "slow move: a cover that comes after its song gave up waiting fades in; another song does not")
+    let airplay = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+AirPlay.swift", encoding: .utf8)) ?? ""
+    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    check(airplay.contains("TrackWipe.coverArrived(") && airplay.contains("TrackWipe.coverFade")
+            && window.contains("TrackWipe.slowFraction(") && window.contains("TrackWipe.finishSeconds("),
+          "slow move: the main window runs it from the press, and both views fade a late cover in")
+}
+
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)
 do {
     check(DockIcon.shows(windows: 1, hidesWhenClosed: true) && DockIcon.shows(windows: 3, hidesWhenClosed: true)

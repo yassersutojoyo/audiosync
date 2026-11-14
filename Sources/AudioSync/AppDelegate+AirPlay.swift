@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 // The AirPlay speaker list, the PIN or password prompt, Local Network access,
 // sleep and wake, and the track info AirPlay receivers show.
@@ -342,7 +343,12 @@ extension AppDelegate: TrackInfoHost {
             return
         }
         artHeldSince = nil
-        if appModel.nowPlaying != track { appModel.nowPlaying = track }
+        guard appModel.nowPlaying != track else { return }
+        if TrackWipe.coverArrived(appModel.nowPlaying, track) {
+            withAnimation(.easeInOut(duration: TrackWipe.coverFade)) { appModel.nowPlaying = track }
+        } else {
+            appModel.nowPlaying = track
+        }
     }
 
     func setSenderTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?, sendsPosition: Bool,
