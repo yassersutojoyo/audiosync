@@ -19618,6 +19618,45 @@ do {
         .components(separatedBy: "\n        }\n").first ?? ""
     check(!tapObjectsInit.isEmpty && !tapObjectsInit.contains("teardown.sync") && !tapObjectsInit.contains("MainBlock.timed("),
           "capture start off main: making a tap neither waits on the teardown queue, which would deadlock on it, nor times itself as main-thread work")
+    // Ten presses 0.24 to 0.35 s apart, each one's turn 0.25 s after it: the next press often comes first.
+    var powerPresses = PowerPresses()
+    var powerPressRunning = false
+    var powerPressAsked: [Bool?] = []
+    var powerPressShown: [Bool] = []
+    var powerPressSwitched: [Bool] = []
+    var powerPressTurns: [Bool] = []
+    func powerPressTurn() {
+        let target = powerPressTurns.removeFirst()
+        if powerPresses.turn(target, running: powerPressRunning) {
+            powerPressSwitched.append(target)
+            powerPressRunning = target   // a start shows on from the click, a stop off at once
+        }
+    }
+    for press in 0..<10 {
+        let asked: Bool? = powerPresses.press(running: powerPressRunning)
+        powerPressAsked.append(asked)
+        powerPressShown.append(powerPresses.shown ?? powerPressRunning)
+        if let asked { powerPressTurns.append(asked) }
+        if press % 2 == 1 { while !powerPressTurns.isEmpty { powerPressTurn() } }
+    }
+    while !powerPressTurns.isEmpty { powerPressTurn() }
+    let powerPressAlternate = (0..<10).map { $0 % 2 == 0 }
+    check(powerPressAsked == powerPressAlternate.map { Optional($0) } && powerPressShown == powerPressAlternate,
+          "power presses: every press counts, even while the one before still waits for its turn, and the switch shows each press at once",
+          "asked \(powerPressAsked), shown \(powerPressShown)")
+    check(powerPressSwitched == powerPressAlternate && !powerPressRunning && powerPresses.shown == nil,
+          "power presses: each press switches streaming in press order, so a press during a pending start ends it and one during a stop starts again, and the switch ends where the last press asked",
+          "switched \(powerPressSwitched), running \(powerPressRunning)")
+    var powerPressOutside = PowerPresses()
+    let powerPressOutsideAsk = powerPressOutside.press(running: true)
+    check(powerPressOutsideAsk == false && !powerPressOutside.turn(false, running: false) && powerPressOutside.shown == nil,
+          "power presses: a press whose state streaming already reached on its own switches nothing")
+    let powerPressMenuBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let powerPressButton = tapOpenPart(powerPressMenuBar, "struct PowerSwitch: View {")
+    check(powerPressButton.contains("model.powerPresses.press(running: model.running)")
+            && powerPressButton.contains("model.powerPresses.turn(target, running: model.running)")
+            && !powerPressButton.contains("guard model.pendingPower == nil"),
+          "power presses: the power switch takes each press through PowerPresses and ignores none")
     let tapOpenStop = tapOpenPart(tapOpenEngine, "func stop(then completion: (() -> Void)? = nil) {")
         .components(separatedBy: "guard isRunning, let parts else {").dropFirst().first?
         .components(separatedBy: "return").first ?? ""

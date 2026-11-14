@@ -260,6 +260,7 @@ final class AppModel: ObservableObject {
     /// The switch's clicked position until the engine has started or
     /// stopped; nil once the views follow `running` again.
     @Published var pendingPower: Bool?
+    var powerPresses = PowerPresses()
     var shownRunning: Bool { pendingPower ?? running }
     @Published var sourceID = ""
     /// The stored channel pair of the input source (`InputChannelPair.index`).
@@ -2816,13 +2817,12 @@ struct PowerSwitch: View {
 
     var body: some View {
         Button {
-            guard model.pendingPower == nil else { return }
-            let target = !model.running
-            model.pendingPower = target
+            let target = model.powerPresses.press(running: model.running)
+            model.pendingPower = model.powerPresses.shown
             DispatchQueue.main.asyncAfter(deadline: .now() + PowerMotion.wait(reduceMotion: reduceMotion)) {
                 // Streaming may have started or stopped on its own meanwhile.
-                if model.running != target { model.actions.setPower(target) }
-                model.pendingPower = nil
+                if model.powerPresses.turn(target, running: model.running) { model.actions.setPower(target) }
+                model.pendingPower = model.powerPresses.shown
             }
         } label: {
             // The off track's edge in `.secondary` keeps 3:1 on the panel

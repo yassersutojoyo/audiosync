@@ -507,6 +507,30 @@ enum CaptureOpen {
     }
 }
 
+/// The power switch's presses (S461): a press shows its state at once, and
+/// the host switches streaming on its turn, after the switch's motion.
+struct PowerPresses {
+    /// What the switch shows until the last press's turn; nil with none waiting.
+    private(set) var shown: Bool?
+    private var waiting = 0
+
+    /// A press while streaming is `running`: it asks for the opposite of what
+    /// the switch shows, a press still waiting for its turn included.
+    mutating func press(running: Bool) -> Bool {
+        let target = !(shown ?? running)
+        shown = target
+        waiting += 1
+        return target
+    }
+
+    /// A press's turn, in press order: whether the host switches streaming to `target`.
+    mutating func turn(_ target: Bool, running: Bool) -> Bool {
+        waiting -= 1
+        if waiting == 0 { shown = nil }
+        return running != target
+    }
+}
+
 /// Whether an input device's streams can be read as they are, and where the
 /// chosen channel pair sits in them (S14, S16).
 enum CaptureInputFormat: Equatable {
