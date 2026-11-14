@@ -50,9 +50,11 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, with shuffle off, Apple Music's next few playlist covers load ahead, so Next shows the cover at once.
 - On the Mac, Next eases the old cover, title and artist out while the next cover loads, instead of holding them still. A cover that comes late fades in.
 - On Windows and Linux, speaker and zone rows are spaced like the Mac's, and small controls in a row keep a 24 px click area.
+- On Windows and Linux, the main window's section titles are small grey capitals, a zone's speakers hang from a thin line under the zone instead of sitting in a tinted box, and a zone's header lights up only under the pointer, as on the Mac.
 
 ### Fixed
 
+- On the Mac, every press of the streaming switch counts. Before, a press during the switch's motion was dropped, so quick presses could leave streaming the wrong way round.
 - On the Mac, pressing Caps Lock no longer quits AudioSync on macOS 27 while it controls the volume keys.
 - On the Mac, Now Playing reads Spotify 1.3.9, which left AudioSync's permission request unanswered.
 - On the Mac, the Settings window opens at its full height again. Before, it could open with only its title bar showing.
