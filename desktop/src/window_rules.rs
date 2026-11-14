@@ -73,9 +73,9 @@ pub mod marquee {
     /// Pixels a second.
     pub const SPEED: f32 = 30.0;
     pub const PAUSE: f64 = 2.0;
-    pub const EDGE_FADE: f32 = 8.0;
+    pub const EDGE_FADE: f32 = 4.0;
     /// Longer at the leading edge: a sliver of the cut letter there read as a thin line.
-    pub const LEADING_FADE: f32 = 16.0;
+    pub const LEADING_FADE: f32 = 8.0;
 
     /// How far the line runs past its room; 0 when it fits, the room isn't
     /// laid out yet, or reduce motion cuts it with an ellipsis.
@@ -550,9 +550,9 @@ mod tests {
 
     #[test]
     fn marquee_fades_only_an_edge_that_cuts_a_letter() {
-        assert_eq!(marquee::edges(0.0, 60.0), (0.0, 8.0));
-        assert_eq!(marquee::edges(60.0, 60.0), (16.0, 0.0));
-        assert_eq!(marquee::edges(4.0, 60.0), (4.0, 8.0));
+        assert_eq!(marquee::edges(0.0, 60.0), (0.0, 4.0));
+        assert_eq!(marquee::edges(60.0, 60.0), (8.0, 0.0));
+        assert_eq!(marquee::edges(4.0, 60.0), (4.0, 4.0));
         assert_eq!(marquee::edges(30.0, 0.0), (0.0, 0.0));
         let stops = marquee::mask_stops((16.0, 8.0), 160.0);
         let expected = [
@@ -587,6 +587,9 @@ mod tests {
             global.contains(&speed) && global.contains(&pause),
             "{global}"
         );
+        let lead = format!("min(self.offset, {}px)", marquee::LEADING_FADE);
+        let tail = format!("min(self.excess - self.offset, {}px)", marquee::EDGE_FADE);
+        assert!(widgets.contains(&lead) && widgets.contains(&tail));
     }
 
     #[test]

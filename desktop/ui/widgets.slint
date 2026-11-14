@@ -166,10 +166,10 @@ export component MarqueeText inherits Rectangle {
     property <length> offset: self.excess > 0 ? Marquee.offset(self.moving ? animation-tick() - self.started : self.rested-at, self.excess) : 0px;
     // Slint has no alpha mask: each fade is strips of the text, fainter
     // toward the edge. As on the Mac, only an edge that cuts a letter fades:
-    // the start over up to 16 px with its first quarter clear (a cut
-    // letter's sliver showed there), the end over up to 8 px.
-    property <length> lead: min(self.offset, 16px);
-    property <length> tail: self.excess > 0 ? min(self.excess - self.offset, 8px) : 0px;
+    // the start over up to 8 px with its first quarter clear (a cut
+    // letter's sliver showed there), the end over up to 4 px.
+    property <length> lead: min(self.offset, 8px);
+    property <length> tail: self.excess > 0 ? min(self.excess - self.offset, 4px) : 0px;
 
     init => {
         self.started = animation-tick();
