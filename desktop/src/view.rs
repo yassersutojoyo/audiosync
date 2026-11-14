@@ -12648,6 +12648,43 @@ mod tests {
         );
     }
 
+    /// The speaker of the master volume is the preset icon's size, on its
+    /// column, as in the Mac panel.
+    #[test]
+    fn the_flyout_volume_speaker_has_the_preset_icon_size_and_column() {
+        let app = measured_flyout();
+        let preset = flyout_element(&app, "PresetPicker::icon");
+        let speaker = flyout_element(&app, "MasterVolume::speaker");
+        let middle = |e: &i_slint_backend_testing::ElementHandle| {
+            e.absolute_position().x + e.size().width / 2.0
+        };
+        assert_eq!(middle(&speaker), middle(&preset));
+        assert_eq!(speaker.size().width, preset.size().width);
+    }
+
+    /// The main window's master volume speaker sits on the rows' icon
+    /// column at their icons' size, as on the Mac.
+    #[test]
+    fn the_main_volume_speaker_has_the_row_icon_size_and_column() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(776.0, 680.0));
+        draw_frames();
+        let element = |id: &str| {
+            ElementHandle::find_by_element_id(&app.main, id)
+                .next()
+                .unwrap_or_else(|| panic!("{id} is in the main window"))
+        };
+        let row = element("EqualizerCard::icon");
+        let speaker = element("MasterVolume::speaker");
+        let middle = |e: &ElementHandle| e.absolute_position().x + e.size().width / 2.0;
+        assert_eq!(middle(&speaker), middle(&row));
+        assert_eq!(speaker.size().width, row.size().width);
+    }
+
     /// The preset row's chevron is the hero card's: one size.
     #[test]
     fn the_flyout_preset_chevron_matches_the_card_chevron() {

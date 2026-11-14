@@ -1858,6 +1858,15 @@ export component MasterVolume inherits HorizontalLayout {
         clicked => {
             root.mute-toggled();
         }
+
+        // All three waves under the level's, the rest faint, so the speaker
+        // keeps one size as the Mac's does.
+        speaker := Glyph {
+            x: (parent.width - self.width) / 2;
+            width: 16px;
+            glyph: root.waves == 0 ? Glyphs.volume-muted : Glyphs.volume-high;
+            opacity: Tokens.disabled-opacity;
+        }
     }
 
     slider := VolumeSlider {
