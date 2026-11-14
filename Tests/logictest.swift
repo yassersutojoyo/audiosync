@@ -19174,6 +19174,27 @@ do {
     check(airplay.contains("TrackWipe.coverArrived(") && airplay.contains("TrackWipe.coverFade")
             && window.contains("TrackWipe.slowFraction(") && window.contains("TrackWipe.finishSeconds("),
           "slow move: the main window runs it from the press, and both views fade a late cover in")
+    let wipeState = window.components(separatedBy: "final class TrackWipeState").last?
+        .components(separatedBy: "private enum TransportMode").first ?? ""
+    check(!wipeState.contains("withAnimation") && !wipeState.contains("DispatchQueue.main.async {")
+            && window.contains("TimelineView(.animation(paused: !wipe.moving))")
+            && window.contains("TrackWipe.sweepProgress(") && window.contains("TrackWipe.settledDrift("),
+          "slow move: one clock draws the slow move and the sweep, so the sweep starts in the frame of the change "
+            + "from where the cover is drawn, with no second commit")
+    let handOff = TrackWipe.artReach * TrackWipe.slowFraction(after: 0.42)
+    let firstFrame = TrackWipe.sweepProgress(from: handOff, after: 1.0 / 60, reduceMotion: false)
+    let sweepEnd = TrackWipe.finishSeconds(fromReached: handOff, reduceMotion: false)
+    check(TrackWipe.sweepProgress(from: handOff, after: 0, reduceMotion: false) == handOff
+            && TrackWipe.sweepProgress(from: handOff, after: -0.01, reduceMotion: false) == handOff
+            && firstFrame > handOff + 0.05
+            && abs(TrackWipe.sweepProgress(from: handOff, after: sweepEnd, reduceMotion: false) - 1) < 1e-12
+            && TrackWipe.sweepProgress(from: 0, after: TrackWipe.fadeDuration / 2, reduceMotion: true) == 0.5,
+          "slow move: the sweep starts from the width reached and moves in its first frame; Reduce Motion fades evenly",
+          "\(handOff) \(firstFrame)")
+    check(TrackWipe.settledDrift(from: 0.8, after: 0) == 0.8 && TrackWipe.settledDrift(from: 0.8, after: 0.05) < 0.8
+            && TrackWipe.settledDrift(from: 0.8, after: TrackWipe.fadeDuration) == 0
+            && TrackWipe.eased(TrackWipe.slowCurve, 0.4 / 1.5) == TrackWipe.slowFraction(after: 0.4),
+          "slow move: an ignored press eases back from where it reached in 0.15 s")
 }
 
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)

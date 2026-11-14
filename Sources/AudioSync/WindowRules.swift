@@ -308,25 +308,41 @@ enum TrackWipe {
     static let textShift: Double = 12
     static let dimTo = 0.6
     static let coverFade: TimeInterval = 0.25
-    /// The view's slow move and `slowFraction` both read it, so the sweep starts where the drawn move is.
-    static let slowCurve = (x1: 0.25, y1: 0.6, x2: 0.35, y2: 1.0)
+    typealias Curve = (x1: Double, y1: Double, x2: Double, y2: Double)
+    static let slowCurve: Curve = (0.25, 0.6, 0.35, 1.0)
+    static let sweepCurve: Curve = (0.2, 0.8, 0.2, 1.0)
+    static let settleCurve: Curve = (0, 0, 0.58, 1.0)
 
-    static func slowFraction(after elapsed: TimeInterval) -> Double {
-        let t = min(1, max(0, elapsed / slowSeconds))
+    /// The cubic Bezier `curve`'s value at `t`, 0 to 1 of its time.
+    static func eased(_ curve: Curve, _ t: Double) -> Double {
+        let t = min(1, max(0, t))
         func axis(_ a: Double, _ b: Double, _ s: Double) -> Double {
             3 * a * s * (1 - s) * (1 - s) + 3 * b * s * s * (1 - s) + s * s * s
         }
         var low = 0.0, high = 1.0
         for _ in 0..<40 {
             let mid = (low + high) / 2
-            if axis(slowCurve.x1, slowCurve.x2, mid) < t { low = mid } else { high = mid }
+            if axis(curve.x1, curve.x2, mid) < t { low = mid } else { high = mid }
         }
-        return t == 0 ? 0 : t == 1 ? 1 : axis(slowCurve.y1, slowCurve.y2, (low + high) / 2)
+        return t == 0 ? 0 : t == 1 ? 1 : axis(curve.y1, curve.y2, (low + high) / 2)
     }
+
+    static func slowFraction(after elapsed: TimeInterval) -> Double { eased(slowCurve, elapsed / slowSeconds) }
 
     /// Today's sweep speed over the part of the width the slow move left.
     static func finishSeconds(fromReached reached: Double, reduceMotion: Bool) -> TimeInterval {
         reduceMotion ? fadeDuration : max(0.09, duration * (1 - reached))
+    }
+
+    /// The sweep's progress `elapsed` after the change, from the width `start` the slow move reached.
+    static func sweepProgress(from start: Double, after elapsed: TimeInterval, reduceMotion: Bool) -> Double {
+        let t = elapsed / finishSeconds(fromReached: start, reduceMotion: reduceMotion)
+        return start + (1 - start) * (reduceMotion ? min(1, max(0, t)) : eased(sweepCurve, t))
+    }
+
+    /// A slow move the player ignored, easing back from `reached` over `fadeDuration`.
+    static func settledDrift(from reached: Double, after elapsed: TimeInterval) -> Double {
+        reached * (1 - eased(settleCurve, elapsed / fadeDuration))
     }
 
     /// The same song getting the cover it went up without.
