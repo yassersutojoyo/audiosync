@@ -25,10 +25,8 @@
 </p>
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-dark.png">
-    <img src="docs/images/main-window-light.png" width="720" alt="AudioSync main window on a Mac: the song playing with its art, the audio source, and the speakers, each with a round on/off icon and a volume slider">
-  </picture>
+  <img src="docs/images/main-window-light.png" width="360" alt="AudioSync main window on a Mac in the light theme: the song playing with its art, the audio source, and the speakers, each with a round on/off icon and a volume slider">
+  <img src="docs/images/main-window-dark.png" width="360" alt="AudioSync main window on a Mac in the dark theme: the song playing with its art, the audio source, and the speakers, each with a round on/off icon and a volume slider">
 </p>
 
 AirPlay speakers play a little late and local speakers don't, so the same song on both turns into an echo. AudioSync grabs your computer's audio once, sends it to the AirPlay speakers and plays a delayed copy on each local speaker, so everything lines up. It's free, and it's a beta, so expect rough edges.
