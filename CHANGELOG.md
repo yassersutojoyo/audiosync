@@ -24,7 +24,6 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, a notice opening or closing in the main window eases the columns along with it, the Waiting for audio notice included. Before, they jumped in one frame. An opening notice moves a little quicker than a closing one and fades in as its room opens. A notice that is closing no longer takes clicks or VoiceOver.
 - On the Mac, zones and the delay panes fold open and shut in one quarter-second motion, in the main window and the menu bar panel, with the rows below following along.
 - On the Mac, Now Playing reads the player every quarter second while the card or the menu bar panel shows a track, so a play/pause key shows sooner, and drops a track that's gone after about 4 seconds of empty readings.
-- On the Mac, Next in Now Playing keeps the old song and cover up until the new cover loads, then wipes once, with no grey placeholder in between and no grey line over the title and artist.
 - On the Mac, the strands under the cover art follow bass, mid and treble, and rest as a slow breath when no sound drives them, so a quiet or paused song no longer leaves an empty gap under the cover. With Reduce Motion they hold one still line.
 - On Windows and Linux, the header matches the Mac's: the real mark, which breathes while no network speaker has been found, the wordmark in the sync teal and the Mac's speaker badges. Focus rings show only after you press Tab.
 - On Windows and Linux, the strands under the cover art follow the sound while streaming, as on the Mac.
@@ -42,13 +41,13 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, as on the Mac, and the Presets rows keep naming the preset you used last until you delete it.
 - On the Mac, the line between zones runs from the zone name to its options button and hides beside the zone under the pointer, whose highlight sits a little inside the card.
 - On Windows and Linux, the master volume row has the Mac's look: the speaker, the drawn slider and the number on the right edge, in the window and the tray panel.
-- On Windows and Linux, Next keeps the old song and cover up while the new cover loads, as on the Mac.
+- On Windows and Linux, Next keeps the old song and cover up while the new cover loads.
 - On Windows and Linux, a notice fades in as its room opens, as on the Mac.
 - On the Mac, when a player says it played or paused, Now Playing shows the change sooner still.
 - On the Mac, Windows and Linux, the master volume speaker shows one, two or three waves as the level goes up.
 - On the Mac, the next Spotify song from the same album shows its cover at once.
 - On the Mac, with shuffle off, Apple Music's next few playlist covers load ahead, so Next shows the cover at once.
-- On the Mac, Next eases the old cover, title and artist out while the next cover loads, instead of holding them still. A cover that comes late fades in.
+- On the Mac, Next in Now Playing eases the old cover, title and artist out while the next cover loads, then wipes once, with no grey placeholder in between and no grey line over the title and artist. A cover that comes late fades in.
 - On Windows and Linux, speaker and zone rows are spaced like the Mac's, and small controls in a row keep a 24 px click area.
 - On Windows and Linux, the main window's section titles are small grey capitals, a zone's speakers hang from a thin line under the zone instead of sitting in a tinted box, and a zone's header lights up only under the pointer, as on the Mac.
 
