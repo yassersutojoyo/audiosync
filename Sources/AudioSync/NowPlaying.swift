@@ -21,6 +21,8 @@ final class NowPlayingMonitor {
         let album: String
         let isPlaying: Bool
         var artwork: NSImage?
+        /// The cover is on its way (`ArtHold`).
+        var artPending = false
         /// Nil when the player gives no length, as for a radio stream.
         var position: Position? = nil
         /// As the explicit pause reads it (`ExplicitPause.playerState`).
@@ -526,7 +528,7 @@ final class NowPlayingMonitor {
             }
             var next = found ?? Self.pausedPick(paused, lastPlayed: lastPlayed)
             if var t = next {
-                t.artwork = self.artwork(for: t)
+                (t.artwork, t.artPending) = self.artwork(for: t)
                 next = t
             }
             DispatchQueue.main.async {
@@ -567,9 +569,10 @@ final class NowPlayingMonitor {
     /// `reading`: what reading the players found. The first reading since
     /// polling started is news even when the track didn't change: it makes
     /// `track` current.
-    private func publish(_ next: Track?, reading: Bool) {
+    private func publish(_ found: Track?, reading: Bool) {
         let first = reading && isRunning && !hasReading
         if first { hasReading = true }
+        let next = found.map { ArtHold.keepingArt(of: track, in: $0) }
         guard next != track || first || Position.jumped(from: track?.position, to: next?.position) else { return }
         track = next
         retime()
@@ -704,9 +707,10 @@ final class NowPlayingMonitor {
         return parts.count == 2 ? Self.modes(bundleID, shuffle: parts[0], repeating: parts[1]) : (nil, nil)
     }
 
-    private func artwork(for t: Track) -> NSImage? {
+    /// The track's cover, and whether one is still on its way.
+    private func artwork(for t: Track) -> (NSImage?, Bool) {
         let key = "\(t.bundleID)|\(t.title)|\(t.album)"
-        if let cached = artworkCache[key] { return cached }
+        if let cached = artworkCache[key] { return (cached, false) }
         if artworkCache.count > 32 { artworkCache.removeAll() }
         if t.bundleID == Self.spotify {
             // Spotify hands out a URL; fetch it, then fill the track in later.
@@ -729,8 +733,9 @@ final class NowPlayingMonitor {
                     }
                 }
                 fetch.resume()
+                return (nil, true)
             }
-            return nil
+            return (nil, false)
         }
         let script = """
             with timeout of 2 seconds
@@ -741,9 +746,9 @@ final class NowPlayingMonitor {
             """
         if let data = run(target: t.bundleID, script)?.data, let image = NSImage(data: data) {
             artworkCache[key] = image
-            return image
+            return (image, false)
         }
-        return nil
+        return (nil, false)
     }
 
     /// Runs `source`, which talks to the player `target`, and reports when

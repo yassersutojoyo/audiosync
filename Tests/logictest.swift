@@ -18851,9 +18851,6 @@ do {
                                           album: "B", isPlaying: true, artwork: nil)
     check(TrackWipe.isSkip(song, other) && !TrackWipe.isSkip(song, paused) && !TrackWipe.isSkip(song, spotify),
           "track wipe: another song in the same player sweeps; the same song pausing or another app taking over does not")
-    check(TrackWipe.waitsForArt(oldHasArt: true, newHasArt: false) && !TrackWipe.waitsForArt(oldHasArt: true, newHasArt: true)
-            && !TrackWipe.waitsForArt(oldHasArt: false, newHasArt: false) && TrackWipe.artHold <= 1,
-          "track wipe: a new song whose cover is still loading keeps the old cover up, for 1 s at most, then changes once")
     let main = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     check(main.components(separatedBy: "wipe.press(.next)").count == 2 && main.components(separatedBy: "wipe.press(.previous)").count == 2
             && main.components(separatedBy: "TrackWipe.parts(").count == 2,
@@ -18861,6 +18858,40 @@ do {
     // 14 Nov on the Mac: a 1 px grey line rode the edge over the title and artist; the approved mockup has none.
     check(!main.contains("WipeEdge("),
           "track wipe: no line rides the sweeping edge, the new track simply takes over where the edge has passed")
+}
+
+// MARK: The old song stays up while the next one's cover loads (ArtHold in WindowRules.swift)
+// covers: S459
+do {
+    let cover = NSImage(size: NSSize(width: 1, height: 1))
+    let shownSong = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "One",
+                                            artist: "A", album: "B", isPlaying: true, artwork: cover)
+    var loading = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                          artist: "A", album: "B", isPlaying: true, artwork: nil)
+    loading.artPending = true
+    let bare = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                       artist: "A", album: "B", isPlaying: true, artwork: nil)
+    var otherApp = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "Two",
+                                           artist: "A", album: "B", isPlaying: true, artwork: nil)
+    otherApp.artPending = true
+    var arrived = loading
+    arrived.artwork = cover
+    check(ArtHold.decide(shown: shownSong, next: loading, heldFor: 0) == .hold
+            && ArtHold.decide(shown: shownSong, next: loading, heldFor: 1.4) == .hold,
+          "art hold: the next song from the same player keeps the old song and cover up while its cover loads")
+    check(ArtHold.decide(shown: shownSong, next: bare, heldFor: 0) == .show,
+          "art hold: a song known to have no cover shows its placeholder at once")
+    check(ArtHold.decide(shown: shownSong, next: otherApp, heldFor: 0) == .show,
+          "art hold: another player taking over shows at once")
+    check(ArtHold.decide(shown: shownSong, next: loading, heldFor: 1.5) == .show && ArtHold.limit == 1.5,
+          "art hold: a cover still loading after 1.5 s gives way to the placeholder")
+    check(ArtHold.decide(shown: shownSong, next: arrived, heldFor: 0.3) == .show,
+          "art hold: the new cover's arrival lets the new song in with it")
+    var stale = shownSong
+    stale.artwork = nil
+    check(ArtHold.keepingArt(of: shownSong, in: stale).artwork === cover
+            && ArtHold.keepingArt(of: shownSong, in: bare).artwork == nil,
+          "art hold: a late reading of the same song without its cover keeps the cover; another song never inherits it")
 }
 
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)

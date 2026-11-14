@@ -1279,7 +1279,7 @@ private struct WipeMask: Shape {
 }
 
 /// The Now Playing block's side of `TrackWipe`: the press it waits on, the
-/// old track kept up while a new cover loads or the running sweep ends, and
+/// old track kept up while the running sweep ends, and
 /// the outgoing one during a sweep. An object rather than @State, for the
 /// Command Line Tools toolchain.
 final class TrackWipeState: ObservableObject {
@@ -1294,7 +1294,6 @@ final class TrackWipeState: ObservableObject {
     /// The way the held track leaves once it is let go.
     private var pending = (direction: TrackWipe.Direction.next, fades: false)
     private var sweeps = 0
-    private var holds = 0
 
     func press(_ direction: TrackWipe.Direction) { pressed = (direction, .now) }
 
@@ -1313,16 +1312,7 @@ final class TrackWipeState: ObservableObject {
         pending = (direction, reduceMotion)
         // A running sweep finishes first; its end lets the held track go.
         guard outgoing == nil else { return }
-        guard TrackWipe.waitsForArt(oldHasArt: old.artwork != nil, newHasArt: new.artwork != nil) else {
-            release()
-            return
-        }
-        holds += 1
-        let mark = holds
-        DispatchQueue.main.asyncAfter(deadline: .now() + TrackWipe.artHold) { [weak self] in
-            guard let self, self.holds == mark, self.outgoing == nil else { return }
-            self.release()
-        }
+        release()
     }
 
     private func release() {

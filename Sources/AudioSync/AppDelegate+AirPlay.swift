@@ -328,6 +328,19 @@ extension AppDelegate: TrackInfoHost {
     }
 
     func showNowPlaying(_ track: NowPlayingMonitor.Track?) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let since = artHeldSince ?? now
+        guard ArtHold.decide(shown: appModel.nowPlaying, next: track, heldFor: now - since) == .show else {
+            if artHeldSince == nil {
+                artHeldSince = now
+                DispatchQueue.main.asyncAfter(deadline: .now() + ArtHold.limit) { [weak self] in
+                    guard let self, self.artHeldSince == now else { return }
+                    self.showNowPlaying(self.nowPlaying.track)
+                }
+            }
+            return
+        }
+        artHeldSince = nil
         if appModel.nowPlaying != track { appModel.nowPlaying = track }
     }
 

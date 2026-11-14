@@ -286,8 +286,6 @@ enum TrackWipe {
     static let fadeDuration: TimeInterval = 0.15
     /// A change this long after a press still counts as the press's.
     static let pressWindow: TimeInterval = 3
-    /// The longest a new track whose cover hasn't come yet keeps the old one up.
-    static let artHold: TimeInterval = 1
 
     static func direction(pressed: Direction?, secondsSincePress: TimeInterval) -> Direction? {
         guard (0...pressWindow).contains(secondsSincePress) else { return nil }
@@ -308,10 +306,30 @@ enum TrackWipe {
         let p = min(1, max(0, progress))
         return direction == .next ? (0...(1 - p), (1 - p)...1) : (p...1, 0...p)
     }
+}
 
-    /// The old cover stays up instead of a blank one while the new one loads.
-    static func waitsForArt(oldHasArt: Bool, newHasArt: Bool) -> Bool {
-        oldHasArt && !newHasArt
+/// Both Now Playing views keep the old song, cover and title together, while
+/// the next song from the same player waits for its cover, so the cover never
+/// blanks between two songs; a track known to have none shows at once.
+enum ArtHold {
+    enum Decision: Equatable { case show, hold }
+    static let limit: TimeInterval = 1.5
+
+    static func decide(shown: NowPlayingMonitor.Track?, next: NowPlayingMonitor.Track?,
+                       heldFor: TimeInterval) -> Decision {
+        guard let shown, let next, shown.artwork != nil, next.artwork == nil, next.artPending,
+              TrackWipe.isSkip(shown, next), heldFor < limit else { return .show }
+        return .hold
+    }
+
+    /// A reading that started before the cover came in must not take it away again.
+    static func keepingArt(of last: NowPlayingMonitor.Track?, in next: NowPlayingMonitor.Track) -> NowPlayingMonitor.Track {
+        guard next.artwork == nil, let last, let art = last.artwork, last.bundleID == next.bundleID,
+              (last.title, last.artist, last.album) == (next.title, next.artist, next.album) else { return next }
+        var kept = next
+        kept.artwork = art
+        kept.artPending = false
+        return kept
     }
 }
 

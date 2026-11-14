@@ -41,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let engine = StreamEngine()
     let devices = AudioDevices()
     let nowPlaying = NowPlayingMonitor()
+    /// Since when the views keep the last song up for the next one's cover (`ArtHold`).
+    var artHeldSince: TimeInterval?
     let localNetworkProbe = LocalNetworkProbe()
     /// The own volume and mute of the local outputs that are on (`+DeviceVolume`).
     private(set) lazy var deviceVolumes = makeDeviceVolumes()
