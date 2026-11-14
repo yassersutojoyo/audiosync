@@ -785,6 +785,21 @@ fn no_text_promises_airplay() {
     );
 }
 
+/// "Looking for speakers…" and the other list notes in the Mac window's
+/// style: callout text on a 10 px inset (MainWindow.swift, `emptyNote`).
+// covers: S393
+#[test]
+fn the_speaker_list_note_is_callout_text_as_on_the_mac() {
+    // A Windows checkout may turn the file's line ends into CRLF.
+    let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+    assert!(main.contains(
+        "                    padding: 10px;
+                    SecondaryText {
+                        text: root.note;
+                        font-size: Tokens.font-size-callout;"
+    ));
+}
+
 /// Whether `text` holds a private-use character (the icon font's glyphs), a
 /// Slint escape for one, or a glyph by name, which Narrator would read as
 /// noise.
