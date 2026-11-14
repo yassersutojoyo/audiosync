@@ -5,10 +5,10 @@
 // double-audio section shows only while that notice does, and opens the
 // notice's own guide (guide.slint).
 
-import { Button, ScrollView } from "std-widgets.slint";
+import { Button } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { FocusRing, Fluent, SectionTitle } from "widgets.slint";
+import { FocusRing, Fluent, OverlayScrollView, SectionTitle } from "widgets.slint";
 
 // A heading and its text. Narrator reads the heading as the group's name,
 // as for the main window's sections, so SectionTitle hides it from Narrator.
@@ -169,7 +169,7 @@ export component HelpWindow inherits Window {
             Rectangle {
                 vertical-stretch: 1;
 
-                scroll := ScrollView {
+                scroll := OverlayScrollView {
 
                     VerticalLayout {
                         // The text wraps at the view's width instead of widening it.

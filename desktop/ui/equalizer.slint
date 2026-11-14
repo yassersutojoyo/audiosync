@@ -3,10 +3,10 @@
 // steps), saving curves, and Reset. Opened with Ctrl+E or from the
 // Equalizer card.
 
-import { Button, ComboBox, Palette, Slider } from "std-widgets.slint";
+import { Button, ComboBox, Palette } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Card, FocusRing, Fluent, NameField, QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
+import { Card, FocusRing, Fluent, NameField, LevelSlider, QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -129,7 +129,7 @@ component Band inherits VerticalLayout {
                     width: 20px;
                     height: parent.height;
 
-                    slider := Slider {
+                    slider := LevelSlider {
                         width: parent.width;
                         height: parent.height;
                         orientation: vertical;

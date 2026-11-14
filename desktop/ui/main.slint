@@ -5,12 +5,12 @@
 // Its own top row carries the menus and the window buttons. Tab order
 // follows the reading order.
 
-import { Button, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
+import { Button, CheckBox, ComboBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, MenuName, NoticeStack, PairPicker, PowerSwitch, QuietText, ResizeEdge, SecondaryText, SectionTitle, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, LinkButton, MarqueeText, MasterVolume, MenuName, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, SecondaryText, SectionTitle, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -462,7 +462,8 @@ component SpeakerSection inherits VerticalLayout {
                 padding-bottom: 2px;
                 SecondaryText {
                     text: Strings.in-zones;
-                    font-size: Tokens.font-size-caption;
+                    font-size: Tokens.font-size-subheadline;
+                    font-weight: 500;
                 }
             }
 
@@ -772,7 +773,7 @@ component EqualizerCard inherits Rectangle {
         padding-bottom: 6px;
         spacing: 8px;
 
-        Glyph {
+        icon := Glyph {
             glyph: Glyphs.equalizer;
             color: Tokens.text;
             width: 16px;
@@ -1321,13 +1322,13 @@ component NowPlayingCard inherits VerticalLayout {
 
                 MarqueeText {
                     text: root.title;
-                    font-size: 16px;
+                    font-size: Tokens.font-size-title3;
                     font-weight: 600;
                 }
 
                 if root.subtitle != "": MarqueeText {
                     text: root.subtitle;
-                    font-size: Tokens.font-size-caption;
+                    font-size: Tokens.font-size-callout;
                     text-color: Tokens.secondary-text;
                 }
             }
@@ -1876,7 +1877,7 @@ export component MainWindow inherits Window {
 
                 SecondaryText {
                     text: root.status;
-                    font-size: Tokens.font-size-caption;
+                    font-size: Tokens.font-size-callout;
                     accessible-role: text;
                     accessible-label: self.text;
                 }
@@ -1947,7 +1948,10 @@ export component MainWindow inherits Window {
             // Left column: what plays and how loud, each in its own card. It
             // scrolls when the window is shorter than its cards (a small
             // screen, or notices showing), as the speaker list does.
-            left-column := ScrollView {
+            left-column := OverlayScrollView {
+                blank-clicked => {
+                    root.blank-clicked();
+                }
                 width: MainColumns.left(root.columns-width);
 
                 VerticalLayout {
@@ -2101,7 +2105,7 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             Text {
                                 text: Strings.master-volume-title;
-                                font-size: Tokens.font-size-caption;
+                                font-size: Tokens.font-size-subheadline;
                                 color: Tokens.secondary-text;
                                 accessible-role: none;
                             }
@@ -2219,7 +2223,10 @@ export component MainWindow inherits Window {
 
             // Speakers: this PC first (few, stable rows), then zones, then
             // every connected speaker in no zone by name.
-            scroll := ScrollView {
+            scroll := OverlayScrollView {
+                blank-clicked => {
+                    root.blank-clicked();
+                }
                 horizontal-stretch: 1;
                 preferred-width: Fluent.speaker-list-full;
                 max-width: Fluent.speaker-list-full;
@@ -2235,7 +2242,7 @@ export component MainWindow inherits Window {
                         padding-left: 4px;
                         SecondaryText {
                             text: Strings.no-speaker-on;
-                            font-size: Tokens.font-size-caption;
+                            font-size: Tokens.font-size-callout;
                         }
                     }
 

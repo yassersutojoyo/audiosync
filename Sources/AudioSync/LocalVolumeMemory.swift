@@ -2,8 +2,9 @@ import Foundation
 
 // A local output's own macOS volume, remembered per device UID: the level it
 // last had while it played through AudioSync is set again before its first
-// audio, and the level it was found at is put back after its last. Only
-// levels the user chose are ever written; the host does the Core Audio part.
+// audio, unless the level was changed in macOS since, and the level it was
+// found at is put back after its last. Only levels the user chose are ever
+// written; the host does the Core Audio part.
 
 struct LocalVolumeMemory: Equatable {
     /// The found level goes back only after the output's fade-out, which
@@ -15,12 +16,16 @@ struct LocalVolumeMemory: Equatable {
     /// The level each output had when it started playing, to put back when it
     /// stops; stored, so one a crash left behind goes back at the next launch.
     private(set) var found: [String: Double]
+    /// The level each output was left at when it last stopped playing; a
+    /// different level at its next switch-on was set in macOS since, and wins.
+    private(set) var left: [String: Double]
     /// The outputs playing through AudioSync now.
     private(set) var playing: Set<String> = []
 
-    init(remembered: [String: Double] = [:], found: [String: Double] = [:]) {
+    init(remembered: [String: Double] = [:], found: [String: Double] = [:], left: [String: Double] = [:]) {
         self.remembered = remembered
         self.found = found
+        self.left = left
     }
 
     /// Output `uid` starts playing; `current` is its device's level now, nil
@@ -32,7 +37,7 @@ struct LocalVolumeMemory: Equatable {
         guard let current else { return nil }
         // One a crash left set keeps the level it had before AudioSync.
         if found[uid] == nil { found[uid] = current }
-        guard let level = remembered[uid] else {
+        guard let level = remembered[uid], let was = left[uid], abs(was - current) < 0.001 else {
             remembered[uid] = current
             return nil
         }
@@ -61,16 +66,25 @@ struct LocalVolumeMemory: Equatable {
     /// AudioSync quits): returns the level to put back, nil to leave it.
     mutating func switchedOff(_ uid: String) -> Double? {
         guard playing.remove(uid) != nil else { return nil }
+        left[uid] = found[uid]
         return found.removeValue(forKey: uid)
     }
 
     /// At launch, before anything plays: the found levels a crash left on the
-    /// outputs listed now, to put back. An unlisted one waits for its turn.
-    mutating func recover(listed: Set<String>) -> [String: Double] {
+    /// outputs listed now with a readable level (`current`), to put back. One
+    /// whose level was changed in macOS since keeps it; an unlisted one waits.
+    mutating func recover(current: [String: Double]) -> [String: Double] {
         var back: [String: Double] = [:]
-        for (uid, level) in found where listed.contains(uid) && !playing.contains(uid) {
-            back[uid] = level
+        for (uid, level) in found where !playing.contains(uid) {
+            guard let now = current[uid] else { continue }
             found[uid] = nil
+            if let kept = remembered[uid], abs(kept - now) < 0.001 {
+                back[uid] = level
+                left[uid] = level
+            } else {
+                left[uid] = now
+                remembered[uid] = now
+            }
         }
         return back
     }

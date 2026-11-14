@@ -874,6 +874,50 @@ mod tests {
     }
 
     #[test]
+    fn switches_sliders_and_scroll_bars_are_drawn_as_the_macs_not_the_toolkits() {
+        let files = [
+            ("main.slint", include_str!("../ui/main.slint")),
+            ("widgets.slint", include_str!("../ui/widgets.slint")),
+            ("equalizer.slint", include_str!("../ui/equalizer.slint")),
+            ("flyout.slint", include_str!("../ui/flyout.slint")),
+            ("help.slint", include_str!("../ui/help.slint")),
+            ("remote.slint", include_str!("../ui/remote.slint")),
+        ];
+        for (name, source) in files {
+            for line in source
+                .lines()
+                .filter(|l| l.contains("\"std-widgets.slint\""))
+            {
+                let toolkit: Vec<&str> = line
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|word| ["Switch", "Slider", "ScrollView"].contains(word))
+                    .collect();
+                assert!(toolkit.is_empty(), "{name} imports {toolkit:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn text_sizes_are_the_macs_text_styles_in_logical_pixels() {
+        let tokens = include_str!("../ui/tokens.slint");
+        for (style, size) in [
+            ("caption", 10),
+            ("caption2", 10),
+            ("subheadline", 11),
+            ("callout", 12),
+            ("body", 13),
+            ("headline", 13),
+            ("title3", 15),
+            ("title2", 17),
+            ("wordmark", 21),
+            ("pairing-code", 28),
+        ] {
+            let line = format!("out property <length> font-size-{style}: {size}px;");
+            assert!(tokens.contains(&line), "{line}");
+        }
+    }
+
+    #[test]
     fn badge_follows_choice_and_streaming() {
         assert_eq!(Badge::of(false, true), Badge::Off);
         assert_eq!(Badge::of(false, false), Badge::Off);

@@ -121,6 +121,9 @@ struct AppSettings: Equatable {
         /// The macOS volume each playing output had before AudioSync set it,
         /// by device UID (`LocalVolumeMemory.found`).
         static let systemVolumesFound = "systemVolumeFoundByUID"
+        /// The macOS volume each output was left at when it last stopped
+        /// playing, by device UID (`LocalVolumeMemory.left`).
+        static let systemVolumesLeft = "systemVolumeLeftByUID"
     }
 
     /// Where a speaker without a volume of its own starts (S71, S399).
@@ -163,6 +166,7 @@ struct AppSettings: Equatable {
     var webRemotePort = RemotePort.default
     var systemVolumesRemembered: [String: Double] = [:]
     var systemVolumesFound: [String: Double] = [:]
+    var systemVolumesLeft: [String: Double] = [:]
 
     /// Whether AUDIOSYNC_AIRPLAY2=1 turns the sender's AirPlay 2 path on; the
     /// core reads it too, and CI and debug runs use it (P2).
@@ -225,6 +229,7 @@ struct AppSettings: Equatable {
         s.webRemotePort = read(Keys.webRemotePort).flatMap(number).flatMap(RemotePort.stored) ?? RemotePort.default
         s.systemVolumesRemembered = levels(read(Keys.systemVolumesRemembered)) { min(1, max(0, $0)) }
         s.systemVolumesFound = levels(read(Keys.systemVolumesFound)) { min(1, max(0, $0)) }
+        s.systemVolumesLeft = levels(read(Keys.systemVolumesLeft)) { min(1, max(0, $0)) }
         return s
     }
 

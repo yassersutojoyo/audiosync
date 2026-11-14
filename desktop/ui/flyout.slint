@@ -4,12 +4,12 @@
 // its speakers under it and every other speaker, then Open AudioSync and Exit; the mark and
 // name open the main window. Escape or a click elsewhere closes it.
 
-import { Button, ScrollView } from "std-widgets.slint";
+import { Button } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
+import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, LinkButton, MarqueeText, MasterVolume, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
 
 // The preset row under the source (spec S260): Presets and the current
 // preset's name, else "Choose a Preset"; its menu lists every preset, the
@@ -865,7 +865,7 @@ export component TrayFlyout inherits Window {
             // screen is too short even for the list at its three rows. Its
             // height comes from where the parts end: a layout's preferred
             // height measures a wrapped notice as one line.
-            body-view := ScrollView {
+            body-view := OverlayScrollView {
                 property <length> natural: body-end.y - body.spacing;
                 height: max(48px, self.natural - root.body-cut);
                 content-height: self.natural;
@@ -998,7 +998,7 @@ export component TrayFlyout inherits Window {
 
                                         MarqueeText {
                                             text: root.now-playing-title;
-                                            font-size: 15px;
+                                            font-size: Tokens.font-size-title3;
                                             font-weight: 600;
                                         }
 
@@ -1065,7 +1065,7 @@ export component TrayFlyout inherits Window {
                         // Four rows, then it scrolls: with the list below it shares
                         // the 260 px the list had alone, so a PC with many outputs
                         // still fits a small screen.
-                        this-pc-view := ScrollView {
+                        this-pc-view := OverlayScrollView {
                             height: min(this-pc-list.preferred-height, 144px);
 
                             this-pc-list := VerticalLayout {
@@ -1150,7 +1150,7 @@ export component TrayFlyout inherits Window {
                         }
                     }
 
-                    if root.zones.length > 0 || root.speakers.length > 0: list-view := ScrollView {
+                    if root.zones.length > 0 || root.speakers.length > 0: list-view := OverlayScrollView {
                         // Every row up to five or so, less this PC's rows above, then
                         // it scrolls; three rows at least.
                         height: min(list.preferred-height, max(108px, 260px - root.list-cut - this-pc-view.height));

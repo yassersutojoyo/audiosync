@@ -28,12 +28,9 @@ enum MasterMute {
     /// Muted when the number beside the slider reads 0.
     static func isMuted(_ level: Double) -> Bool { level.rounded() == 0 }
 
-    /// One wave up to 33, two up to 66, three above.
+    /// Always the three-wave speaker when not muted, so the icon keeps one size; the level lights its waves.
     static func symbol(level: Double) -> String {
-        if isMuted(level) { return "speaker.slash.fill" }
-        if level.rounded() < 34 { return "speaker.wave.1.fill" }
-        if level.rounded() < 67 { return "speaker.wave.2.fill" }
-        return "speaker.wave.3.fill"
+        isMuted(level) ? "speaker.slash.fill" : "speaker.wave.3.fill"
     }
 
     /// What unmuting returns to before the master was ever at 5 or above this run.
