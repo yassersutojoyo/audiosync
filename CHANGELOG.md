@@ -41,15 +41,11 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the equalizer's Reset button, Add by Address and the Web Remote settings use the same buttons and fields as the rest of the app, with the brand color around a focused field. Forget All Remote Devices is red.
 - On Windows and Linux, the speaker list's note, Looking for speakers included, is set in smaller text with a little more room around it, as in the Mac window.
 - On Windows and Linux, the preset and the equalizer curve you picked show on a grey second line under Presets and Equalizer, as on the Mac, and the Presets rows keep naming the preset you used last until you delete it.
-
 - On the Mac, the line between zones runs from the zone name to its options button and hides beside the zone under the pointer, whose highlight sits a little inside the card.
 - On Windows and Linux, the master volume row has the Mac's look: the two-wave speaker, the drawn slider and the number on the right edge, in the window and the tray panel.
 - On Windows and Linux, Next keeps the old song and cover up while the new cover loads, as on the Mac.
 - On Windows and Linux, a notice fades in as its room opens, as on the Mac.
-
-<!-- Pending: move these into Changed and Fixed once they pass on the Mac.
 - On the Mac, when a player says it played or paused, Now Playing shows the change sooner still.
--->
 
 ### Fixed
 
