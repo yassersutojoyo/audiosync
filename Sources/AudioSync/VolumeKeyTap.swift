@@ -2,18 +2,16 @@ import AppKit
 
 /// Takes the keyboard's volume keys while they move the master (S429): an
 /// active event tap on the session's system-defined events, on a thread of
-/// its own so a busy main thread never holds up the keyboard. Every other
-/// event passes unchanged.
+/// its own that has the main queue read each one. Every other event passes
+/// unchanged.
 final class VolumeKeyTap {
     /// NX_SYSDEFINED, the event type media keys arrive as.
     private static let systemDefined: UInt32 = 14
-    /// NX_SUBTYPE_AUX_CONTROL_BUTTONS.
-    private static let auxControlButtons: Int16 = 8
 
     private let deliver: (VolumeKeys.Key) -> Void
     /// Set once in `init`, before the thread starts.
     private var port: CFMachPort?
-    /// Only the tap's thread reads and writes it.
+    /// Only the main thread reads and writes it.
     private var muteHeld = false
 
     /// Nil when macOS refuses the tap, as it does without Accessibility
@@ -54,24 +52,24 @@ final class VolumeKeyTap {
             DebugTrace.log("[AudioSync] volume keys: macOS disabled the event tap after \(why); enabled again")
             return Unmanaged.passUnretained(event)
         }
-        guard type.rawValue == Self.systemDefined, let ns = NSEvent(cgEvent: event),
-              ns.subtype.rawValue == Self.auxControlButtons else { return Unmanaged.passUnretained(event) }
-        let key: VolumeKeys.Key
-        switch (ns.data1 & 0xFFFF_0000) >> 16 {
-        case 0: key = .up     // NX_KEYTYPE_SOUND_UP
-        case 1: key = .down   // NX_KEYTYPE_SOUND_DOWN
-        case 7: key = .mute   // NX_KEYTYPE_MUTE
-        default: return Unmanaged.passUnretained(event)
+        guard type.rawValue == Self.systemDefined else { return Unmanaged.passUnretained(event) }
+        // CGEvent has no public field for data1, and macOS 27 traps an NSEvent built from it off the main
+        // queue for a Caps Lock event; waiting here still keeps a taken key from the system.
+        let taken: Bool = DispatchQueue.main.sync {
+            guard let ns = NSEvent(cgEvent: event),
+                  case let (key, down)? = VolumeKeys.decoded(type: Self.systemDefined, subtype: ns.subtype.rawValue,
+                                                             data1: ns.data1)
+            else { return false }
+            // A held mute key repeats; it toggles once per press.
+            let repeated = key == .mute && muteHeld
+            if key == .mute { muteHeld = down }
+            if down, !repeated {
+                let deliver = deliver
+                DispatchQueue.main.async { deliver(key) }
+            }
+            return true
         }
-        let down = (ns.data1 & 0xFF00) >> 8 == 0x0A
-        // A held mute key repeats; it toggles once per press.
-        let repeated = key == .mute && muteHeld
-        if key == .mute { muteHeld = down }
-        if down, !repeated {
-            let deliver = deliver
-            DispatchQueue.main.async { deliver(key) }
-        }
-        return nil
+        return taken ? nil : Unmanaged.passUnretained(event)
     }
 }
 

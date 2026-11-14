@@ -7115,6 +7115,20 @@ do {
             && PermissionAsks(explained: ["accessibility"], usedBefore: false)
                 .step(.accessibility, state: .notAsked, userAction: false) == .go,
           "volume keys: a stream start offers the Accessibility explanation once, as a card, also after an update")
+    let capsLockKeyUp = 0x04_0B00
+    check(VolumeKeys.decoded(type: 14, subtype: 8, data1: 0x00_0A00).map { "\($0.key) \($0.down)" } == "up true"
+            && VolumeKeys.decoded(type: 14, subtype: 8, data1: 0x01_0B00).map { "\($0.key) \($0.down)" } == "down false"
+            && VolumeKeys.decoded(type: 14, subtype: 8, data1: 0x07_0A00).map { "\($0.key) \($0.down)" } == "mute true"
+            && VolumeKeys.decoded(type: 14, subtype: 8, data1: capsLockKeyUp) == nil
+            && VolumeKeys.decoded(type: 14, subtype: 8, data1: 0x10_0A00) == nil
+            && VolumeKeys.decoded(type: 14, subtype: 7, data1: 0x00_0A00) == nil
+            && VolumeKeys.decoded(type: 10, subtype: 8, data1: 0x00_0A00) == nil,
+          "volume keys: only volume up, down and mute decode from a system-defined event; Caps Lock and the rest pass")
+    // macOS 27 traps when NSEvent(cgEvent:) runs off the main queue for a Caps Lock event.
+    let volumeKeyTapSource = ((try? String(contentsOfFile: "Sources/AudioSync/VolumeKeyTap.swift", encoding: .utf8)) ?? "")
+        .components(separatedBy: "DispatchQueue.main.sync")
+    check(volumeKeyTapSource.count == 2 && !volumeKeyTapSource[0].contains("NSEvent(cgEvent:"),
+          "volume keys: the tap's thread never builds an NSEvent; it decodes on the main queue")
 }
 
 // MARK: Track info — what AirPlay receivers with a screen show

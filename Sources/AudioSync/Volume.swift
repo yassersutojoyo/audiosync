@@ -74,6 +74,22 @@ enum VolumeKeys {
         return MasterMute.snapped(min(max(next, 0), 100))
     }
 
+    /// The volume key a system-defined event (type 14, aux-button subtype 8)
+    /// carries and whether it went down; nil for every other event, Caps Lock
+    /// included. data1 holds the NX key type in its high 16 bits and the key
+    /// state in bits 8-15, 0xA for down.
+    static func decoded(type: UInt32, subtype: Int16, data1: Int) -> (key: Key, down: Bool)? {
+        guard type == 14, subtype == 8 else { return nil }
+        let key: Key
+        switch (data1 & 0xFFFF_0000) >> 16 {
+        case 0: key = .up     // NX_KEYTYPE_SOUND_UP
+        case 1: key = .down   // NX_KEYTYPE_SOUND_DOWN
+        case 7: key = .mute   // NX_KEYTYPE_MUTE
+        default: return nil
+        }
+        return (key, (data1 & 0xFF00) >> 8 == 0x0A)
+    }
+
     /// Whether the keys move the master rather than the system's volume.
     static func taken(switchOn: Bool, streaming: Bool) -> Bool {
         switchOn && streaming
