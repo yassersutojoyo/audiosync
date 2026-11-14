@@ -4193,8 +4193,9 @@ export component NoticeStack inherits VerticalLayout {
             delay: Motion.on && self.closing ? 90ms : 0ms;
             easing: cubic-bezier(0.2, 0.8, 0.2, 1);
         }
+        // With animation effects off only a closing notice fades.
         animate shown {
-            duration: Motion.on ? (self.closing ? 120ms : 180ms) : 150ms;
+            duration: Motion.on ? (self.closing ? 120ms : 180ms) : (self.closing ? 150ms : 0ms);
             delay: Motion.on && !self.closing ? 60ms : 0ms;
             easing: ease-out;
         }

@@ -247,6 +247,36 @@ fn the_level_meter_reaches_3_to_1_and_takes_no_focus() {
     }
 }
 
+/// An opening notice in the main window, as on the Mac (WindowRules.swift
+/// `NoticeMotion.opacity`): its room opens over 240 ms and it fades in over
+/// 180 ms from 60 ms, opaque as the room lands; with animation effects off
+/// it shows at once. A closing notice keeps its fade. Read line by line:
+/// a Windows checkout may have CRLF line ends.
+// covers: S450
+#[test]
+fn an_opening_notice_fades_in_as_its_room_lands() {
+    let stack = component_body(include_str!("../ui/widgets.slint"), "NoticeStack");
+    let lines: Vec<&str> = stack.lines().map(str::trim).collect();
+    let after = |head: &str| {
+        let at = lines
+            .iter()
+            .position(|line| *line == head)
+            .unwrap_or_else(|| panic!("{head}"));
+        (lines[at + 1], lines[at + 2])
+    };
+    assert_eq!(
+        after("animate open {").0,
+        "duration: Motion.on ? (self.closing ? 200ms : 240ms) : 0ms;"
+    );
+    assert_eq!(
+        after("animate shown {"),
+        (
+            "duration: Motion.on ? (self.closing ? 120ms : 180ms) : (self.closing ? 150ms : 0ms);",
+            "delay: Motion.on && !self.closing ? 60ms : 0ms;"
+        )
+    );
+}
+
 /// The master volume rows as on the Mac (MenuBar.swift `MasterSlider`): the
 /// two-wave speaker, crossed out at 0; the track and the knob's edge in the
 /// secondary text color, 3:1 on the window and the tray panel; the number
