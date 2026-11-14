@@ -1838,7 +1838,9 @@ fn a_zone_header_fills_only_on_hover() {
 /// highlight inset does.
 #[test]
 fn a_zone_headers_hover_fill_stops_4_px_inside_each_edge() {
-    let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
+    // CI checks the .slint files out with CRLF line ends on Windows.
+    let header =
+        component_body(include_str!("../ui/widgets.slint"), "ZoneHeader").replace("\r\n", "\n");
     let fill = header
         .find("hover-fill := Rectangle {")
         .map(|at| &header[at..at + header[at..].find("    }\n").expect("it ends")])
