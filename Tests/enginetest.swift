@@ -78,7 +78,7 @@ for dev in devices {
 
     // Runs the main queue, where the start hands over its latency read (hasFaded waits for it).
     RunLoop.main.run(until: Date().addingTimeInterval(0.7))
-    let rendered =r.framesRendered.load(ordering: .relaxed)
+    let rendered = r.framesRendered.load(ordering: .relaxed)
     check(rendered > 24000, "\(dev.name): renders audio", "\(rendered) frames in 1 s")
 
     // Lag ≈ delay − one device buffer, ± one producer chunk; each change
