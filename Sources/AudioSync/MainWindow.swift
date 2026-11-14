@@ -228,7 +228,6 @@ struct MainView: View {
     @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var windowWidth = WindowWidth()
     @StateObject private var heroHover = HoverState()
-    @StateObject private var masterDrag = VolumeDrag()
     @StateObject private var wipe = TrackWipeState()
     @Environment(\.displayScale) private var displayScale
     @FocusState private var modeFocus: TransportMode?
@@ -532,16 +531,16 @@ struct MainView: View {
                 .accessibilityAddTraits(.isHeader)
             HStack(spacing: 8) {
                 MasterMuteButton(model: model, text: t)
-                Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }),
-                       in: 0...100, onEditingChanged: { masterDrag.held = $0 })
-                    .controlSize(.small)
-                    .accessibilityLabel(t.masterVolume)
-                    .accessibilityValue(t.volumeValue(model.master))
-                Text(t.volumeValue(model.master))
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(masterDrag.held ? Color.primary : Brand.secondaryText)
-                    .frame(width: 26, alignment: .trailing)
-                    .accessibilityHidden(true)
+                HStack(spacing: 6) {
+                    MasterSlider(model: model, text: t)
+                    Text(t.volumeValue(model.master))
+                        .font(.body.monospacedDigit())
+                        .foregroundStyle(.primary)
+                        .frame(width: MasterTrack.numberWidth, alignment: .trailing)
+                        .accessibilityHidden(true)
+                }
+                // Past the last digit's bearing, its ink ends on the chevrons' right edge.
+                .padding(.trailing, 1)
             }
         }
     }
@@ -1156,13 +1155,14 @@ private struct PresetNameField: View {
 struct QuickRowIcon: View {
     /// The one symbol size, the menu bar panel's preset and volume icons' too.
     static let point: CGFloat = 15
+    static let slot: CGFloat = 20
     let name: String
     init(_ name: String) { self.name = name }
 
     var body: some View {
         Image(systemName: name)
             .font(.system(size: QuickRowIcon.point))
-            .frame(width: 20, alignment: .leading)
+            .frame(width: QuickRowIcon.slot, alignment: .leading)
     }
 }
 

@@ -7898,7 +7898,7 @@ do {
           "rows without exactly one QuickRow: \(oneRowEach)")
     let rowIcon = part("MainWindow.swift", "struct QuickRowIcon: View", "\n}\n")
     let columnFrame = part("MainWindow.swift", "hero(t)\n", "let all = model.layout")
-    check(rowIcon.contains(".frame(width: 20, alignment: .leading)")
+    check(rowIcon.contains(".frame(width: QuickRowIcon.slot, alignment: .leading)") && rowIcon.contains("static let slot: CGFloat = 20")
             && column.contains("}\n                        .padding(.horizontal, -MainColumns.rowInset)")
             && column.contains(".padding(.horizontal, MainColumns.rowInset)")
             && columnFrame.contains(".frame(width: MainColumns.left(window: windowWidth.points) + 2 * MainColumns.rowInset)"),
@@ -9151,10 +9151,45 @@ do {
         .components(separatedBy: "\n}\n").first ?? ""
     check(quickIconSource.contains(".font(.system(size: QuickRowIcon.point))"),
           "main window: the Presets, Equalizer and Calibrate icons share one size, the menu bar panel's icons' too")
-    check(muteSource.contains("Image(systemName: MasterMute.symbol(level: model.master), variableValue: model.master / 100)\n                .font(.system(size: QuickRowIcon.point))")
-            && muteSource.contains(".frame(width: panel ? PanelLayout.iconBox : 16, height: 18)")
-            && !muteSource.contains(".hidden()") && !muteSource.contains(".caption") && !muteSource.contains("alignment: panel"),
-          "master volume icon: the preset icons' size, centred on their column in the panel and the main window, never shrunk to a narrower glyph")
+    check(muteSource.contains("Image(systemName: MasterMute.symbol(level: model.master))\n                .font(.system(size: QuickRowIcon.point))")
+            && muteSource.contains(".frame(width: panel ? PanelLayout.iconBox : QuickRowIcon.slot, height: 18, alignment: panel ? .center : .leading)")
+            && !muteSource.contains("variableValue") && !muteSource.contains(".hidden()") && !muteSource.contains(".caption"),
+          "master volume icon: the preset icons' size and slot, the panel's centred box and the main window rows' left-aligned 20 pt one, with no faded waves")
+    let mainMaster = mainSource.components(separatedBy: "private func masterVolume(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let numberStyle = ".font(.body.monospacedDigit())\n                    .foregroundStyle(.primary)\n                    .frame(width: MasterTrack.numberWidth, alignment: .trailing)"
+    check(mainMaster.contains("HStack(spacing: 8) {\n                MasterMuteButton(model: model, text: t)\n                HStack(spacing: 6) {\n                    MasterSlider(model: model, text: t)\n")
+            && mainMaster.contains(numberStyle.replacingOccurrences(of: "\n                    ", with: "\n                        "))
+            && mainMaster.contains(".padding(.trailing, 1)")
+            && !mainMaster.contains("Slider(value:") && !mainSource.contains("masterDrag"),
+          "main window master volume source: icon, drawn slider on the title column, then 6 pt and the number in the row titles' style on the chevrons' edge")
+    check(masterRowSource.contains("HStack(spacing: PanelLayout.iconGap) {\n                MasterSlider(model: model, text: t)")
+            && masterRowSource.contains(numberStyle)
+            && !masterRowSource.contains("Slider(value:") && !bar.contains("numberGap"),
+          "menu bar panel master volume source: the same drawn slider and number, the number as far from the track as the icon box is")
+    let sliderSource = bar.components(separatedBy: "struct MasterSlider: View {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(sliderSource.contains("Capsule().fill(Color.secondary)") && sliderSource.contains("Capsule().fill(Color.primary)")
+            && sliderSource.contains(".overlay(Circle().strokeBorder(Color.secondary, lineWidth: 1))")
+            && sliderSource.contains(".shadow(color: .black.opacity(0.3), radius: 1.5, y: 0.5)")
+            && sliderSource.contains(".accessibilityRepresentation {") && sliderSource.contains(".onKeyPress(keys:"),
+          "master slider source: a .secondary track and knob edge at 3:1 under a .primary fill, a Slider to VoiceOver, keys that move it")
+    // The narrow left column's slider: 210 pt less the icon slot, the gaps, the number and its bearing.
+    // 20 is QuickRowIcon.slot, pinned in its source above; the view files aren't compiled here.
+    let masterTrack = MainColumns.narrow - 20 - 8 - 6 - MasterTrack.numberWidth - 1
+    check(masterTrack == 150 && MasterTrack.knobX(width: masterTrack, level: 0) == 0
+            && abs(MasterTrack.knobX(width: masterTrack, level: 48) - 64.32) < 0.001
+            && MasterTrack.knobX(width: masterTrack, level: 100) + MasterTrack.knob == masterTrack
+            && MasterTrack.level(at: 8 + 67, width: masterTrack) == 50 && MasterTrack.level(at: -20, width: masterTrack) == 0
+            && MasterTrack.level(at: 400, width: masterTrack) == 100,
+          "master slider: the knob stays inside the track at 0, 48 and 100, and a drag puts its centre under the pointer",
+          "track \(masterTrack)")
+    let keyed = [MasterTrack.Key.up, .down, .pageUp, .pageDown, .home, .end].map { MasterTrack.level(after: $0, from: 47.6) }
+    check(keyed == [49, 47, 58, 38, 0, 100] && MasterTrack.level(after: .up, from: 100) == 100
+            && MasterTrack.level(after: .down, from: 0) == 0
+            && sliderSource.contains("case .rightArrow, .upArrow: return .up") && sliderSource.contains("case .leftArrow, .downArrow: return .down")
+            && sliderSource.contains("default: return nil"),
+          "master slider: arrows step 1, Page Up and Down 10, Home and End go to either end", "\(keyed)")
     // covers: S403
     check(rowsSource.contains(".clipShape(FoldClip(moving: zoneDisclosure.moving))") && mainSource.contains("moving = true"),
           "menu bar panel source: a fold clips each zone to its own moving edge, so the rows and the footer below never slide over its fading rows")
@@ -18559,8 +18594,8 @@ do {
 // MARK: Master mute
 do {
     let glyphs = [0, 0.4, 0.6, 33, 34, 66, 67, 100].map { MasterMute.symbol(level: $0) }
-    check(glyphs == ["speaker.slash.fill", "speaker.slash.fill"] + Array(repeating: "speaker.wave.3.fill", count: 6),
-          "master mute: the speaker is struck through at 0 and otherwise keeps all three waves, lit by level, so its ink never shrinks",
+    check(glyphs == ["speaker.slash.fill", "speaker.slash.fill"] + Array(repeating: "speaker.wave.2.fill", count: 6),
+          "master mute: the speaker is struck through at 0 and otherwise is the two-wave speaker at every level, so its ink never changes",
           glyphs.joined(separator: ", "))
     func unmuteLevel(after levels: [Double]) -> Double {
         let kept = levels.reduce(MasterMute.fallback) { MasterMute.remembered(level: $1, previous: $0) }
@@ -18698,10 +18733,8 @@ do {
     let meterView = motionPart(motionBar, "struct InputLevelMeter: View")
     check(meterView.contains("InputLevel.glide(from: level.previous, to: level.level, reduceMotion: reduceMotion)"),
           "input level motion source: the meter glides only as InputLevel.glide allows")
-    check(motionWindow.contains(".foregroundStyle(masterDrag.held ? Color.primary : Brand.secondaryText)")
-            && motionWindow.contains(".foregroundStyle(volumeDrag.held ? Color.primary : Brand.secondaryText)")
-            && motionWindow.contains("onEditingChanged: { masterDrag.held = $0 }"),
-          "volume number source: the master's and each speaker's number brighten while the slider is held")
+    check(motionWindow.contains(".foregroundStyle(volumeDrag.held ? Color.primary : Brand.secondaryText)"),
+          "volume number source: each speaker's number brightens while its slider is held")
 }
 
 do {

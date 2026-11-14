@@ -947,8 +947,6 @@ enum PanelLayout {
     static let textColumn = iconBox + iconGap
     /// The preset row's own chevron, drawn at the card's chevron's size.
     static let chevronPoint: CGFloat = 9
-    /// Between the slider and the volume number.
-    static let numberGap: CGFloat = 6
     /// From the content's trailing edge: the card's chevron, the preset chevron and the volume number.
     static var trailingInk: [CGFloat] {
         [cardPadding + menuChevronInset, presetTrailing, volumeTrailing + digitBearing]
@@ -1412,5 +1410,38 @@ enum InPlaceName {
     static func applied(typed: String, suggested: String, returned: Bool) -> String? {
         if !typed.trimmingCharacters(in: .whitespaces).isEmpty { return typed }
         return returned ? suggested : nil
+    }
+}
+
+/// The master volume slider's track, shared by the main window and the menu bar panel.
+enum MasterTrack {
+    static let knob: CGFloat = 16
+    /// Fits "100" in the body font's monospaced digits.
+    static let numberWidth: CGFloat = 25
+
+    enum Key { case up, down, pageUp, pageDown, home, end }
+
+    /// The knob's leading edge for a 0...100 `level`: the knob stays inside the track at both ends.
+    static func knobX(width: CGFloat, level: Double) -> CGFloat {
+        (width - knob) * CGFloat(max(0, min(100, level)) / 100)
+    }
+
+    /// The level under the pointer at `x`, the knob's centre following it.
+    static func level(at x: CGFloat, width: CGFloat) -> Double {
+        guard width > knob else { return 0 }
+        return max(0, min(100, Double((x - knob / 2) / (width - knob)) * 100))
+    }
+
+    /// Arrows step 1, Page Up and Down 10, Home and End go to either end.
+    static func level(after key: Key, from level: Double) -> Double {
+        let now = level.rounded()
+        switch key {
+        case .up: return min(100, now + 1)
+        case .down: return max(0, now - 1)
+        case .pageUp: return min(100, now + 10)
+        case .pageDown: return max(0, now - 10)
+        case .home: return 0
+        case .end: return 100
+        }
     }
 }

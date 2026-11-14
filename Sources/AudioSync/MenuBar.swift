@@ -1799,17 +1799,13 @@ struct MenuBarView: View {
     private func masterRow(_ t: UIStrings) -> some View {
         HStack(spacing: PanelLayout.iconGap) {
             MasterMuteButton(model: model, text: t, panel: true)
-            HStack(spacing: PanelLayout.numberGap) {
-                Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }), in: 0...100)
-                    .controlSize(.small)
-                    .tint(.primary)   // teal marks state only; a level is not one
-                    .accessibilityLabel(t.masterVolume)
-                    .accessibilityValue(t.volumeValue(model.master))
+            HStack(spacing: PanelLayout.iconGap) {
+                MasterSlider(model: model, text: t)
                     .help(t.masterVolume)
                 Text(t.volumeValue(model.master))
                     .font(.body.monospacedDigit())
                     .foregroundStyle(.primary)
-                    .frame(width: 26, alignment: .trailing)
+                    .frame(width: MasterTrack.numberWidth, alignment: .trailing)
                     .accessibilityHidden(true)
             }
         }
@@ -2867,16 +2863,72 @@ struct MasterMuteButton: View {
     var body: some View {
         let label = MasterMute.isMuted(model.master) ? text.unmuteMaster : text.muteMaster
         Button { model.toggleMasterMute() } label: {
-            Image(systemName: MasterMute.symbol(level: model.master), variableValue: model.master / 100)
+            Image(systemName: MasterMute.symbol(level: model.master))
                 .font(.system(size: QuickRowIcon.point))
-                // 16 pt centres it on the main window rows' icons, which sit 8 pt into their slot.
-                .frame(width: panel ? PanelLayout.iconBox : 16, height: 18)
+                .frame(width: panel ? PanelLayout.iconBox : QuickRowIcon.slot, height: 18, alignment: panel ? .center : .leading)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(panel ? AnyShapeStyle(Brand.secondaryText) : AnyShapeStyle(.primary))
         .accessibilityLabel(label)
         .help(label)
+    }
+}
+
+/// The master volume's slider in the main window and the menu bar panel, the equalizer band's
+/// horizontal twin: the system slider's empty track and knob edge fade to about 1:1 on white.
+struct MasterSlider: View {
+    @ObservedObject var model: AppModel
+    let text: UIStrings
+    static let height: CGFloat = 18
+
+    static func key(_ key: KeyEquivalent) -> MasterTrack.Key? {
+        switch key {
+        case .rightArrow, .upArrow: return .up
+        case .leftArrow, .downArrow: return .down
+        case .pageUp: return .pageUp
+        case .pageDown: return .pageDown
+        case .home: return .home
+        case .end: return .end
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            let x = MasterTrack.knobX(width: width, level: model.master)
+            ZStack(alignment: .leading) {
+                // Full `.secondary` keeps the track and knob edge at 3:1, as VerticalSlider does.
+                Capsule().fill(Color.secondary)
+                    .frame(height: 4)
+                Capsule().fill(Color.primary)
+                    .frame(width: x + MasterTrack.knob / 2, height: 4)
+                Circle()
+                    .fill(Color.white)
+                    .overlay(Circle().strokeBorder(Color.secondary, lineWidth: 1))
+                    .shadow(color: .black.opacity(0.3), radius: 1.5, y: 0.5)
+                    .frame(width: MasterTrack.knob, height: MasterTrack.knob)
+                    .offset(x: x)
+            }
+            .frame(width: width, height: geo.size.height)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { drag in
+                model.actions.setMaster(MasterTrack.level(at: drag.location.x, width: width))
+            })
+        }
+        .frame(height: MasterSlider.height)
+        .focusable()
+        .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { press in
+            guard let key = MasterSlider.key(press.key) else { return .ignored }
+            model.actions.setMaster(MasterTrack.level(after: key, from: model.master))
+            return .handled
+        }
+        .accessibilityRepresentation {
+            Slider(value: Binding(get: { model.master }, set: { model.actions.setMaster($0) }), in: 0...100)
+        }
+        .accessibilityLabel(text.masterVolume)
+        .accessibilityValue(text.volumeValue(model.master))
     }
 }
 
