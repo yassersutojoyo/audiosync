@@ -2451,6 +2451,16 @@ final class ConsentHarness {
     }
 }
 do {
+    // The debug log tells a timeout (-1712) from macOS's answer, and a waiting send from a reading.
+    let consentSendLine = AutomationConsent.changeLine(app: consentSpotify, from: nil, to: .undecided, code: -1712, waited: 2.04)
+    let consentReadLine = AutomationConsent.changeLine(app: consentSpotify, from: .allowed, to: .undecided, code: -1712, waited: nil)
+    check(consentSendLine == "Now Playing: com.spotify.client went from unknown to undecided on Apple event code -1712 "
+            + "from the waiting send after 2.0 s"
+          && consentReadLine == "Now Playing: com.spotify.client went from allowed to undecided on Apple event code -1712 "
+            + "from a reading or command",
+          "automation consent: a verdict change logs its Apple event code and what sent it", consentSendLine + " | " + consentReadLine)
+}
+do {
     // Spotify's prompt stays up for 30 readings; Music was allowed long ago.
     let h = ConsentHarness()
     let firstMusic = h.step(consentMusic)

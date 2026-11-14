@@ -830,10 +830,10 @@ final class AutomationConsent {
     /// `queue` only. What a reading or command to an allowed `app` returned, 0 for success.
     func noted(_ app: String, code: Int) {
         switch code {
-        case 0: set(app, .allowed)
-        case NowPlayingMonitor.notPermitted: set(app, .denied)
+        case 0: set(app, .allowed, code: code, waited: nil)
+        case NowPlayingMonitor.notPermitted: set(app, .denied, code: code, waited: nil)
         // errAETimeout: after a reset of the permission, a reading's 2 s timeout takes the new prompt down.
-        case -1712: set(app, .undecided)
+        case -1712: set(app, .undecided, code: code, waited: nil)
         default: break
         }
     }
@@ -844,17 +844,27 @@ final class AutomationConsent {
     private func start(_ app: String, mayPrompt: Bool) {
         if verdicts[app] == nil { DebugTrace.log("Now Playing: sending \(app) one Apple event that waits for macOS's answer") }
         sending.insert(app)
+        let sent = Date()
         send(app, mayPrompt) { [weak self] code in
             guard let self else { return }
+            let waited = Date().timeIntervalSince(sent)
             self.queue.async {
                 self.sending.remove(app)
-                self.set(app, Self.verdict(code: code))
+                self.set(app, Self.verdict(code: code), code: code, waited: waited)
             }
         }
     }
 
-    private func set(_ app: String, _ verdict: Verdict) {
-        guard verdicts.updateValue(verdict, forKey: app) != verdict else { return }
+    /// `waited`: how long the waiting send took, nil for a reading or command.
+    static func changeLine(app: String, from old: Verdict?, to new: Verdict, code: Int, waited: TimeInterval?) -> String {
+        let cause = waited.map { String(format: "the waiting send after %.1f s", $0) } ?? "a reading or command"
+        return "Now Playing: \(app) went from \(old.map { "\($0)" } ?? "unknown") to \(new) on Apple event code \(code) from \(cause)"
+    }
+
+    private func set(_ app: String, _ verdict: Verdict, code: Int, waited: TimeInterval?) {
+        let old = verdicts.updateValue(verdict, forKey: app)
+        guard old != verdict else { return }
+        DebugTrace.log(Self.changeLine(app: app, from: old, to: verdict, code: code, waited: waited))
         onVerdict?(app, verdict)
     }
 }
