@@ -32,11 +32,18 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Linux, clicking the tray icon opens the tray panel by the pointer, as on Windows. Where the desktop only shows the tray menu, Open AudioSync stays in it.
 - On Windows and Linux, the main window draws its own top row, with the menus, the window buttons and the drag area, in place of the system frame and menu bar. Alt, F10 and the menu shortcut letters still work, and switching windows with Alt+Tab leaves the menus shut.
 - On Windows and Linux, the app's text is set in Inter, built into the app, so it looks the same on every PC.
+- On Windows and Linux, the tray panel's rows line up with the Mac panel's: the preset icon sits on the volume icon's column, Open AudioSync is back next to Exit, and Add by Address is in the main window only.
+- On the Mac, a click anywhere on the menu bar panel's Presets row opens its menu.
 
 ### Fixed
 
 - On the Mac, the Settings window opens at its full height again. Before, it could open with only its title bar showing.
 - A Cast speaker that reports itself idle for a moment while it starts a stream no longer makes the stream fail; AudioSync keeps waiting for it to start playing.
+- On the Mac, Now Playing reads Spotify again when AudioSync is allowed to but the macOS permission check never answers.
+- On the Mac, Now Playing keeps a playing track when its player looks quit for a moment, instead of dropping the artwork.
+- On the Mac, the strands under the cover art move from the moment you pause, instead of lying flat first.
+- On the Mac, switching streaming on or off no longer freezes the app while the speakers start or stop.
+- On Windows and Linux, folding a zone no longer shakes the bottom edge of the tray panel.
 
 ## [0.9.2] - 2026-11-08
 
