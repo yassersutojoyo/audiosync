@@ -5738,7 +5738,7 @@ Tests in `desktop/src/view.rs` unless named.
 | the_tray_panel_is_named_so_it_isnt_taken_for_windows_quick_settings (`desktop/src/view.rs`) | S416 |
 | the_guide_says_how_updates_work_only_with_the_updater (`desktop/src/view.rs`) | S416 |
 | several_apps_under_the_flyout_sources_opens_the_main_windows_list (`desktop/src/view.rs`) | S419 |
-| the_flyout_offers_add_by_address_while_no_cast_speaker_is_found (`desktop/src/main.rs`) | S419 |
+| the_flyout_leaves_add_by_address_to_the_main_window (`desktop/src/main.rs`) | S419 |
 | the_no_speakers_note_offers_open_network_settings (`desktop/src/main.rs`) | S419 |
 | open_network_settings_opens_the_network_status_page (`desktop/src/guide.rs`) | S419 |
 | the_speaker_list_grows_with_the_window_up_to_its_old_width (`desktop/src/view.rs`) | S420 |

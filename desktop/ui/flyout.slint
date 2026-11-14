@@ -67,7 +67,7 @@ component PresetPicker inherits Rectangle {
                     padding-right: 6px;
                     spacing: 8px;
 
-                    Glyph {
+                    icon := Glyph {
                         glyph: Glyphs.presets;
                         color: Tokens.text;
                         width: 16px;
@@ -87,7 +87,7 @@ component PresetPicker inherits Rectangle {
                         accessible-role: none;
                     }
 
-                    Glyph {
+                    chevron := Glyph {
                         glyph: Glyphs.chevron-down;
                         font-size: 12px;
                         color: Tokens.secondary-text;
@@ -179,7 +179,7 @@ component SourceMenu inherits Rectangle {
                         accessible-role: none;
                     }
 
-                    Glyph {
+                    chevron := Glyph {
                         glyph: Glyphs.chevron-down;
                         font-size: 10px;
                         color: Tokens.secondary-text;
@@ -1043,7 +1043,7 @@ export component TrayFlyout inherits Window {
                         }
                     }
 
-                    Divider { }
+                    rows-divider := Divider { }
 
                     if root.no-speaker-on && (root.zones.length > 0 || root.speakers.length > 0 || root.this-pc.length > 0): SecondaryText {
                         text: Strings.no-speaker-on;
@@ -1095,7 +1095,7 @@ export component TrayFlyout inherits Window {
                         }
                     }
 
-                    if root.zones.length > 0 || root.speakers.length > 0: ScrollView {
+                    if root.zones.length > 0 || root.speakers.length > 0: list-view := ScrollView {
                         // Every row up to five or so, less this PC's rows above, then
                         // it scrolls; three rows at least.
                         height: min(list.preferred-height, max(108px, 260px - root.list-cut - this-pc-view.height));
