@@ -10894,6 +10894,21 @@ mod tests {
         assert_eq!(rows[1].0 - rows[0].0, 36.0, "{rows:?}");
     }
 
+    /// This PC, Zones and Connected Speakers are titled in small grey
+    /// capitals, as the Mac's SectionTitle.
+    #[test]
+    fn speaker_section_titles_are_grey_capitals_as_on_the_mac() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:two", "Two", &["local:desk", "local:bt"]);
+        let app = narrow_app(backend);
+        let capitals = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "CardTitle::label",
+        )
+        .count();
+        assert_eq!(capitals, 3, "This PC, Zones and Connected Speakers");
+    }
+
     /// A long-named copy of the mock's Kitchen speaker.
     fn long_named_speaker(backend: &MockBackend, id: &str) -> ui_model::Speaker {
         let mut speaker = backend

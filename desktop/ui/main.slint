@@ -10,7 +10,7 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, SecondaryText, SectionTitle, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, SecondaryText, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -440,7 +440,7 @@ component SpeakerSection inherits VerticalLayout {
     accessible-role: groupbox;
     accessible-label: root.title;
 
-    SectionTitle {
+    CardTitle {
         text: root.title;
     }
 
@@ -461,7 +461,8 @@ component SpeakerSection inherits VerticalLayout {
                 padding-top: 6px;
                 padding-bottom: 2px;
                 SecondaryText {
-                    text: Strings.in-zones;
+                    text: Strings.in-zones.to-uppercase();
+                    accessible-label: Strings.in-zones;
                     font-size: Tokens.font-size-subheadline;
                     font-weight: 500;
                 }
@@ -2371,7 +2372,7 @@ export component MainWindow inherits Window {
                         accessible-role: groupbox;
                         accessible-label: Strings.zones;
 
-                        SectionTitle {
+                        CardTitle {
                             text: Strings.zones;
                         }
 

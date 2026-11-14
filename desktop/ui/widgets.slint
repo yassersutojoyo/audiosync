@@ -718,10 +718,10 @@ export component CardTitle inherits HorizontalLayout {
 
     padding-left: 2px;
 
-    Text {
+    label := Text {
         text: root.text.to-uppercase();
         font-size: Tokens.font-size-subheadline;
-        font-weight: 600;
+        letter-spacing: 0.4px;
         color: Tokens.secondary-text;
         accessible-role: none;
     }
