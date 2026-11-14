@@ -46,7 +46,7 @@ struct NoticeReveal: ViewModifier {
     let closing: Bool
 
     func body(content: Content) -> some View {
-        PaneHeight(fraction: motion.room(at: progress)) { content.opacity(motion.opacity(at: progress)) }
+        PaneHeight(fraction: motion.room(at: progress)) { content.opacity(motion.opacity(at: progress, closing: closing)) }
             .clipped()
             .allowsHitTesting(!closing)
             .accessibilityHidden(closing)

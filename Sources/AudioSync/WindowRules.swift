@@ -427,8 +427,11 @@ enum NoticeMotion: Equatable {
     /// notice runs the same progress backwards, so it fades before its room starts to shut.
     static func room(_ progress: Double) -> Double { ease(min(progress / 0.75, 1)) }
 
-    /// Its opacity at `progress`: in over the last half, once most of its room is open.
-    static func opacity(_ progress: Double) -> Double { ease(max(progress * 2 - 1, 0)) }
+    /// An opening notice's opacity at `progress`: in over 0.06-0.24 s, opaque as its room lands.
+    static func opacity(_ progress: Double) -> Double { ease(min(max((progress - 0.1875) / 0.5625, 0), 1)) }
+
+    /// A closing notice's opacity at `progress`, run backwards: out over the first half, from its first frame.
+    static func fadeOut(_ progress: Double) -> Double { ease(max(progress * 2 - 1, 0)) }
 
     /// Speeds up over the first quarter, holds, slows over the last: a lower top speed than a
     /// smoothstep, so no 60 fps frame moves more than an eighth of the room.
@@ -443,7 +446,9 @@ enum NoticeMotion: Equatable {
     /// a closing notice keeping its room until it has faded.
     func room(at progress: Double) -> Double { self == .grow ? Self.room(progress) : (progress > 0 ? 1 : 0) }
 
-    func opacity(at progress: Double) -> Double { self == .grow ? Self.opacity(progress) : progress }
+    func opacity(at progress: Double, closing: Bool = false) -> Double {
+        self == .grow ? (closing ? Self.fadeOut(progress) : Self.opacity(progress)) : progress
+    }
 }
 
 /// The main window's notices as laid out: the listed ones and those still closing, each on its

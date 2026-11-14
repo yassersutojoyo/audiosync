@@ -7764,10 +7764,10 @@ do {
           // The Mac measured 20-27% of the travel in one mid frame on the round 3 ease; its limit is about 14%.
           "notices: at 60 fps the room eases open and shut with no jump, overshoot or big first step either way",
           "\(noticeSteps)")
-    check(NoticeMotion.opacity(0) == 0 && NoticeMotion.opacity(1) == 1 && NoticeMotion.opacity(0.75) < 1
-            && NoticeMotion.room(0.75) == 1 && NoticeMotion.opacity(0.5) == 0 && NoticeMotion.room(0.5) > 0.5,
-          "notices: a notice fades in once most of its room is open, and a closing one fades before its room shuts")
-    check(NoticeMotion.room(0.75) == 1 && NoticeMotion.opacity(1 - 1 / (60 * NoticeMotion.grow.duration)) < 1
+    check(NoticeMotion.opacity(0) == 0 && NoticeMotion.opacity(1) == 1 && NoticeMotion.fadeOut(0.75) < 1
+            && NoticeMotion.room(0.75) == 1 && NoticeMotion.fadeOut(0.5) == 0 && NoticeMotion.room(0.5) > 0.5,
+          "notices: a closing notice fades before its room shuts")
+    check(NoticeMotion.room(0.75) == 1 && NoticeMotion.fadeOut(1 - 1 / (60 * NoticeMotion.grow.duration)) < 1
             && NoticeMotion.room(1 - 0.08 / NoticeMotion.grow.duration) == 1
             && NoticeMotion.room(1 - 0.09 / NoticeMotion.grow.duration) < 1,
           "notices: a closing notice starts fading in its first frame and its room starts to shut 0.08 s later")
@@ -7776,6 +7776,14 @@ do {
         .first { NoticeMotion.grow.room(at: min($0 / NoticeMotion.grow.duration, 1)) >= 1 } ?? 0
     check(abs(noticeOpenSeconds - 0.24) < 0.002,
           "notices: an opening notice eases the columns down over 0.24 s", "\(noticeOpenSeconds) s")
+    // 14 Nov on the Mac: the fade began at 0.15-0.16 s and ended near 0.30 s; option C fades 0.06-0.24 s.
+    let noticeFadeStart = (0...1000).map { Double($0) / 1000 }
+        .first { NoticeMotion.grow.opacity(at: min($0 / NoticeMotion.grow.duration, 1)) > 0 } ?? 0
+    let noticeFadeEnd = (0...1000).map { Double($0) / 1000 }
+        .first { NoticeMotion.grow.opacity(at: min($0 / NoticeMotion.grow.duration, 1)) >= 1 } ?? 0
+    check(abs(noticeFadeStart - 0.06) < 0.002 && abs(noticeFadeEnd - 0.24) < 0.002,
+          "notices: an opening notice fades in over 0.18 s from 0.06 s, opaque as the columns land",
+          "\(noticeFadeStart)-\(noticeFadeEnd) s")
     // Source checks. On the Mac the columns jumped back 8 pt at 0.06 s, when the fade's own delayed animation
     // began, and a closing notice moved them 32.5 pt in its first frame on the front-loaded curve.
     let noticeMotionSource = (try? String(contentsOfFile: "Sources/AudioSync/NoticeMotion.swift", encoding: .utf8)) ?? ""
@@ -7784,7 +7792,7 @@ do {
     // linear animation from the first frame, ahead of the room, and covered a closing notice still opaque.
     let noticeColumnsSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     check(noticeRevealSource.contains("PaneHeight(fraction: motion.room(at: progress))")
-            && noticeRevealSource.contains(".opacity(motion.opacity(at: progress))")
+            && noticeRevealSource.contains(".opacity(motion.opacity(at: progress, closing: closing))")
             && !noticeMotionSource.contains(".animation(") && !noticeMotionSource.contains("withAnimation")
             && !noticeMotionSource.contains("timingCurve") && !noticeMotionSource.contains(".delay("),
           "notices: a notice's room and fade are laid out frame by frame from one linear progress, with no animation of their own")
@@ -7822,7 +7830,8 @@ do {
                 && (roomSteps(opening) + roomSteps(closing)).allSatisfy { $0 <= 0.14 },
               "notices: a dismissed notice keeps its room, which opens and shuts on one eased curve, no 60 fps frame past 14% of its travel",
               "\(keptAtDismissal), \(roomSteps(opening).max() ?? 0), \(roomSteps(closing).max() ?? 0)")
-        let firstFade = NoticeMotion.grow.opacity(at: NoticeRoom<String>.progress(room.slots[0], at: dismissed + 1.0 / 60, duration: duration))
+        let firstFade = NoticeMotion.grow.opacity(at: NoticeRoom<String>.progress(room.slots[0], at: dismissed + 1.0 / 60, duration: duration),
+                                                   closing: true)
         check(firstFade < 1 && roomHeight(room, dismissed + 0.079) == 1 && roomHeight(room, dismissed + 0.09) < 1,
               "notices: a closing notice fades from its first frame and its room starts to shut 0.08 s later")
         let turning = dismissed + 0.1
