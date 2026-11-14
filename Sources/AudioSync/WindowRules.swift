@@ -173,6 +173,16 @@ enum AmbientBreath {
         breath + live * max(0, env - breath)
     }
 
+    /// A band at or below this keeps the whole resting swing while live.
+    static let swayKept = 0.4
+
+    /// How much of the resting swing a strand whose band is at `band` keeps:
+    /// all of it up to `swayKept`, none at full level, so quiet music never
+    /// moves less than the rest and a falling band never passes through a flat line.
+    static func idle(live: Double, band: Double) -> Double {
+        1 - live * min(1, max(0, band - swayKept) / (1 - swayKept))
+    }
+
     /// Points each way of the resting swing, in a slot of any height.
     static let sway = 3.0
     static let waves: [(amplitude: Double, length: Double, offset: Double)] =
@@ -325,6 +335,12 @@ enum AmbientBands {
     static func level(peak: Float) -> Double {
         guard peak.isFinite, peak > 0 else { return 0 }
         return min(1, max(0, (20 * log10(Double(peak)) - floorDb) / -floorDb))
+    }
+
+    /// A band's peak in dBFS, for the debug log.
+    static func dbfs(peak: Float) -> Double {
+        guard peak.isFinite, peak > 0 else { return floorDb }
+        return max(floorDb, 20 * log10(Double(peak)))
     }
 
     /// `level` moved `dt` seconds toward `target`; below 0.001 it rests at 0.

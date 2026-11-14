@@ -73,7 +73,7 @@ final class SoundTide: ObservableObject {
             if DebugTrace.enabled, sinceLog + 1e-9 >= 5 {
                 sinceLog = 0
                 let levels: [String] = next.map { String(format: "%.2f", $0) }
-                let dbfs: [String] = peaks.map { String(format: "%.1f", 20 * log10(Double($0))) }
+                let dbfs: [String] = peaks.map { String(format: "%.1f", AmbientBands.dbfs(peak: $0)) }
                 let loudest = String(format: "%.2f", next.max() ?? 0)
                 DebugTrace.log("[AudioSync] art bands \(levels), peaks dBFS \(dbfs), loudest \(loudest), live \(mode.live)")
             }
@@ -117,7 +117,6 @@ struct AmbientArt: View {
                 let time = tide.clock.tick(context.date.timeIntervalSinceReferenceDate)
                 let live = still ? 0 : tide.live
                 let breath = still ? 0 : AmbientBreath.spread(at: time)
-                let idle = still ? 0 : 1 - live
                 let layers = still ? (breath: 1.0, sound: 0.0) : AmbientBreath.layers(live: live)
                 let scale = size.height / 22
                 let style = StrokeStyle(lineWidth: CGFloat(AmbientBreath.stroke(live: live)), lineCap: .round)
@@ -137,7 +136,8 @@ struct AmbientArt: View {
                         let x = size.width * CGFloat(step) / 60
                         let taper = CGFloat(AmbientBreath.taper(x: Double(step) / 60))
                         let lift = CGFloat(AmbientBreath.lift(strand: index, x: Double(step) / 60, time: time,
-                                                              spread: spread * Double(density), idle: idle, slot: Double(size.height)))
+                                                              spread: spread * Double(density),
+                                                              idle: still ? 0 : AmbientBreath.idle(live: live, band: band), slot: Double(size.height)))
                         let y = min(21, max(1, 11 + taper * lift)) * scale
                         if step == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }

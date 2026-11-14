@@ -7979,6 +7979,67 @@ do {
     let quietBandRun = bandModeRun(1.5, &quietBandMode, loudest: quietBandLevel)
     check(quietBandRun.last == 1, "music art: music as quiet as the input meter shows turns it live",
           "\(quietBandLevel), \(quietBandRun.last ?? -1)")
+    let idleEnds = [AmbientBreath.idle(live: 1, band: 0), AmbientBreath.idle(live: 1, band: 0.4),
+                    AmbientBreath.idle(live: 1, band: 1), AmbientBreath.idle(live: 0, band: 1),
+                    AmbientBreath.idle(live: 1, band: 0.7)]
+    check(idleEnds[0] == 1 && idleEnds[1] == 1 && idleEnds[2] == 0 && idleEnds[3] == 1
+            && idleEnds[4] > 0 && idleEnds[4] < 1,
+          "music art: a band at or below 0.4 keeps the whole resting swing, full level keeps none, rest keeps all",
+          "\(idleEnds)")
+    // The farthest any strand sits from the middle line, in points, as the art draws it in each slot.
+    func artReach(time: Double, live: Double, band: Double, slot: Double, density: Double) -> Double {
+        let breath = AmbientBreath.spread(at: time)
+        let spread = AmbientBreath.motion(env: band, live: live, breath: breath) * density
+        let idle = AmbientBreath.idle(live: live, band: band)
+        return (0..<3).flatMap { strand in
+            (0...60).map { step -> Double in
+                let x = Double(step) / 60
+                let lift = AmbientBreath.lift(strand: strand, x: x, time: time, spread: spread, idle: idle, slot: slot)
+                return abs(min(10, max(-10, AmbientBreath.taper(x: x) * lift))) * slot / 22
+            }
+        }.max() ?? 0
+    }
+    var flatFrames: [String] = []
+    var firstIdle: [Double] = []
+    for (slot, density) in [(22.0, 1.0), (16.0, 0.7)] {
+        for start in (0..<10).map({ AmbientBreath.period * Double($0) / 10 }) {
+            for loud in [0.5, 0.8, 1.0] {
+                var pauseMode = AmbientMode()
+                var pauseBand = 0.0
+                var pauseTime = start
+                for _ in 0..<45 {
+                    pauseBand = AmbientBands.follow(pauseBand, to: loud, dt: AmbientBands.poll)
+                    pauseMode.step(loudest: pauseBand, dt: AmbientBands.poll)
+                    pauseTime += AmbientBands.poll
+                }
+                for frame in 0..<60 {
+                    pauseBand = AmbientBands.follow(pauseBand, to: 0, dt: AmbientBands.poll)
+                    pauseMode.step(loudest: pauseBand, dt: AmbientBands.poll)
+                    pauseTime += AmbientBands.poll
+                    if frame == 0 { firstIdle.append(AmbientBreath.idle(live: pauseMode.live, band: pauseBand)) }
+                    let reach = artReach(time: pauseTime, live: pauseMode.live, band: pauseBand, slot: slot, density: density)
+                    // Half the resting swing's 3 pt reads as a flat line.
+                    if reach < 1.5 { flatFrames.append("\(slot) pt from \(loud) frame \(frame): \(reach)") }
+                }
+            }
+        }
+    }
+    check(firstIdle.allSatisfy { $0 > 0 } && flatFrames.isEmpty,
+          "music art: on pause the resting swing shows from the first frame and the strands never lie flat, main window and panel",
+          "\(firstIdle.min() ?? -1), \(flatFrames.count) flat, \(flatFrames.first ?? "")")
+    // Peaks of -50 and -40 dBFS: a player at volume 15 and 30.
+    let restTimes = (0..<100).map { AmbientBreath.period * Double($0) / 100 }
+    let panelRest = restTimes.map { artReach(time: $0, live: 0, band: 0, slot: 16, density: 0.7) }.max() ?? 0
+    let panelQuiet = [-50.0, -40.0].map { db in
+        restTimes.map { artReach(time: $0, live: 1, band: AmbientBands.level(peak: Float(pow(10, db / 20))), slot: 16, density: 0.7) }.max() ?? 0
+    }
+    check(panelQuiet.allSatisfy { $0 >= panelRest - 1e-9 },
+          "music art: in the panel, quiet music at player volume 15 or 30 moves the strands at least as far as the rest does",
+          "\(panelQuiet), rest \(panelRest)")
+    check(AmbientBands.dbfs(peak: 1e-25) == AmbientBands.floorDb && AmbientBands.dbfs(peak: 0) == AmbientBands.floorDb
+            && abs(AmbientBands.dbfs(peak: 0.1) + 20) < 1e-6,
+          "music art: the debug log reads band peaks below -60 dBFS as -60",
+          "\(AmbientBands.dbfs(peak: 1e-25)), \(AmbientBands.dbfs(peak: 0))")
     var bandLevel = 0.0
     var bandPolls = 0
     while bandLevel < 0.9 && bandPolls < 10 {
