@@ -19083,6 +19083,24 @@ do {
           "art hold: a late reading of the same song without its cover keeps the cover; another song never inherits it")
 }
 
+// MARK: A cover already loaded is found by its address (ArtCache in NowPlaying.swift)
+// covers: S460
+do {
+    var coverCache = ArtCache<String>()
+    let albumCover = "https://i.scdn.co/image/album"
+    coverCache.store("cover", track: "spotify|One|B", address: albumCover)
+    check(coverCache.image(track: "spotify|Two|B", address: albumCover) == "cover"
+            && coverCache.image(track: "spotify|One|B", address: nil) == "cover",
+          "art cache: a second track with the same cover address finds the loaded cover with no fetch")
+    check(coverCache.image(track: "spotify|Two|B", address: "https://i.scdn.co/image/other") == nil
+            && coverCache.image(track: "spotify|Two|B", address: nil) == nil,
+          "art cache: another address or none finds nothing for a new track")
+    for n in 0...ArtCache<String>.limit { coverCache.store("c\(n)", track: "t\(n)", address: nil) }
+    check(coverCache.count <= ArtCache<String>.limit + 2
+            && coverCache.image(track: "spotify|One|B", address: albumCover) == nil,
+          "art cache: past \(ArtCache<String>.limit) entries the cache starts over")
+}
+
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)
 do {
     check(DockIcon.shows(windows: 1, hidesWhenClosed: true) && DockIcon.shows(windows: 3, hidesWhenClosed: true)

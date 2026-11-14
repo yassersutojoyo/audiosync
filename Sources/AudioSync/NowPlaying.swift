@@ -411,7 +411,7 @@ final class NowPlayingMonitor {
 
     // Scripts queue only.
     private let scripts = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.nowplaying")
-    private var artworkCache: [String: NSImage] = [:]   // "bundleID|title|album" → image
+    private var artworkCache = ArtCache<NSImage>()      // "bundleID|title|album" or cover URL → image
     private var denied: Set<String> = []                 // players refusing our Apple Events
     private var modeTerms: [String: Bool] = [:]          // whether a player's mode script compiles
     private lazy var consent: AutomationConsent = {
@@ -737,8 +737,7 @@ final class NowPlayingMonitor {
     /// The track's cover, and whether one is still on its way.
     private func artwork(for t: Track) -> (NSImage?, Bool) {
         let key = "\(t.bundleID)|\(t.title)|\(t.album)"
-        if let cached = artworkCache[key] { return (cached, false) }
-        if artworkCache.count > 32 { artworkCache.removeAll() }
+        if let cached = artworkCache.image(track: key, address: nil) { return (cached, false) }
         if t.bundleID == Self.spotify {
             // Spotify hands out a URL; fetch it, then fill the track in later.
             let script = """
@@ -749,9 +748,13 @@ final class NowPlayingMonitor {
                 end timeout
                 """
             if let s = run(target: t.bundleID, script)?.stringValue, let url = URL(string: s), url.scheme == "https" {
+                if let cached = artworkCache.image(track: key, address: s) {
+                    artworkCache.store(cached, track: key, address: s)
+                    return (cached, false)
+                }
                 let fetch = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
                     guard let self, let data, let image = NSImage(data: data) else { return }
-                    self.scripts.async { self.artworkCache[key] = image }
+                    self.scripts.async { self.artworkCache.store(image, track: key, address: s) }
                     DispatchQueue.main.async {
                         guard var current = self.track, current.bundleID == t.bundleID,
                               current.title == t.title, current.album == t.album else { return }
@@ -772,7 +775,7 @@ final class NowPlayingMonitor {
             end timeout
             """
         if let data = run(target: t.bundleID, script)?.data, let image = NSImage(data: data) {
-            artworkCache[key] = image
+            artworkCache.store(image, track: key, address: nil)
             return (image, false)
         }
         return (nil, false)
@@ -806,6 +809,24 @@ final class NowPlayingMonitor {
 private final class ChangeNotices: NSObject {
     var posted: (Notification) -> Void = { _ in }
     @objc func post(_ notice: Notification) { posted(notice) }
+}
+
+/// Covers already loaded, by track and by the cover's address, so the next
+/// song of an album shows the cover it shares at once (S460).
+struct ArtCache<Image> {
+    static var limit: Int { 32 }
+    private var images: [String: Image] = [:]
+    var count: Int { images.count }
+
+    func image(track: String, address: String?) -> Image? {
+        images[track] ?? address.flatMap { images[$0] }
+    }
+
+    mutating func store(_ image: Image, track: String, address: String?) {
+        if images.count > Self.limit { images.removeAll() }
+        images[track] = image
+        if let address { images[address] = image }
+    }
 }
 
 /// A player can post its change notice before its own reading changes

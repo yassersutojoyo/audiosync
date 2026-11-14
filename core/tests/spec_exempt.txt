@@ -224,3 +224,4 @@ S456 Mac host only: the remembered system level of the built-in speakers; the Ma
 S457 Windows host only: the elevated update of an install for all users (desktop/src/updater/elevated.rs); the desktop tests marked S457 check it.
 S458 Mac host only: a local output's device start off the main thread (Sources/AudioSync/OutputRenderer.swift); the Mac logic suite checks it.
 S459 Mac, Windows and Linux hosts only: the Now Playing views' hold for the next song's cover (Sources/AudioSync/WindowRules.swift ArtHold, desktop/src/now_playing_card.rs ART_HOLD); the Mac logic suite and the desktop tests marked S459 check it.
+S460 Mac host only: the Now Playing cover cache keyed by song and cover address (Sources/AudioSync/NowPlaying.swift ArtCache); the Mac logic suite checks it.
