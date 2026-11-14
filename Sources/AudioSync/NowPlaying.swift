@@ -5,10 +5,10 @@ import AppKit
 /// macOS no longer lets third-party apps read the system-wide Now Playing
 /// center, so this talks to the players directly over Apple Events. A player
 /// not yet known to be allowed gets one waiting Apple event (`AutomationConsent`),
-/// which raises the "AudioSync wants to control …" prompt
-/// (NSAppleEventsUsageDescription). Scripts run on a background queue, never on
-/// the main thread, so a hung player or a pending consent prompt can't freeze
-/// the menu bar. A player is only ever scripted while it is running: every
+/// plus quiet ones that can't prompt while it is out; the waiting one raises
+/// the "AudioSync wants to control …" prompt (NSAppleEventsUsageDescription).
+/// Scripts run on a background queue, never on the main thread, so a hung
+/// player or a pending consent prompt can't freeze the menu bar. A player is only ever scripted while it is running: every
 /// script checks `is running` itself, so a player that is quitting is not
 /// relaunched.
 final class NowPlayingMonitor {
@@ -774,8 +774,8 @@ private final class ChangeNotices: NSObject {
 }
 
 /// Whether Now Playing reads a player (S336). Until a player is known to be
-/// allowed, the only thing sent to it is one Apple event that waits for the
-/// user's answer to macOS's prompt, off `queue`; its result is the verdict.
+/// allowed, it gets one Apple event that waits for the user's answer to macOS's
+/// prompt, off `queue`, and while that is out a quiet one every `quietEvery`.
 final class AutomationConsent {
     enum Verdict: Equatable { case allowed, denied, undecided }
 
@@ -792,6 +792,8 @@ final class AutomationConsent {
     static let sendTimeout: TimeInterval = 300
     /// The same for a send that can't prompt, which holds back a prompting one for that player.
     static let quietTimeout: TimeInterval = 2
+    /// Spotify 1.3.9 (2026-11-12) left the waiting send unanswered for 300 s while answering a quiet one at once.
+    static let quietEvery: TimeInterval = 5
 
     /// `queue`: a player's verdict changed.
     var onVerdict: ((String, Verdict) -> Void)?
@@ -800,6 +802,9 @@ final class AutomationConsent {
     private let send: (String, Bool, @escaping (Int) -> Void) -> Void
     private var verdicts: [String: Verdict] = [:]
     private var sending: Set<String> = []
+    private var prompting: Set<String> = []
+    private var quietOut: Set<String> = []
+    private var quietSent: [String: Date] = [:]
 
     /// `send(app, mayPrompt, done)` must not block `queue`; it reports 0 or the Apple Event Manager's error.
     init(queue: DispatchQueue, send: @escaping (String, Bool, @escaping (Int) -> Void) -> Void) {
@@ -814,6 +819,7 @@ final class AutomationConsent {
         let verdict = verdicts[app] ?? .undecided
         if verdict == .allowed { return .read }
         if !sending.contains(app) { start(app, mayPrompt: mayAsk) }
+        if prompting.contains(app) { sendQuietly(app) }
         return verdict == .denied ? .refused : mayAsk ? .wait : .hold
     }
 
@@ -844,27 +850,49 @@ final class AutomationConsent {
     private func start(_ app: String, mayPrompt: Bool) {
         if verdicts[app] == nil { DebugTrace.log("Now Playing: sending \(app) one Apple event that waits for macOS's answer") }
         sending.insert(app)
+        if mayPrompt { prompting.insert(app) }
         let sent = Date()
         send(app, mayPrompt) { [weak self] code in
             guard let self else { return }
             let waited = Date().timeIntervalSince(sent)
             self.queue.async {
                 self.sending.remove(app)
-                self.set(app, Self.verdict(code: code), code: code, waited: waited)
+                self.prompting.remove(app)
+                let verdict = Self.verdict(code: code)
+                // A quiet send may have found the player allowed while this one hung.
+                if verdict == .undecided && self.verdicts[app] == .allowed { return }
+                self.set(app, verdict, code: code, waited: waited)
             }
         }
     }
 
-    /// `waited`: how long the waiting send took, nil for a reading or command.
-    static func changeLine(app: String, from old: Verdict?, to new: Verdict, code: Int, waited: TimeInterval?) -> String {
-        let cause = waited.map { String(format: "the waiting send after %.1f s", $0) } ?? "a reading or command"
+    /// Only an allowed answer counts: -1744 means macOS still waits on the user, and a refusal is the waiting send's to report.
+    private func sendQuietly(_ app: String) {
+        guard !quietOut.contains(app), quietSent[app].map({ Date().timeIntervalSince($0) >= Self.quietEvery }) ?? true else { return }
+        quietOut.insert(app)
+        let sent = Date()
+        quietSent[app] = sent
+        send(app, false) { [weak self] code in
+            guard let self else { return }
+            let waited = Date().timeIntervalSince(sent)
+            self.queue.async {
+                self.quietOut.remove(app)
+                if Self.verdict(code: code) == .allowed { self.set(app, .allowed, code: code, waited: waited, quiet: true) }
+            }
+        }
+    }
+
+    /// `waited`: how long the waiting send, or the quiet one, took; nil for a reading or command.
+    static func changeLine(app: String, from old: Verdict?, to new: Verdict, code: Int, waited: TimeInterval?,
+                           quiet: Bool = false) -> String {
+        let cause = waited.map { String(format: "the %@ send after %.1f s", quiet ? "quiet" : "waiting", $0) } ?? "a reading or command"
         return "Now Playing: \(app) went from \(old.map { "\($0)" } ?? "unknown") to \(new) on Apple event code \(code) from \(cause)"
     }
 
-    private func set(_ app: String, _ verdict: Verdict, code: Int, waited: TimeInterval?) {
+    private func set(_ app: String, _ verdict: Verdict, code: Int, waited: TimeInterval?, quiet: Bool = false) {
         let old = verdicts.updateValue(verdict, forKey: app)
         guard old != verdict else { return }
-        DebugTrace.log(Self.changeLine(app: app, from: old, to: verdict, code: code, waited: waited))
+        DebugTrace.log(Self.changeLine(app: app, from: old, to: verdict, code: code, waited: waited, quiet: quiet))
         onVerdict?(app, verdict)
     }
 }

@@ -2428,24 +2428,36 @@ final class ConsentHarness {
     let queue = DispatchQueue(label: "consent-test")
     var verdicts: [String] = []
     private var out: [String: [(Int) -> Void]] = [:]
+    private var quietOut: [String: [(Int) -> Void]] = [:]
     private var prompts: [String: [Bool]] = [:]
     lazy var consent: AutomationConsent = {
         let consent = AutomationConsent(queue: self.queue) { [unowned self] app, mayPrompt, done in
             self.prompts[app, default: []].append(mayPrompt)
-            self.out[app, default: []].append(done)
+            if mayPrompt { self.out[app, default: []].append(done) } else { self.quietOut[app, default: []].append(done) }
         }
         consent.onVerdict = { [unowned self] app, verdict in
             self.verdicts.append("\(app == consentSpotify ? "Spotify" : "Music") \(verdict)")
         }
         return consent
     }()
-    func calls(_ app: String) -> Int { queue.sync { prompts[app]?.count ?? 0 } }
+    /// Sends that may prompt, or all of them when none may.
+    func calls(_ app: String) -> Int {
+        queue.sync { prompts[app].map { p in p.contains(true) ? p.filter { $0 }.count : p.count } ?? 0 }
+    }
+    func quietCalls(_ app: String) -> Int { queue.sync { prompts[app]?.filter { !$0 }.count ?? 0 } }
     func mayPrompt(_ app: String) -> [Bool] { queue.sync { prompts[app] ?? [] } }
     func step(_ app: String, mayAsk: Bool = true) -> AutomationConsent.Step {
         queue.sync { consent.step(app, running: true, mayAsk: mayAsk) }
     }
+    /// Answers the oldest send that may prompt, or the oldest quiet one when none is out.
     func answer(_ app: String, _ code: Int) {
         let done = queue.sync { out[app]?.isEmpty == false ? out[app]?.removeFirst() : nil }
+        guard let done else { return answerQuiet(app, code) }
+        done(code)
+        queue.sync {}
+    }
+    func answerQuiet(_ app: String, _ code: Int) {
+        let done = queue.sync { quietOut[app]?.isEmpty == false ? quietOut[app]?.removeFirst() : nil }
         done?(code)
         queue.sync {}
     }
@@ -2454,11 +2466,14 @@ do {
     // The debug log tells a timeout (-1712) from macOS's answer, and a waiting send from a reading.
     let consentSendLine = AutomationConsent.changeLine(app: consentSpotify, from: nil, to: .undecided, code: -1712, waited: 2.04)
     let consentReadLine = AutomationConsent.changeLine(app: consentSpotify, from: .allowed, to: .undecided, code: -1712, waited: nil)
+    let consentQuietLine = AutomationConsent.changeLine(app: consentSpotify, from: nil, to: .allowed, code: 0, waited: 1.04, quiet: true)
     check(consentSendLine == "Now Playing: com.spotify.client went from unknown to undecided on Apple event code -1712 "
             + "from the waiting send after 2.0 s"
           && consentReadLine == "Now Playing: com.spotify.client went from allowed to undecided on Apple event code -1712 "
-            + "from a reading or command",
-          "automation consent: a verdict change logs its Apple event code and what sent it", consentSendLine + " | " + consentReadLine)
+            + "from a reading or command"
+          && consentQuietLine == "Now Playing: com.spotify.client went from unknown to allowed on Apple event code 0 from the quiet send after 1.0 s",
+          "automation consent: a verdict change logs its Apple event code and what sent it",
+          consentSendLine + " | " + consentReadLine + " | " + consentQuietLine)
 }
 do {
     // Spotify's prompt stays up for 30 readings; Music was allowed long ago.
@@ -2477,8 +2492,8 @@ do {
     }
     let finished = done.wait(timeout: .now() + 5) == .success
     let spotify = seen.spotify, music = seen.music
-    check(finished && h.calls(consentSpotify) == 1 && spotify.allSatisfy { $0 == .wait },
-          "EC14 automation consent: only one Apple event is in flight per undecided player, and it isn't read meanwhile",
+    check(finished && h.calls(consentSpotify) == 1 && h.quietCalls(consentSpotify) == 1 && spotify.allSatisfy { $0 == .wait },
+          "EC14 automation consent: at most one waiting and one quiet Apple event are in flight per undecided player, and it isn't read meanwhile",
           "\(finished) \(h.calls(consentSpotify)) \(Set(spotify.map { "\($0)" }))")
     check(firstMusic == .wait && finished && music.allSatisfy { $0 == .read } && h.calls(consentMusic) == 1,
           "EC14 automation consent: a hung send for Spotify doesn't stop Music's readings",
@@ -2542,9 +2557,31 @@ do {
     _ = h.step(consentSpotify)
     h.answer(consentSpotify, -1728)
     let after = h.step(consentSpotify)
-    check(after == .read && h.calls(consentSpotify) == 1 && h.mayPrompt(consentSpotify) == [true],
+    check(after == .read && h.calls(consentSpotify) == 1 && h.mayPrompt(consentSpotify) == [true, false],
           "EC14 automation consent: any reply but -1743 counts as allowed, so it isn't sent again every reading",
           "\(after) \(h.calls(consentSpotify))")
+}
+do {
+    // Spotify 1.3.9 (2026-11-12): the waiting send got no reply for 300 s while the player answered other events at once.
+    let h = ConsentHarness()
+    let hungFirst = h.step(consentSpotify)
+    h.answerQuiet(consentSpotify, 0)
+    let hungRead = h.step(consentSpotify)
+    h.answer(consentSpotify, -1712)
+    let hungLate = h.step(consentSpotify)
+    check(hungFirst == .wait && hungRead == .read && hungLate == .read && h.verdicts == ["Spotify allowed"],
+          "EC14 automation consent: a quiet reply reads a player whose waiting send hangs, and the send's late timeout keeps it read",
+          "\(hungFirst) \(hungRead) \(hungLate) \(h.verdicts)")
+}
+do {
+    // macOS still needs the user's answer: the quiet send gets -1744 and the waiting send stays out for the prompt.
+    let h = ConsentHarness()
+    _ = h.step(consentSpotify)
+    h.answerQuiet(consentSpotify, -1744)
+    let undecidedStep = h.step(consentSpotify)
+    check(undecidedStep == .wait && h.calls(consentSpotify) == 1 && h.quietCalls(consentSpotify) == 1 && h.verdicts.isEmpty,
+          "EC14 automation consent: a quiet -1744 leaves the player undecided with its waiting send still out",
+          "\(undecidedStep) \(h.calls(consentSpotify)) \(h.quietCalls(consentSpotify)) \(h.verdicts)")
 }
 do {
     // Allowed, then `tccutil reset`: the next 2 s reading times out, so the long send goes out instead of more readings.
