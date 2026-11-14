@@ -10909,6 +10909,23 @@ mod tests {
         assert_eq!(capitals, 3, "This PC, Zones and Connected Speakers");
     }
 
+    /// A zone's speakers are set apart by a 1 px rule down their leading
+    /// edge, under the zone header's edge, not by a tinted box, as on the Mac.
+    #[test]
+    fn a_zones_speakers_hang_from_a_rule_as_on_the_mac() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:two", "Two", &["local:desk", "local:bt"]);
+        let app = narrow_app(backend);
+        let rule = element(&app, "ZoneCard::rule").expect("a rule beside the zone's speakers");
+        let header = element(&app, "ZoneCard::header").expect("the zone header");
+        let (top, height) = (header.absolute_position().y, header.size().height);
+        assert_eq!(rule.size().width, 1.0);
+        assert_eq!(rule.absolute_position().x, header.absolute_position().x);
+        assert_eq!(rule.absolute_position().y, top + height);
+        // Both rows and the line between them, as they step 52 px.
+        assert_eq!(rule.size().height, 52.0 + 51.0);
+    }
+
     /// A long-named copy of the mock's Kitchen speaker.
     fn long_named_speaker(backend: &MockBackend, id: &str) -> ui_model::Speaker {
         let mut speaker = backend

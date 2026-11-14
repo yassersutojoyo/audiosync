@@ -130,7 +130,7 @@ component SourceMenu inherits Rectangle {
 // Speaker rows with a line between them, in a section's or a zone's card.
 component SpeakerRows inherits VerticalLayout {
     in property <[SpeakerItem]> speakers;
-    // Rows in a zone's tinted box, which shows that they play together.
+    // Rows in a zone, which take no hover fill, as on the Mac.
     in property <bool> grouped;
     callback toggled(string);
     callback volume-changed(string, float);
@@ -339,46 +339,58 @@ component ZoneCard inherits VerticalLayout {
     in-out property <string> focus-id <=> rows.focus-id;
     in-out property <RowPart> focus-part <=> rows.focus-part;
     property <bool> members-shown: root.item.expanded && root.item.members.length > 0;
+    // From the second zone on, a rule above it, faded while a header it
+    // touches is hovered so a hover fill never meets it.
+    in property <bool> follows-zone;
+    in property <bool> divider-hidden;
+    out property <bool> header-hovered: header.hovered;
 
     accessible-role: groupbox;
     accessible-label: root.item.name;
 
-    Card {
-        inner-padding: 4px;
+    // Shaped like a speaker row, as on the Mac: no card, and a rule from
+    // the title to the options button between this zone and the one above.
+    if root.follows-zone: HorizontalLayout {
+        padding-left: 80px;
+        padding-right: 14px;
+        Divider {
+            opacity: root.divider-hidden ? 0 : 1;
+        }
+    }
 
-        header := ZoneHeader {
-            item: root.item;
-            init => {
-                if root.item.id == root.focus-zone-id {
-                    root.focus-zone-id = "";
-                    self.take-focus(root.focus-zone-part);
-                }
-            }
-            property <bool> focus-asked: root.item.id == root.focus-zone-id;
-            changed focus-asked => {
-                if self.focus-asked {
-                    root.focus-zone-id = "";
-                    self.take-focus(root.focus-zone-part);
-                }
+    header := ZoneHeader {
+        item: root.item;
+        init => {
+            if root.item.id == root.focus-zone-id {
+                root.focus-zone-id = "";
+                self.take-focus(root.focus-zone-part);
             }
         }
+        property <bool> focus-asked: root.item.id == root.focus-zone-id;
+        changed focus-asked => {
+            if self.focus-asked {
+                root.focus-zone-id = "";
+                self.take-focus(root.focus-zone-part);
+            }
+        }
+    }
 
-        // Its speakers while unfolded, in one tinted box as on the Mac.
-        members := FoldPane {
-            open: root.members-shown;
+    // Its speakers while unfolded, set apart by a rule down their leading edge.
+    members := FoldPane {
+        open: root.members-shown;
 
-            Rectangle {
-                background: Tokens.playing-row;
-                border-width: 1px;
-                border-color: Tokens.teal.with-alpha(0.35);
-                border-radius: Fluent.radius-control;
-
-                VerticalLayout {
-                    rows := SpeakerRows {
-                        speakers: members.shown ? root.item.members : [];
-                        grouped: true;
-                    }
+        Rectangle {
+            VerticalLayout {
+                rows := SpeakerRows {
+                    speakers: members.shown ? root.item.members : [];
+                    grouped: true;
                 }
+            }
+
+            rule := Rectangle {
+                x: 0;
+                width: 1px;
+                background: Tokens.separator;
             }
         }
     }
@@ -2367,17 +2379,28 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    if root.zones.length > 0: VerticalLayout {
-                        spacing: 4px;
+                    if root.zones.length > 0: zone-list := VerticalLayout {
+                        // The zone whose header is under the pointer.
+                        property <string> hovered;
                         accessible-role: groupbox;
                         accessible-label: Strings.zones;
 
                         CardTitle {
                             text: Strings.zones;
+                            padding-bottom: 4px;
                         }
 
-                        for zone in root.zones: ZoneCard {
+                        for zone[index] in root.zones: ZoneCard {
                             item: zone;
+                            follows-zone: index > 0;
+                            divider-hidden: zone-list.hovered == zone.id || (index > 0 && zone-list.hovered == root.zones[index - 1].id && !root.zones[index - 1].expanded);
+                            changed header-hovered => {
+                                if self.header-hovered {
+                                    zone-list.hovered = zone.id;
+                                } else if zone-list.hovered == zone.id {
+                                    zone-list.hovered = "";
+                                }
+                            }
                             focus-zone-id <=> root.focus-zone-id;
                             focus-zone-part <=> root.focus-zone-part;
                             reveal-zone-id <=> root.reveal-zone-id;

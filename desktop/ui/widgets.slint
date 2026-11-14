@@ -2665,8 +2665,7 @@ export component NameEditor inherits FocusScope {
 // controls open underneath.
 export component SpeakerRow inherits Rectangle {
     in property <SpeakerItem> item;
-    // In a zone's tinted box, which already marks it: no fill of its own,
-    // since a hover fill stacked on the box drops colored text below 4.5:1.
+    // In a zone: no hover fill of its own, as on the Mac.
     in property <bool> grouped;
     callback toggled();
     // A click on the blank space of a row without a delay, which this row's
@@ -3770,6 +3769,7 @@ export component ZoneHeader inherits Rectangle {
     }
 
     // A member is listed: the toggle works. The volume works with any member, as on the Mac.
+    out property <bool> hovered: hover.has-hover;
     property <bool> live: root.item.present > 0;
     property <bool> badge-focused;
     property <bool> arrow-focused;
