@@ -321,6 +321,42 @@ fn idle_before_playing_fails_the_load() {
     assert!(events(&mut channel).contains(&Event::LoadFailed(MediaError::Idle(IdleReason::Error))));
 }
 
+// covers: C137
+#[test]
+fn idle_without_a_reason_before_playing_keeps_the_load_waiting() {
+    let start = Instant::now();
+    let replied = start + Duration::from_secs(1);
+    for plays in [true, false] {
+        let mut channel = running(start, volume());
+        channel
+            .load(start, &request(Metadata::default()))
+            .expect("loads");
+        channel.handle(replied, media_status("t-1", 102, 4, "BUFFERING", None));
+        events(&mut channel);
+        channel.handle(replied, media_status("t-1", 0, 4, "IDLE", None));
+        assert!(
+            !events(&mut channel)
+                .iter()
+                .any(|event| matches!(event, Event::LoadFailed(_))),
+            "an IDLE with no reason is not a failure"
+        );
+        assert!(channel.is_loading());
+        if plays {
+            channel.handle(replied, media_status("t-1", 0, 4, "PLAYING", None));
+            assert!(events(&mut channel).contains(&Event::Playing {
+                media_session_id: 4
+            }));
+        } else {
+            alive(&mut channel, replied + Duration::from_secs(10));
+            channel.tick(replied + LOAD_TIMEOUT);
+            assert_eq!(
+                events(&mut channel),
+                [Event::LoadFailed(MediaError::Timeout)]
+            );
+        }
+    }
+}
+
 #[test]
 fn device_reasons_are_cut_short_and_printable() {
     let start = Instant::now();
