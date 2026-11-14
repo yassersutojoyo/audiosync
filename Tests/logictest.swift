@@ -2248,10 +2248,11 @@ do {
             && !plays(track(spotify), .system, running: false),
           "known playing: a paused reading, no reading or a stopped monitor's last reading never counts")
 }
-check(NowPlayingMonitor.pollInterval(onScreen: true, playerRuns: true) == 0.5
+// A media key reaches the player, not AudioSync: the poll plus a reading (up to about 140 ms on the Mac) must stay under 0.6 s.
+check(NowPlayingMonitor.pollInterval(onScreen: true, playerRuns: true) == 0.25
         && NowPlayingMonitor.pollInterval(onScreen: true, playerRuns: false) == 2
         && NowPlayingMonitor.pollInterval(onScreen: false, playerRuns: true) == 2,
-      "now playing: the players are read every 0.5 s while the card or panel shows a player's track, else every 2 s")
+      "now playing: the players are read every 0.25 s while the card or panel shows a player's track, else every 2 s")
 // covers: S15 (the decision by permission status; the notice is the call site's)
 check(MicrophoneStart.decide(.authorized) == .start && MicrophoneStart.decide(.notDetermined) == .ask
         && MicrophoneStart.decide(.denied) == .fail && MicrophoneStart.decide(.restricted) == .fail,

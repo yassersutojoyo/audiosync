@@ -355,7 +355,7 @@ final class NowPlayingMonitor {
     /// Seconds between readings of the players. A play/pause key goes to the
     /// player, not to AudioSync, so only a reading shows it on the card.
     static func pollInterval(onScreen: Bool, playerRuns: Bool) -> TimeInterval {
-        onScreen && playerRuns ? 0.5 : 2.0
+        onScreen && playerRuns ? 0.25 : 2.0
     }
 
     // Main thread.
