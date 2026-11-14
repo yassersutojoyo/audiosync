@@ -296,12 +296,6 @@ enum TrackWipe {
 
     static func seconds(reduceMotion: Bool) -> TimeInterval { reduceMotion ? fadeDuration : duration }
 
-    /// The edge line's place as a fraction from the left; none at rest or in a cross-fade.
-    static func edge(_ direction: Direction, progress: Double, reduceMotion: Bool) -> Double? {
-        guard !reduceMotion, progress > 0, progress < 1 else { return nil }
-        return direction == .next ? 1 - progress : progress
-    }
-
     /// Another song in the same player, not the same one pausing or getting
     /// its cover, and not another app taking over.
     static func isSkip(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {

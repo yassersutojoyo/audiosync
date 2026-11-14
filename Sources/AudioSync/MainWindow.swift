@@ -483,11 +483,6 @@ struct MainView: View {
                 .mask(WipeMask(direction: wipe.direction, progress: wipe.fades ? 1 : wipe.progress, showsNew: true))
                 .opacity(wipe.fades ? wipe.progress : 1)
         }
-        .overlay {
-            WipeEdge(direction: wipe.direction, progress: wipe.progress, fades: wipe.fades)
-                .stroke(Color.primary.opacity(0.4), lineWidth: 1)
-                .accessibilityHidden(true)
-        }
     }
 
     /// Shuffle and Repeat wait one step away: hover or keyboard focus on the
@@ -1275,27 +1270,6 @@ private struct WipeMask: Shape {
         let part = showsNew ? parts.new : parts.old
         return Path(CGRect(x: rect.minX + rect.width * part.lowerBound, y: rect.minY,
                            width: rect.width * (part.upperBound - part.lowerBound), height: rect.height))
-    }
-}
-
-/// The thin line on the sweeping edge (`TrackWipe.edge`).
-private struct WipeEdge: Shape {
-    let direction: TrackWipe.Direction
-    var progress: Double
-    let fades: Bool
-
-    var animatableData: Double {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        guard let edge = TrackWipe.edge(direction, progress: progress, reduceMotion: fades) else { return path }
-        let x = rect.minX + rect.width * edge
-        path.move(to: CGPoint(x: x, y: rect.minY))
-        path.addLine(to: CGPoint(x: x, y: rect.maxY))
-        return path
     }
 }
 

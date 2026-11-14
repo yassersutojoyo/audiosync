@@ -18823,13 +18823,8 @@ do {
             && TrackWipe.direction(pressed: .next, secondsSincePress: TrackWipe.pressWindow + 1) == nil
             && TrackWipe.direction(pressed: .next, secondsSincePress: -1) == nil,
           "track wipe: a change soon after Next or Previous sweeps that way; one without a press or a late one is instant")
-    check(TrackWipe.seconds(reduceMotion: false) == 0.34 && TrackWipe.seconds(reduceMotion: true) == 0.15
-            && TrackWipe.edge(.next, progress: 0.25, reduceMotion: false) == 0.75
-            && TrackWipe.edge(.previous, progress: 0.25, reduceMotion: false) == 0.25
-            && TrackWipe.edge(.next, progress: 0.25, reduceMotion: true) == nil
-            && TrackWipe.edge(.next, progress: 0, reduceMotion: false) == nil
-            && TrackWipe.edge(.next, progress: 1, reduceMotion: false) == nil,
-          "track wipe: a thin line rides the sweeping edge and is gone at rest; under Reduce Motion the tracks cross-fade in 0.15 s with no line")
+    check(TrackWipe.seconds(reduceMotion: false) == 0.34 && TrackWipe.seconds(reduceMotion: true) == 0.15,
+          "track wipe: under Reduce Motion the tracks cross-fade in 0.15 s instead of sweeping")
     let start = TrackWipe.parts(.next, progress: 0), nextQuarter = TrackWipe.parts(.next, progress: 0.25)
     let previousQuarter = TrackWipe.parts(.previous, progress: 0.25), end = TrackWipe.parts(.previous, progress: 1)
     check(start.old == 0...1 && start.new.lowerBound == 1 && nextQuarter.old == 0...0.75 && nextQuarter.new == 0.75...1
@@ -18854,6 +18849,9 @@ do {
     check(main.components(separatedBy: "wipe.press(.next)").count == 2 && main.components(separatedBy: "wipe.press(.previous)").count == 2
             && main.components(separatedBy: "TrackWipe.parts(").count == 2,
           "track wipe: the main window's Next and Previous buttons start the sweep over the cover, title and artist")
+    // 14 Nov on the Mac: a 1 px grey line rode the edge over the title and artist; the approved mockup has none.
+    check(!main.contains("WipeEdge("),
+          "track wipe: no line rides the sweeping edge, the new track simply takes over where the edge has passed")
 }
 
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)
