@@ -1,2 +1,3 @@
 # Third-party license text, kept verbatim (it has trailing whitespace).
 brand/fonts/OFL.txt -whitespace
+desktop/res/skia-licenses/** -whitespace
