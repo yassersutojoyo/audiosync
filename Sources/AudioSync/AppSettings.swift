@@ -159,7 +159,7 @@ struct AppSettings: Equatable {
     var hiddenSpeakers = HiddenSpeakers()
     var showVirtualDevices = false
     var volumeKeys = true
-    var hidesDockIcon = true
+    var hidesDockIcon = false
     var appearance = AppAppearance.system
     var inputPairs: [String: Int] = [:]
     var webRemote = false
@@ -222,7 +222,7 @@ struct AppSettings: Equatable {
         s.presetsListOpen = read(Keys.presetsListOpen) as? Bool ?? false
         s.showVirtualDevices = read(Keys.showVirtualDevices) as? Bool ?? false
         s.volumeKeys = read(Keys.volumeKeys) as? Bool ?? true
-        s.hidesDockIcon = read(Keys.hidesDockIcon) as? Bool ?? true
+        s.hidesDockIcon = read(Keys.hidesDockIcon) as? Bool ?? false
         s.appearance = AppAppearance(defaultsValue: read(Keys.appearance) as? String)
         s.inputPairs = channelPairs(read(Keys.inputChannelPairs))
         s.webRemote = read(Keys.webRemote) as? Bool ?? false

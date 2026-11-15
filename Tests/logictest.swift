@@ -19338,9 +19338,9 @@ do {
           "Dock icon: with Hide Dock Icon When Window Closes on, it stays while any window is open and goes when the last one closes")
     check(DockIcon.shows(windows: 0, hidesWhenClosed: false) && DockIcon.shows(windows: 2, hidesWhenClosed: false),
           "Dock icon: with the switch off, it stays after every window closes")
-    check(AppSettings.load { _ in nil }.hidesDockIcon
-            && !AppSettings.load { key -> Any? in key == AppSettings.Keys.hidesDockIcon ? false : nil }.hidesDockIcon,
-          "Dock icon: Hide Dock Icon When Window Closes is on unless turned off")
+    check(!AppSettings.load { _ in nil }.hidesDockIcon
+            && AppSettings.load { key -> Any? in key == AppSettings.Keys.hidesDockIcon ? true : nil }.hidesDockIcon,
+          "Dock icon: Hide Dock Icon When Window Closes is off unless turned on")
 }
 
 // MARK: A local output's macOS volume is remembered while it plays and put back after (LocalVolumeMemory.swift)
