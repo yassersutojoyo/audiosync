@@ -19394,6 +19394,13 @@ do {
     check(!AppSettings.load { _ in nil }.resumesAfterSleep
             && AppSettings.load { key -> Any? in key == AppSettings.Keys.resumesAfterSleep ? true : nil }.resumesAfterSleep,
           "wake resume: Resume Playback After Sleep is off unless turned on")
+    check(NowPlayingMonitor.polls(shown: false, sending: false, casting: false, remote: false, resumeArmed: true)
+            && !NowPlayingMonitor.polls(shown: false, sending: false, casting: false, remote: false, resumeArmed: false)
+            && NowPlayingMonitor.polls(shown: true, sending: false, casting: false, remote: false, resumeArmed: false),
+          "wake resume: with the switch on and streaming, the players are read with the window closed and no speaker showing the track")
+    check(NowPlayingMonitor.verb(.play, bundleID: NowPlayingMonitor.music) == "play"
+            && NowPlayingMonitor.verb(.play, bundleID: NowPlayingMonitor.spotify) == "play",
+          "wake resume: the wake sends an explicit play, never a toggle")
 }
 
 // MARK: A local output's macOS volume is remembered while it plays and put back after (LocalVolumeMemory.swift)
