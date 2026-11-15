@@ -212,7 +212,7 @@ S443 Windows host only: Add by Address in the main window while Cast runs; the d
 S444 Windows host only: the order inside the main window's Connected Speakers; the desktop tests marked S444 check it.
 S445 Windows host only: the AirPlay Delay row shown only with an AirPlay speaker; the desktop tests marked S445 check it.
 S446 Windows host only: the In zones link's tooltip; the desktop tests marked S446 check it.
-S447 Windows host only: a speaker's name tooltip while its switch has the keyboard focus; the desktop tests marked S447 check it.
+S447 Windows host only: no name tooltip from a speaker switch's keyboard focus; the desktop tests marked S447 check it.
 S448 Windows host only: the source picker's input marker; the desktop tests marked S448 check it.
 S449 Windows host only: Web Remote in the View menu; the desktop tests marked S449 check it.
 S450 Windows host only: the main window's look; the desktop tests marked S450 check it.

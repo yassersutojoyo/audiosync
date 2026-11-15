@@ -79,10 +79,6 @@ enum DialogPurpose {
     NewZoneWith(String),
     /// Only a message (no name field), e.g. why a zone can't be made yet.
     Message,
-    /// Save as Preset….
-    SavePreset,
-    /// Rename… on a preset, by preset ID.
-    RenamePreset(String),
     /// Save Curve in the equalizer.
     SaveCurve,
     /// Rename in the equalizer, for the saved curve of this name.
@@ -3381,6 +3377,12 @@ impl App {
         let w = weak.clone();
         main.on_save_preset_requested(move || with_app(&w, App::ask_save_preset));
         let w = weak.clone();
+        main.on_preset_save_named(move |name| with_app(&w, |app| app.save_preset(&name)));
+        let w = weak.clone();
+        main.on_preset_rename_named(move |id, name| {
+            with_app(&w, |app| app.update(|b| b.rename_preset(&id, &name)));
+        });
+        let w = weak.clone();
         self.equalizer
             .on_preset_shortcut(move |n| with_app(&w, |app| app.recall_preset_at(n)));
         let w = weak.clone();
@@ -4991,56 +4993,41 @@ impl App {
         }
     }
 
+    /// Save as Preset…: a name field in the open presets list, as on the
+    /// Mac, or a caption under the row that says why nothing can be saved yet.
     fn ask_save_preset(&self) {
-        if self.dialog_already_open() {
-            return;
-        }
         let strings = self.strings();
         let state = self.snapshot();
-        if state.presets.len() >= MAX_PRESETS {
-            self.show_dialog_message(strings.get_save_preset_title(), strings.get_presets_full());
-            return;
-        }
-        if ui_model::speakers_on_now(&state).is_empty() {
-            self.show_dialog_message(
-                strings.get_save_preset_title(),
-                strings.get_save_preset_needs_speakers(),
-            );
-            return;
-        }
-        let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::SavePreset;
-        dialog.set_heading(strings.get_save_preset_title());
-        dialog.set_message(strings.get_save_preset_message());
-        dialog.set_placeholder(strings.get_preset_placeholder());
-        dialog.set_field_label(strings.get_preset_field_label());
-        dialog.set_name(SharedString::new());
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_save());
-        self.open_dialog();
-    }
-
-    fn ask_rename_preset(&self, id: &str) {
-        if self.dialog_already_open() {
-            return;
-        }
-        let Some(preset) = self.snapshot().presets.into_iter().find(|p| p.id == id) else {
-            return;
+        self.main.set_presets_open(true);
+        let why = if state.presets.len() >= MAX_PRESETS {
+            Some(strings.get_presets_full())
+        } else if ui_model::speakers_on_now(&state).is_empty() {
+            Some(strings.get_save_preset_needs_speakers())
+        } else {
+            None
         };
-        let strings = self.strings();
-        let dialog = &self.zone_dialog;
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::RenamePreset(id.to_owned());
-        dialog.set_heading(strings.get_rename_preset_title());
-        dialog.set_message(strings.invoke_rename_message(preset.name.as_str().into()));
-        dialog.set_placeholder(strings.get_preset_placeholder());
-        dialog.set_field_label(strings.get_preset_field_label());
-        dialog.set_name(preset.name.as_str().into());
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_rename());
-        self.open_dialog();
+        match why {
+            Some(why) => self.say_why_no_preset(why),
+            None => {
+                self.main.set_preset_save_note(SharedString::new());
+                self.main.set_preset_saving(true);
+            }
+        }
     }
 
-    /// Save in the Save Preset dialog: a blank name becomes "Preset n".
+    /// The caption under Save as Preset…, said by Narrator too.
+    fn say_why_no_preset(&self, why: SharedString) {
+        self.main.set_preset_save_note(why.clone());
+        self.announce(why);
+    }
+
+    /// Rename…: the preset's name becomes a field in its row, as on the Mac.
+    fn ask_rename_preset(&self, id: &str) {
+        self.main.set_presets_open(true);
+        self.main.set_preset_renaming(id.into());
+    }
+
+    /// Return in Save as Preset…'s field: a blank name becomes "Preset n".
     fn save_preset(&self, typed: &str) {
         let names: Vec<String> = self
             .snapshot()
@@ -5056,13 +5043,11 @@ impl App {
         self.refresh();
         match saved {
             Ok(()) => self.announce(strings.invoke_preset_saved(name.as_str().into())),
-            Err(PresetError::Full) => self
-                .show_dialog_message(strings.get_save_preset_title(), strings.get_presets_full()),
-            // The last speaker went off while the dialog was open.
-            Err(PresetError::NoSpeakerOn) => self.show_dialog_message(
-                strings.get_save_preset_title(),
-                strings.get_save_preset_needs_speakers(),
-            ),
+            Err(PresetError::Full) => self.say_why_no_preset(strings.get_presets_full()),
+            // The last speaker went off while the name was typed.
+            Err(PresetError::NoSpeakerOn) => {
+                self.say_why_no_preset(strings.get_save_preset_needs_speakers());
+            }
         }
     }
 
@@ -5140,8 +5125,6 @@ impl App {
                 self.update(|b| b.new_zone_with(&id, &name));
             }
             DialogPurpose::Message => {}
-            DialogPurpose::SavePreset => self.save_preset(name),
-            DialogPurpose::RenamePreset(id) => self.update(|b| b.rename_preset(&id, name)),
             DialogPurpose::SaveCurve => {
                 let mut curves = self.snapshot().equalizer_curves;
                 // An empty name saves nothing (spec S270).
@@ -11929,9 +11912,9 @@ mod tests {
         dialog
             .window()
             .set_size(slint::LogicalSize::new(380.0, 153.0));
-        app.ask_save_preset();
+        app.ask_save_curve();
         assert!(dialog.window().is_visible());
-        assert_window_fits(dialog.window(), dialog.get_fit_height(), "Save Preset");
+        assert_window_fits(dialog.window(), dialog.get_fit_height(), "Save Curve");
     }
 
     /// The same for Add by Address, at opening and once a turned-down
@@ -15658,7 +15641,8 @@ mod tests {
         // whole where the column hides the top of the box.
         let (_, box_top, _, _) = slider_box(&app.main, "Now Playing");
         assert!(box_top < old.1, "the column hides the box's top");
-        let whole = (old.0, box_top, old.2, old.3);
+        // The cover sits 2 px under the box's top, as the Mac's.
+        let whole = (old.0, box_top + 2.0, old.2, old.3);
         app.main.set_now_playing_outgoing(OutgoingSong::default());
         app.main.set_now_playing_has_artwork(true);
         app.main.set_now_playing_artwork(red_cover());
@@ -17673,7 +17657,7 @@ mod tests {
         }
 
         // T33: an open name dialog comes to the front as it is.
-        app.ask_save_preset();
+        app.ask_save_curve();
         let heading = app.zone_dialog.get_heading();
         ctrl(app.equalizer.window(), "n");
         assert_eq!(app.zone_dialog.get_heading(), heading);
@@ -17720,7 +17704,7 @@ mod tests {
         held(app.flyout.window(), &[Key::Control, Key::Meta], "1");
         assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the flyout");
 
-        app.ask_save_preset();
+        app.ask_save_curve();
         draw_frames();
         held(app.zone_dialog.window(), &[Key::Control, Key::Shift], "w");
         assert!(app.zone_dialog.window().is_visible(), "Ctrl+Shift+W");
@@ -17766,22 +17750,24 @@ mod tests {
     fn save_rename_update_and_delete_ask_nothing_and_say_what_they_did() {
         let app = main_window_over(MockBackend::new());
         app.ask_save_preset();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SavePreset);
-        assert_eq!(app.zone_dialog.get_heading(), "Save Preset");
-        assert_eq!(app.zone_dialog.get_field_label(), "Preset name");
-        assert_eq!(app.zone_dialog.get_placeholder(), "Evening, Party…");
-        app.confirm_dialog("Evening");
+        assert!(app.main.get_preset_saving(), "a name field in the list");
+        assert!(!app.zone_dialog.window().is_visible(), "Save asks nothing");
+        app.main.invoke_preset_save_named("Evening".into());
         assert_eq!(preset_rows(&app), [("Evening".into(), true)]);
         assert_eq!(app.main.get_notice_announcement(), "Evening saved");
 
         let id = preset_ids(&app)[0].clone();
         app.ask_rename_preset(&id);
-        assert_eq!(app.zone_dialog.get_heading(), "Rename Preset");
-        assert_eq!(app.zone_dialog.get_name(), "Evening");
-        app.confirm_dialog("   ");
+        assert_eq!(app.main.get_preset_renaming(), id.as_str());
+        assert!(
+            !app.zone_dialog.window().is_visible(),
+            "Rename asks nothing"
+        );
+        app.main
+            .invoke_preset_rename_named(id.as_str().into(), "   ".into());
         assert_eq!(preset_rows(&app)[0].0, "Evening", "a blank name keeps it");
-        app.ask_rename_preset(&id);
-        app.confirm_dialog("Late");
+        app.main
+            .invoke_preset_rename_named(id.as_str().into(), "Late".into());
         assert_eq!(preset_rows(&app)[0].0, "Late");
 
         app.save_preset("Party");
@@ -17812,9 +17798,10 @@ mod tests {
             app.update(|b| b.set_speaker_enabled(&speaker.id, false));
         }
         app.ask_save_preset();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
+        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.main.get_preset_saving());
         assert_eq!(
-            app.zone_dialog.get_message(),
+            app.main.get_preset_save_note(),
             "Turn on the speakers you want in the preset first, then save it."
         );
         assert!(preset_rows(&app).is_empty());
@@ -17877,9 +17864,8 @@ mod tests {
         assert!(app.main.get_presets_open(), "a delete leaves the list open");
         tab(window, 1);
         press(window, Key::Return);
-        assert_eq!(
-            *app.dialog_purpose.borrow(),
-            DialogPurpose::SavePreset,
+        assert!(
+            app.main.get_preset_saving(),
             "with no preset left, the list still offers Save as Preset…"
         );
     }
@@ -18058,14 +18044,14 @@ mod tests {
         let app = main_window_over(backend);
         assert!(!app.main.get_can_save_preset());
         app.ask_save_preset();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
+        assert!(!app.zone_dialog.window().is_visible());
+        assert!(!app.main.get_preset_saving());
         assert_eq!(
-            app.zone_dialog.get_message(),
+            app.main.get_preset_save_note(),
             "AudioSync keeps 256 presets at most. Delete one to save another."
         );
 
         let first = preset_ids(&app)[0].clone();
-        app.zone_dialog.hide().unwrap();
         app.delete_preset(&first);
         assert!(app.main.get_can_save_preset());
     }
@@ -18135,11 +18121,11 @@ mod tests {
             press(window, Key::DownArrow);
             press(window, Key::Return);
             assert_eq!(
-                *app.dialog_purpose.borrow(),
-                DialogPurpose::RenamePreset(preset_ids(&app)[0].clone()),
+                app.main.get_preset_renaming(),
+                preset_ids(&app)[0].as_str(),
                 "{open:?}: the menu opened, and its first item is Rename…"
             );
-            app.zone_dialog.hide().expect("the dialog hides");
+            press(window, Key::Escape);
         }
     }
 
@@ -18147,20 +18133,21 @@ mod tests {
     #[test]
     fn the_presets_list_folds_open_recalls_and_folds_by_keyboard() {
         let app = main_window_over(MockBackend::new());
+        hold_clock();
         let window = app.main.window();
         app.main.set_focus_presets(true);
         draw_frames();
         press(window, Key::Return);
+        advance_clock(Duration::from_secs(1));
         draw_frames();
         assert!(app.main.get_presets_open());
         tab(window, 1);
         press(window, " ");
-        assert_eq!(
-            *app.dialog_purpose.borrow(),
-            DialogPurpose::SavePreset,
+        assert!(
+            app.main.get_preset_saving(),
             "an empty list holds only Save as Preset…"
         );
-        app.zone_dialog.hide().expect("the dialog hides");
+        press(window, Key::Escape);
 
         app.save_preset("Evening");
         app.update(|b| b.set_master_volume(30.0));
@@ -18249,8 +18236,8 @@ mod tests {
         };
         let five = list().size().height;
         assert!(
-            (five - 6.0 * 40.0).abs() < 1.0,
-            "five rows and Save as Preset… show whole: {five}"
+            (five - (6.0 * 40.0 + 6.0)).abs() < 1.0,
+            "five rows, Save as Preset… and the 6 px under it show whole: {five}"
         );
 
         app.update(|b| b.set_master_volume(77.0));
@@ -19192,12 +19179,12 @@ mod tests {
         );
     }
 
-    /// While a speaker row's round switch has the keyboard focus, its name
-    /// tooltip shows, so a keyboard user can read a cut name; it goes with
-    /// the focus (S447).
+    /// The keyboard focus on a speaker row's round switch shows no name
+    /// tooltip, as on the Mac: Narrator reads the name from the switch, and
+    /// a tip there covered the next row (S447).
     // covers: S447
     #[test]
-    fn a_speaker_name_tooltip_shows_while_its_switch_has_the_keyboard_focus() {
+    fn a_speaker_switch_with_the_keyboard_focus_shows_no_name_tooltip() {
         let app = app_over(MockBackend::new());
         app.main.show().unwrap();
         draw_frames();
@@ -19212,8 +19199,8 @@ mod tests {
             Some(("airplay:kitchen".into(), RowPart::Toggle))
         );
         assert!(
-            element(&app, "SpeakerRow::focus-tip").is_some(),
-            "the name tip shows with the switch focused"
+            element(&app, "SpeakerRow::focus-tip").is_none(),
+            "no name tip with the switch focused"
         );
         focus(RowPart::Options);
         assert!(element(&app, "SpeakerRow::focus-tip").is_none());
@@ -19268,5 +19255,227 @@ mod tests {
             presets < remote && remote < virtual_devices,
             "right after Presets"
         );
+    }
+
+    /// A speaker's rename field fills its name slot, 120 to 220 px wide, at
+    /// the Mac's 22 px height, so the row keeps its 52 px step.
+    #[test]
+    fn a_speaker_rename_field_fills_the_name_slot_at_the_macs_height() {
+        let app = narrow_app(MockBackend::new());
+        let tops = || -> Vec<f32> {
+            i_slint_backend_testing::ElementHandle::find_by_element_id(
+                &app.main,
+                "SpeakerRow::badge",
+            )
+            .map(|badge| badge.absolute_position().y)
+            .collect()
+        };
+        let before = tops();
+        app.main
+            .invoke_speaker_rename_requested("local:desk".into());
+        slint::platform::update_timers_and_animations();
+        let field = element(&app, "NameEditor::field").expect("the rename field");
+        let size = field.size();
+        assert!((120.0..=220.0).contains(&size.width), "{size:?}");
+        assert_eq!(size.height, 22.0);
+        assert_eq!(tops(), before, "no row moves while one renames");
+    }
+
+    /// A speaker row's content sits 10 px inside it, and the line between
+    /// rows runs from the name's start (54 px) to the row's right edge.
+    #[test]
+    fn speaker_rows_inset_10_px_and_their_dividers_reach_the_edge() {
+        let app = narrow_app(MockBackend::new());
+        let row = element(&app, "SpeakerRow::hover").expect("a speaker row");
+        let badge = element(&app, "SpeakerRow::badge").expect("its switch");
+        let (left, right) = (
+            row.absolute_position().x,
+            row.absolute_position().x + row.size().width,
+        );
+        assert_eq!(badge.absolute_position().x - left, 10.0);
+        let tops: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "SpeakerRow::hover",
+        )
+        .map(|row| row.absolute_position().y)
+        .collect();
+        let divider =
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, "Divider")
+                .find(|line| {
+                    let y = line.absolute_position().y;
+                    tops.iter().any(|top| (top - y - 1.0).abs() < 0.5)
+                })
+                .expect("a line right above a row");
+        let at = divider.absolute_position().x;
+        assert_eq!(at - left, 54.0);
+        assert_eq!(at + divider.size().width, right);
+    }
+
+    /// An icon button shows its label as a tooltip under the pointer, as
+    /// every Mac icon button's help does.
+    #[test]
+    fn icon_buttons_show_their_label_as_a_tooltip() {
+        let app = narrow_app(MockBackend::new());
+        let (_, tip) = rest_on(&app, "IconButton::touch", "IconButton::tip");
+        assert!(tip.is_some(), "a tooltip on the icon button");
+    }
+
+    /// A speaker's volume is the Mac's small slider, a 13 px knob, while
+    /// the master volume keeps its 16 px one.
+    #[test]
+    fn speaker_volume_knobs_are_13_px_and_the_masters_16() {
+        let app = narrow_app(MockBackend::new());
+        let row = element(&app, "SpeakerRow::volume-slider").expect("a speaker's volume");
+        let knob = row
+            .query_descendants()
+            .match_id("LevelSlider::thumb")
+            .find_first()
+            .expect("its knob");
+        assert_eq!(knob.size().width, 13.0);
+        let master = element(&app, "MasterVolume::slider").expect("the master volume");
+        let knob = master
+            .query_descendants()
+            .match_id("LevelSlider::thumb")
+            .find_first()
+            .expect("its knob");
+        assert_eq!(knob.size().width, 16.0);
+    }
+
+    /// A zone header leads as the Mac's: 2 px, a 16 px chevron, 8 px to the
+    /// switch, and the rule between two zones starts 70 px in.
+    #[test]
+    fn a_zone_header_leads_with_the_macs_chevron_and_rule() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:one", "One", &["local:desk"]);
+        backend.add_zone("zone:two", "Two", &["local:bt"]);
+        let app = narrow_app(backend);
+        let chevron = element(&app, "ZoneHeader::chevron").expect("a zone's chevron");
+        let badge = element(&app, "ZoneHeader::badge").expect("its switch");
+        let left = chevron.absolute_position().x - 2.0;
+        assert_eq!(chevron.size().width, 16.0);
+        assert_eq!(badge.absolute_position().x - left, 26.0);
+        let headers: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "ZoneHeader::chevron",
+        )
+        .map(|chevron| chevron.absolute_position().y)
+        .collect();
+        let rule =
+            i_slint_backend_testing::ElementHandle::find_by_element_type_name(&app.main, "Divider")
+                .find(|line| {
+                    let y = line.absolute_position().y;
+                    line.absolute_position().x > left
+                        && headers.iter().any(|top| y < *top && top - y < 20.0)
+                })
+                .expect("a rule above the second zone");
+        assert_eq!(rule.absolute_position().x - left, 70.0);
+    }
+
+    /// Save as Preset… opens a name field in the presets list instead of a
+    /// dialog, as on the Mac: Return saves, Escape drops it.
+    #[test]
+    fn save_as_preset_names_the_preset_in_a_field_in_the_list() {
+        let app = main_window_over(MockBackend::new());
+        hold_clock();
+        app.ask_save_preset();
+        // The list folds open over 250 ms.
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        assert!(app.main.get_presets_open(), "the list folds open");
+        let field = element(&app, "PresetsCard::save-field").expect("a name field in the list");
+        assert_eq!(
+            field.accessible_placeholder_text().as_deref(),
+            Some("Evening, Party…")
+        );
+        type_text(app.main.window(), "Evening");
+        press(app.main.window(), Key::Return);
+        assert_eq!(preset_rows(&app), [("Evening".into(), true)]);
+        assert!(element(&app, "PresetsCard::save-field").is_none());
+
+        app.ask_save_preset();
+        draw_frames();
+        type_text(app.main.window(), "Party");
+        press(app.main.window(), Key::Escape);
+        assert_eq!(preset_rows(&app).len(), 1, "Escape saves nothing");
+        assert!(element(&app, "PresetsCard::save-field").is_none());
+    }
+
+    /// Rename… edits a preset's name in its row instead of a dialog.
+    #[test]
+    fn rename_edits_a_presets_name_in_its_row() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let id = preset_ids(&app)[0].clone();
+        app.ask_rename_preset(&id);
+        draw_frames();
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        let field = element(&app, "PresetListRow::name-field").expect("a name field in the row");
+        assert_eq!(field.accessible_value().as_deref(), Some("Evening"));
+        type_text(app.main.window(), "Late");
+        press(app.main.window(), Key::Return);
+        assert_eq!(preset_rows(&app)[0].0, "Late");
+        assert!(element(&app, "PresetListRow::name-field").is_none());
+    }
+
+    /// With no speaker on, Save as Preset… stays a button and says what to
+    /// do first in a caption under it, as on the Mac, not in a dialog.
+    #[test]
+    fn save_as_preset_with_no_speaker_on_says_why_under_the_row() {
+        let app = main_window_over(MockBackend::new());
+        for speaker in app.snapshot().speakers {
+            app.update(|b| b.set_speaker_enabled(&speaker.id, false));
+        }
+        app.main.set_presets_open(true);
+        draw_frames();
+        app.ask_save_preset();
+        draw_frames();
+        let why = "Turn on the speakers you want in the preset first, then save it.";
+        assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+        let note = element(&app, "PresetsCard::save-note").expect("a caption under Save");
+        assert_eq!(note.accessible_label().as_deref(), Some(why));
+        assert_eq!(app.main.get_notice_announcement(), why);
+        assert!(element(&app, "PresetsCard::save-field").is_none());
+    }
+
+    /// An empty presets list says what a preset is above Save as Preset….
+    #[test]
+    fn an_empty_presets_list_says_what_a_preset_holds() {
+        let app = main_window_over(MockBackend::new());
+        app.main.set_presets_open(true);
+        draw_frames();
+        let hint = element(&app, "PresetsCard::empty-note").expect("a caption in the empty list");
+        assert_eq!(
+            hint.accessible_label().as_deref(),
+            Some(
+                "No presets yet. Turn on the speakers you want, set the volumes and the curve, then save them as a preset."
+            )
+        );
+    }
+
+    /// Why Calibrate All can't start sits 6 px under its row and 8 px in,
+    /// as the Mac's caption, and the row's tooltip says it too.
+    #[test]
+    fn calibrate_alls_reason_sits_under_the_row_8_px_in_and_is_its_tooltip() {
+        let app = narrow_app(MockBackend::new());
+        app.main
+            .set_calibrate_all_status("Turn on streaming to calibrate.".into());
+        app.main.set_calibrate_all_status_is_hint(false);
+        advance_clock(Duration::from_secs(1));
+        draw_frames();
+        let row = element(&app, "CalibrationCard::calibrate-button").expect("the row");
+        let line = element(&app, "CalibrationCard::status-line").expect("the reason");
+        let (at, below) = (row.absolute_position(), line.absolute_position());
+        assert_eq!(below.y - (at.y + row.size().height), 6.0, "the gap");
+        assert_eq!(below.x - at.x, 8.0, "the inset");
+        assert_eq!(row.size().height, 28.0, "the Mac's quick row");
+        let (_, tip) = rest_on(
+            &app,
+            "CalibrationCard::calibrate-button",
+            "QuickRow::tip-text",
+        );
+        assert!(tip.is_some(), "the reason is the row's tooltip");
     }
 }

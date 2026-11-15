@@ -11,7 +11,7 @@ import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IconLook, IncomingCover, OutgoingSong, SlideLook, SlidLine, TrackMotion } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, TextField, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -188,7 +188,6 @@ component SpeakerRows inherits VerticalLayout {
     for speaker[index] in root.speakers: VerticalLayout {
         if index > 0: HorizontalLayout {
             padding-left: Fluent.name-inset;
-            padding-right: 8px;
             Divider { }
         }
 
@@ -370,7 +369,7 @@ component ZoneCard inherits VerticalLayout {
     // Shaped like a speaker row, as on the Mac: no card, and a rule from
     // the title to the options button between this zone and the one above.
     if root.follows-zone: HorizontalLayout {
-        padding-left: 80px;
+        padding-left: 70px;
         padding-right: 14px;
         Divider {
             opacity: root.divider-hidden ? 0 : 1;
@@ -607,16 +606,25 @@ component SpeakerSection inherits VerticalLayout {
 // or a right-click renames, updates or deletes it.
 component PresetListRow inherits Rectangle {
     in property <PresetItem> item;
+    // Its name is a field, as on the Mac: Return applies, Escape keeps the old name.
+    in property <bool> renaming;
     callback recall();
     callback rename();
+    callback renamed(string);
+    callback rename-ended();
     callback update();
     callback delete();
     property <bool> options-focused;
+    // Set once Return or Escape ended the rename, so the field's lost focus adds nothing.
+    property <bool> rename-done;
 
     min-height: 40px;
-    border-radius: Fluent.radius-control;
-    background: hover.pressed ? Fluent.pressed : hover.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
+    border-radius: 6px;
+    background: hover.pressed ? Fluent.pressed : hover.has-hover ? Fluent.row-hover : transparent;
+    animate background {
+        duration: hover.has-hover ? Fluent.row-hover-in : 0ms;
+        easing: linear;
+    }
 
     hover := TouchArea {
         clicked => {
@@ -678,7 +686,7 @@ component PresetListRow inherits Rectangle {
                     }
 
                     HorizontalLayout {
-                        padding-left: 8px;
+                        padding-left: 14px;
                         padding-top: 4px;
                         padding-bottom: 4px;
                         spacing: 8px;
@@ -688,11 +696,47 @@ component PresetListRow inherits Rectangle {
                             alignment: center;
                             spacing: 2px;
 
-                            Text {
+                            if !root.renaming: Text {
                                 text: root.item.name;
                                 color: Tokens.text;
                                 overflow: elide;
                                 accessible-role: none;
+                            }
+
+                            if root.renaming: FocusScope {
+                                focus-on-click: false;
+                                focus-on-tab-navigation: false;
+                                capture-key-pressed(event) => {
+                                    if event.text == Key.Escape {
+                                        root.rename-done = true;
+                                        root.rename-ended();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+
+                                name-field := TextField {
+                                    compact: true;
+                                    font-size: Tokens.font-size-body;
+                                    text: root.item.name;
+                                    placeholder-text: Strings.preset-placeholder;
+                                    accessible-label: Strings.preset-field-label;
+                                    init => {
+                                        root.rename-done = false;
+                                        self.focus();
+                                        self.select-all();
+                                    }
+                                    accepted(text) => {
+                                        root.rename-done = true;
+                                        root.renamed(text);
+                                    }
+                                    changed has-focus => {
+                                        if !self.has-focus && !root.rename-done {
+                                            root.rename-done = true;
+                                            root.renamed(self.text);
+                                        }
+                                    }
+                                }
                             }
 
                             Text {
@@ -739,7 +783,7 @@ component PresetListRow inherits Rectangle {
 // last, kept after a change until it is deleted, and a list that folds open
 // under it as a zone does: one row per preset, then Save as Preset…. A
 // click, Space or Return folds it open or shut; Escape folds it.
-component PresetsCard inherits VerticalLayout {
+component PresetsCard inherits Rectangle {
     in property <[PresetItem]> presets;
     // The name of the preset picked last; empty while none is.
     in property <string> current;
@@ -753,6 +797,27 @@ component PresetsCard inherits VerticalLayout {
     callback update(string);
     callback delete(string);
     callback save();
+    // The name field in place of Save as Preset…, and the preset whose row
+    // is a name field, as on the Mac (empty: none).
+    in-out property <bool> saving;
+    in-out property <string> renaming-id;
+    // Under Save as Preset…: why it saved nothing (empty: no caption).
+    in-out property <string> save-why;
+    callback save-named(string);
+    callback rename-named(string, string);
+    // Set once Return or Escape ended the save, so the field's lost focus adds nothing.
+    property <bool> save-done;
+    // The column's width, which the list's wrapped captions are measured at.
+    in property <length> width-given;
+    property <string> note: root.save-why != "" ? root.save-why : root.can-save ? "" : Strings.presets-full;
+
+    changed open => {
+        if !root.open {
+            root.saving = false;
+            root.renaming-id = "";
+            root.save-why = "";
+        }
+    }
 
     changed focus-wanted => {
         if root.focus-wanted {
@@ -761,190 +826,300 @@ component PresetsCard inherits VerticalLayout {
         }
     }
 
-    Rectangle {
-        min-height: 36px;
-        border-radius: Fluent.radius-control;
-        background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
-        animate background { duration: Fluent.fast; }
-        forward-focus: focus;
-        accessible-role: button;
-        accessible-label: Strings.presets;
-        accessible-value: root.presets.length == 0 ? Strings.no-presets : root.current != "" ? root.current : Strings.choose-preset;
-        accessible-expandable: true;
-        accessible-expanded: root.open;
-        accessible-action-default => {
-            root.open = !root.open;
-        }
+    // The whole block is tinted while it is open, as the Mac's openRowFill.
+    border-radius: 8px;
+    background: root.open ? Fluent.open-row : transparent;
+    animate background { duration: Motion.on ? 250ms : 0ms; }
 
-        touch := TouchArea {
-            clicked => {
+    VerticalLayout {
+        Rectangle {
+            min-height: 36px;
+            border-radius: Fluent.radius-control;
+            background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+            animate background { duration: Fluent.fast; }
+            forward-focus: focus;
+            accessible-role: button;
+            accessible-label: Strings.presets;
+            accessible-value: root.presets.length == 0 ? Strings.no-presets : root.current != "" ? root.current : Strings.choose-preset;
+            accessible-expandable: true;
+            accessible-expanded: root.open;
+            accessible-action-default => {
                 root.open = !root.open;
             }
 
-            focus := FocusScope {
-                focus-on-click: false;
-                key-pressed(event) => {
-                    if event.text == " " || event.text == Key.Return || (event.text == Key.Escape && root.open) {
-                        root.open = !root.open;
-                        return accept;
-                    }
-                    return reject;
+            touch := TouchArea {
+                clicked => {
+                    root.open = !root.open;
                 }
 
-                HorizontalLayout {
-                    padding-left: 8px;
-                    padding-right: 8px;
-                    padding-top: 6px;
-                    padding-bottom: 6px;
-                    spacing: 8px;
+                focus := FocusScope {
+                    focus-on-click: false;
+                    key-pressed(event) => {
+                        if event.text == " " || event.text == Key.Return || (event.text == Key.Escape && root.open) {
+                            root.open = !root.open;
+                            return accept;
+                        }
+                        return reject;
+                    }
 
-                    // The glyphs stay on the label's line when the name's line shows.
-                    VerticalLayout {
-                        alignment: center;
-                        Glyph {
-                            glyph: Glyphs.presets;
-                            color: Tokens.text;
-                            width: 16px;
-                            height: label.preferred-height;
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+                        spacing: 8px;
+
+                        // The glyphs stay on the label's line when the name's line shows.
+                        VerticalLayout {
+                            alignment: center;
+                            Glyph {
+                                glyph: Glyphs.presets;
+                                color: Tokens.text;
+                                width: 16px;
+                                height: label.preferred-height;
+                            }
+
+                            Rectangle {
+                                height: name.min-height;
+                            }
                         }
 
-                        Rectangle {
-                            height: name.min-height;
+                        VerticalLayout {
+                            alignment: center;
+                            horizontal-stretch: 1;
+                            label := Text {
+                                text: Strings.presets;
+                                color: Tokens.text;
+                                accessible-role: none;
+                            }
+
+                            name := ChoiceLine {
+                                text: root.current;
+                            }
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            // Turns a quarter with the 250 ms fold, as on the Mac.
+                            Rectangle {
+                                height: label.preferred-height;
+                                transform-rotation: root.open ? 90deg : 0deg;
+                                animate transform-rotation {
+                                    duration: Motion.on ? 250ms : 0ms;
+                                    easing: ease-in-out;
+                                }
+
+                                Glyph {
+                                    glyph: Glyphs.chevron-right;
+                                    font-size: Tokens.font-size-caption;
+                                    color: Tokens.secondary-text;
+                                }
+                            }
+
+                            Rectangle {
+                                height: name.min-height;
+                            }
+                        }
+                    }
+                }
+            }
+
+            FocusRing {
+                visible-focus: focus.has-focus;
+                border-radius: parent.border-radius;
+            }
+        }
+
+        list := FoldPane {
+            open: root.open;
+            escape-folds: true;
+            fold => {
+                root.open = false;
+                focus.focus();
+            }
+
+            // Above five presets the list scrolls inside its card, half a row
+            // past the fifth showing that it goes on; a new one, or the name
+            // field of one being saved, scrolls into view.
+            if list.shown: scroll := OverlayScrollView {
+                property <int> count: root.presets.length;
+                property <int> seen;
+                property <bool> saving: root.saving;
+                // The new row is laid out a pass after the count changes.
+                property <bool> to-end;
+                height: root.presets.length > 5 ? 40px * 5.5 : rows.preferred-height;
+                init => {
+                    self.seen = self.count;
+                }
+                changed count => {
+                    self.to-end = self.count > self.seen && self.count > 5;
+                    self.seen = self.count;
+                }
+                changed saving => {
+                    self.to-end = self.saving && self.count >= 5;
+                }
+                changed content-height => {
+                    if self.to-end && self.content-height > self.visible-height {
+                        self.to-end = false;
+                        self.content-y = self.visible-height - self.content-height;
+                    }
+                }
+
+                // The names start 36 px in, as on the Mac.
+                rows := VerticalLayout {
+                    padding-left: 22px;
+                    padding-right: 6px;
+                    padding-bottom: 6px;
+
+                    for preset in root.presets: PresetListRow {
+                        item: preset;
+                        renaming: preset.id == root.renaming-id;
+                        recall => {
+                            root.recall(preset.id);
+                        }
+                        rename => {
+                            root.rename(preset.id);
+                        }
+                        renamed(text) => {
+                            root.renaming-id = "";
+                            root.rename-named(preset.id, text);
+                        }
+                        rename-ended => {
+                            root.renaming-id = "";
+                        }
+                        update => {
+                            root.update(preset.id);
+                        }
+                        delete => {
+                            root.delete(preset.id);
                         }
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 1;
-                        label := Text {
-                            text: Strings.presets;
+                    if root.presets.length == 0: HorizontalLayout {
+                        padding-left: 14px;
+                        padding-top: 6px;
+                        padding-bottom: 6px;
+
+                        // Its width set, so the list's height counts every wrapped line.
+                        empty-note := Text {
+                            width: root.width-given - 42px;
+                            text: Strings.no-presets-hint;
+                            font-size: Tokens.font-size-caption;
+                            color: Tokens.secondary-text;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    // While a preset is saved, its name field takes this row's
+                    // place, as on the Mac.
+                    Rectangle {
+                        min-height: 40px;
+                        border-radius: 6px;
+                        background: !root.can-save || root.saving ? transparent : save-touch.pressed ? Fluent.pressed : save-touch.has-hover ? Fluent.row-hover : transparent;
+                        animate background {
+                            duration: save-touch.has-hover ? Fluent.row-hover-in : 0ms;
+                            easing: linear;
+                        }
+                        opacity: root.can-save ? 1 : Tokens.disabled-opacity;
+                        accessible-role: button;
+                        accessible-label: Strings.save-preset;
+                        accessible-description: root.note;
+                        accessible-enabled: root.can-save;
+                        accessible-action-default => {
+                            root.save();
+                        }
+
+                        save-focus := FocusScope {
+                            enabled: root.can-save;
+                            focus-on-click: false;
+                            key-pressed(event) => {
+                                if event.text == " " || event.text == Key.Return {
+                                    root.save();
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+
+                        save-touch := TouchArea {
+                            enabled: root.can-save && !root.saving;
+                            clicked => {
+                                root.save();
+                            }
+                        }
+
+                        if !root.saving: Text {
+                            x: 14px;
+                            width: parent.width - 20px;
+                            text: Strings.save-preset;
                             color: Tokens.text;
+                            overflow: elide;
+                            vertical-alignment: center;
                             accessible-role: none;
                         }
 
-                        name := ChoiceLine {
-                            text: root.current;
+                        FocusRing {
+                            visible-focus: save-focus.has-focus;
+                            border-radius: parent.border-radius;
+                        }
+
+                        if root.saving: FocusScope {
+                            x: 14px;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width - 20px;
+                            height: 22px;
+                            focus-on-click: false;
+                            focus-on-tab-navigation: false;
+                            capture-key-pressed(event) => {
+                                if event.text == Key.Escape {
+                                    root.save-done = true;
+                                    root.saving = false;
+                                    save-focus.focus();
+                                    return accept;
+                                }
+                                return reject;
+                            }
+
+                            save-field := TextField {
+                                compact: true;
+                                font-size: Tokens.font-size-body;
+                                placeholder-text: Strings.preset-placeholder;
+                                accessible-label: Strings.preset-field-label;
+                                init => {
+                                    root.save-done = false;
+                                    self.focus();
+                                }
+                                accepted(text) => {
+                                    root.save-done = true;
+                                    root.saving = false;
+                                    save-focus.focus();
+                                    root.save-named(text);
+                                }
+                                // Losing the focus saves only what was typed.
+                                changed has-focus => {
+                                    if !self.has-focus && !root.save-done {
+                                        root.save-done = true;
+                                        root.saving = false;
+                                        if self.text != "" {
+                                            root.save-named(self.text);
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        Glyph {
-                            glyph: root.open ? Glyphs.chevron-down : Glyphs.chevron-right;
+                    if root.note != "": HorizontalLayout {
+                        padding-left: 14px;
+                        padding-bottom: 6px;
+
+                        save-note := Text {
+                            width: root.width-given - 42px;
+                            text: root.note;
                             font-size: Tokens.font-size-caption;
                             color: Tokens.secondary-text;
-                            height: label.preferred-height;
+                            wrap: word-wrap;
                         }
-
-                        Rectangle {
-                            height: name.min-height;
-                        }
-                    }
-                }
-            }
-        }
-
-        FocusRing {
-            visible-focus: focus.has-focus;
-            border-radius: parent.border-radius;
-        }
-    }
-
-    list := FoldPane {
-        open: root.open;
-        escape-folds: true;
-        fold => {
-            root.open = false;
-            focus.focus();
-        }
-
-        // Above five presets the list scrolls inside its card, half a row
-        // past the fifth showing that it goes on; a new one scrolls into view.
-        if list.shown: scroll := OverlayScrollView {
-            property <int> count: root.presets.length;
-            property <int> seen;
-            // The new row is laid out a pass after the count changes.
-            property <bool> to-end;
-            height: root.presets.length > 5 ? 40px * 5.5 : rows.preferred-height;
-            init => {
-                self.seen = self.count;
-            }
-            changed count => {
-                self.to-end = self.count > self.seen && self.count > 5;
-                self.seen = self.count;
-            }
-            changed content-height => {
-                if self.to-end && self.content-height > self.visible-height {
-                    self.to-end = false;
-                    self.content-y = self.visible-height - self.content-height;
-                }
-            }
-
-            // The names start on the Presets label's column, as on the Mac.
-            rows := VerticalLayout {
-                padding-left: 24px;
-
-                for preset in root.presets: PresetListRow {
-                    item: preset;
-                    recall => {
-                        root.recall(preset.id);
-                    }
-                    rename => {
-                        root.rename(preset.id);
-                    }
-                    update => {
-                        root.update(preset.id);
-                    }
-                    delete => {
-                        root.delete(preset.id);
-                    }
-                }
-
-                Rectangle {
-                    min-height: 40px;
-                    border-radius: Fluent.radius-control;
-                    background: !root.can-save ? transparent : save-touch.pressed ? Fluent.pressed : save-touch.has-hover ? Fluent.hover : transparent;
-                    animate background { duration: Fluent.fast; }
-                    opacity: root.can-save ? 1 : Tokens.disabled-opacity;
-                    accessible-role: button;
-                    accessible-label: Strings.save-preset;
-                    accessible-enabled: root.can-save;
-                    accessible-action-default => {
-                        root.save();
-                    }
-
-                    save-focus := FocusScope {
-                        enabled: root.can-save;
-                        focus-on-click: false;
-                        key-pressed(event) => {
-                            if event.text == " " || event.text == Key.Return {
-                                root.save();
-                                return accept;
-                            }
-                            return reject;
-                        }
-                    }
-
-                    save-touch := TouchArea {
-                        enabled: root.can-save;
-                        clicked => {
-                            root.save();
-                        }
-                    }
-
-                    Text {
-                        x: 8px;
-                        width: parent.width - 16px;
-                        text: Strings.save-preset;
-                        color: Tokens.text;
-                        overflow: elide;
-                        vertical-alignment: center;
-                        accessible-role: none;
-                    }
-
-                    FocusRing {
-                        visible-focus: save-focus.has-focus;
-                        border-radius: parent.border-radius;
                     }
                 }
             }
@@ -1063,10 +1238,13 @@ component QuickRow inherits Rectangle {
     callback clicked();
     callback focus-changed(bool);
 
-    min-height: 36px;
-    border-radius: Fluent.radius-control;
-    background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
+    min-height: 28px;
+    border-radius: 8px;
+    background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.row-hover : transparent;
+    animate background {
+        duration: touch.has-hover ? Fluent.row-hover-in : 0ms;
+        easing: linear;
+    }
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     forward-focus: focus;
     accessible-role: button;
@@ -1211,23 +1389,46 @@ component CalibrationCard inherits VerticalLayout {
     VerticalLayout {
         spacing: 8px;
 
-        // A row, as on the Mac; its results show under it. One row for both,
-        // so the keyboard focus stays on it when a run starts or ends.
-        calibrate-button := QuickRow {
-            focus-changed(has) => {
-                root.focus-changed(has);
+        VerticalLayout {
+            spacing: 6px;
+
+            // A row, as on the Mac; its results show under it. One row for both,
+            // so the keyboard focus stays on it when a run starts or ends.
+            calibrate-button := QuickRow {
+                focus-changed(has) => {
+                    root.focus-changed(has);
+                }
+                glyph: Glyphs.microphone;
+                // After a zone run it runs that zone again.
+                text: root.running ? Strings.calibration-cancel : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
+                enabled: root.running || root.can-start;
+                description: root.status;
+                tip: root.status;
+                clicked => {
+                    if root.running {
+                        root.cancel();
+                    } else {
+                        root.start();
+                    }
+                }
             }
-            glyph: Glyphs.microphone;
-            // After a zone run it runs that zone again.
-            text: root.running ? Strings.calibration-cancel : root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
-            enabled: root.running || root.can-start;
-            description: root.status;
-            tip: root.status-is-hint ? root.status : "";
-            clicked => {
-                if root.running {
-                    root.cancel();
-                } else {
-                    root.start();
+
+            // The hint is the row's description and tooltip; a reason also
+            // fades in under the row, as on the Mac.
+            if !root.status-is-hint: Rectangle {
+                opacity: 0;
+                init => {
+                    self.opacity = 1;
+                }
+                animate opacity { duration: Motion.on ? 250ms : 0ms; }
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+
+                    status-line := QuietText {
+                        text: root.status;
+                    }
                 }
             }
         }
@@ -1252,11 +1453,6 @@ component CalibrationCard inherits VerticalLayout {
             font-size: Tokens.font-size-body;
             color: Tokens.text;
             wrap: word-wrap;
-        }
-
-        // The button's description says it already.
-        if !root.status-is-hint: status-line := QuietText {
-            text: root.status;
         }
 
         if root.volume != DeviceVolumeHint.none: VerticalLayout {
@@ -1533,16 +1729,25 @@ component NowPlayingCard inherits VerticalLayout {
         }
     }
 
+    // The Mac's Reveal for Shuffle and Repeat: a fade with a 4 px slide
+    // from the right over 440 ms; with animation effects off, a 150 ms fade.
+    property <float> reveal: root.revealed || root.focused-button >= 0 ? 1 : 0;
+    animate reveal {
+        duration: Motion.on ? 440ms : 150ms;
+        easing: Motion.on ? ease-out : linear;
+    }
+
     VerticalLayout {
+        padding-top: 2px;
         spacing: 10px;
 
         tile := Rectangle {
             property <bool> has-artwork: root.slide.sliding ? root.outgoing.has-artwork : root.has-artwork;
             width: root.cover-size;
             height: root.cover-size;
-            border-radius: 6px;
+            border-radius: 10px;
             clip: true;
-            background: Tokens.text.with-alpha(0.06);
+            background: Tokens.text.with-alpha(Tokens.secondary-text-opacity * 0.15);
             transform-scale: 1 - root.slide.old-shrink;
             opacity: 1 - root.slide.old-fade;
 
@@ -1559,7 +1764,7 @@ component NowPlayingCard inherits VerticalLayout {
                 height: parent.height;
                 glyph: Glyphs.music-note;
                 color: Tokens.secondary-text;
-                font-size: root.cover-size / 5;
+                font-size: 28px;
             }
 
             Rectangle {
@@ -1610,8 +1815,8 @@ component NowPlayingCard inherits VerticalLayout {
             spacing: root.shuffle >= 0 || root.repeat >= 0 ? 2px : 20px;
 
             if root.shuffle >= 0: IconButton {
-                opacity: root.revealed || root.focused-button >= 0 ? 1 : 0;
-                animate opacity { duration: 120ms; }
+                opacity: root.reveal;
+                glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                 glyph: Glyphs.shuffle;
                 glyph-color: root.shuffle == 1 ? Tokens.teal-text : Tokens.secondary-text;
                 active: root.shuffle == 1;
@@ -1664,8 +1869,8 @@ component NowPlayingCard inherits VerticalLayout {
             }
 
             if root.repeat >= 0: IconButton {
-                opacity: root.revealed || root.focused-button >= 0 ? 1 : 0;
-                animate opacity { duration: 120ms; }
+                opacity: root.reveal;
+                glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                 glyph: root.repeat == 2 ? Glyphs.repeat-one : Glyphs.repeat-all;
                 glyph-color: root.repeat > 0 ? Tokens.teal-text : Tokens.secondary-text;
                 active: root.repeat > 0;
@@ -1919,6 +2124,13 @@ export component MainWindow inherits Window {
     callback preset-update-requested(string);
     callback preset-delete-requested(string);
     callback save-preset-requested();
+    // Save as Preset…'s name field in the list, the preset renamed in its
+    // row (empty: none) and the caption under Save as Preset….
+    in-out property <bool> preset-saving;
+    in-out property <string> preset-renaming;
+    in-out property <string> preset-save-note;
+    callback preset-save-named(string);
+    callback preset-rename-named(string, string);
     callback zone-toggled(string);
     callback zone-expanded-changed(string, bool);
     callback zone-volume-changed(string, float);
@@ -2425,6 +2637,8 @@ export component MainWindow inherits Window {
                     Divider { }
 
                     PresetsCard {
+                        // The left column less its 4 px room for the scroll bar.
+                        width-given: MainColumns.left(root.columns-width) - 4px;
                         presets: root.presets;
                         current: root.current-preset;
                         can-save: root.can-save-preset;
@@ -2444,6 +2658,15 @@ export component MainWindow inherits Window {
                         }
                         save => {
                             root.save-preset-requested();
+                        }
+                        saving <=> root.preset-saving;
+                        renaming-id <=> root.preset-renaming;
+                        save-why <=> root.preset-save-note;
+                        save-named(text) => {
+                            root.preset-save-named(text);
+                        }
+                        rename-named(id, text) => {
+                            root.preset-rename-named(id, text);
                         }
                     }
 
@@ -2953,12 +3176,13 @@ export component MainWindow inherits Window {
         at-y: root.now-playing-tile-y;
         size: MainColumns.left(root.columns-width) - 32px;
         surface-width: root.width;
-        corner: 6px;
+        corner: 10px;
         base: Tokens.surface;
+        fill: Tokens.text.with-alpha(Tokens.secondary-text-opacity * 0.15);
         has-artwork: root.now-playing-has-artwork;
         artwork: root.now-playing-artwork;
         glyph: Glyphs.music-note;
-        glyph-size: self.size / 5;
+        glyph-size: 28px;
     }
 
     Announcer {

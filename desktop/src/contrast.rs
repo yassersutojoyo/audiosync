@@ -1799,14 +1799,15 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
 }
 
 /// A preset row's grey 11 px second line keeps 4.5:1 under the row's hover
-/// and pressed fills, on the window's own background in light and dark.
+/// and pressed fills over the open list's tint, on the window's own
+/// background in light and dark.
 // covers: S259
 #[test]
 fn a_preset_rows_second_line_reaches_4_5_to_1_under_its_fills() {
     let main = include_str!("../ui/main.slint");
     let row = component_body(main, "PresetListRow");
     assert!(row.contains(
-        "background: hover.pressed ? Fluent.pressed : hover.has-hover ? Fluent.hover : transparent;"
+        "background: hover.pressed ? Fluent.pressed : hover.has-hover ? Fluent.row-hover : transparent;"
     ));
     let second_line = row
         .find("font-size: Tokens.font-size-subheadline;")
@@ -1822,8 +1823,10 @@ fn a_preset_rows_second_line_reaches_4_5_to_1_under_its_fills() {
     ] {
         let text = srgb("text", appearance);
         let under = srgb(window, appearance);
-        for fill in ["hover", "pressed"] {
-            let alpha = fluent_fill_alpha(fill);
+        // Over the open list's own tint.
+        let open = fluent_fill_alpha("open-row");
+        for fill in ["row-hover", "pressed"] {
+            let alpha = 1.0 - (1.0 - open) * (1.0 - fluent_fill_alpha(fill));
             let filled = [0, 1, 2].map(|i| text[i] * alpha + under[i] * (1.0 - alpha));
             let value = contrast(composite("text@secondaryText", filled, appearance), filled);
             assert!(
@@ -1877,7 +1880,7 @@ fn the_preset_and_equalizer_rows_name_their_choice_on_a_second_line() {
 fn a_zone_header_fills_only_on_hover() {
     let header = component_body(include_str!("../ui/widgets.slint"), "ZoneHeader");
     assert!(
-        header.contains("        background: hover.has-hover ? Fluent.hover : transparent;"),
+        header.contains("        background: hover.has-hover ? Fluent.row-hover : transparent;"),
         "the header's fill follows only the hover"
     );
 }
