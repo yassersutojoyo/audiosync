@@ -11961,7 +11961,7 @@ mod tests {
 
     /// X11 shows a dialog at its layout's height before the message wraps,
     /// and no window manager grows it: the name field and the buttons of
-    /// Save Preset were cut off.
+    /// a name dialog were cut off.
     #[test]
     fn the_zone_dialog_grows_to_show_its_field_and_buttons() {
         let app = app_over(MockBackend::new());
@@ -11970,9 +11970,10 @@ mod tests {
         dialog
             .window()
             .set_size(slint::LogicalSize::new(380.0, 153.0));
-        app.ask_save_curve();
+        let speaker = app.snapshot().speakers[0].id.clone();
+        app.ask_new_zone_with(&speaker);
         assert!(dialog.window().is_visible());
-        assert_window_fits(dialog.window(), dialog.get_fit_height(), "Save Curve");
+        assert_window_fits(dialog.window(), dialog.get_fit_height(), "New Zone");
     }
 
     /// The same for Add by Address, at opening and once a turned-down
@@ -17761,7 +17762,8 @@ mod tests {
         held(app.flyout.window(), &[Key::Control, Key::Meta], "1");
         assert!(!preset_rows(&app)[0].1, "Ctrl+Win+1 in the flyout");
 
-        app.ask_save_curve();
+        let speaker = app.snapshot().speakers[0].id.clone();
+        app.ask_new_zone_with(&speaker);
         draw_frames();
         held(app.zone_dialog.window(), &[Key::Control, Key::Shift], "w");
         assert!(app.zone_dialog.window().is_visible(), "Ctrl+Shift+W");

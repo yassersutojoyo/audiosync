@@ -954,6 +954,7 @@ private enum PresetListLayout {
 private struct PresetList: View {
     @ObservedObject var model: AppModel
     @ObservedObject var draft: PresetNameDraft
+    @StateObject private var saveHover = HoverState()
 
     var body: some View {
         let t = model.text
@@ -1009,6 +1010,9 @@ private struct PresetList: View {
             .buttonStyle(.plain)
             .contentShape(.focusEffect, RoundedRectangle(cornerRadius: 6))
             .padding(.leading, PresetListLayout.nameColumn)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(saveHover.isHovered ? 0.05 : 0)))
+            .animation(saveHover.isHovered ? .linear(duration: 0.08) : nil, value: saveHover.isHovered)
+            .onHover { saveHover.isHovered = $0 }
             .id(PresetListLayout.saveRowID)
         }
         if draft.needsSpeakers && !model.presetsCanSave {
@@ -1074,8 +1078,8 @@ private struct PresetListRow: View {
                 .tint(Brand.secondaryText)   // grey: teal is kept for state
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .accessibilityLabel(t.speakerOptions(name: row.name))
-                .help(t.speakerOptions(name: row.name))
+                .accessibilityLabel(t.presetOptions(name: row.name))
+                .help(t.presetOptions(name: row.name))
                 .focused($optionsFocused)
                 .modifier(Reveal(shown: hover.isHovered || optionsFocused || voiceOver))
             }
@@ -1085,6 +1089,7 @@ private struct PresetListRow: View {
         .padding(.trailing, 4)
         .frame(minHeight: PresetListLayout.rowHeight)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hover.isHovered ? 0.05 : 0)))
+        .animation(hover.isHovered ? .linear(duration: 0.08) : nil, value: hover.isHovered)
         .onHover { hover.isHovered = $0 }
         .contextMenu { menuItems(t) }
     }

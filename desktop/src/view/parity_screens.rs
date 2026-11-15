@@ -52,7 +52,8 @@ fn save_rename_and_delete_are_items_of_the_curve_menu() {
     ] {
         assert!(source.contains(item), "{item}");
     }
-    let strings = include_str!("../../ui/strings.slint");
+    // A Windows checkout has CRLF line ends.
+    let strings = include_str!("../../ui/strings.slint").replace("\r\n", "\n");
     for text in [
         "equalizer-save-curve: @tr(\"Save Curve…\");",
         "function equalizer-rename-curve(name: string) -> string {\n        return @tr(\"Rename “{}”…\", name);",
