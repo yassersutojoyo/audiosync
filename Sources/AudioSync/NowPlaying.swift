@@ -279,7 +279,7 @@ final class NowPlayingMonitor {
         }
     }
 
-    enum Command: Equatable { case playPause, next, previous, shuffle(Bool), repeatMode(RepeatMode) }
+    enum Command: Equatable { case playPause, play, next, previous, shuffle(Bool), repeatMode(RepeatMode) }
 
     /// The shuffle and repeat fields a reading returns, empty for a player
     /// that does not take them.
@@ -294,6 +294,7 @@ final class NowPlayingMonitor {
     static func verb(_ command: Command, bundleID: String) -> String {
         switch command {
         case .playPause: return "playpause"
+        case .play: return "play"
         case .next: return "next track"
         case .previous: return "previous track"
         case .shuffle(let on):
@@ -368,6 +369,12 @@ final class NowPlayingMonitor {
     /// Posted by Music and Spotify when their track or play state changes.
     static let changeNotices = [Notification.Name("com.apple.Music.playerInfo"),
                                 Notification.Name("com.spotify.client.PlaybackStateChanged")]
+
+    /// Whether the players are read: something shows the track, or Resume
+    /// Playback After Sleep is on while streaming, so a sleep finds a reading (S465).
+    static func polls(shown: Bool, sending: Bool, casting: Bool, remote: Bool, resumeArmed: Bool) -> Bool {
+        shown || sending || casting || remote || resumeArmed
+    }
 
     /// Seconds between readings of the players. A play/pause key goes to the
     /// player, not to AudioSync, so only a reading shows it on the card.
@@ -1356,6 +1363,62 @@ struct ExplicitPause {
         pausedApp = nil
         pausedAt = nil
         heardFrom = nil
+        return .resume
+    }
+}
+
+/// Resume Playback After Sleep (S465): what the sleep notes, and whether the
+/// wake sends that player play.
+enum WakeResume {
+    /// The player and song playing when the Mac went to sleep.
+    struct Noted: Equatable {
+        let bundleID: String
+        let title: String
+        let artist: String
+        let album: String
+    }
+
+    enum Verdict: Equatable {
+        case resume
+        case wait
+        case skip(String)
+    }
+
+    /// A noted player from the sleep until the wake's verdict.
+    struct Pending {
+        let noted: Noted
+        /// System uptimes, so a clock change during the sleep moves neither.
+        var wokeAt: TimeInterval?
+        var backAt: TimeInterval?
+        var readAfterBack = false
+        var userActed = false
+    }
+
+    // A wake's Wi-Fi rejoin and AirPlay reconnect take seconds; past 30 s a play would surprise rather than resume.
+    static let giveUpAfter: TimeInterval = 30
+
+    static func noted(enabled: Bool, streaming: Bool, reading: NowPlayingMonitor.Track?) -> Noted? {
+        guard enabled, streaming, let reading, reading.isPlaying,
+              NowPlayingMonitor.supported.contains(reading.bundleID) else { return nil }
+        return Noted(bundleID: reading.bundleID, title: reading.title, artist: reading.artist, album: reading.album)
+    }
+
+    /// `after`: a reading taken once the outputs were back, nil until one came.
+    static func decide(enabled: Bool, noted: Noted?, streaming: Bool, userActed: Bool, playerRuns: Bool,
+                       outputsBack: Bool, after: NowPlayingMonitor.Track?, waited: TimeInterval) -> Verdict {
+        guard enabled else { return .skip("the switch is off") }
+        guard let noted else { return .skip("nothing was noted at sleep") }
+        guard !userActed else { return .skip("the user acted or the player played since the wake") }
+        guard streaming else { return .skip("streaming is off") }
+        guard playerRuns else { return .skip("the player quit") }
+        guard outputsBack, let after else {
+            return waited < giveUpAfter ? .wait : .skip("the outputs or a reading did not come within 30 s")
+        }
+        guard after.bundleID == noted.bundleID else { return .skip("another player is read") }
+        guard after.title == noted.title, after.artist == noted.artist, after.album == noted.album else {
+            return .skip("another song is read")
+        }
+        guard !after.isPlaying else { return .skip("the player already plays") }
         return .resume
     }
 }

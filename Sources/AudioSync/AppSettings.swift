@@ -73,6 +73,8 @@ struct AppSettings: Equatable {
         /// The saved equalizer curves (S270, `StoredCurves`).
         static let equalizerCurves = "equalizerCurves"
         static let webRemote = "webRemoteEnabled"
+        /// Resume Playback After Sleep (S465), off unless turned on.
+        static let resumesAfterSleep = "resumePlaybackAfterSleep"
         static let webRemotePort = "webRemotePort"
         /// The main window's preset list is folded open (S259).
         static let presetsListOpen = "presetsListOpen"
@@ -167,6 +169,7 @@ struct AppSettings: Equatable {
     var systemVolumesRemembered: [String: Double] = [:]
     var systemVolumesFound: [String: Double] = [:]
     var systemVolumesLeft: [String: Double] = [:]
+    var resumesAfterSleep = false
 
     /// Whether AUDIOSYNC_AIRPLAY2=1 turns the sender's AirPlay 2 path on; the
     /// core reads it too, and CI and debug runs use it (P2).
@@ -230,6 +233,7 @@ struct AppSettings: Equatable {
         s.systemVolumesRemembered = levels(read(Keys.systemVolumesRemembered)) { min(1, max(0, $0)) }
         s.systemVolumesFound = levels(read(Keys.systemVolumesFound)) { min(1, max(0, $0)) }
         s.systemVolumesLeft = levels(read(Keys.systemVolumesLeft)) { min(1, max(0, $0)) }
+        s.resumesAfterSleep = read(Keys.resumesAfterSleep) as? Bool ?? false
         return s
     }
 
@@ -533,6 +537,8 @@ struct SettingsStore {
     func save(appearance: AppAppearance) { write(appearance.defaultsValue, Keys.appearance) }
 
     func save(webRemote: Bool) { write(webRemote, Keys.webRemote) }
+
+    func save(resumesAfterSleep: Bool) { write(resumesAfterSleep, Keys.resumesAfterSleep) }
 
     func save(webRemotePort: Int) { write(webRemotePort, Keys.webRemotePort) }
 

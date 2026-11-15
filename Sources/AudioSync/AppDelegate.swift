@@ -256,6 +256,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     var airplayAccess: [String: AirPlayPairing.Access] = [:]
     /// The Mac is asleep: the AirPlay reconcile waits for the wake (EC3).
     var macAsleep = false
+    var resumesAfterSleep: Bool {
+        didSet { if resumesAfterSleep != oldValue { store.save(resumesAfterSleep: resumesAfterSleep) } }
+    }
+    /// What the last sleep noted for Resume Playback After Sleep, until the wake decides (S465).
+    var wakeResume: WakeResume.Pending?
     /// Since when the running sender has listed no speaker at all (S154).
     var airplayEmptySince: Date?
     /// A PIN or password prompt is open.
@@ -394,6 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         inputPairs = saved.inputPairs
         localVolumeMemory = LocalVolumeMemory(remembered: saved.systemVolumesRemembered, found: saved.systemVolumesFound,
                                               left: saved.systemVolumesLeft)
+        resumesAfterSleep = saved.resumesAfterSleep
         super.init()
         // didSet doesn't run in init, so the moved Cast names are saved here, once.
         if speakerNames != saved.speakerNames { store.save(speakerNames: speakerNames) }

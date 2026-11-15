@@ -191,6 +191,7 @@ extension AppDelegate {
         center.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
             DebugTrace.log("[AudioSync] going to sleep")
             guard let self else { return }
+            self.noteSleepPlayback()
             self.macAsleep = true
             self.nativeAirPlay?.model.asleep = true
             self.castModel.asleep = true
@@ -229,6 +230,79 @@ extension AppDelegate {
         // Devices may have come or gone during the sleep. Its model update
         // also arms again what fell due meanwhile (`scheduleDueReconcile`).
         reconcileLocal(keepListed: true)
+        startWakeResume()
+    }
+}
+
+// MARK: - Resume Playback After Sleep (S465)
+
+extension AppDelegate {
+    func noteSleepPlayback() {
+        wakeResume = nil
+        guard resumesAfterSleep else { return }
+        let reading = nowPlaying.hasReading ? nowPlaying.track : nil
+        guard let noted = WakeResume.noted(enabled: true, streaming: engine.isRunning, reading: reading) else {
+            DebugTrace.log("[AudioSync] resume after sleep: nothing noted, "
+                           + (engine.isRunning ? "no player read as playing" : "streaming is off"))
+            return
+        }
+        wakeResume = WakeResume.Pending(noted: noted)
+        DebugTrace.log("[AudioSync] resume after sleep: noted \(noted.bundleID) playing")
+    }
+
+    private func startWakeResume() {
+        guard var pending = wakeResume, pending.wokeAt == nil else { return }
+        pending.wokeAt = ProcessInfo.processInfo.systemUptime
+        wakeResume = pending
+        wakeResumeTick()
+    }
+
+    /// With an AirPlay speaker on, one AirPlay session plays again; otherwise the running session is enough.
+    private var wakeOutputsBack: Bool {
+        guard !playableAirPlay.isEmpty else { return true }
+        return nativeAirPlay?.model.states.values.contains(.playing) == true
+    }
+
+    /// Once a second from the wake until the verdict.
+    private func wakeResumeTick() {
+        guard var pending = wakeResume, let wokeAt = pending.wokeAt else { return }
+        let streaming = engine.isRunning
+        let now = ProcessInfo.processInfo.systemUptime
+        if pending.backAt == nil, streaming, wakeOutputsBack {
+            pending.backAt = now
+            wakeResume = pending
+            nowPlaying.refresh()
+        }
+        let player = pending.noted.bundleID
+        let verdict = WakeResume.decide(
+            enabled: resumesAfterSleep, noted: pending.noted, streaming: streaming, userActed: pending.userActed,
+            playerRuns: !NSRunningApplication.runningApplications(withBundleIdentifier: player).isEmpty,
+            outputsBack: pending.backAt != nil,
+            after: pending.readAfterBack && nowPlaying.hasReading ? nowPlaying.track : nil,
+            waited: now - wokeAt)
+        switch verdict {
+        case .wait:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.wakeResumeTick() }
+        case .resume:
+            wakeResume = nil
+            DebugTrace.log("[AudioSync] resume after sleep: play sent to \(player)")
+            nowPlaying.send(.play)
+        case .skip(let reason):
+            wakeResume = nil
+            DebugTrace.log("[AudioSync] resume after sleep: skipped for \(player), \(reason)")
+        }
+    }
+
+    /// A reading after the wake: one taken once the outputs are back may decide,
+    /// and the noted player read playing counts as acted on.
+    private func noteWakeReading(startedAt: Date) {
+        let started = ProcessInfo.processInfo.systemUptime + startedAt.timeIntervalSinceNow
+        guard var pending = wakeResume, let wokeAt = pending.wokeAt, started >= wokeAt else { return }
+        if let backAt = pending.backAt, started >= backAt { pending.readAfterBack = true }
+        if let track = nowPlaying.track, track.bundleID == pending.noted.bundleID, track.isPlaying {
+            pending.userActed = true
+        }
+        wakeResume = pending
     }
 }
 
@@ -250,8 +324,9 @@ extension AppDelegate {
     func syncTrackInfo() {
         let sending = sendsTrackInfo
         let casting = sendsCastTrackInfo
-        let polling = nowPlayingOnScreen || panelOnScreen || sending || casting
-            || webRemote?.showsNowPlaying == true
+        let polling = NowPlayingMonitor.polls(shown: nowPlayingOnScreen || panelOnScreen, sending: sending,
+                                              casting: casting, remote: webRemote?.showsNowPlaying == true,
+                                              resumeArmed: resumesAfterSleep && engine.isRunning)
         nowPlaying.onScreen = nowPlayingOnScreen || panelOnScreen
         if polling != nowPlaying.isRunning {
             if polling {
@@ -285,6 +360,7 @@ extension AppDelegate {
     /// goes to the player; a play-pause to a player read as playing pauses
     /// the speakers too, so their buffer drops at once (P213).
     func sendTransport(_ command: NowPlayingMonitor.Command) {
+        wakeResume?.userActed = true
         if command == .playPause {
             let playback = controlledPlayback
             nativeAirPlay?.togglePause(app: playback.app, playing: playback.playing)
@@ -295,6 +371,7 @@ extension AppDelegate {
     /// A reading of the players that started at `startedAt` (P213), with
     /// the player's state as the pause reads it.
     func nowPlayingRead(startedAt: Date) {
+        noteWakeReading(startedAt: startedAt)
         let controlled = nowPlaying.controlledBundleID
         let reading = nowPlaying.hasReading ? nowPlaying.track : nil
         let playing = reading.flatMap { $0.bundleID == controlled ? $0.playerState : nil }
