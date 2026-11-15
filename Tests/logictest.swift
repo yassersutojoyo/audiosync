@@ -19331,6 +19331,112 @@ do {
     }
 }
 
+// MARK: Next and Previous slide the new cover in while the old one recedes (TrackSlide in WindowRules.swift, MainWindow.swift)
+// covers: S463
+do {
+    check(TrackSlide.seconds(.window, reduceMotion: false) == 0.56 && TrackSlide.seconds(.panel, reduceMotion: false) == 0.42
+            && TrackSlide.seconds(.window, reduceMotion: true) == TrackSlide.fadeDuration
+            && TrackSlide.seconds(.panel, reduceMotion: true) == TrackSlide.fadeDuration && TrackSlide.fadeDuration == 0.15,
+          "track slide: 0.56 s in the main window, 0.42 s in the panel, a 0.15 s cross-fade under Reduce Motion")
+    check(TrackSlide.style(onScreen: true, reduceMotion: false) == .slide
+            && TrackSlide.style(onScreen: true, reduceMotion: true) == .fade
+            && TrackSlide.style(onScreen: false, reduceMotion: false) == .instant
+            && TrackSlide.style(onScreen: false, reduceMotion: true) == .instant,
+          "track slide: it runs only on a window or panel on screen, and cross-fades under Reduce Motion")
+    check(TrackSlide.direction(pressed: .next, secondsSincePress: 0.5) == .next
+            && TrackSlide.direction(pressed: .previous, secondsSincePress: 1) == .previous
+            && TrackSlide.direction(pressed: nil, secondsSincePress: 0.5) == nil
+            && TrackSlide.direction(pressed: .next, secondsSincePress: TrackSlide.pressWindow + 1) == nil
+            && TrackSlide.direction(pressed: .next, secondsSincePress: -1) == nil && TrackSlide.pressWindow == 3,
+          "track slide: a change within 3 s of Next or Previous slides that way")
+    let one = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
+                                      album: "B", isPlaying: true, artwork: nil)
+    let onePaused = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
+                                            album: "B", isPlaying: false, artwork: nil)
+    let two = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "Two", artist: "A",
+                                      album: "B", isPlaying: true, artwork: nil)
+    let spotifyOne = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "One",
+                                             artist: "A", album: "B", isPlaying: true, artwork: nil)
+    check(TrackSlide.isSkip(one, two) && !TrackSlide.isSkip(one, onePaused) && !TrackSlide.isSkip(one, spotifyOne),
+          "track slide: another song in the same player slides; a pause or another player taking over does not")
+    check(TrackSlide.guessed(one, playedBefore: nil) == .next && TrackSlide.guessed(one, playedBefore: two) == .next
+            && TrackSlide.guessed(one, playedBefore: onePaused) == .previous
+            && TrackSlide.guessed(one, playedBefore: spotifyOne) == .next,
+          "track slide: a change with no press slides as Next, or as Previous when the new song is the one played before")
+    let cover = NSImage(size: NSSize(width: 1, height: 1))
+    var shown = two
+    shown.artwork = cover
+    var loading = one
+    loading.artPending = true
+    check(TrackSlide.cap == 1.5 && ArtHold.limit == TrackSlide.cap
+            && TrackSlide.waited(heldFor: 0.2, sincePress: 1.4) == 1.4
+            && TrackSlide.waited(heldFor: 0.2, sincePress: nil) == 0.2
+            && TrackSlide.waited(heldFor: 0.2, sincePress: TrackSlide.pressWindow + 1) == 0.2
+            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.0)) == .hold
+            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.5)) == .show,
+          "track slide: the wait for the new song and its cover ends 1.5 s after the press at most")
+    let rest = TrackSlide.oldCover(waited: 0, slid: 0, reduceMotion: false)
+    let waitedOut = TrackSlide.oldCover(waited: 1, slid: 0, reduceMotion: false)
+    let gone = TrackSlide.oldCover(waited: 1, slid: 1, reduceMotion: false)
+    let still = TrackSlide.oldCover(waited: 1, slid: 0.5, reduceMotion: true)
+    check(rest.scale == 1 && rest.dim == 0 && rest.opacity == 1
+            && abs(waitedOut.scale - 0.95) < 1e-9 && waitedOut.dim > 0 && waitedOut.opacity == 1
+            && abs(gone.scale - 0.85) < 1e-9 && gone.dim > waitedOut.dim && gone.opacity == 0
+            && still.scale == 1 && still.opacity == 0.5,
+          "track slide: the old cover recedes to 0.95 and dims while it waits, then to 0.85 as it fades; Reduce Motion never scales")
+    check(TrackSlide.waitFraction(after: 0) == 0 && TrackSlide.waitFraction(after: 0.4) > 0.4 / 1.5
+            && abs(TrackSlide.waitFraction(after: 1.5) - 1) < 1e-6 && TrackSlide.waitFraction(after: 2) == 1
+            && TrackSlide.settled(from: 0.8, after: 0) == 0.8 && TrackSlide.settled(from: 0.8, after: 0.15) == 0,
+          "track slide: the wait's recede eases out over 1.5 s, and an ignored press eases back in 0.15 s")
+    check(TrackSlide.incomingOffset(.next, slid: 0, coverMinX: 28, coverWidth: 300, surfaceWidth: 900) == 872
+            && TrackSlide.incomingOffset(.previous, slid: 0, coverMinX: 28, coverWidth: 300, surfaceWidth: 900) == -328
+            && TrackSlide.incomingOffset(.next, slid: 1, coverMinX: 28, coverWidth: 300, surfaceWidth: 900) == 0
+            && TrackSlide.incomingOffset(.previous, slid: 0.5, coverMinX: 24, coverWidth: 48, surfaceWidth: 300) == -36,
+          "track slide: the new cover enters from the surface's right edge for Next and its left edge for Previous")
+    check(TrackSlide.progress(after: 0, seconds: 0.56, fades: false) == 0
+            && TrackSlide.progress(after: 0.56, seconds: 0.56, fades: false) == 1
+            && TrackSlide.progress(after: 0.14, seconds: 0.56, fades: false) > 0.25
+            && TrackSlide.progress(after: 0.075, seconds: 0.15, fades: true) == 0.5,
+          "track slide: the slide eases out; the cross-fade runs evenly")
+    check(TrackSlide.textAway == 10 && TrackSlide.textFrom == 16 && TrackSlide.artistDelay == 0.06
+            && abs(TrackSlide.textOpacity(waited: 1) - 0.6) < 1e-9 && TrackSlide.textOpacity(waited: 0) == 1
+            && TrackSlide.textOut(after: 0.28, seconds: 0.56) == 1 && TrackSlide.textOut(after: 0, seconds: 0.56) == 0
+            && TrackSlide.textIn(after: TrackSlide.artistDelay, seconds: 0.56, delay: TrackSlide.artistDelay) == 0
+            && TrackSlide.textIn(after: 0.56, seconds: 0.56, delay: 0) == 1,
+          "track slide: title and artist dim to 0.6 while waiting; the old text leaves 10 pt, the new comes 16 pt, the artist 60 ms later")
+    func mediaData(_ type: Int, down: Bool = true, repeats: Bool = false) -> Int {
+        type << 16 | (down ? 0x0A : 0x0B) << 8 | (repeats ? 1 : 0)
+    }
+    check(TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(16)) == .playPause
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(17)) == .next
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(19)) == .next
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(18)) == .previous
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(20)) == .previous
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(17, down: false)) == nil
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(17, repeats: true)) == nil
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(0)) == nil
+            && TrackSlide.mediaKeyDown(subtype: 7, data1: mediaData(17)) == nil
+            && VolumeKeys.decoded(type: 14, subtype: 8, data1: mediaData(17)) == nil
+            && TrackSlide.MediaKey.playPause.direction == nil && TrackSlide.MediaKey.next.direction == .next
+            && TrackSlide.MediaKey.previous.direction == .previous,
+          "track slide: Play, Next and Previous media keys (Fast and Rewind too) are read once per press")
+    let slideWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let slidePanel = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let slideTap = (try? String(contentsOfFile: "Sources/AudioSync/VolumeKeyTap.swift", encoding: .utf8)) ?? ""
+    let slideKeys = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+VolumeKeys.swift", encoding: .utf8)) ?? ""
+    let slideHold = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+AirPlay.swift", encoding: .utf8)) ?? ""
+    check(slideTap.contains("TrackSlide.mediaKeyDown(") && slideKeys.contains("pressTrack("),
+          "track slide: the volume keys' tap passes the media keys on and feeds their press to the slide")
+    check(slideWindow.contains("overlayPreferenceValue(CoverSlot.self)") && slidePanel.contains("overlayPreferenceValue(CoverSlot.self)")
+            && slideWindow.contains("model.pressTrack(.next)") && slideWindow.contains("model.pressTrack(.previous)")
+            && slideWindow.contains("model.pressTrack(nil)") && slidePanel.contains("place: .panel")
+            && !slideWindow.contains("WipeMask") && !slideWindow.contains("TrackWipe"),
+          "track slide: both surfaces draw the incoming cover above their content, and the old edge sweep is gone")
+    check(slideHold.contains("TrackSlide.waited(") && slideHold.contains("TrackSlide.coverArrived(")
+            && slideHold.contains("TrackSlide.coverFade"),
+          "track slide: the hold counts from the press, and a late cover fades in where it landed")
+}
+
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)
 do {
     check(DockIcon.shows(windows: 1, hidesWhenClosed: true) && DockIcon.shows(windows: 3, hidesWhenClosed: true)

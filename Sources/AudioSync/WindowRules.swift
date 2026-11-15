@@ -377,6 +377,41 @@ enum TrackWipe {
     }
 }
 
+/// Placeholder for the slide's rules, so the failing checks compile.
+enum TrackSlide {
+    enum Direction: Equatable { case next, previous }
+    enum Place { case window, panel }
+    enum Style: Equatable { case instant, fade, slide }
+    enum MediaKey: Equatable {
+        case playPause, next, previous
+        var direction: Direction? { nil }
+    }
+    static let pressWindow: TimeInterval = 0
+    static let cap: TimeInterval = 0
+    static let fadeDuration: TimeInterval = 0
+    static let textAway: Double = 0
+    static let textFrom: Double = 0
+    static let artistDelay: TimeInterval = 0
+    static func seconds(_ place: Place, reduceMotion: Bool) -> TimeInterval { 0 }
+    static func style(onScreen: Bool, reduceMotion: Bool) -> Style { .slide }
+    static func direction(pressed: Direction?, secondsSincePress: TimeInterval) -> Direction? { nil }
+    static func isSkip(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool { false }
+    static func guessed(_ new: NowPlayingMonitor.Track, playedBefore: NowPlayingMonitor.Track?) -> Direction { .next }
+    static func waited(heldFor: TimeInterval, sincePress: TimeInterval?) -> TimeInterval { heldFor }
+    static func oldCover(waited: Double, slid: Double, reduceMotion: Bool) -> (scale: Double, dim: Double, opacity: Double) {
+        (1, 0, 1)
+    }
+    static func waitFraction(after elapsed: TimeInterval) -> Double { 0 }
+    static func settled(from reached: Double, after elapsed: TimeInterval) -> Double { 0 }
+    static func incomingOffset(_ direction: Direction, slid: Double, coverMinX: Double, coverWidth: Double,
+                               surfaceWidth: Double) -> Double { 0 }
+    static func progress(after elapsed: TimeInterval, seconds: TimeInterval, fades: Bool) -> Double { 0 }
+    static func textOpacity(waited: Double) -> Double { 1 }
+    static func textOut(after elapsed: TimeInterval, seconds: TimeInterval) -> Double { 0 }
+    static func textIn(after elapsed: TimeInterval, seconds: TimeInterval, delay: TimeInterval) -> Double { 0 }
+    static func mediaKeyDown(subtype: Int16, data1: Int) -> MediaKey? { nil }
+}
+
 /// Both Now Playing views keep the old song, cover and title together, while
 /// the next song from the same player waits for its cover, so the cover never
 /// blanks between two songs; a track known to have none shows at once.
