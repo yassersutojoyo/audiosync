@@ -661,6 +661,12 @@ export global KeyboardFocus {
     in property <bool> shown;
 }
 
+// Rust sets it while a screen reader runs (platform::screen_reader_on), so
+// controls shown on hover stay shown, as the Mac does under VoiceOver.
+export global ScreenReader {
+    in property <bool> on;
+}
+
 // The keyboard focus ring: drawn while the control has the focus and the
 // last input was the keyboard's.
 export component FocusRing inherits Rectangle {

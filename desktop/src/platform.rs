@@ -99,6 +99,40 @@ pub fn animation_effects() -> bool {
     ON.get().copied().unwrap_or(false)
 }
 
+/// Whether a screen reader such as Narrator is running, so controls shown
+/// only on hover stay visible to it, as the Mac shows them under VoiceOver.
+#[cfg(windows)]
+pub fn screen_reader_on() -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SPI_GETSCREENREADER, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    };
+    use windows::core::BOOL;
+
+    let mut on = BOOL(0);
+    // SAFETY: `on` is a writable BOOL, which this setting's read fills in.
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETSCREENREADER,
+            0,
+            Some(std::ptr::from_mut(&mut on).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    screen_reader_read(read.is_ok(), on.as_bool())
+}
+
+/// No desktop-wide screen reader flag is read off Windows.
+#[cfg(not(windows))]
+pub fn screen_reader_on() -> bool {
+    false
+}
+
+/// Off when the setting can't be read, so nothing shows that hover would hide.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn screen_reader_read(read_ok: bool, on: bool) -> bool {
+    read_ok && on
+}
+
 /// Windows' own default double-click time.
 pub const DEFAULT_DOUBLE_CLICK_MS: i64 = 500;
 
@@ -1198,6 +1232,14 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_screen_reader_counts_only_when_windows_reports_it() {
+        assert!(screen_reader_read(true, true));
+        assert!(!screen_reader_read(true, false));
+        assert!(!screen_reader_read(false, true));
+        assert!(!screen_reader_read(false, false));
+    }
 
     #[test]
     fn the_double_click_time_follows_windows_within_its_range() {

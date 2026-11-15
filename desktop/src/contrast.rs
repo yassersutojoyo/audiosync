@@ -1782,6 +1782,7 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
         "enabled: !root.item.current;",
         "title: Strings.delete-preset;",
         "FocusRing {",
+        "|| ScreenReader.on ? 1 : 0;",
     ] {
         assert!(row.contains(needle), "PresetListRow has {needle}");
     }
@@ -1795,6 +1796,42 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
         assert!(picker.contains(needle), "PresetPicker has {needle}");
     }
     assert!(flyout.contains("if root.presets.length > 0: PresetPicker {"));
+}
+
+/// A preset row's grey 11 px second line keeps 4.5:1 under the row's hover
+/// and pressed fills, on the window's own background in light and dark.
+// covers: S259
+#[test]
+fn a_preset_rows_second_line_reaches_4_5_to_1_under_its_fills() {
+    let main = include_str!("../ui/main.slint");
+    let row = component_body(main, "PresetListRow");
+    assert!(row.contains(
+        "background: hover.pressed ? Fluent.pressed : hover.has-hover ? Fluent.hover : transparent;"
+    ));
+    let second_line = row
+        .find("font-size: Tokens.font-size-subheadline;")
+        .expect("an 11 px second line");
+    assert_eq!(
+        row[second_line..].lines().nth(1).map(str::trim),
+        Some("color: Tokens.secondary-text;")
+    );
+    assert!(main.contains("background: Tokens.dark ? Tokens.background : Tokens.surface;"));
+    for (appearance, window) in [
+        (Appearance::Light, "surface"),
+        (Appearance::Dark, "background"),
+    ] {
+        let text = srgb("text", appearance);
+        let under = srgb(window, appearance);
+        for fill in ["hover", "pressed"] {
+            let alpha = fluent_fill_alpha(fill);
+            let filled = [0, 1, 2].map(|i| text[i] * alpha + under[i] * (1.0 - alpha));
+            let value = contrast(composite("text@secondaryText", filled, appearance), filled);
+            assert!(
+                value >= MIN_TEXT_CONTRAST,
+                "secondary text on {window}+{fill} ({appearance:?}): {value:.2}:1"
+            );
+        }
+    }
 }
 
 /// The Presets and Equalizer rows name their choice on a grey 11 px second
