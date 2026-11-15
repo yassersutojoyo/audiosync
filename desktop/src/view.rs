@@ -785,6 +785,8 @@ pub struct App {
     /// The PIN dialog shows a made-up pairing (the PIN preview), which no
     /// refresh closes.
     pin_preview: Cell<bool>,
+    /// Runs once, right before the main window first shows.
+    before_main_shows: RefCell<Option<Box<dyn FnOnce()>>>,
     /// The password prompt of a speaker protected by a password.
     password_dialog: PasswordDialog,
     /// The speaker the password dialog is open for, while it is.
@@ -1226,6 +1228,7 @@ impl App {
             pin_dialog: PinDialog::new()?,
             pin_for: RefCell::new(None),
             pin_preview: Cell::new(false),
+            before_main_shows: RefCell::new(None),
             password_dialog: PasswordDialog::new()?,
             password_for: RefCell::new(None),
             cast_address_dialog: CastAddressDialog::new()?,
@@ -1882,6 +1885,12 @@ impl App {
         self.now_playing.borrow_mut().send(command);
     }
 
+    /// Runs `before` once, right before the main window first shows.
+    #[cfg(windows)]
+    pub fn before_main_shows(&self, before: impl FnOnce() + 'static) {
+        *self.before_main_shows.borrow_mut() = Some(Box::new(before));
+    }
+
     /// Shows the main window and brings it to the front.
     pub fn show_main(&self) {
         #[cfg(any(windows, target_os = "linux"))]
@@ -1919,6 +1928,9 @@ impl App {
             if fitted.maximized {
                 window.set_maximized(true);
             }
+        }
+        if let Some(before) = self.before_main_shows.take() {
+            before();
         }
         if let Err(error) = self.main.show() {
             self.show_window_error(&error);

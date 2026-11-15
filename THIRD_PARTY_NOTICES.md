@@ -220,6 +220,7 @@ release.
 | Component | License |
 |---|---|
 | [Slint](https://slint.dev) 1.18, © SixtyFPS GmbH (the user interface toolkit) | GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0; public builds of AudioSync use it under GPL-3.0-only |
+| [Skia](https://skia.org), © Google LLC and the Skia authors, through [rust-skia](https://github.com/rust-skia/rust-skia) 0.153 (draws the windows of the Windows app; not in the Linux app), with the libraries its build compiles in: [libjpeg-turbo](https://libjpeg-turbo.org) (IJG AND BSD-3-Clause AND Zlib), [libpng](http://www.libpng.org/pub/png/libpng.html) (libpng-2.0), [zlib](https://zlib.net) (Zlib), [Expat](https://libexpat.github.io) (MIT), [Wuffs](https://github.com/google/wuffs) (Apache-2.0), [D3D12 Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator) (MIT) and [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) (Apache-2.0); license texts in `desktop/res/skia-licenses/` | Skia BSD-3-Clause; rust-skia MIT |
 | [tray-icon](https://github.com/tauri-apps/tray-icon) 0.26 and [muda](https://github.com/tauri-apps/muda) 0.21, © the Tauri Programme within The Commons Conservancy (the notification-area icon and its menu) | MIT OR Apache-2.0 |
 | [Poppins](https://github.com/itfoundry/Poppins) Medium, © 2020 The Poppins Project Authors (the wordmark typeface, compiled into the executable from `brand/fonts/`) | SIL Open Font License 1.1 |
 | [Inter](https://github.com/rsms/inter) 4.1 Regular, Medium, SemiBold and Bold, © 2016 The Inter Project Authors (the text typeface, compiled into the executable from `desktop/res/fonts/`; license in `desktop/res/fonts/OFL.txt`) | SIL Open Font License 1.1 |
@@ -298,7 +299,8 @@ checks them with `cargo deny check licenses` against the list in
 generates it from `desktop/Cargo.lock` for that build's target: every crate
 compiled into the executable with its version, license and repository and the
 full text of its license and notice files, plus the Rust standard library's
-copyright notices, Slint's license (GPL-3.0-only), and the font and icon
+copyright notices, Slint's license (GPL-3.0-only), the license texts of Skia
+and the libraries built into it (Windows only), and the font and icon
 licenses above. It also adds the notices for code that crates took from other
 projects, which their own license files don't carry: AccessKit's code derived
 from Chromium (BSD-3-Clause, © The Chromium Authors) and the image crate's JPEG
