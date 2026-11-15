@@ -1022,6 +1022,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             presets_list_open: saved.presets_list_open,
             appearance: saved.appearance,
             window: saved.window,
+            guide: saved.guide_window,
             remote: saved.remote,
             check_updates_automatically: saved.check_updates_automatically,
             volume_keys: saved.volume_keys,
@@ -1168,6 +1169,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             presets_list_open: self.view.presets_list_open,
             appearance: self.view.appearance,
             window: self.view.window,
+            guide_window: self.view.guide,
             slim_window_applied: true,
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
             when_source_quits: self.when_source_quits.stored().to_owned(),
@@ -14502,6 +14504,7 @@ mod tests {
             presets_list_open: true,
             appearance: ui_model::Appearance::Light,
             window: None,
+            guide: Some(ui_model::WindowPlace { x: -1500, y: 120 }),
             remote: crate::remote::RemoteSettings {
                 on: true,
                 port: 8123,
@@ -14550,6 +14553,10 @@ mod tests {
                 on: true,
                 port: 8123
             }
+        );
+        assert_eq!(
+            adapter.view_settings().guide,
+            Some(ui_model::WindowPlace { x: -1500, y: 120 })
         );
 
         // A new zone gets the next number, and streaming starts from the

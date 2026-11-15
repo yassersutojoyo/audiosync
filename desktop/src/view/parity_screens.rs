@@ -1,0 +1,255 @@
+//! The secondary windows laid out as the Mac's: the equalizer, Add by
+//! Address, About, the Guide and the tray panel's footer.
+
+use super::{GUIDE_CHROME, guide_place_to_show};
+use crate::placement::Bounds;
+use crate::ui_model::WindowPlace;
+
+/// The text of component `name` in `source`, up to the next component.
+fn component<'a>(source: &'a str, name: &str) -> &'a str {
+    let start = source
+        .find(&format!("component {name} "))
+        .unwrap_or_else(|| panic!("{name}"));
+    let rest = &source[start..];
+    let end = ["\ncomponent ", "\nexport component "]
+        .iter()
+        .filter_map(|next| rest.find(next))
+        .min()
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
+#[test]
+fn the_equalizer_is_520_wide_with_the_macs_spacing_and_no_card() {
+    let source = include_str!("../../ui/equalizer.slint");
+    let window = component(source, "EqualizerWindow");
+    assert!(window.contains("min-width: 520px;") && window.contains("max-width: 520px;"));
+    assert!(window.contains("padding: 18px;") && window.contains("spacing: 14px;"));
+    assert!(!source.contains("Card {"), "the bands sit on the window");
+    assert!(window.contains("spacing: 6px;"), "6 between the bands");
+}
+
+#[test]
+fn an_equalizer_turned_off_dims_its_sliders_at_once() {
+    let source = include_str!("../../ui/equalizer.slint");
+    assert!(!source.contains("animate opacity"));
+}
+
+#[test]
+fn save_rename_and_delete_are_items_of_the_curve_menu() {
+    let source = include_str!("../../ui/equalizer.slint");
+    let window = component(source, "EqualizerWindow");
+    assert!(!source.contains("ComboBox"), "a menu, not a combo box");
+    assert_eq!(
+        window.matches("Button {").count(),
+        1,
+        "the bottom row has Reset only"
+    );
+    for item in [
+        "title: Strings.equalizer-save-curve;",
+        "title: Strings.equalizer-rename-curve(",
+        "title: Strings.equalizer-delete-curve(",
+    ] {
+        assert!(source.contains(item), "{item}");
+    }
+    let strings = include_str!("../../ui/strings.slint");
+    for text in [
+        "equalizer-save-curve: @tr(\"Save Curve…\");",
+        "function equalizer-rename-curve(name: string) -> string {\n        return @tr(\"Rename “{}”…\", name);",
+        "function equalizer-delete-curve(name: string) -> string {\n        return @tr(\"Delete “{}”\", name);",
+    ] {
+        assert!(strings.contains(text), "{text}");
+    }
+}
+
+#[test]
+fn add_by_address_reads_as_the_macs_sheet() {
+    let dialog = component(include_str!("../../ui/dialogs.slint"), "CastAddressDialog");
+    let at = |text: &str| dialog.find(text).unwrap_or_else(|| panic!("{text}"));
+    assert!(dialog.contains("padding: 20px;"));
+    assert!(dialog.contains("text: Strings.cast-add-address-title;"));
+    assert!(dialog.contains("font-size: Tokens.font-size-title3;"));
+    assert!(dialog.contains("font-size: Tokens.font-size-callout;"));
+    assert!(
+        dialog.contains("text: Strings.cast-address-label;"),
+        "a visible label"
+    );
+    assert!(dialog.contains("placeholder-text: Strings.cast-address-label;"));
+    assert!(
+        !dialog.contains("Tokens.notice"),
+        "the reason is red text, not a box"
+    );
+    assert!(
+        at("TextField {") < at("color: Tokens.error-text;"),
+        "under the field"
+    );
+    assert!(dialog.contains("Spinner {"), "a spinner while it checks");
+}
+
+#[test]
+fn about_names_the_license_before_the_copyright() {
+    let about = include_str!("../../ui/about.slint");
+    let license = about.find("Strings.about-license").expect("license");
+    let copyright = about.find("Strings.about-copyright").expect("copyright");
+    assert!(license < copyright);
+}
+
+#[test]
+fn the_guide_keeps_440_by_300_and_insets_its_text_18_by_16() {
+    let help = include_str!("../../ui/help.slint");
+    assert!(help.contains("min-width: 440px;") && help.contains("min-height: 300px;"));
+    assert!(help.contains("padding-left: 18px;") && help.contains("padding-top: 16px;"));
+}
+
+#[test]
+fn the_tray_footer_buttons_are_grey_24_high_with_a_7_percent_hover() {
+    let footer = component(include_str!("../../ui/flyout.slint"), "FooterButton");
+    assert!(footer.contains("color: Tokens.secondary-text;"));
+    assert!(footer.contains("height: 24px;"));
+    assert!(footer.contains("padding-left: 6px;"));
+    assert!(footer.contains("Tokens.text.with-alpha(0.07)"));
+}
+
+#[test]
+fn save_curve_names_the_curve_in_place_of_the_menu() {
+    use super::tests::{app_over, draw_frames, press, type_text};
+    use slint::ComponentHandle;
+    use slint::platform::Key;
+    let app = app_over(crate::ui_model::MockBackend::new());
+    let eq_window = &app.equalizer;
+    eq_window.show().expect("the equalizer shows headless");
+    let window = eq_window.window();
+    let names = || {
+        let mut names: Vec<_> = app
+            .snapshot()
+            .equalizer_curves
+            .iter()
+            .map(|curve| curve.name.clone())
+            .collect();
+        names.sort();
+        names
+    };
+    eq_window.invoke_save_curve();
+    draw_frames();
+    assert!(!app.zone_dialog.window().is_visible(), "no dialog");
+    type_text(window, "Desk");
+    press(window, Key::Return);
+    assert_eq!(names(), ["Desk"]);
+
+    eq_window.invoke_gain_changed(0, 6.0);
+    eq_window.invoke_save_curve();
+    draw_frames();
+    press(window, Key::Escape);
+    assert!(window.is_visible(), "Escape drops the name, not the window");
+    assert_eq!(names(), ["Desk"]);
+
+    eq_window.invoke_save_curve();
+    draw_frames();
+    press(window, Key::Return);
+    assert_eq!(names(), ["Curve 2", "Desk"], "Return saves the suggestion");
+}
+
+#[test]
+fn the_guide_opens_where_it_was_kept_on_a_monitor() {
+    let work = Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: 1920.0,
+        height: 1040.0,
+    };
+    let size = (640.0, 600.0);
+    let (width, height) = (size.0 + GUIDE_CHROME.0, size.1 + GUIDE_CHROME.1);
+    let place = |x, y| WindowPlace { x, y };
+    assert_eq!(
+        guide_place_to_show(place(100, 80), size, true, Some((work, 1.0))),
+        Some(place(100, 80)),
+        "where it was"
+    );
+    assert_eq!(
+        guide_place_to_show(place(1800, 900), size, true, Some((work, 1.0))),
+        Some(place((1920.0 - width) as i32, (1040.0 - height) as i32)),
+        "pulled back inside the work area"
+    );
+    assert_eq!(
+        guide_place_to_show(place(-5000, 4000), size, false, Some((work, 1.0))),
+        Some(place(
+            ((1920.0 - width) / 2.0).round() as i32,
+            ((1040.0 - height) / 2.0).round() as i32
+        )),
+        "off every monitor, centered on the primary one"
+    );
+    assert_eq!(
+        guide_place_to_show(place(100, 80), size, true, None),
+        Some(place(100, 80))
+    );
+    assert_eq!(
+        guide_place_to_show(place(-5000, 0), size, false, None),
+        None
+    );
+}
+
+#[test]
+fn the_guide_keeps_its_place_once_shown_and_none_before() {
+    use super::tests::app_over;
+    let app = app_over(crate::ui_model::MockBackend::new());
+    app.save_settings();
+    assert_eq!(app.backend.borrow().view_settings().guide, None);
+    app.show_help();
+    app.help.invoke_close_requested();
+    app.save_settings();
+    assert!(app.backend.borrow().view_settings().guide.is_some());
+}
+
+#[test]
+fn a_settings_file_without_the_guides_place_or_with_a_bad_one_reads_as_none() {
+    let stored = |text: &str| -> serde_json::Value {
+        let (read, _) = crate::settings::Settings::from_json(text).expect("reads");
+        serde_json::from_str(&read.to_json()).expect("written as JSON")
+    };
+    for text in [
+        r#"{"version": 3}"#,
+        r#"{"version": 3, "guide_window": "x"}"#,
+        r#"{"version": 3, "guide_window": {"x": 1}}"#,
+    ] {
+        let read = stored(text);
+        assert!(
+            read.get("guide_window")
+                .is_none_or(serde_json::Value::is_null),
+            "{text}"
+        );
+    }
+    let read = stored(r#"{"version": 3, "guide_window": {"x": -1500, "y": 120}}"#);
+    assert_eq!(
+        read["guide_window"],
+        serde_json::json!({"x": -1500, "y": 120})
+    );
+}
+
+#[test]
+fn closing_the_equalizer_drops_a_curve_name_being_typed() {
+    use super::tests::{app_over, draw_frames, type_text};
+    use slint::ComponentHandle;
+    let app = app_over(crate::ui_model::MockBackend::new());
+    let eq_window = &app.equalizer;
+    let window = eq_window.window();
+    let closes: [fn(&crate::EqualizerWindow); 2] = [
+        |eq| eq.invoke_close_requested(),
+        |eq| {
+            eq.window()
+                .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+        },
+    ];
+    for close in closes {
+        app.show_equalizer();
+        eq_window.invoke_save_curve();
+        draw_frames();
+        type_text(window, "Late");
+        close(eq_window);
+        draw_frames();
+        assert!(!eq_window.get_naming_curve(), "the field is gone");
+        assert!(app.snapshot().equalizer_curves.is_empty(), "nothing saved");
+    }
+    eq_window.set_naming_curve(true);
+    app.show_equalizer();
+    assert!(!eq_window.get_naming_curve(), "it reopens with the menu");
+}

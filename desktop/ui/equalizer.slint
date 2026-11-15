@@ -3,10 +3,10 @@
 // steps), saving curves, and Reset. Opened with Ctrl+E or from the
 // Equalizer card.
 
-import { Button, ComboBox, Palette } from "std-widgets.slint";
+import { Button, Palette } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Card, FocusRing, Fluent, NameField, LevelSlider, QuietText, SecondaryText, ToggleSwitch } from "widgets.slint";
+import { FocusRing, Fluent, Glyph, Glyphs, NameField, LevelSlider, QuietText, SecondaryText, TextField, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -75,7 +75,6 @@ component Band inherits VerticalLayout {
                     width: parent.width;
                     height: parent.height;
                     opacity: root.faded ? Tokens.disabled-opacity : 1;
-                    animate opacity { duration: Fluent.normal; }
 
                     Rectangle {
                         x: (parent.width - self.width) / 2;
@@ -194,6 +193,151 @@ component Band inherits VerticalLayout {
     }
 }
 
+// The curve menu, as the Mac's: the presets, the saved curves, then Save
+// Curve… and, while a saved curve shows, Rename and Delete it.
+component CurveMenu inherits Rectangle {
+    // The presets, then the saved curves.
+    in property <[string]> names;
+    in property <int> preset-count;
+    // -1 while no curve matches: the button then reads Custom.
+    in property <int> current;
+    in property <bool> saved-shown;
+    // The curve name dialog is open: the curve actions wait for it.
+    in property <bool> naming;
+    callback selected(int);
+    callback save();
+    callback rename();
+    callback delete();
+    property <string> shown: root.current >= 0 && root.current < root.names.length ? root.names[root.current] : Strings.equalizer-custom;
+    property <string> saved-name: root.saved-shown ? root.shown : "";
+
+    // Windows' native menu returns from show() once closed, and the press
+    // that closed it then reaches this button: that click must not reopen it.
+    property <bool> just-closed;
+
+    function open-menu() {
+        menu.show({ x: 0, y: root.height });
+        root.just-closed = true;
+        reopen-guard.start();
+    }
+
+    reopen-guard := Timer {
+        interval: 300ms;
+        running: false;
+        triggered => {
+            root.just-closed = false;
+            self.stop();
+        }
+    }
+
+    min-height: 32px;
+    border-radius: Fluent.radius-control;
+    border-width: 1px;
+    border-color: Fluent.stroke;
+    background: touch.pressed ? Tokens.surface.mix(Tokens.text, 0.96) : touch.has-hover ? Tokens.surface.mix(Tokens.text, 0.98) : Tokens.surface;
+    forward-focus: focus;
+    accessible-role: combobox;
+    accessible-label: Strings.equalizer-curve;
+    accessible-value: root.shown;
+    accessible-action-default => {
+        root.open-menu();
+    }
+
+    touch := TouchArea {
+        clicked => {
+            if !root.just-closed {
+                root.open-menu();
+            }
+        }
+
+        menu := ContextMenuArea {
+            Menu {
+                for i in root.preset-count: MenuItem {
+                    title: root.names[i];
+                    checkable: true;
+                    checked: i == root.current;
+                    activated => {
+                        root.selected(i);
+                    }
+                }
+
+                if root.names.length > root.preset-count: MenuSeparator { }
+
+                for i in root.names.length - root.preset-count: MenuItem {
+                    title: root.names[root.preset-count + i];
+                    checkable: true;
+                    checked: root.preset-count + i == root.current;
+                    activated => {
+                        root.selected(root.preset-count + i);
+                    }
+                }
+
+                MenuSeparator { }
+
+                MenuItem {
+                    title: Strings.equalizer-save-curve;
+                    enabled: !root.naming;
+                    activated => {
+                        root.save();
+                    }
+                }
+
+                if root.saved-shown: MenuItem {
+                    title: Strings.equalizer-rename-curve(root.saved-name);
+                    enabled: !root.naming;
+                    activated => {
+                        root.rename();
+                    }
+                }
+
+                if root.saved-shown: MenuItem {
+                    title: Strings.equalizer-delete-curve(root.saved-name);
+                    enabled: !root.naming;
+                    activated => {
+                        root.delete();
+                    }
+                }
+            }
+
+            focus := FocusScope {
+                key-pressed(event) => {
+                    if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
+                        root.open-menu();
+                        return accept;
+                    }
+                    return reject;
+                }
+
+                HorizontalLayout {
+                    padding-left: 11px;
+                    padding-right: 11px;
+                    spacing: 8px;
+
+                    Text {
+                        text: root.shown;
+                        color: Tokens.text;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
+
+                    Glyph {
+                        glyph: Glyphs.chevron-down;
+                        font-size: 10px;
+                        color: Tokens.secondary-text;
+                    }
+                }
+            }
+        }
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
 export component EqualizerWindow inherits Window {
     in property <bool> enabled;
     in property <float> preamp;
@@ -202,6 +346,7 @@ export component EqualizerWindow inherits Window {
     in property <float> max-gain: 12;
     // The presets, then the saved curves.
     in property <[string]> preset-names;
+    in property <int> preset-count;
     // -1 while no curve matches: the picker then shows "Custom", which is
     // not an entry.
     in property <int> preset-index;
@@ -211,12 +356,18 @@ export component EqualizerWindow inherits Window {
     // for it.
     in property <bool> name-dialog-open;
     // The entry the picker shows (tests read it).
-    out property <int> picker-shown-index: presets.current-index;
+    out property <int> picker-shown-index: root.preset-index;
+    // Save Curve… names the curve in a field in place of the menu;
+    // the suggestion is its placeholder.
+    in-out property <bool> naming-curve;
+    in property <string> curve-suggestion;
     callback enabled-toggled(bool);
     callback preamp-changed(float);
     callback gain-changed(int, float);
     callback preset-selected(int);
     callback save-curve();
+    // What was typed, and whether Return ended it rather than the focus leaving.
+    callback curve-named(string, bool);
     callback rename-curve();
     callback delete-curve();
     callback reset();
@@ -233,8 +384,8 @@ export component EqualizerWindow inherits Window {
     title: Strings.equalizer-title;
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
-    min-width: 600px;
-    preferred-width: 660px;
+    min-width: 520px;
+    max-width: 520px;
     min-height: 360px;
     default-font-family: Fluent.font;
     default-font-size: Tokens.font-size-body;
@@ -244,18 +395,21 @@ export component EqualizerWindow inherits Window {
     // Called each time the window opens, so Escape works before anything
     // inside is clicked.
     public function take-focus() {
+        root.naming-curve = false;
         keys.focus();
     }
 
     changed enabled => {
         power.checked = root.enabled;
     }
-    changed preset-index => {
-        presets.current-index = root.preset-index;
-    }
 
     keys := FocusScope {
         key-pressed(event) => {
+            // Escape drops the curve name, even before the field has the focus.
+            if event.text == Key.Escape && root.naming-curve {
+                root.naming-curve = false;
+                return accept;
+            }
             if event.text == Key.Escape || (event.modifiers.control && !event.modifiers.alt && !event.modifiers.shift && !event.modifiers.meta && event.text.to-lowercase() == "w") {
                 root.close-requested();
                 return accept;
@@ -284,8 +438,8 @@ export component EqualizerWindow inherits Window {
         }
 
         VerticalLayout {
-            padding: Fluent.window-margin;
-            spacing: Fluent.gap;
+            padding: 18px;
+            spacing: 14px;
 
             HorizontalLayout {
                 spacing: 12px;
@@ -307,84 +461,88 @@ export component EqualizerWindow inherits Window {
                     horizontal-stretch: 1;
                 }
 
-                Text {
+                if root.naming-curve: TextField {
+                    width: 220px;
+                    placeholder-text: root.curve-suggestion;
+                    accessible-label: Strings.curve-name-field-label;
+                    accessible-description: Strings.save-curve-message;
+                    init => {
+                        self.focus();
+                    }
+                    accepted(text) => {
+                        root.curve-named(text, true);
+                    }
+                    changed has-focus => {
+                        if !self.has-focus && root.naming-curve {
+                            root.curve-named(self.text, false);
+                        }
+                    }
+                }
+
+                if !root.naming-curve: Text {
                     text: Strings.equalizer-curve;
                     color: Tokens.text;
                     vertical-alignment: center;
                     accessible-role: none;
                 }
 
-                Rectangle {
-                    width: 180px;
-
-                    presets := ComboBox {
-                        width: parent.width;
-                        height: parent.height;
-                        model: root.preset-names;
-                        current-index: root.preset-index;
-                        accessible-label: Strings.equalizer-curve;
-                        accessible-placeholder-text: Strings.equalizer-custom;
-                        selected => {
-                            root.preset-selected(self.current-index);
-                            self.current-index = root.preset-index;
-                        }
+                if !root.naming-curve: presets := CurveMenu {
+                    width: 170px;
+                    names: root.preset-names;
+                    preset-count: root.preset-count;
+                    current: root.preset-index;
+                    saved-shown: root.saved-curve-shown;
+                    naming: root.name-dialog-open;
+                    selected(index) => {
+                        root.preset-selected(index);
                     }
-
-                    // Where the picker's own text goes; it is empty at -1.
-                    if root.preset-index < 0: Text {
-                        x: 12px;
-                        width: parent.width - 36px;
-                        height: parent.height;
-                        text: Strings.equalizer-custom;
-                        color: Tokens.text;
-                        vertical-alignment: center;
-                        overflow: elide;
-                        accessible-role: none;
+                    save => {
+                        root.save-curve();
+                    }
+                    rename => {
+                        root.rename-curve();
+                    }
+                    delete => {
+                        root.delete-curve();
                     }
                 }
             }
 
-            // The bands on a card, evenly spread; the preamp apart on the left.
-            Card {
+            // The bands evenly spread; the preamp apart on the left.
+            HorizontalLayout {
                 vertical-stretch: 1;
-                inner-padding: 12px;
+                spacing: 6px;
+
+                Band {
+                    horizontal-stretch: 1;
+                    gain: root.preamp;
+                    short-label: Strings.equalizer-preamp;
+                    name: Strings.equalizer-preamp-accessibility;
+                    max-gain: root.max-gain;
+                    faded: !root.enabled;
+                    changed(value) => {
+                        root.preamp-changed(value);
+                    }
+                }
 
                 HorizontalLayout {
-                    spacing: 2px;
-
-                    Band {
-                        horizontal-stretch: 1;
-                        gain: root.preamp;
-                        short-label: Strings.equalizer-preamp;
-                        name: Strings.equalizer-preamp-accessibility;
-                        max-gain: root.max-gain;
-                        faded: !root.enabled;
-                        changed(value) => {
-                            root.preamp-changed(value);
-                        }
+                    padding-top: 8px;
+                    padding-bottom: 8px;
+                    Rectangle {
+                        width: 1px;
+                        background: Fluent.stroke;
                     }
+                }
 
-                    HorizontalLayout {
-                        padding-left: 6px;
-                        padding-right: 6px;
-                        padding-top: 8px;
-                        padding-bottom: 8px;
-                        Rectangle {
-                            width: 1px;
-                            background: Fluent.stroke;
-                        }
-                    }
-
-                    for gain[index] in root.gains: Band {
-                        horizontal-stretch: 1;
-                        gain: gain;
-                        short-label: Strings.equalizer-band-short(root.band-hz[index]);
-                        name: Strings.equalizer-band-name(root.band-hz[index]);
-                        max-gain: root.max-gain;
-                        faded: !root.enabled;
-                        changed(value) => {
-                            root.gain-changed(index, value);
-                        }
+                for gain[index] in root.gains: Band {
+                    horizontal-stretch: 1;
+                    gain: gain;
+                    short-label: Strings.equalizer-band-short(root.band-hz[index]);
+                    name: Strings.equalizer-band-name(root.band-hz[index]);
+                    max-gain: root.max-gain;
+                    faded: !root.enabled;
+                    changed(value) => {
+                        root.gain-changed(index, value);
                     }
                 }
             }
@@ -396,33 +554,6 @@ export component EqualizerWindow inherits Window {
                     text: Strings.equalizer-caption(root.max-gain);
                     vertical-alignment: center;
                     horizontal-stretch: 1;
-                }
-
-                Button {
-                    text: Strings.equalizer-save-curve;
-                    accessible-label: Strings.equalizer-save-curve-accessibility;
-                    enabled: !root.name-dialog-open;
-                    clicked => {
-                        root.save-curve();
-                    }
-                }
-
-                Button {
-                    text: Strings.equalizer-rename-curve;
-                    accessible-label: Strings.equalizer-rename-curve-accessibility(root.saved-curve-shown ? root.preset-names[root.preset-index] : "");
-                    enabled: root.saved-curve-shown && !root.name-dialog-open;
-                    clicked => {
-                        root.rename-curve();
-                    }
-                }
-
-                Button {
-                    text: Strings.equalizer-delete-curve;
-                    accessible-label: Strings.equalizer-delete-curve-accessibility(root.saved-curve-shown ? root.preset-names[root.preset-index] : "");
-                    enabled: root.saved-curve-shown && !root.name-dialog-open;
-                    clicked => {
-                        root.delete-curve();
-                    }
                 }
 
                 Button {

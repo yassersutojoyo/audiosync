@@ -1795,7 +1795,7 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
         assert!(card.contains(needle), "PresetsCard has {needle}");
         assert!(picker.contains(needle), "PresetPicker has {needle}");
     }
-    assert!(flyout.contains("if root.presets.length > 0: PresetPicker {"));
+    assert!(flyout.contains("if root.presets.length > 0: IntroPart {"));
 }
 
 /// A preset row's grey 11 px second line keeps 4.5:1 under the row's hover

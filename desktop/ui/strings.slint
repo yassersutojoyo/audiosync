@@ -363,8 +363,6 @@ export global Strings {
     out property <string> cast-add-address-title: @tr("Add a Cast Speaker by Address");
     out property <string> cast-add-address-message: @tr("Use this when a Google Cast speaker doesn't show up. Enter its IP address or host name, and add :port only if it doesn't use 8009.");
     out property <string> cast-address-label: @tr("Address");
-    // An example in the empty field; a name, never a private address.
-    out property <string> cast-address-placeholder: "speaker.local";
     out property <string> cast-address-invalid: @tr("That isn't an IP address or host name. Check it and try again.");
     // On the Add button and read out while the address is checked.
     out property <string> cast-address-checking: @tr("Checking…");
@@ -508,21 +506,11 @@ export global Strings {
     out property <string> equalizer-preamp: @tr("Pre");
     out property <string> equalizer-preamp-accessibility: @tr("Preamp");
     out property <string> equalizer-curve: @tr("Curve");
-    out property <string> equalizer-save-curve: @tr("Save…");
-    out property <string> equalizer-save-curve-accessibility: @tr("Save curve");
-    out property <string> equalizer-rename-curve: @tr("Rename…");
-    // With the saved curve the picker shows; "" while it shows none.
-    public pure function equalizer-rename-curve-accessibility(name: string) -> string {
-        if name == "" {
-            return @tr("Rename curve");
-        }
+    out property <string> equalizer-save-curve: @tr("Save Curve…");
+    public pure function equalizer-rename-curve(name: string) -> string {
         return @tr("Rename “{}”…", name);
     }
-    out property <string> equalizer-delete-curve: @tr("Delete");
-    public pure function equalizer-delete-curve-accessibility(name: string) -> string {
-        if name == "" {
-            return @tr("Delete curve");
-        }
+    public pure function equalizer-delete-curve(name: string) -> string {
         return @tr("Delete “{}”", name);
     }
     out property <string> save-curve-title: @tr("Save Curve");
