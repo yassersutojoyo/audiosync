@@ -1093,13 +1093,14 @@ pub fn focus_input(
     use slint::winit_030::winit::event::{ElementState, WindowEvent};
     use slint::winit_030::winit::keyboard::{Key, NamedKey};
     match event {
-        WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-            Some(if event.logical_key == Key::Named(NamedKey::Tab) {
-                FocusInput::Tab
-            } else {
-                FocusInput::OtherKey
-            })
-        }
+        WindowEvent::KeyboardInput {
+            event,
+            is_synthetic,
+            ..
+        } if event.state == ElementState::Pressed => crate::window_rules::key_focus_input(
+            event.logical_key == Key::Named(NamedKey::Tab),
+            *is_synthetic,
+        ),
         WindowEvent::MouseInput {
             state: ElementState::Pressed,
             ..
@@ -9408,6 +9409,69 @@ mod tests {
     }
 
     #[test]
+    fn the_scroll_bar_hides_a_second_after_a_scroll() {
+        let app = app_over(MockBackend::zones_preview());
+        let window = app.main.window();
+        window.set_size(slint::LogicalSize::new(820.0, 480.0));
+        hold_clock();
+        draw_frames();
+        let thumb = speaker_list_thumb(&app);
+        let (at, size) = (thumb.absolute_position(), thumb.size());
+        // Over the rows, away from the edge.
+        scroll(window, at.x - 100.0, at.y + size.height / 2.0, -40.0);
+        assert_eq!(thumb.computed_opacity(), 1.0, "shown while it scrolls");
+        advance_clock(Duration::from_millis(1100));
+        draw_frames();
+        advance_clock(Duration::from_millis(400));
+        draw_frames();
+        assert_eq!(thumb.computed_opacity(), 0.0, "hidden a second after");
+    }
+
+    #[test]
+    fn a_click_on_the_source_button_toggles_its_menu() {
+        fn check(name: &str, component: &impl slint::ComponentHandle) {
+            use i_slint_backend_testing::ElementHandle;
+            let window = component.window();
+            let items =
+                || ElementHandle::find_by_accessible_label(component, "Music Player").count();
+            let closed = items();
+            let button = ElementHandle::find_by_accessible_label(component, "Audio Source")
+                .next()
+                .expect("the source button");
+            let (at, size) = (button.absolute_position(), button.size());
+            let (x, y) = (at.x + size.width / 2.0, at.y + size.height / 2.0);
+            click(window, x, y);
+            assert!(items() > closed, "{name}: the first click opens the menu");
+            click(window, x, y);
+            assert_eq!(items(), closed, "{name}: the second click closes it");
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+            click(window, x, y);
+            assert!(items() > closed, "{name}: a click later opens it again");
+            // Windows' native menu closes on the press, which then reaches
+            // the button as a click.
+            press(window, Key::Escape);
+            click(window, x, y);
+            assert_eq!(items(), closed, "{name}: the closing click stays closed");
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+            click(window, x, y);
+            assert!(items() > closed, "{name}: the next click opens it");
+            press(window, Key::Escape);
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+        }
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.main.show().expect("the main window shows");
+        app.flyout.show().expect("the flyout shows headless");
+        hold_clock();
+        draw_frames();
+        check("main", &app.main);
+        check("flyout", &app.flyout);
+    }
+
+    #[test]
     fn a_click_at_a_flyout_rows_right_edge_beside_the_scroll_bar_reaches_the_row() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
@@ -13197,6 +13261,39 @@ mod tests {
         let bottom = flyout.get_footer_bottom();
         assert!(bottom + 16.0 <= room, "buttons end at {bottom} in {room}");
         assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
+    }
+
+    #[test]
+    fn a_tall_screen_shows_every_flyout_speaker_without_scrolling() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        let kitchen = backend
+            .snapshot()
+            .speaker("airplay:kitchen")
+            .unwrap()
+            .clone();
+        for n in 1..=6 {
+            let mut room = kitchen.clone();
+            room.id = format!("airplay:room{n}");
+            room.name = format!("Room {n}");
+            room.system_name = room.name.clone();
+            backend.add_speaker(room);
+        }
+        let app = app_over(backend);
+        app.refresh();
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        app.fit_flyout(2000.0);
+        draw_frames();
+        let height = |id: &str| {
+            ElementHandle::find_by_element_id(&app.flyout, id)
+                .next()
+                .expect(id)
+                .size()
+                .height
+        };
+        let (shown, rows) = (height("TrayFlyout::list-view"), height("TrayFlyout::list"));
+        assert!(shown >= rows, "{shown} px shows {rows} px of rows");
     }
 
     /// The refresh refits the flyout every 500 ms: a cut that still fits

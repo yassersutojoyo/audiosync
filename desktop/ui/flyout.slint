@@ -134,8 +134,23 @@ component SourceMenu inherits Rectangle {
     callback several-apps-requested();
     property <string> name: root.current >= 0 && root.current < root.sources.length ? root.sources[root.current] : Strings.source-system;
 
+    // Windows' native menu returns from show() once closed, and the press
+    // that closed it then reaches this button: that click must not reopen it.
+    property <bool> just-closed;
+
     function open-menu() {
         menu.show({ x: 0, y: root.height });
+        root.just-closed = true;
+        reopen-guard.start();
+    }
+
+    reopen-guard := Timer {
+        interval: 300ms;
+        running: false;
+        triggered => {
+            root.just-closed = false;
+            self.stop();
+        }
     }
 
     min-width: 0px;
@@ -153,7 +168,9 @@ component SourceMenu inherits Rectangle {
 
     touch := TouchArea {
         clicked => {
-            root.open-menu();
+            if !root.just-closed {
+                root.open-menu();
+            }
         }
 
         menu := ContextMenuArea {
@@ -1113,8 +1130,7 @@ export component TrayFlyout inherits Window {
                             }
                         }
 
-                        // Four rows, then it scrolls: with the list below it shares
-                        // the 260 px the list had alone, so a PC with many outputs
+                        // Four rows, then it scrolls, so a PC with many outputs
                         // still fits a small screen.
                         this-pc-view := OverlayScrollView {
                             height: min(this-pc-list.preferred-height, 144px);
@@ -1202,9 +1218,9 @@ export component TrayFlyout inherits Window {
                     }
 
                     if root.zones.length > 0 || root.speakers.length > 0: list-view := OverlayScrollView {
-                        // Every row up to five or so, less this PC's rows above, then
-                        // it scrolls; three rows at least.
-                        height: min(list.preferred-height, max(108px, 260px - root.list-cut - this-pc-view.height));
+                        // Every row; on a screen too short for them it scrolls, three
+                        // rows at least.
+                        height: min(list.preferred-height, max(108px, list.preferred-height - root.list-cut));
 
                         list := VerticalLayout {
                             for zone in root.zones: VerticalLayout {
