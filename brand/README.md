@@ -75,6 +75,7 @@ menu bar icon is the mark as a template image, dimmed while streaming is off
 scripts/brand/build-brand.sh   # icons, wordmarks, SwiftUI mark, AppIcon.icns, site icons and wordmark
 scripts/brand/trace-mark.sh    # re-trace the mark from source/ (needs: brew install potrace)
 scripts/brand/windows-icons.sh # the Windows app and tray icons in desktop/res/
+python3 -I scripts/brand/app_tile.py # the Windows app icon alone, the teal tile (needs Pillow; runs on the PC)
 python3 -I scripts/brand/guide_art.py # the Guide's illustrations in guide/, light and dark, and GuideArtwork.swift
 python3 -I scripts/brand/dmg_background.py # the disk image window's background in dmg/ (needs Pillow)
 ```

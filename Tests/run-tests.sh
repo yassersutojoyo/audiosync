@@ -130,6 +130,14 @@ else
   "$python" -I scripts/check_appcast.py --self-test || status=1
 fi
 
+echo "▶ Windows app icon (scripts/brand/app_tile.py --check)"
+if [ -z "$python" ]; then
+  echo "$no_python"
+  status=1
+else
+  "$python" -I scripts/brand/app_tile.py --check || status=1
+fi
+
 if [ "$only" = python ]; then
   finished=1
   exit $status
