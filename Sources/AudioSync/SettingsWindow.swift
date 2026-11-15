@@ -9,7 +9,6 @@ final class SettingsWindowController {
     private var host: NSHostingController<SettingsView>?
     private let model: AppModel
     private let updates = UpdateChecks()
-    private let motion = OpenMotion()
     private let setUpPermissions: () -> Void
     private var observers: [NSObjectProtocol] = []
 
@@ -32,7 +31,7 @@ final class SettingsWindowController {
     }
 
     private func makeWindow() -> NSWindow {
-        let view = SettingsView(model: model, updates: updates, motion: motion,
+        let view = SettingsView(model: model, updates: updates,
                                 setUpPermissions: setUpPermissions) { [weak self] height in self?.fit(height) }
         let host = NSHostingController(rootView: view)
         self.host = host
@@ -50,7 +49,10 @@ final class SettingsWindowController {
         let center = NotificationCenter.default
         observers = [
             center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: panel, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.reread() }
+                // Its answer re-renders the content, so it waits out the open motion's first frames.
+                DispatchQueue.main.asyncAfter(deadline: .now() + WindowOpen.seconds) {
+                    MainActor.assumeIsolated { self?.reread() }
+                }
             },
             center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -72,25 +74,40 @@ final class SettingsWindowController {
         updates.reread()
     }
 
-    /// Fades the window in while its content drops 8 pt and grows from 0.97;
-    /// with Reduce Motion, the fade alone.
+    /// Plays `WindowOpen` on the content view's layer. The render server moves it as one picture
+    /// at display rate; a SwiftUI scale over the tree rounded each AppKit control apart from the text.
     private func animateOpen(_ window: NSWindow) {
+        guard let view = window.contentView else { return }
+        view.wantsLayer = true
+        guard let layer = view.layer else { return }
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-        window.alphaValue = 0
-        motion.atRest = reduce
+        var parts = [Self.opening("opacity", from: 0, reduce: reduce)]
         if !reduce {
-            DispatchQueue.main.async { [motion] in
-                MainActor.assumeIsolated {
-                    withAnimation(.spring(duration: 0.56, bounce: 0)) { motion.atRest = true }
-                }
-            }
+            let start = WindowOpen.start(frame: layer.frame, position: layer.position,
+                                         flipped: view.superview?.isFlipped ?? false)
+            parts.append(Self.opening("transform", from: NSValue(caTransform3D: CATransform3DMakeAffineTransform(start)),
+                                      reduce: false))
         }
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = reduce ? 0.15 : 0.56
-            context.timingFunction = reduce ? CAMediaTimingFunction(name: .linear)
-                : CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
-            window.animator().alphaValue = 1
+        let group = CAAnimationGroup()
+        group.animations = parts
+        group.duration = parts.map(\.duration).max() ?? 0
+        layer.add(group, forKey: "open")
+    }
+
+    /// One part of the open motion, from `from` to the layer's resting value.
+    private static func opening(_ keyPath: String, from: Any, reduce: Bool) -> CABasicAnimation {
+        let animation: CABasicAnimation
+        if reduce {
+            animation = CABasicAnimation(keyPath: keyPath)
+            animation.duration = WindowOpen.fadeSeconds
+        } else {
+            let spring = CASpringAnimation(perceptualDuration: WindowOpen.seconds, bounce: 0)
+            spring.keyPath = keyPath
+            spring.duration = spring.settlingDuration
+            animation = spring
         }
+        animation.fromValue = from
+        return animation
     }
 
     /// Resizes the window to `height` of content, keeping its top edge where it is.
@@ -110,13 +127,6 @@ final class SettingsWindowController {
             window.animator().setFrame(frame, display: true)
         }
     }
-}
-
-/// Where the content stands in the open motion. An object rather than
-/// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.
-@MainActor
-final class OpenMotion: ObservableObject {
-    @Published var atRest = true
 }
 
 /// Escape closes Settings, as it does the equalizer and the Web Remote.
@@ -147,7 +157,6 @@ final class UpdateChecks: ObservableObject {
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var updates: UpdateChecks
-    @ObservedObject var motion: OpenMotion
     let setUpPermissions: () -> Void
     /// The content's height, for the window to follow.
     let onHeight: (CGFloat) -> Void
@@ -220,8 +229,6 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: Self.width, alignment: .leading)
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: onHeight)
-        .scaleEffect(motion.atRest ? 1 : 0.97, anchor: .top)
-        .offset(y: motion.atRest ? 0 : 8)
     }
 
     private func dockIconRow(_ t: UIStrings) -> some View {
