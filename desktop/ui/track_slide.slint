@@ -1,0 +1,144 @@
+// Now Playing's motion (src/track_slide.rs): another song slides its cover
+// in from the side while the old one recedes, and Play/Pause's icon morphs.
+
+import { Tokens } from "tokens.slint";
+import { Glyph, MarqueeText } from "widgets.slint";
+
+// One frame of a card's change of song, all zero at rest; the fields are
+// track_slide::Look's.
+export struct SlideLook {
+    sliding: bool,
+    fades: bool,
+    side: float,
+    slid: float,
+    old-shrink: float,
+    old-dim: float,
+    old-fade: float,
+    cover-fade: float,
+    old-text-offset: float,
+    old-text-fade: float,
+    title-offset: float,
+    title-fade: float,
+    subtitle-offset: float,
+    subtitle-fade: float,
+}
+
+// The song drawn in place while the new one slides in.
+export struct OutgoingSong {
+    title: string,
+    subtitle: string,
+    has-artwork: bool,
+    artwork: image,
+}
+
+export struct IconLook {
+    shows-old: bool,
+    scale: float,
+    opacity: float,
+    moving: bool,
+}
+
+export global TrackMotion {
+    // Play/Pause's icon the given seconds after it changed.
+    pure callback icon(float) -> IconLook;
+}
+
+// A title or artist line: the old one leaves away from the side the cover
+// comes from while the new one comes from that side, inside the column.
+export component SlidLine inherits Rectangle {
+    in property <string> text;
+    in property <string> old-text;
+    in property <bool> sliding;
+    in property <color> text-color: Tokens.text;
+    in property <length> font-size;
+    in property <int> font-weight;
+    in property <float> offset;
+    in property <float> fade;
+    in property <float> old-offset;
+    in property <float> old-fade;
+
+    min-width: 0px;
+    preferred-width: line.preferred-width;
+    preferred-height: line.preferred-height;
+    clip: true;
+
+    if root.sliding: MarqueeText {
+        x: root.old-offset * 1px;
+        width: root.width;
+        height: root.height;
+        text: root.old-text;
+        text-color: root.text-color;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        opacity: 1 - root.old-fade;
+        accessible-role: none;
+    }
+
+    line := MarqueeText {
+        x: root.offset * 1px;
+        width: root.width;
+        height: root.height;
+        text: root.text;
+        text-color: root.text-color;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+        opacity: 1 - root.fade;
+    }
+}
+
+// The new cover on its way in, drawn above the whole window from its edge
+// to the cover's place (`at-x`, `at-y` in the window), so only the window
+// clips it.
+export component IncomingCover inherits Rectangle {
+    in property <SlideLook> look;
+    in property <length> at-x;
+    in property <length> at-y;
+    in property <length> size;
+    in property <length> surface-width;
+    in property <length> corner;
+    // What the cover's place stands on, so the tile is opaque in flight.
+    in property <color> base;
+    in property <bool> has-artwork;
+    in property <image> artwork;
+    in property <string> glyph;
+    in property <length> glyph-size;
+    in property <bool> edge;
+
+    x: root.look.fades ? root.at-x : root.at-x + (root.look.side > 0 ? root.surface-width - root.at-x : -(root.at-x + root.size)) * (1 - root.look.slid);
+    y: root.at-y;
+    width: root.size;
+    height: root.size;
+    border-radius: root.corner;
+    clip: true;
+    background: root.base;
+    opacity: root.look.fades ? root.look.slid : 1;
+    accessible-role: none;
+
+    Rectangle {
+        background: Tokens.text.with-alpha(0.06);
+    }
+
+    if !root.has-artwork || root.look.cover-fade > 0: Glyph {
+        width: parent.width;
+        height: parent.height;
+        glyph: root.glyph;
+        color: Tokens.secondary-text;
+        font-size: root.glyph-size;
+        opacity: root.has-artwork ? root.look.cover-fade : 1;
+    }
+
+    if root.has-artwork: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.artwork;
+        image-fit: cover;
+        opacity: 1 - root.look.cover-fade;
+        accessible-role: none;
+    }
+
+    if root.edge: Rectangle {
+        border-radius: root.corner;
+        border-width: 1px;
+        border-color: Tokens.text.with-alpha(0.1);
+    }
+}

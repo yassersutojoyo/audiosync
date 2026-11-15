@@ -66,6 +66,7 @@ mod setup_check;
 mod single_instance;
 mod speaker_names;
 mod title_bar;
+mod track_slide;
 // Generated from brand/tokens.json: rustfmt leaves it as the generator wrote it.
 #[cfg(test)]
 #[rustfmt::skip]

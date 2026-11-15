@@ -40,7 +40,10 @@ use crate::debug_log::DebugLog;
 use crate::guide::{self, Guide, GuideStep, SettingsPage};
 use crate::launch_at_login::{self, LaunchAtLogin};
 use crate::network_profile::{self, Watch};
-use crate::now_playing_card::{CardSource, MediaControls, NowPlayingCard, Repeat, Transport};
+use crate::now_playing_card::{
+    CardArtwork, CardSource, CardTrack, MediaControls, NowPlayingCard, Repeat, Transport,
+};
+use crate::track_slide::{self, Direction, Place, TrackSlide};
 use crate::ui_model::{
     self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
     MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
@@ -51,11 +54,11 @@ use crate::window_rules::{Rgb, ambient_breath};
 use crate::{
     AboutDialog, AirPlayProblem, AmbientLook, AmbientStrand, Availability, CalibrationRowItem,
     CastAddressDialog, CastList, CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, Fold,
-    GuidePage, GuideStepItem, GuideWindow, HiddenItem, KeyboardFocus, LeftOutItem, MainControl,
-    MainWindow, MixAppItem, Motion, NameField, NoticeItem, NoticeKind, Palette, PasswordDialog,
-    PinDialog, PinPhase, PresetItem, RowPart, RowState, SpeakerGroup, SpeakerItem, SpeakerKind,
-    Strings, Tokens, TrayFlyout, UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget,
-    speaker_names,
+    GuidePage, GuideStepItem, GuideWindow, HiddenItem, IconLook, KeyboardFocus, LeftOutItem,
+    MainControl, MainWindow, MixAppItem, Motion, NameField, NoticeItem, NoticeKind, OutgoingSong,
+    Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart, RowState, SlideLook,
+    SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrackMotion, TrayFlyout, UpdateButton,
+    ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
 };
 
 mod help_window;
@@ -435,6 +438,9 @@ impl NoticeAnnouncer {
 
 /// How often the backend is polled for what happened on its own.
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// A frame of the Now Playing cards' slide.
+const SLIDE_FRAME: Duration = Duration::from_millis(16);
 
 /// How often a running calibration is moved on: the signal waits for the
 /// microphone's first frames, and each run ends once its recording is in.
@@ -848,6 +854,10 @@ pub struct App {
     poll_timer: Timer,
     /// Shows the next song once the Now Playing card's cover hold runs out.
     art_hold_timer: Timer,
+    window_slide: RefCell<TrackSlide>,
+    panel_slide: RefCell<TrackSlide>,
+    /// Draws the Now Playing cards' slide frames while one moves.
+    slide_timer: Timer,
     /// Moves a microphone calibration on while one holds the outputs.
     calibration_timer: Timer,
     /// Moves the input level meter while an input device is captured.
@@ -903,6 +913,46 @@ fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
+}
+
+fn card_image(artwork: &CardArtwork) -> slint::Image {
+    let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+        &artwork.rgba,
+        artwork.side,
+        artwork.side,
+    );
+    slint::Image::from_rgba8_premultiplied(pixels)
+}
+
+fn outgoing_song(track: Option<&CardTrack>) -> OutgoingSong {
+    let Some(track) = track else {
+        return OutgoingSong::default();
+    };
+    OutgoingSong {
+        title: track.title.as_str().into(),
+        subtitle: track.subtitle().as_str().into(),
+        has_artwork: track.artwork.is_some(),
+        artwork: track.artwork.as_ref().map(card_image).unwrap_or_default(),
+    }
+}
+
+fn slide_look(look: track_slide::Look) -> SlideLook {
+    SlideLook {
+        sliding: look.sliding,
+        fades: look.fades,
+        side: look.side as f32,
+        slid: look.slid as f32,
+        old_shrink: look.old_shrink as f32,
+        old_dim: look.old_dim as f32,
+        old_fade: look.old_fade as f32,
+        cover_fade: look.cover_fade as f32,
+        old_text_offset: look.old_text_offset as f32,
+        old_text_fade: look.old_text_fade as f32,
+        title_offset: look.title_offset as f32,
+        title_fade: look.title_fade as f32,
+        subtitle_offset: look.subtitle_offset as f32,
+        subtitle_fade: look.subtitle_fade as f32,
+    }
 }
 
 /// Gives a window's fold panes the fold the Mac's panes run.
@@ -1211,6 +1261,9 @@ impl App {
             repeat_timer: Timer::default(),
             poll_timer: Timer::default(),
             art_hold_timer: Timer::default(),
+            window_slide: RefCell::new(TrackSlide::new(Place::Window)),
+            panel_slide: RefCell::new(TrackSlide::new(Place::Panel)),
+            slide_timer: Timer::default(),
             calibration_timer: Timer::default(),
             meter_timer: Timer::default(),
             meter_level: Cell::new(0.0),
@@ -1242,6 +1295,15 @@ impl App {
         app.attach_models();
         follow_fold_rule(&app.main.global::<Fold>());
         follow_fold_rule(&app.flyout.global::<Fold>());
+        app.main.global::<TrackMotion>().on_icon(|elapsed| {
+            let look = track_slide::icon_morph(elapsed.into());
+            IconLook {
+                shows_old: look.shows_old,
+                scale: look.scale as f32,
+                opacity: look.opacity as f32,
+                moving: look.moving,
+            }
+        });
         app.connect_main();
         app.connect_flyout();
         app.connect_equalizer();
@@ -1270,6 +1332,7 @@ impl App {
                     app.poll_updater();
                     app.follow_input_level(&weak);
                     app.follow_ambient(&weak);
+                    app.follow_slides(&weak);
                 })
             });
         let weak = Rc::downgrade(&app);
@@ -1626,6 +1689,7 @@ impl App {
             || self.flyout.window().is_visible()
             || self.remote_listening();
         let source = self.now_playing_source.borrow().clone();
+        let old = self.now_playing.borrow().track().cloned();
         let changed = self.now_playing.borrow_mut().sync(source, shows);
         if let Some(left) = self.now_playing.borrow().art_hold_left() {
             let main = self.main.as_weak();
@@ -1648,6 +1712,7 @@ impl App {
             }
             self.main.set_now_playing_shown(false);
             self.flyout.set_now_playing_shown(false);
+            self.slide_change(old.as_ref(), None);
             self.log
                 .log(|| "now playing card: the window hides the card".to_owned());
             return true;
@@ -1664,6 +1729,7 @@ impl App {
         self.main
             .global::<Motion>()
             .set_on(crate::platform::animation_effects());
+        self.slide_change(old.as_ref(), Some(track));
         self.main
             .set_now_playing_subtitle(track.subtitle().as_str().into());
         self.main.set_now_playing_playing(track.playing);
@@ -1680,14 +1746,7 @@ impl App {
                 ambient::cover_bands(&artwork.rgba, artwork.side)
             }));
         self.ambient_still_drawn.set(false);
-        let artwork = track.artwork.as_ref().map(|artwork| {
-            let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &artwork.rgba,
-                artwork.side,
-                artwork.side,
-            );
-            slint::Image::from_rgba8_premultiplied(pixels)
-        });
+        let artwork = track.artwork.as_ref().map(card_image);
         self.flyout
             .set_now_playing_title(track.title.as_str().into());
         self.flyout
@@ -1700,6 +1759,64 @@ impl App {
         self.main.set_now_playing_shown(true);
         self.flyout.set_now_playing_shown(true);
         true
+    }
+
+    /// Starts or ends the Now Playing cards' slide for a change of song; a
+    /// card that is hidden, or with the system's animations off, swaps at once.
+    fn slide_change(&self, old: Option<&CardTrack>, new: Option<&CardTrack>) {
+        let now = std::time::Instant::now();
+        let (window_shows, panel_shows, still) = self.slides_shown();
+        if self
+            .window_slide
+            .borrow_mut()
+            .change(old, new, window_shows, still, now)
+        {
+            self.main.set_now_playing_outgoing(outgoing_song(old));
+        }
+        if self
+            .panel_slide
+            .borrow_mut()
+            .change(old, new, panel_shows, still, now)
+        {
+            self.flyout.set_now_playing_outgoing(outgoing_song(old));
+        }
+    }
+
+    /// Whether the main window's card and the tray panel's are on screen,
+    /// and whether the system's animations are off.
+    fn slides_shown(&self) -> (bool, bool, bool) {
+        let window = self.main.window();
+        (
+            window.is_visible() && !window.is_minimized(),
+            self.flyout.window().is_visible(),
+            !self.main.global::<Motion>().get_on(),
+        )
+    }
+
+    /// Shows the slides' frame now; returns whether one still moves.
+    fn draw_slides(&self) -> bool {
+        let now = std::time::Instant::now();
+        let (window, window_moving) = self.window_slide.borrow_mut().look(now);
+        let (panel, panel_moving) = self.panel_slide.borrow_mut().look(now);
+        self.main.set_now_playing_slide(slide_look(window));
+        self.flyout.set_now_playing_slide(slide_look(panel));
+        window_moving || panel_moving
+    }
+
+    /// Draws the slides' frames while one moves.
+    fn follow_slides(&self, weak: &Weak<App>) {
+        if self.slide_timer.running() || !self.draw_slides() {
+            return;
+        }
+        let weak = weak.clone();
+        self.slide_timer
+            .start(TimerMode::Repeated, SLIDE_FRAME, move || {
+                with_app(&weak, |app| {
+                    if !app.draw_slides() {
+                        app.slide_timer.stop();
+                    }
+                })
+            });
     }
 
     /// The master volume's speaker: mutes to 0, or brings back the last
@@ -1738,8 +1855,29 @@ impl App {
             .borrow()
             .track()
             .map(|track| (track.app_id.clone(), track.playing));
+        let has_track = shown.is_some();
         if let (Transport::PlayPause, Some((app, playing))) = (command, shown) {
             self.backend.borrow_mut().play_pause_pressed(&app, playing);
+        }
+        let direction = match command {
+            Transport::Next => Some(Direction::Next),
+            Transport::Previous => Some(Direction::Previous),
+            _ => None,
+        };
+        if has_track
+            && matches!(
+                command,
+                Transport::Next | Transport::Previous | Transport::PlayPause
+            )
+        {
+            let now = std::time::Instant::now();
+            let (window_shows, panel_shows, still) = self.slides_shown();
+            self.window_slide
+                .borrow_mut()
+                .press(direction, window_shows, still, now);
+            self.panel_slide
+                .borrow_mut()
+                .press(direction, panel_shows, still, now);
         }
         self.now_playing.borrow_mut().send(command);
     }
@@ -2975,13 +3113,19 @@ impl App {
         let w = weak.clone();
         main.on_equalizer_requested(move || with_app(&w, App::show_equalizer));
         let w = weak.clone();
-        main.on_now_playing_transport(move |button| with_app(&w, |app| app.send_transport(button)));
+        main.on_now_playing_transport(move |button| {
+            with_app(&w, |app| {
+                app.send_transport(button);
+                app.follow_slides(&w);
+            })
+        });
         let w = weak.clone();
         main.on_now_playing_read(move || {
             with_app(&w, |app| {
                 if app.sync_now_playing() {
                     app.publish_remote(&app.snapshot());
                 }
+                app.follow_slides(&w);
             })
         });
         let w = weak.clone();

@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::track_slide::PRESS_WINDOW;
 use crate::ui_model::AppState;
 
 /// Which sessions count for the card, from the chosen source.
@@ -276,7 +277,7 @@ fn waits_for_cover(shown: &CardTrack, next: &CardTrack) -> bool {
         && (shown.title != next.title || shown.artist != next.artist)
 }
 
-fn same_song(a: &CardTrack, b: &CardTrack) -> bool {
+pub fn same_song(a: &CardTrack, b: &CardTrack) -> bool {
     a.app_id == b.app_id && a.title == b.title && a.artist == b.artist
 }
 
@@ -289,6 +290,8 @@ pub struct NowPlayingCard {
     track: Option<CardTrack>,
     /// The next song kept back while its cover loads, and since when.
     held: Option<(CardTrack, Instant)>,
+    /// The latest Next or Previous press, which a cover hold counts from.
+    skipped_at: Option<Instant>,
 }
 
 impl NowPlayingCard {
@@ -329,6 +332,10 @@ impl NowPlayingCard {
             let since = held
                 .filter(|(kept, _)| same_song(kept, song))
                 .map_or(now, |(_, since)| since);
+            let since = self
+                .skipped_at
+                .filter(|at| now.saturating_duration_since(*at) <= PRESS_WINDOW)
+                .map_or(since, |at| since.min(at));
             if now.duration_since(since) < ART_HOLD {
                 self.held = Some((song.clone(), since));
                 return false;
@@ -356,8 +363,15 @@ impl NowPlayingCard {
     /// One of the card's buttons was used. Nothing happens while the card
     /// is hidden.
     pub fn send(&mut self, command: Transport) {
+        self.send_at(command, Instant::now());
+    }
+
+    fn send_at(&mut self, command: Transport, now: Instant) {
         if self.track.is_none() {
             return;
+        }
+        if matches!(command, Transport::Next | Transport::Previous) {
+            self.skipped_at = Some(now);
         }
         if let Some(controls) = self.controls.as_mut() {
             controls.send(command);
@@ -593,6 +607,37 @@ mod tests {
         assert_eq!((shown.title.as_str(), shown.playing), ("Two", false));
         assert!(shown.artwork.is_none());
         assert_eq!(card.art_hold_left(), None);
+    }
+
+    /// A Next or Previous press starts the wait, so the next song shows
+    /// 1.5 s after the press at most, with or without its cover.
+    // covers: S463
+    #[test]
+    fn a_cover_hold_ends_1_5_s_after_a_next_press() {
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let source = || Some(CardSource::AnyApp);
+        let start = Instant::now();
+        fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
+        assert!(card.sync_at(source(), true, start));
+        card.send_at(Transport::Next, start);
+        let later = start + Duration::from_secs(1);
+        fake.read(Some(track("Spotify.exe", "Two", "Band", true)));
+        assert!(!card.sync_at(source(), true, later));
+        assert!(!card.sync_at(source(), true, start + ART_HOLD - Duration::from_millis(1)));
+        assert!(card.sync_at(source(), true, start + ART_HOLD));
+        assert_eq!(card.track().map(|t| t.title.as_str()), Some("Two"));
+
+        card.send_at(Transport::PlayPause, start + Duration::from_secs(4));
+        fake.read(Some(with_cover(track("Spotify.exe", "Two", "Band", true))));
+        assert!(card.sync_at(source(), true, start + Duration::from_secs(4)));
+        fake.read(Some(track("Spotify.exe", "Three", "Band", true)));
+        let held = start + Duration::from_secs(5);
+        assert!(
+            !card.sync_at(source(), true, held),
+            "Play/Pause starts no wait"
+        );
+        assert!(!card.sync_at(source(), true, held + Duration::from_millis(1400)));
     }
 
     #[test]
