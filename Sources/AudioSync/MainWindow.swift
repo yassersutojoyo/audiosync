@@ -1352,6 +1352,7 @@ struct IncomingCover<Art: View>: View {
                         slide.direction, slid: slid, coverMinX: Double(rect.minX), coverWidth: Double(rect.width),
                         surfaceWidth: Double(proxy.size.width))
                     art(track)
+                        .animation(.easeInOut(duration: TrackSlide.coverFade), value: track.artwork != nil)
                         .frame(width: rect.width, height: rect.height)
                         .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                         .opacity(slide.fades ? slid : 1)
@@ -1433,15 +1434,16 @@ final class TrackSlideState: ObservableObject {
 
     /// Play/Pause only lets a waiting cover ease back.
     func press(_ press: TrackSlide.Press, onScreen: Bool) {
-        pressed = press
         guard press.direction != nil else {
             if waitStart != nil { settle() }
             return
         }
+        pressed = press
         guard onScreen, outgoing == nil, waitStart == nil else { return }
         settleStart = nil
         waitStart = press.at
-        DispatchQueue.main.asyncAfter(deadline: .now() + TrackSlide.pressWindow) { [weak self] in
+        // A later change still matches the press within `pressWindow`; the cover stops waiting sooner.
+        DispatchQueue.main.asyncAfter(deadline: .now() + TrackSlide.cap) { [weak self] in
             guard let self, self.waitStart == press.at else { return }
             self.settle()
         }
