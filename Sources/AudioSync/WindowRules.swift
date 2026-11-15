@@ -22,6 +22,24 @@ enum WindowPlacement {
     }
 }
 
+/// A window's open motion: its content fades in while it drops `drop` and grows from `scale`,
+/// anchored at its top; under Reduce Motion, a `fadeSeconds` fade alone.
+enum WindowOpen {
+    static let drop: CGFloat = 8
+    static let scale: CGFloat = 0.97
+    static let seconds: TimeInterval = 0.56
+    static let fadeSeconds: TimeInterval = 0.15
+
+    /// The layer transform the motion starts from. A layer transforms about its `position`, so the
+    /// scale is shifted to hold the top centre of `frame` still; `flipped` when y runs down.
+    static func start(frame: CGRect, position: CGPoint, flipped: Bool) -> CGAffineTransform {
+        let top = CGPoint(x: frame.midX, y: flipped ? frame.minY : frame.maxY)
+        return CGAffineTransform(a: scale, b: 0, c: 0, d: scale,
+                                 tx: (1 - scale) * (top.x - position.x),
+                                 ty: (1 - scale) * (top.y - position.y) + (flipped ? drop : -drop))
+    }
+}
+
 /// How the main window's width splits between its two columns. The speaker
 /// list widens first, to its full width, then the left column, from
 /// `narrow` up to `wide`; past that the speaker list again.

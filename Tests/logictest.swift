@@ -18697,6 +18697,36 @@ do {
     check(showSection.contains("if opening {\n            fit(")
             && showSection.components(separatedBy: "fit(").last?.contains("animateOpen(panel)") == true,
           "Settings: every open measures the content again before the open motion, so a reopen fits too")
+    let windowSources = ((try? FileManager.default.contentsOfDirectory(atPath: "Sources/AudioSync")) ?? [])
+        .filter { $0.hasSuffix(".swift") }.map(source)
+    let openSection = section(settings, from: "private func animateOpen(", to: "private func fit(")
+    let openRules = section(source("WindowRules.swift"), from: "enum WindowOpen {", to: "\n}\n")
+    check(!windowSources.isEmpty && !windowSources.contains { $0.contains("motion.atRest") || $0.contains("OpenMotion") }
+            && !settings.contains(".scaleEffect(") && !settings.contains(".offset(y:")
+            && !openSection.contains("alphaValue")
+            && openSection.contains("CAAnimationGroup()") && openSection.contains("layer.add("),
+          "windows: the open motion moves the content view's layer as one picture on the render server, never a SwiftUI scale or offset over controls, and fades that layer on the same clock, not the window's alpha")
+    check(openRules.contains("static let drop: CGFloat = 8") && openRules.contains("static let scale: CGFloat = 0.97")
+            && openRules.contains("static let seconds: TimeInterval = 0.56")
+            && openRules.contains("static let fadeSeconds: TimeInterval = 0.15")
+            && openSection.contains("CASpringAnimation(perceptualDuration: WindowOpen.seconds, bounce: 0)")
+            && openSection.contains("WindowOpen.fadeSeconds"),
+          "windows: the layer motion keeps the look, 8 pt drop and 0.97 grow over 0.56 s on a critically damped spring, and a 0.15 s fade under Reduce Motion")
+    let openFrame = CGRect(x: 10, y: 20, width: 460, height: 300)
+    // A layer maps a point p to position + M (p - position).
+    func opened(_ p: CGPoint, position: CGPoint, flipped: Bool) -> CGPoint {
+        let moved = CGPoint(x: p.x - position.x, y: p.y - position.y)
+            .applying(WindowOpen.start(frame: openFrame, position: position, flipped: flipped))
+        return CGPoint(x: moved.x + position.x, y: moved.y + position.y)
+    }
+    let upTop = opened(CGPoint(x: 240, y: 320), position: CGPoint(x: 10, y: 20), flipped: false)
+    let downTop = opened(CGPoint(x: 240, y: 20), position: CGPoint(x: 240, y: 170), flipped: true)
+    check(abs(upTop.x - 240) < 1e-9 && abs(upTop.y - 312) < 1e-9 && abs(downTop.x - 240) < 1e-9 && abs(downTop.y - 28) < 1e-9,
+          "windows: the open motion starts with the content's top centre 8 pt lower and in place sideways, wherever the layer's anchor sits and whichever way y runs",
+          "\(upTop) \(downTop)")
+    check(section(settings, from: "NSWindow.didBecomeKeyNotification", to: "NSApplication.didBecomeActiveNotification")
+            .contains("asyncAfter(deadline: .now() + WindowOpen.seconds)"),
+          "Settings: the re-read on open lands after the open motion, so it costs the first frames nothing")
 }
 
 // MARK: The playing badge's fill grows where the badge is, even as its row grows (MenuBar.swift)
