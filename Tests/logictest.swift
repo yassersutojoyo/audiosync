@@ -2300,6 +2300,19 @@ do {
                                     info: ["Name": "Two", "Player State": "Paused"], at: 0) == nil
             && stalePlaying.noticed(nil, player: "com.spotify.client", info: ["Name": "One", "Player State": "Paused"], at: 0) == nil,
           "notice state: a notice in the state shown, from another player, without a state, naming another track or with no track changes nothing")
+    // 15 Nov on the Mac: Music's first notice after an in-app Play still said Paused, 50-270 ms after the press.
+    var pressed = NowPlayingMonitor.PendingPlayPause()
+    let promised = pressed.landed(pausedSong, target: "com.spotify.client", at: 0)
+    check(promised?.isPlaying == true
+            && pressed.noticed(promised, player: "com.spotify.client", info: ["Name": "One", "Player State": "Paused"], at: 0.2) == nil
+            && pressed.noticed(promised, player: "com.spotify.client", info: ["Name": "One", "Player State": "Playing"], at: 0.3) == nil
+            && pressed.reconcile(pausedSong, readAt: 0.4)?.isPlaying == true,
+          "play-pause promise: a change notice still naming the old state inside the settle time changes nothing, so the icon morphs once")
+    var later = NowPlayingMonitor.PendingPlayPause()
+    let laterShown = later.landed(pausedSong, target: "com.spotify.client", at: 0)
+    check(later.noticed(laterShown, player: "com.spotify.client", info: ["Name": "One", "Player State": "Paused"], at: 1.6)?
+            .isPlaying == false,
+          "play-pause promise: a notice naming the old state after the settle time is a real change and shows")
 }
 // covers: S15 (the decision by permission status; the notice is the call site's)
 check(MicrophoneStart.decide(.authorized) == .start && MicrophoneStart.decide(.notDetermined) == .ask

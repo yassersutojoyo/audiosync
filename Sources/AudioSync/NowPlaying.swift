@@ -244,6 +244,8 @@ final class NowPlayingMonitor {
                               at uptime: TimeInterval) -> Track? {
             guard let shown, shown.bundleID == player, info?["Name"] as? String == shown.title,
                   let state = info?["Player State"] as? String, (state == "Playing") != shown.isPlaying else { return nil }
+            // Music's first notice after a play-pause can still name the old state; within the settle time it is stale.
+            if bundleID == player, uptime < until, (state == "Playing") != playing { return nil }
             bundleID = player
             playing = !shown.isPlaying
             until = uptime
