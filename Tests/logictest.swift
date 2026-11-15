@@ -19189,6 +19189,21 @@ do {
     warmedArt.ask(title: "After", album: "B")
     check(!warmedArt.accepts(read: ("After", "B"), print: 5, at: 0),
           "art read: a cover read ahead counts as the previous song's cover too")
+    var fastArt = ArtRead()
+    fastArt.ask(title: "A", album: "One")
+    _ = fastArt.accepts(read: ("A", "One"), print: 11, at: 0)
+    fastArt.ask(title: "B", album: "Two")
+    _ = fastArt.accepts(read: ("B", "Two"), print: 12, at: 0.3)
+    fastArt.ask(title: "C", album: "Three")
+    check(!fastArt.accepts(read: ("C", "Three"), print: 12, at: 0.5)
+            && !fastArt.accepts(read: ("C", "Three"), print: 11, at: 0.6),
+          "art read: after quick Nexts, the cover of any of the last songs is held, not only the one just before")
+    var blankArt = ArtRead()
+    blankArt.ask(title: "Live", album: "")
+    _ = blankArt.accepts(read: ("Live", ""), print: 21, at: 0)
+    blankArt.ask(title: "Demo", album: "")
+    check(!blankArt.accepts(read: ("Demo", ""), print: 21, at: 0.2),
+          "art read: two songs with no album are not taken as one album, so the old cover is held")
 }
 
 // MARK: Next eases the old song out while the next one's cover loads (TrackWipe in WindowRules.swift, MainWindow.swift)
