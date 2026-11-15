@@ -63,6 +63,8 @@ use crate::{
 
 mod help_window;
 #[cfg(test)]
+mod parity_calibrate;
+#[cfg(test)]
 mod parity_rest;
 #[cfg(test)]
 mod parity_screens;

@@ -1760,6 +1760,7 @@ export component LevelSlider inherits Rectangle {
     // on a 3 px track in a 16 px slot.
     in property <bool> small;
     out property <bool> has-focus: focus.has-focus;
+    out property <bool> held: touch.pressed;
     callback changed(float);
     callback released(float);
     property <bool> vertical: root.orientation == Orientation.vertical;
@@ -2050,7 +2051,7 @@ export component VolumeSlider inherits HorizontalLayout {
 
     if root.shows-value: QuietText {
         text: Strings.volume-value(slider.value);
-        color: root.is-editing ? Tokens.text : Tokens.secondary-text;
+        color: root.is-editing || slider.held ? Tokens.text : Tokens.secondary-text;
         width: 26px;
         horizontal-alignment: right;
         // One line, centered on the track: a wrapped label is taller than
