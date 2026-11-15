@@ -18513,6 +18513,11 @@ do {
 }
 
 do {
+    check(UIStrings().presetOptions(name: "Evening") == "Options for Evening",
+          "presets: a preset's options button names the preset, as a speaker's does")
+}
+
+do {
     let words = UIStrings()
     // covers: S153
     check(words.noSpeakerNoticeName == "no speaker on"

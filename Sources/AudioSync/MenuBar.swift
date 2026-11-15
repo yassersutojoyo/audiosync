@@ -2775,7 +2775,7 @@ struct NoticeBanner<Footer: View>: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .accessibilityLabel(notice.dismissLabel(text))
-            .help(text.dismissNotice)
+            .help(notice.dismissLabel(text))
         }
         // The panel's notice is text on the panel, without a box.
         .padding(card ? 10 : 0)
