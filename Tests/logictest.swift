@@ -19343,6 +19343,59 @@ do {
           "Dock icon: Hide Dock Icon When Window Closes is off unless turned on")
 }
 
+// MARK: Playback after the Mac wakes (WakeResume in NowPlaying.swift)
+do {
+    // covers: S465
+    func wrTrack(_ bundleID: String = "com.apple.Music", title: String = "Song",
+                 playing: Bool) -> NowPlayingMonitor.Track {
+        NowPlayingMonitor.Track(bundleID: bundleID, appName: "Player", title: title, artist: "Band", album: "Record",
+                                isPlaying: playing, artwork: nil)
+    }
+    let wrNoted = WakeResume.Noted(bundleID: "com.apple.Music", title: "Song", artist: "Band", album: "Record")
+    check(WakeResume.noted(enabled: true, streaming: true, reading: wrTrack(playing: true)) == wrNoted
+            && WakeResume.noted(enabled: true, streaming: true, reading: wrTrack("com.spotify.client", playing: true))?
+                .bundleID == "com.spotify.client",
+          "wake resume: with the switch on, the sleep notes the player playing while streaming")
+    check(WakeResume.noted(enabled: false, streaming: true, reading: wrTrack(playing: true)) == nil
+            && WakeResume.noted(enabled: true, streaming: false, reading: wrTrack(playing: true)) == nil
+            && WakeResume.noted(enabled: true, streaming: true, reading: wrTrack(playing: false)) == nil
+            && WakeResume.noted(enabled: true, streaming: true, reading: nil) == nil
+            && WakeResume.noted(enabled: true, streaming: true, reading: wrTrack("com.example.player", playing: true)) == nil,
+          "wake resume: nothing is noted with the switch off, streaming off, the player paused, no reading or another app")
+    func wrDecide(enabled: Bool = true, noted: WakeResume.Noted?, streaming: Bool = true, acted: Bool = false,
+                  runs: Bool = true, back: Bool = true, after: NowPlayingMonitor.Track?,
+                  waited: TimeInterval = 3) -> WakeResume.Verdict {
+        WakeResume.decide(enabled: enabled, noted: noted, streaming: streaming, userActed: acted, playerRuns: runs,
+                          outputsBack: back, after: after, waited: waited)
+    }
+    func wrSkips(_ verdict: WakeResume.Verdict) -> Bool {
+        if case .skip = verdict { return true }
+        return false
+    }
+    let wrPaused = wrTrack(playing: false)
+    check(wrDecide(noted: wrNoted, after: wrPaused) == .resume,
+          "wake resume: the same player paused on the same song once the outputs are back gets play")
+    check(wrSkips(wrDecide(enabled: false, noted: wrNoted, after: wrPaused))
+            && wrSkips(wrDecide(noted: nil, after: wrPaused))
+            && wrSkips(wrDecide(noted: wrNoted, acted: true, back: false, after: nil))
+            && wrSkips(wrDecide(noted: wrNoted, streaming: false, after: wrPaused))
+            && wrSkips(wrDecide(noted: wrNoted, runs: false, after: nil)),
+          "wake resume: no play with the switch off, nothing noted, a user press, streaming off or the player quit")
+    check(wrSkips(wrDecide(noted: wrNoted, after: wrTrack("com.spotify.client", playing: false)))
+            && wrSkips(wrDecide(noted: wrNoted, after: wrTrack(title: "Other", playing: false)))
+            && wrSkips(wrDecide(noted: wrNoted, after: wrTrack(playing: true))),
+          "wake resume: no play when another player or another song is read, or the player already plays")
+    check(wrDecide(noted: wrNoted, back: false, after: nil) == .wait
+            && wrDecide(noted: wrNoted, after: nil) == .wait
+            && wrSkips(wrDecide(noted: wrNoted, back: false, after: nil, waited: WakeResume.giveUpAfter))
+            && wrSkips(wrDecide(noted: wrNoted, after: nil, waited: WakeResume.giveUpAfter))
+            && wrDecide(noted: wrNoted, after: wrPaused, waited: WakeResume.giveUpAfter - 0.1) == .resume,
+          "wake resume: it waits for the outputs and a reading, and gives up at the bound")
+    check(!AppSettings.load { _ in nil }.resumesAfterSleep
+            && AppSettings.load { key -> Any? in key == AppSettings.Keys.resumesAfterSleep ? true : nil }.resumesAfterSleep,
+          "wake resume: Resume Playback After Sleep is off unless turned on")
+}
+
 // MARK: A local output's macOS volume is remembered while it plays and put back after (LocalVolumeMemory.swift)
 do {
     var lvm = LocalVolumeMemory()
