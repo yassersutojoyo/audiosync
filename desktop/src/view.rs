@@ -56,9 +56,9 @@ use crate::{
     CastAddressDialog, CastList, CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, Fold,
     GuidePage, GuideStepItem, GuideWindow, HiddenItem, IconLook, KeyboardFocus, LeftOutItem,
     MainControl, MainWindow, MixAppItem, Motion, NameField, NoticeItem, NoticeKind, OutgoingSong,
-    Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart, RowState, SlideLook,
-    SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrackMotion, TrayFlyout, UpdateButton,
-    ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
+    Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart, RowState, ScreenReader,
+    SlideLook, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrackMotion, TrayFlyout,
+    UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
 };
 
 mod help_window;
@@ -2177,6 +2177,9 @@ impl App {
                     if kind == Titled::Main {
                         keep_main_min_size(window(app));
                         crate::frameless::attach_native(&app.main);
+                        app.main
+                            .global::<ScreenReader>()
+                            .set_on(crate::platform::screen_reader_on());
                     }
                     if kind == Titled::Dialog {
                         window(app).with_winit_window(|window| {
@@ -3387,7 +3390,15 @@ impl App {
         let w = weak.clone();
         main.on_presets_open_changed({
             let w = w.clone();
-            move || with_app(&w, |app| app.remember_view())
+            move || {
+                with_app(&w, |app| {
+                    // Narrator started while the window had focus is seen here, before the rows show.
+                    app.main
+                        .global::<ScreenReader>()
+                        .set_on(crate::platform::screen_reader_on());
+                    app.remember_view();
+                })
+            }
         });
         main.on_show_virtual_devices_toggled(move |on| {
             with_app(&w, |app| app.show_virtual_devices(on))
