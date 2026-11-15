@@ -11,7 +11,7 @@ import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IconLook, IncomingCover, OutgoingSong, SlideLook, SlidLine, TrackMotion } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, TextField, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, TextField, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -483,62 +483,116 @@ component SpeakerSection inherits VerticalLayout {
         // Rows right after the list, as on the Mac: Connected Speakers' AirPlay delay.
         @children
 
+        // As on the Mac, the label's rule is the line above these rows, and
+        // its left end turns down into the first zone's bar.
         if root.zoned.length > 0: VerticalLayout {
-            if root.speakers.length > 0: Divider { }
+            Rectangle {
+                height: in-zones-label.preferred-height;
 
-            HorizontalLayout {
-                padding-left: Fluent.name-inset;
-                padding-top: 6px;
-                padding-bottom: 2px;
-                SecondaryText {
-                    text: Strings.in-zones.to-uppercase();
-                    accessible-label: Strings.in-zones;
-                    font-size: Tokens.font-size-subheadline;
-                    font-weight: 500;
+                in-zones-label := HorizontalLayout {
+                    padding-left: Fluent.name-inset;
+                    padding-right: Fluent.row-padding-x;
+                    padding-top: 9px;
+                    padding-bottom: 5px;
+                    spacing: 8px;
+
+                    in-zones-text := SecondaryText {
+                        text: Strings.in-zones.to-uppercase();
+                        accessible-label: Strings.in-zones;
+                        font-size: Tokens.font-size-subheadline;
+                        font-weight: 500;
+                        horizontal-stretch: 0;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        Divider { }
+                    }
+                }
+
+                // The join, clipped to a corner of a box whose top edge is
+                // the rule and whose left edge is the bar.
+                Rectangle {
+                    property <length> rule-y: 9px + (in-zones-text.preferred-height - 1px) / 2;
+                    x: 0;
+                    y: self.rule-y;
+                    width: Fluent.name-inset - 8px;
+                    height: parent.height - self.rule-y;
+                    clip: true;
+
+                    Rectangle {
+                        x: 0;
+                        y: 0;
+                        width: parent.width + 12px;
+                        height: parent.height + 12px;
+                        border-width: 1px;
+                        border-color: Tokens.separator;
+                        border-top-left-radius: 6px;
+                    }
                 }
             }
 
-            for speaker in root.zoned: ZoneMemberRow {
-                item: speaker;
-                init => {
-                    if speaker.id == root.in-zones-focus-id {
-                        root.in-zones-focus-id = "";
-                        self.take-focus(root.in-zones-focus-part);
+            for speaker[index] in root.zoned: VerticalLayout {
+                // A new zone's rows start 4 px under the last zone's; within a
+                // zone a hairline from the names splits them, the bar going on.
+                if index > 0 && root.zoned[index - 1].zone-id != speaker.zone-id: Rectangle {
+                    height: 4px;
+                }
+                if index > 0 && root.zoned[index - 1].zone-id == speaker.zone-id: HorizontalLayout {
+                    Rectangle {
+                        width: 1px;
+                        background: Tokens.separator;
                     }
-                }
-                property <bool> focus-asked: speaker.id == root.in-zones-focus-id;
-                changed focus-asked => {
-                    if self.focus-asked {
-                        root.in-zones-focus-id = "";
-                        self.take-focus(root.in-zones-focus-part);
+
+                    Rectangle {
+                        width: Fluent.name-inset - 1px;
                     }
+
+                    Divider { }
                 }
-                toggled => {
-                    root.toggled(speaker.id);
-                }
-                rename-requested => {
-                    root.in-zones-rename-requested(speaker.id);
-                }
-                rename-edited(text) => {
-                    root.rename-edited(speaker.id, text);
-                }
-                rename-committed => {
-                    root.rename-committed(speaker.id);
-                }
-                rename-cancelled => {
-                    root.rename-cancelled(speaker.id);
-                }
-                blank-clicked => {
-                    root.blank-clicked();
-                }
-                focus-changed(part) => {
-                    root.in-zones-focus-changed(speaker.id, part);
-                }
-                go-to-zone => {
-                    root.go-to-zone(speaker.zone-id);
-                }
-                remove-from-zone => {
-                    root.remove-from-zone(speaker.id);
+
+                ZoneMemberRow {
+                    item: speaker;
+                    init => {
+                        if speaker.id == root.in-zones-focus-id {
+                            root.in-zones-focus-id = "";
+                            self.take-focus(root.in-zones-focus-part);
+                        }
+                    }
+                    property <bool> focus-asked: speaker.id == root.in-zones-focus-id;
+                    changed focus-asked => {
+                        if self.focus-asked {
+                            root.in-zones-focus-id = "";
+                            self.take-focus(root.in-zones-focus-part);
+                        }
+                    }
+                    toggled => {
+                        root.toggled(speaker.id);
+                    }
+                    rename-requested => {
+                        root.in-zones-rename-requested(speaker.id);
+                    }
+                    rename-edited(text) => {
+                        root.rename-edited(speaker.id, text);
+                    }
+                    rename-committed => {
+                        root.rename-committed(speaker.id);
+                    }
+                    rename-cancelled => {
+                        root.rename-cancelled(speaker.id);
+                    }
+                    blank-clicked => {
+                        root.blank-clicked();
+                    }
+                    focus-changed(part) => {
+                        root.in-zones-focus-changed(speaker.id, part);
+                    }
+                    go-to-zone => {
+                        root.go-to-zone(speaker.zone-id);
+                    }
+                    remove-from-zone => {
+                        root.remove-from-zone(speaker.id);
+                    }
                 }
             }
         }
@@ -559,25 +613,22 @@ component SpeakerSection inherits VerticalLayout {
                     }
                 }
 
-                HorizontalLayout {
+                VerticalLayout {
                     padding: 10px;
+                    spacing: 8px;
                     SecondaryText {
                         text: root.note;
                         font-size: Tokens.font-size-callout;
                     }
-                }
-            }
 
-            if root.show-network-settings: HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                padding-bottom: 12px;
-                alignment: start;
-                LinkButton {
-                    text: Strings.open-network-settings;
-                    label: Strings.open-network-settings;
-                    clicked => {
-                        root.network-settings();
+                    if root.show-network-settings: HorizontalLayout {
+                        alignment: start;
+                        SmallButton {
+                            text: Strings.open-network-settings;
+                            clicked => {
+                                root.network-settings();
+                            }
+                        }
                     }
                 }
             }
@@ -586,12 +637,15 @@ component SpeakerSection inherits VerticalLayout {
         if root.show-add-address: VerticalLayout {
             if root.speakers.length > 0 || root.zoned.length > 0 || root.note != "": Divider { }
 
+            // On the speaker rows' badge column, as on the Mac.
             HorizontalLayout {
-                padding: 10px;
+                padding-left: Fluent.row-padding-x;
+                padding-top: 6px;
+                padding-bottom: 6px;
                 alignment: start;
-                LinkButton {
+                SmallButton {
                     text: Strings.cast-add-address;
-                    label: Strings.cast-add-address;
+                    tip: Strings.cast-add-address-message;
                     clicked => {
                         root.add-address();
                     }
@@ -2620,6 +2674,8 @@ export component MainWindow inherits Window {
                         }
 
                         MasterVolume {
+                            // Past the last digit's bearing, as on the Mac.
+                            padding-right: 1px;
                             volume: root.master-volume;
                             waves: root.master-volume-waves;
                             mute-toggled => {

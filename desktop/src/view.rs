@@ -63,6 +63,8 @@ use crate::{
 
 mod help_window;
 #[cfg(test)]
+mod parity_rest;
+#[cfg(test)]
 mod parity_screens;
 mod remote_window;
 mod setup_window;
@@ -1014,7 +1016,7 @@ fn close_main_notices(weak: &Weak<App>, ids: Option<u64>) {
     app.refresh();
     // The fade's length in widgets.slint's NoticeStack.
     let fade = if app.main.global::<Motion>().get_on() {
-        300
+        320
     } else {
         150
     };
@@ -6451,6 +6453,11 @@ pub fn notice_item(strings: &Strings<'_>, notice: &ui_model::Notice) -> NoticeIt
         id: i32::try_from(notice.id).unwrap_or(i32::MAX),
         message: notice_text(strings, &notice.message),
         title: notice_title(strings, &notice.message),
+        heading: if matches!(notice.message, NoticeMessage::AirPlayRetrying { .. }) {
+            notice_title(strings, &notice.message)
+        } else {
+            SharedString::new()
+        },
         time: notice.time.as_str().into(),
         has_guide: guide::guide(&notice.message).is_some(),
         has_retry: notice.message == NoticeMessage::AirPlayStopped,
@@ -11225,7 +11232,7 @@ mod tests {
     }
 
     /// A zone's member rows are 36 px tall, as the Mac's compact rows: a
-    /// 24 px badge with 6 px above and below.
+    /// 24 px badge with 6 px above and below, and a hairline between two.
     #[test]
     fn zone_member_rows_are_36_px_as_on_the_mac() {
         let mut backend = MockBackend::new();
@@ -11239,7 +11246,7 @@ mod tests {
         .map(|badge| (badge.absolute_position().y, badge.size().height))
         .collect();
         assert_eq!(rows.len(), 2, "{rows:?}");
-        assert_eq!(rows[1].0 - rows[0].0, 36.0, "{rows:?}");
+        assert_eq!(rows[1].0 - rows[0].0, 37.0, "{rows:?}");
     }
 
     /// This PC, Zones and Connected Speakers are titled in small grey
@@ -13188,7 +13195,7 @@ mod tests {
     }
 
     /// The main window's master volume number, as in the Mac window: 6 px
-    /// after the track, ending on the rows' chevron edge.
+    /// after the track, ending 1 px inside the rows' chevron edge.
     // covers: S450
     #[test]
     fn the_main_volume_number_sits_6_px_after_the_track_on_the_chevron_edge() {
@@ -13208,7 +13215,7 @@ mod tests {
         let (_, end) = master_track(&element("MasterVolume::slider"));
         assert!((number.absolute_position().x - end - 6.0).abs() < 0.5);
         let chevron = element("EqualizerCard::chevron");
-        assert!((right_edge(&number) - right_edge(&chevron)).abs() < 0.5);
+        assert!((right_edge(&number) + 1.0 - right_edge(&chevron)).abs() < 0.5);
     }
 
     /// The preset row's chevron is the hero card's: one size.
