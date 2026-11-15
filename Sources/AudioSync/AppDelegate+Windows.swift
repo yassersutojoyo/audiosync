@@ -459,6 +459,7 @@ extension AppDelegate {
         a.setShowVirtualDevices = { [weak self] on in self?.setShowVirtualDevices(on) }
         a.setVolumeKeys = { [weak self] on in self?.setVolumeKeys(on) }
         a.setHidesDockIcon = { [weak self] on in self?.setHidesDockIcon(on) }
+        a.setResumesAfterSleep = { [weak self] on in self?.setResumesAfterSleep(on) }
         a.openAccessibilitySettings = { NSWorkspace.shared.open(PrivacyPane.accessibility.url) }
         a.setAppearance = { [weak self] choice in self?.setAppearance(choice) }
         a.transport = { [weak self] command in self?.sendTransport(command) }
@@ -656,6 +657,7 @@ extension AppDelegate {
         publish(\.showVirtualDevices, showVirtualDevices)
         publish(\.volumeKeys, volumeKeys)
         publish(\.hidesDockIcon, hidesDockIcon)
+        publish(\.resumesAfterSleep, resumesAfterSleep)
         publish(\.volumeKeysNeedAccess, followVolumeKeys())
         publish(\.appearance, appearance)
         publish(\.deviceVolumes, followDeviceVolumes())
@@ -876,6 +878,13 @@ extension AppDelegate {
         guard on != hidesDockIcon else { return }
         hidesDockIcon = on
         DebugTrace.log("[AudioSync] Dock: Hide Dock Icon When Window Closes turned \(on ? "on" : "off")")
+        pushModel()
+    }
+
+    func setResumesAfterSleep(_ on: Bool) {
+        guard on != resumesAfterSleep else { return }
+        resumesAfterSleep = on
+        DebugTrace.log("[AudioSync] Resume Playback After Sleep turned \(on ? "on" : "off")")
         pushModel()
     }
 

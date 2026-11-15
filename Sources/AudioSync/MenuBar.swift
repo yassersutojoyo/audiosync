@@ -227,6 +227,7 @@ final class AppModel: ObservableObject {
         var setShowVirtualDevices: (Bool) -> Void = { _ in }
         var setVolumeKeys: (Bool) -> Void = { _ in }
         var setHidesDockIcon: (Bool) -> Void = { _ in }
+        var setResumesAfterSleep: (Bool) -> Void = { _ in }
         var openAccessibilitySettings: () -> Void = {}
         var setAppearance: (AppAppearance) -> Void = { _ in }
         var transport: (NowPlayingMonitor.Command) -> Void = { _ in }
@@ -366,6 +367,7 @@ final class AppModel: ObservableObject {
     @Published var volumeKeysNeedAccess = false
     /// Show Virtual Devices is off and left at least one output out (S434).
     @Published var virtualOutputsHidden = false
+    @Published var resumesAfterSleep = false
     @Published var appearance = AppAppearance.system
     /// Rows whose sync controls are expanded. Lives here rather than in view
     /// @State: the Command Line Tools toolchain ships without SwiftUI's macro plugins.

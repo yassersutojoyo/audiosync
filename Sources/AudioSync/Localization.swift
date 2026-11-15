@@ -1428,6 +1428,8 @@ struct UIStrings {
     let hideDockIcon = "Hide Dock Icon When Window Closes"
     let hideDockIconOn = "When the window closes, AudioSync leaves the Dock and keeps running in the menu bar."
     let hideDockIconOff = "When this is off, the Dock icon stays."
+    let resumeAfterSleep = "Resume Playback After Sleep"
+    let resumeAfterSleepInfo = "When your Mac wakes, the song that was playing continues once your speakers are back."
     let launchAtLoginFailed = "macOS did not allow AudioSync to launch at login. You can add it in System Settings → General → Login Items & Extensions."
     let launchAtLoginMoveToApplications = "Move AudioSync to the Applications folder and open it from there to turn on Launch at Login."
     let launchAtLoginOffFailed = "macOS did not allow AudioSync to stop launching at login. You can remove it in System Settings → General → Login Items & Extensions."

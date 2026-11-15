@@ -180,6 +180,8 @@ struct SettingsView: View {
                                                                 set: { model.actions.setLaunchAtLogin($0) }))
                 Divider()
                 dockIconRow(t)
+                Divider()
+                resumeAfterSleepRow(t)
             }
             SettingsBox(title: t.menuSpeakers) {
                 volumeKeysRow(t)
@@ -227,6 +229,18 @@ struct SettingsView: View {
             SwitchRow(title: t.hideDockIcon, isOn: Binding(get: { model.hidesDockIcon },
                                                            set: { model.actions.setHidesDockIcon($0) }))
             Text(t.hideDockIconOn + " " + t.hideDockIconOff)
+                .font(.subheadline)
+                .foregroundStyle(Brand.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.bottom, 10)
+    }
+
+    private func resumeAfterSleepRow(_ t: UIStrings) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SwitchRow(title: t.resumeAfterSleep, isOn: Binding(get: { model.resumesAfterSleep },
+                                                               set: { model.actions.setResumesAfterSleep($0) }))
+            Text(t.resumeAfterSleepInfo)
                 .font(.subheadline)
                 .foregroundStyle(Brand.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
