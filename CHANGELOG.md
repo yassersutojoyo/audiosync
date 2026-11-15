@@ -72,6 +72,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows and Linux, folding a zone no longer shakes the bottom edge of the tray panel.
 - On the Mac, turning streaming on no longer holds up the app while the capture opens, after a wake too.
 - On the Mac, the Settings window opens in one smooth motion. Before, its switches and pickers shook against the text as it appeared.
+- On the Mac, Next and Previous within one album no longer skip a frame as the new cover slides in.
 
 ## [0.9.2] - 2026-11-08
 

@@ -178,7 +178,7 @@ enum CoverColors {
         let neutral = [Color.gray, .gray, .gray]
         guard let image else { return neutral }
         if let last, last.image === image { return last.colors }
-        let colors = bands(image) ?? neutral
+        let colors = CoverBands.bands(of: image)?.map { Color(cgColor: $0) } ?? bands(image) ?? neutral
         last = (image, colors)
         return colors
     }

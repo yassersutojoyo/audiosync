@@ -869,7 +869,9 @@ final class NowPlayingMonitor {
                   kCGImageSourceThumbnailMaxPixelSize: 1000,
               ] as CFDictionary)
         else { return nil }
-        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        let cover = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        if let bands = CoverBands.measure(image) { CoverBands.record(bands, for: cover) }
+        return cover
     }
 
     /// Finds where `t` sits in Music's playlist, once per song, then reads the next covers (S462).
@@ -978,6 +980,47 @@ final class NowPlayingMonitor {
 private final class ChangeNotices: NSObject {
     var posted: (Notification) -> Void = { _ in }
     @objc func post(_ notice: Notification) { posted(notice) }
+}
+
+/// A cover's top, middle and bottom colours, measured where it is decoded, off the main thread:
+/// each song of an album is its own image of the same picture, so a song change measured it again (S467).
+enum CoverBands {
+    private struct Entry {
+        weak var image: AnyObject?
+        let bands: [CGColor]
+    }
+    static let limit = 40
+    private static let lock = NSLock()
+    private static var entries: [Entry] = []
+
+    static func record(_ bands: [CGColor], for image: AnyObject) {
+        lock.lock()
+        defer { lock.unlock() }
+        entries.removeAll { $0.image == nil || $0.image === image }
+        entries.append(Entry(image: image, bands: bands))
+        if entries.count > limit { entries.removeFirst(entries.count - limit) }
+    }
+
+    static func bands(of image: AnyObject) -> [CGColor]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return entries.last { $0.image === image }?.bands
+    }
+
+    /// `image` drawn into a 1 x 3 bitmap, top band first.
+    static func measure(_ image: CGImage) -> [CGColor]? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: 1, height: 3, bitsPerComponent: 8, bytesPerRow: 4, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 3))
+        guard let data = context.data else { return nil }
+        let pixels = data.bindMemory(to: UInt8.self, capacity: 12)
+        return (0..<3).map { row in
+            let channel = { (offset: Int) in CGFloat(pixels[row * 4 + offset]) / 255 }
+            return CGColor(srgbRed: channel(0), green: channel(1), blue: channel(2), alpha: channel(3))
+        }
+    }
 }
 
 /// Covers already loaded, by track and by the cover's address, so the next

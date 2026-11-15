@@ -19130,6 +19130,39 @@ do {
           "art cache: a cover's bytes give a picture of their own size, and bytes that are no picture give none")
 }
 
+// MARK: A cover's colours are measured where it is decoded (CoverBands in NowPlaying.swift)
+// covers: S467
+do {
+    let bandSpace = CGColorSpace(name: CGColorSpace.sRGB)
+    let bandContext = bandSpace.flatMap {
+        CGContext(data: nil, width: 4, height: 30, bitsPerComponent: 8, bytesPerRow: 0, space: $0,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    }
+    for (bandRow, bandRGB) in [(20, (1.0, 0.0, 0.0)), (10, (0.0, 1.0, 0.0)), (0, (0.0, 0.0, 1.0))] {
+        bandContext?.setFillColor(CGColor(srgbRed: bandRGB.0, green: bandRGB.1, blue: bandRGB.2, alpha: 1))
+        bandContext?.fill(CGRect(x: 0, y: bandRow, width: 4, height: 10))
+    }
+    let bandPNG = bandContext?.makeImage().flatMap {
+        NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:])
+    } ?? Data()
+    func strongest(_ bands: [CGColor]?) -> [Int?] {
+        (bands ?? []).map { color in
+            color.components.flatMap { parts in (0..<3).max { parts[$0] < parts[$1] } }
+        }
+    }
+    let firstCover = NowPlayingMonitor.cover(bandPNG)
+    let secondCover = NowPlayingMonitor.cover(bandPNG)
+    check(firstCover != nil && strongest(firstCover.flatMap { CoverBands.bands(of: $0) }) == [0, 1, 2],
+          "cover bands: a decoded cover comes with its top, middle and bottom colours, measured off the main thread")
+    check(secondCover != nil && firstCover !== secondCover
+            && strongest(secondCover.flatMap { CoverBands.bands(of: $0) }) == [0, 1, 2]
+            && CoverBands.bands(of: NSImage(size: NSSize(width: 2, height: 2))) == nil,
+          "cover bands: each song's own copy of an album's cover has its colours too; a picture not decoded as a cover has none")
+    let ambientSource = (try? String(contentsOfFile: "Sources/AudioSync/AmbientArt.swift", encoding: .utf8)) ?? ""
+    check(ambientSource.contains("CoverBands.bands(of: image)"),
+          "cover bands: the art and tint take the measured colours, so a song change draws no cover on the main thread to find them")
+}
+
 // MARK: Apple Music's next covers are loaded ahead (ArtAhead in NowPlaying.swift)
 // covers: S462
 do {
