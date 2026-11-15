@@ -815,6 +815,9 @@ pub struct Settings {
     /// View > Show Virtual Devices.
     #[serde(deserialize_with = "bool_or_false")]
     pub show_virtual_devices: bool,
+    /// The main window's Presets list is open (spec S259).
+    #[serde(deserialize_with = "bool_or_false")]
+    pub presets_list_open: bool,
     /// View > Appearance.
     pub appearance: Appearance,
     /// The main window's place and size, once it has been shown; an
@@ -1002,6 +1005,7 @@ impl Default for Settings {
             equalizer: SavedEqualizer::default(),
             equalizer_curves: Vec::new(),
             show_virtual_devices: false,
+            presets_list_open: false,
             appearance: Appearance::System,
             window: None,
             slim_window_applied: true,
@@ -1301,6 +1305,7 @@ impl Settings {
                 .map(SavedCurve::from)
                 .collect(),
             show_virtual_devices: self.show_virtual_devices,
+            presets_list_open: self.presets_list_open,
             appearance: self.appearance,
             window: self.window.and_then(clamp_window),
             slim_window_applied: self.slim_window_applied,
@@ -1511,6 +1516,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("equalizer", reads::<SavedEqualizer>),
         ("equalizer_curves", Value::is_array),
         ("show_virtual_devices", Value::is_boolean),
+        ("presets_list_open", Value::is_boolean),
         ("appearance", is_appearance),
         ("window", reads::<Option<WindowFrame>>),
         ("airplay_adjustment_ms", Value::is_number),
@@ -1988,6 +1994,7 @@ mod tests {
                 gains_db: vec![1.0; BAND_COUNT],
             }],
             show_virtual_devices: sample.show_virtual_devices,
+            presets_list_open: true,
             appearance: sample.appearance,
             window: sample.window,
             slim_window_applied: true,
@@ -2493,6 +2500,7 @@ mod tests {
             equalizer,
             equalizer_curves,
             show_virtual_devices,
+            presets_list_open,
             appearance,
             window,
             slim_window_applied: _,
@@ -2529,6 +2537,7 @@ mod tests {
         assert_ne!(equalizer, default.equalizer);
         assert_ne!(equalizer_curves, default.equalizer_curves);
         assert_ne!(show_virtual_devices, default.show_virtual_devices);
+        assert_ne!(presets_list_open, default.presets_list_open);
         assert_ne!(appearance, default.appearance);
         assert_ne!(window, default.window);
         assert_ne!(airplay_adjustment_ms, default.airplay_adjustment_ms);

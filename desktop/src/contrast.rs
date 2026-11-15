@@ -1744,11 +1744,12 @@ fn the_updater_notice_uses_strings_and_tokens() {
 // covers: S268 (the Windows host)
 /// The preset controls (spec S267, S268): token colors only, a focus ring,
 /// Narrator's label and value on the Presets row, and the Menu key and
-/// Shift+F10 through the row's context menu area.
+/// Shift+F10 through each listed preset's context menu area.
 #[test]
 fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
     let main = include_str!("../ui/main.slint");
     let flyout = include_str!("../ui/flyout.slint");
+    let row = component_body(main, "PresetListRow");
     let parts = [
         component_body(main, "PresetsCard"),
         component_body(flyout, "PresetPicker"),
@@ -1763,16 +1764,26 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
             }
         }
     }
+    for line in row.lines().map(str::trim) {
+        if line.starts_with("color:") || line.starts_with("background:") {
+            assert!(!line.contains('#') && !line.contains("rgb"), "{line}");
+        }
+    }
     let [card, picker] = parts;
     for needle in [
-        "menu := ContextMenuArea {",
-        "title: Strings.no-presets;",
-        "title: Strings.save-preset;",
-        "title: Strings.rename-preset;",
-        "enabled: !preset.current;",
-        "title: Strings.delete-preset;",
+        "Strings.no-presets",
+        "accessible-label: Strings.save-preset;",
     ] {
         assert!(card.contains(needle), "PresetsCard has {needle}");
+    }
+    for needle in [
+        "menu := ContextMenuArea {",
+        "title: Strings.rename-preset;",
+        "enabled: !root.item.current;",
+        "title: Strings.delete-preset;",
+        "FocusRing {",
+    ] {
+        assert!(row.contains(needle), "PresetListRow has {needle}");
     }
     for needle in [
         "accessible-role: button;",

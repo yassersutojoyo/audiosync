@@ -585,17 +585,150 @@ component SpeakerSection inherits VerticalLayout {
     }
 }
 
+// One preset in the open Presets list (spec S259): a click, Space or Return
+// recalls it; its … button, shown on hover and focus, or a right-click
+// renames, updates or deletes it.
+component PresetListRow inherits Rectangle {
+    in property <PresetItem> item;
+    callback recall();
+    callback rename();
+    callback update();
+    callback delete();
+    property <bool> options-focused;
+
+    min-height: 40px;
+    border-radius: Fluent.radius-control;
+    background: hover.pressed ? Fluent.pressed : hover.has-hover ? Fluent.hover : transparent;
+    animate background { duration: Fluent.fast; }
+
+    hover := TouchArea {
+        clicked => {
+            root.recall();
+        }
+
+        menu := ContextMenuArea {
+            Menu {
+                MenuItem {
+                    title: Strings.rename-preset;
+                    activated => {
+                        root.rename();
+                    }
+                }
+
+                MenuItem {
+                    title: Strings.update-preset;
+                    enabled: !root.item.current;
+                    activated => {
+                        root.update();
+                    }
+                }
+
+                MenuSeparator { }
+
+                MenuItem {
+                    title: Strings.delete-preset;
+                    activated => {
+                        root.delete();
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                padding-right: 2px;
+                spacing: 4px;
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    border-radius: Fluent.radius-control;
+                    accessible-role: button;
+                    accessible-label: root.item.name;
+                    accessible-checkable: true;
+                    accessible-checked: root.item.current;
+                    accessible-value: Strings.preset-summary(root.item.speakers, root.item.master);
+                    accessible-action-default => {
+                        root.recall();
+                    }
+
+                    focus := FocusScope {
+                        focus-on-click: false;
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == Key.Return {
+                                root.recall();
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-top: 4px;
+                        padding-bottom: 4px;
+                        spacing: 8px;
+
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 2px;
+
+                            Text {
+                                text: root.item.name;
+                                color: Tokens.text;
+                                overflow: elide;
+                                accessible-role: none;
+                            }
+
+                            Text {
+                                text: Strings.preset-summary(root.item.speakers, root.item.master);
+                                font-size: Tokens.font-size-subheadline;
+                                color: Tokens.secondary-text;
+                                overflow: elide;
+                                accessible-role: none;
+                            }
+                        }
+                    }
+
+                    FocusRing {
+                        visible-focus: focus.has-focus;
+                        border-radius: parent.border-radius;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    IconButton {
+                        height: 24px;
+                        glyph: Glyphs.more;
+                        label: Strings.speaker-options(root.item.name);
+                        glyph-color: Tokens.secondary-text;
+                        opacity: hover.has-hover || focus.has-focus || root.options-focused ? 1 : 0;
+                        clicked => {
+                            menu.show({
+                                x: self.absolute-position.x - menu.absolute-position.x,
+                                y: self.absolute-position.y - menu.absolute-position.y + self.height,
+                            });
+                        }
+                        focus-changed(focused) => {
+                            root.options-focused = focused;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // The Presets row (spec S259, S264, S267): the name of the preset picked
-// last, kept after a change until it is deleted, and a menu
-// that recalls a preset, saves one, and renames, updates or deletes one
-// through its submenu. A click, Space, Return, the Menu key or Shift+F10
-// open it.
-component PresetsCard inherits Rectangle {
+// last, kept after a change until it is deleted, and a list that folds open
+// under it as a zone does: one row per preset, then Save as Preset…. A
+// click, Space or Return folds it open or shut; Escape folds it.
+component PresetsCard inherits VerticalLayout {
     in property <[PresetItem]> presets;
     // The name of the preset picked last; empty while none is.
     in property <string> current;
     // False at the most presets the app keeps (spec S251).
     in property <bool> can-save: true;
+    in-out property <bool> open;
     // The app asks for the focus after a delete; the row clears the request.
     in-out property <bool> focus-wanted;
     callback recall(string);
@@ -604,9 +737,6 @@ component PresetsCard inherits Rectangle {
     callback delete(string);
     callback save();
 
-    function open-menu() {
-        menu.show({ x: 0, y: root.height });
-    }
     changed focus-wanted => {
         if root.focus-wanted {
             root.focus-wanted = false;
@@ -614,85 +744,31 @@ component PresetsCard inherits Rectangle {
         }
     }
 
-    min-height: 36px;
-    border-radius: Fluent.radius-control;
-    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
-    forward-focus: focus;
-    accessible-role: button;
-    accessible-label: Strings.presets;
-    accessible-value: root.presets.length == 0 ? Strings.no-presets : root.current != "" ? root.current : Strings.choose-preset;
-    accessible-action-default => {
-        root.open-menu();
-    }
-
-    touch := TouchArea {
-        clicked => {
-            root.open-menu();
+    Rectangle {
+        min-height: 36px;
+        border-radius: Fluent.radius-control;
+        background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
+        animate background { duration: Fluent.fast; }
+        forward-focus: focus;
+        accessible-role: button;
+        accessible-label: Strings.presets;
+        accessible-value: root.presets.length == 0 ? Strings.no-presets : root.current != "" ? root.current : Strings.choose-preset;
+        accessible-expandable: true;
+        accessible-expanded: root.open;
+        accessible-action-default => {
+            root.open = !root.open;
         }
 
-        menu := ContextMenuArea {
-            Menu {
-                if root.presets.length == 0: MenuItem {
-                    title: Strings.no-presets;
-                    enabled: false;
-                }
-
-                for preset in root.presets: MenuItem {
-                    title: preset.name;
-                    checkable: true;
-                    checked: preset.current;
-                    activated => {
-                        root.recall(preset.id);
-                    }
-                }
-
-                MenuSeparator { }
-
-                MenuItem {
-                    title: Strings.save-preset;
-                    enabled: root.can-save;
-                    activated => {
-                        root.save();
-                    }
-                }
-
-                if root.presets.length > 0: MenuSeparator { }
-
-                for preset in root.presets: Menu {
-                    title: preset.name;
-
-                    MenuItem {
-                        title: Strings.rename-preset;
-                        activated => {
-                            root.rename(preset.id);
-                        }
-                    }
-
-                    MenuItem {
-                        title: Strings.update-preset;
-                        enabled: !preset.current;
-                        activated => {
-                            root.update(preset.id);
-                        }
-                    }
-
-                    MenuSeparator { }
-
-                    MenuItem {
-                        title: Strings.delete-preset;
-                        activated => {
-                            root.delete(preset.id);
-                        }
-                    }
-                }
+        touch := TouchArea {
+            clicked => {
+                root.open = !root.open;
             }
 
             focus := FocusScope {
                 focus-on-click: false;
                 key-pressed(event) => {
-                    if event.text == " " || event.text == Key.Return {
-                        root.open-menu();
+                    if event.text == " " || event.text == Key.Return || (event.text == Key.Escape && root.open) {
+                        root.open = !root.open;
                         return accept;
                     }
                     return reject;
@@ -737,7 +813,7 @@ component PresetsCard inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         Glyph {
-                            glyph: Glyphs.chevron-down;
+                            glyph: root.open ? Glyphs.chevron-down : Glyphs.chevron-right;
                             font-size: Tokens.font-size-caption;
                             color: Tokens.secondary-text;
                             height: label.preferred-height;
@@ -750,11 +826,112 @@ component PresetsCard inherits Rectangle {
                 }
             }
         }
+
+        FocusRing {
+            visible-focus: focus.has-focus;
+            border-radius: parent.border-radius;
+        }
     }
 
-    FocusRing {
-        visible-focus: focus.has-focus;
-        border-radius: root.border-radius;
+    list := FoldPane {
+        open: root.open;
+        escape-folds: true;
+        fold => {
+            root.open = false;
+            focus.focus();
+        }
+
+        // Above five presets the list scrolls inside its card, half a row
+        // past the fifth showing that it goes on; a new one scrolls into view.
+        if list.shown: scroll := OverlayScrollView {
+            property <int> count: root.presets.length;
+            property <int> seen;
+            // The new row is laid out a pass after the count changes.
+            property <bool> to-end;
+            height: root.presets.length > 5 ? 40px * 5.5 : rows.preferred-height;
+            init => {
+                self.seen = self.count;
+            }
+            changed count => {
+                self.to-end = self.count > self.seen && self.count > 5;
+                self.seen = self.count;
+            }
+            changed content-height => {
+                if self.to-end && self.content-height > self.visible-height {
+                    self.to-end = false;
+                    self.content-y = self.visible-height - self.content-height;
+                }
+            }
+
+            // The names start on the Presets label's column, as on the Mac.
+            rows := VerticalLayout {
+                padding-left: 24px;
+
+                for preset in root.presets: PresetListRow {
+                    item: preset;
+                    recall => {
+                        root.recall(preset.id);
+                    }
+                    rename => {
+                        root.rename(preset.id);
+                    }
+                    update => {
+                        root.update(preset.id);
+                    }
+                    delete => {
+                        root.delete(preset.id);
+                    }
+                }
+
+                Rectangle {
+                    min-height: 40px;
+                    border-radius: Fluent.radius-control;
+                    background: !root.can-save ? transparent : save-touch.pressed ? Fluent.pressed : save-touch.has-hover ? Fluent.hover : transparent;
+                    animate background { duration: Fluent.fast; }
+                    opacity: root.can-save ? 1 : Tokens.disabled-opacity;
+                    accessible-role: button;
+                    accessible-label: Strings.save-preset;
+                    accessible-enabled: root.can-save;
+                    accessible-action-default => {
+                        root.save();
+                    }
+
+                    save-focus := FocusScope {
+                        enabled: root.can-save;
+                        focus-on-click: false;
+                        key-pressed(event) => {
+                            if event.text == " " || event.text == Key.Return {
+                                root.save();
+                                return accept;
+                            }
+                            return reject;
+                        }
+                    }
+
+                    save-touch := TouchArea {
+                        enabled: root.can-save;
+                        clicked => {
+                            root.save();
+                        }
+                    }
+
+                    Text {
+                        x: 8px;
+                        width: parent.width - 16px;
+                        text: Strings.save-preset;
+                        color: Tokens.text;
+                        overflow: elide;
+                        vertical-alignment: center;
+                        accessible-role: none;
+                    }
+
+                    FocusRing {
+                        visible-focus: save-focus.has-focus;
+                        border-radius: parent.border-radius;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1567,6 +1744,12 @@ export component MainWindow inherits Window {
     in property <string> current-preset;
     // After a delete the Presets row takes the focus back.
     in-out property <bool> focus-presets;
+    // The Presets row's list is open; saved across launches, it starts folded.
+    in-out property <bool> presets-open;
+    callback presets-open-changed();
+    changed presets-open => {
+        root.presets-open-changed();
+    }
     // What Narrator says about a new notice, while the app wants it said
     // here (empty otherwise).
     in property <string> notice-announcement;
@@ -2229,6 +2412,7 @@ export component MainWindow inherits Window {
                         current: root.current-preset;
                         can-save: root.can-save-preset;
                         focus-wanted <=> root.focus-presets;
+                        open <=> root.presets-open;
                         recall(id) => {
                             root.preset-recall-requested(id);
                         }

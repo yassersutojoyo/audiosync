@@ -1019,6 +1019,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
         };
         self.view = ViewSettings {
             show_virtual_devices: saved.show_virtual_devices,
+            presets_list_open: saved.presets_list_open,
             appearance: saved.appearance,
             window: saved.window,
             remote: saved.remote,
@@ -1164,6 +1165,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             equalizer: SavedEqualizer::from(self.equalizer),
             equalizer_curves: self.equalizer_curves.iter().map(SavedCurve::from).collect(),
             show_virtual_devices: self.view.show_virtual_devices,
+            presets_list_open: self.view.presets_list_open,
             appearance: self.view.appearance,
             window: self.view.window,
             slim_window_applied: true,
@@ -14489,6 +14491,7 @@ mod tests {
         adapter.set_equalizer_curves(curves.clone());
         adapter.set_view_settings(ViewSettings {
             show_virtual_devices: true,
+            presets_list_open: true,
             appearance: ui_model::Appearance::Light,
             window: None,
             remote: crate::remote::RemoteSettings {
@@ -14528,6 +14531,7 @@ mod tests {
         assert_eq!(state.equalizer, equalizer);
         assert_eq!(state.equalizer_curves, curves);
         assert!(adapter.view_settings().show_virtual_devices);
+        assert!(adapter.view_settings().presets_list_open);
         assert_eq!(
             adapter.view_settings().appearance,
             ui_model::Appearance::Light
