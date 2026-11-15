@@ -19178,8 +19178,8 @@ do {
           "art read: the next song of the same album shares its cover at once")
     sharedArt.ask(title: "Single", album: "Other")
     check(!sharedArt.accepts(read: ("Single", "Other"), print: 7, at: 2)
-            && sharedArt.accepts(read: ("Single", "Other"), print: 7, at: 3.5),
-          "art read: a song whose cover really is the previous one's gets it once the hold has given way")
+            && !sharedArt.accepts(read: ("Single", "Other"), print: 7, at: 3.5),
+          "art read: a song of another album whose cover reads as the previous one's shows none rather than risk it")
     sharedArt.ask(title: "Next", album: "Else")
     check(!sharedArt.accepts(read: ("Single", "Other"), print: 9, at: 4),
           "art read: a cover read from another song than the one asked about is not taken")
@@ -19224,6 +19224,21 @@ do {
     check(!pressArt.accepts(read: ("Basket Case", "Dookie"), print: 740_457, at: 0.6)
             && !pressArt.accepts(read: ("Basket Case", "Dookie"), print: 740_457, at: 2.5),
           "art read: after quick presses, a cover held for one song is not taken for the next one of another album")
+    var pacedArt = ArtRead()
+    pacedArt.ask(title: "Helena", album: "Three Cheers")
+    _ = pacedArt.accepts(read: ("Helena", "Three Cheers"), print: 1, at: 0)
+    pacedArt.ask(title: "Sk8er Boi", album: "Let Go")
+    let pacedFirst = pacedArt.mayRead(at: 0.3)
+    _ = pacedArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 1, at: 0.3)
+    check(pacedFirst && ArtRead.reread == 4 && !pacedArt.mayRead(at: 0.55) && !pacedArt.mayRead(at: 4.2)
+            && pacedArt.mayRead(at: 4.4) && pacedArt.refused,
+          "art read: after a refusal the song's cover is read again once every 4 s, not on every poll")
+    pacedArt.ask(title: "Tik Tok", album: "Animal")
+    check(pacedArt.mayRead(at: 4.5) && !pacedArt.refused,
+          "art read: the next song's cover is read at once")
+    check(pacedArt.isStale(print: 1, for: ("Later", "Other")) && !pacedArt.isStale(print: 3, for: ("Later", "Other"))
+            && !pacedArt.isStale(print: 1, for: ("Track 2", "Three Cheers")),
+          "art read: a cover read ahead that repeats a recent song's of another album is not cached")
 }
 
 // MARK: Next eases the old song out while the next one's cover loads (TrackWipe in WindowRules.swift, MainWindow.swift)

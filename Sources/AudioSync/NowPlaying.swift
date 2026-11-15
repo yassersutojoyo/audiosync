@@ -804,6 +804,9 @@ final class NowPlayingMonitor {
             artLog("Now Playing art: \(song) miss, Spotify gave no cover address")
             return (nil, false)
         }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard artRead.mayRead(at: now) else { return (nil, true) }
+        if artRead.refused { artLog("Now Playing art: \(song) re-read from the player") }
         let script = """
             with timeout of 2 seconds
                 if application id "\(t.bundleID)" is running then
@@ -820,11 +823,11 @@ final class NowPlayingMonitor {
             artLog("Now Playing art: \(song) miss, the player gave no cover")
             return (nil, false)
         }
-        guard artRead.accepts(read: (title, album), print: ArtRead.fingerprint(data),
-                              at: ProcessInfo.processInfo.systemUptime) else {
+        guard artRead.accepts(read: (title, album), print: ArtRead.fingerprint(data), at: now) else {
             artLog("Now Playing art: \(song) read \(data.count) bytes "
-                   + ((title, album) == (t.title, t.album) ? "that are the previous song's cover, held"
-                                                           : "of another song, held"))
+                   + ((title, album) == (t.title, t.album)
+                      ? "refused, a recent song's cover; re-read in \(Int(ArtRead.reread)) s"
+                      : "of another song, held"))
             return (nil, true)
         }
         artLog("Now Playing art: \(song) read from the player, \(Self.pixels(image)), \(data.count) bytes")
@@ -908,10 +911,15 @@ final class NowPlayingMonitor {
         if let song = run(target: t.bundleID, cover), song.numberOfItems == 4,
            let title = song.atIndex(1)?.stringValue, let album = song.atIndex(2)?.stringValue,
            let data = song.atIndex(3)?.data, let image = Self.cover(data) {
-            ArtAhead.warm(&artworkCache, bundleID: t.bundleID, songs: [(title, album, image)])
-            artRead.kept(print: ArtRead.fingerprint(data), title: title, album: album)
-            artLog("Now Playing art: \(t.appName) song \(song.atIndex(4)?.stringValue ?? "") read ahead, "
-                   + "\(Self.pixels(image)), \(data.count) bytes")
+            if artRead.isStale(print: ArtRead.fingerprint(data), for: (title, album)) {
+                artLog("Now Playing art: \(t.appName) song \(song.atIndex(4)?.stringValue ?? "") read ahead, "
+                       + "\(data.count) bytes, refused, a recent song's cover")
+            } else {
+                ArtAhead.warm(&artworkCache, bundleID: t.bundleID, songs: [(title, album, image)])
+                artRead.kept(print: ArtRead.fingerprint(data), title: title, album: album)
+                artLog("Now Playing art: \(t.appName) song \(song.atIndex(4)?.stringValue ?? "") read ahead, "
+                       + "\(Self.pixels(image)), \(data.count) bytes")
+            }
         }
         if aheadGoesOn(t), positions.count > 1 {
             scripts.async { self.readCover(after: t, key: key, positions: positions.dropFirst()) }
@@ -982,14 +990,17 @@ struct ArtCache<Image> {
     }
 }
 
-/// Music can still hand out the previous song's cover just after a change, which the
-/// cache would then keep for the new song (S464). Songs are "title|album" here.
+/// Music can keep handing out a recent song's cover for a streamed song, even 30 s after a change,
+/// which the cache would then keep for the new song (S464). Songs are "title|album" here.
 struct ArtRead {
+    /// Each read pulls about 1 MB over Apple events on the queue commands wait on; 4 s keeps that
+    /// small while a cover Music fixes later still shows within a few seconds.
+    static let reread: TimeInterval = 4
     private var asked: (title: String, album: String)?
     /// The songs asked about before, latest first; quick Nexts or a slow poll can skip some readings.
     private var recent: [(title: String, album: String)] = []
     private var prints: [String: Int] = [:]
-    private var doubted: (song: String, since: TimeInterval)?
+    private var refusedAt: TimeInterval?
 
     /// A fingerprint of a cover's bytes, the same for the same picture within one run.
     static func fingerprint(_ data: Data) -> Int {
@@ -1004,6 +1015,7 @@ struct ArtRead {
         guard asked.map({ ($0.title, $0.album) != (title, album) }) ?? true else { return false }
         if let asked { recent = [asked] + recent.prefix(ArtAhead.count - 1) }
         asked = (title, album)
+        refusedAt = nil
         return true
     }
 
@@ -1012,21 +1024,32 @@ struct ArtRead {
         prints["\(title)|\(album)"] = print
     }
 
+    /// Whether `print` is the cover of the song asked about or a recent one, when that song is
+    /// another than `song` and from another album, or either has none.
+    func isStale(print: Int, for song: (title: String, album: String)) -> Bool {
+        ((asked.map { [$0] } ?? []) + recent).contains {
+            ($0.title, $0.album) != (song.title, song.album) && prints["\($0.title)|\($0.album)"] == print
+                && ($0.album.isEmpty || $0.album != song.album)
+        }
+    }
+
+    /// Whether the asked song's cover may be read from the player at `now`: after a refusal, once per `reread`.
+    func mayRead(at now: TimeInterval) -> Bool {
+        refusedAt.map { now - $0 >= Self.reread } ?? true
+    }
+
+    /// Whether the cover was refused before, so the next read is a re-read.
+    var refused: Bool { refusedAt != nil }
+
     /// Whether a cover `read` from the player at `now` may be shown and kept for the song asked about:
-    /// it must be read from that song, and a recent song's cover, when that song is from another
-    /// album or either has none, waits until ArtHold's hold has given way.
+    /// it must be read from that song and must not be a recent song's cover (`isStale`).
     mutating func accepts(read: (title: String, album: String), print: Int, at now: TimeInterval) -> Bool {
         guard let asked, (read.title, read.album) == (asked.title, asked.album) else { return false }
-        let song = "\(asked.title)|\(asked.album)"
-        let stale = recent.contains {
-            ($0.title, $0.album) != (asked.title, asked.album) && prints["\($0.title)|\($0.album)"] == print
-                && ($0.album.isEmpty || $0.album != asked.album)
+        if isStale(print: print, for: asked) {
+            refusedAt = now
+            return false
         }
-        if stale {
-            if doubted?.song != song { doubted = (song, now) }
-            if let doubted, now - doubted.since < ArtHold.limit { return false }
-        }
-        doubted = nil
+        refusedAt = nil
         kept(print: print, title: asked.title, album: asked.album)
         return true
     }
