@@ -18361,7 +18361,7 @@ do {
         .components(separatedBy: "\n    }\n").first ?? ""
     let closeBody = panelSource.components(separatedBy: "    private func finishClose(lasting: TimeInterval) {").dropFirst().first?
         .components(separatedBy: "\n    }\n").first ?? ""
-    check(polling.contains("nowPlayingOnScreen || panelOnScreen ||") && showBody.contains("model.actions.panelVisible(true)")
+    check(polling.contains("polls(shown: nowPlayingOnScreen || panelOnScreen,") && showBody.contains("model.actions.panelVisible(true)")
             && closeBody.contains("model.actions.panelVisible(false)"),
           "menu bar panel source: Now Playing is read while the panel is open, so its hero can show the song")
     let arcSource = panelSource.components(separatedBy: "private struct ConnectingArc: View {").dropFirst().first?
