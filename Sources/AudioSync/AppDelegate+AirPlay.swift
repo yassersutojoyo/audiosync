@@ -409,10 +409,12 @@ extension AppDelegate: TrackInfoHost {
     func showNowPlaying(_ track: NowPlayingMonitor.Track?) {
         let now = ProcessInfo.processInfo.systemUptime
         let since = artHeldSince ?? now
-        guard ArtHold.decide(shown: appModel.nowPlaying, next: track, heldFor: now - since) == .show else {
+        let press = appModel.trackPress.flatMap { $0.direction == nil ? nil : Date.now.timeIntervalSince($0.at) }
+        let waited = TrackSlide.waited(heldFor: now - since, sincePress: press)
+        guard ArtHold.decide(shown: appModel.nowPlaying, next: track, heldFor: waited) == .show else {
             if artHeldSince == nil {
                 artHeldSince = now
-                DispatchQueue.main.asyncAfter(deadline: .now() + ArtHold.limit) { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + max(0, ArtHold.limit - waited)) { [weak self] in
                     guard let self, self.artHeldSince == now else { return }
                     self.showNowPlaying(self.nowPlaying.track)
                 }
@@ -424,8 +426,8 @@ extension AppDelegate: TrackInfoHost {
         let timesChange = DebugTrace.enabled && appModel.nowPlaying?.title != track?.title
         let began = DispatchTime.now().uptimeNanoseconds
         let before = appModel.nowPlaying
-        if TrackWipe.coverArrived(appModel.nowPlaying, track) {
-            withAnimation(.easeInOut(duration: TrackWipe.coverFade)) { appModel.nowPlaying = track }
+        if TrackSlide.coverArrived(appModel.nowPlaying, track) {
+            withAnimation(.easeInOut(duration: TrackSlide.coverFade)) { appModel.nowPlaying = track }
         } else {
             appModel.nowPlaying = track
         }

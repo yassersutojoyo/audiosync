@@ -48,7 +48,8 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, Windows and Linux, the master volume speaker shows one, two or three waves as the level goes up.
 - On the Mac, the next Spotify song from the same album shows its cover at once.
 - On the Mac, with shuffle off, Apple Music's next few playlist covers load ahead, so Next shows the cover at once.
-- On the Mac, Next in Now Playing eases the old cover, title and artist out while the next cover loads, then wipes once, with no grey placeholder in between and no grey line over the title and artist. A cover that comes late fades in.
+- On the Mac, Next and Previous in Now Playing slide the new cover in from the side while the old one shrinks and fades in place, in the main window, where the cover crosses the speaker list on its way in, and in the menu bar panel. The old cover starts shrinking as soon as you press, and the title and artist follow. The keyboard's media keys do the same while Volume Keys Control AudioSync is on. A cover that comes late fades in, and with Reduce Motion on the songs simply cross-fade.
+- On the Mac, the Play/Pause button in the main window turns from play to pause and back with a quick shrink and grow instead of swapping in one frame, whether you click it, press a media key or the player changes on its own. With Reduce Motion on it swaps at once.
 - On Windows and Linux, speaker and zone rows are spaced like the Mac's, and small controls in a row keep a 24 px click area.
 - On Windows and Linux, the main window's section titles are small grey capitals, a zone's speakers hang from a thin line under the zone instead of sitting in a tinted box, and a zone's header lights up only under the pointer, as on the Mac.
 

@@ -19026,42 +19026,6 @@ do {
           "scrolling title: a title at its start shows its first letter in full", "\(startStops)")
 }
 
-// MARK: Next and Previous sweep one edge across the Now Playing cover, title and artist (WindowRules.swift, MainWindow.swift)
-do {
-    check(TrackWipe.direction(pressed: .next, secondsSincePress: 0.5) == .next
-            && TrackWipe.direction(pressed: .previous, secondsSincePress: 1) == .previous
-            && TrackWipe.direction(pressed: nil, secondsSincePress: 0.5) == nil
-            && TrackWipe.direction(pressed: .next, secondsSincePress: TrackWipe.pressWindow + 1) == nil
-            && TrackWipe.direction(pressed: .next, secondsSincePress: -1) == nil,
-          "track wipe: a change soon after Next or Previous sweeps that way; one without a press or a late one is instant")
-    check(TrackWipe.seconds(reduceMotion: false) == 0.34 && TrackWipe.seconds(reduceMotion: true) == 0.15,
-          "track wipe: under Reduce Motion the tracks cross-fade in 0.15 s instead of sweeping")
-    let start = TrackWipe.parts(.next, progress: 0), nextQuarter = TrackWipe.parts(.next, progress: 0.25)
-    let previousQuarter = TrackWipe.parts(.previous, progress: 0.25), end = TrackWipe.parts(.previous, progress: 1)
-    check(start.old == 0...1 && start.new.lowerBound == 1 && nextQuarter.old == 0...0.75 && nextQuarter.new == 0.75...1
-            && previousQuarter.new == 0...0.25 && previousQuarter.old == 0.25...1 && end.new == 0...1 && end.old.lowerBound == 1
-            && TrackWipe.duration == 0.34,
-          "track wipe: Next's edge moves right to left and Previous's left to right in 0.34 s, the new track on the side the edge has passed",
-          "\(nextQuarter) \(previousQuarter)")
-    let song = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
-                                       album: "B", isPlaying: true, artwork: nil)
-    let paused = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
-                                         album: "B", isPlaying: false, artwork: nil)
-    let other = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "Two", artist: "A",
-                                        album: "B", isPlaying: true, artwork: nil)
-    let spotify = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two", artist: "A",
-                                          album: "B", isPlaying: true, artwork: nil)
-    check(TrackWipe.isSkip(song, other) && !TrackWipe.isSkip(song, paused) && !TrackWipe.isSkip(song, spotify),
-          "track wipe: another song in the same player sweeps; the same song pausing or another app taking over does not")
-    let main = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
-    check(main.components(separatedBy: "wipe.press(.next)").count == 2 && main.components(separatedBy: "wipe.press(.previous)").count == 2
-            && main.components(separatedBy: "TrackWipe.parts(").count == 2,
-          "track wipe: the main window's Next and Previous buttons start the sweep over the cover, title and artist")
-    // 14 Nov on the Mac: a 1 px grey line rode the edge over the title and artist; the approved mockup has none.
-    check(!main.contains("WipeEdge("),
-          "track wipe: no line rides the sweeping edge, the new track simply takes over where the edge has passed")
-}
-
 // MARK: The old song stays up while the next one's cover loads (ArtHold in WindowRules.swift)
 // covers: S459
 do {
@@ -19247,88 +19211,144 @@ do {
           "art read: a cover read ahead that repeats a recent song's of another album is not cached")
 }
 
-// MARK: Next eases the old song out while the next one's cover loads (TrackWipe in WindowRules.swift, MainWindow.swift)
+// MARK: Next and Previous slide the new cover in while the old one recedes (TrackSlide in WindowRules.swift, MainWindow.swift)
 // covers: S463
 do {
-    check(TrackWipe.slowSeconds == 1.5 && TrackWipe.artReach == 0.22 && TrackWipe.textShift == 12
-            && TrackWipe.dimTo == 0.6 && TrackWipe.coverFade == 0.25,
-          "slow move: the old cover eases out up to 22% over 1.5 s, the title and artist 12 px toward 0.6 opacity")
-    let early = TrackWipe.slowFraction(after: 0.4), late = TrackWipe.slowFraction(after: 1.2)
-    check(TrackWipe.slowFraction(after: 0) == 0 && early > 0.4 / 1.5 && early < late && late < 1
-            && abs(TrackWipe.slowFraction(after: 1.5) - 1) < 1e-6 && TrackWipe.slowFraction(after: 2) == 1,
-          "slow move: it starts at the press, eases out, and stops where it reached at 1.5 s", "\(early) \(late)")
-    let fromRest = TrackWipe.finishSeconds(fromReached: 0, reduceMotion: false)
-    let fromEnd = TrackWipe.finishSeconds(fromReached: TrackWipe.artReach, reduceMotion: false)
-    check(fromRest == TrackWipe.duration && abs(fromEnd - TrackWipe.duration * 0.78) < 1e-9
-            && TrackWipe.finishSeconds(fromReached: 0.95, reduceMotion: false) == 0.09
-            && TrackWipe.finishSeconds(fromReached: 0.22, reduceMotion: true) == TrackWipe.fadeDuration,
-          "slow move: the finishing sweep runs today's speed over the width left, 90 ms at least; Reduce Motion cross-fades",
-          "\(fromRest) \(fromEnd)")
-    let lateCover = NSImage(size: NSSize(width: 1, height: 1))
-    let placeholder = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
-                                              artist: "A", album: "B", isPlaying: true, artwork: nil)
-    var withCover = placeholder
-    withCover.artwork = lateCover
-    let nextSong = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Three",
-                                           artist: "A", album: "B", isPlaying: true, artwork: lateCover)
-    check(TrackWipe.coverArrived(placeholder, withCover) && !TrackWipe.coverArrived(placeholder, nextSong)
-            && !TrackWipe.coverArrived(withCover, withCover) && !TrackWipe.coverArrived(nil, withCover),
-          "slow move: a cover that comes after its song gave up waiting fades in; another song does not")
-    let airplay = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+AirPlay.swift", encoding: .utf8)) ?? ""
-    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
-    check(airplay.contains("TrackWipe.coverArrived(") && airplay.contains("TrackWipe.coverFade")
-            && window.contains("TrackWipe.slowFraction(") && window.contains("TrackWipe.finishSeconds("),
-          "slow move: the main window runs it from the press, and both views fade a late cover in")
-    let wipeState = window.components(separatedBy: "final class TrackWipeState").last?
-        .components(separatedBy: "private enum TransportMode").first ?? ""
-    check(!wipeState.contains("withAnimation") && !wipeState.contains("DispatchQueue.main.async {")
-            && window.contains("TimelineView(.animation(paused: !wipe.moving))")
-            && window.contains("TrackWipe.sweepProgress(") && window.contains("TrackWipe.settledDrift("),
-          "slow move: one clock draws the slow move and the sweep, so the sweep starts in the frame of the change "
-            + "from where the cover is drawn, with no second commit")
-    let handOff = TrackWipe.artReach * TrackWipe.slowFraction(after: 0.42)
-    let handOffSpeed = TrackWipe.driftSpeed(atReached: handOff)
-    let firstFrame = TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: 1.0 / 60, reduceMotion: false)
-    let sweepEnd = TrackWipe.finishSeconds(fromReached: handOff, reduceMotion: false)
-    check(TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: 0, reduceMotion: false) == handOff
-            && TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: -0.01, reduceMotion: false) < handOff
-            && firstFrame > handOff
-            && abs(TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: sweepEnd,
-                                           reduceMotion: false) - 1) < 1e-12
-            && TrackWipe.sweepProgress(from: 0, speed: 0, after: TrackWipe.fadeDuration / 2, reduceMotion: true) == 0.5,
-          "slow move: the sweep starts from the width reached and moves in its first frame; Reduce Motion fades evenly",
-          "\(handOff) \(firstFrame)")
-    check(TrackWipe.settledDrift(from: 0.8, after: 0) == 0.8 && TrackWipe.settledDrift(from: 0.8, after: 0.05) < 0.8
-            && TrackWipe.settledDrift(from: 0.8, after: TrackWipe.fadeDuration) == 0
-            && TrackWipe.eased(TrackWipe.slowCurve, 0.4 / 1.5) == TrackWipe.slowFraction(after: 0.4),
-          "slow move: an ignored press eases back from where it reached in 0.15 s")
+    check(TrackSlide.seconds(.window, reduceMotion: false) == 0.56 && TrackSlide.seconds(.panel, reduceMotion: false) == 0.42
+            && TrackSlide.seconds(.window, reduceMotion: true) == TrackSlide.fadeDuration
+            && TrackSlide.seconds(.panel, reduceMotion: true) == TrackSlide.fadeDuration && TrackSlide.fadeDuration == 0.15,
+          "track slide: 0.56 s in the main window, 0.42 s in the panel, a 0.15 s cross-fade under Reduce Motion")
+    check(TrackSlide.style(onScreen: true, reduceMotion: false) == .slide
+            && TrackSlide.style(onScreen: true, reduceMotion: true) == .fade
+            && TrackSlide.style(onScreen: false, reduceMotion: false) == .instant
+            && TrackSlide.style(onScreen: false, reduceMotion: true) == .instant,
+          "track slide: it runs only on a window or panel on screen, and cross-fades under Reduce Motion")
+    check(TrackSlide.direction(pressed: .next, secondsSincePress: 0.5) == .next
+            && TrackSlide.direction(pressed: .previous, secondsSincePress: 1) == .previous
+            && TrackSlide.direction(pressed: nil, secondsSincePress: 0.5) == nil
+            && TrackSlide.direction(pressed: .next, secondsSincePress: TrackSlide.pressWindow + 1) == nil
+            && TrackSlide.direction(pressed: .next, secondsSincePress: -1) == nil && TrackSlide.pressWindow == 3,
+          "track slide: a change within 3 s of Next or Previous slides that way")
+    let one = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
+                                      album: "B", isPlaying: true, artwork: nil)
+    let onePaused = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
+                                            album: "B", isPlaying: false, artwork: nil)
+    let two = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "Two", artist: "A",
+                                      album: "B", isPlaying: true, artwork: nil)
+    let spotifyOne = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "One",
+                                             artist: "A", album: "B", isPlaying: true, artwork: nil)
+    check(TrackSlide.isSkip(one, two) && !TrackSlide.isSkip(one, onePaused) && !TrackSlide.isSkip(one, spotifyOne),
+          "track slide: another song in the same player slides; a pause or another player taking over does not")
+    check(TrackSlide.guessed(one, playedBefore: nil) == .next && TrackSlide.guessed(one, playedBefore: two) == .next
+            && TrackSlide.guessed(one, playedBefore: onePaused) == .previous
+            && TrackSlide.guessed(one, playedBefore: spotifyOne) == .next,
+          "track slide: a change with no press slides as Next, or as Previous when the new song is the one played before")
+    let cover = NSImage(size: NSSize(width: 1, height: 1))
+    var shown = two
+    shown.artwork = cover
+    var loading = one
+    loading.artPending = true
+    check(TrackSlide.cap == 1.5 && ArtHold.limit == TrackSlide.cap
+            && TrackSlide.waited(heldFor: 0.2, sincePress: 1.4) == 1.4
+            && TrackSlide.waited(heldFor: 0.2, sincePress: nil) == 0.2
+            && TrackSlide.waited(heldFor: 0.2, sincePress: TrackSlide.pressWindow + 1) == 0.2
+            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.0)) == .hold
+            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.5)) == .show,
+          "track slide: the wait for the new song and its cover ends 1.5 s after the press at most")
+    let rest = TrackSlide.oldCover(waited: 0, slid: 0, reduceMotion: false)
+    let waitedOut = TrackSlide.oldCover(waited: 1, slid: 0, reduceMotion: false)
+    let gone = TrackSlide.oldCover(waited: 1, slid: 1, reduceMotion: false)
+    let still = TrackSlide.oldCover(waited: 1, slid: 0.5, reduceMotion: true)
+    check(rest.scale == 1 && rest.dim == 0 && rest.opacity == 1
+            && abs(waitedOut.scale - 0.95) < 1e-9 && waitedOut.dim > 0 && waitedOut.opacity == 1
+            && abs(gone.scale - 0.85) < 1e-9 && gone.dim > waitedOut.dim && gone.opacity == 0
+            && still.scale == 1 && still.opacity == 0.5,
+          "track slide: the old cover recedes to 0.95 and dims while it waits, then to 0.85 as it fades; Reduce Motion never scales")
+    check(TrackSlide.waitFraction(after: 0) == 0 && TrackSlide.waitFraction(after: 0.4) > 0.4 / 1.5
+            && abs(TrackSlide.waitFraction(after: 1.5) - 1) < 1e-6 && TrackSlide.waitFraction(after: 2) == 1
+            && TrackSlide.settled(from: 0.8, after: 0) == 0.8 && TrackSlide.settled(from: 0.8, after: 0.15) == 0,
+          "track slide: the wait's recede eases out over 1.5 s, and an ignored press eases back in 0.15 s")
+    check(TrackSlide.incomingOffset(.next, slid: 0, coverMinX: 28, coverWidth: 300, surfaceWidth: 900) == 872
+            && TrackSlide.incomingOffset(.previous, slid: 0, coverMinX: 28, coverWidth: 300, surfaceWidth: 900) == -328
+            && TrackSlide.incomingOffset(.next, slid: 1, coverMinX: 28, coverWidth: 300, surfaceWidth: 900) == 0
+            && TrackSlide.incomingOffset(.previous, slid: 0.5, coverMinX: 24, coverWidth: 48, surfaceWidth: 300) == -36,
+          "track slide: the new cover enters from the surface's right edge for Next and its left edge for Previous")
+    check(TrackSlide.progress(after: 0, seconds: 0.56, fades: false) == 0
+            && TrackSlide.progress(after: 0.56, seconds: 0.56, fades: false) == 1
+            && TrackSlide.progress(after: 0.14, seconds: 0.56, fades: false) > 0.25
+            && TrackSlide.progress(after: 0.075, seconds: 0.15, fades: true) == 0.5,
+          "track slide: the slide eases out; the cross-fade runs evenly")
+    check(TrackSlide.textAway == 10 && TrackSlide.textFrom == 16 && TrackSlide.artistDelay == 0.06
+            && abs(TrackSlide.textOpacity(waited: 1) - 0.6) < 1e-9 && TrackSlide.textOpacity(waited: 0) == 1
+            && TrackSlide.textOut(after: 0.28, seconds: 0.56) == 1 && TrackSlide.textOut(after: 0, seconds: 0.56) == 0
+            && TrackSlide.textIn(after: TrackSlide.artistDelay, seconds: 0.56, delay: TrackSlide.artistDelay) == 0
+            && TrackSlide.textIn(after: 0.56, seconds: 0.56, delay: 0) == 1,
+          "track slide: title and artist dim to 0.6 while waiting; the old text leaves 10 pt, the new comes 16 pt, the artist 60 ms later")
+    func mediaData(_ type: Int, down: Bool = true, repeats: Bool = false) -> Int {
+        type << 16 | (down ? 0x0A : 0x0B) << 8 | (repeats ? 1 : 0)
+    }
+    check(TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(16)) == .playPause
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(17)) == .next
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(19)) == .next
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(18)) == .previous
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(20)) == .previous
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(17, down: false)) == nil
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(17, repeats: true)) == nil
+            && TrackSlide.mediaKeyDown(subtype: 8, data1: mediaData(0)) == nil
+            && TrackSlide.mediaKeyDown(subtype: 7, data1: mediaData(17)) == nil
+            && VolumeKeys.decoded(type: 14, subtype: 8, data1: mediaData(17)) == nil
+            && TrackSlide.MediaKey.playPause.direction == nil && TrackSlide.MediaKey.next.direction == .next
+            && TrackSlide.MediaKey.previous.direction == .previous,
+          "track slide: Play, Next and Previous media keys (Fast and Rewind too) are read once per press")
+    let slideWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let slidePanel = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let slideTap = (try? String(contentsOfFile: "Sources/AudioSync/VolumeKeyTap.swift", encoding: .utf8)) ?? ""
+    let slideKeys = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+VolumeKeys.swift", encoding: .utf8)) ?? ""
+    let slideHold = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+AirPlay.swift", encoding: .utf8)) ?? ""
+    check(slideTap.contains("TrackSlide.mediaKeyDown(") && slideKeys.contains("pressTrack("),
+          "track slide: the volume keys' tap passes the media keys on and feeds their press to the slide")
+    check(slideWindow.contains("overlayPreferenceValue(CoverSlot.self)") && slidePanel.contains("overlayPreferenceValue(CoverSlot.self)")
+            && slideWindow.contains("model.pressTrack(.next)") && slideWindow.contains("model.pressTrack(.previous)")
+            && slideWindow.contains("model.pressTrack(nil)") && slidePanel.contains("place: .panel")
+            && !slideWindow.contains("WipeMask") && !slideWindow.contains("TrackWipe"),
+          "track slide: both surfaces draw the incoming cover above their content, and the old edge sweep is gone")
+    check(slideHold.contains("TrackSlide.waited(") && slideHold.contains("TrackSlide.coverArrived(")
+            && slideHold.contains("TrackSlide.coverFade"),
+          "track slide: the hold counts from the press, and a late cover fades in where it landed")
+    let mediaBranch = slideTap.components(separatedBy: "TrackSlide.mediaKeyDown(").last?
+        .components(separatedBy: "guard case let").first ?? ""
+    check(mediaBranch.contains("DispatchQueue.main.async { observe(media) }") && mediaBranch.contains("return false")
+            && !mediaBranch.contains("return true"),
+          "track slide: the tap hands a media key to the slide and never takes it from the player")
+    let pressBody = slideWindow.components(separatedBy: "func press(_ press: TrackSlide.Press").last?
+        .components(separatedBy: "private func settle()").first ?? ""
+    check(pressBody.contains("deadline: .now() + TrackSlide.cap)") && !pressBody.contains("TrackSlide.pressWindow"),
+          "track slide: a press that changes nothing lets the old cover ease back after 1.5 s, not 3 s")
+    check(pressBody.components(separatedBy: "pressed = press").first?.contains("guard press.direction != nil") == true,
+          "track slide: Play/Pause during the wait ends the recede and keeps the Next or Previous it followed")
+    check(slideWindow.contains("art(track)\n                        .animation(.easeInOut(duration: TrackSlide.coverFade), value: track.artwork != nil)"),
+          "track slide: a cover that arrives while the new song slides in fades in over 0.25 s")
 }
 
-// covers: S463
+// MARK: Play/Pause's icon morphs between play and pause (PlayPauseMorph in WindowRules.swift, MainWindow.swift)
+// covers: S466
 do {
-    let frame = 1.0 / 60
-    for pressToChange in [0.15, 0.25, 0.35] {
-        let reached = TrackWipe.artReach * TrackWipe.slowFraction(after: pressToChange)
-        let lastDriftStep = reached - TrackWipe.artReach * TrackWipe.slowFraction(after: pressToChange - frame)
-        let speed = TrackWipe.driftSpeed(atReached: reached)
-        let before = TrackWipe.sweepProgress(from: reached, speed: speed, after: -frame / 2, reduceMotion: false)
-        let first = TrackWipe.sweepProgress(from: reached, speed: speed, after: frame, reduceMotion: false)
-        let second = TrackWipe.sweepProgress(from: reached, speed: speed, after: 2 * frame, reduceMotion: false)
-        check(before < reached && reached < first && first < second
-                && first - reached <= 1.5 * lastDriftStep && second - first > first - reached,
-              "hand-off: a frame dated before the change still moves, and the sweep's first frame moves at about "
-                + "the slow move's speed, then speeds up",
-              "\(pressToChange) s: drift step \(lastDriftStep), sweep steps \(first - reached) \(second - first)")
-    }
-    for pressToChange in [0.0, 0.15, 0.35] {
-        let reached = TrackWipe.artReach * TrackWipe.slowFraction(after: pressToChange)
-        let speed = TrackWipe.driftSpeed(atReached: reached)
-        let at90 = stride(from: 0.0, through: 1, by: 0.001).first {
-            TrackWipe.sweepProgress(from: reached, speed: speed, after: $0, reduceMotion: false) >= 0.9
-        } ?? 1
-        check(at90 <= 0.15, "hand-off: the sweep still covers 90% of the width within 0.15 s, as before",
-              "\(pressToChange) s: \(at90) s")
-    }
+    let rest = PlayPauseMorph.look(after: nil), start = PlayPauseMorph.look(after: 0)
+    let halfOut = PlayPauseMorph.look(after: 0.05), turn = PlayPauseMorph.look(after: PlayPauseMorph.outSeconds)
+    let done = PlayPauseMorph.look(after: PlayPauseMorph.outSeconds + PlayPauseMorph.inSeconds)
+    check(PlayPauseMorph.outSeconds == 0.1 && PlayPauseMorph.inSeconds == 0.16
+            && PlayPauseMorph.seconds(reduceMotion: false) == 0.26 && PlayPauseMorph.seconds(reduceMotion: true) == 0,
+          "play/pause morph: 100 ms out, 160 ms in, and a plain swap under Reduce Motion")
+    check(!rest.showsOld && rest.scale == 1 && rest.opacity == 1 && start.showsOld && start.scale == 1 && start.opacity == 1
+            && halfOut.showsOld && halfOut.scale < 1 && halfOut.opacity < 1
+            && !turn.showsOld && turn.scale == PlayPauseMorph.outScale && turn.opacity == 0
+            && !done.showsOld && done.scale == 1 && done.opacity == 1,
+          "play/pause morph: the old icon shrinks and fades, then the new one grows in")
+    let peak: Double = stride(from: 0.1, through: 0.26, by: 0.005).map { PlayPauseMorph.look(after: $0).scale }.max() ?? 0.0
+    check(peak > 1 && peak < 1.1, "play/pause morph: the new icon overshoots slightly before it settles")
+    let morphWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    check(morphWindow.contains("SymbolMorph(symbol: symbol)") && morphWindow.contains("PlayPauseMorph.look("),
+          "play/pause morph: the main window's Play/Pause button draws its icon through the morph")
 }
 
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)

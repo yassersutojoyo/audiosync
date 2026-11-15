@@ -276,41 +276,42 @@ struct ArtClock {
     }
 }
 
-/// A Next or Previous press makes the track change after it sweep one edge
-/// across the Now Playing cover, title and artist: right to left for Next,
-/// left to right for Previous, with a thin line on the edge. Under Reduce
-/// Motion the two tracks cross-fade instead; changes without a press are instant.
-enum TrackWipe {
+/// Another song in the same player slides its cover in from the side, Next
+/// from the right and Previous from the left, while the old cover recedes in
+/// place; a Next or Previous press starts the old cover receding while the new
+/// song and its cover load (S463).
+enum TrackSlide {
     enum Direction: Equatable { case next, previous }
-    static let duration: TimeInterval = 0.34
-    static let fadeDuration: TimeInterval = 0.15
+    enum Place { case window, panel }
+    enum Style: Equatable { case instant, fade, slide }
+    enum MediaKey: Equatable {
+        case playPause, next, previous
+        var direction: Direction? { self == .next ? .next : self == .previous ? .previous : nil }
+    }
+    /// A Next or Previous press, or Play/Pause with no direction, from a button or a media key.
+    struct Press: Equatable {
+        let direction: Direction?
+        let at: Date
+    }
+
     /// A change this long after a press still counts as the press's.
     static let pressWindow: TimeInterval = 3
-
-    static func direction(pressed: Direction?, secondsSincePress: TimeInterval) -> Direction? {
-        guard (0...pressWindow).contains(secondsSincePress) else { return nil }
-        return pressed
-    }
-
-    static func seconds(reduceMotion: Bool) -> TimeInterval { reduceMotion ? fadeDuration : duration }
-
-    /// Another song in the same player, not the same one pausing or getting
-    /// its cover, and not another app taking over.
-    static func isSkip(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {
-        old.bundleID == new.bundleID && (old.title, old.artist, old.album) != (new.title, new.artist, new.album)
-    }
-
-    /// From the press until the change, the old cover eases out by up to
-    /// `artReach` of the width and the title and artist by `textShift` points
-    /// toward `dimTo`, so Next never looks like it waits on a cover load.
-    static let slowSeconds: TimeInterval = 1.5
-    static let artReach = 0.22
-    static let textShift: Double = 12
-    static let dimTo = 0.6
+    /// The longest wait from a press for the new song and its cover.
+    static let cap: TimeInterval = 1.5
+    /// Reduce Motion's cross-fade, and an ignored press easing back.
+    static let fadeDuration: TimeInterval = 0.15
     static let coverFade: TimeInterval = 0.25
+    static let waitScale = 0.95
+    static let recedeScale = 0.85
+    static let waitDim = 0.15
+    static let recedeDim = 0.3
+    static let dimTo = 0.6
+    static let textAway: Double = 10
+    static let textFrom: Double = 16
+    static let artistDelay: TimeInterval = 0.06
     typealias Curve = (x1: Double, y1: Double, x2: Double, y2: Double)
-    static let slowCurve: Curve = (0.25, 0.6, 0.35, 1.0)
-    static let sweepCurve: Curve = (0.2, 0.8, 0.2, 1.0)
+    static let waitCurve: Curve = (0.25, 0.6, 0.35, 1.0)
+    static let slideCurve: Curve = (0.2, 0.8, 0.2, 1.0)
     static let settleCurve: Curve = (0, 0, 0.58, 1.0)
 
     /// The cubic Bezier `curve`'s value at `t`, 0 to 1 of its time.
@@ -327,40 +328,87 @@ enum TrackWipe {
         return t == 0 ? 0 : t == 1 ? 1 : axis(curve.y1, curve.y2, (low + high) / 2)
     }
 
-    static func slowFraction(after elapsed: TimeInterval) -> Double { eased(slowCurve, elapsed / slowSeconds) }
-
-    /// Today's sweep speed over the part of the width the slow move left.
-    static func finishSeconds(fromReached reached: Double, reduceMotion: Bool) -> TimeInterval {
-        reduceMotion ? fadeDuration : max(0.09, duration * (1 - reached))
+    /// The main window's travel is long, the panel's short.
+    static func seconds(_ place: Place, reduceMotion: Bool) -> TimeInterval {
+        reduceMotion ? fadeDuration : place == .window ? 0.56 : 0.42
     }
 
-    static let carrySeconds: TimeInterval = 1.0 / 60
-
-    /// The sweep's progress `elapsed` after the change, from the width `start` the slow move reached.
-    /// For `carrySeconds` it carries on at the slow move's `speed`, then runs today's ease-out over the
-    /// rest, so the hand-off holds no frame; a frame dated just before the change moves on at `speed` too.
-    static func sweepProgress(from start: Double, speed: Double, after elapsed: TimeInterval,
-                              reduceMotion: Bool) -> Double {
-        let seconds = finishSeconds(fromReached: start, reduceMotion: reduceMotion)
-        if reduceMotion { return start + (1 - start) * min(1, max(0, elapsed / seconds)) }
-        let carried = start + speed * min(elapsed, carrySeconds)
-        return carried + (1 - carried) * eased(sweepCurve, (elapsed - carrySeconds) / (seconds - carrySeconds))
+    static func style(onScreen: Bool, reduceMotion: Bool) -> Style {
+        !onScreen ? .instant : reduceMotion ? .fade : .slide
     }
 
-    /// The slow move's speed, in widths a second, where the cover has moved out by `reached` of its width.
-    static func driftSpeed(atReached reached: Double) -> Double {
-        var low = 0.0, high = slowSeconds
-        for _ in 0..<40 {
-            let mid = (low + high) / 2
-            if artReach * slowFraction(after: mid) < reached { low = mid } else { high = mid }
-        }
-        let step = 0.001
-        return artReach * (slowFraction(after: low + step) - slowFraction(after: low)) / step
+    static func direction(pressed: Direction?, secondsSincePress: TimeInterval) -> Direction? {
+        guard (0...pressWindow).contains(secondsSincePress) else { return nil }
+        return pressed
     }
 
-    /// A slow move the player ignored, easing back from `reached` over `fadeDuration`.
-    static func settledDrift(from reached: Double, after elapsed: TimeInterval) -> Double {
+    /// Another song in the same player, not the same one pausing or getting
+    /// its cover, and not another app taking over.
+    static func isSkip(_ old: NowPlayingMonitor.Track, _ new: NowPlayingMonitor.Track) -> Bool {
+        old.bundleID == new.bundleID && (old.title, old.artist, old.album) != (new.title, new.artist, new.album)
+    }
+
+    /// A change with no press: Previous when the new song is the one played before the old one.
+    static func guessed(_ new: NowPlayingMonitor.Track, playedBefore: NowPlayingMonitor.Track?) -> Direction {
+        guard let before = playedBefore, before.bundleID == new.bundleID, !isSkip(before, new) else { return .next }
+        return .previous
+    }
+
+    /// How long the next song has waited for its cover (`ArtHold`): from a
+    /// recent press when that came first, so the slide starts `cap` after it at most.
+    static func waited(heldFor: TimeInterval, sincePress: TimeInterval?) -> TimeInterval {
+        guard let sincePress, (0...pressWindow).contains(sincePress) else { return heldFor }
+        return max(heldFor, sincePress)
+    }
+
+    static func waitFraction(after elapsed: TimeInterval) -> Double { eased(waitCurve, elapsed / cap) }
+
+    /// A wait the player ignored, easing back from `reached`.
+    static func settled(from reached: Double, after elapsed: TimeInterval) -> Double {
         reached * (1 - eased(settleCurve, elapsed / fadeDuration))
+    }
+
+    static func progress(after elapsed: TimeInterval, seconds: TimeInterval, fades: Bool) -> Double {
+        fades ? min(1, max(0, elapsed / seconds)) : eased(slideCurve, elapsed / seconds)
+    }
+
+    /// The old cover `waited` into the wait and `slid` into the slide.
+    static func oldCover(waited: Double, slid: Double, reduceMotion: Bool) -> (scale: Double, dim: Double, opacity: Double) {
+        let scale = reduceMotion ? 1 : 1 - (1 - waitScale) * waited
+        let dim = waitDim * waited
+        return (scale + ((reduceMotion ? 1 : recedeScale) - scale) * slid, dim + (recedeDim - dim) * slid, 1 - slid)
+    }
+
+    /// The new cover's offset from its place: from just past the surface's
+    /// right edge for Next, its left edge for Previous.
+    static func incomingOffset(_ direction: Direction, slid: Double, coverMinX: Double, coverWidth: Double,
+                               surfaceWidth: Double) -> Double {
+        (direction == .next ? surfaceWidth - coverMinX : -(coverMinX + coverWidth)) * (1 - slid)
+    }
+
+    static func textOpacity(waited: Double) -> Double { 1 - (1 - dimTo) * waited }
+
+    /// The old title or artist leaves over the slide's first half.
+    static func textOut(after elapsed: TimeInterval, seconds: TimeInterval) -> Double {
+        eased(slideCurve, elapsed / (seconds / 2))
+    }
+
+    static func textIn(after elapsed: TimeInterval, seconds: TimeInterval, delay: TimeInterval) -> Double {
+        eased(slideCurve, (elapsed - delay) / seconds)
+    }
+
+    /// The media key a system-defined event (aux-button subtype 8) carries as
+    /// it goes down; nil for every other key and for a held key's repeats.
+    /// data1 holds the NX key type in its high 16 bits, the key state in bits
+    /// 8-15 (0xA for down) and the repeat flag in bit 0.
+    static func mediaKeyDown(subtype: Int16, data1: Int) -> MediaKey? {
+        guard subtype == 8, (data1 & 0xFF00) >> 8 == 0x0A, data1 & 1 == 0 else { return nil }
+        switch (data1 & 0xFFFF_0000) >> 16 {
+        case 16: return .playPause      // NX_KEYTYPE_PLAY
+        case 17, 19: return .next       // NX_KEYTYPE_NEXT, NX_KEYTYPE_FAST
+        case 18, 20: return .previous   // NX_KEYTYPE_PREVIOUS, NX_KEYTYPE_REWIND
+        default: return nil
+        }
     }
 
     /// The same song getting the cover it went up without.
@@ -368,12 +416,28 @@ enum TrackWipe {
         guard let old, let new, old.artwork == nil, new.artwork != nil else { return false }
         return old.bundleID == new.bundleID && (old.title, old.artist, old.album) == (new.title, new.artist, new.album)
     }
+}
 
-    /// The old and the new track's parts of the width, as fractions from the
-    /// left, at `progress` 0 to 1 of the sweep.
-    static func parts(_ direction: Direction, progress: Double) -> (old: ClosedRange<Double>, new: ClosedRange<Double>) {
-        let p = min(1, max(0, progress))
-        return direction == .next ? (0...(1 - p), (1 - p)...1) : (p...1, 0...p)
+/// Play/Pause's icon changing: the old symbol shrinks and fades, then the new
+/// one grows in with a slight overshoot (S466).
+enum PlayPauseMorph {
+    static let outSeconds: TimeInterval = 0.1
+    static let inSeconds: TimeInterval = 0.16
+    static let outScale = 0.6
+
+    static func seconds(reduceMotion: Bool) -> TimeInterval { reduceMotion ? 0 : outSeconds + inSeconds }
+
+    /// The icon `elapsed` after the change; nil is at rest.
+    static func look(after elapsed: TimeInterval?) -> (showsOld: Bool, scale: Double, opacity: Double) {
+        guard let elapsed, elapsed < outSeconds + inSeconds else { return (false, 1, 1) }
+        if elapsed < outSeconds {
+            let t = max(0, elapsed) / outSeconds
+            return (true, 1 - (1 - outScale) * t, 1 - t)
+        }
+        let t = (elapsed - outSeconds) / inSeconds
+        // Ease-out-back, 1 + 2.70158 (t - 1)^3 + 1.70158 (t - 1)^2 expanded, so it starts at exactly 0.
+        let back = t * (2.70158 * t * t - 6.40316 * t + 4.70158)
+        return (false, outScale + (1 - outScale) * back, t)
     }
 }
 
@@ -387,7 +451,7 @@ enum ArtHold {
     static func decide(shown: NowPlayingMonitor.Track?, next: NowPlayingMonitor.Track?,
                        heldFor: TimeInterval) -> Decision {
         guard let shown, let next, shown.artwork != nil, next.artwork == nil, next.artPending,
-              TrackWipe.isSkip(shown, next), heldFor < limit else { return .show }
+              TrackSlide.isSkip(shown, next), heldFor < limit else { return .show }
         return .hold
     }
 
