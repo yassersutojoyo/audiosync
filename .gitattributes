@@ -1,3 +1,6 @@
 # Third-party license text, kept verbatim (it has trailing whitespace).
 brand/fonts/OFL.txt -whitespace
 desktop/res/skia-licenses/** -whitespace
+# Tests read UI and Rust sources as text and match LF line ends, also on a Windows checkout.
+*.slint text eol=lf
+*.rs text eol=lf
