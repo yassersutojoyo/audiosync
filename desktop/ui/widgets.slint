@@ -44,8 +44,10 @@ export global Fluent {
     // The main window's wordmark and mark, as the Mac's.
     out property <length> wordmark: 21px;
     out property <length> mark: 32px;
+    // Left and right of a speaker row's content (the Mac's rowPaddingX).
+    out property <length> row-padding-x: 10px;
     // Where a row's name starts: its padding, the 32 px toggle and the gap.
-    out property <length> name-inset: 56px;
+    out property <length> name-inset: 54px;
     // The delay column every speaker row lines up on.
     out property <length> delay-column: 76px;
     // The main window's left column, narrow and wide, and the speaker list's
@@ -59,6 +61,16 @@ export global Fluent {
     // Subtle fills under the pointer, over any card or row.
     out property <brush> hover: Tokens.text.with-alpha(0.06);
     out property <brush> pressed: Tokens.text.with-alpha(0.035);
+    // A list row under the pointer, as the Mac's: primary at 5 %, in over
+    // 80 ms and out at once.
+    out property <brush> row-hover: Tokens.text.with-alpha(0.05);
+    out property <length> radius-row: 9px;
+    out property <duration> row-hover-in: 80ms;
+    // An open list's block (Presets), as the Mac's openRowFill.
+    out property <brush> open-row: Tokens.text.with-alpha(0.04);
+    // A playing AirPlay or Bluetooth speaker's kind glyph, the Mac's
+    // activeBlue: 5.8:1 on white, 5.3:1 on the light playing row, 5.5:1 dark.
+    out property <color> active-blue: Tokens.dark ? #5eaeff : #0062cc;
     // The tray panel's block of what plays and the source.
     out property <brush> hero: Tokens.text.with-alpha(0.04);
     // A 1 px edge that sets a card off a light background.
@@ -722,7 +734,7 @@ export component SectionTitle inherits HorizontalLayout {
 export component CardTitle inherits HorizontalLayout {
     in property <string> text;
 
-    padding-left: 2px;
+    padding-left: 4px;
 
     label := Text {
         text: root.text.to-uppercase();
@@ -750,11 +762,12 @@ export component QuietText inherits HorizontalLayout {
     in property <TextVerticalAlignment> vertical-alignment: top;
     in property <TextWrap> wrap: word-wrap;
     in property <TextOverflow> overflow: clip;
+    in property <color> color: Tokens.secondary-text;
 
     Text {
         text: root.text;
         font-size: root.font-size;
-        color: Tokens.secondary-text;
+        color: root.color;
         horizontal-alignment: root.horizontal-alignment;
         vertical-alignment: root.vertical-alignment;
         wrap: root.wrap;
@@ -796,6 +809,8 @@ export component LabelTip inherits Rectangle {
 // tooltip names the kind; Narrator reads it from the row's toggle.
 export component KindIcon inherits Rectangle {
     in property <SpeakerKind> kind;
+    // The speaker plays: blue for AirPlay and Bluetooth, teal for the rest.
+    in property <bool> lit;
     callback clicked();
 
     width: Tokens.font-size-caption + 2px;
@@ -805,7 +820,7 @@ export component KindIcon inherits Rectangle {
         height: 100%;
         glyph: Glyphs.kind-icon(root.kind);
         font-size: Tokens.font-size-caption;
-        color: Tokens.secondary-text;
+        color: !root.lit ? Tokens.secondary-text : root.kind == SpeakerKind.airplay || root.kind == SpeakerKind.airplay2 || root.kind == SpeakerKind.bluetooth ? Fluent.active-blue : Tokens.teal-text;
     }
 
     TouchArea {
@@ -850,6 +865,8 @@ export component IconButton inherits Rectangle {
     in property <length> glyph-size: 16px;
     in property <float> glyph-scale: 1;
     in property <float> glyph-opacity: 1;
+    // Moves the glyph right of its place, for a reveal's slide.
+    in property <length> glyph-shift;
     // A mode that is on: a dot under the glyph, in the glyph's color.
     in property <bool> active;
     callback clicked();
@@ -897,9 +914,17 @@ export component IconButton inherits Rectangle {
         clicked => {
             root.clicked();
         }
+
+        if root.label != "": Tooltip {
+            tip := LabelTip {
+                text: root.label;
+                max-tip-width: 240px;
+            }
+        }
     }
 
     Rectangle {
+        x: root.glyph-shift;
         transform-scale: root.glyph-scale;
         opacity: root.glyph-opacity;
 
@@ -1259,6 +1284,8 @@ export component SpeakerBadge inherits Rectangle {
     // Only the behavior and the focus ring: the tray panel draws its own
     // round mark under it.
     in property <bool> bare;
+    // Its tooltip under the pointer, as the Mac switch's help.
+    in property <string> help;
 
     width: root.size;
     height: root.size;
@@ -1329,6 +1356,13 @@ export component SpeakerBadge inherits Rectangle {
         enabled: root.enabled;
         clicked => {
             root.toggled();
+        }
+
+        if root.help != "": Tooltip {
+            LabelTip {
+                text: root.help;
+                max-tip-width: 240px;
+            }
         }
     }
 
@@ -1642,17 +1676,21 @@ export component LevelSlider inherits Rectangle {
     in property <bool> enabled: true;
     in property <Orientation> orientation: Orientation.horizontal;
     in property <brush> track: Tokens.text.with-alpha(0.15);
+    // The Mac's small slider (a speaker's or a zone's volume): a 13 px knob
+    // on a 3 px track in a 16 px slot.
+    in property <bool> small;
     out property <bool> has-focus: focus.has-focus;
     callback changed(float);
     callback released(float);
     property <bool> vertical: root.orientation == Orientation.vertical;
-    property <length> knob: 16px;
+    property <length> knob: root.small ? 13px : 16px;
+    property <length> thickness: root.small ? 3px : 4px;
     property <length> span: (root.vertical ? root.height : root.width) - root.knob;
     property <float> ratio: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
 
     min-width: root.vertical ? root.knob : 48px;
     min-height: root.vertical ? 48px : root.knob;
-    preferred-height: 22px;
+    preferred-height: root.small ? 16px : 22px;
     forward-focus: focus;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     accessible-role: slider;
@@ -1716,35 +1754,36 @@ export component LevelSlider inherits Rectangle {
     Rectangle {
         x: root.vertical ? (root.width - self.width) / 2 : root.knob / 2;
         y: root.vertical ? root.knob / 2 : (root.height - self.height) / 2;
-        width: root.vertical ? 4px : root.span;
-        height: root.vertical ? root.span : 4px;
-        border-radius: 2px;
+        width: root.vertical ? root.thickness : root.span;
+        height: root.vertical ? root.span : root.thickness;
+        border-radius: root.thickness / 2;
         background: root.track;
     }
 
     Rectangle {
         x: root.vertical ? (root.width - self.width) / 2 : root.knob / 2;
         y: root.vertical ? root.knob / 2 + root.span * (1 - root.ratio) : (root.height - self.height) / 2;
-        width: root.vertical ? 4px : root.span * root.ratio;
-        height: root.vertical ? root.span * root.ratio : 4px;
-        border-radius: 2px;
+        width: root.vertical ? root.thickness : root.span * root.ratio;
+        height: root.vertical ? root.span * root.ratio : root.thickness;
+        border-radius: root.thickness / 2;
         background: Tokens.text;
     }
 
-    Rectangle {
+    thumb := Rectangle {
         width: root.knob;
         height: root.knob;
         x: root.vertical ? (root.width - self.width) / 2 : root.span * root.ratio;
         y: root.vertical ? root.span * (1 - root.ratio) : (root.height - self.height) / 2;
         border-radius: self.width / 2;
-        background: #ffffff;
-        border-width: max(0.5px, 1phx);
+        background: root.small && touch.pressed ? #ebebeb : #ffffff;
+        border-width: root.small ? max(0.5px, 1phx) : 1px;
         border-color: Tokens.secondary-text;
-        drop-shadow-blur: 2px;
-        drop-shadow-color: #00000040;
+        drop-shadow-blur: 1.5px;
+        drop-shadow-offset-y: 0.5px;
+        drop-shadow-color: #0000004d;
     }
 
-    TouchArea {
+    touch := TouchArea {
         enabled: root.enabled;
         pointer-event(event) => {
             if event.button != PointerEventButton.left {
@@ -1866,6 +1905,7 @@ export component VolumeSlider inherits HorizontalLayout {
     in property <float> step: 1;
     in property <brush> track <=> slider.track;
     in property <bool> shows-value: true;
+    in property <bool> small <=> slider.small;
     callback changed(float);
     // True from the first move of a drag or key press to its release.
     callback editing(bool);
@@ -1930,6 +1970,7 @@ export component VolumeSlider inherits HorizontalLayout {
 
     if root.shows-value: QuietText {
         text: Strings.volume-value(slider.value);
+        color: root.is-editing ? Tokens.text : Tokens.secondary-text;
         width: 26px;
         horizontal-alignment: right;
         // One line, centered on the track: a wrapped label is taller than
@@ -2053,6 +2094,9 @@ export component TextField inherits Rectangle {
     in property <InputType> input-type <=> input.input-type;
     in property <bool> read-only <=> input.read-only;
     in property <string> placeholder-text;
+    // A rename in a list row: the Mac's 22 px rounded field, so the row
+    // keeps its height.
+    in property <bool> compact;
     out property <bool> has-focus: input.has-focus;
     // Whether the whole text cursor is inside the box (tests read it).
     out property <bool> caret-in-view: input.x + view.caret-x >= 0 && input.x + view.caret-x + input.text-cursor-width <= view.width;
@@ -2068,13 +2112,14 @@ export component TextField inherits Rectangle {
     }
 
     min-width: 48px;
-    min-height: max(32px, input.preferred-height + 12px);
+    min-height: root.compact ? 22px : max(32px, input.preferred-height + 12px);
+    max-height: root.compact ? 22px : 10000px;
     horizontal-stretch: 1;
     vertical-stretch: 0;
     forward-focus: input;
-    border-radius: Fluent.radius-control;
+    border-radius: root.compact ? 5px : Fluent.radius-control;
     border-width: 1px;
-    border-color: Fluent.stroke;
+    border-color: root.compact && input.has-focus ? Tokens.teal : Fluent.stroke;
     background: input.has-focus ? Tokens.surface : Tokens.surface.mix(Tokens.text, 0.98);
     clip: true;
     accessible-role: text-input;
@@ -2150,8 +2195,8 @@ export component TextField inherits Rectangle {
         }
 
         HorizontalLayout {
-            padding-left: 10px;
-            padding-right: 10px;
+            padding-left: root.compact ? 6px : 10px;
+            padding-right: root.compact ? 6px : 10px;
 
             // The text slides left under this clip so the cursor stays in
             // view: `offset` is how far, never past the end of the text.
@@ -2202,7 +2247,7 @@ export component TextField inherits Rectangle {
         }
     }
 
-    Rectangle {
+    if !root.compact: Rectangle {
         x: 0;
         y: parent.height - self.height;
         width: parent.width;
@@ -2511,7 +2556,7 @@ export component AirPlayDelayControls inherits VerticalLayout {
     }
 
     VerticalLayout {
-        padding-left: Fluent.name-inset - 12px;
+        padding-left: Fluent.name-inset - Fluent.row-padding-x;
 
         VerticalLayout {
             spacing: 6px;
@@ -2634,7 +2679,14 @@ export component NameEditor inherits FocusScope {
         return reject;
     }
 
+    // Fills the name slot, as the Mac's field capped at 220 pt.
+    min-width: 120px;
+    max-width: 220px;
+    horizontal-stretch: 1;
+
     field := TextField {
+        compact: true;
+        font-size: Tokens.font-size-body;
         text: root.text;
         placeholder-text: root.placeholder;
         accessible-label: root.label;
@@ -2820,12 +2872,22 @@ export component SpeakerRow inherits Rectangle {
         }
     }
 
-    border-radius: Fluent.radius-control;
-    background: !root.grouped && hover.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
+    border-radius: Fluent.radius-row;
+    background: !root.grouped && hover.has-hover ? Fluent.row-hover : transparent;
+    animate background {
+        duration: hover.has-hover ? Fluent.row-hover-in : 0ms;
+        easing: linear;
+    }
     // The options button and a delay of 0 ms show under the pointer or the
     // keyboard focus; Narrator finds them either way.
     property <bool> revealed: hover.has-hover || root.focused-part != RowPart.none || root.item.sync-open;
+    // The Mac's Reveal: a fade with a 4 px slide from the right over 440 ms;
+    // with animation effects off, a 150 ms fade alone.
+    property <float> reveal: root.revealed ? 1 : 0;
+    animate reveal {
+        duration: Motion.on ? 440ms : 150ms;
+        easing: Motion.on ? ease-out : linear;
+    }
 
     // Around the row's content, so the hover fill stays on over the row's
     // own controls (they still get their clicks and drags first). The delay
@@ -2935,8 +2997,8 @@ export component SpeakerRow inherits Rectangle {
             }
 
             VerticalLayout {
-                padding-left: 12px;
-                padding-right: 8px;
+                padding-left: Fluent.row-padding-x;
+                padding-right: Fluent.row-padding-x;
                 padding-top: Fluent.row-padding-y;
                 // A pixel less, so the divider keeps the Mac's 52 px step and
                 // the 32 px badge stays on whole pixels in its 40 px line.
@@ -2959,6 +3021,7 @@ export component SpeakerRow inherits Rectangle {
                             plays: root.item.plays;
                             enabled: !root.item.missing;
                             name: root.item.name;
+                            help: Strings.help(root.item.state);
                             label: root.item.cast-group ? Strings.cast-group-label(root.item.name, root.item.cast-group-note) : root.item.cast-added-by-address ? Strings.cast-group-label(Strings.speaker-label(root.item.name, root.item.kind, false, root.item.system-name), Strings.cast-added-by-address) : Strings.speaker-label(root.item.name, root.item.kind, root.item.show-kind, root.item.system-name);
                             description: Strings.with-group-note(root.item.group-note, root.item.zone-note != "" ? root.item.zone-note : root.availability-note != "" ? (root.note-help != "" ? Strings.announcements(root.availability-note, root.note-help) : root.availability-note) : Strings.help(root.item.state));
                             toggled => {
@@ -2977,7 +3040,7 @@ export component SpeakerRow inherits Rectangle {
                     // so a long name keeps the width the slider took.
                     VerticalLayout {
                         alignment: center;
-                        spacing: 4px;
+                        spacing: 5px;
                         horizontal-stretch: 1;
 
                         HorizontalLayout {
@@ -2989,7 +3052,10 @@ export component SpeakerRow inherits Rectangle {
                                 spacing: 1px;
                                 horizontal-stretch: 1;
 
+                                // Fixed, so the 22 px rename field takes no more
+                                // room than the name and the row keeps its 52 px step.
                                 HorizontalLayout {
+                                    height: 17px;
                                     spacing: 6px;
                                     alignment: start;
 
@@ -3047,32 +3113,42 @@ export component SpeakerRow inherits Rectangle {
                                         }
                                     }
 
-                                    if root.item.renaming: NameEditor {
+                                    // The field overhangs the 17 px line by
+                                    // 2.5 px each way, so the row keeps its height.
+                                    if root.item.renaming: Rectangle {
                                         horizontal-stretch: 1;
-                                        text: root.item.name-text;
-                                        placeholder: root.item.device-name;
-                                        label: Strings.speaker-name-field(root.item.device-name);
-                                        description: Strings.speaker-name-field-hint;
-                                        focus-wanted: root.pending-focus == RowPart.name;
-                                        focus-taken => {
-                                            root.pending-focus = RowPart.none;
-                                        }
-                                        focus-changed(focused) => {
-                                            root.name-focused = focused;
-                                        }
-                                        edited(text) => {
-                                            root.rename-edited(text);
-                                        }
-                                        accepted => {
-                                            root.rename-committed();
-                                        }
-                                        cancelled => {
-                                            root.rename-cancelled();
+                                        min-width: 120px;
+                                        max-width: 220px;
+
+                                        NameEditor {
+                                            y: (parent.height - self.height) / 2;
+                                            height: 22px;
+                                            text: root.item.name-text;
+                                            placeholder: root.item.device-name;
+                                            label: Strings.speaker-name-field(root.item.device-name);
+                                            description: Strings.speaker-name-field-hint;
+                                            focus-wanted: root.pending-focus == RowPart.name;
+                                            focus-taken => {
+                                                root.pending-focus = RowPart.none;
+                                            }
+                                            focus-changed(focused) => {
+                                                root.name-focused = focused;
+                                            }
+                                            edited(text) => {
+                                                root.rename-edited(text);
+                                            }
+                                            accepted => {
+                                                root.rename-committed();
+                                            }
+                                            cancelled => {
+                                                root.rename-cancelled();
+                                            }
                                         }
                                     }
 
                                     if root.item.show-kind && !root.item.cast-group: KindIcon {
                                         kind: root.item.kind;
+                                        lit: root.item.plays;
                                         clicked => {
                                             root.box-clicked();
                                         }
@@ -3189,8 +3265,7 @@ export component SpeakerRow inherits Rectangle {
                                 if root.item.has-delay: Rectangle {
                                     min-width: delay-row.preferred-width + 12px;
                                     height: 16px;
-                                    opacity: root.revealed || root.item.delay-ms != 0 ? 1 : 0;
-                                    animate opacity { duration: 120ms; }
+                                    opacity: root.item.delay-ms != 0 ? 1 : root.reveal;
                                     border-radius: Fluent.radius-control;
                                     background: delay-touch.pressed ? Fluent.pressed : delay-touch.has-hover ? Fluent.hover : transparent;
                                     animate background { duration: Fluent.fast; }
@@ -3277,9 +3352,9 @@ export component SpeakerRow inherits Rectangle {
                                     height: 16px;
                                     glyph: Glyphs.more;
                                     label: Strings.speaker-options(root.item.name);
-                                    glyph-color: Tokens.text;
-                                    opacity: root.revealed ? 1 : 0;
-                                    animate opacity { duration: 120ms; }
+                                    glyph-color: Tokens.secondary-text;
+                                    opacity: root.reveal;
+                                    glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                                     clicked => {
                                         // show() takes a point in the menu area, not in this button's layout.
                                         menu.show({
@@ -3307,6 +3382,7 @@ export component SpeakerRow inherits Rectangle {
                                 min-height: volume-slider.min-height;
 
                                 volume-slider := VolumeSlider {
+                                    small: true;
                                     x: -Fluent.slider-inset;
                                     width: parent.width + Fluent.slider-inset;
                                     height: parent.height;
@@ -3424,7 +3500,7 @@ export component SpeakerRow inherits Rectangle {
                 }
 
                 if root.item.has-delay && root.item.sync-open: HorizontalLayout {
-                    padding-left: Fluent.name-inset - 12px;
+                    padding-left: Fluent.name-inset - Fluent.row-padding-x;
                     padding-bottom: 4px;
 
                     // A click on the controls' blank space is a click on the
@@ -3485,16 +3561,6 @@ export component SpeakerRow inherits Rectangle {
                 }
             }
         }
-    }
-
-    // The name's tooltip under the name while the switch has the keyboard
-    // focus, which a click never gives it: a keyboard user can read a cut
-    // name too (S447). Last, so it draws over the row's own controls.
-    if root.badge-focused && !root.item.renaming: focus-tip := LabelTip {
-        x: badge.absolute-position.x - root.absolute-position.x + badge.width + 12px;
-        y: badge.absolute-position.y - root.absolute-position.y + badge.height;
-        text: Strings.speaker-name-tooltip(root.item.name, root.item.system-name);
-        max-tip-width: root.width - self.x - 8px;
     }
 }
 
@@ -3821,9 +3887,12 @@ export component ZoneHeader inherits Rectangle {
     hover-fill := Rectangle {
         x: 4px;
         width: parent.width - 8px;
-        border-radius: Fluent.radius-control;
-        background: hover.has-hover ? Fluent.hover : transparent;
-        animate background { duration: Fluent.fast; }
+        border-radius: Fluent.radius-row;
+        background: hover.has-hover ? Fluent.row-hover : transparent;
+        animate background {
+            duration: hover.has-hover ? Fluent.row-hover-in : 0ms;
+            easing: linear;
+        }
     }
 
     hover := TouchArea {
@@ -3877,7 +3946,7 @@ export component ZoneHeader inherits Rectangle {
                 }
 
                 HorizontalLayout {
-                    padding-left: 4px;
+                    padding-left: 2px;
                     padding-right: 4px;
                     padding-top: Fluent.row-padding-y;
                     padding-bottom: Fluent.row-padding-y;
@@ -3885,8 +3954,8 @@ export component ZoneHeader inherits Rectangle {
                     min-height: Fluent.row-height;
 
                     // The fold arrow at the far left, as on the Mac.
-                    Rectangle {
-                        width: 24px;
+                    chevron := Rectangle {
+                        width: 16px;
                         height: 32px;
                         border-radius: Fluent.radius-control;
                         y: (parent.height - self.height) / 2;
@@ -3941,10 +4010,19 @@ export component ZoneHeader inherits Rectangle {
                             }
                         }
 
-                        Glyph {
-                            glyph: root.item.expanded ? Glyphs.chevron-down : Glyphs.chevron-right;
-                            font-size: 12px;
-                            color: Tokens.secondary-text;
+                        // Turns a quarter with the 250 ms fold, as the Mac's FoldTurn.
+                        Rectangle {
+                            transform-rotation: root.item.expanded ? 90deg : 0deg;
+                            animate transform-rotation {
+                                duration: Motion.on ? 250ms : 0ms;
+                                easing: ease-in-out;
+                            }
+
+                            Glyph {
+                                glyph: Glyphs.chevron-right;
+                                font-size: 10px;
+                                color: Tokens.secondary-text;
+                            }
                         }
                     }
 
@@ -4109,7 +4187,10 @@ export component ZoneHeader inherits Rectangle {
                     VerticalLayout {
                         alignment: center;
                         volume-slider := VolumeSlider {
-                            width: 140px;
+                            small: true;
+                            min-width: 100px;
+                            preferred-width: 140px;
+                            max-width: 140px;
                             volume: root.item.volume;
                             enabled: root.item.total > 0;
                             label: Strings.zone-volume(root.item.name);
