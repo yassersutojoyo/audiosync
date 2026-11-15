@@ -230,7 +230,7 @@ struct MainView: View {
     @StateObject private var zoneDisclosure = ZoneDisclosure()
     @StateObject private var windowWidth = WindowWidth()
     @StateObject private var heroHover = HoverState()
-    @StateObject private var wipe = TrackWipeState()
+    @StateObject private var slide = TrackSlideState()
     @Environment(\.displayScale) private var displayScale
     @FocusState private var modeFocus: TransportMode?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -320,6 +320,10 @@ struct MainView: View {
         .frame(minWidth: 696, maxWidth: .infinity, minHeight: 460, maxHeight: .infinity, alignment: .topLeading)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { sheetRoom.height = $0 }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { windowWidth.points = $0 }
+        // Above the whole window, so the new cover crosses the speaker list on its way in.
+        .overlayPreferenceValue(CoverSlot.self) { slot in
+            IncomingCover(slide: slide, slot: slot, track: model.nowPlaying, cornerRadius: 10) { cover($0) }
+        }
         // A click no row or control takes closes the delay panels, applying
         // what was typed. Behind everything, so the header can still drag
         // the window.
@@ -408,47 +412,28 @@ struct MainView: View {
             }
         }
         .onHover { heroHover.isHovered = $0 }
-        .onChange(of: model.nowPlaying) { old, new in wipe.change(from: old, to: new, reduceMotion: reduceMotion) }
-    }
-
-    private func nowPlaying(_ track: NowPlayingMonitor.Track, _ t: UIStrings) -> some View {
-        TimelineView(.animation(paused: !wipe.moving)) { timeline in
-            nowPlaying(track, t, at: timeline.date)
+        .onChange(of: model.nowPlaying) { old, new in
+            slide.change(from: old, to: new, place: .window, onScreen: MarkBreath.shared.mainOnScreen,
+                         reduceMotion: reduceMotion)
+        }
+        .onChange(of: model.trackPress) { _, press in
+            if let press { slide.press(press, onScreen: MarkBreath.shared.mainOnScreen) }
         }
     }
 
-    private func nowPlaying(_ track: NowPlayingMonitor.Track, _ t: UIStrings, at now: Date) -> some View {
-        let shown = wipe.held ?? track
-        return VStack(alignment: .leading, spacing: 4) {
-            wiped(shown, at: now) { track, drift in
-                Color.clear
-                    .aspectRatio(1, contentMode: .fit)
-                    .overlay {
-                        // The strip the moving cover leaves shows the same cover blurred, never an empty card.
-                        if drift > 0, !reduceMotion { cover(track).blur(radius: 22).scaleEffect(1.2) }
-                    }
-                    .overlay {
-                        GeometryReader { proxy in
-                            cover(track)
-                                .frame(width: proxy.size.width, height: proxy.size.height)
-                                .offset(x: CGFloat(shift(TrackWipe.artReach, drift)) * proxy.size.width)
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .opacity(reduceMotion ? dimmed(drift) : 1)
-            }
-            .padding(.top, 2)
-            .accessibilityHidden(true)
+    private func nowPlaying(_ track: NowPlayingMonitor.Track, _ t: UIStrings) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                .overlay { SlotCover(slide: slide, track: track, cornerRadius: 10) { cover($0) } }
+                .padding(.top, 2)
+                .accessibilityHidden(true)
             AmbientArt(tide: SoundTide.shared, colors: CoverColors.of(track.artwork))
                 .padding(.vertical, 3)
-            wiped(shown, at: now) { track, drift in
-                ScrollingTitle(text: track.title).font(.title3.weight(.semibold))
-                    .offset(x: shift(TrackWipe.textShift, drift)).opacity(dimmed(drift))
-            }
-            wiped(shown, at: now) { track, drift in
-                ScrollingTitle(text: track.artist.isEmpty ? track.appName : track.artist)
+            SlidLine(slide: slide, track: track) { ScrollingTitle(text: $0.title).font(.title3.weight(.semibold)) }
+            SlidLine(slide: slide, track: track, delay: TrackSlide.artistDelay) {
+                ScrollingTitle(text: $0.artist.isEmpty ? $0.appName : $0.artist)
                     .font(.callout).foregroundStyle(Brand.secondaryText)
-                    .offset(x: shift(TrackWipe.textShift, drift)).opacity(dimmed(drift))
             }
             HStack(spacing: MainColumns.transportSpacing(
                 modes: track.shuffle != nil || track.repeatMode != nil)) {
@@ -478,30 +463,6 @@ struct MainView: View {
         }
     }
 
-    /// `content` for `shown`, and during a sweep for the outgoing track too,
-    /// each on its side of the edge. Full width, so one edge crosses the cover,
-    /// title and artist at the same place.
-    /// `content` gets the slow move's progress (`TrackWipeState.drift`) for the
-    /// old track, and 0 for the new one.
-    private func wiped<Content: View>(_ shown: NowPlayingMonitor.Track, at now: Date,
-                                      @ViewBuilder _ content: (NowPlayingMonitor.Track, Double) -> Content) -> some View {
-        let drift = wipe.drift(at: now), progress = wipe.progress(at: now)
-        return ZStack {
-            if let outgoing = wipe.outgoing {
-                content(outgoing, drift)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .mask(WipeMask(direction: wipe.direction, progress: wipe.fades ? 0 : progress, showsNew: false))
-                    .opacity(wipe.fades ? 1 - progress : 1)
-                    .transition(.identity)
-                    .accessibilityHidden(true)
-            }
-            content(shown, wipe.outgoing == nil ? drift : 0)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .mask(WipeMask(direction: wipe.direction, progress: wipe.fades ? 1 : progress, showsNew: true))
-                .opacity(wipe.fades ? progress : 1)
-        }
-    }
-
     @ViewBuilder private func cover(_ track: NowPlayingMonitor.Track) -> some View {
         if let art = track.artwork {
             Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
@@ -513,13 +474,6 @@ struct MainView: View {
         }
     }
 
-    private func dimmed(_ drift: Double) -> Double { 1 - (1 - TrackWipe.dimTo) * drift }
-
-    /// The slow move's offset at `drift`, the way the wipe goes; none under Reduce Motion.
-    private func shift(_ distance: Double, _ drift: Double) -> Double {
-        reduceMotion ? 0 : (wipe.direction == .next ? -1 : 1) * distance * drift
-    }
-
     /// Shuffle and Repeat wait one step away: hover or keyboard focus on the
     /// hero shows them, and VoiceOver always finds them.
     private var modesShown: Bool { heroHover.isHovered || modeFocus != nil || voiceOver }
@@ -527,7 +481,12 @@ struct MainView: View {
     private func transportButton(_ symbol: String, _ command: NowPlayingMonitor.Command,
                                  label: String) -> some View {
         Button {
-            if command == .next { wipe.press(.next) } else if command == .previous { wipe.press(.previous) }
+            switch command {
+            case .next: model.pressTrack(.next)
+            case .previous: model.pressTrack(.previous)
+            case .playPause: model.pressTrack(nil)
+            default: break
+            }
             model.actions.transport(command)
         } label: {
             Image(systemName: symbol)
@@ -1300,148 +1259,205 @@ private struct Reveal: ViewModifier {
     }
 }
 
-/// One side of the track wipe's edge (`TrackWipe.parts`).
-private struct WipeMask: Shape {
-    let direction: TrackWipe.Direction
-    var progress: Double
-    let showsNew: Bool
-
-    var animatableData: Double {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        let parts = TrackWipe.parts(direction, progress: progress)
-        let part = showsNew ? parts.new : parts.old
-        return Path(CGRect(x: rect.minX + rect.width * part.lowerBound, y: rect.minY,
-                           width: rect.width * (part.upperBound - part.lowerBound), height: rect.height))
+/// Where a surface's Now Playing cover sits, for `IncomingCover` above the surface.
+struct CoverSlot: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
 }
 
-/// The Now Playing block's side of `TrackWipe`: the press it waits on, the
-/// old track kept up while the running sweep ends, and
-/// the outgoing one during a sweep. An object rather than @State, for the
-/// Command Line Tools toolchain.
-final class TrackWipeState: ObservableObject {
-    @Published private(set) var held: NowPlayingMonitor.Track?
+/// The cover in its place: it recedes while a press waits, and during a slide
+/// the old cover recedes and fades there while `IncomingCover` brings the new one.
+struct SlotCover<Art: View>: View {
+    @ObservedObject var slide: TrackSlideState
+    let track: NowPlayingMonitor.Track
+    let cornerRadius: CGFloat
+    @ViewBuilder let art: (NowPlayingMonitor.Track) -> Art
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        GeometryReader { proxy in
+            TimelineView(.animation(paused: !slide.moving)) { timeline in
+                let look = TrackSlide.oldCover(waited: slide.waited(at: timeline.date),
+                                               slid: slide.slid(at: timeline.date), reduceMotion: reduceMotion)
+                art(slide.outgoing ?? track)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                    .brightness(-look.dim)
+                    .scaleEffect(look.scale)
+                    .opacity(look.opacity)
+            }
+        }
+        .anchorPreference(key: CoverSlot.self, value: .bounds) { $0 }
+    }
+}
+
+/// The new cover on its way in, drawn above the whole surface from its edge to
+/// the slot, so only the window or panel clips it.
+struct IncomingCover<Art: View>: View {
+    @ObservedObject var slide: TrackSlideState
+    let slot: Anchor<CGRect>?
+    let track: NowPlayingMonitor.Track?
+    let cornerRadius: CGFloat
+    @ViewBuilder let art: (NowPlayingMonitor.Track) -> Art
+
+    var body: some View {
+        if let slot, let track, slide.outgoing != nil {
+            GeometryReader { proxy in
+                let rect = proxy[slot]
+                TimelineView(.animation(paused: !slide.moving)) { timeline in
+                    let slid = slide.slid(at: timeline.date)
+                    let offset = slide.fades ? 0 : TrackSlide.incomingOffset(
+                        slide.direction, slid: slid, coverMinX: Double(rect.minX), coverWidth: Double(rect.width),
+                        surfaceWidth: Double(proxy.size.width))
+                    art(track)
+                        .frame(width: rect.width, height: rect.height)
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+                        .opacity(slide.fades ? slid : 1)
+                        .offset(x: rect.minX + CGFloat(offset), y: rect.minY)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+    }
+}
+
+/// A title or artist line: it dims while a press waits; on the change the old
+/// line leaves away from the cover's side and the new one comes from it, inside its column.
+struct SlidLine<Line: View>: View {
+    @ObservedObject var slide: TrackSlideState
+    let track: NowPlayingMonitor.Track
+    var delay: TimeInterval = 0
+    @ViewBuilder let line: (NowPlayingMonitor.Track) -> Line
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(paused: !slide.moving)) { timeline in
+            let waited = slide.waited(at: timeline.date)
+            let elapsed = slide.elapsed(at: timeline.date)
+            let side: CGFloat = reduceMotion || slide.fades ? 0 : slide.direction == .next ? 1 : -1
+            let into = elapsed.map { TrackSlide.textIn(after: $0, seconds: slide.seconds, delay: delay) } ?? 1
+            ZStack(alignment: .leading) {
+                if let outgoing = slide.outgoing, let elapsed {
+                    let out = TrackSlide.textOut(after: elapsed, seconds: slide.seconds)
+                    line(outgoing)
+                        .offset(x: -side * CGFloat(TrackSlide.textAway * out))
+                        .opacity(TrackSlide.textOpacity(waited: waited) * (1 - out))
+                        .accessibilityHidden(true)
+                }
+                line(track)
+                    .offset(x: side * CGFloat(TrackSlide.textFrom * (1 - into)))
+                    .opacity(slide.outgoing == nil ? TrackSlide.textOpacity(waited: waited) : into)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
+        }
+    }
+}
+
+/// One surface's side of `TrackSlide`: the press it waits on, the old song
+/// while the new one slides in, and the song before it for the guess. An
+/// object rather than @State, for the Command Line Tools toolchain.
+final class TrackSlideState: ObservableObject {
     @Published private(set) var outgoing: NowPlayingMonitor.Track?
-    private(set) var direction = TrackWipe.Direction.next
-    /// Reduce Motion: the tracks cross-fade instead of sweeping.
-    private(set) var fades = false
-    private var pressed: (direction: TrackWipe.Direction, at: Date)?
-    private var current: NowPlayingMonitor.Track?
-    /// The way the held track leaves once it is let go.
-    private var pending = (direction: TrackWipe.Direction.next, fades: false)
-    private var sweeps = 0
-    // The view draws from these times on its frame clock rather than through SwiftUI animations, so the
-    // sweep starts in the frame of the change from the width the cover was drawn at, with no second commit.
-    @Published private var driftStart: Date?
+    // The views draw from these times on their frame clock rather than through SwiftUI animations.
+    @Published private var waitStart: Date?
     @Published private var settleStart: Date?
-    @Published private var sweepStart: Date?
-    /// The press time of the slow move the sweep took over, which keeps moving the outgoing cover.
-    private var handedOff: Date?
-    /// Where the slow move stopped: at the change, or when it began settling back.
+    @Published private var slideStart: Date?
+    private(set) var direction = TrackSlide.Direction.next
+    /// Reduce Motion: the songs cross-fade instead of sliding.
+    private(set) var fades = false
+    private(set) var seconds: TimeInterval = 1
+    private var pressed: TrackSlide.Press?
+    private var playedBefore: NowPlayingMonitor.Track?
+    /// Where the wait got: at the change, or when it began easing back.
     private var reached = 0.0
-    private var sweepFrom = 1.0
-    private var sweepSpeed = 0.0
+    private var slides = 0
 
-    var moving: Bool { driftStart != nil || settleStart != nil || sweepStart != nil }
+    var moving: Bool { waitStart != nil || settleStart != nil || slideStart != nil }
 
-    /// The slow move's progress at `now`, 0 to 1 (`TrackWipe.slowFraction`).
-    func drift(at now: Date) -> Double {
-        if let start = driftStart ?? handedOff { return TrackWipe.slowFraction(after: now.timeIntervalSince(start)) }
-        if let start = settleStart { return TrackWipe.settledDrift(from: reached, after: now.timeIntervalSince(start)) }
-        return reached
+    func waited(at now: Date) -> Double {
+        if let start = waitStart { return TrackSlide.waitFraction(after: now.timeIntervalSince(start)) }
+        if let start = settleStart { return TrackSlide.settled(from: reached, after: now.timeIntervalSince(start)) }
+        return outgoing == nil ? 0 : reached
     }
 
-    func progress(at now: Date) -> Double {
-        guard let start = sweepStart else { return 1 }
-        return TrackWipe.sweepProgress(from: sweepFrom, speed: sweepSpeed, after: now.timeIntervalSince(start),
-                                       reduceMotion: fades)
+    func elapsed(at now: Date) -> TimeInterval? { slideStart.map { now.timeIntervalSince($0) } }
+
+    func slid(at now: Date) -> Double {
+        guard let elapsed = elapsed(at: now) else { return 0 }
+        return TrackSlide.progress(after: elapsed, seconds: seconds, fades: fades)
     }
 
-    func press(_ direction: TrackWipe.Direction) {
-        let now = Date.now
-        pressed = (direction, now)
-        guard held == nil, outgoing == nil, driftStart == nil else { return }
+    /// Play/Pause only lets a waiting cover ease back.
+    func press(_ press: TrackSlide.Press, onScreen: Bool) {
+        pressed = press
+        guard press.direction != nil else {
+            if waitStart != nil { settle() }
+            return
+        }
+        guard onScreen, outgoing == nil, waitStart == nil else { return }
         settleStart = nil
-        driftStart = now
-        self.direction = direction
-        // A press the player ignores lets the old track settle back.
-        DispatchQueue.main.asyncAfter(deadline: .now() + TrackWipe.pressWindow) { [weak self] in
-            guard let self, self.driftStart == now else { return }
+        waitStart = press.at
+        DispatchQueue.main.asyncAfter(deadline: .now() + TrackSlide.pressWindow) { [weak self] in
+            guard let self, self.waitStart == press.at else { return }
             self.settle()
         }
     }
 
     private func settle() {
         let now = Date.now
-        reached = drift(at: now)
-        driftStart = nil
+        reached = waited(at: now)
+        waitStart = nil
         settleStart = now
-        DispatchQueue.main.asyncAfter(deadline: .now() + TrackWipe.fadeDuration) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + TrackSlide.fadeDuration) { [weak self] in
             guard let self, self.settleStart == now else { return }
             self.settleStart = nil
             self.reached = 0
         }
     }
 
-    func change(from old: NowPlayingMonitor.Track?, to new: NowPlayingMonitor.Track?, reduceMotion: Bool) {
-        current = new
-        if held != nil {
-            if outgoing == nil { release() }
+    func change(from old: NowPlayingMonitor.Track?, to new: NowPlayingMonitor.Track?, place: TrackSlide.Place,
+                onScreen: Bool, reduceMotion: Bool) {
+        guard let old, let new, TrackSlide.isSkip(old, new) else {
+            // The same song pausing or getting its cover keeps what runs; another player ends it.
+            if old?.bundleID != new?.bundleID { stop() }
             return
         }
-        guard let old, let new, TrackWipe.isSkip(old, new), let press = pressed,
-              let direction = TrackWipe.direction(pressed: press.direction,
-                                                  secondsSincePress: Date.now.timeIntervalSince(press.at))
-        else {
-            // Another player taking over isn't the skip the press moved the card for.
-            if driftStart != nil, old?.bundleID != new?.bundleID { settle() }
-            return
+        let now = Date.now
+        let press = pressed.flatMap {
+            TrackSlide.direction(pressed: $0.direction, secondsSincePress: now.timeIntervalSince($0.at))
         }
-        if driftStart != nil {
-            reached = drift(at: Date.now)
-            handedOff = driftStart
-            driftStart = nil
-        }
+        let guess = TrackSlide.guessed(new, playedBefore: playedBefore)
+        playedBefore = old
         pressed = nil
-        held = old
-        pending = (direction, reduceMotion)
-        // A running sweep finishes first; its end lets the held track go.
-        guard outgoing == nil else { return }
-        release()
-    }
-
-    private func release() {
-        guard let held else { return }
-        self.held = nil
-        guard current != nil else {
-            reached = 0
-            handedOff = nil
-            return
-        }
-        (direction, fades) = pending
-        sweep(from: held)
-    }
-
-    private func sweep(from old: NowPlayingMonitor.Track) {
-        sweeps += 1
-        let mark = sweeps
+        let style = TrackSlide.style(onScreen: onScreen, reduceMotion: reduceMotion)
+        guard style != .instant else { return stop() }
+        reached = waited(at: now)
+        waitStart = nil
+        settleStart = nil
+        direction = press ?? guess
+        fades = style == .fade
+        seconds = TrackSlide.seconds(place, reduceMotion: fades)
+        slides += 1
+        let mark = slides
         outgoing = old
-        sweepFrom = fades ? 0 : TrackWipe.artReach * reached
-        sweepSpeed = TrackWipe.driftSpeed(atReached: sweepFrom)
-        sweepStart = Date.now
-        let seconds = TrackWipe.finishSeconds(fromReached: sweepFrom, reduceMotion: fades)
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
-            guard let self, self.sweeps == mark else { return }
-            self.sweepStart = nil
-            self.outgoing = nil
-            self.reached = 0
-            self.handedOff = nil
-            self.release()
+        slideStart = now
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds + TrackSlide.artistDelay) { [weak self] in
+            guard let self, self.slides == mark else { return }
+            self.stop()
         }
+    }
+
+    private func stop() {
+        slides += 1
+        outgoing = nil
+        waitStart = nil
+        settleStart = nil
+        slideStart = nil
+        reached = 0
     }
 }
 

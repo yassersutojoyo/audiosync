@@ -322,6 +322,9 @@ final class AppModel: ObservableObject {
     /// Streaming with every speaker off (`StreamingPolicy.showsNoSpeakerOn`).
     @Published var noSpeakerOn = false
     @Published var nowPlaying: NowPlayingMonitor.Track?
+    /// The latest Next, Previous or Play/Pause press, from a button or a media key (`TrackSlide`).
+    @Published var trackPress: TrackSlide.Press?
+    func pressTrack(_ direction: TrackSlide.Direction?) { trackPress = TrackSlide.Press(direction: direction, at: .now) }
     @Published var equalizerOn = false
     /// The curve the equalizer picker shows, or "Custom".
     @Published var equalizerCurve = ""
@@ -1672,6 +1675,7 @@ struct MenuBarView: View {
     @ObservedObject var model: AppModel
     var intro = PanelIntro()
     @StateObject private var zoneDisclosure = ZoneDisclosure()
+    @StateObject private var slide = TrackSlideState()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let rowHeight: CGFloat = 36
 
@@ -1714,7 +1718,7 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 10) {
             header(t).modifier(IntroPart(intro: intro, index: 0))
             NoticeStack(model: model, compact: true).modifier(IntroPart(intro: intro, index: 1))
-            SourcePicker(model: model, hero: true).modifier(IntroPart(intro: intro, index: 2))
+            SourcePicker(model: model, hero: true, slide: slide).modifier(IntroPart(intro: intro, index: 2))
             if let hint = model.liveInputAirPlayHint {
                 LiveInputAirPlayNote(message: hint, font: .subheadline).padding(.top, -4)
             }
@@ -1761,6 +1765,18 @@ struct MenuBarView: View {
         .animation(reduceMotion ? nil : .easeOut(duration: PanelRowMotion.duration), value: rowPlaces)
         .padding(EdgeInsets(top: 14, leading: 14, bottom: 8, trailing: 14))
         .frame(width: 300)
+        .overlayPreferenceValue(CoverSlot.self) { slot in
+            IncomingCover(slide: slide, slot: slot, track: model.nowPlaying, cornerRadius: 9) {
+                SourcePicker(model: model, hero: true).heroArt($0)
+            }
+        }
+        .onChange(of: model.nowPlaying) { old, new in
+            slide.change(from: old, to: new, place: .panel, onScreen: MarkBreath.shared.panelOnScreen,
+                         reduceMotion: reduceMotion)
+        }
+        .onChange(of: model.trackPress) { _, press in
+            if let press { slide.press(press, onScreen: MarkBreath.shared.panelOnScreen) }
+        }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { model.panelContentHeight($0) }
         .pinnedToTop()
         // Over the popover's material; the popover rounds it and draws the edge.
@@ -2306,6 +2322,8 @@ struct SourcePicker: View {
     /// The panel's hero: the source's icon, or the song's cover, beside the
     /// menu, with the song under it while one plays.
     var hero = false
+    /// The hero's Now Playing slide, which the panel owns and draws the incoming cover of.
+    var slide = TrackSlideState()
 
     /// Whether the chosen source is a mix, which checks the Several Apps menu.
     private var isMix: Bool {
@@ -2338,8 +2356,8 @@ struct SourcePicker: View {
     private var heroRow: some View {
         HStack(spacing: 11) {
             Group {
-                if let art = model.nowPlaying?.artwork {
-                    Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
+                if let track = model.nowPlaying {
+                    SlotCover(slide: slide, track: track, cornerRadius: 9) { heroArt($0) }
                 } else {
                     sourceIcon(model.currentSource)
                 }
@@ -2352,15 +2370,28 @@ struct SourcePicker: View {
                 sourceMenu
                 if let track = model.nowPlaying {
                     VStack(alignment: .leading, spacing: 1) {
-                        ScrollingTitle(text: track.title).font(.system(size: 15, weight: .semibold))
-                        ScrollingTitle(text: track.artist.isEmpty ? track.appName : track.artist)
-                            .font(.body)
-                            .foregroundStyle(Brand.secondaryText)
+                        SlidLine(slide: slide, track: track) {
+                            ScrollingTitle(text: $0.title).font(.system(size: 15, weight: .semibold))
+                        }
+                        SlidLine(slide: slide, track: track, delay: TrackSlide.artistDelay) {
+                            ScrollingTitle(text: $0.artist.isEmpty ? $0.appName : $0.artist)
+                                .font(.body)
+                                .foregroundStyle(Brand.secondaryText)
+                        }
                     }
                     .accessibilityElement(children: .combine)
                     .transition(.opacity)
                 }
             }
+        }
+    }
+
+    /// The hero's cover, or the source's icon for a song without one.
+    @ViewBuilder func heroArt(_ track: NowPlayingMonitor.Track) -> some View {
+        if let art = track.artwork {
+            Image(nsImage: art).resizable().aspectRatio(contentMode: .fill)
+        } else {
+            sourceIcon(model.currentSource)
         }
     }
 

@@ -19026,42 +19026,6 @@ do {
           "scrolling title: a title at its start shows its first letter in full", "\(startStops)")
 }
 
-// MARK: Next and Previous sweep one edge across the Now Playing cover, title and artist (WindowRules.swift, MainWindow.swift)
-do {
-    check(TrackWipe.direction(pressed: .next, secondsSincePress: 0.5) == .next
-            && TrackWipe.direction(pressed: .previous, secondsSincePress: 1) == .previous
-            && TrackWipe.direction(pressed: nil, secondsSincePress: 0.5) == nil
-            && TrackWipe.direction(pressed: .next, secondsSincePress: TrackWipe.pressWindow + 1) == nil
-            && TrackWipe.direction(pressed: .next, secondsSincePress: -1) == nil,
-          "track wipe: a change soon after Next or Previous sweeps that way; one without a press or a late one is instant")
-    check(TrackWipe.seconds(reduceMotion: false) == 0.34 && TrackWipe.seconds(reduceMotion: true) == 0.15,
-          "track wipe: under Reduce Motion the tracks cross-fade in 0.15 s instead of sweeping")
-    let start = TrackWipe.parts(.next, progress: 0), nextQuarter = TrackWipe.parts(.next, progress: 0.25)
-    let previousQuarter = TrackWipe.parts(.previous, progress: 0.25), end = TrackWipe.parts(.previous, progress: 1)
-    check(start.old == 0...1 && start.new.lowerBound == 1 && nextQuarter.old == 0...0.75 && nextQuarter.new == 0.75...1
-            && previousQuarter.new == 0...0.25 && previousQuarter.old == 0.25...1 && end.new == 0...1 && end.old.lowerBound == 1
-            && TrackWipe.duration == 0.34,
-          "track wipe: Next's edge moves right to left and Previous's left to right in 0.34 s, the new track on the side the edge has passed",
-          "\(nextQuarter) \(previousQuarter)")
-    let song = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
-                                       album: "B", isPlaying: true, artwork: nil)
-    let paused = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
-                                         album: "B", isPlaying: false, artwork: nil)
-    let other = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "Two", artist: "A",
-                                        album: "B", isPlaying: true, artwork: nil)
-    let spotify = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two", artist: "A",
-                                          album: "B", isPlaying: true, artwork: nil)
-    check(TrackWipe.isSkip(song, other) && !TrackWipe.isSkip(song, paused) && !TrackWipe.isSkip(song, spotify),
-          "track wipe: another song in the same player sweeps; the same song pausing or another app taking over does not")
-    let main = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
-    check(main.components(separatedBy: "wipe.press(.next)").count == 2 && main.components(separatedBy: "wipe.press(.previous)").count == 2
-            && main.components(separatedBy: "TrackWipe.parts(").count == 2,
-          "track wipe: the main window's Next and Previous buttons start the sweep over the cover, title and artist")
-    // 14 Nov on the Mac: a 1 px grey line rode the edge over the title and artist; the approved mockup has none.
-    check(!main.contains("WipeEdge("),
-          "track wipe: no line rides the sweeping edge, the new track simply takes over where the edge has passed")
-}
-
 // MARK: The old song stays up while the next one's cover loads (ArtHold in WindowRules.swift)
 // covers: S459
 do {
@@ -19245,90 +19209,6 @@ do {
     check(pacedArt.isStale(print: 1, for: ("Later", "Other")) && !pacedArt.isStale(print: 3, for: ("Later", "Other"))
             && !pacedArt.isStale(print: 1, for: ("Track 2", "Three Cheers")),
           "art read: a cover read ahead that repeats a recent song's of another album is not cached")
-}
-
-// MARK: Next eases the old song out while the next one's cover loads (TrackWipe in WindowRules.swift, MainWindow.swift)
-// covers: S463
-do {
-    check(TrackWipe.slowSeconds == 1.5 && TrackWipe.artReach == 0.22 && TrackWipe.textShift == 12
-            && TrackWipe.dimTo == 0.6 && TrackWipe.coverFade == 0.25,
-          "slow move: the old cover eases out up to 22% over 1.5 s, the title and artist 12 px toward 0.6 opacity")
-    let early = TrackWipe.slowFraction(after: 0.4), late = TrackWipe.slowFraction(after: 1.2)
-    check(TrackWipe.slowFraction(after: 0) == 0 && early > 0.4 / 1.5 && early < late && late < 1
-            && abs(TrackWipe.slowFraction(after: 1.5) - 1) < 1e-6 && TrackWipe.slowFraction(after: 2) == 1,
-          "slow move: it starts at the press, eases out, and stops where it reached at 1.5 s", "\(early) \(late)")
-    let fromRest = TrackWipe.finishSeconds(fromReached: 0, reduceMotion: false)
-    let fromEnd = TrackWipe.finishSeconds(fromReached: TrackWipe.artReach, reduceMotion: false)
-    check(fromRest == TrackWipe.duration && abs(fromEnd - TrackWipe.duration * 0.78) < 1e-9
-            && TrackWipe.finishSeconds(fromReached: 0.95, reduceMotion: false) == 0.09
-            && TrackWipe.finishSeconds(fromReached: 0.22, reduceMotion: true) == TrackWipe.fadeDuration,
-          "slow move: the finishing sweep runs today's speed over the width left, 90 ms at least; Reduce Motion cross-fades",
-          "\(fromRest) \(fromEnd)")
-    let lateCover = NSImage(size: NSSize(width: 1, height: 1))
-    let placeholder = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
-                                              artist: "A", album: "B", isPlaying: true, artwork: nil)
-    var withCover = placeholder
-    withCover.artwork = lateCover
-    let nextSong = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Three",
-                                           artist: "A", album: "B", isPlaying: true, artwork: lateCover)
-    check(TrackWipe.coverArrived(placeholder, withCover) && !TrackWipe.coverArrived(placeholder, nextSong)
-            && !TrackWipe.coverArrived(withCover, withCover) && !TrackWipe.coverArrived(nil, withCover),
-          "slow move: a cover that comes after its song gave up waiting fades in; another song does not")
-    let airplay = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+AirPlay.swift", encoding: .utf8)) ?? ""
-    let window = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
-    check(airplay.contains("TrackWipe.coverArrived(") && airplay.contains("TrackWipe.coverFade")
-            && window.contains("TrackWipe.slowFraction(") && window.contains("TrackWipe.finishSeconds("),
-          "slow move: the main window runs it from the press, and both views fade a late cover in")
-    let wipeState = window.components(separatedBy: "final class TrackWipeState").last?
-        .components(separatedBy: "private enum TransportMode").first ?? ""
-    check(!wipeState.contains("withAnimation") && !wipeState.contains("DispatchQueue.main.async {")
-            && window.contains("TimelineView(.animation(paused: !wipe.moving))")
-            && window.contains("TrackWipe.sweepProgress(") && window.contains("TrackWipe.settledDrift("),
-          "slow move: one clock draws the slow move and the sweep, so the sweep starts in the frame of the change "
-            + "from where the cover is drawn, with no second commit")
-    let handOff = TrackWipe.artReach * TrackWipe.slowFraction(after: 0.42)
-    let handOffSpeed = TrackWipe.driftSpeed(atReached: handOff)
-    let firstFrame = TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: 1.0 / 60, reduceMotion: false)
-    let sweepEnd = TrackWipe.finishSeconds(fromReached: handOff, reduceMotion: false)
-    check(TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: 0, reduceMotion: false) == handOff
-            && TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: -0.01, reduceMotion: false) < handOff
-            && firstFrame > handOff
-            && abs(TrackWipe.sweepProgress(from: handOff, speed: handOffSpeed, after: sweepEnd,
-                                           reduceMotion: false) - 1) < 1e-12
-            && TrackWipe.sweepProgress(from: 0, speed: 0, after: TrackWipe.fadeDuration / 2, reduceMotion: true) == 0.5,
-          "slow move: the sweep starts from the width reached and moves in its first frame; Reduce Motion fades evenly",
-          "\(handOff) \(firstFrame)")
-    check(TrackWipe.settledDrift(from: 0.8, after: 0) == 0.8 && TrackWipe.settledDrift(from: 0.8, after: 0.05) < 0.8
-            && TrackWipe.settledDrift(from: 0.8, after: TrackWipe.fadeDuration) == 0
-            && TrackWipe.eased(TrackWipe.slowCurve, 0.4 / 1.5) == TrackWipe.slowFraction(after: 0.4),
-          "slow move: an ignored press eases back from where it reached in 0.15 s")
-}
-
-// covers: S463
-do {
-    let frame = 1.0 / 60
-    for pressToChange in [0.15, 0.25, 0.35] {
-        let reached = TrackWipe.artReach * TrackWipe.slowFraction(after: pressToChange)
-        let lastDriftStep = reached - TrackWipe.artReach * TrackWipe.slowFraction(after: pressToChange - frame)
-        let speed = TrackWipe.driftSpeed(atReached: reached)
-        let before = TrackWipe.sweepProgress(from: reached, speed: speed, after: -frame / 2, reduceMotion: false)
-        let first = TrackWipe.sweepProgress(from: reached, speed: speed, after: frame, reduceMotion: false)
-        let second = TrackWipe.sweepProgress(from: reached, speed: speed, after: 2 * frame, reduceMotion: false)
-        check(before < reached && reached < first && first < second
-                && first - reached <= 1.5 * lastDriftStep && second - first > first - reached,
-              "hand-off: a frame dated before the change still moves, and the sweep's first frame moves at about "
-                + "the slow move's speed, then speeds up",
-              "\(pressToChange) s: drift step \(lastDriftStep), sweep steps \(first - reached) \(second - first)")
-    }
-    for pressToChange in [0.0, 0.15, 0.35] {
-        let reached = TrackWipe.artReach * TrackWipe.slowFraction(after: pressToChange)
-        let speed = TrackWipe.driftSpeed(atReached: reached)
-        let at90 = stride(from: 0.0, through: 1, by: 0.001).first {
-            TrackWipe.sweepProgress(from: reached, speed: speed, after: $0, reduceMotion: false) >= 0.9
-        } ?? 1
-        check(at90 <= 0.15, "hand-off: the sweep still covers 90% of the width within 0.15 s, as before",
-              "\(pressToChange) s: \(at90) s")
-    }
 }
 
 // MARK: Next and Previous slide the new cover in while the old one recedes (TrackSlide in WindowRules.swift, MainWindow.swift)

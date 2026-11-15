@@ -2,22 +2,25 @@ import AppKit
 
 /// Takes the keyboard's volume keys while they move the master (S429): an
 /// active event tap on the session's system-defined events, on a thread of
-/// its own that has the main queue read each one. Every other event passes
-/// unchanged.
+/// its own that has the main queue read each one. The media keys pass on to
+/// the player untouched, read only for the Now Playing slide (S463); every
+/// other event passes unchanged.
 final class VolumeKeyTap {
     /// NX_SYSDEFINED, the event type media keys arrive as.
     private static let systemDefined: UInt32 = 14
 
     private let deliver: (VolumeKeys.Key) -> Void
+    private let observe: (TrackSlide.MediaKey) -> Void
     /// Set once in `init`, before the thread starts.
     private var port: CFMachPort?
     /// Only the main thread reads and writes it.
     private var muteHeld = false
 
     /// Nil when macOS refuses the tap, as it does without Accessibility
-    /// access. `deliver` runs on the main thread, once per key press.
-    init?(deliver: @escaping (VolumeKeys.Key) -> Void) {
+    /// access. `deliver` and `observe` run on the main thread, once per key press.
+    init?(deliver: @escaping (VolumeKeys.Key) -> Void, observe: @escaping (TrackSlide.MediaKey) -> Void) {
         self.deliver = deliver
+        self.observe = observe
         let mask = CGEventMask(1) << CGEventMask(Self.systemDefined)
         guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                            options: .defaultTap, eventsOfInterest: mask,
@@ -56,8 +59,13 @@ final class VolumeKeyTap {
         // CGEvent has no public field for data1, and macOS 27 traps an NSEvent built from it off the main
         // queue for a Caps Lock event; waiting here still keeps a taken key from the system.
         let taken: Bool = DispatchQueue.main.sync {
-            guard let ns = NSEvent(cgEvent: event),
-                  case let (key, down)? = VolumeKeys.decoded(type: Self.systemDefined, subtype: ns.subtype.rawValue,
+            guard let ns = NSEvent(cgEvent: event) else { return false }
+            if let media = TrackSlide.mediaKeyDown(subtype: ns.subtype.rawValue, data1: ns.data1) {
+                let observe = observe
+                DispatchQueue.main.async { observe(media) }
+                return false
+            }
+            guard case let (key, down)? = VolumeKeys.decoded(type: Self.systemDefined, subtype: ns.subtype.rawValue,
                                                              data1: ns.data1)
             else { return false }
             // A held mute key repeats; it toggles once per press.

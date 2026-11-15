@@ -9,7 +9,8 @@ extension AppDelegate {
         let trusted = volumeKeyTap != nil || AXIsProcessTrusted()
         let wanted = VolumeKeys.taken(switchOn: volumeKeys, streaming: engine.isRunning) && trusted
         if wanted, volumeKeyTap == nil, !volumeKeyTapRefused {
-            volumeKeyTap = VolumeKeyTap { [weak self] key in self?.volumeKeyPressed(key) }
+            volumeKeyTap = VolumeKeyTap(deliver: { [weak self] key in self?.volumeKeyPressed(key) },
+                                        observe: { [weak self] key in self?.appModel.pressTrack(key.direction) })
             volumeKeyTapRefused = volumeKeyTap == nil
             DebugTrace.log("[AudioSync] volume keys: "
                            + (volumeKeyTapRefused ? "macOS refused the event tap" : "the event tap takes the volume keys"))
