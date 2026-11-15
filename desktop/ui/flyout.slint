@@ -7,6 +7,7 @@
 import { Button } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
+import { IncomingCover, OutgoingSong, SlideLook, SlidLine } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
@@ -631,6 +632,8 @@ export component TrayFlyout inherits Window {
     in property <bool> now-playing-has-artwork;
     in property <image> now-playing-artwork;
     in property <AmbientLook> now-playing-ambient;
+    in property <SlideLook> now-playing-slide;
+    in property <OutgoingSong> now-playing-outgoing;
     // AirPlay discovery has run for 20 seconds without finding a speaker.
     in property <bool> airplay-none-found;
     // Every speaker present is hidden.
@@ -961,27 +964,34 @@ export component TrayFlyout inherits Window {
                             HorizontalLayout {
                                 spacing: 11px;
 
-                                Rectangle {
+                                cover-tile := Rectangle {
+                                    property <bool> has-artwork: root.now-playing-slide.sliding ? root.now-playing-outgoing.has-artwork : root.now-playing-has-artwork;
                                     width: 48px;
                                     height: 48px;
                                     border-radius: 9px;
                                     clip: true;
                                     background: Tokens.text.with-alpha(0.06);
+                                    transform-scale: 1 - root.now-playing-slide.old-shrink;
+                                    opacity: 1 - root.now-playing-slide.old-fade;
 
-                                    if root.now-playing-shown && root.now-playing-has-artwork: Image {
+                                    if root.now-playing-shown && cover-tile.has-artwork: Image {
                                         width: parent.width;
                                         height: parent.height;
-                                        source: root.now-playing-artwork;
+                                        source: root.now-playing-slide.sliding ? root.now-playing-outgoing.artwork : root.now-playing-artwork;
                                         image-fit: cover;
                                         accessible-role: none;
                                     }
 
-                                    if !(root.now-playing-shown && root.now-playing-has-artwork): Glyph {
+                                    if !(root.now-playing-shown && cover-tile.has-artwork): Glyph {
                                         width: parent.width;
                                         height: parent.height;
                                         glyph: root.source-is-input ? Glyphs.microphone : Glyphs.volume-high;
                                         color: Tokens.secondary-text;
                                         font-size: 22px;
+                                    }
+
+                                    Rectangle {
+                                        background: #000000.with-alpha(root.now-playing-slide.old-dim);
                                     }
 
                                     Rectangle {
@@ -1017,15 +1027,27 @@ export component TrayFlyout inherits Window {
                                         accessible-role: groupbox;
                                         accessible-label: Strings.now-playing;
 
-                                        song-title := MarqueeText {
+                                        song-title := SlidLine {
                                             text: root.now-playing-title;
+                                            old-text: root.now-playing-outgoing.title;
+                                            sliding: root.now-playing-slide.sliding;
                                             font-size: Tokens.font-size-title3;
                                             font-weight: 600;
+                                            offset: root.now-playing-slide.title-offset;
+                                            fade: root.now-playing-slide.title-fade;
+                                            old-offset: root.now-playing-slide.old-text-offset;
+                                            old-fade: root.now-playing-slide.old-text-fade;
                                         }
 
-                                        if root.now-playing-subtitle != "": MarqueeText {
+                                        if root.now-playing-subtitle != "" || (root.now-playing-slide.sliding && root.now-playing-outgoing.subtitle != ""): SlidLine {
                                             text: root.now-playing-subtitle;
+                                            old-text: root.now-playing-outgoing.subtitle;
+                                            sliding: root.now-playing-slide.sliding;
                                             text-color: Tokens.secondary-text;
+                                            offset: root.now-playing-slide.subtitle-offset;
+                                            fade: root.now-playing-slide.subtitle-fade;
+                                            old-offset: root.now-playing-slide.old-text-offset;
+                                            old-fade: root.now-playing-slide.old-text-fade;
                                         }
                                     }
                                 }
@@ -1287,6 +1309,21 @@ export component TrayFlyout inherits Window {
                 }
             }
         }
+    }
+
+    if root.now-playing-shown && root.now-playing-slide.sliding: IncomingCover {
+        look: root.now-playing-slide;
+        at-x: cover-tile.absolute-position.x;
+        at-y: cover-tile.absolute-position.y;
+        size: cover-tile.width;
+        surface-width: root.width;
+        corner: cover-tile.border-radius;
+        base: Tokens.surface;
+        has-artwork: root.now-playing-has-artwork;
+        artwork: root.now-playing-artwork;
+        glyph: Glyphs.volume-high;
+        glyph-size: 22px;
+        edge: true;
     }
 
     Announcer {

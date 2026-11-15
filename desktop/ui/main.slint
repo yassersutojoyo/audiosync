@@ -8,9 +8,10 @@
 import { Button, CheckBox, ComboBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
+import { IconLook, IncomingCover, OutgoingSong, SlideLook, SlidLine, TrackMotion } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, SecondaryText, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, SecondaryText, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -27,6 +28,7 @@ export { Palette } from "std-widgets.slint";
 // The brand teal, for the standard controls' accent (src/view.rs).
 export { Tokens } from "tokens.slint";
 export { AmbientLook, AmbientStrand } from "ambient.slint";
+export { IconLook, OutgoingSong, SlideLook, TrackMotion } from "track_slide.slint";
 export { AirPlayProblem, Appearance, Availability, CastList, CastProblem, CastState, DeviceVolumeHint, GuidePage, GuideStepItem, MixAppItem, NoticeItem, NoticeKind, PinPhase, RowPart, RowState, SetupMicrophone, SetupNetwork, SpeakerGroup, SpeakerItem, SpeakerKind, ZoneChoice, ZoneItem, ZoneTarget } from "types.slint";
 
 // The main window's left column: the speaker list widens first, to its full
@@ -1290,6 +1292,11 @@ component NowPlayingCard inherits VerticalLayout {
     in property <bool> has-artwork;
     in property <image> artwork;
     in property <AmbientLook> ambient;
+    in property <SlideLook> slide;
+    in property <OutgoingSong> outgoing;
+    // Where the cover sits in the window, for the incoming cover above it.
+    out property <length> tile-x: tile.absolute-position.x;
+    out property <length> tile-y: tile.absolute-position.y;
     // As the player reports them, -1 where it doesn't take the command:
     // shuffle 0 off, 1 on; repeat 0 off, 1 all, 2 one.
     in property <int> shuffle: -1;
@@ -1302,6 +1309,24 @@ component NowPlayingCard inherits VerticalLayout {
 
     accessible-role: groupbox;
     accessible-label: Strings.now-playing;
+    property <bool> morphing;
+    property <duration> morph-start;
+    property <IconLook> icon: TrackMotion.icon(root.morphing ? (animation-tick() - root.morph-start) / 1s : 1);
+    changed playing => {
+        if Motion.on {
+            root.morph-start = animation-tick();
+            root.morphing = true;
+        }
+    }
+
+    Timer {
+        interval: 100ms;
+        running: root.morphing;
+        triggered => {
+            root.morphing = TrackMotion.icon((animation-tick() - root.morph-start) / 1s).moving;
+        }
+    }
+
     // Slint leaves nothing focused when the focused button goes.
     changed shuffle => {
         if root.shuffle < 0 && root.focused-button == 3 {
@@ -1317,27 +1342,34 @@ component NowPlayingCard inherits VerticalLayout {
     VerticalLayout {
         spacing: 10px;
 
-        Rectangle {
+        tile := Rectangle {
+            property <bool> has-artwork: root.slide.sliding ? root.outgoing.has-artwork : root.has-artwork;
             width: root.cover-size;
             height: root.cover-size;
             border-radius: 6px;
             clip: true;
             background: Tokens.text.with-alpha(0.06);
+            transform-scale: 1 - root.slide.old-shrink;
+            opacity: 1 - root.slide.old-fade;
 
-            if root.has-artwork: Image {
+            if tile.has-artwork: Image {
                 width: parent.width;
                 height: parent.height;
-                source: root.artwork;
+                source: root.slide.sliding ? root.outgoing.artwork : root.artwork;
                 image-fit: cover;
                 accessible-role: none;
             }
 
-            if !root.has-artwork: Glyph {
+            if !tile.has-artwork: Glyph {
                 width: parent.width;
                 height: parent.height;
                 glyph: Glyphs.music-note;
                 color: Tokens.secondary-text;
                 font-size: root.cover-size / 5;
+            }
+
+            Rectangle {
+                background: #000000.with-alpha(root.slide.old-dim);
             }
         }
 
@@ -1352,16 +1384,28 @@ component NowPlayingCard inherits VerticalLayout {
                 spacing: 2px;
                 horizontal-stretch: 1;
 
-                MarqueeText {
+                SlidLine {
                     text: root.title;
+                    old-text: root.outgoing.title;
+                    sliding: root.slide.sliding;
                     font-size: Tokens.font-size-title3;
                     font-weight: 600;
+                    offset: root.slide.title-offset;
+                    fade: root.slide.title-fade;
+                    old-offset: root.slide.old-text-offset;
+                    old-fade: root.slide.old-text-fade;
                 }
 
-                if root.subtitle != "": MarqueeText {
+                if root.subtitle != "" || (root.slide.sliding && root.outgoing.subtitle != ""): SlidLine {
                     text: root.subtitle;
+                    old-text: root.outgoing.subtitle;
+                    sliding: root.slide.sliding;
                     font-size: Tokens.font-size-callout;
                     text-color: Tokens.secondary-text;
+                    offset: root.slide.subtitle-offset;
+                    fade: root.slide.subtitle-fade;
+                    old-offset: root.slide.old-text-offset;
+                    old-fade: root.slide.old-text-fade;
                 }
             }
         }
@@ -1401,8 +1445,10 @@ component NowPlayingCard inherits VerticalLayout {
             IconButton {
                 width: 40px;
                 height: 40px;
-                glyph: root.playing ? Glyphs.pause : Glyphs.play;
+                glyph: root.playing != root.icon.shows-old ? Glyphs.pause : Glyphs.play;
                 glyph-size: 20px;
+                glyph-scale: root.icon.scale;
+                glyph-opacity: root.icon.opacity;
                 label: root.playing ? Strings.pause : Strings.play;
                 clicked => {
                     root.transport(1);
@@ -1502,6 +1548,10 @@ export component MainWindow inherits Window {
     in property <bool> now-playing-has-artwork;
     in property <image> now-playing-artwork;
     in property <AmbientLook> now-playing-ambient;
+    in property <SlideLook> now-playing-slide;
+    in property <OutgoingSong> now-playing-outgoing;
+    property <length> now-playing-tile-x;
+    property <length> now-playing-tile-y;
     in property <int> now-playing-shuffle: -1;
     in property <int> now-playing-repeat: -1;
     in-out property <int> now-playing-focused-button: -1;
@@ -2112,11 +2162,23 @@ export component MainWindow inherits Window {
                                     has-artwork: root.now-playing-has-artwork;
                                     artwork: root.now-playing-artwork;
                                     ambient: root.now-playing-ambient;
+                                    slide: root.now-playing-slide;
+                                    outgoing: root.now-playing-outgoing;
                                     shuffle: root.now-playing-shuffle;
                                     repeat: root.now-playing-repeat;
                                     focused-button <=> root.now-playing-focused-button;
                                     changed focused-button => {
                                         root.control-focus-changed(MainControl.transport, self.focused-button >= 0);
+                                    }
+                                    init => {
+                                        root.now-playing-tile-x = self.tile-x;
+                                        root.now-playing-tile-y = self.tile-y;
+                                    }
+                                    changed tile-x => {
+                                        root.now-playing-tile-x = self.tile-x;
+                                    }
+                                    changed tile-y => {
+                                        root.now-playing-tile-y = self.tile-y;
                                     }
                                     transport(button) => {
                                         root.now-playing-transport(button);
@@ -2680,6 +2742,20 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
+
+    if root.now-playing-shown && root.now-playing-slide.sliding: IncomingCover {
+        look: root.now-playing-slide;
+        at-x: root.now-playing-tile-x;
+        at-y: root.now-playing-tile-y;
+        size: MainColumns.left(root.columns-width) - 32px;
+        surface-width: root.width;
+        corner: 6px;
+        base: Tokens.surface;
+        has-artwork: root.now-playing-has-artwork;
+        artwork: root.now-playing-artwork;
+        glyph: Glyphs.music-note;
+        glyph-size: self.size / 5;
     }
 
     Announcer {

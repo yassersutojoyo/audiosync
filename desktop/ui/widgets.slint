@@ -842,6 +842,8 @@ export component IconButton inherits Rectangle {
     in property <bool> enabled: true;
     in property <color> glyph-color: Tokens.text;
     in property <length> glyph-size: 16px;
+    in property <float> glyph-scale: 1;
+    in property <float> glyph-opacity: 1;
     // A mode that is on: a dot under the glyph, in the glyph's color.
     in property <bool> active;
     callback clicked();
@@ -891,11 +893,16 @@ export component IconButton inherits Rectangle {
         }
     }
 
-    Glyph {
-        glyph: root.glyph;
-        color: root.glyph-color;
-        font-size: root.glyph-size;
-        opacity: touch.pressed ? 0.75 : 1;
+    Rectangle {
+        transform-scale: root.glyph-scale;
+        opacity: root.glyph-opacity;
+
+        Glyph {
+            glyph: root.glyph;
+            color: root.glyph-color;
+            font-size: root.glyph-size;
+            opacity: touch.pressed ? 0.75 : 1;
+        }
     }
 
     if root.active: Rectangle {
