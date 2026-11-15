@@ -253,6 +253,7 @@ impl SessionList for Players {
         let method = match command {
             Transport::Previous => "Previous",
             Transport::PlayPause => "PlayPause",
+            Transport::Play => "Play",
             Transport::Next => "Next",
             Transport::Shuffle(_) | Transport::Repeat(_) => return Ok(false),
         };

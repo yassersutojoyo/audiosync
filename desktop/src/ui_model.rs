@@ -1094,6 +1094,8 @@ pub struct AppState {
     pub airplay_searching: bool,
     /// What a session does when the app it captures quits (spec S227).
     pub when_source_quits: WhenSourceQuits,
+    /// File > Resume Playback After Sleep (spec S465).
+    pub resume_after_sleep: bool,
     /// The speaker list's note about Google Cast discovery.
     pub cast_list: CastList,
     /// A Google Cast sender runs, so Add by Address… can list a speaker.
@@ -1762,6 +1764,7 @@ pub trait Backend {
     fn dismiss_all_notices(&mut self);
     fn refresh_devices(&mut self);
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
+    fn set_resume_after_sleep(&mut self, on: bool);
 
     /// The fix under speaker `id`'s device-volume hint: raises its own
     /// volume in Windows to 75 % when low and unmutes it when muted
@@ -2225,6 +2228,7 @@ impl MockBackend {
             airplay_none_found: false,
             airplay_searching: false,
             when_source_quits: WhenSourceQuits::Stop,
+            resume_after_sleep: false,
             cast_list: CastList::Quiet,
             cast_by_address: true,
             cast_on: false,
@@ -2693,6 +2697,10 @@ impl Backend for MockBackend {
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
         self.state.when_source_quits = setting;
+    }
+
+    fn set_resume_after_sleep(&mut self, on: bool) {
+        self.state.resume_after_sleep = on;
     }
 
     fn set_master_volume(&mut self, position: f64) {

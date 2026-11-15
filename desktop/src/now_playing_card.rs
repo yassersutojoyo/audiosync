@@ -70,6 +70,8 @@ impl CardSource {
 pub enum Transport {
     Previous,
     PlayPause,
+    /// Play, never the toggle: the wake's resume (S465).
+    Play,
     Next,
     /// Shuffle turned on (true) or off.
     Shuffle(bool),

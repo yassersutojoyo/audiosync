@@ -587,6 +587,8 @@ pub struct TrackInfo {
     since: Option<Instant>,
     /// The newest reading since then, if one came.
     reading: Option<Reading>,
+    /// When the reader last gave a reading.
+    read_at: Option<Instant>,
     /// The app seen playing last since the source was chosen (S218).
     last_played: Option<String>,
     /// When its readings in a row neither playing nor paused began.
@@ -651,6 +653,14 @@ impl TrackInfo {
         (session.playing || session.paused).then(|| (session.app_id.clone(), session.playing))
     }
 
+    /// The session that counts in the newest reading, or none, and when the
+    /// reader last gave one (S465). `None` until a reading came.
+    pub fn latest(&self) -> Option<(Option<&MediaSession>, Instant)> {
+        let reading = self.reading.as_ref()?;
+        let session = reading.track.as_ref().map(|track| &track.session);
+        Some((session, self.read_at?))
+    }
+
     /// Sends a speaker remote's control to the session that counts.
     pub fn send(&mut self, command: Transport) {
         if self.following.is_some()
@@ -679,6 +689,7 @@ impl TrackInfo {
             self.following = follow;
             self.since = Some(now);
             self.reading = None;
+            self.read_at = None;
             self.last_played = None;
             self.idle_since = None;
             reader.played_last(None);
@@ -698,6 +709,7 @@ impl TrackInfo {
             self.last_played = None;
         }
         if let Some(reading) = reader.take_reading() {
+            self.read_at = Some(now);
             let session = reading.track.as_ref().map(|track| &track.session);
             self.idle_since = match session {
                 Some(session) if session.playing && source.mix.is_none() => {

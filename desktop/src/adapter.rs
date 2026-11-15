@@ -683,6 +683,8 @@ pub struct AudioAdapter<A: AudioBackend> {
     airplay2_switch_env: Option<String>,
     /// What a session does when the app it captures quits (spec S227).
     when_source_quits: WhenSourceQuits,
+    /// File > Resume Playback After Sleep (spec S465).
+    resume_after_sleep: bool,
     /// The microphone calibration running, or letting its cut-off sweep
     /// play out.
     calibration_run: Option<CalibrationRun>,
@@ -837,6 +839,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             airplay2_at_launch: false,
             airplay2_switch_env: crate::audio::airplay::airplay2_switch_env(),
             when_source_quits: WhenSourceQuits::Stop,
+            resume_after_sleep: false,
             calibration_run: None,
             calibration: calibration::Status::default(),
             calibrate_all: CalibrateAll::default(),
@@ -895,6 +898,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
         self.input_pairs.extend(saved.input_pairs.clone());
         self.when_source_quits = WhenSourceQuits::from_stored(Some(&saved.when_source_quits));
         self.audio.set_when_source_quits(self.when_source_quits);
+        self.resume_after_sleep = saved.resume_after_sleep;
+        self.audio.set_resume_after_sleep(self.resume_after_sleep);
         if !self.delays_to_migrate {
             self.audio
                 .set_airplay_adjustment(saved.airplay_adjustment_ms);
@@ -1164,6 +1169,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             slim_window_applied: true,
             airplay_adjustment_ms: self.audio.airplay_adjustment(),
             when_source_quits: self.when_source_quits.stored().to_owned(),
+            resume_after_sleep: self.resume_after_sleep,
             remote: self.view.remote,
             cast_addresses: self.cast_addresses.clone(),
             cast_found_ids: self.cast_found_ids.clone(),
@@ -5077,6 +5083,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
                 }
             }),
             when_source_quits: self.when_source_quits,
+            resume_after_sleep: self.resume_after_sleep,
             cast_list: self.cast_list(),
             cast_by_address: self.audio.cast_discovery() != CastDiscovery::Off,
             cast_on: self.audio.cast_on(),
@@ -6214,6 +6221,13 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
         });
         self.when_source_quits = setting;
         self.audio.set_when_source_quits(setting);
+    }
+
+    fn set_resume_after_sleep(&mut self, on: bool) {
+        self.log
+            .log(|| format!("resume playback after sleep: {on}"));
+        self.resume_after_sleep = on;
+        self.audio.set_resume_after_sleep(on);
     }
 }
 
@@ -7965,6 +7979,22 @@ mod tests {
             restored.snapshot().when_source_quits,
             WhenSourceQuits::SwitchToSystem
         );
+    }
+
+    // covers: S465
+    #[test]
+    fn resume_playback_after_sleep_is_off_by_default_and_saved_and_restored() {
+        let mut adapter = adapter();
+        assert!(!adapter.snapshot().resume_after_sleep);
+        adapter.set_resume_after_sleep(true);
+        let saved = adapter.current_settings();
+        let mut restored = AudioAdapter::new(
+            MockBackend::empty(),
+            || "09.41".to_owned(),
+            DebugLog::default(),
+        );
+        restored.restore(saved);
+        assert!(restored.snapshot().resume_after_sleep);
     }
 
     // covers: S380

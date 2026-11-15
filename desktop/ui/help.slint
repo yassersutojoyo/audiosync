@@ -65,6 +65,8 @@ export component HelpWindow inherits Window {
     // A release build that updates itself: More Controls says how.
     in property <bool> updater-available;
     private property <string> more-body: root.updater-available ? Strings.help-more + "\n\n" + Strings.help-more-updates : Strings.help-more;
+    private property <string> linux-more-body: Strings.help-more-linux;
+    private property <string> resume-paragraph: "\n\n" + Strings.help-more-resume-after-sleep;
     private property <string> airplay-body: Platform.os == OperatingSystemType.linux ? Strings.help-airplay-linux : Strings.help-airplay;
     callback show-how-requested();
     callback close-requested();
@@ -234,7 +236,7 @@ export component HelpWindow inherits Window {
 
                         HelpSection {
                             title: Strings.help-more-title;
-                            body: Platform.os == OperatingSystemType.linux ? Strings.help-more-linux : root.more-body + "\n\n" + Strings.help-more-volume-keys;
+                            body: Platform.os == OperatingSystemType.linux ? root.linux-more-body + root.resume-paragraph : root.more-body + root.resume-paragraph + "\n\n" + Strings.help-more-volume-keys;
                         }
 
                         HelpSection {
