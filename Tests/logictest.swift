@@ -9603,6 +9603,12 @@ do {
     // covers: S405
     check(endSource.contains("\n        host.view.layer?.removeAnimation(forKey: Self.stepKey)"),
           "menu bar panel source: ending the steps always hands the content back at its laid-out scale, even once the window is gone")
+    let takeKeySource = windowSource.components(separatedBy: "private func takeKey(").dropFirst().first?
+        .components(separatedBy: "\n    }\n").first ?? ""
+    let madeKey = takeKeySource.range(of: "window.makeKey()")
+    let cleared = takeKeySource.range(of: "window.makeFirstResponder(nil)")
+    check(madeKey != nil && cleared != nil && madeKey!.upperBound <= cleared!.lowerBound,
+          "menu bar panel source: the panel clears its first responder once it is key, so a mouse open shows no focus ring on the master slider")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)
