@@ -19157,6 +19157,40 @@ do {
           "art ahead: the next cover is read only while no command waits; an error ends it and a timeout is told apart")
 }
 
+// MARK: A cover read just after a song change is checked against the previous song (ArtRead in NowPlaying.swift)
+// covers: S464
+do {
+    var staleArt = ArtRead()
+    staleArt.ask(title: "Helena", album: "Revenge")
+    check(staleArt.accepts(read: ("Helena", "Revenge"), print: 1, at: 0),
+          "art read: the first song's cover is taken")
+    staleArt.ask(title: "Complicated", album: "Let Go")
+    check(!staleArt.accepts(read: ("Complicated", "Let Go"), print: 1, at: 0.2)
+            && !staleArt.accepts(read: ("Complicated", "Let Go"), print: 1, at: 1.4),
+          "art read: the previous song's cover, read for a song of another album, is not taken while the hold runs")
+    check(staleArt.accepts(read: ("Complicated", "Let Go"), print: 2, at: 0.5),
+          "art read: the new song's own cover is taken once the player gives it")
+    var sharedArt = ArtRead()
+    sharedArt.ask(title: "One", album: "LP")
+    _ = sharedArt.accepts(read: ("One", "LP"), print: 7, at: 0)
+    sharedArt.ask(title: "Two", album: "LP")
+    check(sharedArt.accepts(read: ("Two", "LP"), print: 7, at: 0.1),
+          "art read: the next song of the same album shares its cover at once")
+    sharedArt.ask(title: "Single", album: "Other")
+    check(!sharedArt.accepts(read: ("Single", "Other"), print: 7, at: 2)
+            && sharedArt.accepts(read: ("Single", "Other"), print: 7, at: 3.5),
+          "art read: a song whose cover really is the previous one's gets it once the hold has given way")
+    sharedArt.ask(title: "Next", album: "Else")
+    check(!sharedArt.accepts(read: ("Single", "Other"), print: 9, at: 4),
+          "art read: a cover read from another song than the one asked about is not taken")
+    var warmedArt = ArtRead()
+    warmedArt.kept(print: 5, title: "Ahead", album: "A")
+    warmedArt.ask(title: "Ahead", album: "A")
+    warmedArt.ask(title: "After", album: "B")
+    check(!warmedArt.accepts(read: ("After", "B"), print: 5, at: 0),
+          "art read: a cover read ahead counts as the previous song's cover too")
+}
+
 // MARK: Next eases the old song out while the next one's cover loads (TrackWipe in WindowRules.swift, MainWindow.swift)
 // covers: S463
 do {
