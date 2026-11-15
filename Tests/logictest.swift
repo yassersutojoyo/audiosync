@@ -19315,6 +19315,19 @@ do {
     check(slideHold.contains("TrackSlide.waited(") && slideHold.contains("TrackSlide.coverArrived(")
             && slideHold.contains("TrackSlide.coverFade"),
           "track slide: the hold counts from the press, and a late cover fades in where it landed")
+    let mediaBranch = slideTap.components(separatedBy: "TrackSlide.mediaKeyDown(").last?
+        .components(separatedBy: "guard case let").first ?? ""
+    check(mediaBranch.contains("DispatchQueue.main.async { observe(media) }") && mediaBranch.contains("return false")
+            && !mediaBranch.contains("return true"),
+          "track slide: the tap hands a media key to the slide and never takes it from the player")
+    let pressBody = slideWindow.components(separatedBy: "func press(_ press: TrackSlide.Press").last?
+        .components(separatedBy: "private func settle()").first ?? ""
+    check(pressBody.contains("deadline: .now() + TrackSlide.cap)") && !pressBody.contains("TrackSlide.pressWindow"),
+          "track slide: a press that changes nothing lets the old cover ease back after 1.5 s, not 3 s")
+    check(pressBody.components(separatedBy: "pressed = press").first?.contains("guard press.direction != nil") == true,
+          "track slide: Play/Pause during the wait ends the recede and keeps the Next or Previous it followed")
+    check(slideWindow.contains("art(track)\n                        .animation(.easeInOut(duration: TrackSlide.coverFade), value: track.artwork != nil)"),
+          "track slide: a cover that arrives while the new song slides in fades in over 0.25 s")
 }
 
 // MARK: Play/Pause's icon morphs between play and pause (PlayPauseMorph in WindowRules.swift, MainWindow.swift)
