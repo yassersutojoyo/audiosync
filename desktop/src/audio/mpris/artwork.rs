@@ -1,9 +1,8 @@
 //! A player's artwork, decoded and encoded with the `image` crate: receiver
 //! artwork as JPEGs ([`fit_artwork`]) and the Now Playing card's square tile
-//! ([`ARTWORK_SIDE`], [`cover_size`]), premultiplied as the card draws it.
+//! ([`card_side`], [`cover_size`]), premultiplied as the card draws it.
 
 use std::io::Cursor;
-use std::sync::Arc;
 
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::{self, FilterType};
@@ -11,7 +10,7 @@ use image::{DynamicImage, ExtendedColorType, ImageReader, Limits, RgbaImage};
 
 use crate::audio::now_playing::{FittedArtwork, fit_artwork};
 use crate::debug_log::DebugLog;
-use crate::now_playing_card::{ARTWORK_SIDE, CardArtwork, cover_size};
+use crate::now_playing_card::{CardArtwork, card_side, cover_size};
 
 /// AudioSync's icon, which receivers show while no track's artwork does.
 pub const ICON_PNG: &[u8] = include_bytes!("../../../res/audiosync-256.png");
@@ -75,7 +74,7 @@ pub fn card_decoded(decoded: &RgbaImage) -> Option<CardArtwork> {
     if width == 0 || height == 0 {
         return None;
     }
-    let side = ARTWORK_SIDE;
+    let side = card_side(width, height);
     let (scaled_width, scaled_height) = cover_size(width, height, side);
     let scaled = imageops::resize(decoded, scaled_width, scaled_height, FilterType::CatmullRom);
     let tile = imageops::crop_imm(
@@ -93,10 +92,7 @@ pub fn card_decoded(decoded: &RgbaImage) -> Option<CardArtwork> {
             *channel = over_black(*channel, alpha);
         }
     }
-    Some(CardArtwork {
-        side,
-        rgba: Arc::from(rgba),
-    })
+    Some(CardArtwork::new(side, rgba))
 }
 
 /// An encoded image decoded as RGBA, within the side and memory limits.
@@ -157,8 +153,13 @@ mod tests {
             artwork.small.len() <= SMALL_ARTWORK.bytes && artwork.small.starts_with(&[0xFF, 0xD8])
         );
         let tile = card_artwork(ICON_PNG).unwrap().expect("the icon fits");
-        assert_eq!(tile.side, ARTWORK_SIDE);
-        assert_eq!(tile.rgba.len(), (tile.side * tile.side * 4) as usize);
+        assert_eq!(tile.side, 256, "the tile keeps the icon's pixels");
+        assert_eq!(
+            tile.bands,
+            crate::ambient::cover_bands(tile.rgba(), tile.side),
+            "the bands are measured where the tile is decoded"
+        );
+        assert_eq!(tile.rgba().len(), (tile.side * tile.side * 4) as usize);
     }
 
     #[test]
@@ -171,8 +172,9 @@ mod tests {
         wide.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
         let tile = card_artwork(&png).unwrap().unwrap();
-        assert_eq!(tile.rgba.len(), (ARTWORK_SIDE * ARTWORK_SIDE * 4) as usize);
-        assert_eq!(&tile.rgba[..4], &[200, 100, 50, 255]);
+        assert_eq!(tile.side, 100);
+        assert_eq!(tile.rgba().len(), (100 * 100 * 4) as usize);
+        assert_eq!(&tile.rgba()[..4], &[200, 100, 50, 255]);
     }
 
     #[test]

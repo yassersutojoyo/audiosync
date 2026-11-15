@@ -873,6 +873,8 @@ pub struct App {
     ambient_frame_at: Cell<std::time::Instant>,
     /// The cover's top, middle and bottom colours.
     ambient_cover: Cell<[Rgb; 3]>,
+    /// The image of the cover shown last.
+    cover_image: RefCell<CoverImage>,
     /// The still line is drawn for the cover shown now.
     ambient_still_drawn: Cell<bool>,
     /// Launch at Sign-In and its notice, which the windows own: the
@@ -917,16 +919,25 @@ fn unix_now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-fn card_image(artwork: &CardArtwork) -> slint::Image {
-    let pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-        &artwork.rgba,
-        artwork.side,
-        artwork.side,
-    );
-    slint::Image::from_rgba8_premultiplied(pixels)
+/// The image of the cover shown last, made again only for another cover, so
+/// Play/Pause and the outgoing cover reuse it and the renderer its texture.
+#[derive(Default)]
+struct CoverImage(Option<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, slint::Image)>);
+
+impl CoverImage {
+    fn of(&mut self, artwork: &CardArtwork) -> slint::Image {
+        if let Some((pixels, image)) = &self.0
+            && pixels.as_bytes().as_ptr() == artwork.pixels.as_bytes().as_ptr()
+        {
+            return image.clone();
+        }
+        let image = slint::Image::from_rgba8_premultiplied(artwork.pixels.clone());
+        self.0 = Some((artwork.pixels.clone(), image.clone()));
+        image
+    }
 }
 
-fn outgoing_song(track: Option<&CardTrack>) -> OutgoingSong {
+fn outgoing_song(track: Option<&CardTrack>, covers: &RefCell<CoverImage>) -> OutgoingSong {
     let Some(track) = track else {
         return OutgoingSong::default();
     };
@@ -934,7 +945,11 @@ fn outgoing_song(track: Option<&CardTrack>) -> OutgoingSong {
         title: track.title.as_str().into(),
         subtitle: track.subtitle().as_str().into(),
         has_artwork: track.artwork.is_some(),
-        artwork: track.artwork.as_ref().map(card_image).unwrap_or_default(),
+        artwork: track
+            .artwork
+            .as_ref()
+            .map(|artwork| covers.borrow_mut().of(artwork))
+            .unwrap_or_default(),
     }
 }
 
@@ -1275,6 +1290,7 @@ impl App {
             ambient: RefCell::default(),
             ambient_frame_at: Cell::new(std::time::Instant::now()),
             ambient_cover: Cell::new(ambient::NO_COVER),
+            cover_image: RefCell::default(),
             ambient_still_drawn: Cell::new(false),
             login: RefCell::new(LaunchAtLogin::new(
                 launch_at_login::system_store(),
@@ -1745,12 +1761,17 @@ impl App {
             Some(Repeat::All) => 1,
             Some(Repeat::One) => 2,
         });
-        self.ambient_cover
-            .set(track.artwork.as_ref().map_or(ambient::NO_COVER, |artwork| {
-                ambient::cover_bands(&artwork.rgba, artwork.side)
-            }));
+        self.ambient_cover.set(
+            track
+                .artwork
+                .as_ref()
+                .map_or(ambient::NO_COVER, |artwork| artwork.bands),
+        );
         self.ambient_still_drawn.set(false);
-        let artwork = track.artwork.as_ref().map(card_image);
+        let artwork = track
+            .artwork
+            .as_ref()
+            .map(|artwork| self.cover_image.borrow_mut().of(artwork));
         self.flyout
             .set_now_playing_title(track.title.as_str().into());
         self.flyout
@@ -1775,14 +1796,16 @@ impl App {
             .borrow_mut()
             .change(old, new, window_shows, still, now)
         {
-            self.main.set_now_playing_outgoing(outgoing_song(old));
+            self.main
+                .set_now_playing_outgoing(outgoing_song(old, &self.cover_image));
         }
         if self
             .panel_slide
             .borrow_mut()
             .change(old, new, panel_shows, still, now)
         {
-            self.flyout.set_now_playing_outgoing(outgoing_song(old));
+            self.flyout
+                .set_now_playing_outgoing(outgoing_song(old, &self.cover_image));
         }
     }
 
@@ -6876,6 +6899,34 @@ mod tests {
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
+
+    #[test]
+    fn a_covers_image_shares_its_pixels_and_is_made_once_per_cover() {
+        let pixels = |image: &slint::Image| {
+            image
+                .to_rgba8_premultiplied()
+                .expect("an RGBA image")
+                .as_bytes()
+                .as_ptr()
+        };
+        let cover = CardArtwork::new(1, [10u8, 20, 30, 255]);
+        let mut covers = CoverImage::default();
+        let image = covers.of(&cover);
+        assert_eq!(
+            pixels(&image),
+            cover.rgba().as_ptr(),
+            "no copy on the UI thread"
+        );
+        let made = covers.0.as_ref().map(|(_, image)| pixels(image));
+        let _ = covers.of(&cover.clone());
+        assert_eq!(
+            covers.0.as_ref().map(|(_, image)| pixels(image)),
+            made,
+            "Play/Pause keeps the image"
+        );
+        let next = CardArtwork::new(1, [10u8, 20, 30, 255]);
+        assert_eq!(pixels(&covers.of(&next)), next.rgba().as_ptr());
+    }
 
     /// A platform without native windows, so a test can build the whole App
     /// and drive it through the windows' callbacks or keys.

@@ -573,6 +573,9 @@ impl<L: SessionList> Reader<L> {
                         )
                     });
                 }
+                if let Some(side) = tile.as_ref().map(|tile| tile.side) {
+                    log.log(|| format!("now playing card: the cover is {side} px a side"));
+                }
                 tile
             }),
         };
@@ -861,10 +864,7 @@ mod tests {
 
         fn card_artwork(&self, image: &[u8]) -> Result<Option<CardArtwork>, String> {
             assert_eq!(image, IMAGE);
-            Ok(Some(CardArtwork {
-                side: 1,
-                rgba: Arc::from(&[0u8, 0, 0, 255][..]),
-            }))
+            Ok(Some(CardArtwork::new(1, [0u8, 0, 0, 255])))
         }
 
         fn icon(&self, _: &DebugLog) -> Option<FittedArtwork> {
