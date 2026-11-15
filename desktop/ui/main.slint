@@ -49,8 +49,23 @@ component SourceMenu inherits Rectangle {
     out property <bool> has-focus: focus.has-focus;
     callback chosen(int);
 
+    // Windows' native menu returns from show() once closed, and the press
+    // that closed it then reaches this button: that click must not reopen it.
+    property <bool> just-closed;
+
     function open-menu() {
         menu.show({ x: 0, y: root.height });
+        root.just-closed = true;
+        reopen-guard.start();
+    }
+
+    reopen-guard := Timer {
+        interval: 300ms;
+        running: false;
+        triggered => {
+            root.just-closed = false;
+            self.stop();
+        }
     }
 
     min-height: row.preferred-height;
@@ -66,7 +81,9 @@ component SourceMenu inherits Rectangle {
 
     touch := TouchArea {
         clicked => {
-            root.open-menu();
+            if !root.just-closed {
+                root.open-menu();
+            }
         }
 
         menu := ContextMenuArea {

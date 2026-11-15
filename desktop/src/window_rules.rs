@@ -478,6 +478,19 @@ pub fn focus_ring_shown(was: bool, input: FocusInput) -> bool {
     }
 }
 
+/// The focus input a key press brings; none for the presses winit makes up
+/// for keys held while the window regains the focus, as Alt+Tab's Tab.
+pub fn key_focus_input(tab: bool, synthetic: bool) -> Option<FocusInput> {
+    if synthetic {
+        return None;
+    }
+    Some(if tab {
+        FocusInput::Tab
+    } else {
+        FocusInput::OtherKey
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -958,5 +971,13 @@ mod tests {
             "arrows keep it"
         );
         assert!(!focus_ring_shown(true, FocusInput::Pointer));
+    }
+
+    #[test]
+    fn keys_held_through_alt_tab_back_into_the_window_leave_the_focus_ring_hidden() {
+        assert_eq!(key_focus_input(true, true), None, "a made-up Tab");
+        assert_eq!(key_focus_input(false, true), None, "a made-up Alt");
+        assert_eq!(key_focus_input(true, false), Some(FocusInput::Tab));
+        assert_eq!(key_focus_input(false, false), Some(FocusInput::OtherKey));
     }
 }

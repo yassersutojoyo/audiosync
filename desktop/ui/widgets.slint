@@ -1791,6 +1791,8 @@ export component OverlayScrollView {
 
     changed content-y => {
         root.scrolling = true;
+        // restart() alone does nothing on a timer that is not running.
+        settle.start();
         settle.restart();
     }
 
