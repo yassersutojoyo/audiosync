@@ -1568,6 +1568,8 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         guard let window = host.view.window else { return }
         if let panel = window as? NSPanel { panel.styleMask.insert(.nonactivatingPanel) }
         window.makeKey()
+        // A key window hands focus to its first focusable view, the master slider; Tab still reaches it.
+        window.makeFirstResponder(nil)
         resignWatch = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification,
                                                              object: window, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.dismiss() }
