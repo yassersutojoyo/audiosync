@@ -429,6 +429,7 @@ extension AppDelegate: TrackInfoHost {
         let timesChange = DebugTrace.enabled && appModel.nowPlaying?.title != track?.title
         let began = DispatchTime.now().uptimeNanoseconds
         let before = appModel.nowPlaying
+        if nowPlayingOnScreen, let before, let track, TrackSlide.isSkip(before, track) { songShownAt = now }
         if TrackSlide.coverArrived(appModel.nowPlaying, track) {
             withAnimation(.easeInOut(duration: TrackSlide.coverFade)) { appModel.nowPlaying = track }
         } else {
@@ -448,9 +449,28 @@ extension AppDelegate: TrackInfoHost {
         }
     }
 
+    /// How long a cover for the receivers still waits for the window's slide (S468).
+    var receiverArtWait: TimeInterval {
+        ArtPushDelay.wait(sinceSongShown: songShownAt.map { ProcessInfo.processInfo.systemUptime - $0 },
+                          reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
+
     func setSenderTrackInfo(fields: TrackMetadata.Fields?, artwork: NSImage?, sendsPosition: Bool,
                             position: NowPlayingMonitor.Position?) {
-        nativeAirPlay?.setTrackInfo(fields: fields, artwork: artwork, sendsPosition: sendsPosition,
-                                    position: position)
+        let turn = fields != nil || artwork != nil ? airPlayArtDelay.sent() : airPlayArtDelay.turn
+        let wait = artwork == nil ? 0 : receiverArtWait
+        let send = { [weak self] (fields: TrackMetadata.Fields?, artwork: NSImage?, sendsPosition: Bool) -> Void in
+            guard let self else { return }
+            self.nativeAirPlay?.setTrackInfo(fields: fields, artwork: artwork, sendsPosition: sendsPosition,
+                                             position: position)
+        }
+        guard wait > 0 else {
+            send(fields, artwork, sendsPosition)
+            return
+        }
+        if fields != nil || sendsPosition { send(fields, nil, sendsPosition) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+            if self?.airPlayArtDelay.isCurrent(turn) == true { send(nil, artwork, false) }
+        }
     }
 }

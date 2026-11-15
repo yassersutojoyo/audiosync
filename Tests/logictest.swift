@@ -19163,6 +19163,53 @@ do {
           "cover bands: the art and tint take the measured colours, so a song change draws no cover on the main thread to find them")
 }
 
+// MARK: A song change keeps its main-thread work small (ArtFetches, ArtPushDelay in NowPlaying.swift)
+// covers: S468
+do {
+    var slimFetches = ArtFetches()
+    let slimFirst = slimFetches.start("spotify|One|A")
+    let slimAgain = slimFetches.start("spotify|One|A")
+    let slimOther = slimFetches.start("spotify|Two|A")
+    slimFetches.ended("spotify|One|A")
+    let slimEnded = !slimFetches.isFetching("spotify|One|A") && slimFetches.isFetching("spotify|Two|A")
+    let slimRetry = slimFetches.start("spotify|One|A")
+    check(slimFirst && !slimAgain && slimOther && slimEnded && slimRetry,
+          "song change: a cover on its way is fetched once however many readings ask for it, and again once that fetch ended")
+    let slimContext = CGColorSpace(name: CGColorSpace.sRGB).flatMap {
+        CGContext(data: nil, width: 1280, height: 1280, bitsPerComponent: 8, bytesPerRow: 0, space: $0,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+    }
+    let slimPNG = slimContext?.makeImage().flatMap {
+        NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:])
+    } ?? Data()
+    let slimCover = NowPlayingMonitor.cover(slimPNG)
+    check(slimCover.map { NowPlayingMonitor.pixels($0) } == "1000x1000 px"
+            && slimCover?.size == NSSize(width: 1000, height: 1000)
+            && slimCover?.representations.count == 1
+            && slimCover?.representations.first is NSBitmapImageRep,
+          "song change: a 1280 px cover reaches the card as its 1000 px decode, one bitmap, nothing left to draw at a larger size")
+    let slimSlide = TrackSlide.seconds(.window, reduceMotion: false)
+    check(ArtPushDelay.wait(sinceSongShown: nil) == 0
+            && abs(ArtPushDelay.wait(sinceSongShown: 0.1) - (slimSlide - 0.1)) < 0.001
+            && ArtPushDelay.wait(sinceSongShown: slimSlide + 0.2) == 0
+            && abs(ArtPushDelay.wait(sinceSongShown: 0.1, reduceMotion: true)
+                   - (TrackSlide.seconds(.window, reduceMotion: true) - 0.1)) < 0.001,
+          "song change: the receivers' cover waits for the window's slide to end, and goes at once outside one")
+    var slimDelay = ArtPushDelay()
+    let slimTurn = slimDelay.sent()
+    let slimStill = slimDelay.isCurrent(slimTurn)
+    _ = slimDelay.sent()
+    check(slimStill && !slimDelay.isCurrent(slimTurn),
+          "song change: a waiting cover is dropped once newer track info or another cover went to the receivers")
+    let slimAirPlay = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+AirPlay.swift", encoding: .utf8)) ?? ""
+    let slimCast = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Cast.swift", encoding: .utf8)) ?? ""
+    let slimNowPlaying = (try? String(contentsOfFile: "Sources/AudioSync/NowPlaying.swift", encoding: .utf8)) ?? ""
+    check(slimAirPlay.contains("ArtPushDelay.wait(") && slimAirPlay.contains("if nowPlayingOnScreen, let before") && slimCast.contains("castArtDelay.isCurrent(")
+            && slimNowPlaying.contains("artFetches.start(") && slimNowPlaying.contains("timeoutInterval: 4") && slimNowPlaying.contains("running[$0.bundleID] ?? Self.isRunning"),
+          "song change: the AirPlay and Cast covers wait for the slide, Spotify covers are fetched once, "
+            + "and a reading's main-thread turn asks no running-app list")
+}
+
 // MARK: Apple Music's next covers are loaded ahead (ArtAhead in NowPlaying.swift)
 // covers: S462
 do {

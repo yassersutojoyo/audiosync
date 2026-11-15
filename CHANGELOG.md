@@ -74,6 +74,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On the Mac, the Settings window opens in one smooth motion. Before, its switches and pickers shook against the text as it appeared.
 - On the Mac, the cover, title and artist slide smoothly on Next and Previous. Before, the slide skipped frames while the new song loaded.
 - On the Mac, Next and Previous within one album no longer skip a frame as the new cover slides in.
+- On the Mac, a Spotify Next fetches the new cover once and sends it to AirPlay and Cast speakers after the slide ends, so the slide has less work competing with it.
 
 ## [0.9.2] - 2026-11-08
 
