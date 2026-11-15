@@ -9609,6 +9609,12 @@ do {
     let cleared = takeKeySource.range(of: "window.makeFirstResponder(nil)")
     check(madeKey != nil && cleared != nil && madeKey!.upperBound <= cleared!.lowerBound,
           "menu bar panel source: the panel clears its first responder once it is key, so a mouse open shows no focus ring on the master slider")
+    let mainShowSource = ((try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? "")
+        .components(separatedBy: "    func show() {").dropFirst().first?.components(separatedBy: "\n    }\n").first ?? ""
+    let shownKey = mainShowSource.range(of: "window.makeKeyAndOrderFront(nil)")
+    let mainCleared = mainShowSource.range(of: "window.makeFirstResponder(nil)")
+    check(shownKey != nil && mainCleared != nil && shownKey!.upperBound <= mainCleared!.lowerBound,
+          "main window source: the window clears its first responder once it is key, so opening it at launch shows no focus ring on the master slider")
 }
 
 // MARK: Settings kept between launches (AppSettings.swift)

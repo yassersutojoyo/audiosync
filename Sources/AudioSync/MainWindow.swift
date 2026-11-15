@@ -86,6 +86,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     func show() {
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        // A key window hands focus to its first focusable view, the master slider; Tab still reaches it.
+        window.makeFirstResponder(nil)
     }
 
     private func updateOnScreen() {
