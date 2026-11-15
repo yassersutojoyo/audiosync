@@ -60,6 +60,9 @@ mod package;
 mod placement;
 mod platform;
 mod remote;
+#[cfg(any(windows, test))]
+#[cfg_attr(all(test, not(windows)), allow(dead_code))]
+mod renderer_choice;
 mod settings;
 mod setup_check;
 #[cfg(any(os_backend, target_os = "linux", test))]
@@ -256,6 +259,8 @@ impl From<slint::PlatformError> for StartError {
 
 /// Shows the main window and runs the UI until the user exits.
 fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
+    #[cfg(windows)]
+    let renderer_record = renderer_choice::select(log);
     #[cfg(feature = "mock-backend")]
     let zones_preview = log.enabled() && std::env::var(PREVIEW_ZONES_VAR).as_deref() == Ok("1");
     #[cfg(feature = "mock-backend")]
@@ -281,6 +286,17 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     #[cfg(not(feature = "mock-backend"))]
     let os::Started { backend, media } = os::start(log)?;
     let app = view::App::new(backend, log.clone())?;
+    #[cfg(windows)]
+    if let Some(record) = renderer_record.clone() {
+        let armed = record.clone();
+        let arm_log = log.clone();
+        app.before_main_shows(move || {
+            if let Err(error) = renderer_choice::arm(&armed) {
+                arm_log.log(|| format!("renderer: not recorded ({error})"));
+            }
+        });
+        renderer_choice::confirm_on_first_frame(app.main.window(), record, log);
+    }
     // Needs the platform the windows above set up, and must come before the
     // first one shows: Wayland matches windows to the .desktop file by it.
     #[cfg(target_os = "linux")]
@@ -301,7 +317,16 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
 
     // Windows may end the process once this handler returns, before the event loop ends.
     #[cfg(windows)]
-    platform::on_session_end(session_ending(&app, log, "Windows session ends"));
+    {
+        let ending = session_ending(&app, log, "Windows session ends");
+        let record = renderer_record.clone();
+        platform::on_session_end(Box::new(move || {
+            if let Some(record) = &record {
+                renderer_choice::confirm(record);
+            }
+            ending();
+        }));
+    }
     // A logout sends SIGTERM, and its default ends the process with no quit step.
     #[cfg(target_os = "linux")]
     platform::on_exit_signal(session_ending(&app, log, "exit signal"));
@@ -393,6 +418,10 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     }
     slint::run_event_loop_until_quit()?;
     log.log(|| "the event loop ended".to_owned());
+    #[cfg(windows)]
+    if let Some(record) = &renderer_record {
+        renderer_choice::confirm(record);
+    }
     app.at_quit();
     Ok(())
 }

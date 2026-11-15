@@ -1,0 +1,79 @@
+name: Skia binaries
+
+# skia-bindings publishes no binaries for a +crt-static Windows build. This
+# workflow makes sure the Actions cache holds Skia for each Windows target:
+# on a hit it stops, on a miss it builds Skia once and saves the archive.
+# windows.yml and msix.yml call it before they build, so a cache that expired
+# (7 days unused) is rebuilt instead of failing the run; a run on main fills
+# the cache every branch reads.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  skia:
+    name: Skia (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    runs-on: windows-latest
+    # A full Skia build on a miss; a hit ends in a minute or two.
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain (1.99.1, with the ${{ matrix.target }} target)
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup default 1.99.1
+          rustup target add ${{ matrix.target }}
+          rustc --version
+
+      - name: Cache key
+        id: key
+        run: echo "key=$(bash scripts/skia_cache_key.sh ${{ matrix.target }})" >> "$GITHUB_OUTPUT"
+
+      - name: Is Skia cached?
+        id: cached
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: skia-cache
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+
+      - name: Ninja 1.13.1
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/ninja.zip" https://github.com/ninja-build/ninja/releases/download/v1.13.1/ninja-win.zip
+          unzip -q "$RUNNER_TEMP/ninja.zip" -d "$RUNNER_TEMP/ninja"
+          echo "$RUNNER_TEMP/ninja" >> "$GITHUB_PATH"
+
+      - name: Build Skia and pack its archive
+        if: steps.cached.outputs.cache-hit != 'true'
+        working-directory: desktop
+        env:
+          # Nothing to download: the failed download makes skia-bindings build
+          # from source and print the archive's tag and key.
+          SKIA_BINARIES_URL: file://${{ runner.temp }}/none/{tag}/skia-binaries-{key}.tar.gz
+          LLVM_HOME: C:\Program Files\LLVM
+        run: |
+          # The app builds with no-compile, so nothing else ever compiles Skia.
+          sed -i 's/features = \["no-compile"\]/features = []/' Cargo.toml
+          cargo build --locked --release --target ${{ matrix.target }}
+          python -I ../scripts/skia_archive.py target/${{ matrix.target }}/release ../skia-cache
+
+      - name: Save the archive
+        if: steps.cached.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: skia-cache
+          key: ${{ steps.key.outputs.key }}
