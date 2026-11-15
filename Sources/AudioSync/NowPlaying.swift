@@ -279,7 +279,7 @@ final class NowPlayingMonitor {
         }
     }
 
-    enum Command: Equatable { case playPause, next, previous, shuffle(Bool), repeatMode(RepeatMode) }
+    enum Command: Equatable { case playPause, play, next, previous, shuffle(Bool), repeatMode(RepeatMode) }
 
     /// The shuffle and repeat fields a reading returns, empty for a player
     /// that does not take them.
@@ -294,6 +294,7 @@ final class NowPlayingMonitor {
     static func verb(_ command: Command, bundleID: String) -> String {
         switch command {
         case .playPause: return "playpause"
+        case .play: return "play"
         case .next: return "next track"
         case .previous: return "previous track"
         case .shuffle(let on):
@@ -368,6 +369,12 @@ final class NowPlayingMonitor {
     /// Posted by Music and Spotify when their track or play state changes.
     static let changeNotices = [Notification.Name("com.apple.Music.playerInfo"),
                                 Notification.Name("com.spotify.client.PlaybackStateChanged")]
+
+    /// Whether the players are read: something shows the track, or Resume
+    /// Playback After Sleep is on while streaming, so a sleep finds a reading (S465).
+    static func polls(shown: Bool, sending: Bool, casting: Bool, remote: Bool, resumeArmed: Bool) -> Bool {
+        shown || sending || casting || remote || resumeArmed
+    }
 
     /// Seconds between readings of the players. A play/pause key goes to the
     /// player, not to AudioSync, so only a reading shows it on the card.
@@ -1380,8 +1387,9 @@ enum WakeResume {
     /// A noted player from the sleep until the wake's verdict.
     struct Pending {
         let noted: Noted
-        var wokeAt: Date?
-        var backAt: Date?
+        /// System uptimes, so a clock change during the sleep moves neither.
+        var wokeAt: TimeInterval?
+        var backAt: TimeInterval?
         var readAfterBack = false
         var userActed = false
     }

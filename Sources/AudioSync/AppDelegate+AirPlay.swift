@@ -252,7 +252,7 @@ extension AppDelegate {
 
     private func startWakeResume() {
         guard var pending = wakeResume, pending.wokeAt == nil else { return }
-        pending.wokeAt = Date()
+        pending.wokeAt = ProcessInfo.processInfo.systemUptime
         wakeResume = pending
         wakeResumeTick()
     }
@@ -267,8 +267,9 @@ extension AppDelegate {
     private func wakeResumeTick() {
         guard var pending = wakeResume, let wokeAt = pending.wokeAt else { return }
         let streaming = engine.isRunning
+        let now = ProcessInfo.processInfo.systemUptime
         if pending.backAt == nil, streaming, wakeOutputsBack {
-            pending.backAt = Date()
+            pending.backAt = now
             wakeResume = pending
             nowPlaying.refresh()
         }
@@ -278,14 +279,14 @@ extension AppDelegate {
             playerRuns: !NSRunningApplication.runningApplications(withBundleIdentifier: player).isEmpty,
             outputsBack: pending.backAt != nil,
             after: pending.readAfterBack && nowPlaying.hasReading ? nowPlaying.track : nil,
-            waited: Date().timeIntervalSince(wokeAt))
+            waited: now - wokeAt)
         switch verdict {
         case .wait:
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.wakeResumeTick() }
         case .resume:
             wakeResume = nil
             DebugTrace.log("[AudioSync] resume after sleep: play sent to \(player)")
-            sendTransport(.playPause)
+            nowPlaying.send(.play)
         case .skip(let reason):
             wakeResume = nil
             DebugTrace.log("[AudioSync] resume after sleep: skipped for \(player), \(reason)")
@@ -295,8 +296,9 @@ extension AppDelegate {
     /// A reading after the wake: one taken once the outputs are back may decide,
     /// and the noted player read playing counts as acted on.
     private func noteWakeReading(startedAt: Date) {
-        guard var pending = wakeResume, let wokeAt = pending.wokeAt, startedAt >= wokeAt else { return }
-        if let backAt = pending.backAt, startedAt >= backAt { pending.readAfterBack = true }
+        let started = ProcessInfo.processInfo.systemUptime + startedAt.timeIntervalSinceNow
+        guard var pending = wakeResume, let wokeAt = pending.wokeAt, started >= wokeAt else { return }
+        if let backAt = pending.backAt, started >= backAt { pending.readAfterBack = true }
         if let track = nowPlaying.track, track.bundleID == pending.noted.bundleID, track.isPlaying {
             pending.userActed = true
         }
@@ -322,8 +324,9 @@ extension AppDelegate {
     func syncTrackInfo() {
         let sending = sendsTrackInfo
         let casting = sendsCastTrackInfo
-        let polling = nowPlayingOnScreen || panelOnScreen || sending || casting
-            || webRemote?.showsNowPlaying == true
+        let polling = NowPlayingMonitor.polls(shown: nowPlayingOnScreen || panelOnScreen, sending: sending,
+                                              casting: casting, remote: webRemote?.showsNowPlaying == true,
+                                              resumeArmed: resumesAfterSleep && engine.isRunning)
         nowPlaying.onScreen = nowPlayingOnScreen || panelOnScreen
         if polling != nowPlaying.isRunning {
             if polling {
