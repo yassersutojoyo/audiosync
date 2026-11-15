@@ -249,9 +249,9 @@ fn the_level_meter_reaches_3_to_1_and_takes_no_focus() {
 
 /// An opening notice in the main window, as on the Mac (WindowRules.swift
 /// `NoticeMotion.opacity`): its room opens over 240 ms and it fades in over
-/// 180 ms from 60 ms, opaque as the room lands; with animation effects off
-/// it shows at once. A closing notice keeps its fade. Read line by line:
-/// a Windows checkout may have CRLF line ends.
+/// 180 ms from 60 ms, opaque as the room lands; a closing one fades over
+/// 160 ms. With animation effects off it cross-fades over 150 ms. Read line
+/// by line: a Windows checkout may have CRLF line ends.
 // covers: S450
 #[test]
 fn an_opening_notice_fades_in_as_its_room_lands() {
@@ -266,15 +266,58 @@ fn an_opening_notice_fades_in_as_its_room_lands() {
     };
     assert_eq!(
         after("animate open {").0,
-        "duration: Motion.on ? (self.closing ? 200ms : 240ms) : 0ms;"
+        "duration: Motion.on ? 240ms : 0ms;"
     );
     assert_eq!(
         after("animate shown {"),
         (
-            "duration: Motion.on ? (self.closing ? 120ms : 180ms) : (self.closing ? 150ms : 0ms);",
+            "duration: Motion.on ? (self.closing ? 160ms : 180ms) : 150ms;",
             "delay: Motion.on && !self.closing ? 60ms : 0ms;"
         )
     );
+}
+
+/// A warning notice's orange box, an info notice's teal one and the small
+/// button's tint, as the Mac's: the text on each at 4.5:1 and the notice's
+/// icon at 3:1, on the window and on a card, in light and dark.
+#[test]
+fn the_notice_boxes_and_the_small_button_keep_their_text_readable() {
+    let opaque = |rgba: [f64; 4]| [rgba[0], rgba[1], rgba[2]];
+    for (index, appearance) in [Appearance::Light, Appearance::Dark]
+        .into_iter()
+        .enumerate()
+    {
+        let warn_box = opaque(fluent_color("warn-background")[index]);
+        let ink = opaque(fluent_color("house-text")[index]);
+        let pressed = if index == 0 { 0.28 } else { 0.30 };
+        for under in ["background", "surface"] {
+            let below = srgb(under, appearance);
+            let teal = srgb("teal", appearance);
+            let tint = |alpha: f64| [0, 1, 2].map(|i| teal[i] * alpha + below[i] * (1.0 - alpha));
+            for (name, fill, icon) in [
+                ("warning", warn_box, "warn"),
+                ("info", tint(0.12), "tealText"),
+            ] {
+                for text in ["text", "text@secondaryText"] {
+                    let value = contrast(composite(text, fill, appearance), fill);
+                    assert!(
+                        value >= MIN_TEXT_CONTRAST,
+                        "{text} on the {name} box over {under} ({appearance:?}): {value:.2}:1"
+                    );
+                }
+                let value = contrast(srgb(icon, appearance), fill);
+                assert!(
+                    value >= MIN_GRAPHIC_CONTRAST,
+                    "{icon} icon on the {name} box over {under} ({appearance:?}): {value:.2}:1"
+                );
+            }
+            let value = contrast(ink, tint(pressed));
+            assert!(
+                value >= MIN_TEXT_CONTRAST,
+                "small button pressed over {under} ({appearance:?}): {value:.2}:1"
+            );
+        }
+    }
 }
 
 /// The master volume rows as on the Mac (MenuBar.swift `MasterSlider`): the
@@ -862,7 +905,8 @@ fn no_text_promises_airplay() {
 }
 
 /// "Looking for speakers…" and the other list notes in the Mac window's
-/// style: callout text on a 10 px inset (MainWindow.swift, `emptyNote`).
+/// style: callout text on a 10 px inset, 8 px over its button
+/// (MainWindow.swift, `emptyNote`).
 // covers: S393
 #[test]
 fn the_speaker_list_note_is_callout_text_as_on_the_mac() {
@@ -870,6 +914,7 @@ fn the_speaker_list_note_is_callout_text_as_on_the_mac() {
     let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
     assert!(main.contains(
         "                    padding: 10px;
+                    spacing: 8px;
                     SecondaryText {
                         text: root.note;
                         font-size: Tokens.font-size-callout;"
@@ -967,7 +1012,7 @@ fn accessible_names_start_with_the_visible_text() {
         let (text, label) = (tr_text(strings, text), tr_text(strings, label));
         assert!(label.starts_with(text), "`{label}` starts with `{text}`");
     }
-    assert_eq!(buttons, 8, "the check found the buttons");
+    assert_eq!(buttons, 6, "the check found the buttons");
 }
 
 /// Retry on the notice that AirPlay stopped: the button shows only on a
@@ -1694,8 +1739,8 @@ fn the_updater_notice_uses_strings_and_tokens() {
         }
     }
     for needle in [
-        "background: Tokens.notice;",
-        "accessible-label: notice.message;",
+        "background: root.compact ? transparent : notice.info ? Tokens.teal.with-alpha(0.12) : Fluent.warn-background;",
+        "accessible-label: Strings.notice-spoken(notice.heading, notice.message);",
         "text: Strings.update-button(button);",
         "accessible-label: Strings.update-button(button);",
         "label: Strings.dismiss-notice(notice.title);",

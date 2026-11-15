@@ -448,6 +448,7 @@ export component EqualizerWindow inherits Window {
                     alignment: center;
                     power := ToggleSwitch {
                         text: Strings.equalizer-title;
+                        headline: true;
                         checked: root.enabled;
                         accessible-label: Strings.equalizer-title;
                         toggled => {

@@ -1520,16 +1520,23 @@ impl AppState {
     }
 
     /// A section's speakers split into its full rows and, after them, the
-    /// compact rows of those in a zone, each with its zone; order kept.
+    /// compact rows of those in a zone, each with its zone, grouped by zone
+    /// in the order of each zone's first row, as the Mac's; order kept.
     pub fn split_zoned<'a>(
         &'a self,
         section: Vec<&'a Speaker>,
     ) -> (Vec<&'a Speaker>, Vec<(&'a Speaker, &'a Zone)>) {
         let mut full = Vec::new();
-        let mut zoned = Vec::new();
+        let mut zoned: Vec<(&Speaker, &Zone)> = Vec::new();
         for speaker in section {
             match self.zone_of(&speaker.id) {
-                Some(zone) => zoned.push((speaker, zone)),
+                Some(zone) => {
+                    let after = zoned
+                        .iter()
+                        .rposition(|(_, z)| z.id == zone.id)
+                        .map_or(zoned.len(), |last| last + 1);
+                    zoned.insert(after, (speaker, zone));
+                }
                 None => full.push(speaker),
             }
         }
@@ -3802,6 +3809,21 @@ mod tests {
         assert!(!ids(&full).contains(&"airplay:bedroom".to_owned()));
         assert_eq!(zoned.len(), 1);
         assert_eq!(zoned[0].0.id, "airplay:bedroom");
+    }
+
+    #[test]
+    fn the_compact_rows_group_by_zone_in_the_order_of_each_zones_first_row() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:a", "Upstairs", &["airplay:bedroom", "airplay:living"]);
+        backend.add_zone("zone:b", "Downstairs", &["airplay:kitchen"]);
+        let state = backend.snapshot();
+        let (_, connected) = state.layout();
+        let (_, zoned) = state.split_zoned(connected);
+        let ids: Vec<&str> = zoned.iter().map(|(s, _)| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["airplay:bedroom", "airplay:living", "airplay:kitchen"]
+        );
     }
 
     // covers: S246

@@ -1165,6 +1165,14 @@ export global Strings {
         return @tr("Open AudioSync, {}", status);
     }
 
+    // What Narrator reads of a notice: its heading, if any, then its text.
+    public pure function notice-spoken(heading: string, message: string) -> string {
+        if heading == "" {
+            return message;
+        }
+        return @tr("{}. {}", heading, message);
+    }
+
     public pure function dismiss-notice(title: string) -> string {
         return @tr("Dismiss: {}", title);
     }

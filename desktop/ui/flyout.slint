@@ -987,26 +987,27 @@ export component TrayFlyout inherits Window {
 
                         HorizontalLayout {
                             alignment: space-between;
-                            more := Button {
+                            more := LinkButton {
                                 text: Strings.more-notices(root.notice-count - root.notices.length);
-                                accessible-label: self.text;
+                                label: self.text;
+                                text-color: Tokens.text;
                                 clicked => {
                                     root.open-app();
                                 }
-                                // A standard button reports focus only through has-focus.
-                                changed has-focus => {
-                                    root.more-notices-focused = more.has-focus || all.has-focus;
+                                changed keyboard-focused => {
+                                    root.more-notices-focused = more.keyboard-focused || all.keyboard-focused;
                                 }
                             }
 
-                            all := Button {
+                            all := LinkButton {
                                 text: Strings.dismiss-all-notices;
-                                accessible-label: Strings.dismiss-all-notices;
+                                label: Strings.dismiss-all-notices;
+                                text-color: Tokens.text;
                                 clicked => {
                                     root.notices-dismissed-all();
                                 }
-                                changed has-focus => {
-                                    root.more-notices-focused = more.has-focus || all.has-focus;
+                                changed keyboard-focused => {
+                                    root.more-notices-focused = more.keyboard-focused || all.keyboard-focused;
                                 }
                             }
                         }

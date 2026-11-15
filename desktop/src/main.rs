@@ -966,10 +966,10 @@ mod tests {
         let body = handler_body(
             widgets,
             "text: Strings.notice-show-how;",
-            "changed has-focus",
+            "changed keyboard-focused",
         );
         assert!(
-            body.contains("row.guide-focused = self.has-focus;"),
+            body.contains("row.guide-focused = self.keyboard-focused;"),
             "{body}"
         );
         for flag in ["dismiss-focused", "guide-focused"] {
@@ -1002,7 +1002,7 @@ mod tests {
             ),
             (
                 "text: Strings.more-notices(",
-                "changed has-focus",
+                "changed keyboard-focused",
                 "more-notices-focused",
             ),
             (

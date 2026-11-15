@@ -271,6 +271,9 @@ export struct NoticeItem {
     // A few words that name the notice, for its dismiss button ("double
     // audio", "Kitchen reconnecting").
     title: string,
+    // A few words drawn over the text, for an AirPlay speaker that waits or
+    // reconnects, as on the Mac; empty for none.
+    heading: string,
     // The notice offers Show How, which opens its guide.
     has-guide: bool,
     // The notice offers Retry, which starts AirPlay again.

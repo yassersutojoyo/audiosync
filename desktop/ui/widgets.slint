@@ -71,6 +71,11 @@ export global Fluent {
     // A playing AirPlay or Bluetooth speaker's kind glyph, the Mac's
     // activeBlue: 5.8:1 on white, 5.3:1 on the light playing row, 5.5:1 dark.
     out property <color> active-blue: Tokens.dark ? #5eaeff : #0062cc;
+    // A warning notice's box, the Mac's warnBackground.
+    out property <color> warn-background: Tokens.dark ? #3a2c12 : #fff4dd;
+    // The small button's text, the Mac's house button ink (tealDeep, and
+    // logo on dark).
+    out property <color> house-text: Tokens.dark ? #63dac2 : #0f574f;
     // The tray panel's block of what plays and the source.
     out property <brush> hero: Tokens.text.with-alpha(0.04);
     // A 1 px edge that sets a card off a light background.
@@ -417,10 +422,10 @@ export global Glyphs {
         return root.volume-high;
     }
 
-    // The icon font's Repeat reads poorly at 16 px, so these two are drawn
-    // on Windows too.
+    // The icon font's Repeat reads poorly at 16 px and it has no circled
+    // ellipsis (the Mac's options glyph), so these are drawn on Windows too.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.repeat-all || glyph == root.repeat-one;
+        return glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more;
     }
 
     // What the speaker is; how it is reached is the kind's glyph after the
@@ -473,6 +478,9 @@ export global Glyphs {
     }
 
     public pure function outline(glyph: string) -> string {
+        if glyph == root.more {
+            return "M8 1.5 A6.5 6.5 0 0 1 8 14.5 A6.5 6.5 0 0 1 8 1.5 Z";
+        }
         if glyph == root.speakers {
             return "M4.5 1.5 H11.5 A1 1 0 0 1 12.5 2.5 V13.5 A1 1 0 0 1 11.5 14.5 H4.5 A1 1 0 0 1 3.5 13.5 V2.5 A1 1 0 0 1 4.5 1.5 Z M8 7.5 A2.5 2.5 0 0 1 8 12.5 A2.5 2.5 0 0 1 8 7.5 Z";
         }
@@ -579,7 +587,7 @@ export global Glyphs {
             return "M4.5 5 A0.85 0.85 0 0 1 4.5 6.7 A0.85 0.85 0 0 1 4.5 5 Z M11.5 5 A0.85 0.85 0 0 1 11.5 6.7 A0.85 0.85 0 0 1 11.5 5 Z";
         }
         if glyph == root.more {
-            return "M3 6.9 A1.1 1.1 0 0 1 3 9.1 A1.1 1.1 0 0 1 3 6.9 Z M8 6.9 A1.1 1.1 0 0 1 8 9.1 A1.1 1.1 0 0 1 8 6.9 Z M13 6.9 A1.1 1.1 0 0 1 13 9.1 A1.1 1.1 0 0 1 13 6.9 Z";
+            return "M5 7.1 A0.9 0.9 0 0 1 5 8.9 A0.9 0.9 0 0 1 5 7.1 Z M8 7.1 A0.9 0.9 0 0 1 8 8.9 A0.9 0.9 0 0 1 8 7.1 Z M11 7.1 A0.9 0.9 0 0 1 11 8.9 A0.9 0.9 0 0 1 11 7.1 Z";
         }
         if glyph == root.warning {
             return "M8 10.75 A0.8 0.8 0 0 1 8 12.35 A0.8 0.8 0 0 1 8 10.75 Z";
@@ -1084,6 +1092,8 @@ export component LinkButton inherits Rectangle {
     in property <string> text;
     in property <string> label;
     in property <TextOverflow> overflow: clip;
+    // A notice's links take the text color, as the Mac's do.
+    in property <color> text-color: Tokens.teal-text;
     // Shown while the pointer rests on it; empty for none.
     in property <string> tip;
     // Whether it has the keyboard focus (a click doesn't give it).
@@ -1137,12 +1147,79 @@ export component LinkButton inherits Rectangle {
             text: root.text;
             font-size: Tokens.font-size-caption;
             font-weight: 600;
-            color: Tokens.teal-text;
+            color: root.text-color;
             vertical-alignment: center;
             overflow: root.overflow;
             opacity: touch.pressed ? 0.75 : 1;
             accessible-role: none;
         }
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
+// The Mac's small house button (HouseButtonStyle small): medium text in the
+// deep teal on a teal tint with a faint teal edge, for the fix under a note.
+export component SmallButton inherits Rectangle {
+    in property <string> text;
+    // Shown while the pointer rests on it, and what Narrator adds.
+    in property <string> tip;
+    callback clicked();
+
+    min-width: label.preferred-width + 20px;
+    preferred-width: self.min-width;
+    height: 24px;
+    border-radius: Tokens.radius-control;
+    background: Tokens.teal.with-alpha(touch.pressed ? (Tokens.dark ? 0.30 : 0.28) : touch.has-hover ? (Tokens.dark ? 0.20 : 0.18) : (Tokens.dark ? 0.14 : 0.12));
+    animate background {
+        duration: 120ms;
+        easing: ease-out;
+    }
+    border-width: max(0.5px, 1phx);
+    border-color: Tokens.teal.with-alpha(0.3);
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-description: root.tip;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+
+        if root.tip != "": Tooltip {
+            LabelTip {
+                text: root.tip;
+                max-tip-width: 360px;
+            }
+        }
+    }
+
+    label := Text {
+        text: root.text;
+        font-size: Tokens.font-size-callout;
+        font-weight: 500;
+        color: Fluent.house-text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
     }
 
     FocusRing {
@@ -1603,6 +1680,8 @@ export component PowerSwitch inherits Rectangle {
 export component ToggleSwitch {
     in-out property <bool> checked <=> track.checked;
     in property <string> text;
+    // The label in the headline weight, as the Mac's Equalizer switch.
+    in property <bool> headline;
     out property <bool> has-focus: track.has-focus;
     callback toggled();
 
@@ -1631,6 +1710,7 @@ export component ToggleSwitch {
         Text {
             text: root.text;
             color: Tokens.text;
+            font-weight: root.headline ? 600 : 400;
             vertical-alignment: center;
             accessible-role: none;
         }
@@ -3629,6 +3709,13 @@ export component ZoneMemberRow inherits Rectangle {
     background: hover.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
 
+    // The zone's bar on the group's left edge.
+    Rectangle {
+        x: 0;
+        width: 1px;
+        background: Tokens.separator;
+    }
+
     hover := TouchArea {
         clicked => {
             root.blank-clicked();
@@ -4313,23 +4400,27 @@ export component NoticeStack inherits VerticalLayout {
                 self.shown = 0;
             }
         }
+        // The Mac's 320 ms (NoticeMotion): a closing notice fades over its
+        // first half and its room shuts after 80 ms; the curve has the same
+        // top speed as the Mac's.
         animate open {
-            duration: Motion.on ? (self.closing ? 200ms : 240ms) : 0ms;
-            delay: Motion.on && self.closing ? 90ms : 0ms;
-            easing: cubic-bezier(0.2, 0.8, 0.2, 1);
+            duration: Motion.on ? 240ms : 0ms;
+            delay: Motion.on && self.closing ? 80ms : 0ms;
+            easing: cubic-bezier(0.25, 0, 0.75, 1);
         }
-        // With animation effects off only a closing notice fades.
+        // With animation effects off a notice cross-fades and its room
+        // opens or shuts at once.
         animate shown {
-            duration: Motion.on ? (self.closing ? 120ms : 180ms) : (self.closing ? 150ms : 0ms);
+            duration: Motion.on ? (self.closing ? 160ms : 180ms) : 150ms;
             delay: Motion.on && !self.closing ? 60ms : 0ms;
-            easing: ease-out;
+            easing: cubic-bezier(0.25, 0, 0.75, 1);
         }
 
         height: (Motion.on ? self.open : 1) * (self.gap + row.preferred-height);
         clip: true;
 
         row := Rectangle {
-            y: slot.gap - (Motion.on ? 6px * (1 - slot.shown) : 0px);
+            y: slot.gap;
             width: parent.width;
             height: self.preferred-height;
             opacity: slot.shown;
@@ -4356,19 +4447,19 @@ export component NoticeStack inherits VerticalLayout {
                 }
             }
 
-            background: Tokens.notice;
-            border-radius: Fluent.radius-card;
+            // The tray panel's notice is text on the panel, as on the Mac.
+            background: root.compact ? transparent : notice.info ? Tokens.teal.with-alpha(0.12) : Fluent.warn-background;
+            border-radius: Tokens.radius-card;
             border-width: 1px;
-            border-color: Fluent.stroke;
+            border-color: root.compact || notice.info ? transparent : Tokens.warn.with-alpha(0.28);
 
             HorizontalLayout {
-                padding: 12px;
-                padding-right: 8px;
-                spacing: 12px;
+                padding: root.compact ? 0px : 10px;
+                spacing: 8px;
 
                 Glyph {
                     glyph: notice.info ? Glyphs.info : Glyphs.warning;
-                    color: Tokens.text;
+                    color: notice.info ? Tokens.teal-text : Tokens.warn;
                     vertical-alignment: top;
                     width: 18px;
                 }
@@ -4379,7 +4470,16 @@ export component NoticeStack inherits VerticalLayout {
                     VerticalLayout {
                         spacing: 2px;
                         accessible-role: text;
-                        accessible-label: notice.message;
+                        accessible-label: Strings.notice-spoken(notice.heading, notice.message);
+
+                        if notice.heading != "": Text {
+                            text: notice.heading;
+                            color: Tokens.text;
+                            font-size: Tokens.font-size-caption;
+                            font-weight: 600;
+                            overflow: elide;
+                            accessible-role: none;
+                        }
 
                         message-box := Rectangle {
                             property <bool> cut: root.capped && message.preferred-height > self.three-lines;
@@ -4422,46 +4522,48 @@ export component NoticeStack inherits VerticalLayout {
 
                     if notice.has-guide: HorizontalLayout {
                         alignment: start;
-                        Button {
+                        LinkButton {
                             text: Strings.notice-show-how;
-                            accessible-label: Strings.notice-show-how-label;
+                            label: Strings.notice-show-how-label;
+                            text-color: Tokens.text;
                             clicked => {
                                 root.guide-requested(notice.id);
                             }
-                            // A standard button reports focus only through has-focus.
-                            changed has-focus => {
-                                row.guide-focused = self.has-focus;
+                            changed keyboard-focused => {
+                                row.guide-focused = self.keyboard-focused;
                             }
                         }
                     }
 
                     if notice.has-retry: HorizontalLayout {
                         alignment: start;
-                        Button {
+                        LinkButton {
                             text: Strings.notice-retry;
-                            accessible-label: Strings.notice-retry-label;
+                            label: Strings.notice-retry-label;
+                            text-color: Tokens.text;
                             clicked => {
                                 root.retry-requested(notice.id);
                             }
                             // A notice has no guide and Retry both, so the row's
                             // second button focus is this one's.
-                            changed has-focus => {
-                                row.guide-focused = self.has-focus;
+                            changed keyboard-focused => {
+                                row.guide-focused = self.keyboard-focused;
                             }
                         }
                     }
 
                     if notice.has-privacy: HorizontalLayout {
                         alignment: start;
-                        Button {
+                        LinkButton {
                             text: Strings.notice-open-privacy;
-                            accessible-label: Strings.notice-open-privacy-label;
+                            label: Strings.notice-open-privacy-label;
+                            text-color: Tokens.text;
                             clicked => {
                                 root.privacy-requested(notice.id);
                             }
                             // Only the microphone notice has this button.
-                            changed has-focus => {
-                                row.guide-focused = self.has-focus;
+                            changed keyboard-focused => {
+                                row.guide-focused = self.keyboard-focused;
                             }
                         }
                     }
@@ -4534,14 +4636,15 @@ export component NoticeStack inherits VerticalLayout {
             height: self.preferred-height;
             alignment: end;
             opacity: all-slot.open;
-            Button {
+            LinkButton {
                 text: Strings.dismiss-all-notices;
-                accessible-label: Strings.dismiss-all-notices;
+                label: Strings.dismiss-all-notices;
+                text-color: Tokens.text;
                 clicked => {
                     root.dismissed-all();
                 }
-                changed has-focus => {
-                    root.dismiss-all-focus-changed(self.has-focus);
+                changed keyboard-focused => {
+                    root.dismiss-all-focus-changed(self.keyboard-focused);
                 }
             }
         }
