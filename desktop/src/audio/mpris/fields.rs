@@ -47,7 +47,7 @@ impl Controls {
     pub fn allows(self, command: Transport) -> bool {
         match command {
             Transport::Previous => self.previous,
-            Transport::PlayPause => self.play_pause,
+            Transport::PlayPause | Transport::Play => self.play_pause,
             Transport::Next => self.next,
             Transport::Shuffle(_) | Transport::Repeat(_) => false,
         }

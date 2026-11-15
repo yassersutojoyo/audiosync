@@ -1859,6 +1859,13 @@ impl AirPlaySpeakers {
         }
     }
 
+    /// Whether any speaker plays (S465).
+    pub fn plays(&self) -> bool {
+        self.added
+            .values()
+            .any(|added| added.state == SpeakerState::Playing)
+    }
+
     fn is_playing(&self, id: &str) -> bool {
         self.added
             .get(id)

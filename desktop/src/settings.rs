@@ -860,6 +860,9 @@ pub struct Settings {
     /// Speakers > Volume Keys Control AudioSync (spec S429), on by default.
     #[serde(deserialize_with = "bool_or_true")]
     pub volume_keys: bool,
+    /// File > Resume Playback After Sleep (spec S465), off by default.
+    #[serde(deserialize_with = "bool_or_false")]
+    pub resume_after_sleep: bool,
     /// The last update check that read the appcast, in seconds since the
     /// Unix epoch (spec S305).
     #[serde(deserialize_with = "or_default")]
@@ -1010,6 +1013,7 @@ impl Default for Settings {
             cast_on: None,
             check_updates_automatically: true,
             volume_keys: true,
+            resume_after_sleep: false,
             last_update_check: None,
             update_record: None,
             other_fields: BTreeMap::new(),
@@ -1318,6 +1322,7 @@ impl Settings {
             cast_on: self.cast_on.filter(|id| usable_id(id)),
             check_updates_automatically: self.check_updates_automatically,
             volume_keys: self.volume_keys,
+            resume_after_sleep: self.resume_after_sleep,
             last_update_check: self.last_update_check,
             update_record: self.update_record,
             // Capped as every list is, so a damaged file's thousands of stray keys aren't carried on.
@@ -1516,6 +1521,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("cast_on", reads::<Option<String>>),
         ("check_updates_automatically", Value::is_boolean),
         ("volume_keys", Value::is_boolean),
+        ("resume_after_sleep", Value::is_boolean),
         ("last_update_check", reads::<Option<u64>>),
         ("update_record", reads::<Option<UpdateRecord>>),
     ];
@@ -1996,6 +2002,7 @@ mod tests {
             cast_on: Some("4a1f9d2e-7b3c-4e8a-9f60-1c2d3e4f5a6b".to_owned()),
             check_updates_automatically: false,
             volume_keys: false,
+            resume_after_sleep: true,
             last_update_check: Some(1_800_000_000),
             update_record: Some(UpdateRecord {
                 version: "9.9.9".to_owned(),
@@ -2497,6 +2504,7 @@ mod tests {
             cast_on,
             check_updates_automatically,
             volume_keys,
+            resume_after_sleep,
             last_update_check,
             update_record,
             other_fields: _,
@@ -2534,6 +2542,7 @@ mod tests {
             default.check_updates_automatically
         );
         assert_ne!(volume_keys, default.volume_keys);
+        assert_ne!(resume_after_sleep, default.resume_after_sleep);
         assert_ne!(last_update_check, default.last_update_check);
         assert_ne!(update_record, default.update_record);
     }

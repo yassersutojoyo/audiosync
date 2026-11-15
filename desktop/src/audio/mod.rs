@@ -70,6 +70,7 @@ pub mod pipewire;
 pub mod process;
 pub mod render;
 pub mod routing;
+pub mod wake_resume;
 #[cfg(windows)]
 pub mod wasapi;
 

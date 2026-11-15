@@ -84,7 +84,9 @@ use super::capture::{
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
 use super::clock_probe::{ClockQueue, describe_clock_queue};
-use super::now_playing::{Follow, Mix, SharedLabels, TrackInfo, TrackReader, TrackSource};
+use super::now_playing::{
+    Follow, Mix, POLL_INTERVAL, SharedLabels, TrackInfo, TrackReader, TrackSource,
+};
 #[cfg(test)]
 use super::outputs::OutputParams;
 use super::outputs::{
@@ -97,7 +99,9 @@ use super::render::{Stall, StallSign, WakeCounts};
 use super::routing::{
     self, Captured, DirectPath, DirectReason, EndpointAudio, EndpointVolume, PlayedOn,
 };
+use super::wake_resume::{self, Pending, Verdict};
 use crate::debug_log::DebugLog;
+use crate::now_playing_card::Transport;
 
 pub(crate) mod device_volume;
 
@@ -971,6 +975,10 @@ pub struct Controller<D: Driver> {
     calm_restarts: BTreeMap<String, u64>,
     /// Where the PC is in a sleep (S332).
     power: PowerState,
+    /// Resume Playback After Sleep (S465).
+    resume_after_sleep: bool,
+    /// What the last sleep noted, until the wake decides (S465).
+    wake_resume: Option<Pending>,
 }
 
 impl<D: Driver> Controller<D> {
@@ -1036,6 +1044,8 @@ impl<D: Driver> Controller<D> {
             left_mid_session: BTreeSet::new(),
             calm_restarts: BTreeMap::new(),
             power: PowerState::default(),
+            resume_after_sleep: false,
+            wake_resume: None,
         }
     }
 
@@ -1348,7 +1358,8 @@ impl<D: Driver> Controller<D> {
                 .airplay
                 .as_ref()
                 .is_some_and(|airplay| airplay.chosen())
-                || self.cast.as_ref().is_some_and(CastSpeakers::chosen));
+                || self.cast.as_ref().is_some_and(CastSpeakers::chosen)
+                || self.resume_after_sleep);
         if self.session.is_none() {
             self.track_source = None;
         }
@@ -3004,6 +3015,7 @@ impl<D: Driver> Controller<D> {
             match notice {
                 PowerNotice::Suspend if self.power.suspended.is_none() => {
                     self.power.suspended = Some(now);
+                    self.note_sleep_playback();
                     self.cancel_fresh_restarts_for_sleep();
                     if let Some(airplay) = self.airplay.as_mut() {
                         airplay.sleeping();
@@ -3057,6 +3069,13 @@ impl<D: Driver> Controller<D> {
     /// The PC woke, as `found` showed, at wall time `now`, `gap` after the
     /// poll before (S332).
     fn resume(&mut self, found: ResumeFound, now: SystemTime, gap: Option<Duration>) {
+        // Without a suspend notice (Linux, or one Windows missed) the reading before the gap stands for the sleep.
+        if self.power.suspended.is_none() {
+            self.note_sleep_playback();
+        }
+        if let Some(pending) = self.wake_resume.as_mut() {
+            pending.woke_at = Some(Instant::now());
+        }
         // A suspend taken in this same poll slept for the gap.
         let asleep = self
             .power
@@ -3098,6 +3117,103 @@ impl<D: Driver> Controller<D> {
                 asleep.as_secs_f64()
             )
         });
+    }
+
+    /// A sleep notes the player the newest reading shows playing, while
+    /// streaming runs (S465); a new sleep replaces what the last one noted.
+    fn note_sleep_playback(&mut self) {
+        self.wake_resume = None;
+        if !self.resume_after_sleep {
+            return;
+        }
+        let streaming = self.session.is_some();
+        let reading = self.track_info.latest().and_then(|(session, _)| session);
+        match wake_resume::noted(true, streaming, reading) {
+            Some(noted) => {
+                self.log
+                    .log(|| format!("resume after sleep: noted {} playing", noted.app_id));
+                self.wake_resume = Some(Pending {
+                    noted,
+                    woke_at: None,
+                    back_at: None,
+                    user_acted: false,
+                });
+            }
+            None => self.log.log(|| {
+                let why = if streaming {
+                    "no player read as playing"
+                } else {
+                    "streaming is off"
+                };
+                format!("resume after sleep: nothing noted, {why}")
+            }),
+        }
+    }
+
+    /// At each poll from the wake until the verdict (S465): the outputs are
+    /// back once streaming runs with its capture open again (S332) and, with
+    /// an AirPlay speaker chosen, one plays; a reading after that may decide.
+    fn wake_resume_tick(&mut self) {
+        let Some(woke_at) = self
+            .wake_resume
+            .as_ref()
+            .and_then(|pending| pending.woke_at)
+        else {
+            return;
+        };
+        let now = Instant::now();
+        let streaming = self.session.is_some();
+        let back = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.reopen.is_none())
+            && self
+                .airplay
+                .as_ref()
+                .is_none_or(|airplay| !airplay.chosen() || airplay.plays());
+        let latest = self.track_info.latest();
+        let Some(pending) = self.wake_resume.as_mut() else {
+            return;
+        };
+        if back && pending.back_at.is_none() {
+            pending.back_at = Some(now);
+        }
+        // A reading the reader made before the sleep may be taken just after the wake.
+        if let Some((Some(session), at)) = latest
+            && at >= woke_at + POLL_INTERVAL
+            && session.app_id == pending.noted.app_id
+            && session.playing
+        {
+            pending.user_acted = true;
+        }
+        let after = latest
+            .filter(|(_, at)| pending.back_at.is_some_and(|back_at| *at > back_at))
+            .map(|(session, _)| session);
+        let verdict = wake_resume::decide(
+            self.resume_after_sleep,
+            Some(&pending.noted),
+            streaming,
+            pending.user_acted,
+            pending.back_at.is_some(),
+            after,
+            now.saturating_duration_since(woke_at),
+        );
+        if verdict == Verdict::Wait {
+            return;
+        }
+        let player = pending.noted.app_id.clone();
+        self.wake_resume = None;
+        match verdict {
+            Verdict::Resume => {
+                self.log
+                    .log(|| format!("resume after sleep: play sent to {player}"));
+                self.track_info.send(Transport::Play);
+            }
+            Verdict::Skip(reason) => self
+                .log
+                .log(|| format!("resume after sleep: skipped for {player}, {reason}")),
+            Verdict::Wait => {}
+        }
     }
 
     /// Lets go of the running session's capture, lost because Windows audio
@@ -4606,6 +4722,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn airplay_play_pause_pressed(&mut self, app: &str, playing: bool) {
+        if let Some(pending) = self.wake_resume.as_mut() {
+            pending.user_acted = true;
+        }
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.play_pause_pressed(app, playing, Instant::now());
         }
@@ -4804,6 +4923,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.quit_watch.set_setting(setting);
     }
 
+    fn set_resume_after_sleep(&mut self, on: bool) {
+        self.resume_after_sleep = on;
+    }
+
     fn set_input_pair(&mut self, endpoint_id: &str, pair: u16) {
         if pair == 0 {
             self.input_pairs.remove(endpoint_id);
@@ -4952,6 +5075,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
             let events = airplay.poll();
             for control in airplay.take_remote_controls() {
                 self.track_info.send(control);
+                if let Some(pending) = self.wake_resume.as_mut() {
+                    pending.user_acted = true;
+                }
             }
             self.pending.extend(events);
             self.sync_airplay_rule();
@@ -4962,6 +5088,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
             self.sync_cast_rule();
         }
         self.sync_track_info();
+        self.wake_resume_tick();
 
         // Outputs that stopped by themselves.
         let mut stopped: Vec<(String, Option<Stall>)> = Vec::new();
@@ -8641,6 +8768,114 @@ mod tests {
                 "the PC is going to sleep",
                 "the PC woke after 7200 s asleep, as Windows' resume notice said",
             ],
+        );
+    }
+
+    /// Streams with Resume Playback After Sleep `on`, Spotify read playing.
+    fn streaming_with_spotify(
+        name: &str,
+        on: bool,
+    ) -> (MockBackend, FakeReader, DebugLog, PathBuf) {
+        let (mut backend, log, dir) = logged_backend(name);
+        let reader = FakeReader::with_icon(b"icon");
+        backend.set_track_reader(reader.reader());
+        backend.set_receiver_labels(shared_labels());
+        backend.set_resume_after_sleep(on);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        reader.read(Some(track("Spotify.exe", "Song", true, None)));
+        backend.poll();
+        (backend, reader, log, dir)
+    }
+
+    /// The wake's poll, then one more with Spotify still read paused.
+    fn wake_with_spotify_paused(backend: &mut MockBackend, reader: &FakeReader) {
+        reader.read(Some(track("Spotify.exe", "Song", false, None)));
+        backend.poll();
+        reader.read(Some(track("Spotify.exe", "Song", false, None)));
+        backend.poll();
+    }
+
+    // covers: S465
+    #[test]
+    fn the_wake_sends_play_to_the_player_that_played_at_the_sleep() {
+        let (mut backend, reader, log, dir) =
+            streaming_with_spotify("controller-wake-resume", true);
+        backend.notify_power(PowerNotice::Suspend);
+        backend.poll();
+        backend.pass_wall_time(Duration::from_secs(3600));
+        backend.notify_power(PowerNotice::Resume);
+        wake_with_spotify_paused(&mut backend, &reader);
+        assert_eq!(reader.take_sent(), [Transport::Play]);
+        backend.poll();
+        assert!(reader.take_sent().is_empty(), "sent once");
+        assert_in_order(
+            &logged(&log, &dir),
+            &[
+                "resume after sleep: noted Spotify.exe playing",
+                "resume after sleep: play sent to Spotify.exe",
+            ],
+        );
+    }
+
+    // covers: S465
+    #[test]
+    fn a_wake_the_clock_shows_sends_play_without_a_suspend_notice() {
+        let (mut backend, reader, _log, _dir) =
+            streaming_with_spotify("controller-wake-resume-clock", true);
+        backend.pass_wall_time(Duration::from_secs(3600));
+        wake_with_spotify_paused(&mut backend, &reader);
+        assert_eq!(reader.take_sent(), [Transport::Play]);
+    }
+
+    // covers: S465
+    #[test]
+    fn the_wake_waits_for_a_lost_capture_to_run_again() {
+        let (mut backend, reader, _log, _dir) =
+            streaming_with_spotify("controller-wake-resume-reopen", true);
+        backend.notify_power(PowerNotice::Suspend);
+        backend.poll();
+        backend.notify_power(PowerNotice::Resume);
+        backend.fail_capture(BackendError::DeviceGone);
+        backend.refuse_captures(Some(BackendError::DeviceGone));
+        wake_with_spotify_paused(&mut backend, &reader);
+        assert!(!backend.driver().capture_running());
+        assert!(reader.take_sent().is_empty(), "nothing while it reopens");
+
+        backend.refuse_captures(None);
+        for _ in 0..polls_in(10) {
+            if backend.driver().capture_running() {
+                break;
+            }
+            backend.poll();
+        }
+        assert!(backend.driver().capture_running());
+        wake_with_spotify_paused(&mut backend, &reader);
+        assert_eq!(reader.take_sent(), [Transport::Play]);
+    }
+
+    // covers: S465
+    #[test]
+    fn the_wake_sends_nothing_with_the_switch_off_or_after_a_press() {
+        let (mut backend, reader, _log, _dir) =
+            streaming_with_spotify("controller-wake-resume-off", false);
+        backend.notify_power(PowerNotice::Suspend);
+        backend.poll();
+        backend.notify_power(PowerNotice::Resume);
+        wake_with_spotify_paused(&mut backend, &reader);
+        assert!(reader.take_sent().is_empty());
+
+        let (mut backend, reader, log, dir) =
+            streaming_with_spotify("controller-wake-resume-pressed", true);
+        backend.notify_power(PowerNotice::Suspend);
+        backend.poll();
+        backend.notify_power(PowerNotice::Resume);
+        backend.airplay_play_pause_pressed("Spotify.exe", false);
+        wake_with_spotify_paused(&mut backend, &reader);
+        assert!(reader.take_sent().is_empty());
+        assert_in_order(
+            &logged(&log, &dir),
+            &["resume after sleep: skipped for Spotify.exe, the user acted"],
         );
     }
 

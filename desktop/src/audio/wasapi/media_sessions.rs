@@ -220,6 +220,7 @@ impl SessionList for WindowsSessions {
         let operation = match command {
             Transport::Previous => session.TrySkipPreviousAsync(),
             Transport::PlayPause => session.TryTogglePlayPauseAsync(),
+            Transport::Play => session.TryPlayAsync(),
             Transport::Next => session.TrySkipNextAsync(),
             Transport::Shuffle(on) => session.TryChangeShuffleActiveAsync(on),
             Transport::Repeat(mode) => session.TryChangeAutoRepeatModeAsync(match mode {

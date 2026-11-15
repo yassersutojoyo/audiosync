@@ -1574,6 +1574,7 @@ export component MainWindow inherits Window {
     in property <bool> show-virtual-devices;
     in property <Appearance> appearance;
     in property <bool> switch-source-on-quit;
+    in property <bool> resume-after-sleep;
     // File > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
     // A release build that updates itself shows the updater's menu items.
@@ -1744,6 +1745,7 @@ export component MainWindow inherits Window {
     callback show-virtual-devices-toggled(bool);
     callback appearance-chosen(Appearance);
     callback switch-source-on-quit-toggled(bool);
+    callback resume-after-sleep-toggled(bool);
     callback launch-at-login-toggled(bool);
     callback check-updates-automatically-toggled(bool);
     callback volume-keys-toggled(bool);
@@ -2807,6 +2809,15 @@ export component MainWindow inherits Window {
                             checked: root.switch-source-on-quit;
                             activated => {
                                 root.switch-source-on-quit-toggled(!root.switch-source-on-quit);
+                            }
+                        }
+
+                        MenuItem {
+                            title: Strings.resume-after-sleep;
+                            checkable: true;
+                            checked: root.resume-after-sleep;
+                            activated => {
+                                root.resume-after-sleep-toggled(!root.resume-after-sleep);
                             }
                         }
 

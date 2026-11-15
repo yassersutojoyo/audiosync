@@ -3105,6 +3105,10 @@ impl App {
             with_app(&w, |app| app.update(|b| b.set_when_source_quits(setting)))
         });
         let w = weak.clone();
+        main.on_resume_after_sleep_toggled(move |on| {
+            with_app(&w, |app| app.update(|b| b.set_resume_after_sleep(on)))
+        });
+        let w = weak.clone();
         main.on_master_volume_changed(move |volume| {
             with_app(&w, |app| app.move_master_volume(volume))
         });
@@ -5285,6 +5289,7 @@ impl WindowState for MainWindow {
             &self.global::<Motion>(),
         ));
         self.set_switch_source_on_quit(state.when_source_quits == WhenSourceQuits::SwitchToSystem);
+        self.set_resume_after_sleep(state.resume_after_sleep);
     }
 
     fn show_live_input_hint(&self, hint: &SharedString) {
@@ -15625,6 +15630,16 @@ mod tests {
         app.main.invoke_volume_keys_toggled(false);
         assert!(!app.main.get_volume_keys());
         assert!(!app.backend.borrow().view_settings().volume_keys);
+    }
+
+    // covers: S465
+    #[test]
+    fn the_resume_after_sleep_switch_is_off_until_turned_on() {
+        let app = app_over(MockBackend::new());
+        assert!(!app.main.get_resume_after_sleep());
+        app.main.invoke_resume_after_sleep_toggled(true);
+        assert!(app.main.get_resume_after_sleep());
+        assert!(app.snapshot().resume_after_sleep);
     }
 
     #[test]

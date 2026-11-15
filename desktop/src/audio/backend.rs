@@ -1202,6 +1202,11 @@ pub trait AudioBackend {
     /// What a session does when the app it captures quits (spec S227).
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits);
 
+    /// Resume Playback After Sleep (S465): while on and streaming, the media
+    /// sessions are read, and the wake sends the player playing at the sleep
+    /// play once the outputs are back.
+    fn set_resume_after_sleep(&mut self, _on: bool) {}
+
     /// The channel pair input device `endpoint_id` plays from its next
     /// start (`InputPair::index`, 0 for channels 1-2). A running capture
     /// keeps its pair until started again.
