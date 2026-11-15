@@ -15583,6 +15583,132 @@ mod tests {
         }
     }
 
+    /// A one-colour red cover, a colour nothing else in the windows shows.
+    fn red_cover() -> slint::Image {
+        slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+            &[255, 0, 0, 255].repeat(64),
+            8,
+            8,
+        ))
+    }
+
+    /// The left, top, right and bottom pixels the red cover shows in `window`.
+    fn red_bounds(window: &slint::Window) -> (f32, f32, f32, f32) {
+        let shot = window
+            .take_snapshot()
+            .expect("the software renderer draws it");
+        let width = shot.width() as usize;
+        let red: Vec<(usize, usize)> = shot
+            .as_bytes()
+            .chunks(4)
+            .enumerate()
+            .filter(|(_, pixel)| *pixel == [255, 0, 0, 255])
+            .map(|(at, _)| (at % width, at / width))
+            .collect();
+        let xs = red.iter().map(|&(x, _)| x);
+        let ys = red.iter().map(|&(_, y)| y);
+        (
+            xs.clone().min().expect("the red cover shows") as f32,
+            ys.clone().min().unwrap() as f32,
+            xs.max().unwrap() as f32,
+            ys.max().unwrap() as f32,
+        )
+    }
+
+    // covers: S463
+    #[test]
+    fn the_next_cover_crosses_the_window_whole_level_with_its_box_in_a_scrolled_column() {
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let window = app.main.window();
+        app.main.set_now_playing_shown(true);
+        app.main.set_now_playing_title("A track title".into());
+        app.main.set_now_playing_outgoing(OutgoingSong {
+            has_artwork: true,
+            artwork: red_cover(),
+            ..OutgoingSong::default()
+        });
+        draw_frames();
+        // The box partly under the column's top edge, the old cover in it red.
+        scroll(window, 150.0, 400.0, -120.0);
+        let slide = |side: f32, slid: f32| {
+            app.main.set_now_playing_slide(SlideLook {
+                sliding: true,
+                side,
+                slid,
+                ..SlideLook::default()
+            });
+            draw_frames();
+            red_bounds(window)
+        };
+        let old = slide(1.0, 0.0);
+        // As on the Mac only the window clips the new cover, so it shows
+        // whole where the column hides the top of the box.
+        let (_, box_top, _, _) = slider_box(&app.main, "Now Playing");
+        assert!(box_top < old.1, "the column hides the box's top");
+        let whole = (old.0, box_top, old.2, old.3);
+        app.main.set_now_playing_outgoing(OutgoingSong::default());
+        app.main.set_now_playing_has_artwork(true);
+        app.main.set_now_playing_artwork(red_cover());
+        for (side, slid) in [(1.0, 0.25), (-1.0, 0.5), (1.0, 0.75)] {
+            let (_, top, _, bottom) = slide(side, slid);
+            assert_eq!(
+                (top, bottom),
+                (whole.1, whole.3),
+                "level with the whole box ({side}, {slid})"
+            );
+        }
+        assert!(
+            slide(1.0, 0.5).0 > old.2,
+            "Next's cover crosses the speaker list"
+        );
+        assert!(slide(-1.0, 0.5).0 < old.0, "Previous's comes from the left");
+        assert_eq!(slide(1.0, 1.0), whole, "it lands on the whole box");
+    }
+
+    // covers: S463
+    #[test]
+    fn the_flyout_cover_comes_across_the_panel_level_with_its_box() {
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let window = app.flyout.window();
+        app.flyout.set_now_playing_shown(true);
+        app.flyout.set_now_playing_title("A track title".into());
+        app.flyout.set_now_playing_outgoing(OutgoingSong {
+            has_artwork: true,
+            artwork: red_cover(),
+            ..OutgoingSong::default()
+        });
+        let slide = |side: f32, slid: f32| {
+            app.flyout.set_now_playing_slide(SlideLook {
+                sliding: true,
+                side,
+                slid,
+                ..SlideLook::default()
+            });
+            draw_frames();
+            red_bounds(window)
+        };
+        let old = slide(1.0, 0.0);
+        app.flyout.set_now_playing_outgoing(OutgoingSong::default());
+        app.flyout.set_now_playing_has_artwork(true);
+        app.flyout.set_now_playing_artwork(red_cover());
+        let next = slide(1.0, 0.5);
+        let previous = slide(-1.0, 0.5);
+        assert_eq!(
+            (next.1, next.3),
+            (old.1, old.3),
+            "Next's cover is level with the box"
+        );
+        assert_eq!((previous.1, previous.3), (old.1, old.3), "Previous's too");
+        assert!(next.0 > old.2, "Next's comes from the right");
+        assert!(
+            previous.0 < old.0 && previous.2 < old.2,
+            "Previous's from the left"
+        );
+        assert_eq!(slide(1.0, 1.0), old, "it lands on the box");
+    }
+
     // covers: S453
     #[test]
     fn a_flat_equalizer_band_is_empty_with_its_0_db_tick_showing() {
