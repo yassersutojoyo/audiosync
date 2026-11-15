@@ -26,6 +26,14 @@ pub fn backend<D: Driver + 'static>(
         settings::SettingsFile::in_memory,
         settings::SettingsFile::at,
     );
+    // Before the settings are read, so a record restored now isn't read.
+    #[cfg(windows)]
+    audio.set_default_switch(
+        Box::new(audio::wasapi::WasapiDefaults),
+        Box::new(settings::DefaultRecordFile(
+            settings_file.path().map(std::path::Path::to_path_buf),
+        )),
+    );
     let read = settings_file.load();
     start_airplay(&mut audio, log);
     let (cast_file, cast_unread) = start_cast(&mut audio, log);

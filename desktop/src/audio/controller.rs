@@ -84,6 +84,7 @@ use super::capture::{
 use super::cast::{CastLink, CastSpeakers, CastTrack};
 use super::cast_address::CastAddress;
 use super::clock_probe::{ClockQueue, describe_clock_queue};
+use super::default_output::{DefaultEndpoints, DefaultSwitch, Record, RecordStore};
 use super::now_playing::{
     Follow, Mix, POLL_INTERVAL, SharedLabels, TrackInfo, TrackReader, TrackSource,
 };
@@ -946,6 +947,13 @@ pub struct Controller<D: Driver> {
     calibration_tap: Arc<CalibrationTap>,
     /// The one local output a calibration lets be heard.
     calibration_solo: Option<String>,
+    /// Where Windows' default output is read and moved while the whole
+    /// system streams, and where its restore record is kept (S469); `None`
+    /// where it isn't moved.
+    default_output: Option<(Box<dyn DefaultEndpoints>, Box<dyn RecordStore>)>,
+    default_switch: DefaultSwitch,
+    /// When the switch was last checked for a change it didn't make.
+    default_checked: Option<Instant>,
     /// The zone volumes (S249), for the senders started later too.
     zone_volumes: ZoneVolumes,
     /// Sessions started so far, captures started again included: a
@@ -1034,6 +1042,9 @@ impl<D: Driver> Controller<D> {
             track_source: None,
             calibration_tap: Arc::new(CalibrationTap::new()),
             calibration_solo: None,
+            default_output: None,
+            default_switch: DefaultSwitch::default(),
+            default_checked: None,
             zone_volumes: ZoneVolumes::default(),
             sessions_started: 0,
             polls: 0,
@@ -1181,6 +1192,72 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Sends what the backend does to `log`.
+    /// Moves Windows' default output through `endpoints` while the whole
+    /// system streams, with the restore record in `store`, after restoring
+    /// what a record an earlier run left says (S469).
+    pub fn set_default_switch(
+        &mut self,
+        mut endpoints: Box<dyn DefaultEndpoints>,
+        mut store: Box<dyn RecordStore>,
+    ) {
+        let lines = self
+            .default_switch
+            .restore_at_launch(endpoints.as_mut(), store.as_mut());
+        for line in lines {
+            self.log.log(|| line);
+        }
+        self.default_output = Some((endpoints, store));
+    }
+
+    /// Starts, checks or ends the default output's switch for a stream that
+    /// is of the whole system or not (S469); one that plays to no output
+    /// counts as not, since moving the default would silence the PC. The
+    /// check runs every [`ROUTING_INTERVAL`].
+    fn sync_default_output(&mut self, streams_system: bool) {
+        let listed = |id: &str| self.present.iter().any(|endpoint| endpoint.id == id);
+        let whole_system = streams_system
+            && (self.policy.enabled_ids().into_iter().any(listed)
+                || !self.enabled_airplay().is_empty()
+                || self.cast_enabled().is_some());
+        let Some((endpoints, store)) = self.default_output.as_mut() else {
+            return;
+        };
+        let switch = &mut self.default_switch;
+        let chosen = self.policy.enabled_ids();
+        let due = self
+            .default_checked
+            .is_none_or(|at| at.elapsed() >= ROUTING_INTERVAL);
+        let lines = if !whole_system {
+            // A stream left with no output keeps a fallback: a default the
+            // user moved meanwhile stays theirs (S469).
+            let keep = streams_system && switch.holds_out_default();
+            switch.restore(endpoints.as_mut(), store.as_mut(), keep)
+        } else if !switch.engaged() {
+            self.default_checked = Some(Instant::now());
+            switch.engage(endpoints.as_mut(), store.as_mut(), &chosen)
+        } else if due {
+            self.default_checked = Some(Instant::now());
+            switch.check(endpoints.as_mut(), store.as_mut(), &chosen)
+        } else {
+            Vec::new()
+        };
+        for line in lines {
+            self.log.log(|| line);
+        }
+    }
+
+    /// Windows' default output while it gets no copy, since the original
+    /// plays there (S470).
+    fn held_out_default(&self) -> Option<&str> {
+        if !self.default_switch.holds_out_default() {
+            return None;
+        }
+        self.present
+            .iter()
+            .find(|endpoint| endpoint.is_default)
+            .map(|endpoint| endpoint.id.as_str())
+    }
+
     pub fn set_debug_log(&mut self, log: DebugLog) {
         if let Some(airplay) = self.airplay.as_mut() {
             airplay.set_debug_log(log.clone());
@@ -1776,11 +1853,18 @@ impl<D: Driver> Controller<D> {
     /// start hung go last in the next pass.
     fn sync_outputs(&mut self) -> Vec<(String, BackendError)> {
         self.cancel_stale_fresh_restarts();
+        let held_out = self.held_out_default().map(str::to_owned);
         let Some(session) = self.session.as_mut() else {
             return Vec::new();
         };
         let active: Vec<&str> = session.outputs.keys().map(String::as_str).collect();
-        let plan = self.policy.plan(true, &self.present, &active);
+        let mut plan = self.policy.plan(true, &self.present, &active);
+        if let Some(held_out) = &held_out {
+            plan.attach.retain(|endpoint| endpoint.id != *held_out);
+            if session.outputs.contains_key(held_out) && !plan.detach.contains(held_out) {
+                plan.detach.push(held_out.clone());
+            }
+        }
 
         // A switched-off output fades out first, together with any others
         // switched off now; one whose device isn't listed has nothing to
@@ -1792,8 +1876,14 @@ impl<D: Driver> Controller<D> {
             };
             playing.handle.request_stop();
             switched_off.push(playing);
-            self.log
-                .log(|| format!("output {} stopped: switched off", label(&self.names, id)));
+            self.log.log(|| {
+                let why = if held_out.as_ref() == Some(id) {
+                    "it is Windows' default output, which plays the source itself"
+                } else {
+                    "switched off"
+                };
+                format!("output {} stopped: {why}", label(&self.names, id))
+            });
         }
         if !switched_off.is_empty() {
             self.retiring.push(Retiring {
@@ -4221,6 +4311,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let cast = self.cast.as_mut().and_then(CastSpeakers::begin_shutdown);
         self.next_start = None;
         self.end_session();
+        self.sync_default_output(false);
         self.reap(true);
         self.stop_following_device_volumes();
         self.airplay = None;
@@ -4294,6 +4385,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
                             .get(&endpoint.id)
                             .is_some_and(|restart| !matches!(restart, FreshRestart::Due(_))),
                     device_volume: self.device_volumes.reading(&endpoint.id),
+                    plays_original: self.held_out_default() == Some(endpoint.id.as_str()),
                 }
             })
             .collect();
@@ -4319,6 +4411,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let from = self.switch_origin();
         self.switch_from = None;
         self.end_session();
+        self.sync_default_output(*source == SourceId::WholeSystem);
         self.log
             .log(|| format!("starting: capturing {}", describe_source(source)));
         let started = match self.begin_session(source) {
@@ -4359,8 +4452,27 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.next_start = None;
         self.switch_from = None;
         self.end_session();
+        self.sync_default_output(false);
         self.airplay_streaming(false);
         self.release_busy();
+    }
+
+    fn default_output_record(&self) -> Option<Record> {
+        self.default_switch.record().cloned()
+    }
+
+    fn restore_default_output(&mut self) {
+        let streaming = self.running_source() == Some(SourceId::WholeSystem);
+        let Some((endpoints, store)) = self.default_output.as_mut() else {
+            return;
+        };
+        let lines = self
+            .default_switch
+            .restore(endpoints.as_mut(), store.as_mut(), streaming);
+        for line in lines {
+            self.log.log(|| format!("Windows session ends: {line}"));
+        }
+        self.sync_outputs();
     }
 
     fn running_source(&self) -> Option<SourceId> {
@@ -5174,6 +5286,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         ended.extend(self.stop_unlisted_outputs());
         ended.extend(self.forget_unlisted_unplayable());
         self.tick_fresh_restarts();
+        self.sync_default_output(self.running_source() == Some(SourceId::WholeSystem));
         let failures = self.sync_outputs();
         self.release_held_leads(true);
         // An output that left or joined moves the others (S177).
@@ -5942,6 +6055,7 @@ mod tests {
     use crate::audio::airplay::tests::{Call, FakeAirPlay, OPEN_TXT, device, device_at, id_of};
     use crate::audio::backend::OutputKind;
     use crate::audio::capture::Activation;
+    use crate::audio::default_output::tests as switch_fakes;
     use crate::audio::mock::{MOCK_OWN_PID, MockBackend};
     use crate::audio::now_playing::DROP_AFTER;
     use crate::audio::now_playing::fake::{FakeReader, shared_labels, track};
@@ -5985,6 +6099,176 @@ mod tests {
             })]
         );
         assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+    }
+
+    /// The default-output seam's fakes, shared with the test.
+    type SwitchFakes = (
+        switch_fakes::Calls,
+        switch_fakes::Shared<switch_fakes::Fake>,
+        switch_fakes::Shared<switch_fakes::Store>,
+    );
+
+    fn with_switch(backend: &mut MockBackend) -> SwitchFakes {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let calls = switch_fakes::Calls::default();
+        let fake = switch_fakes::Shared(Rc::new(RefCell::new(switch_fakes::Fake::new(&calls))));
+        let store = switch_fakes::Shared(Rc::new(RefCell::new(switch_fakes::Store::new(&calls))));
+        backend.set_default_switch(Box::new(fake.clone()), Box::new(store.clone()));
+        (calls, fake, store)
+    }
+
+    fn console(fake: &switch_fakes::Shared<switch_fakes::Fake>) -> Option<String> {
+        fake.0.borrow().console.clone()
+    }
+
+    // covers: S469
+    #[test]
+    fn a_whole_system_stream_moves_the_default_and_a_stop_puts_it_back() {
+        let mut backend = backend();
+        let (_, fake, store) = with_switch(&mut backend);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        assert_eq!(
+            backend.default_output_record(),
+            Some(switch_fakes::the_record())
+        );
+        backend.stop();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+        assert_eq!(store.0.borrow().record, None);
+        assert_eq!(backend.default_output_record(), None);
+    }
+
+    // covers: S469
+    #[test]
+    fn a_whole_system_stream_to_no_output_leaves_the_default_alone() {
+        let mut backend = backend();
+        let (calls, fake, _) = with_switch(&mut backend);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.poll();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+        backend.stop();
+        calls.borrow_mut().clear();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
+    }
+
+    // covers: S469
+    #[test]
+    fn the_only_output_unplugged_mid_stream_puts_the_default_back() {
+        let mut backend = backend();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        let (_, fake, _) = with_switch(&mut backend);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        backend.disconnect_output(SPEAKERS);
+        backend.poll();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+    }
+
+    // covers: S469, S470
+    #[test]
+    fn a_fallback_outlasts_a_moment_with_no_output() {
+        let mut backend = backend();
+        let (calls, fake, _) = with_switch(&mut backend);
+        fake.0.borrow_mut().broken = true;
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_output_enabled(SPEAKERS, false).unwrap();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.poll();
+        fake.0.borrow_mut().broken = false;
+        calls.borrow_mut().clear();
+        backend.set_output_enabled(SPEAKERS, true).unwrap();
+        backend.poll();
+        assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
+    }
+
+    // covers: S469
+    #[test]
+    fn quitting_puts_the_default_back() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
+        backend.shut_down();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+    }
+
+    // covers: S469
+    #[test]
+    fn a_record_left_on_disk_is_restored_before_any_stream() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let mut backend = backend();
+        let calls = switch_fakes::Calls::default();
+        let mut left = switch_fakes::Fake::new(&calls);
+        left.console = Some(switch_fakes::CABLE.to_owned());
+        left.multimedia = Some(switch_fakes::CABLE.to_owned());
+        let fake = switch_fakes::Shared(Rc::new(RefCell::new(left)));
+        let mut kept = switch_fakes::Store::new(&calls);
+        kept.record = Some(switch_fakes::the_record());
+        let store = switch_fakes::Shared(Rc::new(RefCell::new(kept)));
+        backend.set_default_switch(Box::new(fake.clone()), Box::new(store.clone()));
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+        assert_eq!(store.0.borrow().record, None);
+    }
+
+    // covers: S469
+    #[test]
+    fn one_app_or_an_input_leaves_the_default_alone() {
+        let mut backend = backend();
+        let (calls, _, _) = with_switch(&mut backend);
+        let source = SourceId::App {
+            root_pid: PLAYER_PID,
+        };
+        backend.start(&source).unwrap();
+        backend.poll();
+        backend.stop();
+        assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
+    }
+
+    // covers: S470
+    #[test]
+    fn without_the_switch_the_default_output_gets_no_copy_and_stays_on() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        fake.0.borrow_mut().broken = true;
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES]);
+        let speakers = backend
+            .outputs()
+            .into_iter()
+            .find(|output| output.id == SPEAKERS)
+            .expect("listed");
+        assert!(speakers.enabled && speakers.plays_original);
+        backend.stop();
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+    }
+
+    // covers: S469, S470
+    #[test]
+    fn the_session_query_restores_and_the_stream_runs_on_without_a_copy() {
+        let mut backend = backend();
+        let (_, fake, _) = with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.restore_default_output();
+        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
+        assert_eq!(backend.running_source(), Some(SourceId::WholeSystem));
+        assert_eq!(playing(&backend), [HEADPHONES]);
     }
 
     // covers: S380

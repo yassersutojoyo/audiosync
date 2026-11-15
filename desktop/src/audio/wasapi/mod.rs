@@ -11,6 +11,7 @@
 //! sessions and processes) use COM in whatever apartment that thread has.
 
 mod com;
+mod default_output;
 mod devices;
 mod endpoint;
 mod loopback;
@@ -41,6 +42,7 @@ use super::process::ProcessTable;
 use super::routing::{EndpointAudio, EndpointVolume};
 use crate::debug_log::DebugLog;
 
+pub use default_output::WasapiDefaults;
 pub use media_sessions::read_media_sessions;
 
 /// The platform calls of the Windows backend.

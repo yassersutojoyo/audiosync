@@ -4138,6 +4138,17 @@ impl App {
         saved
     }
 
+    /// When Windows asks whether the session may end: Windows' default
+    /// output goes back before any answer (S469).
+    #[cfg(windows)]
+    pub fn at_session_query(&self) {
+        // The query can arrive inside a COM call the backend makes on this
+        // thread; the quit at the session's end restores then.
+        if let Ok(mut backend) = self.backend.try_borrow_mut() {
+            backend.restore_default_output();
+        }
+    }
+
     /// Takes the updater worker's news; a check that read the appcast
     /// stores its time. Then starts the daily check when due (spec S305).
     fn poll_updater(&self) {
@@ -5577,6 +5588,7 @@ pub fn row_state(state: SpeakerState) -> RowState {
         SpeakerState::Waiting(ui_model::Waiting::NotOnNetwork) => RowState::NotOnNetwork,
         SpeakerState::Waiting(ui_model::Waiting::ForPassword) => RowState::WaitingForPassword,
         SpeakerState::Waiting(ui_model::Waiting::ForPin) => RowState::WaitingForPin,
+        SpeakerState::Waiting(ui_model::Waiting::PlaysOriginal) => RowState::PlaysOriginal,
     }
 }
 

@@ -327,6 +327,15 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
             ending();
         }));
     }
+    #[cfg(windows)]
+    {
+        let app = std::rc::Rc::downgrade(&app);
+        platform::on_session_query(Box::new(move || {
+            if let Some(app) = app.upgrade() {
+                app.at_session_query();
+            }
+        }));
+    }
     // A logout sends SIGTERM, and its default ends the process with no quit step.
     #[cfg(target_os = "linux")]
     platform::on_exit_signal(session_ending(&app, log, "exit signal"));

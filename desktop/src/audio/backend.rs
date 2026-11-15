@@ -157,6 +157,9 @@ pub struct OutputInfo {
     /// while the output is on, and `None` while it is off. Each part is
     /// `None` when Windows can't tell.
     pub device_volume: Option<DeviceVolume>,
+    /// Whether it is Windows' default output while that gets no copy, since
+    /// the original plays there (S470).
+    pub plays_original: bool,
 }
 
 /// Whether an AirPlay speaker can play from AudioSync.
@@ -1211,6 +1214,17 @@ pub trait AudioBackend {
     /// start (`InputPair::index`, 0 for channels 1-2). A running capture
     /// keeps its pair until started again.
     fn set_input_pair(&mut self, endpoint_id: &str, pair: u16);
+
+    /// The restore record of Windows' default output that the settings file
+    /// holds (S469), which the adapter's own saves keep.
+    fn default_output_record(&self) -> Option<super::default_output::Record> {
+        None
+    }
+
+    /// Puts Windows' default output back as Windows asks to end the
+    /// session; a stream of the whole system runs on without the switch
+    /// (S469, S470).
+    fn restore_default_output(&mut self) {}
 
     /// What a microphone calibration depends on: the session, the outputs
     /// that play, the reference and their hold-backs.
