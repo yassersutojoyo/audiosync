@@ -21,6 +21,11 @@ jobs:
       matrix:
         target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
     runs-on: windows-latest
+    # windows.yml and msix.yml call this together; queueing them per target lets
+    # the second one find the archive the first just saved.
+    concurrency:
+      group: skia.yml-${{ github.ref }}-${{ matrix.target }}
+      cancel-in-progress: false
     # A full Skia build on a miss; a hit ends in a minute or two.
     timeout-minutes: 120
     defaults:
