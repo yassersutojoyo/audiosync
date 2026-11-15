@@ -419,7 +419,7 @@ enum TrackSlide {
 }
 
 /// Play/Pause's icon changing: the old symbol shrinks and fades, then the new
-/// one grows in with a slight overshoot (S465).
+/// one grows in with a slight overshoot (S466).
 enum PlayPauseMorph {
     static let outSeconds: TimeInterval = 0.1
     static let inSeconds: TimeInterval = 0.16

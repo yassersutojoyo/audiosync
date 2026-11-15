@@ -19318,7 +19318,7 @@ do {
 }
 
 // MARK: Play/Pause's icon morphs between play and pause (PlayPauseMorph in WindowRules.swift, MainWindow.swift)
-// covers: S465
+// covers: S466
 do {
     let rest = PlayPauseMorph.look(after: nil), start = PlayPauseMorph.look(after: 0)
     let halfOut = PlayPauseMorph.look(after: 0.05), turn = PlayPauseMorph.look(after: PlayPauseMorph.outSeconds)
