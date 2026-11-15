@@ -19157,6 +19157,90 @@ do {
           "art ahead: the next cover is read only while no command waits; an error ends it and a timeout is told apart")
 }
 
+// MARK: A cover read just after a song change is checked against the previous song (ArtRead in NowPlaying.swift)
+// covers: S464
+do {
+    var staleArt = ArtRead()
+    staleArt.ask(title: "Helena", album: "Revenge")
+    check(staleArt.accepts(read: ("Helena", "Revenge"), print: 1, at: 0),
+          "art read: the first song's cover is taken")
+    staleArt.ask(title: "Complicated", album: "Let Go")
+    check(!staleArt.accepts(read: ("Complicated", "Let Go"), print: 1, at: 0.2)
+            && !staleArt.accepts(read: ("Complicated", "Let Go"), print: 1, at: 1.4),
+          "art read: the previous song's cover, read for a song of another album, is not taken while the hold runs")
+    check(staleArt.accepts(read: ("Complicated", "Let Go"), print: 2, at: 0.5),
+          "art read: the new song's own cover is taken once the player gives it")
+    var sharedArt = ArtRead()
+    sharedArt.ask(title: "One", album: "LP")
+    _ = sharedArt.accepts(read: ("One", "LP"), print: 7, at: 0)
+    sharedArt.ask(title: "Two", album: "LP")
+    check(sharedArt.accepts(read: ("Two", "LP"), print: 7, at: 0.1),
+          "art read: the next song of the same album shares its cover at once")
+    sharedArt.ask(title: "Single", album: "Other")
+    check(!sharedArt.accepts(read: ("Single", "Other"), print: 7, at: 2)
+            && !sharedArt.accepts(read: ("Single", "Other"), print: 7, at: 3.5),
+          "art read: a song of another album whose cover reads as the previous one's shows none rather than risk it")
+    sharedArt.ask(title: "Next", album: "Else")
+    check(!sharedArt.accepts(read: ("Single", "Other"), print: 9, at: 4),
+          "art read: a cover read from another song than the one asked about is not taken")
+    var warmedArt = ArtRead()
+    warmedArt.kept(print: 5, title: "Ahead", album: "A")
+    warmedArt.ask(title: "Ahead", album: "A")
+    warmedArt.ask(title: "After", album: "B")
+    check(!warmedArt.accepts(read: ("After", "B"), print: 5, at: 0),
+          "art read: a cover read ahead counts as the previous song's cover too")
+    var fastArt = ArtRead()
+    fastArt.ask(title: "A", album: "One")
+    _ = fastArt.accepts(read: ("A", "One"), print: 11, at: 0)
+    fastArt.ask(title: "B", album: "Two")
+    _ = fastArt.accepts(read: ("B", "Two"), print: 12, at: 0.3)
+    fastArt.ask(title: "C", album: "Three")
+    check(!fastArt.accepts(read: ("C", "Three"), print: 12, at: 0.5)
+            && !fastArt.accepts(read: ("C", "Three"), print: 11, at: 0.6),
+          "art read: after quick Nexts, the cover of any of the last songs is held, not only the one just before")
+    var blankArt = ArtRead()
+    blankArt.ask(title: "Live", album: "")
+    _ = blankArt.accepts(read: ("Live", ""), print: 21, at: 0)
+    blankArt.ask(title: "Demo", album: "")
+    check(!blankArt.accepts(read: ("Demo", ""), print: 21, at: 0.2),
+          "art read: two songs with no album are not taken as one album, so the old cover is held")
+    // The Mac's trace: Music kept answering the previous song's cover for 30 s after Next.
+    var stuckArt = ArtRead()
+    stuckArt.ask(title: "Helena", album: "Three Cheers")
+    _ = stuckArt.accepts(read: ("Helena", "Three Cheers"), print: 1_133_270, at: 0)
+    stuckArt.ask(title: "Sk8er Boi", album: "Let Go")
+    check(!stuckArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 1_133_270, at: 0.3)
+            && !stuckArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 1_133_270, at: 1.81)
+            && !stuckArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 1_133_270, at: 30),
+          "art read: a recent song's cover read for a song of another album is never taken, however long it lasts")
+    check(stuckArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 4_300, at: 34),
+          "art read: the song's own cover is taken once the player gives it, after any refusal")
+    var pressArt = ArtRead()
+    pressArt.ask(title: "Blitzkrieg Bop", album: "Ramones")
+    _ = pressArt.accepts(read: ("Blitzkrieg Bop", "Ramones"), print: 740_457, at: 0)
+    pressArt.ask(title: "Song 937", album: "Album 937")
+    _ = pressArt.accepts(read: ("Song 937", "Album 937"), print: 740_457, at: 0.4)
+    pressArt.ask(title: "Basket Case", album: "Dookie")
+    check(!pressArt.accepts(read: ("Basket Case", "Dookie"), print: 740_457, at: 0.6)
+            && !pressArt.accepts(read: ("Basket Case", "Dookie"), print: 740_457, at: 2.5),
+          "art read: after quick presses, a cover held for one song is not taken for the next one of another album")
+    var pacedArt = ArtRead()
+    pacedArt.ask(title: "Helena", album: "Three Cheers")
+    _ = pacedArt.accepts(read: ("Helena", "Three Cheers"), print: 1, at: 0)
+    pacedArt.ask(title: "Sk8er Boi", album: "Let Go")
+    let pacedFirst = pacedArt.mayRead(at: 0.3)
+    _ = pacedArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 1, at: 0.3)
+    check(pacedFirst && ArtRead.reread == 4 && !pacedArt.mayRead(at: 0.55) && !pacedArt.mayRead(at: 4.2)
+            && pacedArt.mayRead(at: 4.4) && pacedArt.refused,
+          "art read: after a refusal the song's cover is read again once every 4 s, not on every poll")
+    pacedArt.ask(title: "Tik Tok", album: "Animal")
+    check(pacedArt.mayRead(at: 4.5) && !pacedArt.refused,
+          "art read: the next song's cover is read at once")
+    check(pacedArt.isStale(print: 1, for: ("Later", "Other")) && !pacedArt.isStale(print: 3, for: ("Later", "Other"))
+            && !pacedArt.isStale(print: 1, for: ("Track 2", "Three Cheers")),
+          "art read: a cover read ahead that repeats a recent song's of another album is not cached")
+}
+
 // MARK: Next eases the old song out while the next one's cover loads (TrackWipe in WindowRules.swift, MainWindow.swift)
 // covers: S463
 do {
