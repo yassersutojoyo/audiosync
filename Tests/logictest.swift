@@ -19204,6 +19204,26 @@ do {
     blankArt.ask(title: "Demo", album: "")
     check(!blankArt.accepts(read: ("Demo", ""), print: 21, at: 0.2),
           "art read: two songs with no album are not taken as one album, so the old cover is held")
+    // The Mac's trace: Music kept answering the previous song's cover for 30 s after Next.
+    var stuckArt = ArtRead()
+    stuckArt.ask(title: "Helena", album: "Three Cheers")
+    _ = stuckArt.accepts(read: ("Helena", "Three Cheers"), print: 1_133_270, at: 0)
+    stuckArt.ask(title: "Sk8er Boi", album: "Let Go")
+    check(!stuckArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 1_133_270, at: 0.3)
+            && !stuckArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 1_133_270, at: 1.81)
+            && !stuckArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 1_133_270, at: 30),
+          "art read: a recent song's cover read for a song of another album is never taken, however long it lasts")
+    check(stuckArt.accepts(read: ("Sk8er Boi", "Let Go"), print: 4_300, at: 34),
+          "art read: the song's own cover is taken once the player gives it, after any refusal")
+    var pressArt = ArtRead()
+    pressArt.ask(title: "Blitzkrieg Bop", album: "Ramones")
+    _ = pressArt.accepts(read: ("Blitzkrieg Bop", "Ramones"), print: 740_457, at: 0)
+    pressArt.ask(title: "Song 937", album: "Album 937")
+    _ = pressArt.accepts(read: ("Song 937", "Album 937"), print: 740_457, at: 0.4)
+    pressArt.ask(title: "Basket Case", album: "Dookie")
+    check(!pressArt.accepts(read: ("Basket Case", "Dookie"), print: 740_457, at: 0.6)
+            && !pressArt.accepts(read: ("Basket Case", "Dookie"), print: 740_457, at: 2.5),
+          "art read: after quick presses, a cover held for one song is not taken for the next one of another album")
 }
 
 // MARK: Next eases the old song out while the next one's cover loads (TrackWipe in WindowRules.swift, MainWindow.swift)
