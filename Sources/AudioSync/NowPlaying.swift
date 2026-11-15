@@ -986,7 +986,8 @@ struct ArtCache<Image> {
 /// cache would then keep for the new song (S464). Songs are "title|album" here.
 struct ArtRead {
     private var asked: (title: String, album: String)?
-    private var before: (title: String, album: String)?
+    /// The songs asked about before, latest first; quick Nexts or a slow poll can skip some readings.
+    private var recent: [(title: String, album: String)] = []
     private var prints: [String: Int] = [:]
     private var doubted: (song: String, since: TimeInterval)?
 
@@ -1001,7 +1002,7 @@ struct ArtRead {
     @discardableResult
     mutating func ask(title: String, album: String) -> Bool {
         guard asked.map({ ($0.title, $0.album) != (title, album) }) ?? true else { return false }
-        before = asked
+        if let asked { recent = [asked] + recent.prefix(ArtAhead.count - 1) }
         asked = (title, album)
         return true
     }
@@ -1012,12 +1013,16 @@ struct ArtRead {
     }
 
     /// Whether a cover `read` from the player at `now` may be shown and kept for the song asked about:
-    /// it must be read from that song, and the previous song's cover, when that song is from another
-    /// album, waits until ArtHold's hold has given way.
+    /// it must be read from that song, and a recent song's cover, when that song is from another
+    /// album or either has none, waits until ArtHold's hold has given way.
     mutating func accepts(read: (title: String, album: String), print: Int, at now: TimeInterval) -> Bool {
         guard let asked, (read.title, read.album) == (asked.title, asked.album) else { return false }
         let song = "\(asked.title)|\(asked.album)"
-        if let before, before.album != asked.album, prints["\(before.title)|\(before.album)"] == print {
+        let stale = recent.contains {
+            ($0.title, $0.album) != (asked.title, asked.album) && prints["\($0.title)|\($0.album)"] == print
+                && ($0.album.isEmpty || $0.album != asked.album)
+        }
+        if stale {
             if doubted?.song != song { doubted = (song, now) }
             if let doubted, now - doubted.since < ArtHold.limit { return false }
         }
