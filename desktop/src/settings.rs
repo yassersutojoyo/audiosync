@@ -62,7 +62,7 @@ use crate::audio::default_output::Record as DefaultRecord;
 use crate::audio::default_output::RecordStore;
 use crate::data_folder;
 use crate::remote::RemoteSettings;
-use crate::ui_model::{UpdateRecord, WindowFrame};
+use crate::ui_model::{UpdateRecord, WindowFrame, WindowPlace};
 
 /// The file's name in the app's data folder.
 #[cfg(any(os_backend, test))]
@@ -827,6 +827,10 @@ pub struct Settings {
     /// unreadable one gives the default place and size.
     #[serde(deserialize_with = "or_default")]
     pub window: Option<WindowFrame>,
+    /// The Guide's place, once it has been shown; an unreadable one leaves
+    /// the place to the system.
+    #[serde(deserialize_with = "or_default")]
+    pub guide_window: Option<WindowPlace>,
     /// The saved window's width was set to the slim default once, after the
     /// speaker list stopped filling the width. A file without it has not.
     #[serde(default, deserialize_with = "bool_or_true")]
@@ -1018,6 +1022,7 @@ impl Default for Settings {
             presets_list_open: false,
             appearance: Appearance::System,
             window: None,
+            guide_window: None,
             slim_window_applied: true,
             airplay_adjustment_ms: 0.0,
             when_source_quits: WhenSourceQuits::Stop.stored().to_owned(),
@@ -1319,6 +1324,10 @@ impl Settings {
             presets_list_open: self.presets_list_open,
             appearance: self.appearance,
             window: self.window.and_then(clamp_window),
+            guide_window: self.guide_window.map(|place| WindowPlace {
+                x: place.x.clamp(-MAX_POSITION, MAX_POSITION),
+                y: place.y.clamp(-MAX_POSITION, MAX_POSITION),
+            }),
             slim_window_applied: self.slim_window_applied,
             airplay_adjustment_ms: sanitize_airplay_adjustment_ms(self.airplay_adjustment_ms)
                 .unwrap_or(0.0),
@@ -1531,6 +1540,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("presets_list_open", Value::is_boolean),
         ("appearance", is_appearance),
         ("window", reads::<Option<WindowFrame>>),
+        ("guide_window", reads::<Option<WindowPlace>>),
         ("airplay_adjustment_ms", Value::is_number),
         ("when_source_quits", Value::is_string),
         ("remote", reads::<RemoteSettings>),
@@ -2046,6 +2056,7 @@ mod tests {
             presets_list_open: true,
             appearance: sample.appearance,
             window: sample.window,
+            guide_window: Some(WindowPlace { x: -1500, y: 120 }),
             slim_window_applied: true,
             airplay_adjustment_ms: 120.0,
             when_source_quits: WhenSourceQuits::SwitchToSystem.stored().to_owned(),
@@ -2557,6 +2568,7 @@ mod tests {
             presets_list_open,
             appearance,
             window,
+            guide_window,
             slim_window_applied: _,
             airplay_adjustment_ms,
             when_source_quits,
@@ -2595,6 +2607,7 @@ mod tests {
         assert_ne!(presets_list_open, default.presets_list_open);
         assert_ne!(appearance, default.appearance);
         assert_ne!(window, default.window);
+        assert_ne!(guide_window, default.guide_window);
         assert_ne!(airplay_adjustment_ms, default.airplay_adjustment_ms);
         assert_ne!(when_source_quits, default.when_source_quits);
         assert_ne!(remote, default.remote);

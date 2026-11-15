@@ -1907,6 +1907,13 @@ pub struct WindowFrame {
     pub maximized: bool,
 }
 
+/// Where a window's outer frame was, in physical pixels.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct WindowPlace {
+    pub x: i32,
+    pub y: i32,
+}
+
 /// How the main window shows when its frame is remembered.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MainWindowShows {
@@ -1947,6 +1954,8 @@ pub struct ViewSettings {
     pub appearance: Appearance,
     /// The main window's place and size, once it has been shown.
     pub window: Option<WindowFrame>,
+    /// The Guide's place, once it has been shown.
+    pub guide: Option<WindowPlace>,
     /// View > Web Remote.
     pub remote: crate::remote::RemoteSettings,
     /// File > Check for Updates Automatically.

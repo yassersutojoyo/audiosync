@@ -47,7 +47,7 @@ use crate::track_slide::{self, Direction, Place, TrackSlide};
 use crate::ui_model::{
     self, AirPlayWait, AllPhase, AllProgress, AppState, Backend, LeftOutRow, MAX_PRESETS,
     MainWindowShows, NoticeMessage, PinPrompt, PresetError, PresetLeftOff, SheetRow, SheetState,
-    SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame,
+    SourceKind, SourceName, SpeakerState, SwitchName, ViewSettings, WindowFrame, WindowPlace,
 };
 use crate::volume_keys::{self, VolumeKey};
 use crate::window_rules::{Rgb, ambient_breath};
@@ -62,6 +62,8 @@ use crate::{
 };
 
 mod help_window;
+#[cfg(test)]
+mod parity_screens;
 mod remote_window;
 mod setup_window;
 
@@ -79,8 +81,6 @@ enum DialogPurpose {
     NewZoneWith(String),
     /// Only a message (no name field), e.g. why a zone can't be made yet.
     Message,
-    /// Save Curve in the equalizer.
-    SaveCurve,
     /// Rename in the equalizer, for the saved curve of this name.
     RenameCurve(String),
 }
@@ -108,6 +108,8 @@ struct UiState {
     rename: Option<(String, String)>,
     /// Where the open rename's field shows.
     rename_place: RenamePlace,
+    /// Where the Guide was when it last showed.
+    guide_place: Option<WindowPlace>,
     /// The open rename's field has had the focus; only then does the focus
     /// moving to another control apply the name.
     rename_focused: bool,
@@ -1162,6 +1164,36 @@ fn place_to_show(
     }
     let (work_area, scale) = primary?;
     Some(fitted_main_frame(frame, work_area, scale, false))
+}
+
+/// What the Guide's outer frame adds to its inner size, in logical pixels:
+/// Windows' title bar and resize borders at 96 DPI.
+const GUIDE_CHROME: (f64, f64) = (16.0, 39.0);
+
+/// Where the Guide opens from its saved `place`, with `size` its inner size
+/// in logical pixels: on a monitor, moved as little as needed into the work
+/// area of `monitor` (the one at `place`); off every monitor, centered on
+/// `monitor` (the primary one). `None` leaves it to the system.
+fn guide_place_to_show(
+    place: WindowPlace,
+    size: (f64, f64),
+    on_a_monitor: bool,
+    monitor: Option<(crate::placement::Bounds, f64)>,
+) -> Option<WindowPlace> {
+    let Some((work_area, scale)) = monitor else {
+        return on_a_monitor.then_some(place);
+    };
+    let outer = crate::placement::Bounds {
+        x: f64::from(place.x),
+        y: f64::from(place.y),
+        width: (size.0 + GUIDE_CHROME.0) * scale,
+        height: (size.1 + GUIDE_CHROME.1) * scale,
+    };
+    let fitted = crate::placement::fit_window(outer, work_area, on_a_monitor);
+    Some(WindowPlace {
+        x: fitted.x.round() as i32,
+        y: fitted.y.round() as i32,
+    })
 }
 
 /// The saved main window `frame` as it opens on the monitor with
@@ -2281,6 +2313,7 @@ impl App {
         self.equalizer
             .set_band_hz(ModelRc::new(VecModel::from(band_hz)));
         self.equalizer.set_max_gain(eq::MAX_GAIN_DB as f32);
+        self.equalizer.set_preset_count(count(eq::PRESETS.len()));
         self.guide
             .set_steps(ModelRc::from(self.guide_steps.clone()));
         self.about.set_version(env!("CARGO_PKG_VERSION").into());
@@ -3678,6 +3711,10 @@ impl App {
         let w = weak.clone();
         eq_window.on_save_curve(move || with_app(&w, App::ask_save_curve));
         let w = weak.clone();
+        eq_window.on_curve_named(move |typed, returned| {
+            with_app(&w, |app| app.finish_curve_name(&typed, returned));
+        });
+        let w = weak.clone();
         eq_window.on_rename_curve(move || with_app(&w, App::ask_rename_curve));
         let w = weak.clone();
         eq_window.on_delete_curve(move || {
@@ -3703,12 +3740,19 @@ impl App {
                 app.change_equalizer(EqSettings::reset);
             })
         });
+        let w = weak.clone();
+        eq_window.on_close_requested(move || with_app(&w, App::hide_equalizer));
         let w = weak;
-        eq_window.on_close_requested(move || {
-            with_app(&w, |app| {
-                let _ = app.equalizer.hide();
-            })
+        eq_window.window().on_close_requested(move || {
+            with_app(&w, App::hide_equalizer);
+            slint::CloseRequestResponse::HideWindow
         });
+    }
+
+    /// Closing the equalizer drops a curve name being typed, as Escape does.
+    fn hide_equalizer(&self) {
+        self.equalizer.set_naming_curve(false);
+        let _ = self.equalizer.hide();
     }
 
     fn connect_dialogs(self: &Rc<Self>) {
@@ -4337,6 +4381,7 @@ impl App {
             presets_list_open: self.main.get_presets_open(),
             appearance: self.ui.borrow().appearance,
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
+            guide: self.guide_place(),
             remote: self.ui.borrow().remote,
             check_updates_automatically: self.ui.borrow().check_updates_automatically,
             volume_keys: self.ui.borrow().volume_keys,
@@ -4357,6 +4402,7 @@ impl App {
         let saved = self.backend.borrow().view_settings();
         self.ui.borrow_mut().show_virtual = saved.show_virtual_devices;
         self.ui.borrow_mut().appearance = saved.appearance;
+        self.ui.borrow_mut().guide_place = saved.guide;
         self.ui.borrow_mut().remote = saved.remote;
         self.ui.borrow_mut().check_updates_automatically = saved.check_updates_automatically;
         self.ui.borrow_mut().volume_keys = saved.volume_keys;
@@ -4841,7 +4887,6 @@ impl App {
         }
         let state = self.snapshot();
         let strings = self.strings();
-        let dialog = &self.zone_dialog;
         let shown = match self.shown_curve(&state) {
             Some(CurveMatch::User(index)) => Some(&state.equalizer_curves[index]),
             _ => None,
@@ -4850,16 +4895,47 @@ impl App {
             || strings.invoke_numbered_curve(count(state.equalizer_curves.len() + 1)),
             |curve| curve.name.as_str().into(),
         );
-        *self.dialog_purpose.borrow_mut() = DialogPurpose::SaveCurve;
         self.ui.borrow_mut().save_curve_gains = state.equalizer.gains_db;
-        dialog.set_heading(strings.get_save_curve_title());
-        dialog.set_message(strings.get_save_curve_message());
-        dialog.set_placeholder(strings.get_curve_name_field_label());
-        dialog.set_field_label(strings.get_curve_name_field_label());
-        dialog.set_name(name);
-        dialog.set_show_field(true);
-        dialog.set_confirm_label(strings.get_save());
-        self.open_dialog();
+        self.equalizer.set_curve_suggestion(name);
+        self.equalizer.set_naming_curve(true);
+    }
+
+    /// Saves the curve named in the equalizer's field: what was typed, else
+    /// the suggestion on Return; the focus leaving an empty field saves
+    /// nothing.
+    fn finish_curve_name(&self, typed: &str, returned: bool) {
+        if !self.equalizer.get_naming_curve() {
+            return;
+        }
+        self.equalizer.set_naming_curve(false);
+        let suggested = self.equalizer.get_curve_suggestion();
+        let name = if !typed.trim().is_empty() {
+            typed
+        } else if returned {
+            suggested.as_str()
+        } else {
+            return;
+        };
+        self.save_curve(name);
+    }
+
+    fn save_curve(&self, name: &str) {
+        let mut curves = self.snapshot().equalizer_curves;
+        // An empty name saves nothing (spec S270).
+        if eq::curve_name(name).is_none() {
+            return;
+        }
+        let gains_db = self.ui.borrow().save_curve_gains;
+        if let Some(index) = eq::save_curve(&mut curves, name, &gains_db) {
+            self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
+            self.update(|b| b.set_equalizer_curves(curves));
+        } else {
+            let strings = self.strings();
+            self.show_dialog_message(
+                strings.get_save_curve_title(),
+                strings.invoke_curves_full(count(eq::MAX_USER_CURVES)),
+            );
+        }
     }
 
     fn ask_rename_curve(&self) {
@@ -5125,24 +5201,6 @@ impl App {
                 self.update(|b| b.new_zone_with(&id, &name));
             }
             DialogPurpose::Message => {}
-            DialogPurpose::SaveCurve => {
-                let mut curves = self.snapshot().equalizer_curves;
-                // An empty name saves nothing (spec S270).
-                if eq::curve_name(name).is_none() {
-                    return;
-                }
-                let gains_db = self.ui.borrow().save_curve_gains;
-                if let Some(index) = eq::save_curve(&mut curves, name, &gains_db) {
-                    self.ui.borrow_mut().chosen_curve = Some(CurveMatch::User(index));
-                    self.update(|b| b.set_equalizer_curves(curves));
-                } else {
-                    let strings = self.strings();
-                    self.show_dialog_message(
-                        strings.get_save_curve_title(),
-                        strings.invoke_curves_full(count(eq::MAX_USER_CURVES)),
-                    );
-                }
-            }
             DialogPurpose::RenameCurve(old) => {
                 let mut curves = self.snapshot().equalizer_curves;
                 let Some(index) = curves.iter().position(|curve| curve.name == old) else {
@@ -11928,6 +11986,9 @@ mod tests {
         app.ask_cast_address();
         let opened = dialog.get_fit_height();
         assert_window_fits(window, opened, "opened");
+        // Drawn at the window's width, the texts wrap into fewer lines.
+        draw_frames();
+        let opened = dialog.get_fit_height();
         type_text(window, "bad address:99999");
         press(window, Key::Return);
         assert!(!dialog.get_error().is_empty(), "turned down");
@@ -12883,10 +12944,12 @@ mod tests {
         );
     }
 
-    /// The flyout's content slides up into place as it opens, from the start
-    /// each time, and the flyout's height doesn't follow the slide.
+    /// The flyout's seven parts fade in and rise 6 px into place as it
+    /// opens, as the Mac panel's: 440 ms each, the first after 90 ms and each
+    /// next 35 ms later, from the start each time; the flyout's height
+    /// doesn't follow them.
     #[test]
-    fn the_flyout_content_slides_up_as_it_opens() {
+    fn the_flyout_parts_fade_in_and_rise_one_after_another_as_it_opens() {
         hold_clock();
         let app = app_over(MockBackend::new());
         app.flyout.show().expect("the flyout shows headless");
@@ -12895,7 +12958,7 @@ mod tests {
         app.prepare_flyout_open(true);
         assert_eq!(
             app.flyout.get_content_offset(),
-            16.0,
+            6.0,
             "back to the start at once"
         );
         assert_eq!(app.flyout.get_fit_height(), height);
@@ -12903,11 +12966,25 @@ mod tests {
         draw_frames();
         advance_clock(Duration::from_millis(80));
         draw_frames();
+        assert_eq!(
+            app.flyout.get_content_offset(),
+            6.0,
+            "the first part waits 90 ms"
+        );
+        advance_clock(Duration::from_millis(230));
+        draw_frames();
         let offset = app.flyout.get_content_offset();
-        assert!(offset > 0.0 && offset < 16.0, "it slides: {offset}");
-        advance_clock(Duration::from_millis(200));
+        assert!(offset > 0.0 && offset < 6.0, "it rises: {offset}");
+        assert_eq!(app.flyout.get_fit_height(), height);
+        advance_clock(Duration::from_millis(800));
         draw_frames();
         assert_eq!(app.flyout.get_content_offset(), 0.0);
+
+        let flyout = include_str!("../ui/flyout.slint");
+        for index in 0..7 {
+            assert!(flyout.contains(&format!("index: {index};")), "part {index}");
+        }
+        assert!(flyout.contains("easing: cubic-bezier(0.22, 0.61, 0.36, 1);"));
 
         app.prepare_flyout_open(false);
         assert_eq!(
@@ -14738,7 +14815,7 @@ mod tests {
         }
     }
 
-    fn type_text(window: &slint::Window, text: &str) {
+    pub(super) fn type_text(window: &slint::Window, text: &str) {
         for character in text.chars() {
             press(window, character.to_string());
         }
@@ -15123,6 +15200,8 @@ mod tests {
         let app = app_over(MockBackend::new());
         let zones = app.snapshot().zones.len();
         app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         app.zone_dialog.set_name("Late night".into());
         let heading = app.zone_dialog.get_heading();
 
@@ -15155,9 +15234,9 @@ mod tests {
         assert!(!eq_window.get_saved_curve_shown());
 
         eq_window.invoke_save_curve();
-        assert!(app.zone_dialog.window().is_visible());
-        assert_eq!(app.zone_dialog.get_name(), "Curve 1");
-        app.zone_dialog.invoke_confirmed("Desk".into());
+        assert!(eq_window.get_naming_curve());
+        assert_eq!(eq_window.get_curve_suggestion(), "Curve 1");
+        eq_window.invoke_curve_named("Desk".into(), true);
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), 1);
         assert_eq!(state.equalizer.preamp_db, -3.0, "a save leaves the preamp");
@@ -15167,14 +15246,6 @@ mod tests {
         assert_eq!(eq_window.get_picker_shown_index(), presets as i32);
         assert_eq!(app.main.get_equalizer_curve(), "Desk");
         assert!(eq_window.get_saved_curve_shown());
-        for label in [
-            "Rename \u{201c}Desk\u{201d}\u{2026}",
-            "Delete \u{201c}Desk\u{201d}",
-        ] {
-            let found =
-                i_slint_backend_testing::ElementHandle::find_by_accessible_label(eq_window, label);
-            assert_eq!(found.count(), 1, "{label}");
-        }
 
         eq_window.invoke_preset_selected(0);
         assert_eq!(eq_window.get_preset_index(), 0);
@@ -15194,7 +15265,7 @@ mod tests {
         app.ask_new_zone();
         assert_eq!(app.zone_dialog.get_field_label(), "Zone name");
         app.zone_dialog.invoke_cancelled();
-        eq_window.invoke_save_curve();
+        eq_window.invoke_rename_curve();
         app.zone_dialog.invoke_cancelled();
         let speaker = app.snapshot().speakers[0].id.clone();
         app.ask_new_zone_with(&speaker);
@@ -15221,28 +15292,16 @@ mod tests {
     // covers: S270
     #[test]
     fn the_curve_buttons_are_disabled_while_the_name_dialog_is_open() {
-        use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         let eq_window = &app.equalizer;
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Bass".into());
+        eq_window.invoke_curve_named("Bass".into(), true);
+        // The curve menu's Save, Rename and Delete wait while `naming`.
+        let menu = include_str!("../ui/equalizer.slint");
+        assert_eq!(menu.matches("enabled: !root.naming;").count(), 3);
+        assert!(menu.contains("naming: root.name-dialog-open;"));
         let assert_enabled = |enabled: bool, after: &str| {
-            let curve = app.snapshot().equalizer_curves[0].name.clone();
-            let buttons = [
-                "Save curve".to_owned(),
-                format!("Rename \u{201c}{curve}\u{201d}\u{2026}"),
-                format!("Delete \u{201c}{curve}\u{201d}"),
-            ];
-            for label in &buttons {
-                let button = ElementHandle::find_by_accessible_label(eq_window, label)
-                    .next()
-                    .unwrap_or_else(|| panic!("nothing is labeled {label}"));
-                assert_eq!(
-                    button.accessible_enabled(),
-                    Some(enabled),
-                    "{label} {after}"
-                );
-            }
+            assert_eq!(eq_window.get_name_dialog_open(), !enabled, "{after}");
         };
         assert_enabled(true, "with no dialog open");
 
@@ -15291,8 +15350,7 @@ mod tests {
         eq_window.invoke_preset_selected(rock as i32);
 
         eq_window.invoke_save_curve();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
-        app.zone_dialog.invoke_confirmed("warm".into());
+        eq_window.invoke_curve_named("warm".into(), true);
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), eq::MAX_USER_CURVES);
         assert_eq!(
@@ -15302,7 +15360,7 @@ mod tests {
 
         eq_window.invoke_preset_selected(0);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Late night".into());
+        eq_window.invoke_curve_named("Late night".into(), true);
         assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
         assert_eq!(
             app.zone_dialog.get_message(),
@@ -15328,14 +15386,14 @@ mod tests {
             eq_window.invoke_gain_changed(band as i32, *gain as f32);
         }
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Warm".into());
+        eq_window.invoke_curve_named("Warm".into(), true);
 
         eq_window.invoke_save_curve();
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
         eq_window.invoke_preset_selected(rock as i32);
         eq_window.invoke_gain_changed(0, -6.0);
         eq_window.invoke_reset();
-        app.zone_dialog.invoke_confirmed("Warm".into());
+        eq_window.invoke_curve_named("Warm".into(), true);
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), 1);
         assert_eq!(state.equalizer_curves[0].gains_db, warm);
@@ -15351,14 +15409,14 @@ mod tests {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
         eq_window.invoke_preset_selected(rock);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         assert_eq!(
             eq_window.get_preset_index(),
             presets,
             "a save shows the curve"
         );
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Twin".into());
+        eq_window.invoke_curve_named("Twin".into(), true);
         assert_eq!(eq_window.get_preset_index(), presets + 1);
 
         eq_window.invoke_preset_selected(rock);
@@ -15395,7 +15453,7 @@ mod tests {
         eq_window.invoke_reset();
         assert_eq!(eq_window.get_preset_index(), 0, "Reset reads Flat");
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Netral".into());
+        eq_window.invoke_curve_named("Netral".into(), true);
         assert_eq!(eq_window.get_preset_index(), presets + 1);
         eq_window.invoke_reset();
         assert_eq!(
@@ -15415,9 +15473,9 @@ mod tests {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap() as i32;
         eq_window.invoke_preset_selected(rock);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Twin".into());
+        eq_window.invoke_curve_named("Twin".into(), true);
         app.save_preset("Rock");
         let ids = preset_ids(&app);
 
@@ -15439,7 +15497,7 @@ mod tests {
         let rock = eq::PRESETS.iter().position(|p| p.id == "rock").unwrap();
         eq_window.invoke_preset_selected(rock as i32);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         app.save_preset("Rock");
         eq_window.invoke_preset_selected(rock as i32);
 
@@ -15460,9 +15518,9 @@ mod tests {
         let first_gain = eq::PRESETS[rock].gains_db[0] as f32;
         eq_window.invoke_preset_selected(rock as i32);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("Twin".into());
+        eq_window.invoke_curve_named("Twin".into(), true);
 
         for (picked, name) in [(rock as i32, "Rock"), (presets + 1, "Twin")] {
             eq_window.invoke_preset_selected(picked);
@@ -15497,8 +15555,7 @@ mod tests {
         assert_eq!(eq_window.get_preset_index(), -1, "Custom");
 
         eq_window.invoke_save_curve();
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
-        app.zone_dialog.invoke_confirmed("Mine".into());
+        eq_window.invoke_curve_named("Mine".into(), true);
         assert!(!app.zone_dialog.window().is_visible(), "no full message");
         let state = app.snapshot();
         assert_eq!(state.equalizer_curves.len(), eq::MAX_USER_CURVES);
@@ -15506,7 +15563,7 @@ mod tests {
 
         eq_window.invoke_gain_changed(0, 0.0);
         eq_window.invoke_save_curve();
-        app.zone_dialog.invoke_confirmed("New".into());
+        eq_window.invoke_curve_named("New".into(), true);
         assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::Message);
         assert_eq!(
             app.zone_dialog.get_message(),
@@ -16263,7 +16320,7 @@ mod tests {
         for (gain, name) in [(1.0, "A"), (2.0, "B"), (3.0, "C")] {
             eq_window.invoke_gain_changed(0, gain);
             eq_window.invoke_save_curve();
-            app.zone_dialog.invoke_confirmed(name.into());
+            eq_window.invoke_curve_named(name.into(), true);
         }
         eq_window.invoke_preset_selected(presets as i32 + 1);
         assert_eq!(eq_window.get_preset_index(), presets as i32 + 1, "B");
@@ -17816,6 +17873,8 @@ mod tests {
             app.update(|b| b.set_speaker_enabled(&speaker.id, false));
         }
         app.equalizer.invoke_save_curve();
+        app.equalizer.invoke_curve_named("Bass".into(), true);
+        app.equalizer.invoke_rename_curve();
         app.zone_dialog.set_name("Late night".into());
         let heading = app.zone_dialog.get_heading();
 
@@ -17824,7 +17883,10 @@ mod tests {
         assert!(app.zone_dialog.window().is_visible());
         assert_eq!(app.zone_dialog.get_heading(), heading);
         assert_eq!(app.zone_dialog.get_name(), "Late night");
-        assert_eq!(*app.dialog_purpose.borrow(), DialogPurpose::SaveCurve);
+        assert_eq!(
+            *app.dialog_purpose.borrow(),
+            DialogPurpose::RenameCurve("Bass".to_owned())
+        );
         assert_eq!(app.main.get_notice_announcement(), why);
         let notices = app.snapshot().notices;
         let notice = notices.last().expect("a notice says it");

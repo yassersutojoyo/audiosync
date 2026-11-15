@@ -852,7 +852,7 @@ mod tests {
     fn the_flyout_offers_dismiss_all_beside_the_more_notices_button() {
         let flyout = include_str!("../ui/flyout.slint");
         let row = &flyout[flyout
-            .find("if root.notice-count > root.notices.length: HorizontalLayout {")
+            .find("if root.notice-count > root.notices.length: IntroPart {")
             .expect("the more-notices row is there")..];
         let row = &row[..row.find("Divider { }").expect("the row ends")];
         assert!(row.contains("text: Strings.dismiss-all-notices;"), "{row}");
@@ -1088,13 +1088,8 @@ mod tests {
             (
                 "equalizer.slint",
                 include_str!("../ui/equalizer.slint"),
-                &[
-                    ("power := ToggleSwitch", "self.checked = root.enabled;"),
-                    (
-                        "presets := ComboBox",
-                        "self.current-index = root.preset-index;",
-                    ),
-                ][..],
+                // The curve menu checks `root.preset-index`, which only the engine sets.
+                &[("power := ToggleSwitch", "self.checked = root.enabled;")][..],
             ),
         ] {
             for &(element, reset) in pairs {
