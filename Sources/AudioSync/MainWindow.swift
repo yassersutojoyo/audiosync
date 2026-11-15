@@ -489,7 +489,7 @@ struct MainView: View {
             }
             model.actions.transport(command)
         } label: {
-            Image(systemName: symbol)
+            if command == .playPause { SymbolMorph(symbol: symbol) } else { Image(systemName: symbol) }
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -1256,6 +1256,46 @@ private struct Reveal: ViewModifier {
             .opacity(shown ? 1 : 0)
             .offset(x: shown || reduceMotion ? 0 : 4)
             .animation(MainMotion.reveal(reduceMotion: reduceMotion), value: shown)
+    }
+}
+
+/// Play/Pause's icon, morphing to a new symbol (`PlayPauseMorph`) whatever changed it.
+struct SymbolMorph: View {
+    let symbol: String
+    @StateObject private var morph = SymbolMorphState()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(paused: morph.start == nil)) { timeline in
+            let look = PlayPauseMorph.look(after: morph.start.map { timeline.date.timeIntervalSince($0) })
+            Image(systemName: look.showsOld ? morph.old : symbol)
+                .scaleEffect(look.scale)
+                .opacity(look.opacity)
+        }
+        .onChange(of: symbol) { old, _ in morph.begin(from: old, reduceMotion: reduceMotion) }
+    }
+}
+
+/// The running morph, an object rather than @State for the Command Line Tools toolchain.
+final class SymbolMorphState: ObservableObject {
+    @Published private(set) var start: Date?
+    private(set) var old = ""
+    private var runs = 0
+
+    func begin(from old: String, reduceMotion: Bool) {
+        runs += 1
+        let seconds = PlayPauseMorph.seconds(reduceMotion: reduceMotion)
+        guard seconds > 0 else {
+            start = nil
+            return
+        }
+        let mark = runs
+        self.old = old
+        start = .now
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+            guard let self, self.runs == mark else { return }
+            self.start = nil
+        }
     }
 }
 

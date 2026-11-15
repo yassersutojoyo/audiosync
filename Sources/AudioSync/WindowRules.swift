@@ -418,13 +418,27 @@ enum TrackSlide {
     }
 }
 
-/// Placeholder for the morph's rules, so the failing checks compile.
+/// Play/Pause's icon changing: the old symbol shrinks and fades, then the new
+/// one grows in with a slight overshoot (S465).
 enum PlayPauseMorph {
-    static let outSeconds: TimeInterval = 0
-    static let inSeconds: TimeInterval = 0
-    static let outScale = 0.0
-    static func seconds(reduceMotion: Bool) -> TimeInterval { 0 }
-    static func look(after elapsed: TimeInterval?) -> (showsOld: Bool, scale: Double, opacity: Double) { (false, 1, 1) }
+    static let outSeconds: TimeInterval = 0.1
+    static let inSeconds: TimeInterval = 0.16
+    static let outScale = 0.6
+
+    static func seconds(reduceMotion: Bool) -> TimeInterval { reduceMotion ? 0 : outSeconds + inSeconds }
+
+    /// The icon `elapsed` after the change; nil is at rest.
+    static func look(after elapsed: TimeInterval?) -> (showsOld: Bool, scale: Double, opacity: Double) {
+        guard let elapsed, elapsed < outSeconds + inSeconds else { return (false, 1, 1) }
+        if elapsed < outSeconds {
+            let t = max(0, elapsed) / outSeconds
+            return (true, 1 - (1 - outScale) * t, 1 - t)
+        }
+        let t = (elapsed - outSeconds) / inSeconds
+        // Ease-out-back, 1 + 2.70158 (t - 1)^3 + 1.70158 (t - 1)^2 expanded, so it starts at exactly 0.
+        let back = t * (2.70158 * t * t - 6.40316 * t + 4.70158)
+        return (false, outScale + (1 - outScale) * back, t)
+    }
 }
 
 /// Both Now Playing views keep the old song, cover and title together, while
