@@ -3137,6 +3137,11 @@ impl<D: Driver> Controller<D> {
                     woke_at: None,
                     back_at: None,
                     user_acted: false,
+                    stale: self
+                        .airplay
+                        .as_ref()
+                        .map_or_else(Vec::new, AirPlaySpeakers::playing),
+                    capture_back_at: None,
                 });
             }
             None => self.log.log(|| {
@@ -3152,7 +3157,9 @@ impl<D: Driver> Controller<D> {
 
     /// At each poll from the wake until the verdict (S465): the outputs are
     /// back once streaming runs with its capture open again (S332) and, with
-    /// an AirPlay speaker chosen, one plays; a reading after that may decide.
+    /// an AirPlay speaker chosen, one plays that did not play at the sleep, was
+    /// seen not playing since, or plays on 12 s after the capture is back; a
+    /// reading after that may decide.
     fn wake_resume_tick(&mut self) {
         let Some(woke_at) = self
             .wake_resume
@@ -3163,18 +3170,26 @@ impl<D: Driver> Controller<D> {
         };
         let now = Instant::now();
         let streaming = self.session.is_some();
-        let back = self
+        let capture_back = self
             .session
             .as_ref()
-            .is_some_and(|session| session.reopen.is_none())
-            && self
-                .airplay
-                .as_ref()
-                .is_none_or(|airplay| !airplay.chosen() || airplay.plays());
+            .is_some_and(|session| session.reopen.is_none());
+        let airplay = self
+            .airplay
+            .as_ref()
+            .map(|airplay| (airplay.chosen(), airplay.playing()));
         let latest = self.track_info.latest();
         let Some(pending) = self.wake_resume.as_mut() else {
             return;
         };
+        pending.capture_back_at = capture_back.then(|| *pending.capture_back_at.get_or_insert(now));
+        let survived = pending
+            .capture_back_at
+            .is_some_and(|at| now.saturating_duration_since(at) >= wake_resume::SURVIVED_AFTER);
+        let airplay_back = airplay.is_none_or(|(chosen, playing)| {
+            wake_resume::airplay_back(&mut pending.stale, &playing, survived) || !chosen
+        });
+        let back = capture_back && airplay_back;
         if back && pending.back_at.is_none() {
             pending.back_at = Some(now);
         }
@@ -8816,6 +8831,35 @@ mod tests {
                 "resume after sleep: play sent to Spotify.exe",
             ],
         );
+    }
+
+    // covers: S465
+    #[test]
+    fn an_airplay_speaker_playing_at_the_sleep_counts_back_only_once_it_plays_again() {
+        let (mut backend, reader, _log, _dir) =
+            streaming_with_spotify("controller-wake-resume-airplay", true);
+        let fake = FakeAirPlay::new();
+        backend.set_airplay(fake.link(), None);
+        let kitchen = device(1, "Kitchen", OPEN_TXT);
+        fake.appear(&kitchen);
+        backend.poll();
+        backend.set_airplay_enabled(&id_of(&kitchen), true).unwrap();
+        fake.state(&kitchen, SpeakerState::Playing);
+        backend.poll();
+        backend.notify_power(PowerNotice::Suspend);
+        backend.poll();
+        backend.pass_wall_time(Duration::from_secs(3600));
+        backend.notify_power(PowerNotice::Resume);
+        wake_with_spotify_paused(&mut backend, &reader);
+        assert!(
+            reader.take_sent().is_empty(),
+            "the sender has not reported the drop yet"
+        );
+        fake.fail(&kitchen, ErrorKind::Unreachable);
+        backend.poll();
+        fake.state(&kitchen, SpeakerState::Playing);
+        wake_with_spotify_paused(&mut backend, &reader);
+        assert_eq!(reader.take_sent(), [Transport::Play]);
     }
 
     // covers: S465

@@ -1394,7 +1394,21 @@ enum WakeResume {
         var backAt: TimeInterval?
         var readAfterBack = false
         var userActed = false
+        /// The AirPlay speakers that played at the sleep, until seen not playing.
+        var stale: Set<String> = []
+        var streamingSince: TimeInterval?
+
+        /// Whether an AirPlay speaker plays after the sleep: one that played at the sleep counts once
+        /// it plays again after a tick saw it not playing, or once it `survived` the sleep.
+        mutating func airplayBack(playing: Set<String>, survived: Bool) -> Bool {
+            if survived { stale = [] }
+            stale.formIntersection(playing)
+            return !playing.subtracting(stale).isEmpty
+        }
     }
+
+    // The sender's 2 s feedback interval plus its 10 s response timeout: a session the sleep broke has dropped by then.
+    static let survivedAfter: TimeInterval = 12
 
     // A wake's Wi-Fi rejoin and AirPlay reconnect take seconds; past 30 s a play would surprise rather than resume.
     static let giveUpAfter: TimeInterval = 30

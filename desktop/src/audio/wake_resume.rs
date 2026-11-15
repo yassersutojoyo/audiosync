@@ -3,11 +3,18 @@
 
 use std::time::{Duration, Instant};
 
+use audiosync_airplay::ap2::session::FEEDBACK_INTERVAL;
+use audiosync_airplay::session::RESPONSE_TIMEOUT;
+
 use super::now_playing::MediaSession;
 
 /// A wake's Wi-Fi rejoin and AirPlay reconnect take seconds; past 30 s a play
 /// would surprise rather than resume.
 pub const GIVE_UP_AFTER: Duration = Duration::from_secs(30);
+
+/// By then a session the sleep broke has sent feedback and waited out its
+/// answer, so one still playing survived the sleep.
+pub const SURVIVED_AFTER: Duration = FEEDBACK_INTERVAL.saturating_add(RESPONSE_TIMEOUT);
 
 /// The player and song playing when the PC went to sleep.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +39,20 @@ pub struct Pending {
     pub woke_at: Option<Instant>,
     pub back_at: Option<Instant>,
     pub user_acted: bool,
+    /// The AirPlay speakers that played at the sleep, until seen not playing.
+    pub stale: Vec<String>,
+    pub capture_back_at: Option<Instant>,
+}
+
+/// Whether an AirPlay speaker plays after the sleep: one that played at the
+/// sleep counts once it plays again after a tick saw it not playing, or once
+/// it `survived` the sleep.
+pub fn airplay_back(stale: &mut Vec<String>, playing: &[String], survived: bool) -> bool {
+    if survived {
+        stale.clear();
+    }
+    stale.retain(|id| playing.contains(id));
+    playing.iter().any(|id| !stale.contains(id))
 }
 
 /// What a sleep notes: the session read last, when it plays while streaming
@@ -160,6 +181,33 @@ mod tests {
             Verdict::Wait
         );
         assert_eq!(verdict(true, false, true, None, 29), Verdict::Wait);
+    }
+
+    // covers: S465
+    #[test]
+    fn a_speaker_playing_at_the_sleep_is_back_only_after_a_drop() {
+        let kitchen = || vec!["kitchen".to_owned()];
+        let mut stale = kitchen();
+        assert!(!airplay_back(&mut stale, &kitchen(), false));
+        assert!(!airplay_back(&mut stale, &[], false));
+        assert!(airplay_back(&mut stale, &kitchen(), false));
+        let mut stale = kitchen();
+        assert!(airplay_back(
+            &mut stale,
+            &["kitchen".to_owned(), "office".to_owned()],
+            false
+        ));
+    }
+
+    // covers: S465
+    #[test]
+    fn a_session_that_survived_the_sleep_is_back_once_its_drop_would_show() {
+        let kitchen = || vec!["kitchen".to_owned()];
+        let mut stale = kitchen();
+        assert!(!airplay_back(&mut stale, &kitchen(), false));
+        assert!(airplay_back(&mut stale, &kitchen(), true));
+        assert!(!airplay_back(&mut kitchen(), &[], true));
+        assert_eq!(SURVIVED_AFTER, Duration::from_secs(12));
     }
 
     // covers: S465
