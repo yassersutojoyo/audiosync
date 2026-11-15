@@ -346,10 +346,16 @@ extension AppDelegate: TrackInfoHost {
         guard appModel.nowPlaying != track else { return }
         let timesChange = DebugTrace.enabled && appModel.nowPlaying?.title != track?.title
         let began = DispatchTime.now().uptimeNanoseconds
+        let before = appModel.nowPlaying
         if TrackWipe.coverArrived(appModel.nowPlaying, track) {
             withAnimation(.easeInOut(duration: TrackWipe.coverFade)) { appModel.nowPlaying = track }
         } else {
             appModel.nowPlaying = track
+        }
+        if DebugTrace.enabled, let track, track.songID != before?.songID || track.artwork !== before?.artwork {
+            DebugTrace.log("Now Playing art: the card shows \(track.appName) song \(track.songID) with "
+                           + (track.artwork.map { NowPlayingMonitor.pixels($0) } ?? "no cover")
+                           + (track.artwork != nil && track.artwork === before?.artwork ? ", the cover it showed" : ""))
         }
         if timesChange {
             // The next turn of the main queue normally comes after the window's update for this change.

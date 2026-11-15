@@ -31,6 +31,8 @@ final class NowPlayingMonitor {
         /// Nil where the player doesn't take the command, which hides its button.
         var shuffle: Bool? = nil
         var repeatMode: RepeatMode? = nil
+        /// The player's own id of the song, for the debug log only.
+        var songID = ""
 
         /// Leaves `position` out: it moves on all the time, and only a jump
         /// is news (`Position.jumped`).
@@ -260,7 +262,7 @@ final class NowPlayingMonitor {
         private static func track(_ t: Track, playing: Bool) -> Track {
             Track(bundleID: t.bundleID, appName: t.appName, title: t.title, artist: t.artist, album: t.album,
                   isPlaying: playing, artwork: t.artwork, artPending: t.artPending, position: t.position,
-                  playerState: t.playerState, shuffle: t.shuffle, repeatMode: t.repeatMode)
+                  playerState: t.playerState, shuffle: t.shuffle, repeatMode: t.repeatMode, songID: t.songID)
         }
     }
 
@@ -414,6 +416,8 @@ final class NowPlayingMonitor {
     private let scripts = DispatchQueue(label: "io.github.yassersutojoyo.audiosync.nowplaying")
     private var artworkCache = ArtCache<NSImage>()      // "bundleID|title|album" or cover URL → image
     private var aheadOf: String?                         // the song whose next covers were read
+    private var artRead = ArtRead()
+    private var artLogged = ""
     private var lastCode: Int?                           // the last script's error number, nil when it ran
     private let commandLock = NSLock()
     private var commandsQueued = 0                       // under commandLock: commands not yet started
@@ -667,6 +671,11 @@ final class NowPlayingMonitor {
                     if s is "stopped" then return s
                     set t to current track
                     set trackText to s & "\(sep)" & (name of t) & "\(sep)" & (artist of t) & "\(sep)" & (album of t)
+                    set i to ""
+                    try
+                        set i to (id of t) as string
+                    end try
+                    set trackText to trackText & "\(sep)" & i
                     set p to missing value
                     set d to missing value
                     try
@@ -689,7 +698,7 @@ final class NowPlayingMonitor {
         }
         if result == "stopped" { return .empty(.stopped) }
         let parts = result.components(separatedBy: sep)
-        guard parts.count >= 4, !parts[1].isEmpty else {
+        guard parts.count >= 5, !parts[1].isEmpty else {
             return .empty(parts[0] == "playing" ? .playingNameless : .unreadable)
         }
         let appName = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName
@@ -697,14 +706,14 @@ final class NowPlayingMonitor {
         let isPlaying = parts[0] == "playing"
         let modes = readModes(bundleID)
         var position: Position?
-        if parts.count >= 6, let elapsedMs = Int(parts[4]), let lengthMs = Int(parts[5]), lengthMs > 0 {
+        if parts.count >= 7, let elapsedMs = Int(parts[5]), let lengthMs = Int(parts[6]), lengthMs > 0 {
             position = Position(elapsed: Double(min(max(0, elapsedMs), lengthMs)) / 1000,
                                 length: Double(lengthMs) / 1000, readAt: readAt, playing: isPlaying)
         }
         return .track(Track(bundleID: bundleID, appName: appName, title: parts[1], artist: parts[2],
                             album: parts[3], isPlaying: isPlaying, artwork: nil, position: position,
                             playerState: ExplicitPause.playerState(parts[0]),
-                            shuffle: modes.shuffle, repeatMode: modes.repeatMode))
+                            shuffle: modes.shuffle, repeatMode: modes.repeatMode, songID: parts[4]))
     }
 
     /// Shuffle and repeat in a script of their own: a term the player lacks fails only this
@@ -749,7 +758,13 @@ final class NowPlayingMonitor {
     /// The track's cover, and whether one is still on its way.
     private func artwork(for t: Track) -> (NSImage?, Bool) {
         let key = "\(t.bundleID)|\(t.title)|\(t.album)"
-        if let cached = artworkCache.image(track: key, address: nil) { return (cached, false) }
+        let song = "\(t.appName) song \(t.songID)"
+        let asked = artRead.ask(title: t.title, album: t.album)
+        if asked { artLog("Now Playing art: \(song) asked") }
+        if let cached = artworkCache.image(track: key, address: nil) {
+            if asked { artLog("Now Playing art: \(song) cache hit, \(Self.pixels(cached))") }
+            return (cached, false)
+        }
         if t.bundleID == Self.spotify {
             // Spotify hands out a URL; fetch it, then fill the track in later.
             let script = """
@@ -762,14 +777,23 @@ final class NowPlayingMonitor {
             if let s = run(target: t.bundleID, script)?.stringValue, let url = URL(string: s), url.scheme == "https" {
                 if let cached = artworkCache.image(track: key, address: s) {
                     artworkCache.store(cached, track: key, address: s)
+                    artLog("Now Playing art: \(song) cache hit by cover address, \(Self.pixels(cached))")
                     return (cached, false)
                 }
+                artLog("Now Playing art: \(song) miss, fetching its cover address")
                 let fetch = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-                    guard let self, let data, let image = Self.cover(data) else { return }
+                    guard let self, let data, let image = Self.cover(data) else {
+                        DebugTrace.log("Now Playing art: \(song) fetch gave no picture")
+                        return
+                    }
+                    DebugTrace.log("Now Playing art: \(song) fetched, \(Self.pixels(image)), \(data.count) bytes")
                     self.scripts.async { self.artworkCache.store(image, track: key, address: s) }
                     DispatchQueue.main.async {
                         guard var current = self.track, current.bundleID == t.bundleID,
-                              current.title == t.title, current.album == t.album else { return }
+                              current.title == t.title, current.album == t.album else {
+                            DebugTrace.log("Now Playing art: \(song) fetch came after the song changed, not shown")
+                            return
+                        }
                         current.artwork = image
                         self.publish(current, reading: false)
                     }
@@ -777,20 +801,48 @@ final class NowPlayingMonitor {
                 fetch.resume()
                 return (nil, true)
             }
+            artLog("Now Playing art: \(song) miss, Spotify gave no cover address")
             return (nil, false)
         }
         let script = """
             with timeout of 2 seconds
                 if application id "\(t.bundleID)" is running then
-                    tell application id "\(t.bundleID)" to return raw data of artwork 1 of current track
+                    tell application id "\(t.bundleID)"
+                        set s to current track
+                        return {name of s, album of s, raw data of artwork 1 of s}
+                    end tell
                 end if
             end timeout
             """
-        if let data = run(target: t.bundleID, script)?.data, let image = Self.cover(data) {
-            artworkCache.store(image, track: key, address: nil)
-            return (image, false)
+        guard let reply = run(target: t.bundleID, script), reply.numberOfItems == 3,
+              let title = reply.atIndex(1)?.stringValue, let album = reply.atIndex(2)?.stringValue,
+              let data = reply.atIndex(3)?.data, let image = Self.cover(data) else {
+            artLog("Now Playing art: \(song) miss, the player gave no cover")
+            return (nil, false)
         }
-        return (nil, false)
+        guard artRead.accepts(read: (title, album), print: ArtRead.fingerprint(data),
+                              at: ProcessInfo.processInfo.systemUptime) else {
+            artLog("Now Playing art: \(song) read \(data.count) bytes "
+                   + ((title, album) == (t.title, t.album) ? "that are the previous song's cover, held"
+                                                           : "of another song, held"))
+            return (nil, true)
+        }
+        artLog("Now Playing art: \(song) read from the player, \(Self.pixels(image)), \(data.count) bytes")
+        artworkCache.store(image, track: key, address: nil)
+        return (image, false)
+    }
+
+    /// Scripts queue: one debug line, skipped when it repeats the last, as a reading every poll would.
+    private func artLog(_ line: @autoclosure () -> String) {
+        guard DebugTrace.enabled else { return }
+        let text = line()
+        guard text != artLogged else { return }
+        artLogged = text
+        DebugTrace.log(text)
+    }
+
+    static func pixels(_ image: NSImage) -> String {
+        image.representations.first.map { "\($0.pixelsWide)x\($0.pixelsHigh) px" } ?? "no pixels"
     }
 
     /// `data`'s picture, decoded now: an image made from data decodes on its first draw, which on a
@@ -845,7 +897,7 @@ final class NowPlayingMonitor {
                         if (n & "|" & a) is in {\(skip.joined(separator: ", "))} then return {}
                     end considering
                     try
-                        return {n, a, raw data of artwork 1 of s}
+                        return {n, a, raw data of artwork 1 of s, (id of s) as string}
                     on error number e
                         if e is -1712 then error number e
                     end try
@@ -853,10 +905,13 @@ final class NowPlayingMonitor {
                 end tell
             end timeout
             """
-        if let song = run(target: t.bundleID, cover), song.numberOfItems == 3,
+        if let song = run(target: t.bundleID, cover), song.numberOfItems == 4,
            let title = song.atIndex(1)?.stringValue, let album = song.atIndex(2)?.stringValue,
            let data = song.atIndex(3)?.data, let image = Self.cover(data) {
             ArtAhead.warm(&artworkCache, bundleID: t.bundleID, songs: [(title, album, image)])
+            artRead.kept(print: ArtRead.fingerprint(data), title: title, album: album)
+            artLog("Now Playing art: \(t.appName) song \(song.atIndex(4)?.stringValue ?? "") read ahead, "
+                   + "\(Self.pixels(image)), \(data.count) bytes")
         }
         if aheadGoesOn(t), positions.count > 1 {
             scripts.async { self.readCover(after: t, key: key, positions: positions.dropFirst()) }
@@ -924,6 +979,51 @@ struct ArtCache<Image> {
         if images.count > Self.limit { images.removeAll() }
         images[track] = image
         if let address { images[address] = image }
+    }
+}
+
+/// Music can still hand out the previous song's cover just after a change, which the
+/// cache would then keep for the new song (S464). Songs are "title|album" here.
+struct ArtRead {
+    private var asked: (title: String, album: String)?
+    private var before: (title: String, album: String)?
+    private var prints: [String: Int] = [:]
+    private var doubted: (song: String, since: TimeInterval)?
+
+    /// A fingerprint of a cover's bytes, the same for the same picture within one run.
+    static func fingerprint(_ data: Data) -> Int {
+        var hasher = Hasher()
+        data.withUnsafeBytes { hasher.combine(bytes: $0) }
+        return hasher.finalize()
+    }
+
+    /// Returns whether the song is another than the one asked about last.
+    @discardableResult
+    mutating func ask(title: String, album: String) -> Bool {
+        guard asked.map({ ($0.title, $0.album) != (title, album) }) ?? true else { return false }
+        before = asked
+        asked = (title, album)
+        return true
+    }
+
+    mutating func kept(print: Int, title: String, album: String) {
+        if prints.count > ArtCache<Int>.limit { prints.removeAll() }
+        prints["\(title)|\(album)"] = print
+    }
+
+    /// Whether a cover `read` from the player at `now` may be shown and kept for the song asked about:
+    /// it must be read from that song, and the previous song's cover, when that song is from another
+    /// album, waits until ArtHold's hold has given way.
+    mutating func accepts(read: (title: String, album: String), print: Int, at now: TimeInterval) -> Bool {
+        guard let asked, (read.title, read.album) == (asked.title, asked.album) else { return false }
+        let song = "\(asked.title)|\(asked.album)"
+        if let before, before.album != asked.album, prints["\(before.title)|\(before.album)"] == print {
+            if doubted?.song != song { doubted = (song, now) }
+            if let doubted, now - doubted.since < ArtHold.limit { return false }
+        }
+        doubted = nil
+        kept(print: print, title: asked.title, album: asked.album)
+        return true
     }
 }
 
