@@ -2323,7 +2323,7 @@ struct SourcePicker: View {
     /// menu, with the song under it while one plays.
     var hero = false
     /// The hero's Now Playing slide, which the panel owns and draws the incoming cover of.
-    var slide = TrackSlideState()
+    @ObservedObject var slide = TrackSlideState()
 
     /// Whether the chosen source is a mix, which checks the Several Apps menu.
     private var isMix: Bool {
@@ -2347,7 +2347,8 @@ struct SourcePicker: View {
             RoundedRectangle(cornerRadius: BrandTokens.Radius.card)
                 .fill(hero ? Color.primary.opacity(0.05) : Color.clear)
             if hero, let track = model.nowPlaying {
-                AmbientTint(tide: SoundTide.shared, color: CoverColors.of(track.artwork)[0],
+                // The old cover's colour until the slide ends, so the change costs it no frames.
+                AmbientTint(tide: SoundTide.shared, color: CoverColors.of((slide.outgoing ?? track).artwork)[0],
                             cornerRadius: BrandTokens.Radius.card)
             }
         }

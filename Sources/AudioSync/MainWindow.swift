@@ -407,7 +407,8 @@ struct MainView: View {
         .background {
             RoundedRectangle(cornerRadius: BrandTokens.Radius.card).fill(Color.primary.opacity(0.05))
             if let track = model.nowPlaying {
-                AmbientTint(tide: SoundTide.shared, color: CoverColors.of(track.artwork)[0],
+                // The old cover's colour until the slide ends, so the change costs it no frames.
+                AmbientTint(tide: SoundTide.shared, color: CoverColors.of((slide.outgoing ?? track).artwork)[0],
                             cornerRadius: BrandTokens.Radius.card)
             }
         }
@@ -1314,20 +1315,11 @@ struct SlotCover<Art: View>: View {
     let track: NowPlayingMonitor.Track
     let cornerRadius: CGFloat
     @ViewBuilder let art: (NowPlayingMonitor.Track) -> Art
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { proxy in
-            TimelineView(.animation(paused: !slide.moving)) { timeline in
-                let look = TrackSlide.oldCover(waited: slide.waited(at: timeline.date),
-                                               slid: slide.slid(at: timeline.date), reduceMotion: reduceMotion)
-                art(slide.outgoing ?? track)
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                    .brightness(-look.dim)
-                    .scaleEffect(look.scale)
-                    .opacity(look.opacity)
-            }
+            CoverLayer(track: slide.outgoing ?? track, phase: slide.phase, role: .slot, size: proxy.size,
+                       cornerRadius: cornerRadius, art: art)
         }
         .anchorPreference(key: CoverSlot.self, value: .bounds) { $0 }
     }
@@ -1346,18 +1338,14 @@ struct IncomingCover<Art: View>: View {
         if let slot, let track, slide.outgoing != nil {
             GeometryReader { proxy in
                 let rect = proxy[slot]
-                TimelineView(.animation(paused: !slide.moving)) { timeline in
-                    let slid = slide.slid(at: timeline.date)
-                    let offset = slide.fades ? 0 : TrackSlide.incomingOffset(
-                        slide.direction, slid: slid, coverMinX: Double(rect.minX), coverWidth: Double(rect.width),
-                        surfaceWidth: Double(proxy.size.width))
-                    art(track)
-                        .animation(.easeInOut(duration: TrackSlide.coverFade), value: track.artwork != nil)
-                        .frame(width: rect.width, height: rect.height)
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-                        .opacity(slide.fades ? slid : 1)
-                        .offset(x: rect.minX + CGFloat(offset), y: rect.minY)
-                }
+                let from = TrackSlide.incomingOffset(slide.direction, slid: 0, coverMinX: Double(rect.minX),
+                                                     coverWidth: Double(rect.width), surfaceWidth: Double(proxy.size.width))
+                // Only the slot is the view's frame; the layer travels from outside it, unclipped.
+                CoverLayer(track: track, phase: slide.phase, role: .incoming(from: CGFloat(from)), size: rect.size,
+                           cornerRadius: cornerRadius, art: art)
+                    .frame(width: rect.width, height: rect.height)
+                    .padding(.leading, rect.minX)
+                    .padding(.top, rect.minY)
             }
             .allowsHitTesting(false)
             .accessibilityHidden(true)
@@ -1372,28 +1360,305 @@ struct SlidLine<Line: View>: View {
     let track: NowPlayingMonitor.Track
     var delay: TimeInterval = 0
     @ViewBuilder let line: (NowPlayingMonitor.Track) -> Line
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(paused: !slide.moving)) { timeline in
-            let waited = slide.waited(at: timeline.date)
-            let elapsed = slide.elapsed(at: timeline.date)
-            let side: CGFloat = reduceMotion || slide.fades ? 0 : slide.direction == .next ? 1 : -1
-            let into = elapsed.map { TrackSlide.textIn(after: $0, seconds: slide.seconds, delay: delay) } ?? 1
-            ZStack(alignment: .leading) {
-                if let outgoing = slide.outgoing, let elapsed {
-                    let out = TrackSlide.textOut(after: elapsed, seconds: slide.seconds)
-                    line(outgoing)
-                        .offset(x: -side * CGFloat(TrackSlide.textAway * out))
-                        .opacity(TrackSlide.textOpacity(waited: waited) * (1 - out))
-                        .accessibilityHidden(true)
-                }
-                line(track)
-                    .offset(x: side * CGFloat(TrackSlide.textFrom * (1 - into)))
-                    .opacity(slide.outgoing == nil ? TrackSlide.textOpacity(waited: waited) : into)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .clipped()
+        LineLayers(track: track, outgoing: slide.outgoing, phase: slide.phase, delay: delay) {
+            AnyView(line($0).frame(maxWidth: .infinity, alignment: .leading).accessibilityHidden(true))
+        }
+        .accessibilityRepresentation { line(track) }
+    }
+}
+
+/// Core Animation's side of `TrackSlide`: each layer gets one group, played on the render server,
+/// so a slide costs the main thread no frames.
+enum SlideMotion {
+    static func timing(_ curve: TrackSlide.Curve) -> CAMediaTimingFunction {
+        CAMediaTimingFunction(controlPoints: Float(curve.x1), Float(curve.y1), Float(curve.x2), Float(curve.y2))
+    }
+
+    /// Moves `layer` to `to` from `from`, else from what it shows now. `model`: `to` becomes the layer's
+    /// own value; otherwise the group holds it, for a view's layer, whose own values AppKit sets.
+    static func run(_ layer: CALayer?, to: [String: CGFloat], from: [String: CGFloat] = [:], seconds: TimeInterval,
+                    timing: CAMediaTimingFunction, startedAgo: TimeInterval = 0, delay: TimeInterval = 0,
+                    model: Bool = true) {
+        guard let layer else { return }
+        let shown = layer.presentation() ?? layer
+        let fill: CAMediaTimingFillMode = model ? .backwards : .both
+        let group = CAAnimationGroup()
+        group.animations = to.map { path, value in
+            let part = CABasicAnimation(keyPath: path)
+            part.fromValue = from[path] ?? (shown.value(forKeyPath: path) as? NSNumber).map { CGFloat($0.doubleValue) } ?? value
+            part.toValue = value
+            part.duration = seconds
+            part.timingFunction = timing
+            part.fillMode = fill
+            return part
+        }
+        group.duration = seconds
+        group.beginTime = layer.convertTime(CACurrentMediaTime(), from: nil) + delay - startedAgo
+        group.fillMode = fill
+        group.isRemovedOnCompletion = model
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        if model { to.forEach { layer.setValue($0.value, forKeyPath: $0.key) } }
+        layer.add(group, forKey: "slide")
+        CATransaction.commit()
+    }
+
+    static func stop(_ layers: [CALayer?], at rest: [String: CGFloat]) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in layers {
+            layer?.removeAnimation(forKey: "slide")
+            rest.forEach { layer?.setValue($0.value, forKeyPath: $0.key) }
+        }
+        CATransaction.commit()
+    }
+}
+
+/// Where a `CoverLayer` stands in the slide: in the slot, or coming in from `from` points beside it.
+enum CoverRole: Equatable { case slot, incoming(from: CGFloat) }
+
+/// A Now Playing cover as one layer of its picture. SwiftUI hands it the slide's step when that changes;
+/// Core Animation draws every frame between.
+struct CoverLayer<Art: View>: NSViewRepresentable {
+    let track: NowPlayingMonitor.Track
+    let phase: TrackSlideState.Phase
+    let role: CoverRole
+    let size: CGSize
+    let cornerRadius: CGFloat
+    let art: (NowPlayingMonitor.Track) -> Art
+
+    func makeNSView(context: Context) -> CoverLayerView { CoverLayerView(frame: .zero) }
+
+    func updateNSView(_ view: CoverLayerView, context: Context) {
+        let environment = context.environment
+        let another = view.show(track, size: size, look: "\(environment.colorScheme)", cornerRadius: cornerRadius) {
+            // Only a song without a cover draws its stand-in here, once per song and size.
+            let renderer = ImageRenderer(content: art(track).frame(width: size.width, height: size.height)
+                .environment(\.colorScheme, environment.colorScheme))
+            renderer.scale = environment.displayScale
+            return renderer.cgImage
+        }
+        view.play(phase, role: role, reduceMotion: environment.accessibilityReduceMotion, anotherSong: another)
+    }
+}
+
+/// `CoverLayer`'s view: the cover's own layer, with a black one over it for the dim.
+final class CoverLayerView: NSView {
+    private let card = CALayer()
+    private let dim = CALayer()
+    private var shown: NowPlayingMonitor.Track?
+    private var key: AnyHashable?
+    private var step: TrackSlideState.Phase.Step?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        clipsToBounds = false
+        card.masksToBounds = true
+        card.cornerCurve = .continuous
+        card.contentsGravity = .resizeAspectFill
+        dim.backgroundColor = NSColor.black.cgColor
+        dim.opacity = 0
+        card.addSublayer(dim)
+        layer?.addSublayer(card)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        if card.superlayer == nil { layer?.addSublayer(card) }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        card.bounds = bounds
+        card.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        dim.frame = card.bounds
+        CATransaction.commit()
+    }
+
+    /// Each cover's CGImage, shared by the slot and the incoming cover, so a slide asks NSImage for none.
+    private static let pictures = NSMapTable<NSImage, CGImage>.weakToStrongObjects()
+
+    private static func picture(_ image: NSImage) -> CGImage? {
+        if let known = pictures.object(forKey: image) { return known }
+        let made = image.representations.lazy.compactMap { ($0 as? NSBitmapImageRep)?.cgImage }.first
+            ?? image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        if let made { pictures.setObject(made, forKey: image) }
+        return made
+    }
+
+    /// Puts `track`'s picture on the layer; true when it is another song than the one shown.
+    func show(_ track: NowPlayingMonitor.Track, size: CGSize, look: String, cornerRadius: CGFloat,
+              standIn: () -> CGImage?) -> Bool {
+        let key: AnyHashable = track.artwork.map { AnyHashable(ObjectIdentifier($0)) }
+            ?? AnyHashable("\(track.bundleID)|\(track.title)|\(track.artist)|\(track.album)|\(size)|\(look)")
+        let another = shown.map { TrackSlide.isSkip($0, track) } ?? false
+        defer { shown = track }
+        card.cornerRadius = cornerRadius
+        guard key != self.key else { return another }
+        self.key = key
+        let before = card.contents
+        let arrived = TrackSlide.coverArrived(shown, track)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        card.contents = track.artwork.flatMap(Self.picture) ?? standIn()
+        if arrived {
+            let fade = CABasicAnimation(keyPath: "contents")
+            fade.fromValue = before
+            fade.duration = TrackSlide.coverFade
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            card.add(fade, forKey: "cover")
+        }
+        CATransaction.commit()
+        return another
+    }
+
+    func play(_ phase: TrackSlideState.Phase, role: CoverRole, reduceMotion: Bool, anotherSong: Bool) {
+        guard phase.step != step else { return }
+        step = phase.step
+        let rest = TrackSlide.oldCover(waited: 0, slid: 0, reduceMotion: reduceMotion)
+        switch (phase.step, role) {
+        case (.wait(let since), .slot):
+            let look = TrackSlide.oldCover(waited: 1, slid: 0, reduceMotion: reduceMotion)
+            let timing = SlideMotion.timing(TrackSlide.waitCurve)
+            SlideMotion.run(card, to: ["transform.scale": CGFloat(look.scale)], seconds: TrackSlide.cap, timing: timing,
+                            startedAgo: -since.timeIntervalSinceNow)
+            SlideMotion.run(dim, to: ["opacity": CGFloat(look.dim)], seconds: TrackSlide.cap, timing: timing,
+                            startedAgo: -since.timeIntervalSinceNow)
+        case (.settle(let since), .slot):
+            let timing = SlideMotion.timing(TrackSlide.settleCurve)
+            SlideMotion.run(card, to: ["transform.scale": CGFloat(rest.scale)], seconds: TrackSlide.fadeDuration, timing: timing,
+                            startedAgo: -since.timeIntervalSinceNow)
+            SlideMotion.run(dim, to: ["opacity": CGFloat(rest.dim)], seconds: TrackSlide.fadeDuration, timing: timing,
+                            startedAgo: -since.timeIntervalSinceNow)
+        case (.slide(let since), .slot):
+            // A change mid-slide puts the song that was coming in here, at rest, before it recedes.
+            let look = TrackSlide.oldCover(waited: 1, slid: 1, reduceMotion: reduceMotion)
+            let timing = phase.fades ? CAMediaTimingFunction(name: .linear) : SlideMotion.timing(TrackSlide.slideCurve)
+            SlideMotion.run(card, to: ["transform.scale": CGFloat(look.scale), "opacity": CGFloat(look.opacity)],
+                            from: anotherSong ? ["transform.scale": CGFloat(rest.scale), "opacity": CGFloat(rest.opacity)] : [:],
+                            seconds: phase.seconds, timing: timing, startedAgo: -since.timeIntervalSinceNow)
+            SlideMotion.run(dim, to: ["opacity": CGFloat(look.dim)], from: anotherSong ? ["opacity": CGFloat(rest.dim)] : [:],
+                            seconds: phase.seconds, timing: timing, startedAgo: -since.timeIntervalSinceNow)
+        case (.slide(let since), .incoming(let from)):
+            let timing = phase.fades ? CAMediaTimingFunction(name: .linear) : SlideMotion.timing(TrackSlide.slideCurve)
+            SlideMotion.run(card, to: ["transform.translation.x": 0, "opacity": 1],
+                            from: ["transform.translation.x": phase.fades ? 0 : from, "opacity": phase.fades ? 0 : 1],
+                            seconds: phase.seconds, timing: timing, startedAgo: -since.timeIntervalSinceNow)
+        default:
+            SlideMotion.stop([card], at: ["transform.scale": CGFloat(rest.scale), "transform.translation.x": 0,
+                                         "opacity": CGFloat(rest.opacity)])
+            SlideMotion.stop([dim], at: ["opacity": CGFloat(rest.dim)])
+        }
+    }
+}
+
+/// A title or artist line as two hosted views, the song's and the one leaving, moved by their layers.
+struct LineLayers: NSViewRepresentable {
+    let track: NowPlayingMonitor.Track
+    let outgoing: NowPlayingMonitor.Track?
+    let phase: TrackSlideState.Phase
+    let delay: TimeInterval
+    let line: (NowPlayingMonitor.Track) -> AnyView
+
+    func makeNSView(context: Context) -> LineStage {
+        // The line is in before SwiftUI first measures the view.
+        let stage = LineStage(frame: .zero)
+        stage.show(track, outgoing: outgoing, line: line)
+        return stage
+    }
+
+    func updateNSView(_ stage: LineStage, context: Context) {
+        stage.show(track, outgoing: outgoing, line: line)
+        stage.play(phase, delay: delay, reduceMotion: context.environment.accessibilityReduceMotion)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView stage: LineStage, context: Context) -> CGSize? {
+        let fit = stage.current.intrinsicContentSize
+        return CGSize(width: proposal.width ?? max(0, fit.width), height: max(0, fit.height))
+    }
+}
+
+/// `LineLayers`' view, clipped to its column.
+final class LineStage: NSView {
+    let current = NSHostingView(rootView: AnyView(EmptyView()))
+    private let leaving = NSHostingView(rootView: AnyView(EmptyView()))
+    private var shown: NowPlayingMonitor.Track?
+    private var gone: NowPlayingMonitor.Track?
+    private var step: TrackSlideState.Phase.Step?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        clipsToBounds = true
+        for host in [leaving, current] {
+            host.sizingOptions = [.intrinsicContentSize]
+            host.wantsLayer = true
+            host.autoresizingMask = [.width, .height]
+            addSubview(host)
+        }
+        leaving.isHidden = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: current.intrinsicContentSize.height)
+    }
+
+    func show(_ track: NowPlayingMonitor.Track, outgoing: NowPlayingMonitor.Track?,
+              line: (NowPlayingMonitor.Track) -> AnyView) {
+        if track != shown {
+            shown = track
+            current.rootView = line(track)
+            invalidateIntrinsicContentSize()
+        }
+        // Holds the song on screen until a slide, so the old line is drawn before it has to leave.
+        let leaver = outgoing ?? track
+        if leaver != gone {
+            gone = leaver
+            leaving.rootView = line(leaver)
+        }
+    }
+
+    func play(_ phase: TrackSlideState.Phase, delay: TimeInterval, reduceMotion: Bool) {
+        guard phase.step != step else { return }
+        step = phase.step
+        switch phase.step {
+        case .wait(let since):
+            SlideMotion.run(current.layer, to: ["opacity": CGFloat(TrackSlide.textOpacity(waited: 1))], seconds: TrackSlide.cap,
+                            timing: SlideMotion.timing(TrackSlide.waitCurve), startedAgo: -since.timeIntervalSinceNow,
+                            model: false)
+        case .settle(let since):
+            SlideMotion.run(current.layer, to: ["opacity": 1], seconds: TrackSlide.fadeDuration,
+                            timing: SlideMotion.timing(TrackSlide.settleCurve), startedAgo: -since.timeIntervalSinceNow,
+                            model: false)
+        case .slide(let since):
+            let side: CGFloat = reduceMotion || phase.fades ? 0 : phase.direction == .next ? 1 : -1
+            let timing = SlideMotion.timing(TrackSlide.slideCurve)
+            let shownNow = current.layer?.presentation() ?? current.layer
+            let opacity = CGFloat(shownNow?.opacity ?? 1)
+            let shift = (shownNow?.value(forKeyPath: "transform.translation.x") as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0
+            leaving.isHidden = false
+            SlideMotion.run(leaving.layer, to: ["transform.translation.x": -side * CGFloat(TrackSlide.textAway), "opacity": 0],
+                            from: ["transform.translation.x": shift, "opacity": opacity], seconds: phase.seconds / 2,
+                            timing: timing, startedAgo: -since.timeIntervalSinceNow, model: false)
+            SlideMotion.run(current.layer, to: ["transform.translation.x": 0, "opacity": 1],
+                            from: ["transform.translation.x": side * CGFloat(TrackSlide.textFrom), "opacity": 0],
+                            seconds: phase.seconds, timing: timing, startedAgo: -since.timeIntervalSinceNow,
+                            delay: delay, model: false)
+        case .rest:
+            SlideMotion.stop([current.layer, leaving.layer], at: [:])
+            leaving.isHidden = true
         }
     }
 }
@@ -1402,8 +1667,16 @@ struct SlidLine<Line: View>: View {
 /// while the new one slides in, and the song before it for the guess. An
 /// object rather than @State, for the Command Line Tools toolchain.
 final class TrackSlideState: ObservableObject {
+    /// The step the slide is at, which the views hand to Core Animation once per change.
+    struct Phase: Equatable {
+        enum Step: Equatable { case rest, wait(Date), settle(Date), slide(Date) }
+        let step: Step
+        let direction: TrackSlide.Direction
+        let fades: Bool
+        let seconds: TimeInterval
+    }
+
     @Published private(set) var outgoing: NowPlayingMonitor.Track?
-    // The views draw from these times on their frame clock rather than through SwiftUI animations.
     @Published private var waitStart: Date?
     @Published private var settleStart: Date?
     @Published private var slideStart: Date?
@@ -1413,23 +1686,12 @@ final class TrackSlideState: ObservableObject {
     private(set) var seconds: TimeInterval = 1
     private var pressed: TrackSlide.Press?
     private var playedBefore: NowPlayingMonitor.Track?
-    /// Where the wait got: at the change, or when it began easing back.
-    private var reached = 0.0
     private var slides = 0
 
-    var moving: Bool { waitStart != nil || settleStart != nil || slideStart != nil }
-
-    func waited(at now: Date) -> Double {
-        if let start = waitStart { return TrackSlide.waitFraction(after: now.timeIntervalSince(start)) }
-        if let start = settleStart { return TrackSlide.settled(from: reached, after: now.timeIntervalSince(start)) }
-        return outgoing == nil ? 0 : reached
-    }
-
-    func elapsed(at now: Date) -> TimeInterval? { slideStart.map { now.timeIntervalSince($0) } }
-
-    func slid(at now: Date) -> Double {
-        guard let elapsed = elapsed(at: now) else { return 0 }
-        return TrackSlide.progress(after: elapsed, seconds: seconds, fades: fades)
+    var phase: Phase {
+        let step: Phase.Step = slideStart.map { .slide($0) } ?? waitStart.map { .wait($0) }
+            ?? settleStart.map { .settle($0) } ?? .rest
+        return Phase(step: step, direction: direction, fades: fades, seconds: seconds)
     }
 
     /// Play/Pause only lets a waiting cover ease back.
@@ -1451,13 +1713,11 @@ final class TrackSlideState: ObservableObject {
 
     private func settle() {
         let now = Date.now
-        reached = waited(at: now)
         waitStart = nil
         settleStart = now
         DispatchQueue.main.asyncAfter(deadline: .now() + TrackSlide.fadeDuration) { [weak self] in
             guard let self, self.settleStart == now else { return }
             self.settleStart = nil
-            self.reached = 0
         }
     }
 
@@ -1477,7 +1737,6 @@ final class TrackSlideState: ObservableObject {
         pressed = nil
         let style = TrackSlide.style(onScreen: onScreen, reduceMotion: reduceMotion)
         guard style != .instant else { return stop() }
-        reached = waited(at: now)
         waitStart = nil
         settleStart = nil
         direction = press ?? guess
@@ -1499,7 +1758,6 @@ final class TrackSlideState: ObservableObject {
         waitStart = nil
         settleStart = nil
         slideStart = nil
-        reached = 0
     }
 }
 
