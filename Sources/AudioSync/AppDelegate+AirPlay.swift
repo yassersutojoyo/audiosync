@@ -246,7 +246,7 @@ extension AppDelegate {
                            + (engine.isRunning ? "no player read as playing" : "streaming is off"))
             return
         }
-        wakeResume = WakeResume.Pending(noted: noted)
+        wakeResume = WakeResume.Pending(noted: noted, stale: playingAirPlay)
         DebugTrace.log("[AudioSync] resume after sleep: noted \(noted.bundleID) playing")
     }
 
@@ -257,10 +257,8 @@ extension AppDelegate {
         wakeResumeTick()
     }
 
-    /// With an AirPlay speaker on, one AirPlay session plays again; otherwise the running session is enough.
-    private var wakeOutputsBack: Bool {
-        guard !playableAirPlay.isEmpty else { return true }
-        return nativeAirPlay?.model.states.values.contains(.playing) == true
+    private var playingAirPlay: Set<String> {
+        Set((nativeAirPlay?.model.states ?? [:]).compactMap { $0.value == .playing ? $0.key : nil })
     }
 
     /// Once a second from the wake until the verdict.
@@ -268,7 +266,12 @@ extension AppDelegate {
         guard var pending = wakeResume, let wokeAt = pending.wokeAt else { return }
         let streaming = engine.isRunning
         let now = ProcessInfo.processInfo.systemUptime
-        if pending.backAt == nil, streaming, wakeOutputsBack {
+        // With an AirPlay speaker on, one AirPlay session plays again; otherwise the running session is enough.
+        pending.streamingSince = streaming ? pending.streamingSince ?? now : nil
+        let survived = pending.streamingSince.map { now - $0 >= WakeResume.survivedAfter } ?? false
+        let airplayBack = pending.airplayBack(playing: playingAirPlay, survived: survived) || playableAirPlay.isEmpty
+        wakeResume = pending
+        if pending.backAt == nil, streaming, airplayBack {
             pending.backAt = now
             wakeResume = pending
             nowPlaying.refresh()

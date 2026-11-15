@@ -19454,6 +19454,21 @@ do {
             && wrSkips(wrDecide(noted: wrNoted, after: nil, waited: WakeResume.giveUpAfter))
             && wrDecide(noted: wrNoted, after: wrPaused, waited: WakeResume.giveUpAfter - 0.1) == .resume,
           "wake resume: it waits for the outputs and a reading, and gives up at the bound")
+    var wrPending = WakeResume.Pending(noted: wrNoted, stale: ["kitchen"])
+    let wrBeforeDrop = wrPending.airplayBack(playing: ["kitchen"], survived: false)
+    let wrAtDrop = wrPending.airplayBack(playing: [], survived: false)
+    let wrAfterDrop = wrPending.airplayBack(playing: ["kitchen"], survived: false)
+    var wrOtherPending = WakeResume.Pending(noted: wrNoted, stale: ["kitchen"])
+    let wrOtherBack = wrOtherPending.airplayBack(playing: ["kitchen", "office"], survived: false)
+    check(!wrBeforeDrop && !wrAtDrop && wrAfterDrop && wrOtherBack,
+          "wake resume: an AirPlay speaker playing at the sleep counts as back only once it plays again after a drop")
+    var wrSurvivor = WakeResume.Pending(noted: wrNoted, stale: ["kitchen"])
+    let wrSurvivorEarly = wrSurvivor.airplayBack(playing: ["kitchen"], survived: false)
+    let wrSurvivorLater = wrSurvivor.airplayBack(playing: ["kitchen"], survived: true)
+    var wrSurvivorGone = WakeResume.Pending(noted: wrNoted, stale: ["kitchen"])
+    let wrSurvivorGoneBack = wrSurvivorGone.airplayBack(playing: [], survived: true)
+    check(!wrSurvivorEarly && wrSurvivorLater && !wrSurvivorGoneBack && WakeResume.survivedAfter == 12,
+          "wake resume: a session that survived the sleep counts as back once it still plays 12 s after streaming runs")
     check(!AppSettings.load { _ in nil }.resumesAfterSleep
             && AppSettings.load { key -> Any? in key == AppSettings.Keys.resumesAfterSleep ? true : nil }.resumesAfterSleep,
           "wake resume: Resume Playback After Sleep is off unless turned on")

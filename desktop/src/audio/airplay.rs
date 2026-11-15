@@ -1859,11 +1859,13 @@ impl AirPlaySpeakers {
         }
     }
 
-    /// Whether any speaker plays (S465).
-    pub fn plays(&self) -> bool {
+    /// The speakers that play (S465).
+    pub fn playing(&self) -> Vec<String> {
         self.added
-            .values()
-            .any(|added| added.state == SpeakerState::Playing)
+            .iter()
+            .filter(|(_, added)| added.state == SpeakerState::Playing)
+            .map(|(id, _)| id.clone())
+            .collect()
     }
 
     fn is_playing(&self, id: &str) -> bool {
