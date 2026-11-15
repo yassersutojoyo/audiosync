@@ -418,6 +418,15 @@ enum TrackSlide {
     }
 }
 
+/// Placeholder for the morph's rules, so the failing checks compile.
+enum PlayPauseMorph {
+    static let outSeconds: TimeInterval = 0
+    static let inSeconds: TimeInterval = 0
+    static let outScale = 0.0
+    static func seconds(reduceMotion: Bool) -> TimeInterval { 0 }
+    static func look(after elapsed: TimeInterval?) -> (showsOld: Bool, scale: Double, opacity: Double) { (false, 1, 1) }
+}
+
 /// Both Now Playing views keep the old song, cover and title together, while
 /// the next song from the same player waits for its cover, so the cover never
 /// blanks between two songs; a track known to have none shows at once.

@@ -19317,6 +19317,27 @@ do {
           "track slide: the hold counts from the press, and a late cover fades in where it landed")
 }
 
+// MARK: Play/Pause's icon morphs between play and pause (PlayPauseMorph in WindowRules.swift, MainWindow.swift)
+// covers: S465
+do {
+    let rest = PlayPauseMorph.look(after: nil), start = PlayPauseMorph.look(after: 0)
+    let halfOut = PlayPauseMorph.look(after: 0.05), turn = PlayPauseMorph.look(after: PlayPauseMorph.outSeconds)
+    let done = PlayPauseMorph.look(after: PlayPauseMorph.outSeconds + PlayPauseMorph.inSeconds)
+    check(PlayPauseMorph.outSeconds == 0.1 && PlayPauseMorph.inSeconds == 0.16
+            && PlayPauseMorph.seconds(reduceMotion: false) == 0.26 && PlayPauseMorph.seconds(reduceMotion: true) == 0,
+          "play/pause morph: 100 ms out, 160 ms in, and a plain swap under Reduce Motion")
+    check(!rest.showsOld && rest.scale == 1 && rest.opacity == 1 && start.showsOld && start.scale == 1 && start.opacity == 1
+            && halfOut.showsOld && halfOut.scale < 1 && halfOut.opacity < 1
+            && !turn.showsOld && turn.scale == PlayPauseMorph.outScale && turn.opacity == 0
+            && !done.showsOld && done.scale == 1 && done.opacity == 1,
+          "play/pause morph: the old icon shrinks and fades, then the new one grows in")
+    let peak = stride(from: 0.1, through: 0.26, by: 0.005).map { PlayPauseMorph.look(after: $0).scale }.max() ?? 0
+    check(peak > 1 && peak < 1.1, "play/pause morph: the new icon overshoots slightly before it settles")
+    let morphWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    check(morphWindow.contains("SymbolMorph(symbol: symbol)") && morphWindow.contains("PlayPauseMorph.look("),
+          "play/pause morph: the main window's Play/Pause button draws its icon through the morph")
+}
+
 // MARK: The Dock icon after the last window closes (DockIcon in WindowRules.swift)
 do {
     check(DockIcon.shows(windows: 1, hidesWhenClosed: true) && DockIcon.shows(windows: 3, hidesWhenClosed: true)
