@@ -19153,7 +19153,7 @@ do {
     let firstCover = NowPlayingMonitor.cover(bandPNG)
     let secondCover = NowPlayingMonitor.cover(bandPNG)
     check(firstCover != nil && strongest(firstCover.flatMap { CoverBands.bands(of: $0) }) == [0, 1, 2],
-          "cover bands: a decoded cover comes with its top, middle and bottom colours, measured off the main thread")
+          "cover bands: a decoded cover comes with its top, middle and bottom colours")
     check(secondCover != nil && firstCover !== secondCover
             && strongest(secondCover.flatMap { CoverBands.bands(of: $0) }) == [0, 1, 2]
             && CoverBands.bands(of: NSImage(size: NSSize(width: 2, height: 2))) == nil,
