@@ -19402,8 +19402,24 @@ do {
           "track slide: a press that changes nothing lets the old cover ease back after 1.5 s, not 3 s")
     check(pressBody.components(separatedBy: "pressed = press").first?.contains("guard press.direction != nil") == true,
           "track slide: Play/Pause during the wait ends the recede and keeps the Next or Previous it followed")
-    check(slideWindow.contains("art(track)\n                        .animation(.easeInOut(duration: TrackSlide.coverFade), value: track.artwork != nil)"),
+    check(slideWindow.contains("let arrived = TrackSlide.coverArrived(shown, track)")
+            && slideWindow.contains("CABasicAnimation(keyPath: \"contents\")")
+            && slideWindow.contains("fade.duration = TrackSlide.coverFade"),
           "track slide: a cover that arrives while the new song slides in fades in over 0.25 s")
+    let slideViews = slideWindow.components(separatedBy: "struct SlotCover").last?
+        .components(separatedBy: "final class TrackSlideState").first ?? ""
+    check(!slideViews.isEmpty && !slideViews.contains("TimelineView"),
+          "track slide: no frame clock re-renders the covers or the lines while they slide")
+    check(slideViews.contains("CAAnimationGroup") && slideViews.contains("TrackSlide.slideCurve")
+            && slideViews.contains("TrackSlide.waitCurve") && slideViews.contains("TrackSlide.settleCurve")
+            && slideViews.contains("TrackSlide.cap") && slideViews.contains("TrackSlide.fadeDuration")
+            && slideViews.contains("TrackSlide.oldCover(") && slideViews.contains("TrackSlide.incomingOffset(")
+            && slideViews.contains("TrackSlide.textAway") && slideViews.contains("TrackSlide.textFrom")
+            && slideViews.contains("beginTime") && slideViews.contains("CATransaction.setDisableActions(true)"),
+          "track slide: Core Animation plays the slide on the render server, with TrackSlide's curves and values")
+    let slideTint = "AmbientTint(tide: SoundTide.shared, color: CoverColors.of((slide.outgoing ?? track).artwork)[0]"
+    check(slideWindow.contains(slideTint) && slidePanel.contains(slideTint),
+          "track slide: the hero's tint keeps the old cover's colour until the slide ends")
 }
 
 // MARK: Play/Pause's icon morphs between play and pause (PlayPauseMorph in WindowRules.swift, MainWindow.swift)
