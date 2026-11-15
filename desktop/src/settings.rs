@@ -57,7 +57,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::backend::OutputKind;
 use crate::audio::cast_address;
-use crate::audio::default_output::{Record as DefaultRecord, RecordStore};
+use crate::audio::default_output::Record as DefaultRecord;
+#[cfg(any(windows, test))]
+use crate::audio::default_output::RecordStore;
 use crate::data_folder;
 use crate::remote::RemoteSettings;
 use crate::ui_model::{UpdateRecord, WindowFrame};
