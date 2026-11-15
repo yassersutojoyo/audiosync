@@ -884,9 +884,18 @@ pub fn on_session_end(ending: Box<dyn Fn()>) -> Option<isize> {
     Some(hwnd.0 as isize)
 }
 
+/// Runs `query` on this thread each time Windows asks whether the session
+/// may end, before the window [`on_session_end`] made answers that it may.
+#[cfg(windows)]
+pub fn on_session_query(query: Box<dyn Fn()>) {
+    SESSION_QUERY.with(|slot| *slot.borrow_mut() = Some(query));
+}
+
 #[cfg(windows)]
 thread_local! {
     static SESSION_ENDING: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
+    static SESSION_QUERY: std::cell::RefCell<Option<Box<dyn Fn()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -898,8 +907,17 @@ unsafe extern "system" fn session_end_procedure(
     lparam: windows::Win32::Foundation::LPARAM,
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
-    use windows::Win32::UI::WindowsAndMessaging::{DefWindowProcW, WM_ENDSESSION};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DefWindowProcW, WM_ENDSESSION, WM_QUERYENDSESSION,
+    };
 
+    if message == WM_QUERYENDSESSION {
+        SESSION_QUERY.with(|slot| {
+            if let Some(query) = slot.borrow().as_ref() {
+                query();
+            }
+        });
+    }
     // A zero `wparam` means the end was called off.
     if message == WM_ENDSESSION && wparam.0 != 0 {
         let ending = SESSION_ENDING.with(|slot| slot.borrow_mut().take());

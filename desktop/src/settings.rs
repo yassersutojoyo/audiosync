@@ -57,6 +57,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::backend::OutputKind;
 use crate::audio::cast_address;
+use crate::audio::default_output::{Record as DefaultRecord, RecordStore};
 use crate::data_folder;
 use crate::remote::RemoteSettings;
 use crate::ui_model::{UpdateRecord, WindowFrame};
@@ -877,6 +878,13 @@ pub struct Settings {
         deserialize_with = "record_that_reads"
     )]
     pub update_record: Option<UpdateRecord>,
+    /// Windows' default output before AudioSync moved it to a silent
+    /// endpoint, kept until it is put back (S469).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
+    pub default_output: Option<DefaultRecord>,
     /// The fields this build doesn't know, written back as read so a newer
     /// build's settings survive a downgrade or a restored copy (S212).
     #[serde(flatten)]
@@ -1020,6 +1028,7 @@ impl Default for Settings {
             resume_after_sleep: false,
             last_update_check: None,
             update_record: None,
+            default_output: None,
             other_fields: BTreeMap::new(),
         }
     }
@@ -1330,6 +1339,7 @@ impl Settings {
             resume_after_sleep: self.resume_after_sleep,
             last_update_check: self.last_update_check,
             update_record: self.update_record,
+            default_output: self.default_output,
             // Capped as every list is, so a damaged file's thousands of stray keys aren't carried on.
             other_fields: self.other_fields.into_iter().take(MAX_ENTRIES).collect(),
         }
@@ -1530,6 +1540,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("resume_after_sleep", Value::is_boolean),
         ("last_update_check", reads::<Option<u64>>),
         ("update_record", reads::<Option<UpdateRecord>>),
+        ("default_output", reads::<Option<DefaultRecord>>),
     ];
     let Ok(Value::Object(stored)) = serde_json::from_str::<Value>(text) else {
         return Vec::new();
@@ -1839,6 +1850,42 @@ impl SettingsFile {
     }
 }
 
+/// The settings file as the store of S469's restore record: each write
+/// reads the file and saves it back with the record, through the same
+/// atomic write. A file that doesn't read as settings is left alone, and
+/// without a file there is nowhere to keep the record, so nothing moves.
+#[cfg(any(windows, test))]
+pub struct DefaultRecordFile(pub Option<PathBuf>);
+
+#[cfg(any(windows, test))]
+impl RecordStore for DefaultRecordFile {
+    fn load(&mut self) -> Result<Option<DefaultRecord>, String> {
+        let Some(path) = &self.0 else {
+            return Ok(None);
+        };
+        match SettingsFile::at(path.clone()).load() {
+            (settings, Loaded::Read { .. }) => Ok(settings.default_output),
+            (_, Loaded::NoFile) => Ok(None),
+            (_, Loaded::Ignored(reason)) => Err(reason),
+        }
+    }
+
+    fn save(&mut self, record: Option<&DefaultRecord>) -> Result<(), String> {
+        let Some(path) = &self.0 else {
+            return Err("there is no settings file".to_owned());
+        };
+        let file = SettingsFile::at(path.clone());
+        let mut settings = match file.load() {
+            (settings, Loaded::Read { .. } | Loaded::NoFile) => settings,
+            (_, Loaded::Ignored(reason)) => return Err(reason),
+        };
+        settings.default_output = record.cloned();
+        file.save(&settings)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Whether `bytes` are a settings file in a format newer than [`VERSION`].
 fn written_by_a_newer_build(bytes: &[u8]) -> bool {
     #[derive(Deserialize)]
@@ -2014,6 +2061,11 @@ mod tests {
             update_record: Some(UpdateRecord {
                 version: "9.9.9".to_owned(),
                 reason: crate::ui_model::UpdateRecordReason::Blocked,
+            }),
+            default_output: Some(DefaultRecord {
+                console: "{0.0.0.00000000}.speakers".to_owned(),
+                multimedia: "{0.0.0.00000000}.speakers".to_owned(),
+                silent: "{0.0.0.00000000}.cable".to_owned(),
             }),
             other_fields: BTreeMap::new(),
         }
@@ -2515,6 +2567,7 @@ mod tests {
             resume_after_sleep,
             last_update_check,
             update_record,
+            default_output,
             other_fields: _,
         } = every_field();
         assert_ne!(source, default.source);
@@ -2554,6 +2607,7 @@ mod tests {
         assert_ne!(resume_after_sleep, default.resume_after_sleep);
         assert_ne!(last_update_check, default.last_update_check);
         assert_ne!(update_record, default.update_record);
+        assert_ne!(default_output, default.default_output);
     }
 
     // covers: S212
@@ -2661,6 +2715,7 @@ mod tests {
             "hidden_speakers",
             "equalizer_curves",
             "update_record",
+            "default_output",
         ];
         for name in optional {
             assert!(stored.contains_key(name), "{name} is stored");
@@ -3914,5 +3969,41 @@ mod tests {
                 reference_member: false,
             }]
         );
+    }
+
+    // covers: S469
+    #[test]
+    fn the_default_output_record_is_saved_into_the_settings_file_and_deleted() {
+        let path = test_dir("settings-default-output").join(FILE_NAME);
+        let file = SettingsFile::at(path.clone());
+        let settings = Settings {
+            master_volume: 31.0,
+            ..Settings::default()
+        };
+        file.save(&settings).expect("saved");
+        let record = every_field().default_output.expect("a record");
+        let mut store = DefaultRecordFile(Some(path.clone()));
+        store.save(Some(&record)).expect("written");
+        let (read, _) = file.load();
+        assert_eq!(read.default_output.as_ref(), Some(&record));
+        assert_eq!(read.master_volume, 31.0, "the other settings stay");
+        assert_eq!(store.load(), Ok(Some(record)));
+        store.save(None).expect("deleted");
+        assert_eq!(file.load().0.default_output, None);
+        assert!(DefaultRecordFile(None).save(None).is_err());
+    }
+
+    // covers: S469
+    #[test]
+    fn a_settings_file_that_doesnt_read_keeps_no_record_and_stays() {
+        let path = test_dir("settings-default-output-damaged").join(FILE_NAME);
+        fs::write(&path, "{ not settings").expect("written");
+        let record = every_field().default_output.expect("a record");
+        assert!(
+            DefaultRecordFile(Some(path.clone()))
+                .save(Some(&record))
+                .is_err()
+        );
+        assert_eq!(fs::read_to_string(&path).expect("read"), "{ not settings");
     }
 }

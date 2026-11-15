@@ -1183,6 +1183,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             volume_keys: self.view.volume_keys,
             last_update_check: self.view.last_update_check,
             update_record: self.view.update_record.clone(),
+            default_output: self.audio.default_output_record(),
             other_fields: self.saved.other_fields.clone(),
         }
         .clamped()
@@ -4906,8 +4907,11 @@ impl<A: AudioBackend> AudioAdapter<A> {
             device_volume: output
                 .device_volume
                 .and_then(|device_volume| device_volume.hint()),
-            waiting: (output.enabled && self.busy.contains(&output.id))
-                .then_some(Waiting::ForDevice),
+            waiting: if output.enabled && output.plays_original {
+                Some(Waiting::PlaysOriginal)
+            } else {
+                (output.enabled && self.busy.contains(&output.id)).then_some(Waiting::ForDevice)
+            },
             cast: None,
             group: None,
             mic_left_out,
@@ -6211,6 +6215,10 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn shut_down(&mut self) {
         self.audio.shut_down();
+    }
+
+    fn restore_default_output(&mut self) {
+        self.audio.restore_default_output();
     }
 
     fn set_when_source_quits(&mut self, setting: WhenSourceQuits) {
