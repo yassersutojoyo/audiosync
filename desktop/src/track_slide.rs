@@ -533,10 +533,10 @@ mod tests {
         let a = track("Spotify.exe", "A", "Band", true);
         let b = track("Spotify.exe", "B", "Band", true);
         let mut b_cover = b.clone();
-        b_cover.artwork = Some(crate::now_playing_card::CardArtwork {
-            side: 1,
-            rgba: vec![0, 0, 0, 255].into(),
-        });
+        b_cover.artwork = Some(crate::now_playing_card::CardArtwork::new(
+            1,
+            vec![0u8, 0, 0, 255],
+        ));
         let start = Instant::now();
         let mut slide = TrackSlide::new(Place::Window);
         assert!(slide.change(Some(&a), Some(&b), true, false, start));

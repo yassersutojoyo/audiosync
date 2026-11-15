@@ -1,11 +1,9 @@
 //! What the media sessions reader ([`super::media_sessions`]) makes of a
 //! session: its description for track info, and its thumbnail decoded
 //! through the WinRT imaging codecs, as JPEGs for receivers ([`fit_artwork`])
-//! or as the Now Playing card's square tile ([`ARTWORK_SIDE`],
+//! or as the Now Playing card's square tile ([`card_side`],
 //! [`cover_size`]). Decoding works on bytes already read, so it never waits
 //! on the app behind a session.
-
-use std::sync::Arc;
 
 use windows::Foundation::PropertyType;
 use windows::Foundation::PropertyValue;
@@ -34,7 +32,7 @@ use super::com::take_com_string;
 
 use crate::audio::now_playing::{FittedArtwork, MediaSession, fit_artwork};
 use crate::debug_log::DebugLog;
-use crate::now_playing_card::{ARTWORK_SIDE, CardArtwork, cover_size};
+use crate::now_playing_card::{CardArtwork, card_side, cover_size};
 
 /// AudioSync's icon, which receivers show while no track's artwork does.
 pub(super) const ICON_PNG: &[u8] = include_bytes!("../../../res/audiosync-256.png");
@@ -123,7 +121,7 @@ pub(super) fn card_artwork(image: &[u8]) -> windows::core::Result<Option<CardArt
     if width == 0 || height == 0 {
         return Ok(None);
     }
-    let side = ARTWORK_SIDE;
+    let side = card_side(width, height);
     let (scaled_width, scaled_height) = cover_size(width, height, side);
     let transform = BitmapTransform::new()?;
     transform.SetScaledWidth(scaled_width)?;
@@ -148,10 +146,7 @@ pub(super) fn card_artwork(image: &[u8]) -> windows::core::Result<Option<CardArt
     if pixels.len() != (side * side * 4) as usize {
         return Ok(None);
     }
-    Ok(Some(CardArtwork {
-        side,
-        rgba: Arc::from(&pixels[..]),
-    }))
+    Ok(Some(CardArtwork::new(side, &pixels[..])))
 }
 
 /// `bytes` as a stream the imaging codecs can read.
@@ -238,6 +233,12 @@ mod tests {
             artwork.small.len() <= SMALL_ARTWORK.bytes && artwork.small.starts_with(&[0xFF, 0xD8])
         );
         let tile = card_artwork(ICON_PNG).unwrap().expect("the icon fits");
-        assert_eq!(tile.rgba.len(), (tile.side * tile.side * 4) as usize);
+        assert_eq!(tile.side, 256, "the tile keeps the icon's pixels");
+        assert_eq!(
+            tile.bands,
+            crate::ambient::cover_bands(tile.rgba(), tile.side),
+            "the bands are measured where the tile is decoded"
+        );
+        assert_eq!(tile.rgba().len(), (tile.side * tile.side * 4) as usize);
     }
 }

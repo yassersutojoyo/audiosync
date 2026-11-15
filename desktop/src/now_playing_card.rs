@@ -16,11 +16,11 @@
 
 #[cfg(any(windows, target_os = "linux", test))]
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::track_slide::PRESS_WINDOW;
 use crate::ui_model::AppState;
+use crate::window_rules::Rgb;
 
 /// Which sessions count for the card, from the chosen source.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -129,16 +129,57 @@ impl PlayModes {
     }
 }
 
-/// A track's artwork for the card: square, premultiplied RGBA.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A track's artwork for the card: square, premultiplied RGBA, with its
+/// band colours ([`crate::ambient::cover_bands`]).
+#[derive(Clone, Debug)]
 pub struct CardArtwork {
     pub side: u32,
-    pub rgba: Arc<[u8]>,
+    /// Shared with every image the window makes of it, never copied again.
+    pub pixels: slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    pub bands: [Rgb; 3],
 }
 
-/// How many pixels a side the card's artwork has: its 48 px tile at 200 %.
-#[cfg(any(windows, target_os = "linux"))]
-pub const ARTWORK_SIDE: u32 = 96;
+impl CardArtwork {
+    /// Copies the pixels into the window's buffer and measures the bands
+    /// here, on the thread that decoded the cover, so a song change does no
+    /// per-pixel work on the UI thread.
+    pub fn new(side: u32, rgba: impl AsRef<[u8]>) -> Self {
+        let rgba = rgba.as_ref();
+        let bands = crate::ambient::cover_bands(rgba, side);
+        let pixels = slint::SharedPixelBuffer::clone_from_slice(rgba, side, side);
+        Self {
+            side,
+            pixels,
+            bands,
+        }
+    }
+
+    pub fn rgba(&self) -> &[u8] {
+        self.pixels.as_bytes()
+    }
+}
+
+// The bands follow from the pixels.
+impl PartialEq for CardArtwork {
+    fn eq(&self, other: &Self) -> bool {
+        self.side == other.side && self.rgba() == other.rgba()
+    }
+}
+
+impl Eq for CardArtwork {}
+
+/// The most pixels a side the card's artwork has: the main window's widest
+/// cover, 248 px, at 250 %.
+#[cfg(any(windows, target_os = "linux", test))]
+const ARTWORK_SIDE: u32 = 640;
+
+/// How many pixels a side the card's artwork of an image of `width` ×
+/// `height` has: its shorter side, so the window scales it only once, up to
+/// [`ARTWORK_SIDE`].
+#[cfg(any(windows, target_os = "linux", test))]
+pub fn card_side(width: u32, height: u32) -> u32 {
+    width.min(height).clamp(1, ARTWORK_SIDE)
+}
 
 /// The size an image of `width` × `height` is scaled to so that it covers a
 /// `side` × `side` square, the rest cropped evenly, as the Mac's tile fills.
@@ -152,9 +193,10 @@ pub fn cover_size(width: u32, height: u32, side: u32) -> (u32, u32) {
     (scaled(width), scaled(height))
 }
 
-/// Artwork kept for at most this many tracks.
+/// Artwork kept for at most this many tracks: 8 covers of 640 px a side
+/// stay under 14 MB.
 #[cfg(any(windows, target_os = "linux", test))]
-const ARTWORK_CACHE: usize = 32;
+const ARTWORK_CACHE: usize = 8;
 
 /// The card's artwork, made once per track by key. A failed attempt isn't
 /// kept, so the next reading tries again; only a track's first failure is
@@ -551,10 +593,7 @@ mod tests {
     }
 
     fn with_cover(mut track: CardTrack) -> CardTrack {
-        track.artwork = Some(CardArtwork {
-            side: 1,
-            rgba: Arc::from(vec![0u8; 4]),
-        });
+        track.artwork = Some(CardArtwork::new(1, vec![0u8; 4]));
         track
     }
 
@@ -702,19 +741,29 @@ mod tests {
 
     #[test]
     fn artwork_is_scaled_to_cover_the_square_tile() {
-        assert_eq!(cover_size(600, 600, ARTWORK_SIDE), (96, 96));
-        assert_eq!(cover_size(300, 150, ARTWORK_SIDE), (192, 96));
-        assert_eq!(cover_size(100, 333, ARTWORK_SIDE), (96, 320));
-        assert_eq!(cover_size(56, 56, ARTWORK_SIDE), (96, 96), "scaled up");
-        assert_eq!(cover_size(0, 10, ARTWORK_SIDE), (96, 960));
+        assert_eq!(cover_size(600, 600, 96), (96, 96));
+        assert_eq!(cover_size(300, 150, 96), (192, 96));
+        assert_eq!(cover_size(100, 333, 96), (96, 320));
+        assert_eq!(cover_size(56, 56, 96), (96, 96), "scaled up");
+        assert_eq!(cover_size(0, 10, 96), (96, 960));
+    }
+
+    #[test]
+    fn the_cards_artwork_keeps_the_images_pixels_up_to_the_widest_cover() {
+        assert_eq!(card_side(300, 300), 300);
+        assert_eq!(card_side(640, 480), 480);
+        assert_eq!(
+            card_side(56, 56),
+            56,
+            "never scaled up before the window scales it"
+        );
+        assert_eq!(card_side(1000, 1000), ARTWORK_SIDE);
+        assert_eq!(card_side(0, 10), 1);
     }
 
     #[test]
     fn failed_artwork_is_tried_again_and_logged_once() {
-        let art = CardArtwork {
-            side: 1,
-            rgba: Arc::from(&[1, 2, 3, 4][..]),
-        };
+        let art = CardArtwork::new(1, [1u8, 2, 3, 4]);
         let mut cache = ArtworkCache::default();
         assert_eq!(cache.keep("a", Err("busy")), (None, Some("busy")));
         assert_eq!(cache.get("a"), None, "a failure isn't kept");
