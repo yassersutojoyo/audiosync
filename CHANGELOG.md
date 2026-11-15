@@ -9,7 +9,7 @@ User-visible changes in each version. Loosely follows [Keep a Changelog](https:/
 - On Windows, there's an installer, `AudioSync-Setup.exe` for x64 and `AudioSync-Setup-arm64.exe` for Arm, next to the zips. It installs for everyone on the PC by default, or only for you, with a Start menu shortcut and an uninstall entry in Settings > Apps, and a page before the install says what AudioSync sends and what stays on the PC. An install for everyone updates from Download and Install after one administrator prompt per update.
 - On Linux, there's an `.rpm` for Fedora on x86_64.
 - On the Mac, the built-in speakers' row shows a System value where other local rows show their delay. It opens a panel with the macOS volume slider and follows changes you make in macOS.
-- On the Mac, a new Settings switch, Hide Dock Icon When Window Closes, on by default: AudioSync leaves the Dock when its last window closes and keeps running in the menu bar. Opening a window brings the icon back.
+- On the Mac, a new Settings switch, Hide Dock Icon When Window Closes, off by default: turned on, AudioSync leaves the Dock when its last window closes and keeps running in the menu bar. Opening a window brings the icon back.
 
 ### Changed
 
