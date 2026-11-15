@@ -3385,6 +3385,10 @@ impl App {
         let w = weak.clone();
         main.on_refresh_devices(move || with_app(&w, |app| app.update(|b| b.refresh_devices())));
         let w = weak.clone();
+        main.on_presets_open_changed({
+            let w = w.clone();
+            move || with_app(&w, |app| app.remember_view())
+        });
         main.on_show_virtual_devices_toggled(move |on| {
             with_app(&w, |app| app.show_virtual_devices(on))
         });
@@ -4270,6 +4274,7 @@ impl App {
         let saved = backend.view_settings();
         let settings = ViewSettings {
             show_virtual_devices: self.ui.borrow().show_virtual,
+            presets_list_open: self.main.get_presets_open(),
             appearance: self.ui.borrow().appearance,
             window: ui_model::frame_to_keep(self.main_window_shows(), saved.window),
             remote: self.ui.borrow().remote,
@@ -4298,6 +4303,7 @@ impl App {
         self.ui.borrow_mut().last_update_check = saved.last_update_check;
         self.ui.borrow_mut().update_record = saved.update_record.clone();
         self.apply_appearance(saved.appearance);
+        self.main.set_presets_open(saved.presets_list_open);
         let (true, Some(saved_frame)) = (with_frame, saved.window) else {
             return;
         };
@@ -6650,6 +6656,8 @@ fn preset_items(state: &AppState) -> Vec<PresetItem> {
             id: preset.id.as_str().into(),
             name: preset.name.as_str().into(),
             current: state.current_preset.as_deref() == Some(preset.id.as_str()),
+            speakers: count(preset.members.len()),
+            master: preset.master,
         })
         .collect()
 }
@@ -12866,6 +12874,7 @@ mod tests {
                 id: "p1".into(),
                 name: "Evening".into(),
                 current: true,
+                ..PresetItem::default()
             }])));
         app.flyout.show().expect("the flyout shows headless");
         draw_frames();
@@ -17546,26 +17555,23 @@ mod tests {
         assert!(!preset_rows(&app)[0].1);
         press(window, " ");
         draw_frames();
-        press(window, Key::DownArrow);
+        tab(window, 1);
         press(window, Key::Return);
         assert_eq!(
             preset_rows(&app),
             [("Party".into(), true)],
-            "Space on the focused row opened its menu, and its first item recalls Party"
+            "Space on the focused row opened its list, and its first row recalls Party"
         );
 
         app.delete_preset(&ids[1]);
         draw_frames();
-        press(window, " ");
-        draw_frames();
-        // Past the empty line, which can't be chosen.
-        press(window, Key::DownArrow);
-        press(window, Key::DownArrow);
+        assert!(app.main.get_presets_open(), "a delete leaves the list open");
+        tab(window, 1);
         press(window, Key::Return);
         assert_eq!(
             *app.dialog_purpose.borrow(),
             DialogPurpose::SavePreset,
-            "with no preset left, the menu still offers Save as Preset…"
+            "with no preset left, the list still offers Save as Preset…"
         );
     }
 
@@ -17781,21 +17787,18 @@ mod tests {
         app.recall_preset(&ids[0]);
         press(window, " ");
         draw_frames();
-        press(window, Key::DownArrow);
-        press(window, Key::DownArrow);
-        press(window, Key::Return);
-        assert_eq!(
-            preset_rows(&app)[1],
-            ("Party".into(), true),
-            "the Presets row kept the focus and opened its menu"
+        assert!(
+            app.main.get_presets_open(),
+            "the Presets row kept the focus and opened its list"
         );
     }
 
     // covers: S267
     #[test]
-    fn the_menu_key_and_shift_f10_open_the_presets_menu() {
+    fn the_menu_key_and_shift_f10_open_a_listed_presets_menu() {
         let app = main_window_over(MockBackend::new());
         app.save_preset("Evening");
+        app.main.set_presets_open(true);
         draw_frames();
         let window = app.main.window();
 
@@ -17806,10 +17809,9 @@ mod tests {
             &[&[Key::Menu]]
         };
         for &open in opens {
-            app.update(|b| b.set_master_volume(12.0));
-            assert!(!preset_rows(&app)[0].1);
             app.main.set_focus_presets(true);
             draw_frames();
+            tab(window, 1);
             for key in open {
                 window.dispatch_event(WindowEvent::KeyPressed {
                     text: (*key).into(),
@@ -17824,12 +17826,139 @@ mod tests {
             press(window, Key::DownArrow);
             press(window, Key::Return);
             assert_eq!(
-                preset_rows(&app)[0],
-                ("Evening".into(), true),
-                "{open:?}: the menu opened, and its first item recalls Evening"
+                *app.dialog_purpose.borrow(),
+                DialogPurpose::RenamePreset(preset_ids(&app)[0].clone()),
+                "{open:?}: the menu opened, and its first item is Rename…"
             );
-            app.update(|b| b.set_master_volume(40.0));
+            app.zone_dialog.hide().expect("the dialog hides");
         }
+    }
+
+    // covers: S259, S264
+    #[test]
+    fn the_presets_list_folds_open_recalls_and_folds_by_keyboard() {
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        app.main.set_focus_presets(true);
+        draw_frames();
+        press(window, Key::Return);
+        draw_frames();
+        assert!(app.main.get_presets_open());
+        tab(window, 1);
+        press(window, " ");
+        assert_eq!(
+            *app.dialog_purpose.borrow(),
+            DialogPurpose::SavePreset,
+            "an empty list holds only Save as Preset…"
+        );
+        app.zone_dialog.hide().expect("the dialog hides");
+
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+        app.save_preset("Party");
+        draw_frames();
+        assert_eq!(
+            preset_rows(&app),
+            [("Evening".into(), false), ("Party".into(), true)],
+            "list order, the one that plays now marked"
+        );
+
+        app.main.set_focus_presets(true);
+        draw_frames();
+        tab(window, 1);
+        press(window, Key::Return);
+        assert_eq!(preset_rows(&app)[0], ("Evening".into(), true), "Return");
+        // Past Evening's … button.
+        tab(window, 2);
+        press(window, " ");
+        assert_eq!(preset_rows(&app)[1], ("Party".into(), true), "Space");
+
+        press(window, Key::Escape);
+        draw_frames();
+        assert!(!app.main.get_presets_open(), "Escape folded it");
+        press(window, " ");
+        assert!(
+            app.main.get_presets_open(),
+            "the Presets row took the focus back"
+        );
+    }
+
+    // covers: S259
+    #[test]
+    fn a_listed_preset_says_how_many_speakers_it_holds_and_its_master() {
+        let app = app_over(MockBackend::new());
+        app.update(|b| b.set_master_volume(79.6));
+        app.save_preset("Evening");
+        let row = app.main.get_presets().row_data(0).expect("a row");
+        let strings = app.strings();
+        assert_eq!(
+            strings.invoke_preset_summary(row.speakers, row.master),
+            format!(
+                "{} speaker{}, master 80%",
+                row.speakers,
+                if row.speakers == 1 { "" } else { "s" }
+            )
+        );
+        assert_eq!(
+            strings.invoke_preset_summary(1, 80),
+            "1 speaker, master 80%"
+        );
+        assert_eq!(strings.invoke_preset_summary(2, 5), "2 speakers, master 5%");
+    }
+
+    // covers: S259
+    #[test]
+    fn the_presets_list_stays_open_or_folded_across_launches() {
+        let app = app_over(MockBackend::new());
+        assert!(!app.main.get_presets_open(), "it starts folded");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let saved = app.backend.borrow().view_settings();
+        assert!(saved.presets_list_open);
+
+        let mut backend = MockBackend::new();
+        backend.set_view_settings(saved);
+        let app = app_over(backend);
+        assert!(app.main.get_presets_open());
+    }
+
+    // covers: S259
+    #[test]
+    fn above_five_presets_the_list_scrolls_and_a_new_one_scrolls_into_view() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        app.main.set_presets_open(true);
+        for n in 0..5 {
+            app.update(|b| b.set_master_volume(f64::from(10 * n)));
+            app.save_preset("");
+        }
+        draw_frames();
+        let list = || {
+            ElementHandle::find_by_element_id(&app.main, "PresetsCard::scroll")
+                .next()
+                .expect("the list")
+        };
+        let five = list().size().height;
+        assert!(
+            (five - 6.0 * 40.0).abs() < 1.0,
+            "five rows and Save as Preset… show whole: {five}"
+        );
+
+        app.update(|b| b.set_master_volume(77.0));
+        app.save_preset("");
+        draw_frames();
+        let view = list();
+        assert!(
+            (view.size().height - 5.5 * 40.0).abs() < 1.0,
+            "half a row past the fifth: {}",
+            view.size().height
+        );
+        assert!(
+            ElementHandle::find_by_accessible_label(&app.main, "Save as Preset…")
+                .next()
+                .is_some(),
+            "the new preset and Save as Preset… scrolled into view"
+        );
     }
 
     #[test]

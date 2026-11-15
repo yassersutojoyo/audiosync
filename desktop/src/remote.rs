@@ -1512,12 +1512,14 @@ pub(crate) mod tests {
                 name: "Evening".into(),
                 current: true,
                 members: vec!["desk".into()],
+                master: 50,
             },
             PresetItem {
                 id: "preset:b".into(),
                 name: "Party".into(),
                 current: false,
                 members: vec!["tv".into(), "kitchen".into()],
+                master: 50,
             },
         ];
         state

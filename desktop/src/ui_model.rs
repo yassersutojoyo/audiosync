@@ -976,6 +976,7 @@ pub fn show_presets(
                 .iter()
                 .map(|member| member.key.clone())
                 .collect(),
+            master: preset.master.round() as i32,
         })
         .collect();
 }
@@ -1117,6 +1118,8 @@ pub struct PresetItem {
     pub current: bool,
     /// The stored members' keys, in order.
     pub members: Vec<String>,
+    /// Its master volume, 0 to 100, rounded as the Presets list shows it.
+    pub master: i32,
 }
 
 /// Calibrate All Speakers (spec S235 to S240): where a run stands and the
@@ -1929,6 +1932,8 @@ pub fn frame_to_keep(shows: MainWindowShows, saved: Option<WindowFrame>) -> Opti
 pub struct ViewSettings {
     /// View > Show Virtual Devices.
     pub show_virtual_devices: bool,
+    /// The main window's Presets list is open (spec S259).
+    pub presets_list_open: bool,
     /// View > Appearance.
     pub appearance: Appearance,
     /// The main window's place and size, once it has been shown.
