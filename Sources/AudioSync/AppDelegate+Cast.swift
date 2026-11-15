@@ -369,9 +369,16 @@ extension AppDelegate {
                                          hasReading: nowPlaying.hasReading, icon: nil, shows: castShows)
         if let fields = step.fields { sender.setTrack(fields) }
         if let date = step.recheckAt { recheckTrackInfo(at: date) }
+        guard step.fields != nil || step.picture != nil else { return }
+        let turn = castArtDelay.sent()
         guard let picture = step.picture else { return }
+        let wait = receiverArtWait
         // Encoded on the sender's queue, so it gets an image of its own.
-        sender.setArtwork(picture.copy() as? NSImage ?? picture)
+        guard wait > 0 else { return sender.setArtwork(picture.copy() as? NSImage ?? picture) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+            guard let self, self.castArtDelay.isCurrent(turn) else { return }
+            self.castSender?.setArtwork(picture.copy() as? NSImage ?? picture)
+        }
     }
 
     private func castShows() -> (info: ReceiverInfo, artwork: NSImage?) {

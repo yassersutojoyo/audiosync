@@ -43,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let nowPlaying = NowPlayingMonitor()
     /// Since when the views keep the last song up for the next one's cover (`ArtHold`).
     var artHeldSince: TimeInterval?
+    /// When the window last slid another song in; receivers' covers wait for the slide (`ArtPushDelay`).
+    var songShownAt: TimeInterval?
+    var airPlayArtDelay = ArtPushDelay()
+    var castArtDelay = ArtPushDelay()
     let localNetworkProbe = LocalNetworkProbe()
     /// The own volume and mute of the local outputs that are on (`+DeviceVolume`).
     private(set) lazy var deviceVolumes = makeDeviceVolumes()

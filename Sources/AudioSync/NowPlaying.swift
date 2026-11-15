@@ -426,6 +426,7 @@ final class NowPlayingMonitor {
     private var artworkCache = ArtCache<NSImage>()      // "bundleID|title|album" or cover URL → image
     private var aheadOf: String?                         // the song whose next covers were read
     private var artRead = ArtRead()
+    private var artFetches = ArtFetches()
     private var artLogged = ""
     private var lastCode: Int?                           // the last script's error number, nil when it ran
     private let commandLock = NSLock()
@@ -576,6 +577,8 @@ final class NowPlayingMonitor {
                 }
                 if found != nil { break }
             }
+            // Read here after the players, so the main thread's part asks for no list of running apps.
+            let running = Dictionary(candidates.map { ($0, Self.isRunning($0)) }, uniquingKeysWith: { first, _ in first })
             var next = found ?? Self.pausedPick(paused, lastPlayed: lastPlayed)
             if var t = next {
                 (t.artwork, t.artPending) = self.artwork(for: t)
@@ -594,7 +597,7 @@ final class NowPlayingMonitor {
                 let promised = self.pending.reconcile(next, readAt: readAt)
                 let last = self.track
                 let lastIsCandidate = last.map { self.candidates().contains($0.bundleID) } ?? false
-                let lastRuns = last.map { Self.isRunning($0.bundleID) } ?? false
+                let lastRuns = last.map { running[$0.bundleID] ?? Self.isRunning($0.bundleID) } ?? false
                 let lastPlayerRuns = lastIsCandidate && lastRuns
                 let lastPlayer = last.flatMap { empties[$0.bundleID] } ?? .unreadable
                 let shown = self.emptyReadings.next(reading: promised, last: last, lastPlayerRuns: lastPlayerRuns,
@@ -775,6 +778,7 @@ final class NowPlayingMonitor {
             return (cached, false)
         }
         if t.bundleID == Self.spotify {
+            guard !artFetches.isFetching(key) else { return (nil, true) }
             // Spotify hands out a URL; fetch it, then fill the track in later.
             let script = """
                 with timeout of 2 seconds
@@ -790,13 +794,20 @@ final class NowPlayingMonitor {
                     return (cached, false)
                 }
                 artLog("Now Playing art: \(song) miss, fetching its cover address")
-                let fetch = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-                    guard let self, let data, let image = Self.cover(data) else {
+                artFetches.start(key)
+                // A stalled fetch would hold the song's later readings off until URLSession's 60 s default.
+                let fetch = URLSession.shared.dataTask(with: URLRequest(url: url, timeoutInterval: 4)) { [weak self] data, _, _ in
+                    guard let self else { return }
+                    guard let data, let image = Self.cover(data) else {
                         DebugTrace.log("Now Playing art: \(song) fetch gave no picture")
+                        self.scripts.async { self.artFetches.ended(key) }
                         return
                     }
                     DebugTrace.log("Now Playing art: \(song) fetched, \(Self.pixels(image)), \(data.count) bytes")
-                    self.scripts.async { self.artworkCache.store(image, track: key, address: s) }
+                    self.scripts.async {
+                        self.artworkCache.store(image, track: key, address: s)
+                        self.artFetches.ended(key)
+                    }
                     DispatchQueue.main.async {
                         guard var current = self.track, current.bundleID == t.bundleID,
                               current.title == t.title, current.album == t.album else {
@@ -869,7 +880,9 @@ final class NowPlayingMonitor {
                   kCGImageSourceThumbnailMaxPixelSize: 1000,
               ] as CFDictionary)
         else { return nil }
-        let cover = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        // One bitmap of exactly the decoded pixels, so no view draws or keeps a larger copy (S468).
+        let cover = NSImage(size: NSSize(width: image.width, height: image.height))
+        cover.addRepresentation(NSBitmapImageRep(cgImage: image))
         if let bands = CoverBands.measure(image) { CoverBands.record(bands, for: cover) }
         return cover
     }
@@ -1021,6 +1034,39 @@ enum CoverBands {
             return CGColor(srgbRed: channel(0), green: channel(1), blue: channel(2), alpha: channel(3))
         }
     }
+}
+
+/// Spotify covers being fetched, by song, so the readings made while one is on its way start no second fetch (S468).
+struct ArtFetches {
+    private var songs: Set<String> = []
+
+    func isFetching(_ song: String) -> Bool { songs.contains(song) }
+
+    /// False when `song`'s cover is already on its way.
+    @discardableResult
+    mutating func start(_ song: String) -> Bool { songs.insert(song).inserted }
+
+    mutating func ended(_ song: String) { _ = songs.remove(song) }
+}
+
+/// A cover for the receivers waits until the main window's slide of the new song has ended,
+/// and is dropped when newer track info or another cover went to the same sender first (S468).
+struct ArtPushDelay {
+    private(set) var turn = 0
+
+    /// How long a cover waits, `sinceSongShown` seconds after the window slid another song in; nil for no slide.
+    static func wait(sinceSongShown: TimeInterval?, reduceMotion: Bool = false) -> TimeInterval {
+        guard let since = sinceSongShown else { return 0 }
+        return max(0, TrackSlide.seconds(.window, reduceMotion: reduceMotion) - since)
+    }
+
+    /// Track info or a cover went to the sender; returns the turn a waiting cover must still hold.
+    mutating func sent() -> Int {
+        turn += 1
+        return turn
+    }
+
+    func isCurrent(_ asked: Int) -> Bool { asked == turn }
 }
 
 /// Covers already loaded, by track and by the cover's address, so the next
