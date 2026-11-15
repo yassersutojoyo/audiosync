@@ -19344,7 +19344,7 @@ do {
             && !turn.showsOld && turn.scale == PlayPauseMorph.outScale && turn.opacity == 0
             && !done.showsOld && done.scale == 1 && done.opacity == 1,
           "play/pause morph: the old icon shrinks and fades, then the new one grows in")
-    let peak = stride(from: 0.1, through: 0.26, by: 0.005).map { PlayPauseMorph.look(after: $0).scale }.max() ?? 0
+    let peak: Double = stride(from: 0.1, through: 0.26, by: 0.005).map { PlayPauseMorph.look(after: $0).scale }.max() ?? 0.0
     check(peak > 1 && peak < 1.1, "play/pause morph: the new icon overshoots slightly before it settles")
     let morphWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     check(morphWindow.contains("SymbolMorph(symbol: symbol)") && morphWindow.contains("PlayPauseMorph.look("),
