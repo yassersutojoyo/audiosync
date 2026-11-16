@@ -177,6 +177,18 @@ final class NowPlayingMonitor {
         }
     }
 
+    /// The running apps' bundle IDs, kept on the main thread from macOS's launch
+    /// and terminate notices, apart from AppKit so the logic suite can drive it.
+    struct RunningPlayers {
+        private var ids: Set<String>
+
+        init(_ ids: [String]) { self.ids = Set(ids) }
+
+        func runs(_ bundleID: String) -> Bool { ids.contains(bundleID) }
+        mutating func launched(_ bundleID: String?) { if let bundleID { ids.insert(bundleID) } }
+        mutating func terminated(_ bundleID: String?) { if let bundleID { ids.remove(bundleID) } }
+    }
+
     /// What one player answered.
     enum Answer {
         case track(Track)
@@ -366,6 +378,17 @@ final class NowPlayingMonitor {
 
     init(noticeCenter: NotificationCenter = DistributedNotificationCenter.default()) {
         self.noticeCenter = noticeCenter
+        let center = NSWorkspace.shared.notificationCenter
+        appObservers.append(center.addObserver(forName: NSWorkspace.didLaunchApplicationNotification,
+                                               object: nil, queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            self?.runningPlayers.launched(app?.bundleIdentifier)
+        })
+        appObservers.append(center.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
+                                               object: nil, queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            self?.runningPlayers.terminated(app?.bundleIdentifier)
+        })
     }
 
     /// Posted by Music and Spotify when their track or play state changes.
@@ -411,6 +434,9 @@ final class NowPlayingMonitor {
     private var emptyReadings = EmptyReadings()
     private var played = LastPlayed()
     private var pending = PendingPlayPause()
+    // Off the main thread the running-app list has missed a running Spotify (debug log, 2026-11-16).
+    private var runningPlayers = RunningPlayers(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+    private var appObservers: [NSObjectProtocol] = []
     /// The player seen playing last since the source was chosen (`LastPlayed`).
     var lastPlayedBundleID: String? { played.bundleID }
 
@@ -509,7 +535,7 @@ final class NowPlayingMonitor {
 
     /// The player `send` drives now, by bundle ID: the one read, else the
     /// first supported player that runs; nil for none (main thread).
-    var controlledBundleID: String? { track?.bundleID ?? candidates().first(where: Self.isRunning) }
+    var controlledBundleID: String? { track?.bundleID ?? candidates().first(where: { runningPlayers.runs($0) }) }
 
     func send(_ command: Command) {
         guard let bundleID = controlledBundleID else { return }
@@ -551,6 +577,7 @@ final class NowPlayingMonitor {
         let lastPlayed = played.bundleID
         let startedAt = Date()
         let mayAsk = mayRaisePrompt
+        let running = runningPlayers
         scripts.async { [weak self] in
             guard let self else { return }
             // Here, not on main: a refresh queued behind a slow command reads after it landed.
@@ -560,7 +587,7 @@ final class NowPlayingMonitor {
             var empties: [String: EmptyReadings.Empty] = [:]
             var held = false
             for bundleID in candidates {
-                switch self.consent.step(bundleID, running: Self.isRunning(bundleID), mayAsk: mayAsk) {
+                switch self.consent.step(bundleID, running: running.runs(bundleID), mayAsk: mayAsk) {
                 case .read: break
                 case .wait: continue
                 case .hold:
@@ -577,8 +604,6 @@ final class NowPlayingMonitor {
                 }
                 if found != nil { break }
             }
-            // Read here after the players, so the main thread's part asks for no list of running apps.
-            let running = Dictionary(candidates.map { ($0, Self.isRunning($0)) }, uniquingKeysWith: { first, _ in first })
             var next = found ?? Self.pausedPick(paused, lastPlayed: lastPlayed)
             if var t = next {
                 (t.artwork, t.artPending) = self.artwork(for: t)
@@ -597,7 +622,7 @@ final class NowPlayingMonitor {
                 let promised = self.pending.reconcile(next, readAt: readAt)
                 let last = self.track
                 let lastIsCandidate = last.map { self.candidates().contains($0.bundleID) } ?? false
-                let lastRuns = last.map { running[$0.bundleID] ?? Self.isRunning($0.bundleID) } ?? false
+                let lastRuns = last.map { self.runningPlayers.runs($0.bundleID) } ?? false
                 let lastPlayerRuns = lastIsCandidate && lastRuns
                 let lastPlayer = last.flatMap { empties[$0.bundleID] } ?? .unreadable
                 let shown = self.emptyReadings.next(reading: promised, last: last, lastPlayerRuns: lastPlayerRuns,
@@ -637,10 +662,6 @@ final class NowPlayingMonitor {
     // MARK: - Scripting (scripts queue)
 
     private func candidates() -> [String] { players }
-
-    private static func isRunning(_ bundleID: String) -> Bool {
-        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
-    }
 
     /// Gets the player's name. `mayPrompt`: waits up to `AutomationConsent.sendTimeout` for the user to answer
     /// macOS's prompt; otherwise macOS answers -1744 instead of prompting.
