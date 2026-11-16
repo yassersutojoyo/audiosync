@@ -25,7 +25,7 @@ use crate::ui_model::{
 /// The lowest port the setting takes: below it are the well-known services.
 pub const MIN_PORT: u16 = 1024;
 
-/// View > Web Remote, as the settings file keeps it.
+/// Web Remote, as the settings file keeps it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RemoteSettings {

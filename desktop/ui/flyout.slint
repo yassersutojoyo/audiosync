@@ -301,7 +301,7 @@ component FlyoutRow inherits Rectangle {
     // The row gained (true) or lost (false) keyboard focus.
     callback focus-changed(bool);
 
-    min-height: 38px;
+    min-height: 36px;
     border-radius: Fluent.radius-control;
     background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
     animate background { duration: Fluent.fast; }
@@ -738,7 +738,7 @@ export component TrayFlyout inherits Window {
     title: Strings.flyout-title;
     no-frame: true;
     always-on-top: true;
-    width: 340px;
+    width: 300px;
     // True once Windows draws the flyout's rounded frame (border and shadow).
     in property <bool> rounded;
     // Set false then true by the app as the flyout opens: its parts fade in
@@ -768,7 +768,7 @@ export component TrayFlyout inherits Window {
     // sizes the window to: Slint's own preferred height counts a wrapped
     // notice as one line. The parts sit at the top, so this holds at any
     // window height.
-    out property <length> fit-height: root.footer-bottom + 16px;
+    out property <length> fit-height: root.footer-bottom + 12px;
     // Each frame of a zone's fold changes it; the app then sizes the window
     // again, so no gap opens under the rows and nothing is cut.
     callback fit-height-changed();
@@ -826,7 +826,8 @@ export component TrayFlyout inherits Window {
 
         VerticalLayout {
             alignment: start;
-            padding: Fluent.card-padding;
+            padding: 14px;
+            padding-bottom: 8px;
             spacing: 8px;
 
             header-part := IntroPart {
@@ -1288,9 +1289,9 @@ export component TrayFlyout inherits Window {
                         revealed: root.revealed;
 
                         list-view := OverlayScrollView {
-                            // Every row; on a screen too short for them it scrolls, three
-                            // rows at least.
-                            height: min(list.preferred-height, max(108px, list.preferred-height - root.list-cut));
+                            // Every row; on a screen too short for them it scrolls, six
+                            // rows at least, as the Mac panel's.
+                            height: min(list.preferred-height, max(6 * 36px, list.preferred-height - root.list-cut));
 
                             list := VerticalLayout {
                                 for zone in root.zones: VerticalLayout {

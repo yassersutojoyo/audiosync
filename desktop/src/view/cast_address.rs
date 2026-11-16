@@ -45,7 +45,7 @@ impl App {
             });
     }
 
-    /// Speakers > Add by Address…, or the link under the note that no
+    /// The speaker list's Add by Address… link, or the one under the note that no
     /// Google Cast speaker was found.
     pub(super) fn ask_cast_address(&self) {
         self.stop_cast_check();

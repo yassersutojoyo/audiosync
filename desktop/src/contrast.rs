@@ -771,8 +771,8 @@ fn every_icon_has_a_drawing_off_windows() {
 #[test]
 fn keyboard_shortcuts_are_declared() {
     let main = include_str!("../ui/main.slint");
-    for keys in ["\"Ctrl+W\")", "\"Ctrl+N\")", "\"Ctrl+E\")", "\"F5\")"] {
-        assert!(main.contains(keys), "the menus show {keys}");
+    for keys in ["\"Ctrl+N\";", "\"F5\";", "\"Ctrl+,\";", "\"Ctrl+Q\";"] {
+        assert!(main.contains(keys), "the gear's menu shows {keys}");
     }
     for (file, source) in UI_FILES {
         if source.contains("inherits Window") && !source.contains("public function shortcut(") {
@@ -1220,7 +1220,7 @@ fn stuck_notices_say_what_to_do_next() {
 }
 
 /// A text that asks the user to start AudioSync again says so in the words
-/// of File > Exit, never quit and reopen or restart.
+/// of the gear's Exit, never quit and reopen or restart.
 #[test]
 fn texts_say_exit_to_start_audiosync_again() {
     let strings = include_str!("../ui/strings.slint");
@@ -1246,16 +1246,17 @@ fn no_text_asks_for_a_pin() {
     }
 }
 
-/// Help > AudioSync Guide (F1) opens the Guide, which spells out no text of
+/// AudioSync Guide in the gear's menu (F1) opens the Guide, which spells out no text of
 /// its own, closes on Escape, and keeps every paragraph's full height.
 #[test]
 fn the_audiosync_guide_is_wired_and_worded_in_strings() {
     let main = include_str!("../ui/main.slint");
     let item = main
-        .find("title: Strings.with-keys(Strings.help-title, \"F1\");")
-        .expect("the Help menu has the Guide, with F1");
-    let item = &main[item..item + 200];
-    assert!(item.contains("root.help-requested();"));
+        .find("text: Strings.help-title;\n                keys: \"F1\";")
+        .expect("the gear's menu has the Guide, with F1");
+    let item = &main[item..item + 400];
+    assert!(item.contains("root.guide();"));
+    assert!(main.contains("root.help-requested();"));
     // A Windows checkout may end the lines of main.slint with CRLF.
     assert!(main.replace("\r\n", "\n").contains(
         "if text == Key.F1 {
@@ -1312,7 +1313,7 @@ fn the_audiosync_guide_is_wired_and_worded_in_strings() {
     assert!(help.contains("source: Tokens.dark ? root.dark : root.light;"));
 }
 
-/// The Windows and Linux Guides say what Several Apps opens and describe
+/// The Windows and Linux Guides say where Several Apps is and describe
 /// the Now Playing card, as the Mac Guide does.
 // covers: S416
 #[test]
@@ -1325,7 +1326,10 @@ fn the_guide_describes_several_apps_and_now_playing_on_both_hosts() {
             .unwrap_or_else(|| panic!("strings.slint has {name}"))
     };
     for suffix in ["", "-linux"] {
-        assert!(text(&format!("help-start{suffix}")).contains("Several Apps opens a list"));
+        assert!(
+            text(&format!("help-start{suffix}"))
+                .contains("Several Apps, at the end of the source menu")
+        );
         assert!(text(&format!("help-more{suffix}")).contains("the Now Playing card"));
     }
 }
@@ -1762,12 +1766,12 @@ fn the_updater_notice_uses_strings_and_tokens() {
             );
         }
     }
-    let main = include_str!("../ui/main.slint");
+    let settings = include_str!("../ui/settings.slint");
     for title in [
-        "title: Strings.check-updates-automatically;",
-        "title: Strings.menu-check-for-updates;",
+        "text: Strings.check-updates-automatically;",
+        "text: Strings.menu-check-for-updates;",
     ] {
-        assert!(main.contains(title), "main.slint has {title}");
+        assert!(settings.contains(title), "settings.slint has {title}");
     }
     let strings = include_str!("../ui/strings.slint");
     for label in [
@@ -1903,7 +1907,10 @@ fn the_preset_and_equalizer_rows_name_their_choice_on_a_second_line() {
     }
     let main = include_str!("../ui/main.slint");
     for (part, text) in [
-        (component_body(main, "PresetsCard"), "text: root.current;"),
+        (
+            component_body(main, "PresetsCard"),
+            "text: root.presets.length == 0 ? Strings.no-presets : root.current;",
+        ),
         (
             component_body(main, "EqualizerCard"),
             "text: root.on ? root.curve : \"\";",

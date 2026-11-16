@@ -9,8 +9,8 @@
 //! AirPlay speakers by the ID they announce), the AirPlay delay adjustment,
 //! the master volume, the
 //! auto-connect marks, the names the user gave speakers, the groups, the
-//! zones, the speaker presets, the equalizer, View > Show Virtual Devices, View > Appearance, the main
-//! window's place and size, and View > Web Remote with its port.
+//! zones, the speaker presets, the equalizer, Settings > Show Virtual Devices, Settings > Appearance, the main
+//! window's place and size, and Web Remote with its port.
 //!
 //! The file carries a format version ([`VERSION`]). A file from an older
 //! version is read for the fields it has; one from a newer version, one that
@@ -125,7 +125,7 @@ pub const MAX_WINDOW: (f64, f64) = (16_384.0, 16_384.0);
 /// pixels: Windows' own coordinate range.
 pub const MAX_POSITION: i32 = 32_000;
 
-/// View > Appearance: every window light or dark, or as Windows is set.
+/// Settings > Appearance: every window light or dark, or as Windows is set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Appearance {
@@ -815,13 +815,13 @@ pub struct Settings {
         deserialize_with = "curves_that_read"
     )]
     pub equalizer_curves: Vec<SavedCurve>,
-    /// View > Show Virtual Devices.
+    /// Settings > Show Virtual Devices.
     #[serde(deserialize_with = "bool_or_false")]
     pub show_virtual_devices: bool,
     /// The main window's Presets list is open (spec S259).
     #[serde(deserialize_with = "bool_or_false")]
     pub presets_list_open: bool,
-    /// View > Appearance.
+    /// Settings > Appearance.
     pub appearance: Appearance,
     /// The main window's place and size, once it has been shown; an
     /// unreadable one gives the default place and size.
@@ -844,7 +844,7 @@ pub struct Settings {
     /// stores it: `stop` or `system` (spec S227).
     #[serde(deserialize_with = "or_default")]
     pub when_source_quits: String,
-    /// View > Web Remote: whether it is on, and its port.
+    /// Web Remote: whether it is on, and its port.
     #[serde(deserialize_with = "or_default")]
     pub remote: RemoteSettings,
     /// The Google Cast speakers added by address (spec C18), as
@@ -864,13 +864,13 @@ pub struct Settings {
         deserialize_with = "or_default"
     )]
     pub cast_on: Option<String>,
-    /// File > Check for Updates Automatically (spec S305), on by default.
+    /// Settings > Check for Updates Automatically (spec S305), on by default.
     #[serde(deserialize_with = "bool_or_true")]
     pub check_updates_automatically: bool,
-    /// Speakers > Volume Keys Control AudioSync (spec S429), on by default.
+    /// Settings > Volume Keys Control AudioSync (spec S429), on by default.
     #[serde(deserialize_with = "bool_or_true")]
     pub volume_keys: bool,
-    /// File > Resume Playback After Sleep (spec S465), off by default.
+    /// Settings > Resume Playback After Sleep (spec S465), off by default.
     #[serde(deserialize_with = "bool_or_false")]
     pub resume_after_sleep: bool,
     /// The last update check that read the appcast, in seconds since the

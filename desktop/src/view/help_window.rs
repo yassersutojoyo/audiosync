@@ -1,5 +1,5 @@
 //! The AudioSync Guide (`ui/help.slint`): how to use the Windows app, opened
-//! from Help > AudioSync Guide (F1). There is one Guide window, made with the
+//! from the gear's AudioSync Guide (F1). There is one Guide window, made with the
 //! App; opening it again brings that window to the front at the top. Its
 //! Show How opens the double-audio notice's own guide, and shows only while
 //! that notice does.
@@ -138,7 +138,7 @@ mod tests {
         assert!(!window.is_visible());
         app.main.invoke_help_requested();
         draw_frames();
-        assert!(window.is_visible(), "Help > AudioSync Guide opens it");
+        assert!(window.is_visible(), "AudioSync Guide opens it");
         assert!(
             !app.guide.window().is_visible(),
             "not the double-audio guide"

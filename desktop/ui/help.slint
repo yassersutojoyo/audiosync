@@ -1,4 +1,4 @@
-// The Guide, opened from Help > AudioSync Guide (F1): how to use AudioSync on
+// The Guide, opened from the gear's AudioSync Guide (F1): how to use AudioSync on
 // Windows, one section per topic, in the Mac Guide's order, with double
 // audio (a Windows topic) last. Escape or Close closes it; the arrow keys,
 // Page Up, Page Down, Space, Home and End scroll it. Show How in the
@@ -70,7 +70,7 @@ export component HelpWindow inherits Window {
     private property <string> airplay-body: Platform.os == OperatingSystemType.linux ? Strings.help-airplay-linux : Strings.help-airplay;
     callback show-how-requested();
     callback close-requested();
-    // Ctrl+Q, File > Exit from this window.
+    // Ctrl+Q, the gear's Exit, from this window.
     callback exit-requested();
     // Ctrl+1 to Ctrl+9: recall the preset in that place (spec S261).
     callback preset-shortcut(int);

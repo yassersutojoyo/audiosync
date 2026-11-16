@@ -5,13 +5,13 @@
 // Its own top row carries the menus and the window buttons. Tab order
 // follows the reading order.
 
-import { Button, CheckBox, ComboBox, Spinner } from "std-widgets.slint";
+import { Button, Spinner } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IconLook, IncomingCover, OutgoingSong, SlideLook, SlidLine, TrackMotion } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, TextField, FadeScrollView, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, MenuDivider, MenuNote, MenuPanel, MenuRow, TextField, FadeScrollView, FoldPane, BrandMark, Card, CardTitle, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -21,6 +21,7 @@ export { GuideWindow } from "guide.slint";
 export { HelpWindow } from "help.slint";
 export { RemoteWindow } from "remote.slint";
 export { SetupWindow } from "setup.slint";
+export { SettingsWindow } from "settings.slint";
 export { Strings } from "strings.slint";
 export { Fold, KeyboardFocus, Motion, NameField, ScreenReader } from "widgets.slint";
 // The style's palette, for the theme preview (src/view.rs).
@@ -46,26 +47,18 @@ component SourceMenu inherits Rectangle {
     in property <[string]> sources;
     in property <int> index;
     in property <bool> is-input;
+    in property <[MixAppItem]> mix-apps;
+    in property <bool> mix-all-except;
     out property <bool> has-focus: focus.has-focus;
     callback chosen(int);
+    callback mix-mode-selected(bool);
+    callback mix-app-toggled(int);
+    // Several Apps' rows show under it.
+    property <bool> mix-expanded;
 
-    // Windows' native menu returns from show() once closed, and the press
-    // that closed it then reaches this button: that click must not reopen it.
-    property <bool> just-closed;
-
-    function open-menu() {
-        menu.show({ x: 0, y: root.height });
-        root.just-closed = true;
-        reopen-guard.start();
-    }
-
-    reopen-guard := Timer {
-        interval: 300ms;
-        running: false;
-        triggered => {
-            root.just-closed = false;
-            self.stop();
-        }
+    public function open-menu() {
+        root.mix-expanded = false;
+        menu.show();
     }
 
     min-height: row.preferred-height;
@@ -81,61 +74,152 @@ component SourceMenu inherits Rectangle {
 
     touch := TouchArea {
         clicked => {
-            if !root.just-closed {
-                root.open-menu();
-            }
+            root.open-menu();
         }
 
-        menu := ContextMenuArea {
-            Menu {
-                for name[i] in root.sources: MenuItem {
-                    title: name;
-                    checkable: true;
-                    checked: i == root.index;
-                    activated => {
-                        root.chosen(i);
-                    }
+        focus := FocusScope {
+            focus-on-click: false;
+            key-pressed(event) => {
+                if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
+                    root.open-menu();
+                    return accept;
+                }
+                return reject;
+            }
+
+            row := HorizontalLayout {
+                padding-left: 10px;
+                padding-right: 10px;
+                padding-top: 8px;
+                padding-bottom: 8px;
+                spacing: 8px;
+
+                Glyph {
+                    glyph: root.is-input ? Glyphs.microphone : Glyphs.volume-high;
+                    color: Tokens.teal-text;
+                    font-size: 20px;
+                }
+
+                Text {
+                    text: root.sources[root.index];
+                    color: Tokens.text;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+
+                Glyph {
+                    glyph: Glyphs.chevron-down;
+                    font-size: 9px;
+                    color: Tokens.text;
+                }
+            }
+        }
+    }
+
+    // The Mac's source menu: the sources, then Several Apps, whose rows
+    // unfold under it.
+    menu := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: max(root.width, 240px);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            property <int> sources: root.sources.length;
+            count: self.sources + 1 + (root.mix-expanded ? 2 + root.mix-apps.length : 0);
+            close-requested(refocus) => {
+                menu.close();
+                if refocus {
+                    root.focus();
                 }
             }
 
-            focus := FocusScope {
-                focus-on-click: false;
-                key-pressed(event) => {
-                    if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
-                        root.open-menu();
-                        return accept;
-                    }
-                    return reject;
+            for name[i] in root.sources: MenuRow {
+                index: i;
+                text: name;
+                checks: true;
+                checked: i == root.index;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.chosen(i);
                 }
+            }
 
-                row := HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    padding-top: 8px;
-                    padding-bottom: 8px;
-                    spacing: 8px;
+            MenuDivider { }
 
-                    Glyph {
-                        glyph: root.is-input ? Glyphs.microphone : Glyphs.volume-high;
-                        color: Tokens.teal-text;
-                        font-size: 20px;
-                    }
-
-                    Text {
-                        text: root.sources[root.index];
-                        color: Tokens.text;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                        vertical-alignment: center;
-                        accessible-role: none;
-                    }
-
-                    Glyph {
-                        glyph: Glyphs.chevron-down;
-                        font-size: 9px;
-                        color: Tokens.text;
-                    }
+            MenuRow {
+                index: panel.sources;
+                text: Strings.source-mix-title;
+                checks: true;
+                submenu: true;
+                expanded: root.mix-expanded;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.mix-expanded = !root.mix-expanded;
                 }
+            }
+
+            if root.mix-expanded: MenuRow {
+                index: panel.sources + 1;
+                text: Strings.source-mix-only;
+                checks: true;
+                checked: !root.mix-all-except;
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.mix-mode-selected(false);
+                }
+            }
+
+            if root.mix-expanded: MenuRow {
+                index: panel.sources + 2;
+                text: Strings.source-mix-all-except;
+                checks: true;
+                checked: root.mix-all-except;
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.mix-mode-selected(true);
+                }
+            }
+
+            if root.mix-expanded && root.mix-apps.length == 0: MenuNote {
+                text: Strings.source-mix-empty;
+                nested: true;
+            }
+
+            for app[index] in root.mix-expanded ? root.mix-apps : []: MenuRow {
+                index: panel.sources + 3 + index;
+                text: app.name;
+                checks: true;
+                checked: app.checked;
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.mix-app-toggled(index);
+                }
+            }
+
+            if root.mix-expanded && root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": MenuNote {
+                text: Strings.source-mix-all-except-note;
+                nested: true;
             }
         }
     }
@@ -143,6 +227,143 @@ component SourceMenu inherits Rectangle {
     FocusRing {
         visible-focus: focus.has-focus;
         border-radius: root.border-radius;
+    }
+}
+
+// The header's gear, as the Mac's: its Speakers and Windows sections, then
+// About and Exit, which a Windows app keeps in no app menu.
+component GearButton inherits IconButton {
+    callback new-zone();
+    callback refresh();
+    callback remote();
+    callback settings();
+    callback guide();
+    callback about();
+    callback exit();
+
+    public function open-menu() {
+        menu.show();
+    }
+
+    glyph: Glyphs.gear;
+    label: Strings.more-options;
+    clicked => {
+        root.open-menu();
+    }
+
+    menu := PopupWindow {
+        x: root.width - 270px;
+        y: root.height + 4px;
+        width: 270px;
+
+        panel := MenuPanel {
+            count: 7;
+            close-requested(refocus) => {
+                menu.close();
+                if refocus {
+                    root.focus();
+                }
+            }
+
+            MenuNote {
+                text: Strings.menu-speakers;
+            }
+
+            MenuRow {
+                index: 0;
+                text: Strings.new-zone;
+                keys: "Ctrl+N";
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.new-zone();
+                }
+            }
+
+            MenuRow {
+                index: 1;
+                text: Strings.refresh-devices;
+                keys: "F5";
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.refresh();
+                }
+            }
+
+            MenuNote {
+                text: Strings.menu-group-windows;
+            }
+
+            MenuRow {
+                index: 2;
+                text: Strings.menu-remote;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.remote();
+                }
+            }
+
+            MenuRow {
+                index: 3;
+                text: Strings.settings-menu;
+                keys: "Ctrl+,";
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.settings();
+                }
+            }
+
+            MenuRow {
+                index: 4;
+                text: Strings.help-title;
+                keys: "F1";
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.guide();
+                }
+            }
+
+            MenuDivider { }
+
+            MenuRow {
+                index: 5;
+                text: Strings.menu-about;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.about();
+                }
+            }
+
+            MenuRow {
+                index: 6;
+                text: Strings.menu-exit;
+                keys: "Ctrl+Q";
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.exit();
+                }
+            }
+        }
     }
 }
 
@@ -919,8 +1140,6 @@ component PresetsCard inherits Rectangle {
                     HorizontalLayout {
                         padding-left: 8px;
                         padding-right: 8px;
-                        padding-top: 6px;
-                        padding-bottom: 6px;
                         spacing: 8px;
 
                         // The glyphs stay on the label's line when the name's line shows.
@@ -948,7 +1167,7 @@ component PresetsCard inherits Rectangle {
                             }
 
                             name := ChoiceLine {
-                                text: root.current;
+                                text: root.presets.length == 0 ? Strings.no-presets : root.current;
                             }
                         }
 
@@ -1225,8 +1444,6 @@ component EqualizerCard inherits Rectangle {
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;
-        padding-top: 6px;
-        padding-bottom: 6px;
         spacing: 8px;
 
         // The glyphs stay on the label's line when the curve's line shows.
@@ -1292,8 +1509,8 @@ component QuickRow inherits Rectangle {
     callback clicked();
     callback focus-changed(bool);
 
-    min-height: 28px;
-    border-radius: 8px;
+    min-height: 36px;
+    border-radius: Fluent.radius-control;
     background: !root.enabled ? transparent : touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.row-hover : transparent;
     animate background {
         duration: touch.has-hover ? Fluent.row-hover-in : 0ms;
@@ -2195,22 +2412,6 @@ component NowPlayingCard inherits VerticalLayout {
     }
 }
 
-// An app's check box in the several-apps list: shows what the backend made
-// of a click, and follows the list when the source changes elsewhere.
-component MixAppBox inherits CheckBox {
-    in property <bool> on;
-    callback flip();
-    checked: root.on;
-    accessible-label: self.text;
-    changed on => {
-        self.checked = root.on;
-    }
-    toggled => {
-        root.flip();
-        self.checked = root.on;
-    }
-}
-
 export component MainWindow inherits Window {
     in property <bool> running;
     // The header's mark breathes (mark_breath in src/window_rules.rs).
@@ -2230,11 +2431,9 @@ export component MainWindow inherits Window {
     // The note under the source while an input device plays through an
     // AirPlay speaker; empty hides it.
     in property <string> live-input-hint;
-    // The several-apps list under the source menu.
+    // The Several Apps submenu at the end of the source menu.
     in property <[MixAppItem]> mix-apps;
     in property <bool> mix-all-except;
-    // The several-apps list stays folded so it adds one Tab stop until opened.
-    in-out property <bool> mix-open;
     in property <float> master-volume;
     in property <int> master-volume-waves;
     in property <bool> equalizer-on;
@@ -2275,17 +2474,17 @@ export component MainWindow inherits Window {
     // What Narrator says about a new notice, while the app wants it said
     // here (empty otherwise).
     in property <string> notice-announcement;
-    // View > Show Virtual Devices: virtual outputs are listed even while off.
+    // Settings > Show Virtual Devices: virtual outputs are listed even while off.
     in property <bool> show-virtual-devices;
     in property <Appearance> appearance;
     in property <bool> switch-source-on-quit;
     in property <bool> resume-after-sleep;
-    // File > Launch at Sign-In: what the Run key says, read again by Rust.
+    // Settings > Launch at Sign-In: what the Run key says, read again by Rust.
     in property <bool> launch-at-login;
     // A release build that updates itself shows the updater's menu items.
     in property <bool> updater-available;
     in property <bool> check-updates-automatically;
-    // Speakers > Volume Keys Control AudioSync (spec S429); Windows only.
+    // Settings > Volume Keys Control AudioSync (spec S429); Windows only.
     in property <bool> volume-keys-available;
     in property <bool> volume-keys;
     // The AirPlay delay, shown while an AirPlay sender runs: what its field
@@ -2308,7 +2507,7 @@ export component MainWindow inherits Window {
         root.focus-zone-id = id;
         root.reveal-zone-id = id;
     }
-    // Speakers > Hidden Speakers.
+    // Settings > Hidden Speakers.
     in property <[HiddenItem]> hidden-speakers;
     // AirPlay discovery runs but has found no speaker for 20 seconds.
     in property <bool> airplay-none-found;
@@ -2327,7 +2526,7 @@ export component MainWindow inherits Window {
     // what Enter applies; empty otherwise.
     in property <string> airplay-delay-range-hint;
     // A delay field, a speaker's or the AirPlay one, holds typing not yet
-    // applied: File > Apply Typed Delay is enabled only then.
+    // applied: Ctrl+S applies it only then.
     in property <bool> delay-typing;
     // Calibrate All Speakers (see CalibrationCard).
     in property <bool> calibrate-all-running;
@@ -2379,8 +2578,11 @@ export component MainWindow inherits Window {
     // A click on the window outside every speaker row: apply every typed
     // delay and close the sync controls.
     callback blank-clicked();
-    // File > Apply Typed Delay (Ctrl+S, wherever the focus is): apply every
-    // typed delay and keep the sync controls open.
+    // For the layout tests (src/view.rs): the left column's content and its room.
+    out property <length> left-content-height: left-column.content-height;
+    out property <length> left-visible-height: left-column.visible-height;
+    // Ctrl+S, wherever the focus is: apply every typed delay and keep the
+    // sync controls open.
     callback delay-apply-requested();
     callback auto-connect-toggled(string, bool);
     // Rename… in a speaker's menu, or a double-click on its name.
@@ -2401,7 +2603,7 @@ export component MainWindow inherits Window {
     callback cast-resync-requested(string);
     // Open Network Settings under the no-speakers note.
     callback network-settings-requested();
-    // Speakers > Add by Address…, and Remove on a row added that way.
+    // The speaker list's Add by Address…, and Remove on a row added that way.
     callback cast-add-address-requested();
     callback cast-remove-requested(string);
     // Hide Speaker in a speaker's menu, and an entry of Hidden Speakers.
@@ -2418,7 +2620,7 @@ export component MainWindow inherits Window {
     callback calibrate-all-apply-requested();
     callback calibrate-all-undo-requested();
     callback calibrate-all-close-requested();
-    // A preset row, View > Presets and Ctrl+1 to Ctrl+9 recall by ID.
+    // A preset row and Ctrl+1 to Ctrl+9 recall by ID.
     callback preset-recall-requested(string);
     callback preset-rename-requested(string);
     callback preset-update-requested(string);
@@ -2445,7 +2647,7 @@ export component MainWindow inherits Window {
     callback zone-calibrate-requested(string);
     // Use <target> Instead in a zone's menu, by the member's ID.
     callback zone-use-target-requested(string);
-    // Speakers > New Zone from Active Speakers… (Ctrl+N).
+    // The gear's New Zone from Active Speakers… (Ctrl+N).
     callback new-zone-requested();
     // Move to Zone, New Zone… and Remove from Zone in a speaker's menu.
     callback speaker-move-to-zone-requested(string, string);
@@ -2462,9 +2664,9 @@ export component MainWindow inherits Window {
     callback check-updates-automatically-toggled(bool);
     callback volume-keys-toggled(bool);
     callback check-for-updates-requested();
-    // View > Web Remote…
+    // The gear's Web Remote…
     callback remote-requested();
-    // File > Check Setup… (Windows only: its rows name Windows settings).
+    // Settings > Check Setup… (Windows only: its rows name Windows settings).
     callback setup-requested();
     callback notice-dismissed(int);
     callback notices-dismissed-all();
@@ -2484,11 +2686,11 @@ export component MainWindow inherits Window {
     callback drag-requested();
     callback window-menu-requested(length, length);
     callback resize-requested(int);
-    // Where the menus end and the drag area begins.
-    out property <length> caption-start: title-row.padding-left + menus.width;
     callback about-requested();
-    // Help > AudioSync Guide: open the Guide.
+    // AudioSync Guide in the gear's menu (F1): open the Guide.
     callback help-requested();
+    // Settings… in the gear's menu (Ctrl+,).
+    callback settings-requested();
 
     // Slint leaves nothing focused when a refresh removes the focused
     // control (a notice dismissed with the keyboard, a speaker unplugged):
@@ -2524,38 +2726,22 @@ export component MainWindow inherits Window {
         source.focus();
     }
 
+    // Several Apps… in the tray panel: the source menu, which ends in it.
+    public function open-sources() {
+        source.focus();
+        source.open-menu();
+    }
+
     title: Strings.main-window-title;
     icon: @image-url("../res/audiosync-tile-256.png");
     no-frame: true;
 
-    // The menu at `index` (wrapping around) takes the focus, after Alt or F10.
-    public function focus-menu(index: int) {
-        let i = Math.mod(index, 4);
-        if i == 0 {
-            file-name.focus();
-        } else if i == 1 {
-            speakers-name.focus();
-        } else if i == 2 {
-            view-name.focus();
-        } else {
-            help-name.focus();
-        }
+    // Alt or F10 puts the focus on the gear, where a menu bar's would go.
+    public function focus-gear() {
+        gear.focus();
     }
 
-    public function open-menu(index: int) {
-        root.focus-menu(index);
-        if index == 0 {
-            file-menu.show({ x: 0, y: file-name.height });
-        } else if index == 1 {
-            speakers-menu.show({ x: 0, y: speakers-name.height });
-        } else if index == 2 {
-            view-menu.show({ x: 0, y: view-name.height });
-        } else if index == 3 {
-            help-menu.show({ x: 0, y: help-name.height });
-        }
-    }
-
-    // The menus' shortcuts, which a system menu bar took before the window
+    // The window's shortcuts, which a system menu bar took before the window
     // drew its own: true when `text` with Ctrl (`control`) and no other
     // modifier (`others`) ran one.
     public function shortcut(text: string, control: bool, others: bool) -> bool {
@@ -2591,6 +2777,10 @@ export component MainWindow inherits Window {
         }
         if text == "e" {
             root.equalizer-requested();
+            return true;
+        }
+        if text == "," {
+            root.settings-requested();
             return true;
         }
         if text.is-float() && text.to-float() >= 1 && text.to-float() <= 9 && text.to-float() <= root.presets.length && text.character-count == 1 {
@@ -2639,7 +2829,8 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: Fluent.window-margin;
-        padding-top: title-row.height + Fluent.window-margin / 2;
+        // The header 4 under the top row, as the Mac's under its title bar.
+        padding-top: title-row.height + 4px;
         // The notices and the columns bring their gap above them, so a
         // notice opens and closes its gap with it.
         spacing: 0px;
@@ -2683,6 +2874,34 @@ export component MainWindow inherits Window {
 
             Rectangle {
                 horizontal-stretch: 1;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                gear := GearButton {
+                    glyph-size: 16px;
+                    new-zone => {
+                        root.new-zone-requested();
+                    }
+                    refresh => {
+                        root.refresh-devices();
+                    }
+                    remote => {
+                        root.remote-requested();
+                    }
+                    settings => {
+                        root.settings-requested();
+                    }
+                    guide => {
+                        root.help-requested();
+                    }
+                    about => {
+                        root.about-requested();
+                    }
+                    exit => {
+                        root.exit-requested();
+                    }
+                }
             }
 
             VerticalLayout {
@@ -2778,61 +2997,13 @@ export component MainWindow inherits Window {
                                     chosen(i) => {
                                         root.source-selected(i);
                                     }
-                                }
-
-                                // Right under the sources, where the Mac's source
-                                // menu ends in its Several Apps submenu; a
-                                // drop-down can't hold one, so it unfolds here.
-                                VerticalLayout {
-                                    HorizontalLayout {
-                                        alignment: start;
-
-                                        Disclosure {
-                                            text: Strings.source-mix-title;
-                                            expanded: root.mix-open;
-                                            toggled => {
-                                                root.mix-open = !root.mix-open;
-                                            }
-                                        }
+                                    mix-apps: root.mix-apps;
+                                    mix-all-except: root.mix-all-except;
+                                    mix-mode-selected(all-except) => {
+                                        root.mix-mode-selected(all-except);
                                     }
-
-                                    mix-pane := FoldPane {
-                                        open: root.mix-open;
-                                        escape-folds: true;
-                                        fold => {
-                                            root.mix-open = false;
-                                        }
-
-                                        if mix-pane.shown: VerticalLayout {
-                                            padding-top: 8px;
-                                            spacing: 6px;
-
-                                            if root.mix-apps.length == 0: SecondaryText {
-                                                text: Strings.source-mix-empty;
-                                            }
-
-                                            if root.mix-apps.length > 0: ComboBox {
-                                                model: [Strings.source-mix-only, Strings.source-mix-all-except];
-                                                current-index: root.mix-all-except ? 1 : 0;
-                                                accessible-label: Strings.source-mix-mode;
-                                                selected => {
-                                                    root.mix-mode-selected(self.current-index == 1);
-                                                    self.current-index = root.mix-all-except ? 1 : 0;
-                                                }
-                                            }
-
-                                            for app[index] in root.mix-apps: MixAppBox {
-                                                text: app.name;
-                                                on: app.checked;
-                                                flip => {
-                                                    root.mix-app-toggled(index);
-                                                }
-                                            }
-
-                                            if root.mix-apps.length > 0 && root.mix-all-except && Strings.source-mix-all-except-note != "": SecondaryText {
-                                                text: Strings.source-mix-all-except-note;
-                                            }
-                                        }
+                                    mix-app-toggled(i) => {
+                                        root.mix-app-toggled(i);
                                     }
                                 }
 
@@ -2925,6 +3096,9 @@ export component MainWindow inherits Window {
                             spacing: 8px;
                             // 8 px clear of the knob at 100.
                             number-gap: 16px;
+                            button-size: 24px;
+                            // Its speaker centred over the rows' icons.
+                            padding-left: 4px;
                             volume: root.master-volume;
                             waves: root.master-volume-waves;
                             mute-toggled => {
@@ -3546,309 +3720,12 @@ export component MainWindow inherits Window {
         }
     }
 
-    // The top row in place of the system title bar: the menus, room to drag
-    // the window by, and the window's own buttons (src/title_bar.rs hit-tests
-    // the same sizes for Windows).
+    // The top row in place of the system title bar, as the Mac's transparent
+    // one: room to drag the window by and the window's own buttons
+    // (src/title_bar.rs hit-tests the same sizes for Windows).
     title-row := HorizontalLayout {
         y: 0;
         height: 32px;
-        padding-left: 6px;
-
-        menus := HorizontalLayout {
-            spacing: 2px;
-            padding-top: 0;
-            file-name := MenuName {
-                title: Strings.menu-file;
-                open => {
-                    file-menu.show({ x: 0, y: self.height });
-                }
-                step(by) => {
-                    root.focus-menu(0 + by);
-                }
-
-                file-menu := ContextMenuArea {
-                    Menu {
-                        MenuItem {
-                            title: Strings.with-keys(Strings.menu-apply-delay, "Ctrl+S");
-                            enabled: root.delay-typing;
-                            activated => {
-                                root.delay-apply-requested();
-                            }
-                        }
-
-                        MenuItem {
-                            title: Strings.with-keys(Strings.menu-close-window, "Ctrl+W");
-                            activated => {
-                                root.close-requested();
-                            }
-                        }
-
-                        MenuSeparator { }
-
-                        MenuItem {
-                            title: Strings.switch-source-on-quit;
-                            checkable: true;
-                            checked: root.switch-source-on-quit;
-                            activated => {
-                                root.switch-source-on-quit-toggled(!root.switch-source-on-quit);
-                            }
-                        }
-
-                        MenuItem {
-                            title: Strings.resume-after-sleep;
-                            checkable: true;
-                            checked: root.resume-after-sleep;
-                            activated => {
-                                root.resume-after-sleep-toggled(!root.resume-after-sleep);
-                            }
-                        }
-
-                        MenuItem {
-                            title: Strings.launch-at-login;
-                            checkable: true;
-                            checked: root.launch-at-login;
-                            activated => {
-                                root.launch-at-login-toggled(!root.launch-at-login);
-                            }
-                        }
-
-                        if root.updater-available: MenuItem {
-                            title: Strings.check-updates-automatically;
-                            checkable: true;
-                            checked: root.check-updates-automatically;
-                            activated => {
-                                root.check-updates-automatically-toggled(!root.check-updates-automatically);
-                            }
-                        }
-
-                        if Platform.os == OperatingSystemType.windows: MenuItem {
-                            title: Strings.menu-check-setup;
-                            activated => {
-                                root.setup-requested();
-                            }
-                        }
-
-                        MenuSeparator { }
-
-                        MenuItem {
-                            title: Strings.with-keys(Strings.menu-exit, "Ctrl+Q");
-                            activated => {
-                                root.exit-requested();
-                            }
-                        }
-                    }
-                }
-            }
-
-            speakers-name := MenuName {
-                title: Strings.menu-speakers;
-                open => {
-                    speakers-menu.show({ x: 0, y: self.height });
-                }
-                step(by) => {
-                    root.focus-menu(1 + by);
-                }
-
-                speakers-menu := ContextMenuArea {
-                    Menu {
-                        MenuItem {
-                            title: root.running ? Strings.menu-turn-streaming-off : Strings.menu-turn-streaming-on;
-                            activated => {
-                                root.power-toggled(!root.running);
-                            }
-                        }
-
-                        if root.volume-keys-available: MenuItem {
-                            title: Strings.volume-keys;
-                            checkable: true;
-                            checked: root.volume-keys;
-                            activated => {
-                                root.volume-keys-toggled(!root.volume-keys);
-                            }
-                        }
-
-                        MenuSeparator { }
-
-                        MenuItem {
-                            title: Strings.with-keys(Strings.new-zone, "Ctrl+N");
-                            activated => {
-                                root.new-zone-requested();
-                            }
-                        }
-
-                        MenuItem {
-                            title: Strings.with-keys(Strings.refresh-devices, "F5");
-                            activated => {
-                                root.refresh-devices();
-                            }
-                        }
-
-                        Menu {
-                            title: Strings.hidden-speakers;
-
-                            if root.hidden-speakers.length == 0: MenuItem {
-                                title: Strings.no-hidden-speakers;
-                                enabled: false;
-                            }
-
-                            for hidden in root.hidden-speakers: MenuItem {
-                                title: Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present);
-                                activated => {
-                                    root.speaker-unhide-requested(hidden.id);
-                                }
-                            }
-                        }
-
-                        MenuItem {
-                            title: Strings.cast-add-address;
-                            enabled: root.cast-by-address;
-                            activated => {
-                                root.cast-add-address-requested();
-                            }
-                        }
-                    }
-                }
-            }
-
-            view-name := MenuName {
-                title: Strings.menu-view;
-                open => {
-                    view-menu.show({ x: 0, y: self.height });
-                }
-                step(by) => {
-                    root.focus-menu(2 + by);
-                }
-
-                view-menu := ContextMenuArea {
-                    Menu {
-                        MenuItem {
-                            title: Strings.with-keys(Strings.equalizer, "Ctrl+E");
-                            activated => {
-                                root.equalizer-requested();
-                            }
-                        }
-
-                        // Rebuilt with the list, so Ctrl+1 to Ctrl+9 work while it is
-                        // closed (spec S261).
-                        Menu {
-                            title: Strings.presets;
-
-                            if root.presets.length == 0: MenuItem {
-                                title: Strings.no-presets;
-                                enabled: false;
-                            }
-
-                            for preset[index] in root.presets: MenuItem {
-                                title: Strings.with-keys(preset.name, index < 9 ? "Ctrl+" + (index + 1) : "");
-                                checkable: true;
-                                checked: preset.current;
-                                activated => {
-                                    root.preset-recall-requested(preset.id);
-                                }
-                            }
-
-                            MenuSeparator { }
-
-                            MenuItem {
-                                title: Strings.save-preset;
-                                enabled: root.can-save-preset;
-                                activated => {
-                                    root.save-preset-requested();
-                                }
-                            }
-                        }
-
-                        MenuItem {
-                            title: Strings.menu-remote;
-                            activated => {
-                                root.remote-requested();
-                            }
-                        }
-
-                        MenuSeparator { }
-
-                        MenuItem {
-                            title: Strings.show-virtual-devices;
-                            checkable: true;
-                            checked: root.show-virtual-devices;
-                            activated => {
-                                root.show-virtual-devices-toggled(!root.show-virtual-devices);
-                            }
-                        }
-
-                        MenuSeparator { }
-
-                        Menu {
-                            title: Strings.appearance;
-
-                            MenuItem {
-                                title: Strings.appearance-system;
-                                checkable: true;
-                                checked: root.appearance == Appearance.system;
-                                activated => {
-                                    root.appearance-chosen(Appearance.system);
-                                }
-                            }
-
-                            MenuItem {
-                                title: Strings.appearance-light;
-                                checkable: true;
-                                checked: root.appearance == Appearance.light;
-                                activated => {
-                                    root.appearance-chosen(Appearance.light);
-                                }
-                            }
-
-                            MenuItem {
-                                title: Strings.appearance-dark;
-                                checkable: true;
-                                checked: root.appearance == Appearance.dark;
-                                activated => {
-                                    root.appearance-chosen(Appearance.dark);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            help-name := MenuName {
-                title: Strings.menu-help;
-                open => {
-                    help-menu.show({ x: 0, y: self.height });
-                }
-                step(by) => {
-                    root.focus-menu(3 + by);
-                }
-
-                help-menu := ContextMenuArea {
-                    Menu {
-                        MenuItem {
-                            title: Strings.with-keys(Strings.help-title, "F1");
-                            activated => {
-                                root.help-requested();
-                            }
-                        }
-
-                        if root.updater-available: MenuItem {
-                            title: Strings.menu-check-for-updates;
-                            activated => {
-                                root.check-for-updates-requested();
-                            }
-                        }
-
-                        MenuSeparator { }
-
-                        MenuItem {
-                            title: Strings.menu-about;
-                            activated => {
-                                root.about-requested();
-                            }
-                        }
-                    }
-                }
-            }
-        }
 
         TouchArea {
             horizontal-stretch: 1;

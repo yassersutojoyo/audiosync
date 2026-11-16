@@ -683,7 +683,7 @@ pub struct AudioAdapter<A: AudioBackend> {
     airplay2_switch_env: Option<String>,
     /// What a session does when the app it captures quits (spec S227).
     when_source_quits: WhenSourceQuits,
-    /// File > Resume Playback After Sleep (spec S465).
+    /// Settings > Resume Playback After Sleep (spec S465).
     resume_after_sleep: bool,
     /// The microphone calibration running, or letting its cut-off sweep
     /// play out.

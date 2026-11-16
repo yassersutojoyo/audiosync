@@ -1,4 +1,4 @@
-// The About dialog, opened from Help > About AudioSync. OK or Escape closes
+// The About dialog, opened from About AudioSync in the gear menu. OK or Escape closes
 // it.
 //
 // It names AudioSync's copyright holder and license (GPL-3.0 for the built exe,
@@ -22,7 +22,7 @@ export component AboutDialog inherits Dialog {
 
     // OK or Escape.
     callback closed();
-    // Ctrl+Q, File > Exit from this window.
+    // Ctrl+Q, the gear's Exit, from this window.
     callback exit-requested();
 
     // Called each time the dialog opens, so Escape works before anything

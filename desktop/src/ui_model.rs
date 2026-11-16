@@ -286,7 +286,7 @@ pub struct Speaker {
     pub in_target: Option<InTarget>,
 }
 
-/// A speaker hidden with Hide Speaker, as Speakers > Hidden Speakers lists it.
+/// A speaker hidden with Hide Speaker, as Settings > Hidden Speakers lists it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HiddenSpeaker {
     /// The ID its row had, its speaker key.
@@ -1099,7 +1099,7 @@ pub struct AppState {
     pub airplay_searching: bool,
     /// What a session does when the app it captures quits (spec S227).
     pub when_source_quits: WhenSourceQuits,
-    /// File > Resume Playback After Sleep (spec S465).
+    /// Settings > Resume Playback After Sleep (spec S465).
     pub resume_after_sleep: bool,
     /// The speaker list's note about Google Cast discovery.
     pub cast_list: CastList,
@@ -1953,21 +1953,21 @@ pub fn frame_to_keep(shows: MainWindowShows, saved: Option<WindowFrame>) -> Opti
 /// What the windows themselves keep across restarts.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ViewSettings {
-    /// View > Show Virtual Devices.
+    /// Settings > Show Virtual Devices.
     pub show_virtual_devices: bool,
     /// The main window's Presets list is open (spec S259).
     pub presets_list_open: bool,
-    /// View > Appearance.
+    /// Settings > Appearance.
     pub appearance: Appearance,
     /// The main window's place and size, once it has been shown.
     pub window: Option<WindowFrame>,
     /// The Guide's place, once it has been shown.
     pub guide: Option<WindowPlace>,
-    /// View > Web Remote.
+    /// Web Remote.
     pub remote: crate::remote::RemoteSettings,
-    /// File > Check for Updates Automatically.
+    /// Settings > Check for Updates Automatically.
     pub check_updates_automatically: bool,
-    /// Speakers > Volume Keys Control AudioSync.
+    /// Settings > Volume Keys Control AudioSync.
     pub volume_keys: bool,
     /// The last update check that read the appcast, Unix seconds.
     pub last_update_check: Option<u64>,

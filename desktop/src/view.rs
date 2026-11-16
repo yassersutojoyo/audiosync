@@ -69,6 +69,7 @@ mod parity_rest;
 #[cfg(test)]
 mod parity_screens;
 mod remote_window;
+mod settings_window;
 mod setup_window;
 
 /// The digits the PIN field keeps of what was typed: four at most.
@@ -117,15 +118,15 @@ struct UiState {
     /// The open rename's field has had the focus; only then does the focus
     /// moving to another control apply the name.
     rename_focused: bool,
-    /// View > Show Virtual Devices; off at launch, like the Mac's default.
+    /// Settings > Show Virtual Devices; off at launch, like the Mac's default.
     show_virtual: bool,
-    /// View > Appearance as chosen, which the theme preview doesn't change.
+    /// Settings > Appearance as chosen, which the theme preview doesn't change.
     appearance: ui_model::Appearance,
-    /// View > Web Remote.
+    /// Web Remote.
     remote: crate::remote::RemoteSettings,
-    /// File > Check for Updates Automatically, as saved.
+    /// Settings > Check for Updates Automatically, as saved.
     check_updates_automatically: bool,
-    /// Speakers > Volume Keys Control AudioSync, as saved (spec S429).
+    /// Settings > Volume Keys Control AudioSync, as saved (spec S429).
     volume_keys: bool,
     /// The last update check that read the appcast, Unix seconds.
     last_update_check: Option<u64>,
@@ -139,8 +140,6 @@ struct UiState {
     collapsed: HashSet<String>,
     /// The same for the flyout, which keeps its own (S359).
     flyout_collapsed: HashSet<String>,
-    /// Whether the source was a mix at the last refresh.
-    source_was_mix: bool,
     /// The equalizer curve last picked or saved, so the picker tells it from
     /// a curve with the same gains (spec S270).
     chosen_curve: Option<CurveMatch>,
@@ -257,7 +256,7 @@ fn is_draft(typed: Option<&str>, applied: &str) -> bool {
 }
 
 /// Whether Connected Speakers lists nothing only because its outputs are
-/// virtual ones that View > Show Virtual Devices hides: its note says so.
+/// virtual ones that Settings > Show Virtual Devices hides: its note says so.
 fn only_virtual_outputs_hidden(
     connected: &[&ui_model::Speaker],
     listed: impl Fn(&ui_model::Speaker) -> bool,
@@ -806,12 +805,14 @@ pub struct App {
     /// The guide is open for the double-audio notice and follows it (not
     /// for a made-up preview notice).
     guide_follows_notice: Cell<bool>,
-    /// The AudioSync Guide (Help > AudioSync Guide), `help_window.rs`.
+    /// The AudioSync Guide (the gear's AudioSync Guide), `help_window.rs`.
     help: crate::HelpWindow,
-    /// View > Web Remote, `remote_window.rs`.
+    /// Web Remote, `remote_window.rs`.
     remote_window: crate::RemoteWindow,
-    /// File > Check Setup…, `setup_window.rs`.
+    /// Settings > Check Setup…, `setup_window.rs`.
     setup: crate::SetupWindow,
+    /// Settings… from the gear, `settings_window.rs`.
+    settings: crate::SettingsWindow,
     setup_check: RefCell<setup_window::SetupCheck>,
     remote: RefCell<remote_window::RemoteHost>,
     log: DebugLog,
@@ -824,7 +825,7 @@ pub struct App {
     models: Models,
     /// With a tray icon, closing the main window keeps the app running there.
     tray_available: Cell<bool>,
-    /// The appearance every window shows: View > Appearance, or the theme
+    /// The appearance every window shows: Settings > Appearance, or the theme
     /// preview's.
     appearance: Cell<ui_model::Appearance>,
     /// False until the first Light or Dark: until then the windows follow
@@ -1289,6 +1290,7 @@ impl App {
             help: crate::HelpWindow::new()?,
             remote_window: crate::RemoteWindow::new()?,
             setup: crate::SetupWindow::new()?,
+            settings: crate::SettingsWindow::new()?,
             setup_check: RefCell::default(),
             remote: RefCell::default(),
             log,
@@ -1366,6 +1368,7 @@ impl App {
         app.connect_help();
         app.connect_remote();
         app.connect_setup();
+        app.connect_settings();
         app.restore_view(true);
         app.restore_remote();
         app.launch_update_check();
@@ -2007,6 +2010,7 @@ impl App {
             Appearance::Light => crate::Appearance::Light,
             Appearance::Dark => crate::Appearance::Dark,
         });
+        self.settings.set_appearance(self.main.get_appearance());
         if appearance == Appearance::System && !self.themed_by_hand.get() {
             return;
         }
@@ -2014,7 +2018,7 @@ impl App {
         self.follow_appearance();
     }
 
-    /// View > Appearance.
+    /// Settings > Appearance.
     fn choose_appearance(&self, choice: crate::Appearance) {
         let appearance = match choice {
             crate::Appearance::Light => ui_model::Appearance::Light,
@@ -2075,6 +2079,7 @@ impl App {
             .global::<Palette>()
             .set_color_scheme(scheme);
         self.setup.global::<Palette>().set_color_scheme(scheme);
+        self.settings.global::<Palette>().set_color_scheme(scheme);
         for window in [
             self.main.window(),
             self.flyout.window(),
@@ -2088,6 +2093,7 @@ impl App {
             self.help.window(),
             self.remote_window.window(),
             self.setup.window(),
+            self.settings.window(),
         ] {
             self.theme_frame(window);
             crate::platform::repaint_frame(window, false, dark);
@@ -2224,9 +2230,6 @@ impl App {
                     if outcome == Some(crate::frameless::KeyOutcome::MenuFocused) {
                         app.note_focus_input(crate::window_rules::FocusInput::Tab);
                     }
-                    if matches!(event, WindowEvent::Resized(_)) {
-                        crate::frameless::note_layout(&app.main);
-                    }
                 });
                 if outcome == Some(crate::frameless::KeyOutcome::Taken) {
                     return EventResult::PreventDefault;
@@ -2349,11 +2352,8 @@ impl App {
         // dropped off, so the list doesn't take it for news when it is back.
         let mut state = self.every_notice();
         let strings = self.strings();
-        let became_mix = {
+        {
             let mut ui = self.ui.borrow_mut();
-            let is_mix = state.source_id.starts_with("mix:");
-            let became_mix = is_mix && !ui.source_was_mix;
-            ui.source_was_mix = is_mix;
             let show_virtual = ui.show_virtual;
             ui.listed_virtual.note(&state, show_virtual);
             // A speaker that went takes what was typed for it along: back,
@@ -2364,8 +2364,7 @@ impl App {
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
             ui.flyout_collapsed
                 .retain(|id| state.zones.iter().any(|zone| zone.id == *id));
-            became_mix
-        };
+        }
         let move_zones = self.sync_move_zones(&state);
         let move_zones_of = |zone_id: &str| move_zones.get(zone_id).cloned().unwrap_or_default();
         let ui = self.ui.borrow();
@@ -2762,11 +2761,6 @@ impl App {
                 .collect(),
         );
         self.main.set_mix_all_except(state.mix_all_except);
-        // The list opens once as the source becomes a mix; folding it is
-        // the user's.
-        if became_mix {
-            self.main.set_mix_open(true);
-        }
         sync_model(&m.flyout_this_pc, this_pc.clone());
         sync_model(&m.flyout_connected, connected.clone());
         sync_model(&m.this_pc, this_pc);
@@ -2817,6 +2811,7 @@ impl App {
             .set_check_updates_automatically(check_updates_automatically);
         self.main.set_volume_keys_available(cfg!(windows));
         self.main.set_volume_keys(keys_switch);
+        self.show_settings_state();
         self.take_volume_keys(volume_keys::keys_taken(
             keys_switch,
             state.running && !state.no_speaker_on,
@@ -2880,7 +2875,7 @@ impl App {
         }
     }
 
-    /// An entry of Speakers > Hidden Speakers.
+    /// An entry of Settings > Hidden Speakers.
     fn unhide_speaker(&self, id: &str) {
         let state = self.snapshot();
         let Some(hidden) = state.hidden.iter().find(|hidden| hidden.id == id) else {
@@ -3602,7 +3597,13 @@ impl App {
             with_app(&w, |app| {
                 app.hide_flyout();
                 app.show_main();
-                app.main.set_mix_open(true);
+                // The menu runs its own modal loop: open it after this event.
+                let main = app.main.as_weak();
+                Timer::single_shot(Duration::ZERO, move || {
+                    if let Some(main) = main.upgrade() {
+                        main.invoke_open_sources();
+                    }
+                });
             })
         });
         let w = weak.clone();
@@ -4232,7 +4233,7 @@ impl App {
         }
     }
 
-    /// Speakers > Volume Keys Control AudioSync (spec S429).
+    /// Settings > Volume Keys Control AudioSync (spec S429).
     fn set_volume_keys(&self, on: bool) {
         self.ui.borrow_mut().volume_keys = on;
         self.log.log(|| {
@@ -4296,7 +4297,7 @@ impl App {
         self.refresh();
     }
 
-    /// Help > Check for Updates…, whatever the switch and the time say.
+    /// Settings > Check for Updates…, whatever the switch and the time say.
     fn check_for_updates(&self) {
         #[cfg(any(windows, all(target_os = "linux", not(test))))]
         if let Some(updater) = self.updater.borrow_mut().as_mut() {
@@ -4375,7 +4376,7 @@ impl App {
     }
 
     /// Hands the windows' own settings to the backend, which saves them with
-    /// the rest: View > Show Virtual Devices, View > Appearance, and the main
+    /// the rest: Settings > Show Virtual Devices, Settings > Appearance, and the main
     /// window's frame (see [`ui_model::frame_to_keep`]).
     fn remember_view(&self) {
         let mut backend = self.backend.borrow_mut();
@@ -4397,8 +4398,8 @@ impl App {
         }
     }
 
-    /// Shows the windows with the settings saved last time: View > Show
-    /// Virtual Devices, View > Appearance, and the main window's size and
+    /// Shows the windows with the settings saved last time: Settings > Show
+    /// Virtual Devices, Settings > Appearance, and the main window's size and
     /// place, fitted to the monitor it opens on (the one at its saved place,
     /// else the primary one, where it opens centered), maximized when it was.
     /// Without `with_frame` the main window keeps its size and place.
@@ -4836,7 +4837,7 @@ impl App {
         crate::platform::bring_to_front(self.equalizer.window());
     }
 
-    /// Speakers > New Zone from Active Speakers… (Ctrl+N): a name for a
+    /// The gear's New Zone from Active Speakers… (Ctrl+N): a name for a
     /// zone of the speakers that are on, or why none can be made yet.
     fn ask_new_zone(&self) {
         if self.dialog_already_open() {
@@ -5904,7 +5905,7 @@ fn zone_note(strings: &Strings<'_>, note: ui_model::ZoneNote<'_>) -> SharedStrin
     }
 }
 
-/// The entries of Speakers > Hidden Speakers.
+/// The entries of Settings > Hidden Speakers.
 fn hidden_items(strings: &Strings<'_>, state: &AppState) -> Vec<HiddenItem> {
     state
         .hidden
@@ -6756,7 +6757,7 @@ fn preset_left_off(strings: &Strings<'_>, reason: &PresetLeftOff) -> SharedStrin
     }
 }
 
-/// The presets as the Presets card, View > Presets and the flyout list them.
+/// The presets as the Presets card, the Presets row and the flyout list them.
 fn preset_items(state: &AppState) -> Vec<PresetItem> {
     state
         .presets
@@ -7155,11 +7156,11 @@ mod tests {
                 .set_size(slint::LogicalSize::new(696.0, 680.0));
             app.flyout
                 .window()
-                .set_size(slint::LogicalSize::new(340.0, 720.0));
+                .set_size(slint::LogicalSize::new(300.0, 720.0));
             let fit = app.flyout.get_fit_height();
             app.flyout
                 .window()
-                .set_size(slint::LogicalSize::new(340.0, fit));
+                .set_size(slint::LogicalSize::new(300.0, fit));
             app.equalizer
                 .window()
                 .set_size(slint::LogicalSize::new(660.0, 420.0));
@@ -7642,6 +7643,63 @@ mod tests {
             buttons.windows(2).all(|pair| pair[0].1 <= pair[1].0),
             "no button overlaps the next: {buttons:?}"
         );
+    }
+
+    /// At the default 696 x 680 with a song and its Shuffle and Repeat, the
+    /// left column fits with no scrolling, its cards 12 px clear of the
+    /// bottom fade, as on the Mac: no menu row above the header, which sits
+    /// 4 under the top row, and Several Apps in the source menu.
+    // covers: S450
+    #[test]
+    fn the_left_column_fits_the_default_window_with_a_song() {
+        use crate::now_playing_card::fake::{FakeControls, track};
+        use crate::now_playing_card::{PlayModes, Repeat};
+        let app = app_over(MockBackend::new());
+        let fake = FakeControls::default();
+        app.set_media_controls(fake.controls());
+        app.main.show().expect("the main window shows");
+        app.poll();
+        let mut song = track("Spotify.exe", "Song", "Band", true);
+        song.modes = PlayModes {
+            shuffle: Some(false),
+            repeat: Some(Repeat::Off),
+        };
+        fake.read(Some(song));
+        // The mock's first speaker starts with a low Windows volume, whose fix shows under Calibrate.
+        app.main
+            .invoke_device_volume_fix_requested(app.main.get_calibrate_all_volume_id());
+        app.poll();
+        // draw_frames sizes every window 1000 x 720, so the size comes after.
+        draw_frames();
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(696.0, 680.0));
+        // Runs the window's change handlers, as the event loop does.
+        slint::platform::update_timers_and_animations();
+        let content = app.main.get_left_content_height();
+        let room = app.main.get_left_visible_height();
+        assert!(content > 400.0, "the card shows: {content}");
+        assert!(content <= room, "{content} of {room}");
+        assert_eq!(app.main.get_presets().row_count(), 0);
+        app.main.set_presets_open(true);
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            slint::platform::update_timers_and_animations();
+        }
+        draw_frames();
+        app.main
+            .window()
+            .set_size(slint::LogicalSize::new(696.0, 680.0));
+        slint::platform::update_timers_and_animations();
+        let content = app.main.get_left_content_height();
+        // As on the Mac, the open list says there is none yet over Save as
+        // Preset…, about 100 px, and the column scrolls the rows below it.
+        assert!(
+            content > room && content <= room + 110.0,
+            "open with no presets: {content} of {room}"
+        );
+        let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        assert!(main.contains("padding-top: title-row.height + 4px;"));
     }
 
     /// A Now Playing title too long for its line stays on one line and
@@ -9629,13 +9687,17 @@ mod tests {
             draw_frames();
             click(window, x, y);
             assert!(items() > closed, "{name}: a click later opens it again");
-            // Windows' native menu closes on the press, which then reaches
-            // the button as a click.
             press(window, Key::Escape);
-            click(window, x, y);
-            assert_eq!(items(), closed, "{name}: the closing click stays closed");
-            advance_clock(Duration::from_millis(1000));
-            draw_frames();
+            // Windows' native menu, still the flyout's, closes on the press,
+            // which then reaches the button as a click.
+            if name == "flyout" {
+                click(window, x, y);
+                assert_eq!(items(), closed, "{name}: the closing click stays closed");
+                advance_clock(Duration::from_millis(1000));
+                draw_frames();
+            } else {
+                assert_eq!(items(), closed, "{name}: Escape closes it");
+            }
             click(window, x, y);
             assert!(items() > closed, "{name}: the next click opens it");
             press(window, Key::Escape);
@@ -9662,7 +9724,7 @@ mod tests {
         let height = app.fit_flyout(300.0);
         app.flyout
             .window()
-            .set_size(slint::LogicalSize::new(340.0, height));
+            .set_size(slint::LogicalSize::new(300.0, height));
         draw_frames();
         let thumbs: Vec<_> =
             ElementHandle::find_by_element_id(&app.flyout, "OverlayScrollView::thumb").collect();
@@ -12275,16 +12337,8 @@ mod tests {
         let strings = app.strings();
         let updates = strings.get_help_more_updates().to_string();
         for named in [
-            format!(
-                "{} > {}",
-                strings.get_menu_help(),
-                strings.get_menu_check_for_updates()
-            ),
-            format!(
-                "{} > {}",
-                strings.get_menu_file(),
-                strings.get_check_updates_automatically()
-            ),
+            format!("{} in Settings", strings.get_menu_check_for_updates()),
+            format!("{}, in Settings", strings.get_check_updates_automatically()),
             strings
                 .invoke_update_button(UpdateButton::Download)
                 .to_string(),
@@ -13111,16 +13165,16 @@ mod tests {
         let flyout = &app.flyout;
         let window = flyout.window();
         let preferred = flyout.get_made_height();
-        window.set_size(slint::LogicalSize::new(340.0, preferred));
+        window.set_size(slint::LogicalSize::new(300.0, preferred));
         let height = app.fit_flyout(300.0);
         let size = window.size().to_logical(window.scale_factor());
         assert_eq!(size.height, height);
         let bottom = flyout.get_footer_bottom();
         assert!(
-            bottom + 16.0 <= height,
+            bottom + 12.0 <= height,
             "buttons end at {bottom}, window {height} high (Slint asked for {preferred})"
         );
-        assert!(height <= bottom + 16.5, "no room left under the buttons");
+        assert!(height <= bottom + 12.5, "no room left under the buttons");
     }
 
     /// The hero's borderless source menu reads the chosen source, as the
@@ -13458,13 +13512,13 @@ mod tests {
         draw_frames();
         let flyout = &app.flyout;
         let window = flyout.window();
-        window.set_size(slint::LogicalSize::new(340.0, 400.0));
+        window.set_size(slint::LogicalSize::new(300.0, 400.0));
         let full = app.fit_flyout(1000.0);
         let room = full - 40.0;
         let height = app.fit_flyout(room);
         assert_eq!(height, room);
         let bottom = flyout.get_footer_bottom();
-        assert!(bottom + 16.0 <= room, "buttons end at {bottom} in {room}");
+        assert!(bottom + 12.0 <= room, "buttons end at {bottom} in {room}");
         assert_eq!(app.fit_flyout(1000.0), full, "the list gets its room back");
     }
 
@@ -13521,7 +13575,7 @@ mod tests {
         let flyout = &app.flyout;
         flyout
             .window()
-            .set_size(slint::LogicalSize::new(340.0, 400.0));
+            .set_size(slint::LogicalSize::new(300.0, 400.0));
         let room = app.fit_flyout(1000.0) - 40.0;
         assert_eq!(app.fit_flyout(room), room);
         let cuts = (flyout.get_list_cut(), flyout.get_body_cut());
@@ -13540,7 +13594,7 @@ mod tests {
         let grown = flyout.get_list_cut() + flyout.get_body_cut();
         assert!(grown > cuts.0 + cuts.1, "less room, a deeper cut");
         assert!(
-            flyout.get_footer_bottom() + 16.0 <= shorter + 0.5,
+            flyout.get_footer_bottom() + 12.0 <= shorter + 0.5,
             "the buttons still show"
         );
         assert_eq!(app.fit_flyout(room), room);
@@ -13576,7 +13630,7 @@ mod tests {
         assert!(flyout.get_presets().row_count() > 0, "{case}: presets show");
         flyout
             .window()
-            .set_size(slint::LogicalSize::new(340.0, 400.0));
+            .set_size(slint::LogicalSize::new(300.0, 400.0));
         let full = app.fit_flyout(1000.0);
         let room = 300.0;
         assert!(full > room + 100.0, "{case}: {full} fits {room} anyway");
@@ -13584,7 +13638,7 @@ mod tests {
         assert_eq!(height, room, "{case}");
         let bottom = flyout.get_footer_bottom();
         assert!(
-            bottom + 16.0 <= room + 0.5,
+            bottom + 12.0 <= room + 0.5,
             "{case}: buttons end at {bottom} in {room}"
         );
         assert_eq!(app.fit_flyout(1000.0), full, "{case}: the room comes back");
@@ -14298,21 +14352,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn escape_on_several_apps_folds_its_list() {
-        let app = app_over(MockBackend::new());
-        app.main.show().unwrap();
-        draw_frames();
-        let window = app.main.window();
-        tab(window, 3);
-        press(window, " ");
-        draw_frames();
-        assert!(app.main.get_mix_open());
-        press(window, Key::Escape);
-        draw_frames();
-        assert!(!app.main.get_mix_open(), "Escape folded it");
-    }
-
     // covers: S245
     #[test]
     fn move_to_zone_lists_only_the_zones_the_speaker_is_not_in() {
@@ -14911,7 +14950,7 @@ mod tests {
         app.main.invoke_cast_add_address_requested();
         let dialog = &app.cast_address_dialog;
         let window = dialog.window();
-        assert!(window.is_visible(), "Speakers > Add by Address… opens it");
+        assert!(window.is_visible(), "Add by Address… opens it");
         assert_eq!(dialog.get_error(), "");
 
         type_text(window, "not an address");
@@ -17314,20 +17353,12 @@ mod tests {
         );
     }
 
+    /// The Several Apps submenu ends the main window's source menu, as on
+    /// the Mac: its items check apps and pick the mode.
     #[test]
-    fn the_several_apps_list_opens_from_the_keyboard_and_checks_apps_and_the_mode() {
+    fn the_several_apps_submenu_checks_apps_and_the_mode() {
         let app = app_over(MockBackend::new());
-        app.main.show().unwrap();
-        draw_frames();
-        let window = app.main.window();
-        assert!(!app.main.get_mix_open(), "folded until asked for");
-        // The main switch, the source, then Several apps under it.
-        tab(window, 3);
-        press(window, " ");
-        draw_frames();
-        assert!(app.main.get_mix_open());
         assert_eq!(app.main.get_mix_apps().row_count(), 2);
-
         app.main.invoke_mix_app_toggled(1);
         app.main.invoke_mix_app_toggled(0);
         let state = app.snapshot();
@@ -17336,13 +17367,21 @@ mod tests {
         app.main.invoke_mix_mode_selected(true);
         assert!(app.snapshot().mix_all_except);
         assert!(app.main.get_mix_all_except());
-
-        // Folded again by the user, it stays folded while the mix plays on.
-        press(window, " ");
-        draw_frames();
-        assert!(!app.main.get_mix_open());
-        app.refresh();
-        assert!(!app.main.get_mix_open(), "a refresh never reopens it");
+        let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        let menu = &main[main.find("component SourceMenu").unwrap()..];
+        let menu = &menu[..menu.find("FocusRing {").unwrap()];
+        for line in [
+            "text: Strings.source-mix-title;",
+            "root.mix-mode-selected(false);",
+            "root.mix-mode-selected(true);",
+            "root.mix-app-toggled(index);",
+        ] {
+            assert!(menu.contains(line), "{line} in the source menu");
+        }
+        assert!(
+            !main.contains("mix-open"),
+            "no list unfolds under the source"
+        );
     }
 
     /// A click on a flyout row's name, not only on its round mark, switches
@@ -17532,7 +17571,8 @@ mod tests {
 
     /// Several Apps… ends the flyout's source menu, as the Mac panel's menu
     /// ends in its submenu: the menu's model holds the sources only, and the
-    /// item opens the main window's list and leaves the source as it was.
+    /// item opens the main window, whose source menu holds the list, and
+    /// leaves the source as it was.
     // covers: S419
     #[test]
     fn several_apps_under_the_flyout_sources_opens_the_main_windows_list() {
@@ -17544,32 +17584,9 @@ mod tests {
 
         app.flyout.show().unwrap();
         app.flyout.invoke_several_apps_requested();
-        assert!(app.main.get_mix_open());
         assert!(app.main.window().is_visible());
         assert!(!app.flyout.window().is_visible());
         assert_eq!(app.snapshot().source_id, chosen);
-    }
-
-    #[test]
-    fn the_several_apps_list_opens_by_itself_once_as_the_source_becomes_a_mix() {
-        let app = app_over(MockBackend::new());
-        app.main.show().unwrap();
-        draw_frames();
-        assert!(!app.main.get_mix_open());
-        app.main.invoke_mix_app_toggled(0);
-        assert!(!app.main.get_mix_open(), "one app is no mix yet");
-        app.main.invoke_mix_app_toggled(1);
-        assert!(app.main.get_mix_open());
-        app.main.set_mix_open(false);
-        app.main.invoke_mix_app_toggled(1);
-        app.main.invoke_mix_app_toggled(1);
-        assert!(
-            app.main.get_mix_open(),
-            "back to a mix after one app opens it again"
-        );
-        app.main.set_mix_open(false);
-        app.refresh();
-        assert!(!app.main.get_mix_open());
     }
 
     #[test]
@@ -19376,30 +19393,189 @@ mod tests {
         assert!(source.contains("glyph: root.is-input ? Glyphs.microphone"));
     }
 
-    /// Web Remote… sits under View, right after Presets, with the other
-    /// items that open a window, not under File (S449).
+    /// The gear's menu, as the Mac's: Speakers (New Zone, Refresh Devices),
+    /// Windows (Web Remote, Settings, the Guide), then About and Exit, the
+    /// app menu items a Windows app has no other place for. Each item calls
+    /// the callback its File, Speakers, View or Help item called (S449).
     // covers: S449
     #[test]
-    fn web_remote_sits_under_view_below_presets() {
-        let source = include_str!("../ui/main.slint");
-        let at = |text: &str| {
-            source
-                .find(text)
-                .unwrap_or_else(|| panic!("{text} in main.slint"))
-        };
-        let view = at("title: Strings.menu-view;");
-        let help = at("title: Strings.menu-help;");
-        let remote = at("title: Strings.menu-remote;");
-        let presets = view
-            + source[view..]
-                .find("title: Strings.presets;")
-                .expect("View > Presets");
-        let virtual_devices = at("title: Strings.show-virtual-devices;");
-        assert!(view < remote && remote < help, "under View");
-        assert!(
-            presets < remote && remote < virtual_devices,
-            "right after Presets"
+    fn the_gear_menu_holds_the_old_menus_items_in_the_macs_order() {
+        let source = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        let gear = &source[source.find("component GearButton").expect("the gear")..];
+        let gear = &gear[..gear.find("\n}\n").unwrap()];
+        let mut at = 0;
+        for title in [
+            "text: Strings.menu-speakers;",
+            "text: Strings.new-zone;\n                keys: \"Ctrl+N\";",
+            "text: Strings.refresh-devices;\n                keys: \"F5\";",
+            "text: Strings.menu-group-windows;",
+            "text: Strings.menu-remote;",
+            "text: Strings.settings-menu;\n                keys: \"Ctrl+,\";",
+            "text: Strings.help-title;\n                keys: \"F1\";",
+            "MenuDivider { }",
+            "text: Strings.menu-about;",
+            "text: Strings.menu-exit;\n                keys: \"Ctrl+Q\";",
+        ] {
+            at += gear[at..]
+                .find(title)
+                .unwrap_or_else(|| panic!("{title} after the item before it"));
+        }
+        let header = &source[source.find("gear := GearButton {").unwrap()..];
+        let header: String = header[..header.find("power := PowerSwitch").unwrap()]
+            .split_whitespace()
+            .collect();
+        for (item, callback) in [
+            ("new-zone", "new-zone-requested"),
+            ("refresh", "refresh-devices"),
+            ("remote", "remote-requested"),
+            ("settings", "settings-requested"),
+            ("guide", "help-requested"),
+            ("about", "about-requested"),
+            ("exit", "exit-requested"),
+        ] {
+            assert!(
+                header.contains(&format!("{item}=>{{root.{callback}();}}")),
+                "{item} calls {callback}"
+            );
+        }
+        assert!(!source.contains("MenuName"), "no menu row");
+        at = 0;
+        for (index, callback) in [
+            "new-zone", "refresh", "remote", "settings", "guide", "about", "exit",
+        ]
+        .iter()
+        .enumerate()
+        {
+            at = gear[at..]
+                .find(&format!("index: {index};"))
+                .map(|i| at + i)
+                .unwrap_or_else(|| panic!("item {index}"));
+            assert!(
+                gear[at..].starts_with(&format!("index: {index};"))
+                    && gear[at..(at + 400).min(gear.len())]
+                        .contains(&format!("root.{callback}();")),
+                "item {index} calls {callback}"
+            );
+        }
+    }
+
+    /// The gear's and the source picker's menus are one popup drawn in the
+    /// app's colors, so they are dark with the app, as the Mac's menus are:
+    /// the arrows pick an item with a focus ring, Enter runs it, Escape
+    /// closes it and gives the button the focus.
+    // covers: S449
+    #[test]
+    fn the_gear_menu_follows_the_theme_and_the_keyboard() {
+        let source = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        for name in ["GearButton", "SourceMenu"] {
+            let menu = &source[source.find(&format!("component {name}")).unwrap()..];
+            let menu = &menu[..menu.find("\n}\n").unwrap()];
+            assert!(!menu.contains("ContextMenuArea"), "{name}: no native menu");
+            assert!(menu.contains("panel := MenuPanel {"), "{name}");
+        }
+        let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+        let gear = &widgets[widgets.find("export component MenuPanel").unwrap()..];
+        for colour in [
+            "background: Tokens.surface;",
+            "border-color: Fluent.stroke;",
+            "color: Tokens.text;",
+            "color: Tokens.secondary-text;",
+            "background: root.selected ? Fluent.hover : transparent;",
+            "visible-focus: root.selected && root.keyboard;",
+            "height: 32px;",
+        ] {
+            assert!(gear.contains(colour), "{colour}");
+        }
+        assert!(source.contains("width: 270px;"));
+        let backend = MockBackend::new();
+        let refreshes = backend.refreshes.clone();
+        let app = app_over(backend);
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let window = app.main.window();
+        app.main.invoke_focus_gear();
+        press(window, " ");
+        press(window, Key::DownArrow);
+        press(window, Key::DownArrow);
+        let before = refreshes.get();
+        press(window, Key::Return);
+        assert_eq!(refreshes.get(), before + 1, "Refresh Devices ran");
+        app.main.invoke_focus_gear();
+        press(window, " ");
+        press(window, Key::Escape);
+        press(window, Key::Return);
+        assert_eq!(refreshes.get(), before + 1, "Escape closed the menu");
+    }
+
+    /// The keyboard reaches every row of the source menu: each source, then
+    /// Several Apps, whose rows unfold under it with Enter, its two modes and
+    /// each app.
+    #[test]
+    fn the_keyboard_reaches_every_row_of_the_source_menu() {
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.main.show().expect("the main window shows");
+        draw_frames();
+        let window = app.main.window();
+        let sources = app.main.get_sources().row_count();
+        assert!(sources > 1);
+        app.main.invoke_open_sources();
+        draw_frames();
+        press(window, Key::End);
+        press(window, Key::UpArrow);
+        press(window, Key::Return);
+        draw_frames();
+        assert_eq!(
+            app.main.get_source_index() as usize,
+            sources - 1,
+            "the last source"
         );
+        app.main.invoke_open_sources();
+        draw_frames();
+        press(window, Key::End);
+        press(window, Key::Return);
+        press(window, Key::DownArrow);
+        press(window, Key::DownArrow);
+        press(window, Key::Return);
+        assert!(app.snapshot().mix_all_except, "All Apps Except");
+        app.main.invoke_open_sources();
+        draw_frames();
+        press(window, Key::End);
+        press(window, Key::Return);
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(
+            app.main.get_mix_apps().row_data(1).unwrap().checked,
+            "the last app"
+        );
+    }
+
+    /// Settings… (Ctrl+,) opens the Settings window, which shows the main
+    /// window's settings and hands each change to the main window's callback.
+    // covers: S449
+    #[test]
+    fn settings_shows_the_main_windows_settings_and_changes_them_through_its_callbacks() {
+        let app = app_over(MockBackend::new());
+        assert!(app.main.invoke_shortcut(",".into(), true, false));
+        assert!(app.settings.window().is_visible());
+        assert!(!app.settings.get_show_virtual_devices());
+        app.settings.invoke_show_virtual_devices_toggled(true);
+        assert!(app.main.get_show_virtual_devices());
+        assert!(app.settings.get_show_virtual_devices());
+        app.settings.invoke_resume_after_sleep_toggled(true);
+        assert!(app.snapshot().resume_after_sleep);
+        assert!(app.settings.get_resume_after_sleep());
+        app.settings
+            .invoke_appearance_chosen(crate::Appearance::Dark);
+        assert_eq!(app.settings.get_appearance(), crate::Appearance::Dark);
+        app.main.invoke_speaker_hide_requested("local:desk".into());
+        let hidden = app.settings.get_hidden_speakers();
+        assert_eq!(hidden.row_count(), 1);
+        app.settings
+            .invoke_speaker_unhide_requested(hidden.row_data(0).unwrap().id);
+        assert_eq!(app.settings.get_hidden_speakers().row_count(), 0);
+        app.settings.invoke_close_requested();
+        assert!(!app.settings.window().is_visible());
     }
 
     /// A speaker's rename field fills its name slot, 120 to 220 px wide, at
@@ -19615,7 +19791,7 @@ mod tests {
         let (at, below) = (row.absolute_position(), line.absolute_position());
         assert_eq!(below.y - (at.y + row.size().height), 6.0, "the gap");
         assert_eq!(below.x - at.x, 8.0, "the inset");
-        assert_eq!(row.size().height, 28.0, "the Mac's quick row");
+        assert_eq!(row.size().height, 36.0, "the quick row, 36 high");
         let (_, tip) = rest_on(
             &app,
             "CalibrationCard::calibrate-button",
