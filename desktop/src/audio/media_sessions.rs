@@ -776,6 +776,10 @@ mod tests {
         Image,
         /// Never read in time.
         Hung,
+        /// The app has no cover for the track yet.
+        Empty,
+        /// Read, but not an image.
+        Undecodable,
     }
 
     #[derive(Default)]
@@ -818,6 +822,7 @@ mod tests {
 
     const IMAGE: &[u8] = b"image";
     const JPEG: &[u8] = b"jpeg";
+    const NOT_AN_IMAGE: &[u8] = b"text";
 
     impl SessionList for Fake {
         type Session = String;
@@ -843,6 +848,8 @@ mod tests {
             self.counts.thumbnails.fetch_add(1, Ordering::SeqCst);
             match self.thumbnail {
                 Thumbnail::Image => Ok(Some(IMAGE.to_vec())),
+                Thumbnail::Empty => Ok(None),
+                Thumbnail::Undecodable => Ok(Some(NOT_AN_IMAGE.to_vec())),
                 Thumbnail::Hung => {
                     *self.counts.thumbnail_asked.lock().unwrap() = Some((Instant::now(), deadline));
                     // Woken a wait late, as a loaded PC wakes a thread.
@@ -865,11 +872,17 @@ mod tests {
         fn reset(&mut self) {}
 
         fn fit_image(&self, image: &[u8]) -> Result<Option<FittedArtwork>, String> {
+            if image == NOT_AN_IMAGE {
+                return Err("not an image".to_owned());
+            }
             assert_eq!(image, IMAGE);
             Ok(Some(FittedArtwork::single(JPEG.into())))
         }
 
         fn card_artwork(&self, image: &[u8]) -> Result<Option<CardArtwork>, String> {
+            if image == NOT_AN_IMAGE {
+                return Err("not an image".to_owned());
+            }
             assert_eq!(image, IMAGE);
             Ok(Some(CardArtwork::new(1, [0u8, 0, 0, 255])))
         }
@@ -987,6 +1000,28 @@ mod tests {
         let card = card.expect("the card still shows");
         assert_eq!((card.title.as_str(), card.artwork), ("Song", None));
         assert!(card.cover_failed, "no cover is on its way");
+    }
+
+    #[test]
+    fn a_track_with_no_cover_yet_has_not_failed_it() {
+        let (fake, _) = fake(Thumbnail::Empty);
+        let mut reader = Reader::new(fake);
+        let (_, card) = poll(&mut reader);
+        let card = card.expect("the card shows");
+        assert_eq!(card.artwork, None);
+        assert!(!card.cover_failed, "a cover may come a moment later");
+    }
+
+    #[test]
+    fn a_good_cover_after_a_decode_failure_clears_it() {
+        let (fake, _) = fake(Thumbnail::Undecodable);
+        let mut reader = Reader::new(fake);
+        let (_, card) = poll(&mut reader);
+        assert!(card.is_some_and(|card| card.cover_failed));
+        reader.sessions.thumbnail = Thumbnail::Image;
+        let (_, card) = poll(&mut reader);
+        let card = card.expect("the card shows");
+        assert!(card.artwork.is_some() && !card.cover_failed);
     }
 
     #[test]
