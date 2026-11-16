@@ -180,8 +180,16 @@ extension AppDelegate {
         let prompt = NSAlert()
         prompt.messageText = text.deleteZoneTitle(name)
         prompt.informativeText = text.deleteZoneMessage
-        prompt.addButton(withTitle: text.cancel)
+        let cancel = prompt.addButton(withTitle: text.cancel)
+        cancel.keyEquivalent = "\r"
         prompt.addButton(withTitle: text.deleteZoneConfirm).hasDestructiveAction = true
+        // AppKit maps Escape to a Cancel title only while it has no other key equivalent.
+        let escape = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 53 else { return event }   // 53: Escape
+            cancel.performClick(nil)
+            return nil
+        }
+        defer { if let escape = escape { NSEvent.removeMonitor(escape) } }
         return prompt.runModal() == .alertSecondButtonReturn
     }
 
