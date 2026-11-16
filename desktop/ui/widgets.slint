@@ -2085,7 +2085,8 @@ export component VolumeSlider inherits HorizontalLayout {
         // the slider and drops below it.
         vertical-alignment: center;
         wrap: no-wrap;
-        font-size: Tokens.font-size-subheadline;
+        // Segoe's digits are narrower than the Mac's: at its 11 pt they read a size smaller.
+        font-size: Tokens.font-size-callout;
         // The Mac's line: Segoe UI's is 2 px taller, all of it leading, and
         // would break a speaker row's 52 px step.
         height: 14px;
