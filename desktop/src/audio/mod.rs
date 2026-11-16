@@ -44,6 +44,7 @@
 //! lock, block or log.
 
 pub mod airplay;
+pub mod app_output;
 pub mod backend;
 pub mod calibrate_all;
 pub mod calibration;
