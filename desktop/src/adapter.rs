@@ -4208,17 +4208,17 @@ impl<A: AudioBackend> AudioAdapter<A> {
             self.handle(event);
         }
         self.forget_stale_waits();
-        self.save_local_volumes();
-        any
+        self.save_local_volumes() || any
     }
 
     /// Saves at once the levels the outputs were found at or left at, so
-    /// a crash before the next poll still puts them back (S472).
-    fn save_local_volumes(&mut self) {
-        // A changed field saves now; a failing file keeps its retry wait.
-        if self.audio.local_volumes() != self.saved.local_volumes {
-            let _ = self.persist();
-        }
+    /// a crash before the next poll still puts them back (S472). Returns
+    /// whether the notices changed.
+    fn save_local_volumes(&mut self) -> bool {
+        // A failing file is retried by the poll alone, so its wait counts once a poll.
+        self.unsaved.is_none()
+            && self.audio.local_volumes() != self.saved.local_volumes
+            && self.persist()
     }
 
     /// Only a speaker that is on while streaming is on waits: turned off, or
@@ -5132,7 +5132,7 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
             }
             self.clear_switch_notices();
             self.forget_stale_waits();
-            self.save_local_volumes();
+            let _ = self.save_local_volumes();
             return;
         }
         let action = self.streaming_after(SpeakerEvent::StartRequested);

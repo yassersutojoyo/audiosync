@@ -57,14 +57,17 @@ pub struct LocalVolumeMemory {
 
 impl LocalVolumeMemory {
     /// Takes in levels read from the settings file; an output playing now
-    /// keeps the level it was found at, to put back when it stops.
+    /// keeps the level it was found at, unless the file holds one for it.
     pub fn replace(&mut self, stored: LocalVolumes) {
         let playing = self.playing.iter();
         let kept: Vec<(String, f64)> = playing
             .filter_map(|id| Some((id.clone(), *self.stored.found.get(id)?)))
             .collect();
         self.stored = stored;
-        self.stored.found.extend(kept);
+        // The file's found level wins: one a crash left is the level from before AudioSync.
+        for (id, level) in kept {
+            self.stored.found.entry(id).or_insert(level);
+        }
     }
 
     pub fn playing(&self) -> impl Iterator<Item = &String> {
@@ -243,6 +246,22 @@ mod tests {
         };
         assert_eq!(changed.recover(&levels(0.3)), BTreeMap::new());
         assert_eq!(changed.switched_on(ID, Some(0.3)), None);
+    }
+
+    // covers: S472
+    #[test]
+    fn a_file_read_late_keeps_its_own_found_level_for_a_playing_output() {
+        let mut memory = LocalVolumeMemory::default();
+        memory.switched_on(ID, Some(0.18));
+        memory.replace(LocalVolumes {
+            found: levels(0.3),
+            ..LocalVolumes::default()
+        });
+        assert_eq!(
+            memory.switched_off(ID),
+            Some(0.3),
+            "the level before a crash wins"
+        );
     }
 
     #[test]
