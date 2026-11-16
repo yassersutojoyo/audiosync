@@ -332,3 +332,24 @@ fn the_source_button_shows_the_chosen_apps_icon_and_presets_the_stack() {
     let glyphs = component(include_str!("../../ui/widgets.slint"), "Glyphs");
     assert!(glyphs.contains(r#"out property <string> presets: "\u{E81E}";"#));
 }
+
+/// The header sits 5 px higher than the gap under the title row gave it, as
+/// the Mac's at 1:1 (gear top 43, card top 86), while the columns stay put.
+// covers: S450
+#[test]
+fn the_header_sits_as_high_as_the_macs_and_the_columns_stay() {
+    use i_slint_backend_testing::ElementHandle;
+    use slint::ComponentHandle;
+    let app = app_over(MockBackend::new());
+    app.main.show().expect("the main window shows headless");
+    app.poll();
+    let top = |id: &str| {
+        ElementHandle::find_by_element_id(&app.main, id)
+            .next()
+            .map(|element| element.absolute_position().y)
+            .unwrap_or_else(|| panic!("{id}"))
+    };
+    let gear = top("MainWindow::gear");
+    let column = top("MainWindow::left-column");
+    assert_eq!((gear, column), (33.0, 84.0), "gear, then the left column");
+}
