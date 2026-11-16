@@ -1017,6 +1017,9 @@ export component TrayFlyout inherits Window {
                     content-height: self.natural;
 
                     body := VerticalLayout {
+                        // At the top: its trailing spacing makes it taller than the
+                        // view, which would otherwise centre it and cut its first part.
+                        y: 0px;
                         height: self.preferred-height;
                         alignment: start;
                         padding-left: 6px;
@@ -1094,7 +1097,7 @@ export component TrayFlyout inherits Window {
                             index: 2;
                             revealed: root.revealed;
 
-                            Rectangle {
+                            hero-card := Rectangle {
                                 border-radius: Fluent.radius-card;
                                 background: Fluent.hero;
 

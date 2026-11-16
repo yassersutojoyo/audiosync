@@ -13433,6 +13433,40 @@ mod tests {
         );
     }
 
+    /// The Now Playing card shows whole inside the scrolling body, its
+    /// rounded corners included, as the Mac panel's does.
+    #[test]
+    fn the_flyout_now_playing_card_is_not_clipped() {
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        app.flyout.set_now_playing_shown(true);
+        app.flyout.set_now_playing_title("The Sun Does Rise".into());
+        app.flyout.set_now_playing_subtitle("Compuphonic".into());
+        app.flyout.show().expect("the flyout shows headless");
+        let height = app.fit_flyout(2000.0);
+        app.flyout
+            .window()
+            .set_size(slint::LogicalSize::new(300.0, height));
+        draw_frames();
+        let card = flyout_element(&app, "TrayFlyout::hero-card");
+        let body = flyout_element(&app, "TrayFlyout::body-view");
+        let (c, b) = (card.absolute_position(), body.absolute_position());
+        assert!(c.y >= b.y, "card top {} above the body's {}", c.y, b.y);
+        assert!(c.x >= b.x, "card left {} past the body's {}", c.x, b.x);
+        assert!(
+            c.y + card.size().height <= b.y + body.size().height,
+            "card bottom {} below the body's {}",
+            c.y + card.size().height,
+            b.y + body.size().height
+        );
+        assert!(
+            c.x + card.size().width <= b.x + body.size().width,
+            "card right {} past the body's {}",
+            c.x + card.size().width,
+            b.x + body.size().width
+        );
+    }
+
     /// A speaker's circle starts 14 px from the panel's edge and its name
     /// 10 px past it, its end 17 px from the other edge, as in the Mac panel.
     #[test]
