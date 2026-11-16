@@ -7934,8 +7934,9 @@ mod tests {
             "one line, {} px high",
             button.size().height
         );
+        // The row's fill reaches 8 px past the column, as the Mac's does.
         assert!(
-            end(&button) <= inside + 0.5,
+            end(&button) <= inside + 8.5,
             "the button ends at {}, the card's inside at {inside}",
             end(&button)
         );
@@ -13382,7 +13383,9 @@ mod tests {
         let speaker = element("MasterVolume::speaker");
         let middle = |e: &ElementHandle| e.absolute_position().x + e.size().width / 2.0;
         assert_eq!(middle(&speaker), middle(&row));
-        assert_eq!(speaker.size().width, row.size().width);
+        // Both glyphs are 16 px; the row's slot is the Mac's 20.
+        assert_eq!(speaker.size().width, 16.0);
+        assert_eq!(row.size().width, 20.0);
     }
 
     /// Where the master volume's track starts and ends: between the knob's
@@ -13419,7 +13422,8 @@ mod tests {
 
     /// The main window's master volume number, as in the Mac window: 8 px
     /// clear of the knob at 100 (16 px after the track's end, the knob's
-    /// centre), ending 1 px inside the rows' chevron edge.
+    /// centre), its digits' ink ending on the chevron's, 3 px inside the
+    /// chevron glyph's box.
     // covers: S450
     #[test]
     fn the_main_volume_number_sits_8_px_clear_of_the_knob_on_the_chevron_edge() {
@@ -13439,7 +13443,7 @@ mod tests {
         let (_, end) = master_track(&element("MasterVolume::slider"));
         assert!((number.absolute_position().x - end - 16.0).abs() < 0.5);
         let chevron = element("EqualizerCard::chevron");
-        assert!((right_edge(&number) + 1.0 - right_edge(&chevron)).abs() < 0.5);
+        assert!((right_edge(&number) + 3.0 - right_edge(&chevron)).abs() < 0.5);
     }
 
     /// The preset row's chevron is the hero card's: one size.

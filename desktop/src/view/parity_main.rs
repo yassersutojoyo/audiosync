@@ -318,3 +318,17 @@ fn no_text_overlaps_another_in_the_default_window() {
         }
     }
 }
+
+/// The source button shows the chosen app's own icon, as the Mac's does, and
+/// keeps the speaker or microphone glyph for anything without one; Presets
+/// shows the stacked squares.
+// covers: S450
+#[test]
+fn the_source_button_shows_the_chosen_apps_icon_and_presets_the_stack() {
+    let menu = component(include_str!("../../ui/main.slint"), "SourceMenu");
+    assert!(menu.contains("if root.looks[root.index].icon.width > 0: Rectangle {"));
+    assert!(menu.contains("source: root.looks[root.index].icon;"));
+    assert!(menu.contains("if root.looks[root.index].icon.width == 0: Glyph {"));
+    let glyphs = component(include_str!("../../ui/widgets.slint"), "Glyphs");
+    assert!(glyphs.contains(r#"out property <string> presets: "\u{E81E}";"#));
+}
