@@ -190,6 +190,9 @@ export component SettingsWindow inherits Window {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.settings-window;
     width: 460px;
+    // As high as its boxes, as the Mac's: a window kept at its first height cut
+    // the last boxes' bottom padding once a hidden speaker or a wrapped row came in.
+    height: content.preferred-height;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
@@ -214,7 +217,7 @@ export component SettingsWindow inherits Window {
             return reject;
         }
 
-        VerticalLayout {
+        content := VerticalLayout {
             padding: 20px;
             spacing: 16px;
             alignment: start;
