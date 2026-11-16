@@ -19125,6 +19125,13 @@ do {
             && ArtHold.decide(shown: waitShown, next: waitArrived, heldFor: waitAtCover) == .show
             && TrackSlide.cap > 2.3 && TrackSlide.cap == ArtFetches.timeout && ArtHold.limit == ArtFetches.timeout,
           "cover wait: a cover arriving 2.3 s after a press holds the old card until it comes, with no placeholder slide")
+    let waitLate = TrackSlide.waited(heldFor: 3.0, sincePress: 3.5)
+    check(waitLate == 3.5 && ArtHold.decide(shown: waitShown, next: waitLoading, heldFor: waitLate) == .hold
+            && TrackSlide.direction(pressed: .previous, secondsSincePress: 3.5) == .previous
+            && ArtHold.decide(shown: waitShown, next: waitLoading,
+                              heldFor: TrackSlide.waited(heldFor: 2.0, sincePress: TrackSlide.cap + 0.05)) == .show
+            && TrackSlide.direction(pressed: .previous, secondsSincePress: TrackSlide.cap + 0.05) == .previous,
+          "cover wait: a cover 3.5 s after Previous still counts as the press's, and the hold ends at the cap however slow the fetch")
     let waitGaveUp = ArtHold.gaveUp(waitLoading, on: waitLoading)
     check(waitGaveUp?.artPending == false && waitGaveUp?.artwork == nil
             && waitGaveUp.map { ArtHold.decide(shown: waitShown, next: $0, heldFor: 0.3) } == .show
@@ -19384,8 +19391,8 @@ do {
             && TrackSlide.direction(pressed: .previous, secondsSincePress: 1) == .previous
             && TrackSlide.direction(pressed: nil, secondsSincePress: 0.5) == nil
             && TrackSlide.direction(pressed: .next, secondsSincePress: TrackSlide.pressWindow + 1) == nil
-            && TrackSlide.direction(pressed: .next, secondsSincePress: -1) == nil && TrackSlide.pressWindow == 3,
-          "track slide: a change within 3 s of Next or Previous slides that way")
+            && TrackSlide.direction(pressed: .next, secondsSincePress: -1) == nil && TrackSlide.pressWindow > TrackSlide.cap,
+          "track slide: a change within 5 s of Next or Previous, past the 4 s wait, slides that way")
     let one = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",
                                       album: "B", isPlaying: true, artwork: nil)
     let onePaused = NowPlayingMonitor.Track(bundleID: "com.apple.Music", appName: "Music", title: "One", artist: "A",

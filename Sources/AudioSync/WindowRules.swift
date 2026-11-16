@@ -312,8 +312,8 @@ enum TrackSlide {
         let at: Date
     }
 
-    /// A change this long after a press still counts as the press's.
-    static let pressWindow: TimeInterval = 3
+    /// A change this long after a press still counts as the press's: past `cap`, so the slide the cap starts is the press's.
+    static let pressWindow: TimeInterval = ArtFetches.timeout + 1
     /// The longest wait from a press for the new song and its cover: the cover fetch's own timeout.
     static let cap: TimeInterval = ArtFetches.timeout
     /// The old cover's recede while it waits.
