@@ -2384,6 +2384,14 @@ impl MockBackend {
         }
     }
 
+    /// Names source `id` `name`.
+    #[cfg(test)]
+    pub fn rename_source(&mut self, id: &str, name: &str) {
+        if let Some(source) = self.state.sources.iter_mut().find(|s| s.id == id) {
+            source.name = name.into();
+        }
+    }
+
     /// Adds preset `id` of the speakers `members` at the master and the
     /// curve now, with no own volumes.
     pub fn add_preset(&mut self, id: &str, name: &str, members: &[&str]) {

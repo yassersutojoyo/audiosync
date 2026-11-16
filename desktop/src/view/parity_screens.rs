@@ -46,9 +46,9 @@ fn save_rename_and_delete_are_items_of_the_curve_menu() {
         "the bottom row has Reset only"
     );
     for item in [
-        "title: Strings.equalizer-save-curve;",
-        "title: Strings.equalizer-rename-curve(",
-        "title: Strings.equalizer-delete-curve(",
+        "text: Strings.equalizer-save-curve;",
+        "text: Strings.equalizer-rename-curve(",
+        "text: Strings.equalizer-delete-curve(",
     ] {
         assert!(source.contains(item), "{item}");
     }

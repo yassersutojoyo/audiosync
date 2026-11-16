@@ -1793,7 +1793,7 @@ fn the_updater_notice_uses_strings_and_tokens() {
 // covers: S268 (the Windows host)
 /// The preset controls (spec S267, S268): token colors only, a focus ring,
 /// Narrator's label and value on the Presets row, and the Menu key and
-/// Shift+F10 through each listed preset's context menu area.
+/// Shift+F10 through each listed preset's menu.
 #[test]
 fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
     let main = include_str!("../ui/main.slint");
@@ -1826,10 +1826,11 @@ fn the_preset_controls_use_tokens_and_reach_the_keyboard() {
         assert!(card.contains(needle), "PresetsCard has {needle}");
     }
     for needle in [
-        "menu := ContextMenuArea {",
-        "title: Strings.rename-preset;",
+        "menu := PopupWindow {",
+        "if MenuKey.opens(event) {",
+        "text: Strings.rename-preset;",
         "enabled: !root.item.current;",
-        "title: Strings.delete-preset;",
+        "text: Strings.delete-preset;",
         "FocusRing {",
         "|| ScreenReader.on ? 1 : 0;",
     ] {

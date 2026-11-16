@@ -2793,10 +2793,364 @@ export component NameEditor inherits FocusScope {
     }
 }
 
+// The keys that open a focused control's menu: the Menu key, or Shift+F10.
+export global MenuKey {
+    public pure function opens(event: KeyEvent) -> bool {
+        return event.text == Key.Menu || (event.text == Key.F10 && event.modifiers.shift);
+    }
+}
+
+// The room a window's row menus keep inside; zero where no window sets it.
+export global MenuRoom {
+    in-out property <length> width;
+    in-out property <length> height;
+    // A menu's popup reaches this far past its box, so its shadow is inside
+    // the area the renderer redraws as it opens and closes.
+    out property <length> margin: 8px;
+
+    // Where a menu `size` long opened at `at` starts: past `room` it ends at
+    // `flip` instead, and it never leaves the room.
+    public pure function place(at: length, size: length, flip: length, room: length) -> length {
+        if room <= 0px {
+            return at;
+        }
+        return clamp(at + size > room ? flip - size : at, 0px, max(0px, room - size));
+    }
+
+    // A menu's height: 32 px rows, 9 px dividers, 4 px padding at each end.
+    public pure function rows(count: int, dividers: int) -> length {
+        return count * 32px + dividers * 9px + 8px;
+    }
+}
+
+// One menu shows at a time: each opening claims the next serial, and the
+// menu holding an older one closes. `open` is the serial of the menu that
+// shows (0: none), so Invoke on its button closes it again.
+export global MenuState {
+    in-out property <int> serial;
+    in-out property <int> open;
+    // Bumped as an older menu closes, which gives the focus back to what had
+    // it then: the menu that shows takes it again.
+    in-out property <int> refocus;
+
+    public function claim() -> int {
+        self.serial += 1;
+        return self.serial;
+    }
+}
+
+// The app's own menus (the gear's, the source picker's, a speaker's options):
+// a popup drawn in the app's colors, so it is dark with the app as the Mac's
+// menus are. MenuPanel holds the rows and the keys: the arrows, Home and End
+// pick a row with a focus ring, Enter or Space runs it, Escape or Tab closes.
+// Each MenuRow shares `current`, `keyboard`, `pulse` and `done` with it.
+// A closing popup gives the focus back to what had it, so a row whose
+// action focuses a name field closes the menu before it runs.
+export component MenuPanel inherits FocusScope {
+    in property <int> count;
+    in-out property <int> current: -1;
+    in-out property <bool> keyboard;
+    // Enter or Space bumps it; the picked row runs on the change.
+    out property <int> pulse;
+    // A row that ran bumps it, which closes the menu.
+    in-out property <int> done;
+    // Which way the keys last moved, for a disabled row to pass the pick on.
+    out property <int> step: 1;
+    callback close-requested(bool);
+    property <int> own;
+    property <int> latest: MenuState.serial;
+
+    changed done => {
+        root.close-requested(false);
+    }
+
+    property <int> refocus: MenuState.refocus;
+
+    changed latest => {
+        if self.latest != self.own {
+            root.close-requested(false);
+            MenuState.refocus += 1;
+        }
+    }
+
+    changed refocus => {
+        if MenuState.serial == self.own {
+            MenuState.open = self.own;
+            self.focus();
+        }
+    }
+
+    init => {
+        self.own = MenuState.serial;
+        MenuState.open = self.own;
+        self.focus();
+    }
+    // Only closing takes it this way; Narrator may move it elsewhere first.
+    focus-lost(reason) => {
+        if reason == FocusReason.popup-activation && MenuState.open == root.own {
+            MenuState.open = 0;
+        }
+    }
+    key-pressed(event) => {
+        if root.count > 0 && event.text == Key.DownArrow {
+            root.step = 1;
+            root.current = mod(root.current + 1, root.count);
+            root.keyboard = true;
+            return accept;
+        }
+        if root.count > 0 && event.text == Key.UpArrow {
+            root.step = -1;
+            root.current = mod(max(root.current, 0) + root.count - 1, root.count);
+            root.keyboard = true;
+            return accept;
+        }
+        if root.count > 0 && (event.text == Key.Home || event.text == Key.End) {
+            root.step = event.text == Key.Home ? 1 : -1;
+            root.current = event.text == Key.Home ? 0 : root.count - 1;
+            root.keyboard = true;
+            return accept;
+        }
+        if (event.text == Key.Return || event.text == " ") && root.current >= 0 {
+            root.pulse += 1;
+            return accept;
+        }
+        if event.text == Key.Escape || event.text == Key.Tab || event.text == Key.Backtab {
+            root.close-requested(true);
+            return accept;
+        }
+        return reject;
+    }
+
+    Rectangle {
+        x: MenuRoom.margin;
+        y: MenuRoom.margin;
+        width: parent.width - 2 * MenuRoom.margin;
+        height: parent.height - 2 * MenuRoom.margin;
+        background: Tokens.surface;
+        border-width: 1px;
+        border-color: Fluent.stroke;
+        border-radius: 8px;
+        drop-shadow-blur: 6px;
+        drop-shadow-offset-y: 2px;
+        drop-shadow-color: #00000038;
+    }
+
+    VerticalLayout {
+        padding: 4px + MenuRoom.margin;
+        @children
+    }
+}
+
+// A menu row: a check column when the menu has checks, the name, and its keys
+// or a submenu's chevron at the right in the secondary color.
+export component MenuRow inherits Rectangle {
+    in property <int> index;
+    in property <string> text;
+    in property <string> keys;
+    in property <bool> checks;
+    in property <bool> checked;
+    // The check column of a menu where only some rows have a check.
+    in property <bool> check-column;
+    in property <bool> enabled: true;
+    // A disabled row passes a pick by the keys on, as the Mac's menus do:
+    // it binds the panel's `step` and `count`.
+    in property <int> step;
+    in property <int> count;
+    // A submenu's row, which unfolds its rows under it and keeps the menu open.
+    in property <bool> submenu;
+    in property <bool> expanded;
+    // A submenu's rows sit a step in.
+    in property <bool> nested;
+    in-out property <int> current;
+    in-out property <bool> keyboard;
+    in property <int> pulse;
+    in-out property <int> done;
+    callback activated();
+    property <bool> selected: root.current == root.index;
+
+    function run() {
+        if !root.enabled {
+            return;
+        }
+        root.activated();
+        if !root.submenu {
+            root.done += 1;
+        }
+    }
+
+    changed pulse => {
+        if root.selected {
+            root.run();
+        }
+    }
+
+    changed selected => {
+        if root.selected && !root.enabled && root.keyboard && root.count > 1 {
+            root.current = mod(root.current + root.step + root.count, root.count);
+        }
+    }
+
+    height: 32px;
+    border-radius: Fluent.radius-control;
+    background: root.selected ? Fluent.hover : transparent;
+    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+    accessible-role: button;
+    accessible-checkable: root.checks;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-expandable: root.submenu;
+    accessible-expanded: root.expanded;
+    accessible-label: root.text;
+    accessible-description: root.keys;
+    accessible-action-default => {
+        root.run();
+    }
+
+    TouchArea {
+        changed has-hover => {
+            if self.has-hover {
+                root.current = root.index;
+                root.keyboard = false;
+            }
+        }
+        clicked => {
+            root.run();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: root.nested ? 26px : 10px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        if root.checks || root.check-column: Glyph {
+            width: 14px;
+            glyph: root.checks && root.checked ? Glyphs.check : "";
+            color: Tokens.teal-text;
+        }
+
+        Text {
+            text: root.text;
+            color: Tokens.text;
+            font-size: Tokens.font-size-body;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+            accessible-role: none;
+        }
+
+        if root.keys != "": Text {
+            text: root.keys;
+            color: Tokens.secondary-text;
+            font-size: Tokens.font-size-subheadline;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        if root.submenu: Rectangle {
+            width: 12px;
+            transform-rotation: root.expanded ? 90deg : 0deg;
+
+            Glyph {
+                glyph: Glyphs.chevron-right;
+                font-size: Tokens.font-size-caption;
+                color: Tokens.secondary-text;
+            }
+        }
+    }
+
+    FocusRing {
+        visible-focus: root.selected && root.keyboard;
+        border-radius: root.border-radius;
+    }
+}
+
+// A menu section's name, or a line no one picks.
+export component MenuNote inherits HorizontalLayout {
+    in property <string> text;
+    in property <bool> nested;
+
+    padding-left: root.nested ? 26px : 10px;
+    padding-right: 10px;
+    padding-top: 6px;
+    padding-bottom: 2px;
+
+    Text {
+        text: root.text;
+        color: Tokens.secondary-text;
+        font-size: Tokens.font-size-subheadline;
+        wrap: word-wrap;
+    }
+}
+
+export component MenuDivider inherits HorizontalLayout {
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+
+    Rectangle {
+        height: 1px;
+        background: Tokens.separator;
+    }
+}
+
 // One speaker: its toggle, then its name with its kind and note, the sync
 // delay and its options on one line, and its volume under them. The sync
 // controls open underneath.
 export component SpeakerRow inherits Rectangle {
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-width: 260px;
+    // The options menu's rows that show, as on the Mac; each index counts
+    // the rows shown above it.
+    property <bool> menu-rename: !root.item.missing;
+    // Auto-connect is for local and AirPlay speakers; a Cast speaker's menu
+    // holds the controls under its volume.
+    property <bool> menu-auto: !root.item.cast && !root.item.missing;
+    property <bool> menu-mute: root.cast-live && !root.item.volume-fixed;
+    property <bool> menu-pairing: root.item.paired || root.item.holds-credentials;
+    property <bool> menu-password: !root.item.paired && !root.item.holds-credentials && root.item.holds-password;
+    property <bool> menu-only: root.item.zone-id != "" && !root.item.missing;
+    property <bool> menu-remove: root.item.zone-movable && root.item.zone-id != "";
+    // Move to Zone's rows show under it.
+    property <bool> menu-move-open;
+    property <int> i-auto: root.menu-rename ? 1 : 0;
+    property <int> i-mute: root.i-auto + (root.menu-auto ? 1 : 0);
+    property <int> i-resync: root.i-mute + (root.menu-mute ? 1 : 0);
+    property <int> i-pairing: root.i-resync + (root.cast-live ? 1 : 0);
+    property <int> i-cast-remove: root.i-pairing + (root.menu-pairing || root.menu-password ? 1 : 0);
+    property <int> i-only: root.i-cast-remove + (root.item.cast-added-by-address ? 1 : 0);
+    property <int> i-move: root.i-only + (root.menu-only ? 1 : 0);
+    property <int> i-remove: root.i-move + (root.item.zone-movable ? 1 + (root.menu-move-open ? root.item.move-zones.length + 1 : 0) : 0);
+    property <int> i-hide: root.i-remove + (root.menu-remove ? 1 : 0);
+
+    // At x, y in the window; past its right or bottom edge the menu
+    // flips to end at flip-x or flip-y.
+    property <int> menu-serial;
+
+    function open-menu(x: length, y: length, flip-x: length, flip-y: length) {
+        root.menu-x = MenuRoom.place(x, root.menu-width, flip-x, MenuRoom.width) - root.absolute-position.x;
+        root.menu-y = MenuRoom.place(y, MenuRoom.rows(root.i-hide + 1, 3), flip-y, MenuRoom.height) - root.absolute-position.y;
+        root.menu-move-open = false;
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        if root.focused-part == RowPart.none {
+            options.focus();
+        }
+        root.menu-serial = MenuState.claim();
+        menu.show();
+    }
+
+    function open-menu-under-options() {
+        root.open-menu(options.absolute-position.x, options.absolute-position.y + options.height, options.absolute-position.x + options.width, options.absolute-position.y);
+    }
+
     in property <SpeakerItem> item;
     // In a zone: no hover fill of its own, as on the Mac.
     in property <bool> grouped;
@@ -2962,104 +3316,21 @@ export component SpeakerRow inherits Rectangle {
         clicked => {
             root.box-clicked();
         }
-        menu := ContextMenuArea {
-            Menu {
-                if !root.item.missing: MenuItem {
-                    title: Strings.rename-speaker;
-                    activated => {
-                        root.rename-requested();
-                    }
+        pointer-event(event) => {
+            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                root.open-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
+
+        FocusScope {
+            focus-on-click: false;
+            focus-on-tab-navigation: false;
+            key-pressed(event) => {
+                if MenuKey.opens(event) {
+                    root.open-menu-under-options();
+                    return accept;
                 }
-
-                // Auto-connect is for local and AirPlay speakers; a Cast
-                // speaker's menu holds the controls under its volume.
-                if !root.item.cast && !root.item.missing: MenuItem {
-                    title: Strings.auto-connect;
-                    checkable: true;
-                    checked: root.item.auto-connect;
-                    activated => {
-                        root.auto-connect-toggled(!root.item.auto-connect);
-                    }
-                }
-
-                if root.cast-live && !root.item.volume-fixed: MenuItem {
-                    title: root.item.muted ? Strings.cast-unmute : Strings.cast-mute;
-                    activated => {
-                        root.cast-muted(!root.item.muted);
-                    }
-                }
-
-                if root.cast-live: MenuItem {
-                    title: Strings.cast-resync;
-                    activated => {
-                        root.cast-resync();
-                    }
-                }
-
-                if root.item.paired || root.item.holds-credentials: MenuItem {
-                    title: Strings.forget-pairing;
-                    activated => {
-                        root.forget-pairing();
-                    }
-                }
-
-                if !root.item.paired && !root.item.holds-credentials && root.item.holds-password: MenuItem {
-                    title: Strings.forget-password;
-                    activated => {
-                        root.forget-pairing();
-                    }
-                }
-
-                if root.item.cast-added-by-address: MenuItem {
-                    title: Strings.cast-remove;
-                    activated => {
-                        root.cast-remove();
-                    }
-                }
-
-                if (root.item.zone-movable || root.item.zone-id != "") && !root.item.missing: MenuSeparator { }
-
-                if root.item.zone-id != "" && !root.item.missing: MenuItem {
-                    title: Strings.only-this-speaker;
-                    activated => {
-                        root.only-this();
-                    }
-                }
-
-                if root.item.zone-movable: Menu {
-                    title: Strings.move-to-zone;
-                    for zone in root.item.move-zones: MenuItem {
-                        title: zone.name;
-                        activated => {
-                            root.move-to-zone(zone.id);
-                        }
-                    }
-
-                    if root.item.move-zones.length > 0: MenuSeparator { }
-
-                    MenuItem {
-                        title: Strings.new-zone-item;
-                        activated => {
-                            root.new-zone();
-                        }
-                    }
-                }
-
-                if root.item.zone-movable && root.item.zone-id != "": MenuItem {
-                    title: Strings.remove-from-zone;
-                    activated => {
-                        root.remove-from-zone();
-                    }
-                }
-
-                if root.item.hideable: MenuSeparator { }
-
-                if root.item.hideable: MenuItem {
-                    title: Strings.hide-speaker;
-                    activated => {
-                        root.hide-requested();
-                    }
-                }
+                return reject;
             }
 
             VerticalLayout {
@@ -3421,11 +3692,7 @@ export component SpeakerRow inherits Rectangle {
                                     opacity: root.reveal;
                                     glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
                                     clicked => {
-                                        // show() takes a point in the menu area, not in this button's layout.
-                                        menu.show({
-                                            x: self.absolute-position.x - menu.absolute-position.x,
-                                            y: self.absolute-position.y - menu.absolute-position.y + self.height,
-                                        });
+                                        root.open-menu-under-options();
                                     }
                                     focus-changed(focused) => {
                                         root.options-focused = focused;
@@ -3632,6 +3899,201 @@ export component SpeakerRow inherits Rectangle {
             }
         }
     }
+
+    menu := PopupWindow {
+        x: root.menu-x - MenuRoom.margin;
+        y: root.menu-y - MenuRoom.margin;
+        width: max(root.menu-width + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            count: root.i-hide + (root.item.hideable ? 1 : 0);
+            close-requested => {
+                menu.close();
+            }
+
+            if root.menu-rename: MenuRow {
+                index: 0;
+                text: Strings.rename-speaker;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    menu.close();
+                    root.rename-requested();
+                }
+            }
+
+            if root.menu-auto: MenuRow {
+                index: root.i-auto;
+                text: Strings.auto-connect;
+                checks: true;
+                checked: root.item.auto-connect;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.auto-connect-toggled(!root.item.auto-connect);
+                }
+            }
+
+            if root.menu-mute: MenuRow {
+                index: root.i-mute;
+                text: root.item.muted ? Strings.cast-unmute : Strings.cast-mute;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.cast-muted(!root.item.muted);
+                }
+            }
+
+            if root.cast-live: MenuRow {
+                index: root.i-resync;
+                text: Strings.cast-resync;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.cast-resync();
+                }
+            }
+
+            if root.menu-pairing: MenuRow {
+                index: root.i-pairing;
+                text: Strings.forget-pairing;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.forget-pairing();
+                }
+            }
+
+            if root.menu-password: MenuRow {
+                index: root.i-pairing;
+                text: Strings.forget-password;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.forget-pairing();
+                }
+            }
+
+            if root.item.cast-added-by-address: MenuRow {
+                index: root.i-cast-remove;
+                text: Strings.cast-remove;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.cast-remove();
+                }
+            }
+
+            if (root.item.zone-movable || root.item.zone-id != "") && !root.item.missing: MenuDivider { }
+
+            if root.menu-only: MenuRow {
+                index: root.i-only;
+                text: Strings.only-this-speaker;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.only-this();
+                }
+            }
+
+            if root.item.zone-movable: MenuRow {
+                index: root.i-move;
+                text: Strings.move-to-zone;
+                check-column: true;
+                submenu: true;
+                expanded: root.menu-move-open;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.menu-move-open = !root.menu-move-open;
+                }
+            }
+
+            for zone[k] in root.item.zone-movable && root.menu-move-open ? root.item.move-zones : []: MenuRow {
+                index: root.i-move + 1 + k;
+                text: zone.name;
+                check-column: true;
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.move-to-zone(zone.id);
+                }
+            }
+
+            if root.item.zone-movable && root.menu-move-open && root.item.move-zones.length > 0: MenuDivider { }
+
+            if root.item.zone-movable && root.menu-move-open: MenuRow {
+                index: root.i-move + 1 + root.item.move-zones.length;
+                text: Strings.new-zone-item;
+                check-column: true;
+                nested: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.new-zone();
+                }
+            }
+
+            if root.menu-remove: MenuRow {
+                index: root.i-remove;
+                text: Strings.remove-from-zone;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.remove-from-zone();
+                }
+            }
+
+            if root.item.hideable: MenuDivider { }
+
+            if root.item.hideable: MenuRow {
+                index: root.i-hide;
+                text: Strings.hide-speaker;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.hide-requested();
+                }
+            }
+        }
+    }
 }
 
 // A zone member's compact row under its own section: its switch, which runs
@@ -3640,6 +4102,35 @@ export component SpeakerRow inherits Rectangle {
 // from Zone. A double-click on the name, or F2 on the switch, renames the
 // speaker here, as on its full row.
 export component ZoneMemberRow inherits Rectangle {
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-width: 220px;
+
+    // At x, y in the window; past its right or bottom edge the menu
+    // flips to end at flip-x or flip-y.
+    property <int> menu-serial;
+
+    function open-menu(x: length, y: length, flip-x: length, flip-y: length) {
+        root.menu-x = MenuRoom.place(x, root.menu-width, flip-x, MenuRoom.width) - root.absolute-position.x;
+        root.menu-y = MenuRoom.place(y, MenuRoom.rows(2, 0), flip-y, MenuRoom.height) - root.absolute-position.y;
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        if root.focused-part == RowPart.none {
+            options.focus();
+        }
+        root.menu-serial = MenuState.claim();
+        menu.show();
+    }
+
+    function open-menu-under-options() {
+        root.open-menu(options.absolute-position.x, options.absolute-position.y + options.height, options.absolute-position.x + options.width, options.absolute-position.y);
+    }
+
     in property <SpeakerItem> item;
     callback toggled();
     callback go-to-zone();
@@ -3710,21 +4201,21 @@ export component ZoneMemberRow inherits Rectangle {
         clicked => {
             root.blank-clicked();
         }
-        menu := ContextMenuArea {
-            Menu {
-                MenuItem {
-                    title: Strings.go-to-zone;
-                    activated => {
-                        root.go-to-zone();
-                    }
-                }
+        pointer-event(event) => {
+            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                root.open-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
 
-                MenuItem {
-                    title: Strings.remove-from-zone;
-                    activated => {
-                        root.remove-from-zone();
-                    }
+        FocusScope {
+            focus-on-click: false;
+            focus-on-tab-navigation: false;
+            key-pressed(event) => {
+                if MenuKey.opens(event) {
+                    root.open-menu-under-options();
+                    return accept;
                 }
+                return reject;
             }
 
             HorizontalLayout {
@@ -3868,15 +4359,50 @@ export component ZoneMemberRow inherits Rectangle {
                         label: Strings.speaker-options(root.item.name);
                         glyph-color: Tokens.teal-text;
                         clicked => {
-                            menu.show({
-                                x: self.absolute-position.x - menu.absolute-position.x,
-                                y: self.absolute-position.y - menu.absolute-position.y + self.height,
-                            });
+                            root.open-menu-under-options();
                         }
                         focus-changed(focused) => {
                             root.options-focused = focused;
                         }
                     }
+                }
+            }
+        }
+    }
+
+    menu := PopupWindow {
+        x: root.menu-x - MenuRoom.margin;
+        y: root.menu-y - MenuRoom.margin;
+        width: max(root.menu-width + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            count: 2;
+            close-requested => {
+                menu.close();
+            }
+
+            MenuRow {
+                index: 0;
+                text: Strings.go-to-zone;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.go-to-zone();
+                }
+            }
+
+            MenuRow {
+                index: 1;
+                text: Strings.remove-from-zone;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.remove-from-zone();
                 }
             }
         }
@@ -3889,6 +4415,35 @@ export component ZoneMemberRow inherits Rectangle {
 // anywhere but the toggle, the volume and the options shows or hides the
 // speakers; the arrow is a Tab stop of its own, as on the Mac.
 export component ZoneHeader inherits Rectangle {
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-width: 260px;
+
+    // At x, y in the window; past its right or bottom edge the menu
+    // flips to end at flip-x or flip-y.
+    property <int> menu-serial;
+
+    function open-menu(x: length, y: length, flip-x: length, flip-y: length) {
+        root.menu-x = MenuRoom.place(x, root.menu-width, flip-x, MenuRoom.width) - root.absolute-position.x;
+        root.menu-y = MenuRoom.place(y, MenuRoom.rows(3 + root.item.targets.length, 1), flip-y, MenuRoom.height) - root.absolute-position.y;
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        if root.focused-part == RowPart.none {
+            options.focus();
+        }
+        root.menu-serial = MenuState.claim();
+        menu.show();
+    }
+
+    function open-menu-under-options() {
+        root.open-menu(options.absolute-position.x, options.absolute-position.y + options.height, options.absolute-position.x + options.width, options.absolute-position.y);
+    }
+
     in property <ZoneItem> item;
     callback toggled();
     callback expanded-changed(bool);
@@ -3976,38 +4531,21 @@ export component ZoneHeader inherits Rectangle {
         clicked => {
             root.expanded-changed(!root.item.expanded);
         }
-        menu := ContextMenuArea {
-            Menu {
-                MenuItem {
-                    title: Strings.rename-zone;
-                    activated => {
-                        root.rename();
-                    }
-                }
+        pointer-event(event) => {
+            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                root.open-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
 
-                for target in root.item.targets: MenuItem {
-                    title: Strings.use-target-instead(target.target);
-                    activated => {
-                        root.use-target(target.member-id);
-                    }
+        FocusScope {
+            focus-on-click: false;
+            focus-on-tab-navigation: false;
+            key-pressed(event) => {
+                if MenuKey.opens(event) {
+                    root.open-menu-under-options();
+                    return accept;
                 }
-
-                MenuItem {
-                    title: Strings.calibrate-zone-item;
-                    enabled: root.item.can-calibrate;
-                    activated => {
-                        root.calibrate();
-                    }
-                }
-
-                MenuSeparator { }
-
-                MenuItem {
-                    title: Strings.delete-zone;
-                    activated => {
-                        root.delete();
-                    }
-                }
+                return reject;
             }
 
             // F2 renames the zone from any of its header's controls.
@@ -4284,17 +4822,81 @@ export component ZoneHeader inherits Rectangle {
                             label: Strings.speaker-options(root.item.name);
                             glyph-color: Tokens.teal-text;
                             clicked => {
-                                // show() takes a point in the menu area, not in this button's layout.
-                                menu.show({
-                                    x: self.absolute-position.x - menu.absolute-position.x,
-                                    y: self.absolute-position.y - menu.absolute-position.y + self.height,
-                                });
+                                root.open-menu-under-options();
                             }
                             focus-changed(focused) => {
                                 root.options-focused = focused;
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    menu := PopupWindow {
+        x: root.menu-x - MenuRoom.margin;
+        y: root.menu-y - MenuRoom.margin;
+        width: max(root.menu-width + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            count: 3 + root.item.targets.length;
+            close-requested => {
+                menu.close();
+            }
+
+            MenuRow {
+                index: 0;
+                text: Strings.rename-zone;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    menu.close();
+                    root.rename();
+                }
+            }
+
+            for target[i] in root.item.targets: MenuRow {
+                index: 1 + i;
+                text: Strings.use-target-instead(target.target);
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.use-target(target.member-id);
+                }
+            }
+
+            MenuRow {
+                index: 1 + root.item.targets.length;
+                text: Strings.calibrate-zone-item;
+                enabled: root.item.can-calibrate;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.calibrate();
+                }
+            }
+
+            MenuDivider { }
+
+            MenuRow {
+                index: 2 + root.item.targets.length;
+                text: Strings.delete-zone;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.delete();
                 }
             }
         }
@@ -4638,206 +5240,5 @@ export component NoticeStack inherits VerticalLayout {
                 }
             }
         }
-    }
-}
-
-// The app's own menus (the gear's, the source picker's, a speaker's options):
-// a popup drawn in the app's colors, so it is dark with the app as the Mac's
-// menus are. MenuPanel holds the rows and the keys: the arrows, Home and End
-// pick a row with a focus ring, Enter or Space runs it, Escape or Tab closes.
-// Each MenuRow shares `current`, `keyboard`, `pulse` and `done` with it.
-export component MenuPanel inherits FocusScope {
-    in property <int> count;
-    in-out property <int> current: -1;
-    in-out property <bool> keyboard;
-    // Enter or Space bumps it; the picked row runs on the change.
-    out property <int> pulse;
-    // A row that ran bumps it, which closes the menu.
-    in-out property <int> done;
-    callback close-requested(bool);
-
-    changed done => {
-        root.close-requested(false);
-    }
-
-    init => {
-        self.focus();
-    }
-    key-pressed(event) => {
-        if root.count > 0 && event.text == Key.DownArrow {
-            root.current = mod(root.current + 1, root.count);
-            root.keyboard = true;
-            return accept;
-        }
-        if root.count > 0 && event.text == Key.UpArrow {
-            root.current = mod(max(root.current, 0) + root.count - 1, root.count);
-            root.keyboard = true;
-            return accept;
-        }
-        if root.count > 0 && (event.text == Key.Home || event.text == Key.End) {
-            root.current = event.text == Key.Home ? 0 : root.count - 1;
-            root.keyboard = true;
-            return accept;
-        }
-        if (event.text == Key.Return || event.text == " ") && root.current >= 0 {
-            root.pulse += 1;
-            return accept;
-        }
-        if event.text == Key.Escape || event.text == Key.Tab || event.text == Key.Backtab {
-            root.close-requested(true);
-            return accept;
-        }
-        return reject;
-    }
-
-    Rectangle {
-        background: Tokens.surface;
-        border-width: 1px;
-        border-color: Fluent.stroke;
-        border-radius: 8px;
-        drop-shadow-blur: 24px;
-        drop-shadow-offset-y: 8px;
-        drop-shadow-color: #00000038;
-    }
-
-    VerticalLayout {
-        padding: 4px;
-        @children
-    }
-}
-
-// A menu row: a check column when the menu has checks, the name, and its keys
-// or a submenu's chevron at the right in the secondary color.
-export component MenuRow inherits Rectangle {
-    in property <int> index;
-    in property <string> text;
-    in property <string> keys;
-    in property <bool> checks;
-    in property <bool> checked;
-    // A submenu's row, which unfolds its rows under it and keeps the menu open.
-    in property <bool> submenu;
-    in property <bool> expanded;
-    // A submenu's rows sit a step in.
-    in property <bool> nested;
-    in-out property <int> current;
-    in-out property <bool> keyboard;
-    in property <int> pulse;
-    in-out property <int> done;
-    callback activated();
-    property <bool> selected: root.current == root.index;
-
-    function run() {
-        root.activated();
-        if !root.submenu {
-            root.done += 1;
-        }
-    }
-
-    changed pulse => {
-        if root.selected {
-            root.run();
-        }
-    }
-
-    height: 32px;
-    border-radius: Fluent.radius-control;
-    background: root.selected ? Fluent.hover : transparent;
-    accessible-role: button;
-    accessible-checkable: root.checks;
-    accessible-checked: root.checked;
-    accessible-expandable: root.submenu;
-    accessible-expanded: root.expanded;
-    accessible-label: root.text;
-    accessible-description: root.keys;
-    accessible-action-default => {
-        root.run();
-    }
-
-    TouchArea {
-        changed has-hover => {
-            if self.has-hover {
-                root.current = root.index;
-                root.keyboard = false;
-            }
-        }
-        clicked => {
-            root.run();
-        }
-    }
-
-    HorizontalLayout {
-        padding-left: root.nested ? 26px : 10px;
-        padding-right: 10px;
-        spacing: 8px;
-
-        if root.checks: Glyph {
-            width: 14px;
-            glyph: root.checked ? Glyphs.check : "";
-            color: Tokens.teal-text;
-        }
-
-        Text {
-            text: root.text;
-            color: Tokens.text;
-            font-size: Tokens.font-size-body;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
-            overflow: elide;
-            accessible-role: none;
-        }
-
-        if root.keys != "": Text {
-            text: root.keys;
-            color: Tokens.secondary-text;
-            font-size: Tokens.font-size-subheadline;
-            vertical-alignment: center;
-            accessible-role: none;
-        }
-
-        if root.submenu: Rectangle {
-            width: 12px;
-            transform-rotation: root.expanded ? 90deg : 0deg;
-
-            Glyph {
-                glyph: Glyphs.chevron-right;
-                font-size: Tokens.font-size-caption;
-                color: Tokens.secondary-text;
-            }
-        }
-    }
-
-    FocusRing {
-        visible-focus: root.selected && root.keyboard;
-        border-radius: root.border-radius;
-    }
-}
-
-// A menu section's name, or a line no one picks.
-export component MenuNote inherits HorizontalLayout {
-    in property <string> text;
-    in property <bool> nested;
-
-    padding-left: root.nested ? 26px : 10px;
-    padding-right: 10px;
-    padding-top: 6px;
-    padding-bottom: 2px;
-
-    Text {
-        text: root.text;
-        color: Tokens.secondary-text;
-        font-size: Tokens.font-size-subheadline;
-        wrap: word-wrap;
-    }
-}
-
-export component MenuDivider inherits HorizontalLayout {
-    padding-left: 6px;
-    padding-right: 6px;
-    padding-top: 4px;
-    padding-bottom: 4px;
-
-    Rectangle {
-        height: 1px;
-        background: Tokens.separator;
     }
 }
