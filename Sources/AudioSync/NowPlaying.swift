@@ -796,11 +796,16 @@ final class NowPlayingMonitor {
                 artLog("Now Playing art: \(song) miss, fetching its cover address")
                 artFetches.start(key)
                 // A stalled fetch would hold the song's later readings off until URLSession's 60 s default.
-                let fetch = URLSession.shared.dataTask(with: URLRequest(url: url, timeoutInterval: 4)) { [weak self] data, _, _ in
+                let fetch = URLSession.shared.dataTask(with: URLRequest(url: url, timeoutInterval: ArtFetches.timeout)) { [weak self] data, _, _ in
                     guard let self else { return }
                     guard let data, let image = Self.cover(data) else {
                         DebugTrace.log("Now Playing art: \(song) fetch gave no picture")
                         self.scripts.async { self.artFetches.ended(key) }
+                        DispatchQueue.main.async {
+                            guard let given = ArtHold.gaveUp(self.track, on: t) else { return }
+                            self.track = given
+                            self.onChange?(given)
+                        }
                         return
                     }
                     DebugTrace.log("Now Playing art: \(song) fetched, \(Self.pixels(image)), \(data.count) bytes")
@@ -1038,6 +1043,8 @@ enum CoverBands {
 
 /// Spotify covers being fetched, by song, so the readings made while one is on its way start no second fetch (S468).
 struct ArtFetches {
+    /// A fetch's own timeout, and the longest a song change waits for its cover (`ArtHold.limit`).
+    static let timeout: TimeInterval = 4
     private var songs: Set<String> = []
 
     func isFetching(_ song: String) -> Bool { songs.contains(song) }

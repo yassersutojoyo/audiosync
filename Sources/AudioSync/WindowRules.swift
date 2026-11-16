@@ -314,8 +314,14 @@ enum TrackSlide {
 
     /// A change this long after a press still counts as the press's.
     static let pressWindow: TimeInterval = 3
-    /// The longest wait from a press for the new song and its cover.
-    static let cap: TimeInterval = 1.5
+    /// The longest wait from a press for the new song and its cover: the cover fetch's own timeout.
+    static let cap: TimeInterval = ArtFetches.timeout
+    /// The old cover's recede while it waits.
+    static let recede: TimeInterval = 1.5
+    /// A wait longer than `breatheAfter` pulses the receded cover's dim and opacity by `breatheDepth`, once per `breathePeriod`.
+    static let breatheAfter: TimeInterval = 0.6
+    static let breathePeriod: TimeInterval = 1.2
+    static let breatheDepth = 0.05
     /// Reduce Motion's cross-fade, and an ignored press easing back.
     static let fadeDuration: TimeInterval = 0.15
     static let coverFade: TimeInterval = 0.25
@@ -379,7 +385,7 @@ enum TrackSlide {
         return max(heldFor, sincePress)
     }
 
-    static func waitFraction(after elapsed: TimeInterval) -> Double { eased(waitCurve, elapsed / cap) }
+    static func waitFraction(after elapsed: TimeInterval) -> Double { eased(waitCurve, elapsed / recede) }
 
     /// A wait the player ignored, easing back from `reached`.
     static func settled(from reached: Double, after elapsed: TimeInterval) -> Double {
@@ -464,13 +470,21 @@ enum PlayPauseMorph {
 /// blanks between two songs; a track known to have none shows at once.
 enum ArtHold {
     enum Decision: Equatable { case show, hold }
-    static let limit: TimeInterval = 1.5
+    static let limit: TimeInterval = ArtFetches.timeout
 
     static func decide(shown: NowPlayingMonitor.Track?, next: NowPlayingMonitor.Track?,
                        heldFor: TimeInterval) -> Decision {
         guard let shown, let next, shown.artwork != nil, next.artwork == nil, next.artPending,
               TrackSlide.isSkip(shown, next), heldFor < limit else { return .show }
         return .hold
+    }
+
+    /// A cover fetch that gave no picture: `current`, when it is still that song, shows its placeholder now.
+    static func gaveUp(_ current: NowPlayingMonitor.Track?, on fetched: NowPlayingMonitor.Track) -> NowPlayingMonitor.Track? {
+        guard var given = current, given.artwork == nil, given.artPending, given.bundleID == fetched.bundleID,
+              given.title == fetched.title, given.album == fetched.album else { return nil }
+        given.artPending = false
+        return given
     }
 
     /// A reading that started before the cover came in must not take it away again.

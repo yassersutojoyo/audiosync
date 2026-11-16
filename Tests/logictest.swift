@@ -19097,8 +19097,8 @@ do {
           "art hold: a song known to have no cover shows its placeholder at once")
     check(ArtHold.decide(shown: shownSong, next: otherApp, heldFor: 0) == .show,
           "art hold: another player taking over shows at once")
-    check(ArtHold.decide(shown: shownSong, next: loading, heldFor: 1.5) == .show && ArtHold.limit == 1.5,
-          "art hold: a cover still loading after 1.5 s gives way to the placeholder")
+    check(ArtHold.decide(shown: shownSong, next: loading, heldFor: ArtHold.limit) == .show && ArtHold.limit == 4,
+          "art hold: a cover still loading after the fetch's 4 s timeout gives way to the placeholder")
     check(ArtHold.decide(shown: shownSong, next: arrived, heldFor: 0.3) == .show,
           "art hold: the new cover's arrival lets the new song in with it")
     var stale = shownSong
@@ -19405,13 +19405,13 @@ do {
     shown.artwork = cover
     var loading = one
     loading.artPending = true
-    check(TrackSlide.cap == 1.5 && ArtHold.limit == TrackSlide.cap
+    check(TrackSlide.recede == 1.5 && ArtHold.limit == TrackSlide.cap
             && TrackSlide.waited(heldFor: 0.2, sincePress: 1.4) == 1.4
             && TrackSlide.waited(heldFor: 0.2, sincePress: nil) == 0.2
             && TrackSlide.waited(heldFor: 0.2, sincePress: TrackSlide.pressWindow + 1) == 0.2
             && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.0)) == .hold
-            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: 1.5)) == .show,
-          "track slide: the wait for the new song and its cover ends 1.5 s after the press at most")
+            && ArtHold.decide(shown: shown, next: loading, heldFor: TrackSlide.waited(heldFor: 0.1, sincePress: TrackSlide.cap)) == .show,
+          "track slide: the wait for the new song and its cover ends 4 s after the press at most")
     let rest = TrackSlide.oldCover(waited: 0, slid: 0, reduceMotion: false)
     let waitedOut = TrackSlide.oldCover(waited: 1, slid: 0, reduceMotion: false)
     let gone = TrackSlide.oldCover(waited: 1, slid: 1, reduceMotion: false)
@@ -19480,7 +19480,7 @@ do {
     let pressBody = slideWindow.components(separatedBy: "func press(_ press: TrackSlide.Press").last?
         .components(separatedBy: "private func settle()").first ?? ""
     check(pressBody.contains("deadline: .now() + TrackSlide.cap)") && !pressBody.contains("TrackSlide.pressWindow"),
-          "track slide: a press that changes nothing lets the old cover ease back after 1.5 s, not 3 s")
+          "track slide: a press that changes nothing lets the old cover ease back after the 4 s wait, not 3 s")
     check(pressBody.components(separatedBy: "pressed = press").first?.contains("guard press.direction != nil") == true,
           "track slide: Play/Pause during the wait ends the recede and keeps the Next or Previous it followed")
     check(slideWindow.contains("let arrived = TrackSlide.coverArrived(shown, track)")
@@ -19493,11 +19493,14 @@ do {
           "track slide: no frame clock re-renders the covers or the lines while they slide")
     check(slideViews.contains("CAAnimationGroup") && slideViews.contains("TrackSlide.slideCurve")
             && slideViews.contains("TrackSlide.waitCurve") && slideViews.contains("TrackSlide.settleCurve")
-            && slideViews.contains("TrackSlide.cap") && slideViews.contains("TrackSlide.fadeDuration")
+            && slideViews.contains("TrackSlide.recede") && slideViews.contains("TrackSlide.fadeDuration")
             && slideViews.contains("TrackSlide.oldCover(") && slideViews.contains("TrackSlide.incomingOffset(")
             && slideViews.contains("TrackSlide.textAway") && slideViews.contains("TrackSlide.textFrom")
             && slideViews.contains("beginTime") && slideViews.contains("CATransaction.setDisableActions(true)"),
           "track slide: Core Animation plays the slide on the render server, with TrackSlide's curves and values")
+    check(slideViews.contains("TrackSlide.breatheAfter") && slideViews.contains("pulse.isAdditive = true")
+            && slideViews.contains("removeAnimation(forKey: \"breathe\")"),
+          "track slide: a long wait breathes on the render server, and the next step starts from the breath it stops")
     let slideTint = "AmbientTint(tide: SoundTide.shared, color: CoverColors.of((slide.outgoing ?? track).artwork)[0]"
     check(slideWindow.contains(slideTint) && slidePanel.contains(slideTint),
           "track slide: the hero's tint keeps the old cover's colour until the slide ends")
