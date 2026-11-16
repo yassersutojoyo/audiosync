@@ -134,6 +134,40 @@ pub fn set_dark(window: &slint::Window, dark: bool) {
 #[cfg(not(windows))]
 pub fn set_dark(_window: &slint::Window, _dark: bool) {}
 
+/// Turns the app's native menus (the tray's) dark or light with the app's
+/// appearance, as the Mac's follow it. Windows names these uxtheme exports
+/// only by ordinal (135 SetPreferredAppMode, 136 FlushMenuThemes); on
+/// 18362 135 is still AllowDarkModeForApp, so builds before 18363 keep light menus.
+#[cfg(windows)]
+pub fn set_menu_dark(dark: bool) {
+    use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    use windows::core::{PCSTR, w};
+
+    if !crate::platform::windows_version().is_some_and(|version| version >= windows_build(18363)) {
+        return;
+    }
+    // SAFETY: uxtheme.dll is a system library; from build 18363 its ordinal
+    // 135 takes one int (2 force dark, 3 force light) and 136 takes none.
+    unsafe {
+        let Ok(uxtheme) = LoadLibraryW(w!("uxtheme.dll")) else {
+            return;
+        };
+        let (Some(set_mode), Some(flush)) = (
+            GetProcAddress(uxtheme, PCSTR(135 as *const u8)),
+            GetProcAddress(uxtheme, PCSTR(136 as *const u8)),
+        ) else {
+            return;
+        };
+        let set_mode: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(set_mode);
+        let flush: unsafe extern "system" fn() = std::mem::transmute(flush);
+        set_mode(if dark { 2 } else { 3 });
+        flush();
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_menu_dark(_dark: bool) {}
+
 #[cfg(windows)]
 fn set_frame(hwnd: windows::Win32::Foundation::HWND, frame: Frame) -> bool {
     use windows::Win32::Graphics::Dwm::{

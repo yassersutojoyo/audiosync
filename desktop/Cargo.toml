@@ -117,6 +117,8 @@ windows = { version = "0.62", features = [
     # QueryPerformanceCounter: the capture loop's clock while loopback
     # delivers nothing, in the time base of the packets' positions.
     "Win32_System_Performance",
+    # uxtheme's SetPreferredAppMode by ordinal: the tray menu follows the app's theme.
+    "Win32_System_LibraryLoader",
     # PowerRegisterSuspendResumeNotification: a sleep and wake while
     # streaming (src/audio/wasapi/power.rs).
     "Win32_System_Power",

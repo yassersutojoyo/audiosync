@@ -2114,6 +2114,7 @@ impl App {
             .set_color_scheme(scheme);
         self.setup.global::<Palette>().set_color_scheme(scheme);
         self.settings.global::<Palette>().set_color_scheme(scheme);
+        crate::backdrop::set_menu_dark(dark);
         for window in [
             self.main.window(),
             self.flyout.window(),
