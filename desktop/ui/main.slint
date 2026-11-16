@@ -11,7 +11,7 @@ import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IconLook, IncomingCover, OutgoingSong, SlideLook, SlidLine, TrackMotion } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, TextField, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, TextField, FadeScrollView, FoldPane, BrandMark, Card, CardTitle, Disclosure, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuName, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -2028,7 +2028,7 @@ component NowPlayingCard inherits VerticalLayout {
 
     VerticalLayout {
         padding-top: 2px;
-        spacing: 10px;
+        spacing: 4px;
 
         tile := Rectangle {
             property <bool> has-artwork: root.slide.sliding ? root.outgoing.has-artwork : root.has-artwork;
@@ -2061,9 +2061,14 @@ component NowPlayingCard inherits VerticalLayout {
             }
         }
 
-        AmbientArt {
-            height: 22px;
-            look: root.ambient;
+        VerticalLayout {
+            padding-top: 3px;
+            padding-bottom: 3px;
+
+            AmbientArt {
+                height: 16px;
+                look: root.ambient;
+            }
         }
 
         HorizontalLayout {
@@ -2098,78 +2103,84 @@ component NowPlayingCard inherits VerticalLayout {
             }
         }
 
-        HorizontalLayout {
-            alignment: center;
-            // Five buttons fit the narrow left column only this close.
-            spacing: root.shuffle >= 0 || root.repeat >= 0 ? 2px : 20px;
+        // The Mac's centres, 38 px apart with Shuffle and Repeat and 54
+        // without; five 32 px buttons then pass the cover by a pixel a side.
+        Rectangle {
+            height: 32px + 6px;
 
-            if root.shuffle >= 0: IconButton {
-                opacity: root.reveal;
-                glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
-                glyph: Glyphs.shuffle;
-                glyph-color: root.shuffle == 1 ? Tokens.teal-text : Tokens.secondary-text;
-                active: root.shuffle == 1;
-                label: Strings.shuffle;
-                value: root.shuffle == 1 ? Strings.on : Strings.off;
-                clicked => {
-                    root.transport(3);
-                }
-                focus-changed(has) => {
-                    root.note-focus(3, has);
-                }
-            }
+            transport := HorizontalLayout {
+                x: (parent.width - self.width) / 2;
+                y: 6px;
+                width: self.preferred-width;
+                height: 32px;
+                spacing: root.shuffle >= 0 || root.repeat >= 0 ? 6px : 22px;
 
-            IconButton {
-                glyph: Glyphs.previous;
-                label: Strings.previous-track;
-                clicked => {
-                    root.transport(0);
+                if root.shuffle >= 0: IconButton {
+                    opacity: root.reveal;
+                    glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
+                    glyph: Glyphs.shuffle;
+                    glyph-color: root.shuffle == 1 ? Tokens.teal-text : Tokens.secondary-text;
+                    active: root.shuffle == 1;
+                    label: Strings.shuffle;
+                    value: root.shuffle == 1 ? Strings.on : Strings.off;
+                    clicked => {
+                        root.transport(3);
+                    }
+                    focus-changed(has) => {
+                        root.note-focus(3, has);
+                    }
                 }
-                focus-changed(has) => {
-                    root.note-focus(0, has);
-                }
-            }
 
-            IconButton {
-                width: 40px;
-                height: 40px;
-                glyph: root.playing != root.icon.shows-old ? Glyphs.pause : Glyphs.play;
-                glyph-size: 20px;
-                glyph-scale: root.icon.scale;
-                glyph-opacity: root.icon.opacity;
-                label: root.playing ? Strings.pause : Strings.play;
-                clicked => {
-                    root.transport(1);
+                IconButton {
+                    glyph: Glyphs.previous;
+                    label: Strings.previous-track;
+                    clicked => {
+                        root.transport(0);
+                    }
+                    focus-changed(has) => {
+                        root.note-focus(0, has);
+                    }
                 }
-                focus-changed(has) => {
-                    root.note-focus(1, has);
-                }
-            }
 
-            IconButton {
-                glyph: Glyphs.next;
-                label: Strings.next-track;
-                clicked => {
-                    root.transport(2);
+                IconButton {
+                    glyph: root.playing != root.icon.shows-old ? Glyphs.pause : Glyphs.play;
+                    glyph-size: 22px;
+                    glyph-scale: root.icon.scale;
+                    glyph-opacity: root.icon.opacity;
+                    label: root.playing ? Strings.pause : Strings.play;
+                    clicked => {
+                        root.transport(1);
+                    }
+                    focus-changed(has) => {
+                        root.note-focus(1, has);
+                    }
                 }
-                focus-changed(has) => {
-                    root.note-focus(2, has);
-                }
-            }
 
-            if root.repeat >= 0: IconButton {
-                opacity: root.reveal;
-                glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
-                glyph: root.repeat == 2 ? Glyphs.repeat-one : Glyphs.repeat-all;
-                glyph-color: root.repeat > 0 ? Tokens.teal-text : Tokens.secondary-text;
-                active: root.repeat > 0;
-                label: Strings.repeat;
-                value: root.repeat == 2 ? Strings.repeat-one : root.repeat == 1 ? Strings.on : Strings.off;
-                clicked => {
-                    root.transport(4);
+                IconButton {
+                    glyph: Glyphs.next;
+                    label: Strings.next-track;
+                    clicked => {
+                        root.transport(2);
+                    }
+                    focus-changed(has) => {
+                        root.note-focus(2, has);
+                    }
                 }
-                focus-changed(has) => {
-                    root.note-focus(4, has);
+
+                if root.repeat >= 0: IconButton {
+                    opacity: root.reveal;
+                    glyph-shift: Motion.on ? (1 - root.reveal) * 4px : 0px;
+                    glyph: root.repeat == 2 ? Glyphs.repeat-one : Glyphs.repeat-all;
+                    glyph-color: root.repeat > 0 ? Tokens.teal-text : Tokens.secondary-text;
+                    active: root.repeat > 0;
+                    label: Strings.repeat;
+                    value: root.repeat == 2 ? Strings.repeat-one : root.repeat == 1 ? Strings.on : Strings.off;
+                    clicked => {
+                        root.transport(4);
+                    }
+                    focus-changed(has) => {
+                        root.note-focus(4, has);
+                    }
                 }
             }
         }
@@ -2609,8 +2620,8 @@ export component MainWindow inherits Window {
     changed width => {
         self.columns-width = self.width;
     }
-    // The Fluent scroll bar is 14 px wide and drawn over the speaker list's content.
-    property <length> scroll-gutter: 14px;
+    // The columns draw no scroll bar, so nothing keeps clear of one.
+    property <length> scroll-gutter: 0px;
 
     // Rust sets these; a user's click or drag replaces the controls' bindings,
     // so each control's handler also sets it back to the state after its
@@ -2632,6 +2643,8 @@ export component MainWindow inherits Window {
         // The notices and the columns bring their gap above them, so a
         // notice opens and closes its gap with it.
         spacing: 0px;
+        // The columns run on under their faded bottom edge, as the Mac's.
+        padding-bottom: Fluent.window-margin - 12px;
 
         // Header: the brand and the state on the left, the switch on the right.
         // It and the notices end with the speaker cards.
@@ -2733,16 +2746,14 @@ export component MainWindow inherits Window {
             // Left column: what plays and how loud, each in its own card. It
             // scrolls when the window is shorter than its cards (a small
             // screen, or notices showing), as the speaker list does.
-            left-column := OverlayScrollView {
+            left-column := FadeScrollView {
                 blank-clicked => {
                     root.blank-clicked();
                 }
                 width: MainColumns.left(root.columns-width);
+                fade-color: root.background;
 
                 VerticalLayout {
-                    // Room for the scroll bar, as in the speaker list.
-                    padding-right: 4px;
-                    spacing: 8px;
                     alignment: start;
 
                     // One block on a faint fill holds the source and what plays.
@@ -2857,7 +2868,7 @@ export component MainWindow inherits Window {
                                 }
 
                                 if root.now-playing-shown: NowPlayingCard {
-                                    cover-size: MainColumns.left(root.columns-width) - 32px;
+                                    cover-size: MainColumns.left(root.columns-width) - 28px;
                                     revealed: hero-touch.has-hover;
                                     title: root.now-playing-title;
                                     subtitle: root.now-playing-subtitle;
@@ -2893,10 +2904,10 @@ export component MainWindow inherits Window {
 
                     // Master Volume on the window, then a hairline over the rows.
                     VerticalLayout {
-                        padding-top: 8px;
-                        // Clear of the scroll bar.
+                        padding-top: 16px;
+                        // The number ends on the rows' chevron edge.
                         padding-right: 8px;
-                        spacing: 2px;
+                        spacing: 4px;
 
                         // The slider's own label names it for Narrator.
                         HorizontalLayout {
@@ -2911,6 +2922,9 @@ export component MainWindow inherits Window {
                         MasterVolume {
                             // Past the last digit's bearing, as on the Mac.
                             padding-right: 1px;
+                            spacing: 8px;
+                            // 8 px clear of the knob at 100.
+                            number-gap: 16px;
                             volume: root.master-volume;
                             waves: root.master-volume-waves;
                             mute-toggled => {
@@ -2925,85 +2939,93 @@ export component MainWindow inherits Window {
                         }
                     }
 
-                    Divider { }
+                    VerticalLayout {
+                        padding-top: 11px;
+                        padding-bottom: 5px;
 
-                    PresetsCard {
-                        // The left column less its 4 px room for the scroll bar.
-                        width-given: MainColumns.left(root.columns-width) - 4px;
-                        presets: root.presets;
-                        current: root.current-preset;
-                        can-save: root.can-save-preset;
-                        focus-wanted <=> root.focus-presets;
-                        open <=> root.presets-open;
-                        recall(id) => {
-                            root.preset-recall-requested(id);
-                        }
-                        rename(id) => {
-                            root.preset-rename-requested(id);
-                        }
-                        update(id) => {
-                            root.preset-update-requested(id);
-                        }
-                        delete(id) => {
-                            root.preset-delete-requested(id);
-                        }
-                        save => {
-                            root.save-preset-requested();
-                        }
-                        saving <=> root.preset-saving;
-                        renaming-id <=> root.preset-renaming;
-                        save-why <=> root.preset-save-note;
-                        save-named(text) => {
-                            root.preset-save-named(text);
-                        }
-                        rename-named(id, text) => {
-                            root.preset-rename-named(id, text);
-                        }
+                        Divider { }
                     }
 
-                    equalizer-card := EqualizerCard {
-                        on: root.equalizer-on;
-                        curve: root.equalizer-curve;
-                        clicked => {
-                            root.equalizer-requested();
-                        }
-                        focus-changed(has) => {
-                            root.control-focus-changed(MainControl.equalizer, has);
-                        }
-                    }
+                    VerticalLayout {
+                        spacing: 6px;
 
-                    calibration-card := CalibrationCard {
-                        running: root.calibrate-all-running;
-                        can-start: root.calibrate-all-can-start;
-                        status: root.calibrate-all-status;
-                        status-is-hint: root.calibrate-all-status-is-hint;
-                        privacy: root.calibrate-all-privacy;
-                        left-out: root.calibrate-all-left-out;
-                        zone: root.calibrate-all-zone;
-                        volume: root.calibrate-all-volume;
-                        volume-percent: root.calibrate-all-volume-percent;
-                        reference: root.calibrate-all-reference;
-                        // A focused fix with Calibrate All disabled hands the focus to the card above.
-                        fix-volume(focused) => {
-                            if focused && !root.calibrate-all-can-start {
-                                equalizer-card.focus();
+                        PresetsCard {
+                            width-given: MainColumns.left(root.columns-width);
+                            presets: root.presets;
+                            current: root.current-preset;
+                            can-save: root.can-save-preset;
+                            focus-wanted <=> root.focus-presets;
+                            open <=> root.presets-open;
+                            recall(id) => {
+                                root.preset-recall-requested(id);
                             }
-                            root.device-volume-fix-requested(root.calibrate-all-volume-id);
+                            rename(id) => {
+                                root.preset-rename-requested(id);
+                            }
+                            update(id) => {
+                                root.preset-update-requested(id);
+                            }
+                            delete(id) => {
+                                root.preset-delete-requested(id);
+                            }
+                            save => {
+                                root.save-preset-requested();
+                            }
+                            saving <=> root.preset-saving;
+                            renaming-id <=> root.preset-renaming;
+                            save-why <=> root.preset-save-note;
+                            save-named(text) => {
+                                root.preset-save-named(text);
+                            }
+                            rename-named(id, text) => {
+                                root.preset-rename-named(id, text);
+                            }
                         }
-                        start => {
-                            root.calibrate-all-requested();
+
+                        equalizer-card := EqualizerCard {
+                            on: root.equalizer-on;
+                            curve: root.equalizer-curve;
+                            clicked => {
+                                root.equalizer-requested();
+                            }
+                            focus-changed(has) => {
+                                root.control-focus-changed(MainControl.equalizer, has);
+                            }
                         }
-                        cancel => {
-                            root.cancel-calibrate-all-requested();
-                        }
-                        privacy-requested => {
-                            root.calibration-privacy-requested();
-                        }
-                        include(id, included) => {
-                            root.calibrate-all-include-requested(id, included);
-                        }
-                        focus-changed(has) => {
-                            root.control-focus-changed(MainControl.calibration, has);
+
+                        calibration-card := CalibrationCard {
+                            running: root.calibrate-all-running;
+                            can-start: root.calibrate-all-can-start;
+                            status: root.calibrate-all-status;
+                            status-is-hint: root.calibrate-all-status-is-hint;
+                            privacy: root.calibrate-all-privacy;
+                            left-out: root.calibrate-all-left-out;
+                            zone: root.calibrate-all-zone;
+                            volume: root.calibrate-all-volume;
+                            volume-percent: root.calibrate-all-volume-percent;
+                            reference: root.calibrate-all-reference;
+                            // A focused fix with Calibrate All disabled hands the focus to the card above.
+                            fix-volume(focused) => {
+                                if focused && !root.calibrate-all-can-start {
+                                    equalizer-card.focus();
+                                }
+                                root.device-volume-fix-requested(root.calibrate-all-volume-id);
+                            }
+                            start => {
+                                root.calibrate-all-requested();
+                            }
+                            cancel => {
+                                root.cancel-calibrate-all-requested();
+                            }
+                            privacy-requested => {
+                                root.calibration-privacy-requested();
+                            }
+                            include(id, included) => {
+                                root.calibrate-all-include-requested(id, included);
+                            }
+                            focus-changed(has) => {
+                                root.control-focus-changed(MainControl.calibration, has);
+                            }
                         }
                     }
                 }
@@ -3011,10 +3033,11 @@ export component MainWindow inherits Window {
 
             // Speakers: this PC first (few, stable rows), then zones, then
             // every connected speaker in no zone by name.
-            scroll := OverlayScrollView {
+            scroll := FadeScrollView {
                 blank-clicked => {
                     root.blank-clicked();
                 }
+                fade-color: root.background;
                 horizontal-stretch: 1;
                 preferred-width: Fluent.speaker-list-full;
                 max-width: Fluent.speaker-list-full;
@@ -3442,7 +3465,7 @@ export component MainWindow inherits Window {
         look: root.now-playing-slide;
         at-x: root.now-playing-tile-x;
         at-y: root.now-playing-tile-y;
-        size: MainColumns.left(root.columns-width) - 32px;
+        size: MainColumns.left(root.columns-width) - 28px;
         surface-width: root.width;
         corner: 10px;
         base: Tokens.surface;

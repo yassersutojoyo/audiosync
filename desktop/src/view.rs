@@ -7576,8 +7576,10 @@ mod tests {
         }
     }
 
-    /// With Shuffle and Repeat showing, all five buttons keep their size
-    /// and fit inside the source block at the default 776 px window.
+    /// With Shuffle and Repeat showing, all five buttons keep their size,
+    /// their centres 38 px apart as the Mac's, and stay inside the source
+    /// block at the default 776 px window: the row passes the cover by at
+    /// most a pixel a side, into the block's padding.
     // covers: S450
     #[test]
     fn the_five_transport_buttons_fit_the_narrow_left_column() {
@@ -7616,8 +7618,8 @@ mod tests {
             element(&app, "MainWindow::left-column").map_or(0.0, |column| column.size().width);
         assert_eq!(
             card.1 - card.0,
-            column - 4.0 - 28.0,
-            "it fills the block inside its padding, clear of the column's scroll gutter"
+            column - 28.0,
+            "it fills the block inside its padding"
         );
         let inner = card;
         let shown = ["Shuffle", "Previous Track", "Pause", "Next Track", "Repeat"].map(span);
@@ -7627,14 +7629,14 @@ mod tests {
         );
         let buttons = shown.map(Option::unwrap_or_default);
         let widths = buttons.map(|(start, end)| end - start);
-        assert_eq!(
-            widths,
-            [32.0, 32.0, 40.0, 32.0, 32.0],
-            "the buttons keep their size"
+        assert_eq!(widths, [32.0; 5], "the buttons keep their size");
+        assert!(
+            buttons.windows(2).all(|pair| pair[1].0 - pair[0].0 == 38.0),
+            "centres 38 px apart: {buttons:?}"
         );
         assert!(
-            buttons[0].0 >= inner.0 && buttons[4].1 <= inner.1,
-            "the row {buttons:?} fits inside the card {inner:?}"
+            buttons[0].0 >= inner.0 - 1.0 && buttons[4].1 <= inner.1 + 1.0,
+            "the row {buttons:?} passes the card {inner:?} by a pixel at most"
         );
         assert!(
             buttons.windows(2).all(|pair| pair[0].1 <= pair[1].0),
@@ -7763,8 +7765,7 @@ mod tests {
             element("MainWindow::left-column"),
         );
         let end = |e: &ElementHandle| e.absolute_position().x + e.size().width;
-        // The scroll bar's room.
-        let inside = end(&column) - 4.0;
+        let inside = end(&column);
         assert!(
             button.size().height < 40.0,
             "one line, {} px high",
@@ -8211,7 +8212,7 @@ mod tests {
         let strip = ElementHandle::find_by_element_type_name(&app.main, "AmbientArt")
             .next()
             .expect("the art's strip");
-        assert_eq!(strip.size().height, 22.0, "the strip keeps its height");
+        assert_eq!(strip.size().height, 16.0, "the strip keeps its height");
     }
 
     #[test]
@@ -9494,50 +9495,117 @@ mod tests {
         );
     }
 
-    /// The thumb of the main window's speaker list scroll bar.
-    fn speaker_list_thumb(app: &App) -> i_slint_backend_testing::ElementHandle {
-        i_slint_backend_testing::ElementHandle::find_by_element_id(
-            &app.main,
-            "OverlayScrollView::thumb",
-        )
-        .max_by(|a, b| a.absolute_position().x.total_cmp(&b.absolute_position().x))
-        .expect("the main window has scroll views")
+    /// The main window's columns draw no scroll bar, as the Mac's: scrolled
+    /// past its top, a column fades into the window over its top 12 px.
+    #[test]
+    fn a_scrolled_column_fades_into_the_window_at_its_top_with_no_scroll_bar() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        hold_clock();
+        let window = app.main.window();
+        app.main.set_now_playing_shown(true);
+        app.main.set_now_playing_title("A track title".into());
+        app.main.set_now_playing_has_artwork(true);
+        app.main.set_now_playing_artwork(red_cover());
+        draw_frames();
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app.main, "OverlayScrollView::thumb").count(),
+            0,
+            "no scroll bar on the columns"
+        );
+        let column = element(&app, "MainWindow::left-column").expect("the left column");
+        let top = column.absolute_position().y;
+        let (left, ..) = red_bounds(window);
+        let x = left + 20.0;
+        let at = pixels(window);
+        let window_colour = at(x, top - 4.0);
+        scroll(window, x, top + 100.0, -120.0);
+        let at = pixels(window);
+        assert_eq!(at(x, top + 0.5), window_colour, "faded out at the edge");
+        assert_eq!(at(x, top + 12.5), [255, 0, 0, 255], "whole 12 px in");
+        scroll(window, x, top + 100.0, 120.0);
+        let at = pixels(window);
+        assert_ne!(
+            at(x, top + 0.5),
+            window_colour,
+            "no fade with nothing past the top"
+        );
     }
 
+    /// A speaker's delay panel moves as the Mac's: over 250 ms its edge moves
+    /// in the first half and its content fades in the second, and closing
+    /// runs it back; with Windows' animation effects off it moves at once.
+    // covers: S450
     #[test]
-    fn the_scroll_bar_hides_at_rest_and_shows_with_the_pointer_at_the_edge() {
-        let app = app_over(MockBackend::zones_preview());
-        let window = app.main.window();
-        window.set_size(slint::LogicalSize::new(820.0, 480.0));
-        draw_frames();
-        let thumb = speaker_list_thumb(&app);
-        assert_eq!(thumb.computed_opacity(), 0.0, "hidden at rest");
-        let (at, size) = (thumb.absolute_position(), thumb.size());
-        // On the edge, below the thumb.
-        let position =
-            slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height + 8.0);
-        window.dispatch_event(WindowEvent::PointerMoved { position });
-        draw_frames();
-        assert_eq!(thumb.computed_opacity(), 1.0, "shown at the edge");
-    }
-
-    #[test]
-    fn the_scroll_bar_hides_a_second_after_a_scroll() {
-        let app = app_over(MockBackend::zones_preview());
-        let window = app.main.window();
-        window.set_size(slint::LogicalSize::new(820.0, 480.0));
+    fn a_delay_panel_unfolds_over_250_ms_and_folds_back_edge_last() {
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
         hold_clock();
         draw_frames();
-        let thumb = speaker_list_thumb(&app);
-        let (at, size) = (thumb.absolute_position(), thumb.size());
-        // Over the rows, away from the edge.
-        scroll(window, at.x - 100.0, at.y + size.height / 2.0, -40.0);
-        assert_eq!(thumb.computed_opacity(), 1.0, "shown while it scrolls");
-        advance_clock(Duration::from_millis(1100));
+        let height = || {
+            i_slint_backend_testing::ElementHandle::find_by_element_id(
+                &app.main,
+                "SpeakerRow::sync-pane",
+            )
+            .map(|pane| pane.size().height)
+            .fold(0.0, f32::max)
+        };
+        let after = |ms: u64| {
+            advance_clock(Duration::from_millis(ms));
+            draw_frames();
+            height()
+        };
+        app.main.invoke_sync_toggled("local:desk".into());
         draw_frames();
-        advance_clock(Duration::from_millis(400));
+        let unfolding = after(60);
+        let full = after(400);
+        assert!(0.0 < unfolding && unfolding < full, "{unfolding} of {full}");
+        app.main.invoke_sync_toggled("local:desk".into());
         draw_frames();
-        assert_eq!(thumb.computed_opacity(), 0.0, "hidden a second after");
+        assert_eq!(after(60), full, "the content fades out first");
+        let folding = after(130);
+        assert!(0.0 < folding && folding < full, "{folding} of {full}");
+        assert_eq!(after(300), 0.0);
+
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_sync_toggled("local:desk".into());
+        draw_frames();
+        assert_eq!(height(), full, "at once with animation effects off");
+    }
+
+    /// The delay panel holds the Mac's small steps, 20 px high and 4 px
+    /// apart, around a 72 x 22 field.
+    // covers: S450
+    #[test]
+    fn the_delay_panel_holds_small_steps_around_a_72_by_22_field() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_sync_toggled("local:desk".into());
+        draw_frames();
+        let strings = app.strings();
+        let step = |delta: i32| {
+            let label = strings.invoke_delay_step_accessibility(delta);
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .unwrap_or_else(|| panic!("the {delta} step"))
+        };
+        let steps = [-100, -10].map(step);
+        assert!(steps.iter().all(|s| s.size().height == 20.0));
+        assert_eq!(
+            steps[1].absolute_position().x - right_edge(&steps[0]),
+            4.0,
+            "4 px apart"
+        );
+        let name = app.snapshot().speaker("local:desk").unwrap().name.clone();
+        let field = ElementHandle::find_by_accessible_label(
+            &app.main,
+            &strings.invoke_delay_of(name.into()),
+        )
+        .find(|e| e.size().width == 72.0)
+        .expect("the delay field");
+        assert_eq!(field.size().height, 22.0);
     }
 
     #[test]
@@ -11179,9 +11247,12 @@ mod tests {
     /// Checks that the tip on `label` holds more than `label` shows. The
     /// tip's Text has no accessible label to compare (Narrator reads the
     /// row). Its font is no larger than the label's yet it needs more width
-    /// than the label has: the label is cut and the tip is not.
+    /// than the label has, or a second line where the tip wraps: the label
+    /// is cut and the tip is not.
     fn shows_in_full(app: &App, label: &str, tip: &str) {
-        let width = element(app, label).map_or(0.0, |label| label.size().width);
+        let (width, height) = element(app, label).map_or((0.0, 0.0), |label| {
+            (label.size().width, label.size().height)
+        });
         let (_, shown) = rest_on(app, label, tip);
         let shown = shown
             .and_then(|tip| {
@@ -11191,9 +11262,9 @@ mod tests {
             })
             .unwrap_or_else(|| panic!("a tooltip on {label}"));
         assert!(
-            shown.size().width > width,
-            "{label}: tip {} wide, label {width}",
-            shown.size().width
+            shown.size().width > width || shown.size().height > height,
+            "{label}: tip {:?}, label {width} x {height}",
+            shown.size()
         );
     }
 
@@ -11801,7 +11872,7 @@ mod tests {
         assert!(has_line(format!("    min-height: {min_height}px;")));
         // The left column scrolls when it is taller than the window, so
         // its cards never push the window past that height.
-        assert!(main.contains("left-column := OverlayScrollView {"));
+        assert!(main.contains("left-column := FadeScrollView {"));
     }
 
     #[test]
@@ -13196,11 +13267,12 @@ mod tests {
         assert!((right_edge(&number) - right_edge(&chevron)).abs() < 0.5);
     }
 
-    /// The main window's master volume number, as in the Mac window: 6 px
-    /// after the track, ending 1 px inside the rows' chevron edge.
+    /// The main window's master volume number, as in the Mac window: 8 px
+    /// clear of the knob at 100 (16 px after the track's end, the knob's
+    /// centre), ending 1 px inside the rows' chevron edge.
     // covers: S450
     #[test]
-    fn the_main_volume_number_sits_6_px_after_the_track_on_the_chevron_edge() {
+    fn the_main_volume_number_sits_8_px_clear_of_the_knob_on_the_chevron_edge() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.main.show().expect("the main window shows");
@@ -13215,7 +13287,7 @@ mod tests {
         };
         let number = element("MasterVolume::number");
         let (_, end) = master_track(&element("MasterVolume::slider"));
-        assert!((number.absolute_position().x - end - 6.0).abs() < 0.5);
+        assert!((number.absolute_position().x - end - 16.0).abs() < 0.5);
         let chevron = element("EqualizerCard::chevron");
         assert!((right_edge(&number) + 1.0 - right_edge(&chevron)).abs() < 0.5);
     }
