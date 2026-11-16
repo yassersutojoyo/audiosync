@@ -38,6 +38,62 @@ pub fn process_image(_pid: u32) -> Option<PathBuf> {
     None
 }
 
+/// The executable behind the app source `id` (`app:<pid>:<executable>`): its
+/// process's, else a running process's of the same executable, as for a saved
+/// choice restored with pid 0 while its app has no audio session yet.
+pub fn source_image(
+    id: &str,
+    image_of: impl Fn(u32) -> Option<PathBuf>,
+    pid_named: impl Fn(&str) -> Option<u32>,
+) -> Option<PathBuf> {
+    let (pid, executable) = id.strip_prefix("app:")?.split_once(':')?;
+    pid.parse()
+        .ok()
+        .and_then(&image_of)
+        .or_else(|| pid_named(executable).and_then(&image_of))
+}
+
+/// A running process started from `executable` (a file name, any case).
+#[cfg(windows)]
+pub fn pid_named(executable: &str) -> Option<u32> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+
+    // SAFETY: the snapshot handle is closed below, and `entry`'s size field is
+    // set, as both walk calls require.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut found = None;
+        let mut more = Process32FirstW(snapshot, &mut entry).is_ok();
+        while more && found.is_none() {
+            let length = entry
+                .szExeFile
+                .iter()
+                .position(|&unit| unit == 0)
+                .unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..length]).eq_ignore_ascii_case(executable)
+            {
+                found = Some(entry.th32ProcessID);
+            }
+            more = Process32NextW(snapshot, &mut entry).is_ok();
+        }
+        let _ = CloseHandle(snapshot);
+        found
+    }
+}
+
+#[cfg(not(windows))]
+pub fn pid_named(_executable: &str) -> Option<u32> {
+    None
+}
+
 /// The first icon in `path`, `size` pixels square, as straight RGBA.
 #[cfg(windows)]
 pub fn file_icon(path: &std::path::Path, size: u32) -> Option<Vec<u8>> {
@@ -129,7 +185,28 @@ fn rgba(color: &[u8], mask: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::rgba;
+    use super::{rgba, source_image};
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_restored_choice_without_its_process_takes_a_running_one_of_the_same_executable() {
+        let path = PathBuf::from("C:/Apps/Spotify.exe");
+        let image_of = |pid| (pid == 412).then(|| path.clone());
+        let pid_named = |executable: &str| {
+            executable
+                .eq_ignore_ascii_case("spotify.exe")
+                .then_some(412)
+        };
+        assert_eq!(
+            source_image("app:0:Spotify.exe", image_of, pid_named),
+            Some(path.clone())
+        );
+        assert_eq!(
+            source_image("app:412:Spotify.exe", image_of, |_| None),
+            Some(path.clone())
+        );
+        assert_eq!(source_image("system", image_of, pid_named), None);
+    }
 
     #[test]
     fn an_icon_with_alpha_keeps_it_and_turns_bgra_into_rgba() {

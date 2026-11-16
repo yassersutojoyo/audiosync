@@ -2324,11 +2324,11 @@ impl App {
         {
             return icon.clone();
         }
-        let path = id
-            .strip_prefix("app:")
-            .and_then(|rest| rest.split(':').next())
-            .and_then(|pid| pid.parse().ok())
-            .and_then(crate::os::app_icon::process_image);
+        let path = crate::os::app_icon::source_image(
+            id,
+            crate::os::app_icon::process_image,
+            crate::os::app_icon::pid_named,
+        );
         let icon = path
             .map(|path| {
                 m.file_icons
