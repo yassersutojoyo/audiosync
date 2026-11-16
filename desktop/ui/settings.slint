@@ -6,7 +6,7 @@
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
 import { Appearance, HiddenItem } from "types.slint";
-import { Divider, FocusRing, Fluent, PowerSwitch, SmallButton } from "widgets.slint";
+import { Divider, FocusRing, Fluent, OverlayScrollView, PowerSwitch, SmallButton } from "widgets.slint";
 
 // A row 48 high, as the Mac's SettingsRow: 40 at least, 4 above and below.
 component SettingsRow inherits HorizontalLayout {
@@ -190,9 +190,11 @@ export component SettingsWindow inherits Window {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.settings-window;
     width: 460px;
+    // The screen's work area less a margin, in logical pixels; 0 while unknown.
+    in property <length> room;
     // As high as its boxes, as the Mac's: a window kept at its first height cut
     // the last boxes' bottom padding once a hidden speaker or a wrapped row came in.
-    height: content.preferred-height;
+    height: root.room > 0 ? min(content.preferred-height, root.room) : content.preferred-height;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
@@ -217,207 +219,216 @@ export component SettingsWindow inherits Window {
             return reject;
         }
 
-        content := VerticalLayout {
-            padding: 20px;
-            spacing: 16px;
-            alignment: start;
+        // Past the screen's room it scrolls, so its last box stays in reach.
+        OverlayScrollView {
+            width: parent.width;
+            height: parent.height;
+            content-height: content.preferred-height;
 
-            SettingsBox {
-                title: Strings.settings-general;
+            content := VerticalLayout {
+                y: 0px;
+                height: self.preferred-height;
+                padding: 20px;
+                spacing: 16px;
+                alignment: start;
 
-                SettingsRow {
-                    Text {
-                        text: Strings.appearance;
-                        color: Tokens.text;
-                        horizontal-stretch: 1;
-                        vertical-alignment: center;
-                        accessible-role: none;
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-
-                        Rectangle {
-                            border-radius: 7px;
-                            background: Tokens.text.with-alpha(0.06);
-                            accessible-role: groupbox;
-                            accessible-label: Strings.appearance;
-
-                            HorizontalLayout {
-                                padding: 2px;
-                                spacing: 2px;
-
-                                Segment {
-                                    text: Strings.appearance-system;
-                                    chosen: root.appearance == Appearance.system;
-                                    picked => {
-                                        root.appearance-chosen(Appearance.system);
-                                    }
-                                }
-
-                                Segment {
-                                    text: Strings.appearance-light;
-                                    chosen: root.appearance == Appearance.light;
-                                    picked => {
-                                        root.appearance-chosen(Appearance.light);
-                                    }
-                                }
-
-                                Segment {
-                                    text: Strings.appearance-dark;
-                                    chosen: root.appearance == Appearance.dark;
-                                    picked => {
-                                        root.appearance-chosen(Appearance.dark);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Divider { }
-
-                SwitchRow {
-                    text: Strings.launch-at-login;
-                    checked: root.launch-at-login;
-                    toggled(on) => {
-                        root.launch-at-login-toggled(on);
-                    }
-                }
-
-                Divider { }
-
-                CaptionedSwitchRow {
-                    text: Strings.resume-after-sleep;
-                    caption: Strings.resume-after-sleep-info;
-                    checked: root.resume-after-sleep;
-                    toggled(on) => {
-                        root.resume-after-sleep-toggled(on);
-                    }
-                }
-
-                Divider { }
-
-                SwitchRow {
-                    text: Strings.switch-source-on-quit;
-                    checked: root.switch-source-on-quit;
-                    toggled(on) => {
-                        root.switch-source-on-quit-toggled(on);
-                    }
-                }
-            }
-
-            SettingsBox {
-                title: Strings.menu-speakers;
-
-                if root.volume-keys-available: VerticalLayout {
-                    CaptionedSwitchRow {
-                        text: Strings.volume-keys;
-                        caption: Strings.volume-keys-info;
-                        checked: root.volume-keys;
-                        toggled(on) => {
-                            root.volume-keys-toggled(on);
-                        }
-                    }
-
-                    Divider { }
-                }
-
-                SwitchRow {
-                    text: Strings.show-virtual-devices;
-                    checked: root.show-virtual-devices;
-                    toggled(on) => {
-                        root.show-virtual-devices-toggled(on);
-                    }
-                }
-
-                Divider { }
-
-                Text {
-                    text: Strings.hidden-speakers;
-                    color: Tokens.secondary-text;
-                    font-size: Tokens.font-size-subheadline;
-                    accessible-role: text;
-                    accessible-label: self.text;
-                }
-
-                if root.hidden-speakers.length == 0: SettingsRow {
-                    Text {
-                        text: Strings.no-hidden-speakers;
-                        color: Tokens.secondary-text;
-                        vertical-alignment: center;
-                    }
-                }
-
-                for hidden[index] in root.hidden-speakers: VerticalLayout {
-                    if index > 0: Divider { }
+                SettingsBox {
+                    title: Strings.settings-general;
 
                     SettingsRow {
                         Text {
-                            text: Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present);
+                            text: Strings.appearance;
                             color: Tokens.text;
-                            wrap: word-wrap;
                             horizontal-stretch: 1;
                             vertical-alignment: center;
+                            accessible-role: none;
                         }
 
                         VerticalLayout {
                             alignment: center;
 
-                            SmallButton {
-                                text: Strings.unhide;
-                                tip: Strings.unhide-label(Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present));
-                                clicked => {
-                                    root.speaker-unhide-requested(hidden.id);
+                            Rectangle {
+                                border-radius: 7px;
+                                background: Tokens.text.with-alpha(0.06);
+                                accessible-role: groupbox;
+                                accessible-label: Strings.appearance;
+
+                                HorizontalLayout {
+                                    padding: 2px;
+                                    spacing: 2px;
+
+                                    Segment {
+                                        text: Strings.appearance-system;
+                                        chosen: root.appearance == Appearance.system;
+                                        picked => {
+                                            root.appearance-chosen(Appearance.system);
+                                        }
+                                    }
+
+                                    Segment {
+                                        text: Strings.appearance-light;
+                                        chosen: root.appearance == Appearance.light;
+                                        picked => {
+                                            root.appearance-chosen(Appearance.light);
+                                        }
+                                    }
+
+                                    Segment {
+                                        text: Strings.appearance-dark;
+                                        chosen: root.appearance == Appearance.dark;
+                                        picked => {
+                                            root.appearance-chosen(Appearance.dark);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Divider { }
+
+                    SwitchRow {
+                        text: Strings.launch-at-login;
+                        checked: root.launch-at-login;
+                        toggled(on) => {
+                            root.launch-at-login-toggled(on);
+                        }
+                    }
+
+                    Divider { }
+
+                    CaptionedSwitchRow {
+                        text: Strings.resume-after-sleep;
+                        caption: Strings.resume-after-sleep-info;
+                        checked: root.resume-after-sleep;
+                        toggled(on) => {
+                            root.resume-after-sleep-toggled(on);
+                        }
+                    }
+
+                    Divider { }
+
+                    SwitchRow {
+                        text: Strings.switch-source-on-quit;
+                        checked: root.switch-source-on-quit;
+                        toggled(on) => {
+                            root.switch-source-on-quit-toggled(on);
+                        }
+                    }
+                }
+
+                SettingsBox {
+                    title: Strings.menu-speakers;
+
+                    if root.volume-keys-available: VerticalLayout {
+                        CaptionedSwitchRow {
+                            text: Strings.volume-keys;
+                            caption: Strings.volume-keys-info;
+                            checked: root.volume-keys;
+                            toggled(on) => {
+                                root.volume-keys-toggled(on);
+                            }
+                        }
+
+                        Divider { }
+                    }
+
+                    SwitchRow {
+                        text: Strings.show-virtual-devices;
+                        checked: root.show-virtual-devices;
+                        toggled(on) => {
+                            root.show-virtual-devices-toggled(on);
+                        }
+                    }
+
+                    Divider { }
+
+                    Text {
+                        text: Strings.hidden-speakers;
+                        color: Tokens.secondary-text;
+                        font-size: Tokens.font-size-subheadline;
+                        accessible-role: text;
+                        accessible-label: self.text;
+                    }
+
+                    if root.hidden-speakers.length == 0: SettingsRow {
+                        Text {
+                            text: Strings.no-hidden-speakers;
+                            color: Tokens.secondary-text;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    for hidden[index] in root.hidden-speakers: VerticalLayout {
+                        if index > 0: Divider { }
+
+                        SettingsRow {
+                            Text {
+                                text: Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present);
+                                color: Tokens.text;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+
+                                SmallButton {
+                                    text: Strings.unhide;
+                                    tip: Strings.unhide-label(Strings.hidden-speaker-entry(hidden.name, hidden.kind, hidden.present));
+                                    clicked => {
+                                        root.speaker-unhide-requested(hidden.id);
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            if root.updater-available: SettingsBox {
-                title: Strings.settings-updates;
+                if root.updater-available: SettingsBox {
+                    title: Strings.settings-updates;
 
-                SwitchRow {
-                    text: Strings.check-updates-automatically;
-                    checked: root.check-updates-automatically;
-                    toggled(on) => {
-                        root.check-updates-automatically-toggled(on);
+                    SwitchRow {
+                        text: Strings.check-updates-automatically;
+                        checked: root.check-updates-automatically;
+                        toggled(on) => {
+                            root.check-updates-automatically-toggled(on);
+                        }
                     }
-                }
 
-                Divider { }
+                    Divider { }
 
-                SettingsRow {
-                    alignment: start;
+                    SettingsRow {
+                        alignment: start;
 
-                    VerticalLayout {
-                        alignment: center;
+                        VerticalLayout {
+                            alignment: center;
 
-                        SmallButton {
-                            text: Strings.menu-check-for-updates;
-                            clicked => {
-                                root.check-for-updates-requested();
+                            SmallButton {
+                                text: Strings.menu-check-for-updates;
+                                clicked => {
+                                    root.check-for-updates-requested();
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            if Platform.os == OperatingSystemType.windows: SettingsBox {
-                title: Strings.setup-title;
+                if Platform.os == OperatingSystemType.windows: SettingsBox {
+                    title: Strings.setup-title;
 
-                SettingsRow {
-                    alignment: start;
+                    SettingsRow {
+                        alignment: start;
 
-                    VerticalLayout {
-                        alignment: center;
+                        VerticalLayout {
+                            alignment: center;
 
-                        SmallButton {
-                            text: Strings.menu-check-setup;
-                            clicked => {
-                                root.setup-requested();
+                            SmallButton {
+                                text: Strings.menu-check-setup;
+                                clicked => {
+                                    root.setup-requested();
+                                }
                             }
                         }
                     }

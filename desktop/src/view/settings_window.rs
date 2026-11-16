@@ -54,6 +54,12 @@ impl App {
     /// Opens Settings, or brings it to the front when it is open.
     pub fn show_settings(&self) {
         self.show_settings_state();
+        let at = self.settings.window().position();
+        if let Some((work_area, scale)) = crate::platform::monitor_at(at.x.into(), at.y.into()) {
+            // The margin leaves room for the title bar and a gap above the taskbar.
+            self.settings
+                .set_room((work_area.height / scale - 80.0).max(200.0) as f32);
+        }
         if let Err(error) = self.settings.show() {
             self.show_window_error(&error);
             return;

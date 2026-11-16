@@ -20986,6 +20986,41 @@ mod tests {
         assert_eq!(row().accessible_expanded(), Some(true), "Expand opened it");
     }
 
+    /// With many hidden speakers Settings scrolls, so its last box, Check
+    /// Setup, can still be reached at the bottom of a window that fits the screen.
+    #[test]
+    fn settings_with_30_hidden_speakers_scrolls_to_check_setup() {
+        let app = app_over(MockBackend::new());
+        assert!(app.main.invoke_shortcut(",".into(), true, false));
+        let hidden: Vec<HiddenItem> = (0..30)
+            .map(|n| HiddenItem {
+                id: format!("local:hidden{n}").into(),
+                name: format!("Hidden Speaker {n}").into(),
+                kind: SharedString::new(),
+                present: false,
+            })
+            .collect();
+        app.settings
+            .set_hidden_speakers(ModelRc::new(VecModel::from(hidden)));
+        // A screen with 700 px of room, whatever the test machine's screen is.
+        app.settings.set_room(700.0);
+        draw_frames();
+        let label = app.main.global::<crate::Strings>().get_menu_check_setup();
+        let check_setup = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.settings, &label)
+                .next()
+                .expect("Check Setup")
+        };
+        for _ in 0..40 {
+            scroll(app.settings.window(), 200.0, 300.0, -120.0);
+        }
+        let (at, size) = (check_setup().absolute_position(), check_setup().size());
+        assert!(
+            at.y >= 0.0 && at.y + size.height <= 720.0,
+            "Check Setup at {at:?} {size:?}, out of the 720 px window"
+        );
+    }
+
     /// Settings lays out the same on light and dark: a text as wide in both,
     /// so a row that fits one line on dark fits it on light too.
     #[test]
