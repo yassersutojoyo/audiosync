@@ -69,6 +69,10 @@ and the wordmark (`Sources/AudioSync/MainWindow.swift`, `MenuBar.swift`), and th
 menu bar icon is the mark as a template image, dimmed while streaming is off
 (`Sources/AudioSync/MenuBar.swift`).
 
+## Device icons
+
+`brand/icons/` holds the device icons the speaker rows show on every platform: 18 px glyphs for the 32 px circle and 12 px badges after a speaker's name. They are our own drawings, made 2026-11-16 with `scripts/brand/device_icons.py`, not traced from any other icon set. The script draws on a grid equal to the render size and refuses a straight edge that misses a whole pixel, so the glyphs stay sharp at 1x. Regenerate with `python scripts/brand/device_icons.py brand/icons`.
+
 ## Regenerating
 
 ```bash
