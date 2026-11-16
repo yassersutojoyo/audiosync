@@ -1474,9 +1474,6 @@ export component Wordmark inherits Rectangle {
     in property <length> size: Tokens.font-size-wordmark;
     in property <bool> dim;
     property <color> sync: Tokens.dark ? Tokens.logo : Tokens.teal-text;
-    // The only bundled Poppins is Medium, which Windows' 1x hinting sets lighter than the
-    // Mac's Retina; a hairline outside thickens it on light (dark text blooms on its own).
-    property <length> ink: Platform.os == OperatingSystemType.windows && !Tokens.dark ? 0.3px : 0px;
     // Animated, not the color, so a theme change switches at once.
     property <float> lit: root.dim ? 0 : 1;
     animate lit { duration: Motion.on ? 250ms : 150ms; }
@@ -1500,9 +1497,6 @@ export component Wordmark inherits Rectangle {
             font-weight: Tokens.brand-font-weight;
             font-size: root.size;
             letter-spacing: Tokens.brand-tracking * root.size;
-            stroke: self.color;
-            stroke-width: root.ink;
-            stroke-style: outside;
             color: Tokens.text;
             accessible-role: none;
         }
@@ -1513,9 +1507,6 @@ export component Wordmark inherits Rectangle {
             font-weight: Tokens.brand-font-weight;
             font-size: root.size;
             letter-spacing: Tokens.brand-tracking * root.size;
-            stroke: self.color;
-            stroke-width: root.ink;
-            stroke-style: outside;
             color: root.sync.mix(Tokens.secondary-text, root.lit);
             accessible-role: none;
         }
