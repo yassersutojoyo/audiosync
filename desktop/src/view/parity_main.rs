@@ -200,13 +200,13 @@ fn text_is_segoe_ui_variable_on_windows_and_inter_elsewhere() {
 #[test]
 fn text_weights_are_heavier_on_windows_and_come_from_fluent() {
     let fluent = component(include_str!("../../ui/widgets.slint"), "Fluent");
-    for (role, dark, light, elsewhere) in [
-        ("regular", 480, 590, 400),
-        ("medium", 560, 650, 500),
-        ("semibold", 640, 700, 600),
+    for (role, windows, elsewhere) in [
+        ("regular", 480, 400),
+        ("medium", 560, 500),
+        ("semibold", 640, 600),
     ] {
         assert!(fluent.contains(&format!(
-            "out property <int> weight-{role}: Platform.os == OperatingSystemType.windows ? (Tokens.dark ? {dark} : {light}) : {elsewhere};"
+            "out property <int> weight-{role}: Platform.os == OperatingSystemType.windows ? {windows} : {elsewhere};"
         )));
     }
     for (name, source) in [

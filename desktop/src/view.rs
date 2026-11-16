@@ -20963,6 +20963,41 @@ mod tests {
         assert_eq!(app.flyout.get_current_preset(), "Party", "the last preset");
     }
 
+    /// Settings lays out the same on light and dark: a text as wide in both,
+    /// so a row that fits one line on dark fits it on light too.
+    #[test]
+    fn settings_lays_out_the_same_on_light_and_dark() {
+        let app = app_over(MockBackend::new());
+        assert!(app.main.invoke_shortcut(",".into(), true, false));
+        app.main.invoke_speaker_hide_requested("local:desk".into());
+        let strings = app.main.global::<crate::Strings>();
+        let labels = [
+            strings.get_switch_source_on_quit(),
+            strings.get_volume_keys(),
+            strings.get_unhide(),
+        ];
+        let boxes = |look| {
+            app.main.invoke_appearance_chosen(look);
+            draw_frames_at(460, 640);
+            labels
+                .iter()
+                .map(|label| {
+                    let e = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                        &app.settings,
+                        label,
+                    )
+                    .next()
+                    .expect("the control");
+                    (e.absolute_position(), e.size())
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            boxes(crate::Appearance::Light),
+            boxes(crate::Appearance::Dark)
+        );
+    }
+
     /// Settings… (Ctrl+,) opens the Settings window, which shows the main
     /// window's settings and hands each change to the main window's callback.
     // covers: S449
