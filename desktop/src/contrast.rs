@@ -2213,7 +2213,7 @@ fn every_speaker_kind_has_its_own_device_icon() {
 
 /// The 18 px glyph sits 7 px into its 32 px circle, the 14 px one 5 px into
 /// a zone speaker's 24 px circle, the 16 px one 6 px into the tray panel's
-/// 28 px circle, and the 12 px badge is drawn at its own
+/// 26 px circle, and the 12 px badge is drawn at its own
 /// size, so at 100% every edge lands on a whole pixel; the 32 px circle's
 /// waiting ring is 2 px.
 #[test]
@@ -2230,8 +2230,8 @@ fn device_icons_sit_on_whole_pixels() {
     ));
     assert!(badge.contains("root.waits ? (root.size == 32px ? 2px :"));
     let disc = component_body(&flyout, "RowDisc");
-    assert!(disc.contains("width: 28px;\n    height: 28px;"), "{disc}");
-    assert!(disc.contains("x: 6px;\n        y: 6px;\n        width: 16px;\n        height: 16px;"));
+    assert!(disc.contains("width: 26px;\n    height: 26px;"), "{disc}");
+    assert!(disc.contains("x: 5px;\n        y: 5px;\n        width: 16px;\n        height: 16px;"));
     assert!(!disc.contains("Glyph {"), "{disc}");
     let badge = component_body(&widgets, "KindIcon");
     assert!(

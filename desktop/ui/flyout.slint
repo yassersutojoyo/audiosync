@@ -298,8 +298,9 @@ component RowDisc inherits Rectangle {
         easing: cubic-bezier(0.2, 0.8, 0.2, 1);
     }
 
-    width: 28px;
-    height: 28px;
+    // The Mac panel's 26 pt.
+    width: 26px;
+    height: 26px;
     border-radius: self.width / 2;
     border-width: root.plays ? 0px : root.on ? 2.5px : 1.5px;
     border-color: root.on ? Tokens.teal : Tokens.secondary-text;
@@ -313,8 +314,8 @@ component RowDisc inherits Rectangle {
     }
 
     Image {
-        x: 6px;
-        y: 6px;
+        x: 5px;
+        y: 5px;
         width: 16px;
         height: 16px;
         source: root.icon;
@@ -558,8 +559,8 @@ component FlyoutZoneHeader inherits Rectangle {
 
             // The mark of the speaker rows, under the zone's toggle.
             zone-disc := Rectangle {
-                width: 28px;
-                height: 28px;
+                width: 26px;
+                height: 26px;
 
                 RowDisc {
                     icon: DeviceIcons.zone16;
@@ -570,7 +571,7 @@ component FlyoutZoneHeader inherits Rectangle {
 
                 SpeakerBadge {
                     bare: true;
-                    size: 28px;
+                    size: 26px;
                     state: root.item.state;
                     enabled: root.live;
                     narrated: root.live;

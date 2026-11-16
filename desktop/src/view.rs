@@ -13645,7 +13645,7 @@ mod tests {
         let name = flyout_element(&app, "FlyoutRow::name-label");
         let row = flyout_element(&app, "TrayFlyout::this-pc-view");
         assert_eq!(disc.absolute_position().x, 14.0);
-        assert_eq!(name.absolute_position().x, 52.0);
+        assert_eq!(name.absolute_position().x, 50.0);
         let end = row.absolute_position().x + row.size().width - 6.0;
         // The panel is 300 px wide; the headless window around it is wider.
         assert_eq!(300.0 - end, 17.0);
