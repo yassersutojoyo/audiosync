@@ -6889,6 +6889,21 @@ do {
     // covers: S218
     check(shown == nil && shows(shown).fields == untitled && denied.dropped == .denied,
           "now playing: a player that refuses Apple Events drops a paused track at once")
+    var playerSet = NowPlayingMonitor.RunningPlayers(["com.apple.finder", spotify])
+    var setReadings = NowPlayingMonitor.EmptyReadings()
+    var setShown: NowPlayingMonitor.Track? = paused
+    for _ in 0..<20 {
+        setShown = setReadings.next(reading: nil, last: setShown, lastPlayerRuns: playerSet.runs(spotify))
+    }
+    // covers: S218
+    check(setShown?.title == "Song" && setReadings.dropped == nil,
+          "now playing: a paused track whose player the launch and terminate notices list as running stays through empty readings")
+    playerSet.launched("com.apple.Music")
+    playerSet.terminated(spotify)
+    setShown = setReadings.next(reading: nil, last: setShown, lastPlayerRuns: playerSet.runs(spotify))
+    // covers: S218
+    check(setShown == nil && setReadings.dropped == .quit(1) && playerSet.runs("com.apple.Music"),
+          "now playing: a paused track goes at once when its player's terminate notice arrives")
 }
 
 // MARK: Track info — with the whole system as source, the player that played last keeps its paused track
