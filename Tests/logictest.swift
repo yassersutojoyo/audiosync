@@ -9194,12 +9194,8 @@ do {
     check(PanelLayout.gaps.allSatisfy { $0 == PanelLayout.gap },
           "menu bar panel: one gap between the now playing card, the preset row (or the volume knob when no preset row shows), the volume knob, This Mac's circles, the divider and the list",
           "\(PanelLayout.gaps)")
-    check(PanelLayout.menuLeadingInset + PanelLayout.sourceLeading == 0,
-          "menu bar panel: the source name starts on the title's and the artist's column")
-    // 14 Nov at 1x: the menu's label frame sat on the title's, but "Spotify"'s ink still started 1 pt right of it.
-    check(PanelLayout.sourceLeading == -3.5,
-          "menu bar panel: the source name's ink starts on the title's and the artist's ink",
-          "\(PanelLayout.sourceLeading)")
+    check(bar.contains(".padding(.leading, hero ? 0 : 10)"),
+          "menu bar panel: the source name, SwiftUI's own text like the title's, starts on the title's and the artist's column")
     check(Set(PanelLayout.trailingInk).count == 1,
           "menu bar panel: the card's chevron, the preset chevron and the volume number end on one edge",
           "\(PanelLayout.trailingInk)")
@@ -9219,6 +9215,21 @@ do {
             && panelPresetSource.contains(".font(.system(size: QuickRowIcon.point))")
             && muteSource.contains(".system(size: QuickRowIcon.point)"),
           "menu bar panel source: the preset and volume icons share This Mac's circle box, inside what opens them, and the main window rows' icon size; their text starts on the names' column; with no preset row the volume keeps the card's gap")
+    // 16 Nov at 2x: with a preset's name under it the centred row put its icon 4.5 pt under the card, not 12.
+    check(panelPresetSource.contains("PresetRowLayout {") && !panelPresetSource.contains("minHeight: 34, alignment: .leading"),
+          "menu bar panel source: the preset row keeps its label where a plain row has it when the preset's name shows under it, so the card's gap holds")
+    let plainPresetRow = PanelLayout.presetRow(label: 16, line: 0)
+    let namedPresetRow = PanelLayout.presetRow(label: 16, line: 15)
+    check(plainPresetRow.height == PanelLayout.presetRowHeight && namedPresetRow.labelTop == plainPresetRow.labelTop
+            && namedPresetRow.height == PanelLayout.presetRowHeight + 7.5,
+          "menu bar panel: a preset's name under the preset row pushes only what is below it down, by half its height",
+          "\(plainPresetRow) \(namedPresetRow)")
+    // 16 Nov at 60 fps: the borderless menu's AppKit label moved in whole pixels while the intro moved the card in fractions.
+    let sourceMenuStyle = bar.components(separatedBy: "private struct SourceMenuStyle: ViewModifier {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(sourceMenuStyle.contains("if hero {\n            content.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)")
+            && bar.contains(".modifier(SourceMenuStyle(hero: hero))"),
+          "menu bar panel source: the card's source name and chevron are SwiftUI's own drawing, so they glide with the card as it opens and closes")
     let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let quickIconSource = mainSource.components(separatedBy: "struct QuickRowIcon: View {").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
