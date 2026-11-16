@@ -506,16 +506,16 @@ export global Glyphs {
             return "M9.5 1.5 L3.5 9 H8 L6.5 14.5 L12.5 7 H8 Z";
         }
         if glyph == root.volume-low {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10";
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z M9.75 5.5 A3 3 0 0 1 9.75 10.5";
         }
         if glyph == root.volume-mid {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10 M11.8 4.5 A4.5 4.5 0 0 1 11.8 11.5";
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z M9.75 5.5 A3 3 0 0 1 9.75 10.5 M11.5 3.75 A5.5 5.5 0 0 1 11.5 12.25";
         }
         if glyph == root.volume-high {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6 A2.5 2.5 0 0 1 10.5 10 M11.8 4.5 A4.5 4.5 0 0 1 11.8 11.5 M12.5 2.5 A6.5 6.5 0 0 1 12.5 13.5";
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z M9.75 5.5 A3 3 0 0 1 9.75 10.5 M11.5 3.75 A5.5 5.5 0 0 1 11.5 12.25 M13.25 2 A9 9 0 0 1 13.25 14";
         }
         if glyph == root.volume-muted {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z M10.5 6.25 L14 9.75 M14 6.25 L10.5 9.75";
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z M10 5.75 L14.5 10.25 M14.5 5.75 L10 10.25";
         }
         if glyph == root.music-note {
             return "M10.5 11.5 V2 Q10.5 4 13.5 5.5";
@@ -568,9 +568,9 @@ export global Glyphs {
         if glyph == root.music-note {
             return "M5.5 11.5 A2.5 2 0 0 1 10.5 11.5 A2.5 2 0 0 1 5.5 11.5 Z";
         }
-        // The body of the Mac's speaker.wave.n.fill.
+        // The body of the Mac's speaker.wave.n.fill, which spans its whole box as these do.
         if glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted {
-            return "M2 6 H4.5 L8 3 V13 L4.5 10 H2 Z";
+            return "M0.5 5.5 H3.5 L7.5 2 V14 L3.5 10.5 H0.5 Z";
         }
         // Two solid triangles across the whole box, as the Mac's
         // backward.fill and forward.fill: about 7 wide to 4 high.
@@ -2119,8 +2119,7 @@ export component MasterVolume inherits HorizontalLayout {
 
         speaker := Glyph {
             x: (parent.width - self.width) / 2;
-            width: 20px;
-            font-size: 20px;
+            width: 16px;
             glyph: Glyphs.master-volume(root.waves);
         }
     }
