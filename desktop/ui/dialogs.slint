@@ -28,6 +28,7 @@ export component ZoneNameDialog inherits Dialog {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     // A fixed width: X11 showed it at its layout's narrowest.
     width: 380px;
@@ -139,6 +140,7 @@ export component PinDialog inherits Dialog {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     preferred-width: 380px;
 
@@ -265,6 +267,7 @@ export component PasswordDialog inherits Dialog {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     preferred-width: 380px;
 
@@ -307,7 +310,7 @@ export component PasswordDialog inherits Dialog {
                             text: root.speaker;
                             font-family: Fluent.display-font;
                             font-size: Tokens.font-size-body;
-                            font-weight: 600;
+                            font-weight: Fluent.weight-semibold;
                             color: Tokens.text;
                             vertical-alignment: center;
                             overflow: elide;
@@ -417,6 +420,7 @@ export component CastAddressDialog inherits Dialog {
     icon: @image-url("../res/audiosync-256.png");
     background: Tokens.background;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     preferred-width: 420px;
 
@@ -460,7 +464,7 @@ export component CastAddressDialog inherits Dialog {
                 text: Strings.cast-add-address-title;
                 color: Tokens.text;
                 font-size: Tokens.font-size-title3;
-                font-weight: 600;
+                font-weight: Fluent.weight-semibold;
                 wrap: word-wrap;
             }
 
