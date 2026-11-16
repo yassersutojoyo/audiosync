@@ -343,12 +343,18 @@ export component SettingsWindow inherits Window {
 
                     Divider { }
 
-                    Text {
-                        text: Strings.hidden-speakers;
-                        color: Tokens.secondary-text;
-                        font-size: Tokens.font-size-subheadline;
-                        accessible-role: text;
-                        accessible-label: self.text;
+                    // 8 px under the divider and 2 px over the list, as the Mac's.
+                    VerticalLayout {
+                        padding-top: 8px;
+                        padding-bottom: 2px;
+
+                        Text {
+                            text: Strings.hidden-speakers;
+                            color: Tokens.secondary-text;
+                            font-size: Tokens.font-size-subheadline;
+                            accessible-role: text;
+                            accessible-label: self.text;
+                        }
                     }
 
                     if root.hidden-speakers.length == 0: SettingsRow {
