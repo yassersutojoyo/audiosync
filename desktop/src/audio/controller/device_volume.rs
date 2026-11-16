@@ -12,9 +12,9 @@
 //! Windows audio hangs, an output whose listener, read or fix doesn't answer
 //! in time shows no device volume and is tried again some seconds later. The
 //! core (`audiosync_core::policy::device_volume`) decides what a reading
-//! means and what the fix writes; the only write is that fix, when the user
-//! clicks it, and the row follows what Windows reports afterwards, never the
-//! values written. None of this touches an audio thread, the renderers or
+//! means and what the fix writes; the only writes are that fix, when the
+//! user clicks it, and the remembered level (S472), and the row follows what
+//! Windows reports afterwards, never the values written. None of this touches an audio thread, the renderers or
 //! AudioSync's own volumes.
 
 use std::collections::BTreeMap;
@@ -80,7 +80,7 @@ pub(crate) fn describe(reading: DeviceVolume) -> String {
 }
 
 /// How a write of the fix went, for the log.
-fn outcome(result: &Result<(), BackendError>) -> String {
+pub(super) fn outcome(result: &Result<(), BackendError>) -> String {
     match result {
         Ok(()) => "done".to_owned(),
         Err(error) => format!("failed: {error}"),
@@ -94,6 +94,7 @@ impl<D: Driver> Controller<D> {
     /// log (S201); one switched off or gone is let go. Called whenever the
     /// outputs that are on, or the connected ones, may have changed.
     pub(super) fn follow_device_volumes(&mut self) {
+        self.put_back_local_volumes();
         let wanted: Vec<String> = self
             .present
             .iter()
@@ -159,6 +160,9 @@ impl<D: Driver> Controller<D> {
             if retried && reading.hint().is_some() {
                 self.pending
                     .push(BackendEvent::DeviceVolumeChanged { id: id.clone() });
+            }
+            if let Some(level) = reading.volume {
+                self.local_volumes.reported(&id, level);
             }
             self.device_volumes.readings.insert(id, reading);
         }
@@ -262,6 +266,9 @@ impl<D: Driver> Controller<D> {
                 )
             });
         }
+        if let Some(level) = reading.volume {
+            self.local_volumes.reported(&id, level);
+        }
         self.device_volumes.readings.insert(id.clone(), reading);
         if reading.hint() != before.hint() {
             self.pending.push(BackendEvent::DeviceVolumeChanged { id });
@@ -333,6 +340,69 @@ impl<D: Driver> Controller<D> {
         }
     }
 
+    /// Puts back the found level of each output that stopped playing
+    /// through AudioSync (switched off, or no session), once no output is
+    /// fading out any more (S472); an output that isn't listed keeps it
+    /// until it is, and one already at that level isn't written.
+    pub(super) fn put_back_local_volumes(&mut self) {
+        if !self.retiring.is_empty() {
+            return;
+        }
+        let running = self.session.is_some();
+        let stopped: Vec<String> = self
+            .local_volumes
+            .playing()
+            .filter(|id| {
+                !(running && self.policy.settings(id).enabled)
+                    && self.present.iter().any(|endpoint| endpoint.id == **id)
+            })
+            .cloned()
+            .collect();
+        for id in stopped {
+            let Some(level) = self.local_volumes.switched_off(&id) else {
+                continue;
+            };
+            let now = self.driver.endpoint_volume(&id).ok();
+            if now.is_some_and(|now| (f64::from(now.level) - level).abs() < 0.001) {
+                continue;
+            }
+            let set = self.driver.set_endpoint_level(&id, level as f32);
+            self.log.log(|| {
+                format!(
+                    "output {} device volume put back to {}%: {}",
+                    label(&self.names, &id),
+                    (level * 100.0).round(),
+                    outcome(&set)
+                )
+            });
+        }
+    }
+
+    /// At the first listing, before anything plays: the found levels an
+    /// unclean quit left go back on the outputs listed now (S472).
+    pub(super) fn recover_local_volumes(&mut self) {
+        let left: Vec<String> = self.local_volumes.stored.found.keys().cloned().collect();
+        let mut current = BTreeMap::new();
+        for id in left {
+            if self.present.iter().any(|endpoint| endpoint.id == id)
+                && let Ok(volume) = self.driver.endpoint_volume(&id)
+            {
+                current.insert(id, f64::from(volume.level));
+            }
+        }
+        for (id, level) in self.local_volumes.recover(&current) {
+            let set = self.driver.set_endpoint_level(&id, level as f32);
+            self.log.log(|| {
+                format!(
+                    "output {} device volume put back to {}% after an unclean quit: {}",
+                    label(&self.names, &id),
+                    (level * 100.0).round(),
+                    outcome(&set)
+                )
+            });
+        }
+    }
+
     /// Lets go of every output's own volume: AudioSync quits.
     pub(super) fn stop_following_device_volumes(&mut self) {
         for id in std::mem::take(&mut self.device_volumes.readings).into_keys() {
@@ -397,6 +467,33 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    // covers: S472
+    #[test]
+    fn a_switched_on_output_gets_back_the_level_it_last_played_at() {
+        let mut backend = backend();
+        backend.set_output_level(HEADPHONES, 0.18);
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.poll();
+        // Set to 60 % in Windows while it plays.
+        backend.set_output_level(HEADPHONES, 0.6);
+        backend.poll();
+        backend.set_output_enabled(HEADPHONES, false).unwrap();
+        backend.poll();
+        // At 18 % once it is off, the level it was found at.
+        backend.set_output_level(HEADPHONES, 0.18);
+        backend.poll();
+        backend.set_output_enabled(HEADPHONES, true).unwrap();
+        backend.poll();
+        let percent = device_volume(&backend, HEADPHONES).and_then(DeviceVolume::percent);
+        assert_eq!(
+            percent,
+            Some(60),
+            "the level it last played at is set again"
+        );
+        assert_eq!(hint(&backend, HEADPHONES), None);
     }
 
     // covers: S195, S202

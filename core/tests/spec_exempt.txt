@@ -236,3 +236,4 @@ S468 Mac host only: a Now Playing song change's main-thread work (Sources/AudioS
 S469 Windows host only: moving Windows' default output to a silent endpoint while the whole system streams, and restoring it (docs/WINDOWS_AUDIO_ROUTING.md, "Moving the default output while streaming"); the desktop tests check it with a fake of the default-endpoint seam.
 S470 Windows host only: no copy on Windows' default output when S469 can't move it; the desktop tests check it.
 S471 Windows host only: moving one captured app's own output to a silent endpoint and putting each app's earlier choice back; the desktop tests check it with a fake of the per-app seam.
+S472 Windows host only: the remembered Windows level of each local output; the desktop tests check it with the mock backend.

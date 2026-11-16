@@ -4281,6 +4281,7 @@ impl App {
         self.updater_at_exit();
         // Changes since the last poll, and where the main window is.
         self.save_settings();
+        self.backend.borrow_mut().shut_down();
     }
 
     /// When Windows ends the session or Linux sends an exit signal, which

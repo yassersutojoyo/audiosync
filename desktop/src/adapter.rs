@@ -889,6 +889,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
     fn restore(&mut self, saved: Settings) {
         let saved = saved.with_zones_migrated().with_presets_migrated();
         self.audio.set_master_volume(saved.master_volume);
+        self.audio.set_local_volumes(saved.local_volumes.clone());
         // A hidden speaker is never switched on, not even by the saved on-state.
         self.hidden = saved.hidden_speakers.clone();
         for (endpoint_id, pair) in &saved.input_pairs {
@@ -1187,6 +1188,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             update_record: self.view.update_record.clone(),
             default_output: self.audio.default_output_record(),
             app_output: self.audio.app_output_record(),
+            local_volumes: self.audio.local_volumes(),
             other_fields: self.saved.other_fields.clone(),
         }
         .clamped()
@@ -6218,6 +6220,8 @@ impl<A: AudioBackend> Backend for AudioAdapter<A> {
 
     fn shut_down(&mut self) {
         self.audio.shut_down();
+        // The levels the outputs' fade-outs put back (S472).
+        let _ = self.persist();
     }
 
     fn restore_default_output(&mut self) {

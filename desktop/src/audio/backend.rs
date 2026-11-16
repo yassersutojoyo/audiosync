@@ -1227,6 +1227,15 @@ pub trait AudioBackend {
         None
     }
 
+    /// The local outputs' remembered and found Windows levels (S472), which
+    /// the adapter's own saves keep.
+    fn local_volumes(&self) -> super::local_volume::LocalVolumes {
+        super::local_volume::LocalVolumes::default()
+    }
+
+    /// The stored levels of [`AudioBackend::local_volumes`], at launch.
+    fn set_local_volumes(&mut self, _stored: super::local_volume::LocalVolumes) {}
+
     /// Puts Windows' default output back as Windows asks to end the
     /// session; a stream of the whole system runs on without the switch
     /// (S469, S470).

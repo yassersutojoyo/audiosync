@@ -55,6 +55,7 @@ pub mod clock_probe;
 pub mod controller;
 pub mod default_output;
 pub mod explicit_pause;
+pub mod local_volume;
 #[cfg(all(test, target_os = "linux"))]
 mod mdns_live_tests;
 #[cfg(any(windows, target_os = "linux", test))]

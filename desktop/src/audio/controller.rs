@@ -90,6 +90,7 @@ use super::clock_probe::{ClockQueue, describe_clock_queue};
 use super::default_output::{
     DefaultEndpoints, DefaultSwitch, Record, RecordStore, silent_endpoint,
 };
+use super::local_volume::{LocalVolumeMemory, LocalVolumes};
 use super::now_playing::{
     Follow, Mix, POLL_INTERVAL, SharedLabels, TrackInfo, TrackReader, TrackSource,
 };
@@ -909,6 +910,8 @@ pub struct Controller<D: Driver> {
     /// The own volume and mute of each output that is on and connected
     /// (spec S192 to S202), followed through Windows' notifications.
     device_volumes: device_volume::Followed,
+    /// Each local output's remembered and found Windows level (S472).
+    local_volumes: LocalVolumeMemory,
     /// The outputs reported busy ([`BackendEvent::OutputBusy`]) that
     /// haven't played since or been switched off, each with the polls left
     /// before its next try ([`BUSY_RETRY_POLLS`]).
@@ -1042,6 +1045,7 @@ impl<D: Driver> Controller<D> {
             quit_watch: SourceQuitWatch::default(),
             mix_checked: None,
             device_volumes: device_volume::Followed::default(),
+            local_volumes: LocalVolumeMemory::default(),
             busy: BTreeMap::new(),
             unplayable: BTreeSet::new(),
             stalled: BTreeMap::new(),
@@ -1924,9 +1928,13 @@ impl<D: Driver> Controller<D> {
         // One that left is fresh again once it's back.
         self.appeared
             .retain(|id, _| listed.iter().any(|endpoint| endpoint.id == *id));
+        let first = !self.listed_once;
         self.listed_once = true;
         self.present = listed;
         self.policy.set_listed(&self.present);
+        if first {
+            self.recover_local_volumes();
+        }
         self.listing_ok = true;
         // A busy output whose device is gone no longer waits for it: it
         // stays on and is tried again once it is listed (S68).
@@ -2188,6 +2196,23 @@ impl<D: Driver> Controller<D> {
                     )
                 });
                 continue;
+            }
+            // Its remembered level goes on before its first audio (S472).
+            let current = self.driver.endpoint_volume(&endpoint.id);
+            let current = current.ok().map(|volume| f64::from(volume.level));
+            if let Some(level) = self.local_volumes.switched_on(&endpoint.id, current) {
+                let set = self.driver.set_endpoint_level(&endpoint.id, level as f32);
+                if set.is_err() {
+                    self.local_volumes.refused(&endpoint.id);
+                }
+                self.log.log(|| {
+                    format!(
+                        "output {} device volume set to its remembered {}%: {}",
+                        label(&self.names, &endpoint.id),
+                        (level * 100.0).round(),
+                        device_volume::outcome(&set)
+                    )
+                });
             }
             let params = self.policy.params(&endpoint.id);
             let reader = Reader::new(Arc::clone(&session.ring), SESSION_RATE);
@@ -4580,6 +4605,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.sync_app_output(true);
         self.sync_default_output(false);
         self.reap(true);
+        self.put_back_local_volumes();
         self.stop_following_device_volumes();
         self.airplay = None;
         self.starter = None;
@@ -4724,6 +4750,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         self.sync_default_output(false);
         self.airplay_streaming(false);
         self.release_busy();
+        self.put_back_local_volumes();
     }
 
     fn default_output_record(&self) -> Option<Record> {
@@ -4732,6 +4759,14 @@ impl<D: Driver> AudioBackend for Controller<D> {
 
     fn app_output_record(&self) -> Option<AppRecord> {
         self.app_redirect.record().cloned()
+    }
+
+    fn local_volumes(&self) -> LocalVolumes {
+        self.local_volumes.stored.clone()
+    }
+
+    fn set_local_volumes(&mut self, stored: LocalVolumes) {
+        self.local_volumes.stored = stored;
     }
 
     fn restore_default_output(&mut self) {
@@ -5391,6 +5426,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // Outputs that faded out stop, and then an ended session's capture;
         // a start that waited for them goes ahead.
         self.reap(false);
+        self.put_back_local_volumes();
         self.start_when_faded();
         self.reopen_capture_when_due();
         // A session whose capture stopped ends first. One lost because

@@ -61,6 +61,7 @@ use crate::audio::cast_address;
 use crate::audio::default_output::Record as DefaultRecord;
 #[cfg(any(windows, test))]
 use crate::audio::default_output::RecordStore;
+use crate::audio::local_volume::LocalVolumes;
 use crate::data_folder;
 use crate::remote::RemoteSettings;
 use crate::ui_model::{UpdateRecord, WindowFrame, WindowPlace};
@@ -899,6 +900,12 @@ pub struct Settings {
         deserialize_with = "or_default"
     )]
     pub app_output: Option<AppRecord>,
+    /// Each local output's remembered and found Windows level (S472).
+    #[serde(
+        skip_serializing_if = "LocalVolumes::is_empty",
+        deserialize_with = "or_default"
+    )]
+    pub local_volumes: LocalVolumes,
     /// The fields this build doesn't know, written back as read so a newer
     /// build's settings survive a downgrade or a restored copy (S212).
     #[serde(flatten)]
@@ -1045,6 +1052,7 @@ impl Default for Settings {
             update_record: None,
             default_output: None,
             app_output: None,
+            local_volumes: LocalVolumes::default(),
             other_fields: BTreeMap::new(),
         }
     }
@@ -1361,6 +1369,7 @@ impl Settings {
             update_record: self.update_record,
             default_output: self.default_output,
             app_output: self.app_output,
+            local_volumes: self.local_volumes.clamped(),
             // Capped as every list is, so a damaged file's thousands of stray keys aren't carried on.
             other_fields: self.other_fields.into_iter().take(MAX_ENTRIES).collect(),
         }
@@ -1564,6 +1573,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("update_record", reads::<Option<UpdateRecord>>),
         ("default_output", reads::<Option<DefaultRecord>>),
         ("app_output", reads::<Option<AppRecord>>),
+        ("local_volumes", reads::<LocalVolumes>),
     ];
     let Ok(Value::Object(stored)) = serde_json::from_str::<Value>(text) else {
         return Vec::new();
@@ -2133,6 +2143,11 @@ mod tests {
                     multimedia: String::new(),
                 }],
             }),
+            local_volumes: LocalVolumes {
+                remembered: BTreeMap::from([("cx".to_owned(), 0.6)]),
+                found: BTreeMap::from([("cx".to_owned(), 0.18)]),
+                left: BTreeMap::from([("cx".to_owned(), 0.18)]),
+            },
             other_fields: BTreeMap::new(),
         }
     }
@@ -2636,6 +2651,7 @@ mod tests {
             update_record,
             default_output,
             app_output,
+            local_volumes,
             other_fields: _,
         } = every_field();
         assert_ne!(source, default.source);
@@ -2678,6 +2694,7 @@ mod tests {
         assert_ne!(update_record, default.update_record);
         assert_ne!(default_output, default.default_output);
         assert_ne!(app_output, default.app_output);
+        assert_ne!(local_volumes, default.local_volumes);
     }
 
     // covers: S212
