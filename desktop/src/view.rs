@@ -21146,6 +21146,39 @@ mod tests {
         );
     }
 
+    /// A hidden speaker's row keeps its 48 px inside the Speakers box, as the
+    /// Mac's: the box ends under the Unhide row, not across it.
+    #[test]
+    fn the_speakers_box_holds_the_whole_unhide_row() {
+        let app = app_over(MockBackend::new());
+        assert!(app.main.invoke_shortcut(",".into(), true, false));
+        app.settings
+            .set_hidden_speakers(ModelRc::new(VecModel::from(vec![HiddenItem {
+                id: "local:usb".into(),
+                name: "Speakers (2- Thronmax MDrill Zero Plus)".into(),
+                kind: "USB".into(),
+                present: true,
+            }])));
+        draw_frames_at(460, 900);
+        let strings = app.main.global::<crate::Strings>();
+        let find = |label: SharedString| {
+            let e = i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &app.settings,
+                &label,
+            )
+            .next()
+            .expect("the element");
+            (e.absolute_position().y, e.size().height)
+        };
+        let (unhide, height) = find(strings.get_unhide());
+        let (title, _) = find(strings.get_setup_title());
+        let row_bottom = unhide + height + (48.0 - 8.0 - height) / 2.0 + 4.0;
+        assert!(
+            title - row_bottom >= 16.0,
+            "the Unhide row ends at {row_bottom}, the next box's title starts at {title}"
+        );
+    }
+
     /// Settings lays out the same on light and dark: a text as wide in both,
     /// so a row that fits one line on dark fits it on light too.
     #[test]

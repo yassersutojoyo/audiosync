@@ -320,18 +320,18 @@ export component SettingsWindow inherits Window {
                 SettingsBox {
                     title: Strings.menu-speakers;
 
-                    if root.volume-keys-available: VerticalLayout {
-                        CaptionedSwitchRow {
-                            text: Strings.volume-keys;
-                            caption: Strings.volume-keys-info;
-                            checked: root.volume-keys;
-                            toggled(on) => {
-                                root.volume-keys-toggled(on);
-                            }
+                    // Two ifs, not one around both: a wrapped caption nested
+                    // in an if's layout counted one line, and the box cut its last row.
+                    if root.volume-keys-available: CaptionedSwitchRow {
+                        text: Strings.volume-keys;
+                        caption: Strings.volume-keys-info;
+                        checked: root.volume-keys;
+                        toggled(on) => {
+                            root.volume-keys-toggled(on);
                         }
-
-                        Divider { }
                     }
+
+                    if root.volume-keys-available: Divider { }
 
                     SwitchRow {
                         text: Strings.show-virtual-devices;
