@@ -153,6 +153,20 @@ else
   echo "PASSED"
 fi
 
+echo "▶ Now Playing reads which players run on the main thread"
+# Off the main thread the running-app list has missed a running Spotify, which dropped its paused track as quit.
+np_scripts=$(awk '/^    func refresh\(\)/ { f = 1 } f { print } f && /DispatchQueue\.main\.async/ { exit }' \
+  "$SRC/NowPlaying.swift")
+if ! grep -q 'scripts\.async' <<< "$np_scripts"; then
+  echo "FAIL: NowPlayingMonitor.refresh's scripts-queue block wasn't found"
+  status=1
+elif grep -nE 'runningApplications|Self\.isRunning\(' <<< "$np_scripts"; then
+  echo "FAIL: refresh asks for the running apps on the scripts queue"
+  status=1
+else
+  echo "PASSED"
+fi
+
 echo "▶ one concurrency group per workflow file"
 # Two workflows sharing a group cancel each other's runs, so each group starts
 # with its own file name rather than the copyable display name.
