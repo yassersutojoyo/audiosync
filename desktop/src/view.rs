@@ -1758,7 +1758,22 @@ impl App {
             || self.remote_listening();
         let source = self.now_playing_source.borrow().clone();
         let old = self.now_playing.borrow().track().cloned();
+        let gap = self.now_playing.borrow().in_gap();
         let changed = self.now_playing.borrow_mut().sync(source, shows);
+        let card = self.now_playing.borrow();
+        if card.in_gap() != gap {
+            let grace = crate::now_playing_card::GAP_GRACE.as_secs();
+            self.log.log(|| match (card.in_gap(), card.track()) {
+                (true, _) => {
+                    format!("now playing card: no session counts, the card waits {grace} s")
+                }
+                (false, Some(_)) => {
+                    format!("now playing card: a session counts again within {grace} s")
+                }
+                (false, None) => "now playing card: the gap ends without a session".to_owned(),
+            });
+        }
+        drop(card);
         if let Some(left) = self.now_playing.borrow().art_hold_left() {
             let main = self.main.as_weak();
             self.art_hold_timer
@@ -7538,6 +7553,9 @@ mod tests {
         // The focus on a button goes to the source list as the card hides.
         app.main.set_now_playing_focused_button(1);
         fake.read(None);
+        app.poll();
+        assert!(app.main.get_now_playing_shown(), "a session gap keeps it");
+        *app.now_playing_source.borrow_mut() = None;
         app.poll();
         assert!(!app.main.get_now_playing_shown());
         assert_eq!(app.main.get_now_playing_focused_button(), -1);
