@@ -146,7 +146,8 @@ component SourceMenu inherits Rectangle {
     menu := PopupWindow {
         x: 10px - MenuRoom.margin;
         y: root.height + 4px - MenuRoom.margin;
-        width: max(270px + 2 * MenuRoom.margin, panel.preferred-width);
+        // The Mac's 270 pt: a long device name is cut, not widening the menu.
+        width: 270px + 2 * MenuRoom.margin;
         close-policy: close-on-click-outside;
 
         panel := MenuPanel {
