@@ -16,8 +16,8 @@ use super::default_output::{ROLES, Role};
 
 /// The first build with process loopback, below which nothing is redirected.
 pub const PROCESS_LOOPBACK_BUILD: u32 = 20_348;
-/// From this build the per-app interface has its later IID and takes the
-/// device as an HSTRING.
+/// From this build the per-app interface has its later IID; both variants
+/// take the device as an HSTRING.
 pub const LATER_INTERFACE_BUILD: u32 = 21_390;
 
 /// The per-app interface's variant for an OS build.
@@ -205,7 +205,9 @@ impl AppRedirect {
         Ok(())
     }
 
-    /// Puts each recorded app back through one of its `running` processes.
+    /// Puts each recorded app back through its `running` processes, trying
+    /// them in order until one answers: the calls refuse a process without
+    /// an audio session.
     pub fn restore(
         &mut self,
         endpoints: &mut dyn AppEndpoints,
@@ -217,13 +219,20 @@ impl AppRedirect {
         };
         let mut lines = Vec::new();
         record.apps.retain(|app| {
-            let Some(process) = running.iter().find(|process| process.exe == app.exe) else {
+            let mut tried = running.iter().filter(|process| process.exe == app.exe);
+            let Some(mut process) = tried.next() else {
                 lines.push(format!(
                     "app output: {} isn't running, it is put back when it runs again",
                     app.exe
                 ));
                 return true;
             };
+            while endpoints.app_default(process.pid, Role::Console).is_err() {
+                match tried.next() {
+                    Some(next) => process = next,
+                    None => break,
+                }
+            }
             let mut kept = false;
             for role in ROLES {
                 match endpoints.app_default(process.pid, role) {
@@ -301,6 +310,8 @@ pub(crate) mod tests {
         outputs: BTreeMap<(String, &'static str), String>,
         failing: Option<Role>,
         ignored: Option<Role>,
+        /// Processes without an audio session, which the calls refuse.
+        pub(crate) sessionless: Vec<u32>,
     }
 
     fn key(role: Role) -> &'static str {
@@ -318,10 +329,14 @@ pub(crate) mod tests {
                 outputs: BTreeMap::new(),
                 failing: None,
                 ignored: None,
+                sessionless: Vec::new(),
             }
         }
 
         fn exe(&self, pid: u32) -> Result<String, String> {
+            if self.sessionless.contains(&pid) {
+                return Err("E_INVALIDARG".into());
+            }
             self.exes.get(&pid).cloned().ok_or("no such process".into())
         }
 
@@ -565,6 +580,18 @@ pub(crate) mod tests {
         relaunched.restore_at_launch(&mut fake, &mut store, &spotify());
         assert_eq!(fake.output("C:/Apps/Spotify.exe", Role::Console), "");
         assert_eq!(fake.output("C:/Apps/Spotify.exe", Role::Multimedia), "");
+        assert_eq!(store.record, None);
+    }
+
+    // covers: S471
+    #[test]
+    fn a_restore_tries_each_running_process_of_the_app() {
+        let (_, mut fake, mut store) = world(&spotify());
+        let mut redirect = AppRedirect::default();
+        redirect.redirect(&mut fake, &mut store, SILENT, &spotify()[1..]);
+        fake.sessionless.push(10);
+        redirect.restore(&mut fake, &mut store, &spotify());
+        assert_eq!(fake.output("C:/Apps/Spotify.exe", Role::Console), "");
         assert_eq!(store.record, None);
     }
 

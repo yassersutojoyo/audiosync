@@ -1246,22 +1246,34 @@ impl<D: Driver> Controller<D> {
         self.app_output = Some((endpoints, store));
     }
 
-    /// A running process of each executable `record` holds.
+    /// The running processes of each executable `record` holds, those with
+    /// an audio session first.
     fn recorded_running(&mut self, record: &AppRecord) -> Vec<Process> {
         let Ok(table) = self.driver.processes() else {
             return Vec::new();
         };
-        record
+        let sessions: Vec<u32> = self
+            .driver
+            .endpoint_audio()
+            .map(|audio| {
+                audio
+                    .into_iter()
+                    .flat_map(|endpoint| endpoint.active_pids)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut running: Vec<Process> = record
             .apps
             .iter()
-            .filter_map(|app| {
-                let pid = table.running(&app.exe).next()?;
-                Some(Process {
+            .flat_map(|app| {
+                table.running(&app.exe).map(|pid| Process {
                     pid,
                     exe: app.exe.clone(),
                 })
             })
-            .collect()
+            .collect();
+        running.sort_by_key(|process| !sessions.contains(&process.pid));
+        running
     }
 
     /// Logs a line once per stream under `key`.
@@ -1343,14 +1355,16 @@ impl<D: Driver> Controller<D> {
         if let Some(recorded) = recorded
             && silent.as_deref().map(render_interface).as_ref() != Some(&recorded)
         {
-            self.say_once("gone", || {
+            self.say_once("changed", || {
                 format!(
-                    "app output: the silent endpoint {recorded} is gone or chosen as an output, \
-                     so the app is put back and plays on the PC too for this stream"
+                    "app output: the silent endpoint {recorded} is gone or no longer the one \
+                     picked, so the apps moved there are put back"
                 )
             });
             self.restore_apps("");
-            return;
+            if self.app_redirect.record().is_some() {
+                return;
+            }
         }
         let Some(silent) = silent else {
             self.say_once("none", || {
@@ -1382,6 +1396,21 @@ impl<D: Driver> Controller<D> {
                 })
             })
             .collect();
+        // Windows keeps the choice per executable, so a helper running
+        // another executable (a shared web view host) would move every app
+        // that uses it.
+        let own = table.get(root).map(|entry| entry.executable.clone());
+        let (playing, shared): (Vec<Process>, Vec<Process>) =
+            playing.into_iter().partition(|process| {
+                own.as_ref()
+                    .is_some_and(|own| own.eq_ignore_ascii_case(&process.exe))
+            });
+        if let Some(helper) = shared.first() {
+            let exe = helper.exe.clone();
+            self.say_once("shared", || {
+                format!("app output: {exe} isn't moved, it isn't the app's own executable")
+            });
+        }
         let stuck = playing.iter().find_map(|process| {
             let endpoint = audio.iter().find(|endpoint| {
                 endpoint.id != silent && endpoint.active_pids.contains(&process.pid)
@@ -4548,6 +4577,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
         let cast = self.cast.as_mut().and_then(CastSpeakers::begin_shutdown);
         self.next_start = None;
         self.end_session();
+        self.sync_app_output(true);
         self.sync_default_output(false);
         self.reap(true);
         self.stop_following_device_volumes();
@@ -6438,6 +6468,24 @@ mod tests {
         backend.set_output_enabled(SPEAKERS, true).unwrap();
         backend.poll();
         assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
+    }
+
+    // covers: S471
+    #[test]
+    fn quitting_puts_a_moved_app_back() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        backend.shut_down();
+        assert_eq!(player_output(&apps), "");
     }
 
     // covers: S469
