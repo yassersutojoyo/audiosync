@@ -19541,6 +19541,38 @@ mod tests {
         );
     }
 
+    /// Each window with a menu repaints all of itself as a menu opens or
+    /// closes, so no old menu pixels stay where the popup was. The tests'
+    /// snapshots always draw a fresh buffer, so only the window's partial
+    /// repaint showed them; this checks the window-wide item behind it.
+    // covers: S449
+    #[test]
+    fn closing_a_menu_repaints_the_whole_window_it_was_in() {
+        let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+        let repaint = &widgets[widgets
+            .find("component MenuRepaint inherits Rectangle")
+            .unwrap()..];
+        let repaint = &repaint[..repaint.find("\n}\n").unwrap()];
+        for needle in [
+            "width: 100%;",
+            "height: 100%;",
+            "background: MenuState.open == 0 ?",
+        ] {
+            assert!(repaint.contains(needle), "{needle}");
+        }
+        for (source, window) in [
+            (include_str!("../ui/main.slint"), "MainWindow"),
+            (include_str!("../ui/equalizer.slint"), "EqualizerWindow"),
+            (include_str!("../ui/flyout.slint"), "TrayFlyout"),
+        ] {
+            let source = source.replace("\r\n", "\n");
+            let body = &source[source
+                .find(&format!("component {window} inherits Window"))
+                .unwrap_or_else(|| panic!("{window}"))..];
+            assert!(body.contains("\n    MenuRepaint { }\n"), "{window}");
+        }
+    }
+
     /// Every popup menu but a text field's editing menu is the app's own,
     /// drawn in its colors as the gear's is, and a click outside it, the
     /// opener's included, closes it.

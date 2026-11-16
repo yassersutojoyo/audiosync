@@ -10,7 +10,7 @@ import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IncomingCover, OutgoingSong, SlideLook, SlidLine } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuDivider, MenuPanel, MenuRoom, MenuRow, MenuState, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
+import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
 
 // The preset row under the source (spec S260, S264): Presets, the name of
 // the preset picked last on a line under it; its menu lists every
@@ -847,6 +847,8 @@ export component TrayFlyout inherits Window {
     changed running => {
         power.checked = root.running;
     }
+
+    MenuRepaint { }
 
     // Without the system's rounded frame, draw the edge.
     Rectangle {

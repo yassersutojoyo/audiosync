@@ -2839,6 +2839,15 @@ export global MenuState {
     }
 }
 
+// The software renderer repaints too small a region where a closed popup
+// was, leaving the menu's old pixels there; a window-wide item that changes
+// as a menu opens or closes makes it repaint the whole window.
+export component MenuRepaint inherits Rectangle {
+    width: 100%;
+    height: 100%;
+    background: MenuState.open == 0 ? #ffffff00 : #00000000;
+}
+
 // The app's own menus (the gear's, the source picker's, a speaker's options):
 // a popup drawn in the app's colors, so it is dark with the app as the Mac's
 // menus are. MenuPanel holds the rows and the keys: the arrows, Home and End
