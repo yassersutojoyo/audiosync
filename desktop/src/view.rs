@@ -11597,6 +11597,40 @@ mod tests {
         app
     }
 
+    /// The header's state line is one whole line of its font, as the Mac's,
+    /// and a long speaker name ends in an ellipsis before the gear.
+    #[test]
+    fn the_header_status_is_one_whole_line_that_elides_a_long_name() {
+        let app = narrow_app(MockBackend::new());
+        app.main.set_status(
+            "Streaming to Living Room HomePod, Kitchen Speaker, Bedroom TV, Office Speaker, Garage Speaker and the Speaker Out in the Garden"
+                .into(),
+        );
+        draw_frames_at(776, 680);
+        let status = element(&app, "MainWindow::header-status").expect("the status line");
+        let gear = element(&app, "MainWindow::gear").expect("the gear");
+        let (at, size) = (status.absolute_position(), status.size());
+        assert!(
+            at.x + size.width <= gear.absolute_position().x,
+            "it ends before the gear"
+        );
+        assert!(size.height < 26.0, "one line, {} px", size.height);
+        // Segoe UI's 13 px line is 17.3 px; a 16 px box cut its descenders.
+        #[cfg(windows)]
+        assert!(
+            size.height >= 17.0,
+            "a whole Segoe UI line, {} px",
+            size.height
+        );
+        let source = include_str!("../ui/main.slint");
+        let line = &source[source
+            .find("header-status := SecondaryText {")
+            .expect("the status")..];
+        let line = &line[..line.find('}').expect("its end")];
+        assert!(line.contains("overflow: elide;"), "a long name elides");
+        assert!(line.contains("wrap: no-wrap;"), "it stays on one line");
+    }
+
     /// The open Presets list's tinted box reaches 8 px past the left column
     /// on both sides, as the Mac's open row does, and shows whole: the
     /// column's scrolling view leaves those 8 px uncut.

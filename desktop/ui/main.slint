@@ -3028,10 +3028,10 @@ export component MainWindow inherits Window {
                 }
 
                 // The Mac's line, as the track's lines.
-                SecondaryText {
-                    min-height: 0px;
-                    max-height: 16px;
+                header-status := SecondaryText {
                     text: root.status;
+                    wrap: no-wrap;
+                    overflow: elide;
                     font-size: Tokens.font-size-callout;
                     accessible-role: text;
                     accessible-label: self.text;
