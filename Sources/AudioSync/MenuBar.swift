@@ -2457,21 +2457,29 @@ struct SourcePicker: View {
                         .accessibilityHidden(true)
                 }
                 Text(model.currentSource?.name ?? t.sourceSystem)
+                    .foregroundStyle(.tint)
                     .lineLimit(1)
-                if !hero { Spacer() }
+                Spacer()
+                if hero {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: PanelLayout.chevronPoint, weight: .semibold))
+                        .foregroundStyle(.tint)
+                        .padding(.trailing, PanelLayout.menuChevronInset)
+                }
             }
+            .contentShape(Rectangle())
             // The menu takes its title from this content, which read the
             // chosen app's name instead of the fixed label.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(t.sourceLabel)
             .accessibilityValue(model.currentSource?.name ?? t.sourceSystem)
         }
-        .menuStyle(.borderlessButton)
+        .modifier(SourceMenuStyle(hero: hero))
         // A borderless menu draws its label and chevron in the tint; the brand
         // teal fell near 2:1 on the panel's material over a dark window.
         .tint(hero ? Brand.secondaryText : .primary)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, hero ? PanelLayout.sourceLeading : 10)
+        .padding(.leading, hero ? 0 : 10)
         .padding(.trailing, hero ? 0 : 10)
         .padding(.vertical, hero ? 0 : large ? 8 : 6)
         .background(RoundedRectangle(cornerRadius: 9).fill(.quaternary.opacity(hero ? 0 : 0.6)))
@@ -2505,6 +2513,21 @@ struct SourcePicker: View {
     }
 }
 
+/// AppKit draws a borderless menu's label on whole pixels, so in the card, which the panel's
+/// intro moves by fractions of a point, the menu shows the label as laid out instead.
+private struct SourceMenuStyle: ViewModifier {
+    let hero: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if hero {
+            content.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+        } else {
+            content.menuStyle(.borderlessButton)
+        }
+    }
+}
+
 /// The panel's preset row (S260): recall only, the current one checked, the
 /// preset picked last named under it (`ChoiceLine`). Choosing one leaves the
 /// panel open.
@@ -2515,7 +2538,7 @@ struct PresetPicker: View {
         let t = model.text
         let line = ChoiceLine.preset(model.presets)
         // A plain menu draws its label as laid out here, so the icon, the label and the chevron all open it.
-        VStack(alignment: .leading, spacing: 0) {
+        PresetRowLayout {
             Menu {
                 ForEach(model.presets) { preset in
                     Toggle(preset.name, isOn: Binding(get: { preset.current },
@@ -2553,9 +2576,26 @@ struct PresetPicker: View {
             ChoiceLineView(line: line, fold: model.foldPanelZone)
                 .padding(.leading, PanelLayout.textColumn)
         }
-        // Both lines fit in the row's 34 pt; only a wrapped name adds a line.
-        .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
         .padding(.trailing, PanelLayout.presetTrailing)
+    }
+}
+
+/// The preset row's menu, then the picked preset's name under it (`PanelLayout.presetRow`).
+private struct PresetRowLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let heights = subviews.map { $0.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil)).height }
+        let row = PanelLayout.presetRow(label: heights.first ?? 0, line: heights.dropFirst().reduce(0, +))
+        return CGSize(width: proposal.width ?? 0, height: row.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let width = ProposedViewSize(width: bounds.width, height: nil)
+        let heights = subviews.map { $0.sizeThatFits(width).height }
+        var y = bounds.minY + PanelLayout.presetRow(label: heights.first ?? 0, line: 0).labelTop
+        for (subview, height) in zip(subviews, heights) {
+            subview.place(at: CGPoint(x: bounds.minX, y: y), proposal: width)
+            y += height
+        }
     }
 }
 
