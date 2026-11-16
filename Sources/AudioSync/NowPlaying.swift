@@ -391,6 +391,10 @@ final class NowPlayingMonitor {
         })
     }
 
+    deinit {
+        for observer in appObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+    }
+
     /// Posted by Music and Spotify when their track or play state changes.
     static let changeNotices = [Notification.Name("com.apple.Music.playerInfo"),
                                 Notification.Name("com.spotify.client.PlaybackStateChanged")]
