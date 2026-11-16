@@ -2966,10 +2966,17 @@ export component MainWindow inherits Window {
 
     MenuRepaint { }
 
-    // Under everything else, so only clicks no control takes reach it.
+    // Under everything else, so only clicks no control takes reach it. On the
+    // header band a press drags the window, as the Mac's whole header does.
     TouchArea {
         clicked => {
             root.blank-clicked();
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left
+                && self.mouse-y >= header.y && self.mouse-y < header.y + header.height {
+                root.drag-requested();
+            }
         }
     }
 
