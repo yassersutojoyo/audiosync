@@ -429,11 +429,6 @@ impl Badge {
             (true, true) => Badge::Filled,
         }
     }
-
-    /// The waiting ring's width on a badge `size` wide.
-    pub fn ring_width(size: f32) -> f32 {
-        (size / 18.0).max(1.5)
-    }
 }
 
 /// The header's brand mark breathes, 4 % larger and 20 % fainter at the top
@@ -946,8 +941,6 @@ mod tests {
         assert_eq!(Badge::of(false, false), Badge::Off);
         assert_eq!(Badge::of(true, false), Badge::Ring);
         assert_eq!(Badge::of(true, true), Badge::Filled);
-        assert_eq!(Badge::ring_width(18.0), 1.5);
-        assert_eq!(Badge::ring_width(36.0), 2.0);
     }
 
     #[test]

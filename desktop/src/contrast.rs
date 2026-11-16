@@ -2072,3 +2072,152 @@ fn both_microphone_fixes_name_the_same_windows_switches() {
         );
     }
 }
+
+/// The file a `DeviceIcons` function returns for `kind`: the first `if` that
+/// names it, else the closing fallback.
+fn device_icon_for<'a>(function: &'a str, kind: &str) -> &'a str {
+    let named = format!("SpeakerKind.{kind}");
+    let mut lines = function.lines().map(str::trim);
+    let mut fallback = "";
+    while let Some(line) = lines.next() {
+        let file = |line: &'a str| {
+            line.split("@image-url(\"../../brand/icons/")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .unwrap_or_else(|| panic!("an icon file in {line}"))
+        };
+        if line.starts_with("if ") {
+            let names = line
+                .split(|c: char| c.is_whitespace() || c == '{')
+                .any(|word| word == named);
+            let target = file(lines.next().expect("the if returns"));
+            if names {
+                return target;
+            }
+        } else if line.starts_with("return @image-url(") {
+            fallback = file(line);
+        }
+    }
+    fallback
+}
+
+/// Every speaker kind gets AudioSync's own drawing from brand/icons in its
+/// round toggle and in the badge after its name, never an icon font glyph.
+#[test]
+fn every_speaker_kind_has_its_own_device_icon() {
+    let types = include_str!("../ui/types.slint");
+    let kinds: Vec<&str> = types[types.find("enum SpeakerKind {").expect("the kinds")..]
+        .split(['{', '}'])
+        .nth(1)
+        .expect("the kind list")
+        .split(',')
+        .map(str::trim)
+        .collect();
+    let expected = [
+        ("airplay", "smart-speaker.svg", "badge-airplay.svg"),
+        ("airplay2", "smart-speaker.svg", "badge-airplay.svg"),
+        ("cast", "speaker.svg", "badge-cast.svg"),
+        ("built-in", "speaker.svg", "badge-laptop.svg"),
+        ("headphones", "headphones.svg", "badge-headphones.svg"),
+        ("bluetooth", "bluetooth.svg", "badge-bluetooth.svg"),
+        ("usb", "usb.svg", "badge-usb.svg"),
+        ("usb-headphones", "headphones.svg", "badge-usb.svg"),
+        ("usb-speakers", "speaker.svg", "badge-usb.svg"),
+        ("hdmi", "monitor.svg", "badge-display.svg"),
+        ("display-port", "monitor.svg", "badge-display.svg"),
+        ("virtual", "device.svg", "badge-speaker.svg"),
+        ("other", "device.svg", "badge-speaker.svg"),
+    ];
+    assert_eq!(
+        kinds,
+        expected.iter().map(|(kind, ..)| *kind).collect::<Vec<_>>(),
+        "every kind has a row here"
+    );
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let icons = &widgets[widgets
+        .find("export global DeviceIcons {")
+        .expect("DeviceIcons")..];
+    let function = |name: &str| {
+        let body = &icons[icons
+            .find(&format!("function {name}(kind: SpeakerKind) -> image {{"))
+            .unwrap_or_else(|| panic!("DeviceIcons.{name}"))..];
+        &body[..body.find("\n    }").expect("the function ends")]
+    };
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../brand/icons");
+    for (kind, glyph, badge) in expected {
+        assert_eq!(device_icon_for(function("glyph"), kind), glyph, "{kind}");
+        for size in ["16", "14"] {
+            assert_eq!(
+                device_icon_for(function(&format!("glyph{size}")), kind),
+                format!("{size}/{glyph}"),
+                "{kind}"
+            );
+        }
+        assert_eq!(device_icon_for(function("badge"), kind), badge, "{kind}");
+    }
+    for file in icons.split("@image-url(\"../../brand/icons/").skip(1) {
+        let file = file.split('"').next().expect("a file name");
+        assert!(folder.join(file).is_file(), "brand/icons/{file} exists");
+    }
+    for (file, source) in UI_FILES {
+        for font_glyph in [
+            "Glyphs.speaker(",
+            "Glyphs.kind-icon(",
+            "glyph: Glyphs.zone;",
+        ] {
+            assert!(!source.contains(font_glyph), "{file} uses {font_glyph}");
+        }
+    }
+    for (component, icon) in [
+        ("SpeakerRow", "icon: DeviceIcons.glyph(root.item.kind);"),
+        (
+            "ZoneMemberRow",
+            "icon: DeviceIcons.glyph14(root.item.kind);",
+        ),
+        ("ZoneHeader", "icon: DeviceIcons.zone;"),
+    ] {
+        assert!(
+            component_body(&widgets, component).contains(icon),
+            "{component}"
+        );
+    }
+    let flyout = include_str!("../ui/flyout.slint");
+    assert_eq!(
+        flyout
+            .matches("icon: DeviceIcons.glyph16(speaker.kind);")
+            .count(),
+        3
+    );
+    assert!(flyout.contains("icon: DeviceIcons.zone16;"));
+    assert!(!flyout.contains("Glyphs.speaker("));
+}
+
+/// The 18 px glyph sits 7 px into its 32 px circle, the 14 px one 5 px into
+/// a zone speaker's 24 px circle, the 16 px one 6 px into the tray panel's
+/// 28 px circle, and the 12 px badge is drawn at its own
+/// size, so at 100% every edge lands on a whole pixel; the 32 px circle's
+/// waiting ring is 2 px.
+#[test]
+fn device_icons_sit_on_whole_pixels() {
+    let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+    let flyout = include_str!("../ui/flyout.slint").replace("\r\n", "\n");
+    let badge = component_body(&widgets, "SpeakerBadge");
+    assert!(
+        badge.contains("in property <length> size: 32px;"),
+        "{badge}"
+    );
+    assert!(badge.contains(
+        "if !root.bare: Image {\n        x: (root.size - self.width) / 2;\n        y: self.x;\n        width: root.size == 32px ? 18px : 14px;\n        height: self.width;"
+    ));
+    assert!(badge.contains("root.waits ? (root.size == 32px ? 2px :"));
+    let disc = component_body(&flyout, "RowDisc");
+    assert!(disc.contains("width: 28px;\n    height: 28px;"), "{disc}");
+    assert!(disc.contains("x: 6px;\n        y: 6px;\n        width: 16px;\n        height: 16px;"));
+    assert!(!disc.contains("Glyph {"), "{disc}");
+    let badge = component_body(&widgets, "KindIcon");
+    assert!(
+        badge.contains("width: 12px;\n        height: 12px;"),
+        "{badge}"
+    );
+    assert!(!badge.contains("Glyph {"), "{badge}");
+}
