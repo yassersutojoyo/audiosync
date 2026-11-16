@@ -244,6 +244,29 @@ fn nothing_is_written_without_a_click() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+// covers: S472
+#[test]
+fn a_found_level_is_saved_as_the_output_starts_playing() {
+    let dir = test_dir("adapter-local-volume-saved");
+    let path = dir.join(settings::FILE_NAME);
+    let mut audio = audio();
+    audio.set_output_level(SPEAKERS, 0.18);
+    let file = SettingsFile::at(path.clone());
+    let mut adapter =
+        AudioAdapter::with_settings(audio, || "09.41".to_owned(), DebugLog::default(), file);
+    adapter.set_speaker_enabled(&key(SPEAKERS), true);
+    adapter.set_running(true);
+    // Saved before the next poll, so a crash now still puts it back.
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let saved: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    assert!(
+        saved["local_volumes"]["found"][SPEAKERS].is_number(),
+        "found level saved: {text}"
+    );
+    drop(adapter);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 // covers: S197
 #[test]
 fn calibrate_all_shows_a_quiet_or_muted_reference_before_a_run_with_its_fix() {

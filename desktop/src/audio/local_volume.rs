@@ -56,6 +56,17 @@ pub struct LocalVolumeMemory {
 }
 
 impl LocalVolumeMemory {
+    /// Takes in levels read from the settings file; an output playing now
+    /// keeps the level it was found at, to put back when it stops.
+    pub fn replace(&mut self, stored: LocalVolumes) {
+        let playing = self.playing.iter();
+        let kept: Vec<(String, f64)> = playing
+            .filter_map(|id| Some((id.clone(), *self.stored.found.get(id)?)))
+            .collect();
+        self.stored = stored;
+        self.stored.found.extend(kept);
+    }
+
     pub fn playing(&self) -> impl Iterator<Item = &String> {
         self.playing.iter()
     }

@@ -435,7 +435,8 @@ pub trait Driver {
     fn endpoint_volume(&mut self, id: &str) -> Result<EndpointVolume, BackendError>;
 
     /// Sets the endpoint `id`'s master volume, 0 to 1
-    /// (`SetMasterVolumeLevelScalar`): only the fix the user clicks (S197).
+    /// (`SetMasterVolumeLevelScalar`): only the fix the user clicks (S197)
+    /// and a local output's remembered or found level (S472).
     /// [`BackendError::NotResponding`] when Windows audio didn't answer in
     /// time.
     fn set_endpoint_level(&mut self, id: &str, level: f32) -> Result<(), BackendError>;
@@ -4766,7 +4767,7 @@ impl<D: Driver> AudioBackend for Controller<D> {
     }
 
     fn set_local_volumes(&mut self, stored: LocalVolumes) {
-        self.local_volumes.stored = stored;
+        self.local_volumes.replace(stored);
     }
 
     fn restore_default_output(&mut self) {

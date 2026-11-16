@@ -14,8 +14,8 @@
 //! core (`audiosync_core::policy::device_volume`) decides what a reading
 //! means and what the fix writes; the only writes are that fix, when the
 //! user clicks it, and the remembered level (S472), and the row follows what
-//! Windows reports afterwards, never the values written. None of this touches an audio thread, the renderers or
-//! AudioSync's own volumes.
+//! Windows reports afterwards, never the values written. None of this
+//! touches an audio thread, the renderers or AudioSync's own volumes.
 
 use std::collections::BTreeMap;
 
@@ -420,6 +420,7 @@ mod tests {
 
     use super::super::STALL_RETRY_POLLS;
     use crate::audio::backend::{AudioBackend, BackendError, BackendEvent, SourceId};
+    use crate::audio::local_volume::LocalVolumes;
     use crate::audio::mock::{MockBackend, VolumeWrite};
     use crate::debug_log::{DebugLog, FILE_NAME, TEST_FLUSH, read_messages, test_dir};
 
@@ -494,6 +495,23 @@ mod tests {
             "the level it last played at is set again"
         );
         assert_eq!(hint(&backend, HEADPHONES), None);
+    }
+
+    // covers: S472
+    #[test]
+    fn a_settings_file_read_late_keeps_the_found_level_of_an_output_that_plays() {
+        let mut backend = backend();
+        backend.set_output_level(HEADPHONES, 0.18);
+        backend.poll();
+        backend.start(&SourceId::WholeSystem).unwrap();
+        backend.set_output_level(HEADPHONES, 0.6);
+        backend.poll();
+        // The file ignored at launch is read now, without this output's levels.
+        backend.set_local_volumes(LocalVolumes::default());
+        backend.stop();
+        backend.poll();
+        let percent = device_volume(&backend, HEADPHONES).and_then(DeviceVolume::percent);
+        assert_eq!(percent, Some(18), "the level it was found at goes back");
     }
 
     // covers: S195, S202
