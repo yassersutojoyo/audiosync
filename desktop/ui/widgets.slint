@@ -127,7 +127,7 @@ export component FoldPane inherits Rectangle {
 
     min-width: body.min-width;
     preferred-width: body.preferred-width;
-    min-height: Fold.edge(root.progress, !Motion.on) * root.height-open;
+    min-height: (Motion.on ? Fold.edge(root.progress, false) : root.open ? 1 : 0) * root.height-open;
     max-height: self.min-height;
     clip: true;
 
