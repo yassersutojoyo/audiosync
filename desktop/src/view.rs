@@ -17854,10 +17854,10 @@ mod tests {
         assert!(!app.flyout.window().is_visible());
     }
 
-    /// Resting on the flyout's streaming switch shows a tooltip, Turn On or
-    /// Turn Off by its state, as the Mac panel's power switch does.
+    /// Resting on the flyout's streaming switch shows no tooltip: the switch
+    /// says its state itself (maintainer 2026-11-16).
     #[test]
-    fn the_flyout_streaming_switch_has_a_tooltip() {
+    fn the_flyout_streaming_switch_has_no_tooltip() {
         use i_slint_backend_testing::ElementHandle;
         let app = app_over(MockBackend::new());
         app.flyout.show().unwrap();
@@ -17877,8 +17877,8 @@ mod tests {
         assert!(
             ElementHandle::find_by_element_id(&app.flyout, "TrayFlyout::power-tip")
                 .next()
-                .is_some(),
-            "a tooltip on the streaming switch"
+                .is_none(),
+            "no tooltip on the streaming switch"
         );
     }
 
