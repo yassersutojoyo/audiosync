@@ -15423,6 +15423,64 @@ mod tests {
         assert_eq!(in_main(), 1, "the sheet is in the main window");
     }
 
+    /// The sheet keeps Tab inside it: the field, Cancel, Add and round
+    /// again; Space on Cancel, Escape and Ctrl+W close it, and the focus goes
+    /// back to Add by Address…, where Space opens it again.
+    #[test]
+    fn the_add_by_address_sheet_keeps_tab_inside_and_hands_the_focus_back() {
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let sheet = app.cast_sheet();
+        app.main.invoke_cast_add_address_requested();
+        draw_frames();
+        type_text(window, "a");
+        tab(window, 3);
+        type_text(window, "b");
+        // A field that takes the focus by Tab selects its text, so "b" replaced it.
+        assert_eq!(sheet.get_address(), "b", "Tab came round to the field");
+        tab(window, 1);
+        press(window, " ");
+        assert!(!sheet.get_shown(), "Space on Cancel closed it");
+        draw_frames();
+        press(window, " ");
+        assert!(sheet.get_shown(), "the focus was back on Add by Address…");
+
+        type_text(window, "speaker.local");
+        tab(window, 2);
+        press(window, " ");
+        settle_cast_check(&app);
+        assert!(!sheet.get_shown(), "Space on Add added it");
+        assert!(app.snapshot().speaker("cc:speaker.local").is_some());
+
+        let closes: [(&str, fn(&slint::Window)); 2] = [
+            ("Escape", |window| press(window, Key::Escape)),
+            ("Ctrl+W", |window| ctrl(window, "w")),
+        ];
+        for (key, close) in closes {
+            app.main.invoke_cast_add_address_requested();
+            draw_frames();
+            close(window);
+            assert!(!sheet.get_shown(), "{key} closed it");
+            assert!(app.main.window().is_visible(), "{key} left the window open");
+        }
+    }
+
+    /// The sheet's scrim covers the whole window, the top row's buttons too,
+    /// as a Mac sheet blocks the window's own controls.
+    #[test]
+    fn the_add_by_address_scrim_covers_the_top_row() {
+        let app = main_window_over(MockBackend::new());
+        app.main.invoke_cast_add_address_requested();
+        draw_frames();
+        let scrim = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.main,
+            "MainWindow::cast-scrim",
+        )
+        .next()
+        .expect("the scrim");
+        assert_eq!(scrim.absolute_position().y, 0.0, "from the window's top");
+    }
+
     // covers: C18
     #[test]
     fn add_by_address_keeps_a_turned_down_address_open_with_the_reason() {

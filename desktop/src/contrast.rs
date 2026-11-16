@@ -228,6 +228,23 @@ fn the_two_tone_focus_ring_reaches_3_to_1() {
     }
 }
 
+/// The Add by Address sheet's boxed field shows its edge at 3:1 before it
+/// has the focus (a control's boundary), and the focus outline after.
+#[test]
+fn the_boxed_fields_edge_reaches_3_to_1() {
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let value = ratio("text@secondaryText", "surface", appearance);
+        assert!(
+            value >= MIN_GRAPHIC_CONTRAST,
+            "edge on the sheet ({appearance:?}): {value:.2}:1"
+        );
+    }
+    let field = component_body(include_str!("../ui/widgets.slint"), "TextField");
+    assert!(field.contains(
+        "border-color: root.boxed ? (input.has-focus ? Tokens.focus : Tokens.secondary-text) : root.compact && input.has-focus ? Tokens.teal : Fluent.stroke;"
+    ));
+}
+
 /// The level meter's fill stands out from its track (3:1 for graphics),
 /// and it is never a focusable control.
 #[test]

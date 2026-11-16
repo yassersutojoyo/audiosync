@@ -721,6 +721,8 @@ component SpeakerSection inherits VerticalLayout {
     callback network-settings();
     // Add by Address…, last, while a Google Cast sender runs (S443).
     in property <bool> show-add-address;
+    // Bumped as the Add by Address sheet closes: its button takes the focus back.
+    in property <int> focus-add-address;
     callback add-address();
     in-out property <string> focus-id <=> rows.focus-id;
     in-out property <RowPart> focus-part <=> rows.focus-part;
@@ -905,6 +907,10 @@ component SpeakerSection inherits VerticalLayout {
                 SmallButton {
                     text: Strings.cast-add-address;
                     tip: Strings.cast-add-address-message;
+                    property <int> focus-asked: root.focus-add-address;
+                    changed focus-asked => {
+                        self.focus();
+                    }
                     clicked => {
                         root.add-address();
                     }
@@ -3680,6 +3686,7 @@ export component MainWindow inherits Window {
                             root.network-settings-requested();
                         }
                         show-add-address: root.cast-by-address;
+                        focus-add-address: root.cast-sheet-closed;
                         add-address => {
                             root.cast-add-address-requested();
                         }
@@ -3896,25 +3903,28 @@ export component MainWindow inherits Window {
     }
 
     // Add by Address, as the Mac's sheet: centred over the window under a
-    // scrim, a popup so Tab stays in it.
+    // scrim that blocks the whole window, its top row too, and a popup so Tab
+    // stays in it. Closing hands the focus back to Add by Address….
     property <bool> cast-sheet-shown: CastSheet.shown;
+    property <int> cast-sheet-closed;
     changed cast-sheet-shown => {
         if self.cast-sheet-shown {
             cast-sheet.show();
         } else {
             cast-sheet.close();
+            self.cast-sheet-closed += 1;
         }
     }
 
     cast-sheet := PopupWindow {
         x: 0;
-        y: title-row.height;
+        y: 0;
         width: root.width;
-        height: root.height - title-row.height;
+        height: root.height;
         close-policy: no-auto-close;
 
         // Takes the clicks meant for the window under the sheet.
-        TouchArea {
+        cast-scrim := TouchArea {
             Rectangle {
                 background: Tokens.dark ? #00000066 : #ffffff8c;
             }
@@ -3922,7 +3932,7 @@ export component MainWindow inherits Window {
 
         CastAddressSheet {
             x: (parent.width - self.width) / 2;
-            y: max(0px, (root.height - self.height) / 2 - title-row.height);
+            y: max(0px, (parent.height - self.height) / 2);
         }
     }
 
