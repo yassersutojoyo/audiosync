@@ -21026,6 +21026,50 @@ mod tests {
         assert_eq!(inked(), 0, "hidden again after the pointer left");
     }
 
+    /// A row's slider reached with Tab keeps the row's options button shown,
+    /// as the keyboard's focus does on the Mac.
+    #[test]
+    fn a_rows_slider_reached_with_tab_shows_the_options_button() {
+        let app = narrow_app(MockBackend::new());
+        let window = app.main.window();
+        let options = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_speaker_options("Speakers".into());
+        let button =
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &options)
+                .next()
+                .expect("the Speakers row's options button");
+        let (at, size) = (button.absolute_position(), button.size());
+        let slider = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &app.main,
+                "Speakers volume",
+            )
+            .next()
+            .expect("the Speakers row's slider")
+            .accessible_value()
+        };
+        let reached = (0..60).any(|_| {
+            tab(window, 1);
+            let before = slider();
+            press(window, Key::LeftArrow);
+            slider() != before
+        });
+        assert!(reached, "Tab reaches the Speakers slider");
+        advance_clock(Duration::from_secs(1));
+        draw_frames_at(776, 680);
+        let pixel = pixels(window);
+        let inked = (0..size.width as i32)
+            .flat_map(|x| (0..size.height as i32).map(move |y| (x, y)))
+            .filter(|&(x, y)| pixel(at.x + x as f32, at.y + y as f32)[0] < 200)
+            .count();
+        assert!(
+            inked > 0,
+            "the options button shows while the slider has the keyboard's focus"
+        );
+    }
+
     /// With many hidden speakers Settings scrolls, so its last box, Check
     /// Setup, can still be reached at the bottom of a window that fits the screen.
     #[test]
