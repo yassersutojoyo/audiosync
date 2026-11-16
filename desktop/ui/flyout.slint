@@ -210,13 +210,13 @@ component SourceMenu inherits Rectangle {
             }
 
             row := HorizontalLayout {
-                alignment: start;
                 padding-left: 2px;
                 padding-right: 2px;
                 spacing: 6px;
 
                 label := Text {
                     text: root.name;
+                    horizontal-stretch: 1;
                     color: Tokens.secondary-text;
                     vertical-alignment: center;
                     wrap: no-wrap;
@@ -1144,11 +1144,12 @@ export component TrayFlyout inherits Window {
                                             spacing: 2px;
                                             horizontal-stretch: 1;
 
+                                            // The name on the title's line, its hover box reaching past it, and
+                                            // the button across the card with its chevron at the edge, as the Mac's.
                                             HorizontalLayout {
-                                                alignment: start;
-                                                // The name on the title's line, its hover box reaching past it.
                                                 padding-left: -2px;
                                                 SourceMenu {
+                                                    horizontal-stretch: 1;
                                                     sources: root.sources;
                                                     looks: root.source-looks;
                                                     current: root.source-index;
