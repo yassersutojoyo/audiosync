@@ -19890,6 +19890,118 @@ mod tests {
         assert!(app.snapshot().zones.is_empty(), "Delete Zone ran");
     }
 
+    /// Rename… in a speaker's, a zone's or a preset's menu, run by UI
+    /// Automation's Invoke or by the keys, leaves the name field showing
+    /// with the focus once the menu has closed.
+    // covers: S449
+    #[test]
+    fn rename_from_a_menu_leaves_the_name_field_focused() {
+        use i_slint_backend_testing::ElementHandle;
+        let invoke = |app: &App, label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+                .invoke_accessible_default_action();
+            draw_frames();
+            draw_frames();
+        };
+
+        let app = main_window_over(MockBackend::new());
+        let strings = app.strings();
+        invoke(
+            &app,
+            &strings.invoke_speaker_options(name_of(&app, "local:desk").into()),
+        );
+        invoke(&app, &strings.get_rename_speaker());
+        assert!(
+            row_of(&app, "local:desk").renaming,
+            "Invoke: the field shows"
+        );
+        assert!(
+            app.main_focus
+                .borrow()
+                .holds_name(RenamePlace::Row, "local:desk"),
+            "Invoke: the field has the focus"
+        );
+
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        app.main.set_focus_speaker_part(RowPart::Options);
+        app.main.set_focus_speaker_id("local:desk".into());
+        draw_frames();
+        press(window, Key::Menu);
+        press(window, Key::Home);
+        press(window, Key::Return);
+        draw_frames();
+        assert!(row_of(&app, "local:desk").renaming, "keys: the field shows");
+        assert!(
+            app.main_focus
+                .borrow()
+                .holds_name(RenamePlace::Row, "local:desk"),
+            "keys: the field has the focus"
+        );
+
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        app.main.set_focus_zone_part(RowPart::Options);
+        app.main.set_focus_zone_id("zone:den".into());
+        draw_frames();
+        press(window, Key::Menu);
+        press(window, Key::Home);
+        press(window, Key::Return);
+        draw_frames();
+        assert!(
+            app.main_focus
+                .borrow()
+                .holds_name(RenamePlace::Zone, "zone:den"),
+            "the zone's field has the focus"
+        );
+
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let window = app.main.window();
+        app.main.set_focus_presets(true);
+        draw_frames();
+        tab(window, 1);
+        press(window, Key::Menu);
+        press(window, Key::Home);
+        press(window, Key::Return);
+        draw_frames();
+        assert_eq!(
+            app.main.get_preset_renaming(),
+            preset_ids(&app)[0].as_str(),
+            "the preset's field shows"
+        );
+
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        invoke(&app, &strings.invoke_speaker_options("Den".into()));
+        invoke(&app, &strings.get_rename_zone());
+        assert!(
+            app.main_focus
+                .borrow()
+                .holds_name(RenamePlace::Zone, "zone:den"),
+            "Invoke: the zone's field has the focus"
+        );
+
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        invoke(&app, &strings.invoke_speaker_options("Evening".into()));
+        invoke(&app, &strings.get_rename_preset());
+        assert_eq!(
+            app.main.get_preset_renaming(),
+            preset_ids(&app)[0].as_str(),
+            "Invoke: the preset's field shows"
+        );
+    }
+
     /// A preset row's menu: the keyboard reaches its last item, Delete.
     // covers: S449
     #[test]

@@ -2854,7 +2854,8 @@ export component MenuRepaint inherits Rectangle {
 // pick a row with a focus ring, Enter or Space runs it, Escape or Tab closes.
 // Each MenuRow shares `current`, `keyboard`, `pulse` and `done` with it.
 // A closing popup gives the focus back to what had it, so a row whose
-// action focuses a name field closes the menu before it runs.
+// action focuses a name field closes the menu before it runs; a row inside
+// an `if` runs it first, as closing drops the rest of its Invoke handler.
 export component MenuPanel inherits FocusScope {
     in property <int> count;
     in-out property <int> current: -1;
@@ -3930,8 +3931,8 @@ export component SpeakerRow inherits Rectangle {
                 pulse: panel.pulse;
                 done <=> panel.done;
                 activated => {
-                    menu.close();
                     root.rename-requested();
+                    menu.close();
                 }
             }
 
