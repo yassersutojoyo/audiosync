@@ -54,9 +54,9 @@ while IFS=: read -r file line _; do
 done <<< "$loops"
 
 for item in check-updates-automatically menu-check-for-updates; do
-  check "the menu item $item reads its title from strings.slint" \
-    grep -q "title: Strings\.$item;" desktop/ui/main.slint
-  check "strings.slint words the menu item $item" \
+  check "the Settings control $item reads its text from strings.slint" \
+    grep -q "text: Strings\.$item;" desktop/ui/settings.slint
+  check "strings.slint words the Settings control $item" \
     grep -q "out property <string> $item: @tr(\"" "$strings"
 done
 strays=$(grep -n '"Check for Updates' desktop/ui/*.slint | grep -v "^$strings:" || true)
