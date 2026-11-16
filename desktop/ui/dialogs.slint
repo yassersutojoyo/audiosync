@@ -555,7 +555,7 @@ export component CastAddressSheet inherits FocusScope {
                 height: 26px;
                 font-size: Tokens.font-size-body;
                 text: CastSheet.checking ? Strings.cast-address-checking : Strings.add;
-                opacity: CastSheet.can-add ? 1 : Tokens.disabled-opacity;
+                dimmed: !CastSheet.can-add;
                 accessible-enabled: CastSheet.can-add;
                 clicked => {
                     if CastSheet.can-add {

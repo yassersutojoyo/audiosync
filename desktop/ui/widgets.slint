@@ -1182,18 +1182,20 @@ export component SmallButton inherits Rectangle {
     // Shown while the pointer rests on it, and what Narrator adds.
     in property <string> tip;
     in property <length> font-size: Tokens.font-size-callout;
+    // Can't be used now: grey, as the Mac's disabled push button.
+    in property <bool> dimmed;
     callback clicked();
 
     min-width: label.preferred-width + 20px;
     preferred-width: self.min-width;
     height: 24px;
     border-radius: Tokens.radius-control;
-    background: Tokens.teal.with-alpha(touch.pressed ? (Tokens.dark ? 0.30 : 0.28) : touch.has-hover ? (Tokens.dark ? 0.20 : 0.18) : (Tokens.dark ? 0.14 : 0.12));
+    background: root.dimmed ? Tokens.text.with-alpha(0.05) : Tokens.teal.with-alpha(touch.pressed ? (Tokens.dark ? 0.30 : 0.28) : touch.has-hover ? (Tokens.dark ? 0.20 : 0.18) : (Tokens.dark ? 0.14 : 0.12));
     animate background {
         duration: 120ms;
         easing: ease-out;
     }
-    border-width: max(0.5px, 1phx);
+    border-width: root.dimmed ? 0px : max(0.5px, 1phx);
     border-color: Tokens.teal.with-alpha(0.3);
     forward-focus: focus;
     accessible-role: button;
@@ -1231,7 +1233,7 @@ export component SmallButton inherits Rectangle {
         text: root.text;
         font-size: root.font-size;
         font-weight: Fluent.weight-medium;
-        color: Fluent.house-text;
+        color: root.dimmed ? Tokens.text.with-alpha(0.4) : Fluent.house-text;
         horizontal-alignment: center;
         vertical-alignment: center;
         accessible-role: none;
