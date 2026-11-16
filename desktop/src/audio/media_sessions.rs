@@ -585,6 +585,7 @@ impl<L: SessionList> Reader<L> {
             artist: session.artist,
             playing: session.playing,
             artwork,
+            cover_failed: false,
             modes: self.sessions.modes(&listing.listed[index].1),
         })
     }
@@ -960,7 +961,7 @@ mod tests {
         );
         let card = card.expect("the card gets the track");
         assert_eq!((card.title.as_str(), card.playing), ("Song", true));
-        assert!(card.artwork.is_some());
+        assert!(card.artwork.is_some() && !card.cover_failed);
         let _ = poll(&mut reader);
         assert_eq!(counts.lists(), 2);
         assert_eq!(counts.thumbnails(), 1, "artwork is made once per track");
@@ -979,6 +980,7 @@ mod tests {
         assert_eq!((track.session, track.artwork), (playing(), None));
         let card = card.expect("the card still shows");
         assert_eq!((card.title.as_str(), card.artwork), ("Song", None));
+        assert!(card.cover_failed, "no cover is on its way");
     }
 
     #[test]
@@ -988,8 +990,9 @@ mod tests {
         let _ = poll(&mut reader);
         let started = Instant::now();
         for _ in 0..3 {
-            let (track, _) = poll(&mut reader);
+            let (track, card) = poll(&mut reader);
             assert!(track.is_some_and(|track| track.artwork.is_none()));
+            assert!(card.is_some_and(|card| card.cover_failed));
         }
         assert!(started.elapsed() < APP_WAIT, "later polls don't wait");
         assert_eq!(counts.thumbnails(), 1);

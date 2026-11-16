@@ -443,6 +443,36 @@ mod tests {
 
     // covers: S463
     #[test]
+    fn a_wait_past_0_6_s_breathes_and_the_slide_starts_from_the_breath() {
+        let a = track("Spotify.exe", "A", "Band", true);
+        let b = track("Spotify.exe", "B", "Band", true);
+        let start = Instant::now();
+        let mut slide = TrackSlide::new(Place::Window);
+        slide.press(Some(Direction::Next), true, false, start);
+        assert_eq!(slide.look(at(start, 0.6)).0.old_fade, 0.0);
+        let (look, moving) = slide.look(at(start, 1.2));
+        assert!(moving && close(look.old_fade, 0.05), "{look:?}");
+        let waited = eased(WAIT_CURVE, 1.2 / 1.5);
+        assert!(close(look.old_dim, WAIT_DIM * waited + 0.05));
+        assert!(close(slide.look(at(start, 1.8)).0.old_fade, 0.0));
+        assert!(close(slide.look(at(start, 3.6)).0.old_fade, 0.05));
+        let (look, moving) = slide.look(at(start, 3.9));
+        assert!(
+            moving && !look.sliding && close(look.old_shrink, 0.05),
+            "still waiting"
+        );
+        let before = slide.look(at(start, 3.6)).0;
+        assert!(slide.change(Some(&a), Some(&b), true, false, at(start, 3.6)));
+        let after = slide.look(at(start, 3.6)).0;
+        assert!(close(after.old_fade, before.old_fade) && close(after.old_dim, before.old_dim));
+
+        let mut still = TrackSlide::new(Place::Window);
+        still.press(Some(Direction::Next), true, true, start);
+        assert_eq!(still.look(at(start, 1.2)).0.old_fade, 0.0, "no breath");
+    }
+
+    // covers: S463
+    #[test]
     fn next_slides_from_the_right_and_previous_from_the_left_for_0_56_s_in_the_window() {
         let a = track("Spotify.exe", "A", "Band", true);
         let b = track("Spotify.exe", "B", "Band", true);
