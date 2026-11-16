@@ -13385,6 +13385,69 @@ mod tests {
         assert_eq!(name.absolute_position().x, title.absolute_position().x);
     }
 
+    /// The source, the title and the artist stack beside the cover with
+    /// none cut short, and the wave sits below the artist, as in the Mac
+    /// panel.
+    #[test]
+    fn the_flyout_song_lines_stack_above_the_wave() {
+        let app = app_over(MockBackend::new());
+        app.flyout.set_now_playing_shown(true);
+        app.flyout
+            .set_now_playing_title("They Regret It Instantly!".into());
+        app.flyout.set_now_playing_subtitle("Sobo".into());
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let source = flyout_element(&app, "SourceMenu::label");
+        let title = flyout_element(&app, "TrayFlyout::song-title");
+        let artist = flyout_element(&app, "TrayFlyout::song-artist");
+        let wave = flyout_element(&app, "TrayFlyout::wave");
+        let top = |e: &i_slint_backend_testing::ElementHandle| e.absolute_position().y;
+        let bottom = |e: &i_slint_backend_testing::ElementHandle| top(e) + e.size().height;
+        assert!(
+            bottom(&source) <= top(&title),
+            "source {} over title {}",
+            bottom(&source),
+            top(&title)
+        );
+        assert!(
+            bottom(&title) <= top(&artist),
+            "title {} over artist {}",
+            bottom(&title),
+            top(&artist)
+        );
+        assert!(
+            bottom(&artist) <= top(&wave),
+            "artist {} over wave {}",
+            bottom(&artist),
+            top(&wave)
+        );
+        assert!(
+            title.size().height >= 19.0,
+            "title {} px high",
+            title.size().height
+        );
+        assert!(
+            artist.size().height >= 16.0,
+            "artist {} px high",
+            artist.size().height
+        );
+    }
+
+    /// A speaker's circle starts 14 px from the panel's edge and its name
+    /// 10 px past it, its end 17 px from the other edge, as in the Mac panel.
+    #[test]
+    fn the_flyout_rows_use_the_mac_panel_margins() {
+        let app = measured_flyout();
+        let disc = flyout_element(&app, "FlyoutRow::disc");
+        let name = flyout_element(&app, "FlyoutRow::name-label");
+        let row = flyout_element(&app, "TrayFlyout::this-pc-view");
+        assert_eq!(disc.absolute_position().x, 14.0);
+        assert_eq!(name.absolute_position().x, 52.0);
+        let end = row.absolute_position().x + row.size().width - 3.0;
+        // The panel is 300 px wide; the headless window around it is wider.
+        assert_eq!(300.0 - end, 17.0);
+    }
+
     /// The flyout open with one preset, laid out, for the measuring tests.
     fn measured_flyout() -> Rc<App> {
         let app = app_over(MockBackend::new());

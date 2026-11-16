@@ -400,15 +400,17 @@ component FlyoutRow inherits Rectangle {
     }
 
     HorizontalLayout {
-        padding-left: 6px + root.indent;
-        padding-right: 6px;
+        // The circle and the name's end where the Mac panel puts them, 14 px
+        // and 17 px from the panel's edges, which gives the name that room.
+        padding-left: root.indent;
+        padding-right: 3px;
         padding-top: 3px;
         padding-bottom: 3px;
         spacing: 10px;
 
         VerticalLayout {
             alignment: center;
-            RowDisc {
+            disc := RowDisc {
                 icon: root.icon;
                 on: root.state != RowState.off;
                 plays: root.plays;
@@ -1150,7 +1152,10 @@ export component TrayFlyout inherits Window {
                                             accessible-role: groupbox;
                                             accessible-label: Strings.now-playing;
 
+                                            // Never squeezed under the cover's height, so the artist
+                                            // keeps its own line above the wave.
                                             song-title := SlidLine {
+                                                min-height: self.preferred-height;
                                                 text: root.now-playing-title;
                                                 old-text: root.now-playing-outgoing.title;
                                                 sliding: root.now-playing-slide.sliding;
@@ -1162,7 +1167,8 @@ export component TrayFlyout inherits Window {
                                                 old-fade: root.now-playing-slide.old-text-fade;
                                             }
 
-                                            if root.now-playing-subtitle != "" || (root.now-playing-slide.sliding && root.now-playing-outgoing.subtitle != ""): SlidLine {
+                                            if root.now-playing-subtitle != "" || (root.now-playing-slide.sliding && root.now-playing-outgoing.subtitle != ""): song-artist := SlidLine {
+                                                min-height: self.preferred-height;
                                                 text: root.now-playing-subtitle;
                                                 old-text: root.now-playing-outgoing.subtitle;
                                                 sliding: root.now-playing-slide.sliding;
@@ -1176,7 +1182,7 @@ export component TrayFlyout inherits Window {
                                     }
                                 }
 
-                                if root.now-playing-shown: AmbientArt {
+                                if root.now-playing-shown: wave := AmbientArt {
                                     height: 16px;
                                     look: root.now-playing-ambient;
                                 }
@@ -1366,13 +1372,13 @@ export component TrayFlyout inherits Window {
                                         }
                                     }
 
-                                    // Its speakers while it is unfolded, 12 px in, as
+                                    // Its speakers while it is unfolded, 13 px in, as
                                     // the Mac panel sets them under the arrow.
                                     zone-members := FoldPane {
                                         open: zone.expanded;
 
                                         for speaker in zone-members.shown ? zone.members : []: FlyoutRow {
-                                            indent: 12px;
+                                            indent: 13px;
                                             icon: DeviceIcons.glyph16(speaker.kind);
                                             name: speaker.name;
                                             label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
