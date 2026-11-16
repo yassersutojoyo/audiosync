@@ -20552,9 +20552,10 @@ mod tests {
         }
     }
 
-    /// The gear's New Zone from Active Speakers… beside Ctrl+N fits its
-    /// 270 px menu in Segoe UI; the source menu keeps the Mac's 270 px and
-    /// cuts a long source name instead of widening.
+    /// A menu is as wide as its widest item, so none is cut short, as the
+    /// Mac's menus size to theirs: a long source name, past the picker's
+    /// width. The gear's New Zone from Active Speakers… beside Ctrl+N fits
+    /// its 270 px in Segoe UI.
     // covers: S449
     #[test]
     fn a_menu_is_as_wide_as_its_widest_item() {
@@ -20579,8 +20580,8 @@ mod tests {
         app.main.invoke_open_sources();
         draw_frames();
         assert!(
-            row(long).size().width <= 262.0,
-            "the long name's row stays in the 270 px menu"
+            row(long).size().width > 360.0,
+            "the long name's row fits it"
         );
     }
 
