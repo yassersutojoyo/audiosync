@@ -2975,8 +2975,8 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: Fluent.window-margin;
-        // The header 4 under the top row, as the Mac's under its title bar.
-        padding-top: title-row.height + 4px;
+        // The header as high as the Mac's at 1:1, a pixel into the top row.
+        padding-top: title-row.height - 1px;
         // The notices and the columns bring their gap above them, so a
         // notice opens and closes its gap with it.
         spacing: 0px;
@@ -3068,6 +3068,11 @@ export component MainWindow inherits Window {
                     }
                 }
             }
+        }
+
+        // The 5 the header moved up, so the notices and columns stay put.
+        Rectangle {
+            height: 5px;
         }
 
         if root.notices.length > 0: NoticeStack {
