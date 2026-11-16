@@ -122,6 +122,14 @@ else
   { "$python" -I scripts/swift_macros.py --self-test && "$python" -I scripts/swift_macros.py; } || status=1
 fi
 
+echo "▶ logic suite source checks still match the sources (scripts/source_checks.py)"
+if [ -z "$python" ]; then
+  echo "$no_python"
+  status=1
+else
+  "$python" -I scripts/source_checks.py || status=1
+fi
+
 echo "▶ release appcast checker (scripts/check_appcast.py --self-test)"
 if [ -z "$python" ]; then
   echo "$no_python"
