@@ -281,7 +281,7 @@ fn the_left_column_takes_the_macs_spacing() {
         "padding-top: 11px;\n                        padding-bottom: 5px;\n\n                        Divider { }"
     ));
     assert!(window.contains(
-        "VerticalLayout {\n                        spacing: 6px;\n                        padding-left: -8px;\n                        padding-right: -8px;\n\n                        PresetsCard {"
+        "VerticalLayout {\n                        spacing: 6px;\n                        padding-left: -8px;\n                        padding-right: -8px;\n\n                        presets-card := PresetsCard {"
     ));
     assert!(window.contains("left-column := FadeScrollView {"));
     assert!(window.contains("scroll := FadeScrollView {"));

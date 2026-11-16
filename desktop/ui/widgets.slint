@@ -1922,6 +1922,8 @@ export component FadeScrollView {
     in-out property <length> content-height <=> flickable.content-height;
     in-out property <length> content-y <=> flickable.content-y;
     in property <color> fade-color;
+    // Room past each side that the content may reach without being cut.
+    in property <length> bleed;
     callback blank-clicked();
     out property <length> fade: 12px;
     out property <float> top-fade: clamp(-flickable.content-y / root.fade, 0, 1);
@@ -1935,6 +1937,8 @@ export component FadeScrollView {
     preferred-width: 100%;
 
     TouchArea {
+        x: -root.bleed;
+        width: parent.width + 2 * root.bleed;
         clicked => {
             root.blank-clicked();
         }
@@ -1944,6 +1948,8 @@ export component FadeScrollView {
             height: parent.height;
 
             VerticalLayout {
+                padding-left: root.bleed;
+                padding-right: root.bleed;
                 padding-bottom: root.fade;
                 @children
             }
@@ -1951,12 +1957,16 @@ export component FadeScrollView {
     }
 
     top-edge := Rectangle {
+        x: -root.bleed;
+        width: parent.width + 2 * root.bleed;
         y: 0px;
         height: root.fade;
         background: @linear-gradient(180deg, root.fade-color.with-alpha(root.top-fade) 0%, root.fade-color.with-alpha(0) 100%);
     }
 
     bottom-edge := Rectangle {
+        x: -root.bleed;
+        width: parent.width + 2 * root.bleed;
         y: root.height - root.fade;
         height: root.fade;
         background: @linear-gradient(0deg, root.fade-color.with-alpha(root.bottom-fade) 0%, root.fade-color.with-alpha(0) 100%);

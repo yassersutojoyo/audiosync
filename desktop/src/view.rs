@@ -11528,6 +11528,44 @@ mod tests {
         app
     }
 
+    /// The open Presets list's tinted box reaches 8 px past the left column
+    /// on both sides, as the Mac's open row does, and shows whole: the
+    /// column's scrolling view leaves those 8 px uncut.
+    #[test]
+    fn the_open_presets_box_shows_whole_past_the_left_column() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = narrow_app(MockBackend::new());
+        app.main.set_presets_open(true);
+        advance_clock(Duration::from_millis(400));
+        slint::platform::update_timers_and_animations();
+        let card = element(&app, "MainWindow::presets-card").expect("the Presets box");
+        let (left, width) = (card.absolute_position().x, card.size().width);
+        let column = element(&app, "MainWindow::left-column").expect("the left column");
+        let column_left = column.absolute_position().x;
+        assert!(
+            (left - (column_left - 8.0)).abs() < 0.5,
+            "box at {left}, column at {column_left}"
+        );
+        let middle = left + width / 2.0;
+        let view = ElementHandle::find_by_element_id(&app.main, "FadeScrollView::flickable")
+            .find(|view| {
+                let x = view.absolute_position().x;
+                x <= middle && middle <= x + view.size().width
+            })
+            .expect("the left column's scrolling view");
+        let (view_left, view_width) = (view.absolute_position().x, view.size().width);
+        assert!(
+            left >= view_left - 0.5,
+            "box left {left} cut at {view_left}"
+        );
+        assert!(
+            left + width <= view_left + view_width + 0.5,
+            "box right {} cut at {}",
+            left + width,
+            view_left + view_width
+        );
+    }
+
     /// Speaker rows in one list step 52 px from badge to badge, divider
     /// included, as the Mac's rows step 52 pt.
     #[test]

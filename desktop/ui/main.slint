@@ -3125,6 +3125,8 @@ export component MainWindow inherits Window {
                 }
                 width: MainColumns.left(root.columns-width);
                 fade-color: root.background;
+                // The Presets and Equalizer rows reach 8 px past the column.
+                bleed: 8px;
 
                 VerticalLayout {
                     alignment: start;
@@ -3286,7 +3288,7 @@ export component MainWindow inherits Window {
                         padding-left: -8px;
                         padding-right: -8px;
 
-                        PresetsCard {
+                        presets-card := PresetsCard {
                             width-given: MainColumns.left(root.columns-width) + 2 * 8px;
                             presets: root.presets;
                             current: root.current-preset;
