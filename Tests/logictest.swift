@@ -19108,6 +19108,35 @@ do {
           "art hold: a late reading of the same song without its cover keeps the cover; another song never inherits it")
 }
 
+// MARK: A slow cover holds the pressed card until it comes, and a failed fetch slides at once (ArtHold, ArtFetches)
+// covers: S459
+do {
+    let waitCover = NSImage(size: NSSize(width: 1, height: 1))
+    let waitShown = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "One",
+                                            artist: "A", album: "B", isPlaying: true, artwork: waitCover)
+    var waitLoading = NowPlayingMonitor.Track(bundleID: "com.spotify.client", appName: "Spotify", title: "Two",
+                                              artist: "A", album: "B", isPlaying: true, artwork: nil)
+    waitLoading.artPending = true
+    var waitArrived = waitLoading
+    waitArrived.artwork = waitCover
+    waitArrived.artPending = false
+    let waitAtCover = TrackSlide.waited(heldFor: 2.0, sincePress: 2.3)
+    check(ArtHold.decide(shown: waitShown, next: waitLoading, heldFor: waitAtCover - 0.01) == .hold
+            && ArtHold.decide(shown: waitShown, next: waitArrived, heldFor: waitAtCover) == .show
+            && TrackSlide.cap > 2.3 && TrackSlide.cap == ArtFetches.timeout && ArtHold.limit == ArtFetches.timeout,
+          "cover wait: a cover arriving 2.3 s after a press holds the old card until it comes, with no placeholder slide")
+    let waitGaveUp = ArtHold.gaveUp(waitLoading, on: waitLoading)
+    check(waitGaveUp?.artPending == false && waitGaveUp?.artwork == nil
+            && waitGaveUp.map { ArtHold.decide(shown: waitShown, next: $0, heldFor: 0.3) } == .show
+            && ArtHold.gaveUp(waitShown, on: waitLoading) == nil,
+          "cover wait: a failed cover fetch lets the new song slide in with the placeholder at once")
+    let waitSource = (try? String(contentsOfFile: "Sources/AudioSync/NowPlaying.swift", encoding: .utf8)) ?? ""
+    let waitFailBranch = waitSource.components(separatedBy: "fetch gave no picture").last?
+        .components(separatedBy: "DebugTrace.log(\"Now Playing art: \\(song) fetched").first ?? ""
+    check(waitFailBranch.contains("ArtHold.gaveUp(") && waitSource.contains("timeoutInterval: ArtFetches.timeout"),
+          "cover wait: the monitor hands a failed fetch's song on without its cover at once")
+}
+
 // MARK: A cover already loaded is found by its address (ArtCache in NowPlaying.swift)
 // covers: S460
 do {
