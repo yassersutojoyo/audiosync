@@ -9792,6 +9792,16 @@ mod tests {
         advance_clock(Duration::from_millis(300));
         draw_frames();
         assert_eq!(leaving(), 0.0, "gone after 300 ms");
+
+        // Renamed to sort first, the last connected speaker moves every row
+        // under it into another's slot; no delay changed, so nothing rolls.
+        let last = app.snapshot().layout().1.last().map(|s| s.id.clone());
+        let last = last.expect("a connected speaker");
+        app.update(|b| b.rename_speaker(&last, "AAA"));
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        assert_eq!(leaving(), 0.0, "a moved row doesn't roll");
     }
 
     /// The delay panel holds the Mac's small steps, 20 px high and 4 px

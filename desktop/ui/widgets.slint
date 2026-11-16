@@ -3816,6 +3816,10 @@ export component SpeakerRow inherits Rectangle {
                                             clip: true;
                                             property <int> delay: root.item.delay-ms;
                                             property <int> last;
+                                            // A slot the list reuses for another speaker
+                                            // shows its delay without a roll.
+                                            property <string> id: root.item.id;
+                                            property <string> last-id;
                                             property <int> from;
                                             property <int> rolls;
                                             property <float> rolled: self.rolls;
@@ -3827,11 +3831,18 @@ export component SpeakerRow inherits Rectangle {
                                             property <length> rise: !Motion.on ? 0px : self.delay > self.from ? self.height : -self.height;
                                             init => {
                                                 self.last = self.delay;
+                                                self.last-id = self.id;
+                                            }
+                                            changed id => {
+                                                self.last = self.delay;
+                                                self.last-id = self.id;
                                             }
                                             changed delay => {
-                                                self.from = self.last;
+                                                if self.id == self.last-id && self.delay != self.last {
+                                                    self.from = self.last;
+                                                    self.rolls += 1;
+                                                }
                                                 self.last = self.delay;
-                                                self.rolls += 1;
                                             }
 
                                             delay-new := Text {
