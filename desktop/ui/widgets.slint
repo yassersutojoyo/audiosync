@@ -3967,7 +3967,7 @@ export component SpeakerRow inherits Rectangle {
                         // and its fix, read right after the slider.
                         VerticalLayout {
                             spacing: 2px;
-                            padding-bottom: 4px;
+                            padding-bottom: 2px;
 
                             // Moved left by the slider's own inset, so its track
                             // starts under the name, as on the Mac.
@@ -4007,54 +4007,6 @@ export component SpeakerRow inherits Rectangle {
                                 }
                             }
 
-                            if root.item.device-volume != DeviceVolumeHint.none: HorizontalLayout {
-                                spacing: 4px;
-
-                                Glyph {
-                                    glyph: Glyphs.device-volume(root.item.device-volume);
-                                    font-size: 12px;
-                                    color: Tokens.secondary-text;
-                                    vertical-alignment: top;
-                                }
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    alignment: start;
-
-                                    Text {
-                                        text: Strings.device-volume-hint(root.item.device-volume, root.item.device-volume-percent);
-                                        font-size: Tokens.font-size-caption;
-                                        color: Tokens.secondary-text;
-                                        wrap: word-wrap;
-                                        min-height: self.preferred-height;
-                                        accessible-role: text;
-                                        accessible-label: Strings.device-volume-hint-label(root.item.name, root.item.device-volume, root.item.device-volume-percent);
-                                    }
-
-                                    HorizontalLayout {
-                                        alignment: start;
-
-                                        fix-button := LinkButton {
-                                            text: Strings.device-volume-fix(root.item.device-volume);
-                                            label: Strings.device-volume-fix-label(root.item.name, root.item.device-volume);
-                                            changed keyboard-focused => {
-                                                root.fix-focused = self.keyboard-focused;
-                                            }
-                                            clicked => {
-                                                // The button goes with the hint once
-                                                // Windows reports the change: hand
-                                                // the keyboard focus to the slider
-                                                // first, so it stays in the row.
-                                                if fix-button.keyboard-focused {
-                                                    volume-slider.focus-slider();
-                                                }
-                                                root.device-volume-fix();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
                             if root.cast-live && root.item.volume-fixed: SecondaryText {
                                 text: Strings.cast-volume-fixed;
                                 min-height: self.preferred-height;
@@ -4085,6 +4037,94 @@ export component SpeakerRow inherits Rectangle {
                                     }
                                     clicked => {
                                         root.cast-resync();
+                                    }
+                                }
+                            }
+
+                            // Last in the column, so a shut hint takes no spacing: its 2 px
+                            // come out of the padding below. It opens and shuts over the
+                            // Mac's 0.35 s ease-out, so the rows below glide.
+                            hint-box := Rectangle {
+                                property <bool> open: root.item.device-volume != DeviceVolumeHint.none;
+                                // What the hint said last, kept while it shuts.
+                                property <DeviceVolumeHint> held;
+                                property <int> held-percent;
+                                property <DeviceVolumeHint> live: root.item.device-volume;
+                                property <int> live-percent: root.item.device-volume-percent;
+                                function hold() {
+                                    if self.open {
+                                        self.held = self.live;
+                                        self.held-percent = self.live-percent;
+                                    }
+                                }
+                                init => {
+                                    self.hold();
+                                }
+                                changed live => {
+                                    self.hold();
+                                }
+                                changed live-percent => {
+                                    self.hold();
+                                }
+                                out property <DeviceVolumeHint> hint: self.open ? root.item.device-volume : self.held;
+                                out property <int> percent: self.open ? root.item.device-volume-percent : self.held-percent;
+                                out property <float> progress: self.open ? 1 : 0;
+                                animate progress {
+                                    duration: Motion.on ? 350ms : 0ms;
+                                    easing: ease-out;
+                                }
+                                height: self.progress * (hint-line.preferred-height + 2px);
+                                clip: true;
+
+                                hint-line := HorizontalLayout {
+                                    visible: hint-box.progress > 0;
+                                    y: 2px;
+                                    width: parent.width;
+                                    height: self.preferred-height;
+                                    spacing: 4px;
+
+                                    Glyph {
+                                        glyph: Glyphs.device-volume(hint-box.hint);
+                                        font-size: 12px;
+                                        color: Tokens.secondary-text;
+                                        vertical-alignment: top;
+                                    }
+
+                                    VerticalLayout {
+                                        horizontal-stretch: 1;
+                                        alignment: start;
+
+                                        Text {
+                                            text: Strings.device-volume-hint(hint-box.hint, hint-box.percent);
+                                            font-size: Tokens.font-size-caption;
+                                            color: Tokens.secondary-text;
+                                            wrap: word-wrap;
+                                            min-height: self.preferred-height;
+                                            accessible-role: text;
+                                            accessible-label: Strings.device-volume-hint-label(root.item.name, hint-box.hint, hint-box.percent);
+                                        }
+
+                                        HorizontalLayout {
+                                            alignment: start;
+
+                                            fix-button := LinkButton {
+                                                text: Strings.device-volume-fix(hint-box.hint);
+                                                label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);
+                                                changed keyboard-focused => {
+                                                    root.fix-focused = self.keyboard-focused;
+                                                }
+                                                clicked => {
+                                                    // The button goes with the hint once
+                                                    // Windows reports the change: hand
+                                                    // the keyboard focus to the slider
+                                                    // first, so it stays in the row.
+                                                    if fix-button.keyboard-focused {
+                                                        volume-slider.focus-slider();
+                                                    }
+                                                    root.device-volume-fix();
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

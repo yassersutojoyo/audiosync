@@ -1519,11 +1519,11 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
     let hint_at = row
         .find(
             "accessible-label: Strings.device-volume-hint-label(root.item.name, \
-             root.item.device-volume, root.item.device-volume-percent);",
+             hint-box.hint, hint-box.percent);",
         )
         .expect("the hint names the output");
     let fix_at = row
-        .find("label: Strings.device-volume-fix-label(root.item.name, root.item.device-volume);")
+        .find("label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);")
         .expect("the fix names the output");
     let options = row
         .find("options := IconButton {")
@@ -1533,7 +1533,7 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
         "the hint and the fix come right after the slider"
     );
     let shown = row
-        .find("if root.item.device-volume != DeviceVolumeHint.none:")
+        .find("property <bool> open: root.item.device-volume != DeviceVolumeHint.none;")
         .expect("the hint shows only with a hint to show");
     assert!(slider < shown && shown < hint_at);
     let sync = row
@@ -1541,16 +1541,12 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
         .expect("the sync controls");
     let part = &row[shown..sync];
     assert!(part.contains("accessible-role: text;"));
-    assert!(part.contains(
-        "text: Strings.device-volume-hint(root.item.device-volume, \
-         root.item.device-volume-percent);"
-    ));
-    assert!(part.contains("text: Strings.device-volume-fix(root.item.device-volume);"));
+    assert!(part.contains("text: Strings.device-volume-hint(hint-box.hint, hint-box.percent);"));
+    assert!(part.contains("text: Strings.device-volume-fix(hint-box.hint);"));
     assert!(part.contains("root.device-volume-fix();"));
     assert!(part.contains("color: Tokens.secondary-text;"));
     assert!(
-        part.contains("Glyph {")
-            && part.contains("glyph: Glyphs.device-volume(root.item.device-volume);"),
+        part.contains("Glyph {") && part.contains("glyph: Glyphs.device-volume(hint-box.hint);"),
         "the glyph is a decorative Glyph"
     );
     assert!(

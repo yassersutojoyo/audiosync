@@ -21071,6 +21071,46 @@ mod tests {
         );
     }
 
+    /// When Windows' own volume of an output comes back up, the hint under
+    /// its slider shuts over the Mac's 0.35 s ease-out, so the next row
+    /// glides up instead of jumping.
+    #[test]
+    fn the_rows_below_a_shutting_device_volume_hint_glide() {
+        let app = narrow_app(MockBackend::new());
+        let next_row_y = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+                &app.main,
+                "Options for Headphones",
+            )
+            .next()
+            .expect("the Headphones row")
+            .absolute_position()
+            .y
+        };
+        draw_frames_at(776, 680);
+        let before = next_row_y();
+        i_slint_backend_testing::ElementHandle::find_by_accessible_label(
+            &app.main,
+            "Set to 75%, Speakers",
+        )
+        .next()
+        .expect("the hint's fix")
+        .invoke_accessible_default_action();
+        app.refresh();
+        draw_frames_at(776, 680);
+        advance_clock(Duration::from_millis(100));
+        draw_frames_at(776, 680);
+        let gliding = next_row_y();
+        advance_clock(Duration::from_secs(1));
+        draw_frames_at(776, 680);
+        let after = next_row_y();
+        assert!(after < before, "the hint shut: {before} -> {after}");
+        assert!(
+            gliding < before && gliding > after,
+            "100 ms in, the next row is on its way: {before} -> {gliding} -> {after}"
+        );
+    }
+
     /// With many hidden speakers Settings scrolls, so its last box, Check
     /// Setup, can still be reached at the bottom of a window that fits the screen.
     #[test]
