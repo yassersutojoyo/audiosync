@@ -21009,10 +21009,10 @@ mod tests {
         assert!(tip.is_some(), "a tooltip on the icon button");
     }
 
-    /// A speaker's volume is the Mac's small slider, a 13 px knob, while
-    /// the master volume keeps its 16 px one.
+    /// A speaker's volume has a 16 px knob, as the master volume's and as
+    /// measured on the Mac's window.
     #[test]
-    fn speaker_volume_knobs_are_13_px_and_the_masters_16() {
+    fn speaker_volume_knobs_are_16_px_as_the_masters() {
         let app = narrow_app(MockBackend::new());
         let row = element(&app, "SpeakerRow::volume-slider").expect("a speaker's volume");
         let knob = row
@@ -21020,7 +21020,7 @@ mod tests {
             .match_id("LevelSlider::thumb")
             .find_first()
             .expect("its knob");
-        assert_eq!(knob.size().width, 13.0);
+        assert_eq!(knob.size().width, 16.0);
         let master = element(&app, "MasterVolume::slider").expect("the master volume");
         let knob = master
             .query_descendants()

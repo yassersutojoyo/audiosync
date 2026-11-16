@@ -1732,8 +1732,9 @@ export component LevelSlider inherits Rectangle {
     callback changed(float);
     callback released(float);
     property <bool> vertical: root.orientation == Orientation.vertical;
-    property <length> knob: root.small ? 13px : 16px;
-    property <length> thickness: root.small ? 3px : 4px;
+    // A row's slider has the Mac's 16 px knob on a 4 px track too, as measured on its window.
+    property <length> knob: 16px;
+    property <length> thickness: 4px;
     property <length> span: (root.vertical ? root.height : root.width) - root.knob;
     property <float> ratio: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
     // The Mac's disabled small slider (a speaker that is off): a track and fill
@@ -1741,7 +1742,8 @@ export component LevelSlider inherits Rectangle {
     property <bool> idle: root.small && !root.enabled;
 
     min-width: root.vertical ? root.knob : 48px;
-    min-height: root.vertical ? 48px : root.knob;
+    // A row's knob reaches 1 px past its 14 px line, which keeps the rows' 49 px step.
+    min-height: root.vertical ? 48px : root.small ? 14px : root.knob;
     preferred-height: root.small ? 16px : 22px;
     forward-focus: focus;
     opacity: root.enabled || root.idle ? 1 : Tokens.disabled-opacity;
