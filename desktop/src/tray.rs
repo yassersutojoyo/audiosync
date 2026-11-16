@@ -467,7 +467,7 @@ fn show_flyout(app: &App, icon: Bounds) {
     FLYOUT_ICON.with(|cell| cell.set(Some(icon)));
     place_flyout(app, icon);
     platform::bring_to_front(flyout);
-    app.flyout.set_revealed(true);
+    app.reveal_flyout();
     app.flyout.invoke_take_focus();
 }
 

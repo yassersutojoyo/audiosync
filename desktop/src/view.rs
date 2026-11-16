@@ -341,6 +341,8 @@ const FLYOUT_NOTICE_LIMIT: usize = 1;
 /// How long a notice's announcement stays in its window's live region at
 /// most (it goes sooner with its notice). Cleared, nothing stray is left for
 /// Narrator's scan mode, and the same words can be announced again later.
+// Time enough for a shown flyout to draw its first frame at any refresh rate.
+const FLYOUT_FIRST_FRAME: Duration = Duration::from_millis(50);
 const ANNOUNCEMENT_CLEARS_AFTER: Duration = Duration::from_secs(5);
 
 /// How long a live region stays empty before the words it held come back.
@@ -5381,6 +5383,19 @@ impl App {
     pub fn prepare_flyout_open(&self, animate: bool) {
         self.flyout.set_revealed(!animate);
         self.flyout.global::<Motion>().set_on(animate);
+    }
+
+    /// Starts the flyout's opening from where `prepare_flyout_open` put it,
+    /// after its first frame: an animation starts only from a value that was
+    /// drawn, and a reopened flyout draws nothing between the two.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn reveal_flyout(&self) {
+        let flyout = self.flyout.as_weak();
+        slint::Timer::single_shot(FLYOUT_FIRST_FRAME, move || {
+            if let Some(flyout) = flyout.upgrade() {
+                flyout.set_revealed(true);
+            }
+        });
     }
 
     pub fn hide_flyout(&self) {
@@ -13371,6 +13386,41 @@ mod tests {
         );
     }
 
+    /// Every opening of the flyout plays its rise, not only the first: the
+    /// tray opens it with nothing drawn between putting the parts back down
+    /// and revealing them (maintainer 2026-11-16).
+    #[test]
+    fn the_flyout_rises_again_on_its_second_opening() {
+        hold_clock();
+        let app = app_over(MockBackend::new());
+        for opening in 1..=2 {
+            app.prepare_flyout_open(true);
+            app.flyout.show().expect("the flyout shows headless");
+            app.reveal_flyout();
+            for _ in 0..19 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+                // A real frame reads where the parts are; the headless one
+                // draws nothing that does.
+                app.flyout.get_content_offset();
+            }
+            let offset = app.flyout.get_content_offset();
+            assert!(
+                offset > 0.0 && offset < 6.0,
+                "opening {opening} rises: {offset}"
+            );
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+            assert_eq!(
+                app.flyout.get_content_offset(),
+                0.0,
+                "opening {opening} lands"
+            );
+            app.hide_flyout();
+            draw_frames();
+        }
+    }
+
     /// The flyout's seven parts fade in and rise 6 px into place as it
     /// opens, as the Mac panel's: 440 ms each, the first after 90 ms and each
     /// next 35 ms later, from the start each time; the flyout's height
@@ -17986,7 +18036,10 @@ mod tests {
             position,
             button: PointerEventButton::Left,
         });
-        assert!(dragged.get(), "a press at ({x}, {y}) on the header band drags the window");
+        assert!(
+            dragged.get(),
+            "a press at ({x}, {y}) on the header band drags the window"
+        );
     }
 
     /// Turning streaming on slides the switch's knob across while its track
