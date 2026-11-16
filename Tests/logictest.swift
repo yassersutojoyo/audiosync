@@ -20166,6 +20166,17 @@ do {
     check(small.contains("viewBox=\"0 0 14 14\"") && icons.contains("static let sizes: [CGFloat] = [14, 18]")
             && badge.contains("DeviceIcon.size(circle: size)"),
           "device icons: a smaller circle takes a glyph drawn on its own smaller grid, as 18 in 32 on the sheet")
+    // From the Mac: Monitor Kantor, not found, showed the generic device glyph instead of its display.
+    let monitorKey = SpeakerKey.make(id: "monitor-uid", kind: .local)
+    let storedZone = "[{\"id\":\"z\",\"name\":\"Kantor\",\"members\":[\"\(monitorKey)\"],\"volume\":100,"
+        + "\"memberIcons\":{\"\(monitorKey)\":\"monitor\"}}]"
+    let readBack = (try? JSONDecoder().decode([SpeakerZone].self, from: Data(storedZone.utf8)))
+        .flatMap { try? JSONEncoder().encode($0) }.map { String(decoding: $0, as: UTF8.self) } ?? ""
+    check(readBack.contains("\"memberIcons\"") && readBack.contains(":\"monitor\""),
+          "device icons: a zone keeps the glyph each member was last listed with, across a relaunch", readBack)
+    let zonesApp = read("Sources/AudioSync/AppDelegate+Zones.swift")
+    check(!zonesApp.contains("guard let device = localDevices[member.appID] else { return SpeakerTag.other.symbol(name: name) }"),
+          "device icons: a member that isn't listed keeps its remembered glyph rather than the generic device")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
