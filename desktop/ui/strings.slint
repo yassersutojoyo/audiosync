@@ -413,6 +413,7 @@ export global Strings {
     // Settings > Volume Keys Control AudioSync (spec S429), and the name on
     // the level pop-up a volume key shows.
     out property <string> volume-keys: @tr("Volume Keys Control AudioSync");
+    out property <string> volume-keys-info: @tr("While streaming is on, the volume keys change AudioSync's master volume. When this is off, they change the Windows volume as usual.");
     out property <string> volume-popup-name: @tr("AudioSync");
     // What Narrator reads as the pop-up shows: the level in percent.
     public pure function volume-popup-announcement(percent: int) -> string {
@@ -500,6 +501,7 @@ export global Strings {
     // in AudioSync's own File menu can read as AudioSync itself.
     out property <string> switch-source-on-quit: @tr("Switch to All System Audio When the Source App Quits");
     out property <string> resume-after-sleep: @tr("Resume Playback After Sleep");
+    out property <string> resume-after-sleep-info: @tr("When your PC wakes, the song that was playing continues once your speakers are back.");
 
     // Tray icon and its flyout (the macOS menu bar panel)
     out property <string> open-app: @tr("Open AudioSync");

@@ -49,6 +49,38 @@ component SwitchRow inherits SettingsRow {
     }
 }
 
+// A switch row with the Mac's grey caption under it.
+component CaptionedSwitchRow inherits VerticalLayout {
+    in property <string> text;
+    in property <string> caption;
+    in property <bool> checked;
+    callback toggled(bool);
+
+    spacing: 4px;
+    padding-bottom: 10px;
+
+    SwitchRow {
+        text: root.text;
+        checked: root.checked;
+        toggled(on) => {
+            root.toggled(on);
+        }
+    }
+
+    Text {
+        text: root.caption;
+        color: Tokens.secondary-text;
+        font-size: Tokens.font-size-subheadline;
+        wrap: word-wrap;
+    }
+}
+
+// The Mac's Settings window: neutral grey, its boxes a step darker in dark.
+global SettingsLook {
+    out property <color> window: Tokens.dark ? #2a2a2a : #efeeed;
+    out property <color> card: Tokens.dark ? #1f1f1f : Tokens.surface;
+}
+
 // One titled box, drawn like the main window's cards.
 component SettingsBox inherits VerticalLayout {
     in property <string> title;
@@ -68,7 +100,7 @@ component SettingsBox inherits VerticalLayout {
     }
 
     Rectangle {
-        background: Tokens.surface;
+        background: SettingsLook.card;
         border-radius: Fluent.radius-card;
         border-width: max(0.5px, 1phx);
         border-color: Fluent.stroke;
@@ -90,7 +122,8 @@ component Segment inherits Rectangle {
     min-width: label.preferred-width + 20px;
     height: 24px;
     border-radius: 5px;
-    background: root.chosen ? Tokens.surface : touch.has-hover ? Fluent.hover : transparent;
+    // The Mac's segmented control in the brand teal: white on #147167 is 5.85:1.
+    background: root.chosen ? #147167 : touch.has-hover ? Fluent.hover : transparent;
     border-width: root.chosen ? max(0.5px, 1phx) : 0px;
     border-color: Fluent.stroke;
     forward-focus: focus;
@@ -121,7 +154,7 @@ component Segment inherits Rectangle {
 
     label := Text {
         text: root.text;
-        color: Tokens.text;
+        color: root.chosen ? #ffffff : Tokens.text;
         font-size: Tokens.font-size-callout;
         font-weight: root.chosen ? Fluent.weight-semibold : Fluent.weight-regular;
         horizontal-alignment: center;
@@ -162,7 +195,7 @@ export component SettingsWindow inherits Window {
 
     title: Strings.settings-title;
     icon: @image-url("../res/audiosync-256.png");
-    background: Tokens.background;
+    background: SettingsLook.window;
     width: 460px;
     default-font-family: Fluent.font;
     default-font-weight: Fluent.weight-regular;
@@ -258,8 +291,9 @@ export component SettingsWindow inherits Window {
 
                 Divider { }
 
-                SwitchRow {
+                CaptionedSwitchRow {
                     text: Strings.resume-after-sleep;
+                    caption: Strings.resume-after-sleep-info;
                     checked: root.resume-after-sleep;
                     toggled(on) => {
                         root.resume-after-sleep-toggled(on);
@@ -281,8 +315,9 @@ export component SettingsWindow inherits Window {
                 title: Strings.menu-speakers;
 
                 if root.volume-keys-available: VerticalLayout {
-                    SwitchRow {
+                    CaptionedSwitchRow {
                         text: Strings.volume-keys;
+                        caption: Strings.volume-keys-info;
                         checked: root.volume-keys;
                         toggled(on) => {
                             root.volume-keys-toggled(on);
