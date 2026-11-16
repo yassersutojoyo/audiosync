@@ -7804,7 +7804,7 @@ mod tests {
             "open with no presets: {content} of {room}"
         );
         let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
-        assert!(main.contains("padding-top: title-row.height + 4px;"));
+        assert!(main.contains("padding-top: title-row.height - 1px;"));
     }
 
     /// A Now Playing title too long for its line stays on one line and
