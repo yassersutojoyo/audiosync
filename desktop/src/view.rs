@@ -13443,9 +13443,64 @@ mod tests {
         let row = flyout_element(&app, "TrayFlyout::this-pc-view");
         assert_eq!(disc.absolute_position().x, 14.0);
         assert_eq!(name.absolute_position().x, 52.0);
-        let end = row.absolute_position().x + row.size().width - 3.0;
+        let end = row.absolute_position().x + row.size().width - 6.0;
         // The panel is 300 px wide; the headless window around it is wider.
         assert_eq!(300.0 - end, 17.0);
+        // The hover and focus ring reach 6 px past the circle, as on the Mac.
+        let rows = flyout_element(&app, "FlyoutRow::touch");
+        assert_eq!(rows.absolute_position().x, 8.0);
+    }
+
+    /// A zone's circle sits 32 px from the panel's edge, its arrow before
+    /// it, and its speakers' circles 27 px in, as in the Mac panel.
+    #[test]
+    fn the_flyout_zone_rows_use_the_mac_panel_margins() {
+        let app = app_over(MockBackend::new());
+        app.flyout
+            .set_zones(ModelRc::new(VecModel::from(vec![ZoneItem {
+                id: "z1".into(),
+                name: "Kantor".into(),
+                expanded: true,
+                members: ModelRc::new(VecModel::from(vec![SpeakerItem {
+                    id: "s1".into(),
+                    name: "Monitor Kantor".into(),
+                    ..SpeakerItem::default()
+                }])),
+                ..ZoneItem::default()
+            }])));
+        app.flyout.show().expect("the flyout shows headless");
+        draw_frames();
+        let zone = flyout_element(&app, "FlyoutZoneHeader::zone-disc");
+        // This PC's rows sit at 14 px; the zone's speaker is the one further in.
+        let member = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.flyout,
+            "FlyoutRow::disc",
+        )
+        .map(|disc| disc.absolute_position().x)
+        .fold(0.0, f32::max);
+        assert_eq!(zone.absolute_position().x, 32.0);
+        assert_eq!(member, 27.0);
+    }
+
+    /// The mark starts 16 px from the panel's edge and the footer's words
+    /// 17 px from either edge, as in the Mac panel.
+    #[test]
+    fn the_flyout_header_and_footer_use_the_mac_panel_insets() {
+        let app = measured_flyout();
+        let mark = flyout_element(&app, "TrayFlyout::brand-mark");
+        assert_eq!(mark.absolute_position().x, 16.0);
+        let words: Vec<_> = i_slint_backend_testing::ElementHandle::find_by_element_id(
+            &app.flyout,
+            "FooterButton::words",
+        )
+        .collect();
+        let first = words.first().expect("Open AudioSync");
+        let last = words.last().expect("Exit");
+        assert_eq!(first.absolute_position().x, 17.0);
+        assert_eq!(
+            300.0 - (last.absolute_position().x + last.size().width),
+            17.0
+        );
     }
 
     /// The flyout open with one preset, laid out, for the measuring tests.
