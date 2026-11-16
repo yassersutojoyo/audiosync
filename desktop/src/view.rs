@@ -15451,7 +15451,8 @@ mod tests {
         assert!(!sheet.get_shown(), "Space on Add added it");
         assert!(app.snapshot().speaker("cc:speaker.local").is_some());
 
-        let closes: [(&str, fn(&slint::Window)); 2] = [
+        type Close = fn(&slint::Window);
+        let closes: [(&str, Close); 2] = [
             ("Escape", |window| press(window, Key::Escape)),
             ("Ctrl+W", |window| ctrl(window, "w")),
         ];
