@@ -9,7 +9,7 @@
 import { Button, ComboBox } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
+import { Availability, CastState, DeviceVolumeHint, NoticeItem, RowPart, UpdateButton, RowState, SourceLook, SourceRowKind, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
 
 import "../../brand/fonts/Poppins-Medium.ttf";
 import "../res/fonts/Inter-Regular.ttf";
@@ -2978,6 +2978,9 @@ export component MenuRow inherits Rectangle {
     in property <bool> expanded;
     // A submenu's rows sit a step in.
     in property <bool> nested;
+    // An icon before the name: an app's own, else a glyph.
+    in property <image> icon;
+    in property <string> icon-glyph;
     in-out property <int> current;
     in-out property <bool> keyboard;
     in property <int> pulse;
@@ -3046,6 +3049,22 @@ export component MenuRow inherits Rectangle {
             color: Tokens.teal-text;
         }
 
+        if root.icon.width > 0: Rectangle {
+            width: 16px;
+
+            Image {
+                width: 16px;
+                height: 16px;
+                source: root.icon;
+            }
+        }
+
+        if root.icon.width == 0 && root.icon-glyph != "": Glyph {
+            width: 16px;
+            glyph: root.icon-glyph;
+            font-size: 14px;
+        }
+
         Text {
             text: root.text;
             color: Tokens.text;
@@ -3109,6 +3128,49 @@ export component MenuDivider inherits HorizontalLayout {
     Rectangle {
         height: 1px;
         background: Tokens.separator;
+    }
+}
+
+// A source menu row as the Mac's: a divider where its section starts, Input
+// Devices over the first input, and the app's icon or a glyph before its name.
+export component SourceMenuRow inherits VerticalLayout {
+    in property <int> index;
+    in property <string> text;
+    in property <bool> checked;
+    in property <SourceLook> look;
+    // The row above's kind; the first row's is its own.
+    in property <SourceRowKind> above;
+    in-out property <int> current;
+    in-out property <bool> keyboard;
+    in property <int> pulse;
+    in-out property <int> done;
+    callback activated();
+
+    if root.look.kind != root.above: MenuDivider { }
+
+    if root.look.kind == SourceRowKind.input && root.above != SourceRowKind.input: MenuNote {
+        // Under the icons, as the Mac's header.
+        padding-left: 32px;
+        text: Strings.source-inputs-header;
+    }
+
+    if root.look.kind == SourceRowKind.input && root.above != SourceRowKind.input: MenuDivider { }
+
+    MenuRow {
+        height: 24px;
+        index: root.index;
+        text: root.text;
+        checks: true;
+        checked: root.checked;
+        icon: root.look.icon;
+        icon-glyph: root.look.kind == SourceRowKind.input ? Glyphs.microphone : root.look.kind == SourceRowKind.app ? Glyphs.display : "";
+        current <=> root.current;
+        keyboard <=> root.keyboard;
+        pulse: root.pulse;
+        done <=> root.done;
+        activated => {
+            root.activated();
+        }
     }
 }
 

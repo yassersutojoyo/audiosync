@@ -57,8 +57,9 @@ use crate::{
     GuidePage, GuideStepItem, GuideWindow, HiddenItem, IconLook, KeyboardFocus, LeftOutItem,
     MainControl, MainWindow, MixAppItem, Motion, NameField, NoticeItem, NoticeKind, OutgoingSong,
     Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart, RowState, ScreenReader,
-    SlideLook, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens, TrackMotion, TrayFlyout,
-    UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget, speaker_names,
+    SlideLook, SourceLook, SourceRowKind, SpeakerGroup, SpeakerItem, SpeakerKind, Strings, Tokens,
+    TrackMotion, TrayFlyout, UpdateButton, ZoneChoice, ZoneItem, ZoneNameDialog, ZoneTarget,
+    speaker_names,
 };
 
 mod help_window;
@@ -268,6 +269,10 @@ fn only_virtual_outputs_hidden(
 
 struct Models {
     sources: Rc<VecModel<SharedString>>,
+    source_looks: Rc<VecModel<SourceLook>>,
+    /// Each app source's icon by source ID, and each executable's by path.
+    app_icons: RefCell<HashMap<String, (u32, slint::Image)>>,
+    file_icons: RefCell<HashMap<(std::path::PathBuf, u32), slint::Image>>,
     /// The chosen input device's channel pairs; empty up to two channels.
     input_pairs: Rc<VecModel<SharedString>>,
     mix_apps: Rc<VecModel<MixAppItem>>,
@@ -1252,6 +1257,9 @@ impl App {
         crate::platform::set_min_size_log(log.clone());
         let models = Models {
             sources: Rc::new(VecModel::default()),
+            source_looks: Rc::new(VecModel::default()),
+            app_icons: RefCell::default(),
+            file_icons: RefCell::default(),
             input_pairs: Rc::new(VecModel::default()),
             mix_apps: Rc::new(VecModel::default()),
             this_pc: Rc::new(VecModel::default()),
@@ -2295,9 +2303,49 @@ impl App {
         });
     }
 
+    /// The icon of the app source `id` (`app:<pid>:<executable>`), `size`
+    /// pixels square, from its executable; empty for any other source and for
+    /// an app whose icon can't be read, which the menu draws as a glyph.
+    fn app_icon(&self, id: &str, size: u32) -> slint::Image {
+        let m = &self.models;
+        if let Some((at, icon)) = m.app_icons.borrow().get(id)
+            && *at == size
+        {
+            return icon.clone();
+        }
+        let path = id
+            .strip_prefix("app:")
+            .and_then(|rest| rest.split(':').next())
+            .and_then(|pid| pid.parse().ok())
+            .and_then(crate::os::app_icon::process_image);
+        let icon = path
+            .map(|path| {
+                m.file_icons
+                    .borrow_mut()
+                    .entry((path, size))
+                    .or_insert_with_key(|(path, size)| {
+                        crate::os::app_icon::file_icon(path, *size)
+                            .map(|rgba| {
+                                slint::Image::from_rgba8(
+                                    slint::SharedPixelBuffer::clone_from_slice(&rgba, *size, *size),
+                                )
+                            })
+                            .unwrap_or_default()
+                    })
+                    .clone()
+            })
+            .unwrap_or_default();
+        m.app_icons
+            .borrow_mut()
+            .insert(id.to_owned(), (size, icon.clone()));
+        icon
+    }
+
     fn attach_models(&self) {
         let m = &self.models;
         self.main.set_sources(ModelRc::from(m.sources.clone()));
+        self.main
+            .set_source_looks(ModelRc::from(m.source_looks.clone()));
         self.main
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.main.set_mix_apps(ModelRc::from(m.mix_apps.clone()));
@@ -2318,6 +2366,8 @@ impl App {
         self.main
             .set_calibrate_all_left_out(ModelRc::from(m.calibration_left_out.clone()));
         self.flyout.set_sources(ModelRc::from(m.sources.clone()));
+        self.flyout
+            .set_source_looks(ModelRc::from(m.source_looks.clone()));
         self.flyout
             .set_input_pairs(ModelRc::from(m.input_pairs.clone()));
         self.flyout
@@ -2692,6 +2742,23 @@ impl App {
                 }
             })
             .collect();
+        let icon_size = (16.0 * self.main.window().scale_factor()).round() as u32;
+        let source_looks: Vec<SourceLook> = state
+            .sources
+            .iter()
+            .map(|s| SourceLook {
+                kind: match s.kind {
+                    SourceKind::System => SourceRowKind::System,
+                    SourceKind::Input => SourceRowKind::Input,
+                    SourceKind::App | SourceKind::AppsExcept => SourceRowKind::App,
+                },
+                icon: self.app_icon(&s.id, icon_size),
+            })
+            .collect();
+        self.models
+            .app_icons
+            .borrow_mut()
+            .retain(|id, _| state.sources.iter().any(|s| s.id == *id));
         let source_index = state
             .sources
             .iter()
@@ -2756,6 +2823,7 @@ impl App {
             ..
         } = main_lists;
         sync_model(&m.sources, sources);
+        sync_model(&m.source_looks, source_looks);
         sync_model(&m.input_pairs, input_pairs);
         self.main.set_input_pair_index(input_pair_index);
         self.flyout.set_input_pair_index(input_pair_index);
@@ -19533,6 +19601,30 @@ mod tests {
         press(window, Key::Escape);
         press(window, Key::Return);
         assert_eq!(refreshes.get(), before + 1, "Escape closed the menu");
+    }
+
+    /// The source menu sorts its rows into the Mac's sections: All System
+    /// Audio, the apps, then the input devices, in both windows' menus.
+    #[test]
+    fn the_source_menu_knows_each_rows_section() {
+        let app = app_over(MockBackend::new());
+        app.refresh();
+        let kinds: Vec<SourceRowKind> = app
+            .main
+            .get_source_looks()
+            .iter()
+            .map(|look| look.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                SourceRowKind::System,
+                SourceRowKind::App,
+                SourceRowKind::App,
+                SourceRowKind::Input
+            ]
+        );
+        assert_eq!(app.flyout.get_source_looks().row_count(), kinds.len());
     }
 
     /// The keyboard reaches every row of the source menu: each source, then
