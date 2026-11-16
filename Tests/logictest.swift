@@ -1230,14 +1230,19 @@ do {
         return !bounds.isEmpty && bounds.minX >= 0 && bounds.minY >= 0 && max(bounds.maxX, bounds.maxY) <= size + 0.001
     }
     let unfit = DeviceBadge.allCases.filter { !fits($0.path, DeviceBadge.size) }.map(\.rawValue)
-        + DeviceIcon.allCases.filter { !fits($0.path, DeviceIcon.size) }.map(\.rawValue)
-    check(unfit.isEmpty, "layout: every device badge and glyph draws inside its 12 or 18 pt grid", "\(unfit)")
-    func box(_ icon: DeviceIcon) -> [Double] {
-        let b = icon.path.boundingBoxOfPath
+        + DeviceIcon.sizes.flatMap { size in
+            DeviceIcon.allCases.filter { !fits($0.path(size: size), size) }.map { "\($0.rawValue) \(size)" }
+        }
+    check(unfit.isEmpty, "layout: every device badge and glyph draws inside its own grid", "\(unfit)")
+    func box(_ icon: DeviceIcon, _ size: CGFloat) -> [Double] {
+        let b = icon.path(size: size).boundingBoxOfPath
         return [b.minX, b.minY, b.maxX, b.maxY].map { (Double($0) * 1000).rounded() / 1000 }
     }
-    check(box(.laptop) == [1, 3, 17, 15] && box(.speaker) == [4, 1, 14, 17],
+    check(box(.laptop, 18) == [1, 3, 17, 15] && box(.speaker, 18) == [4, 1, 14, 17]
+            && box(.laptop, 14) == [1, 2, 13, 12] && box(.speaker, 14) == [3, 1, 11, 13],
           "layout: the glyphs are drawn 1:1 in points, straight edges on whole points")
+    check(DeviceIcon.size(circle: 32) == 18 && DeviceIcon.size(circle: 26) == 14 && DeviceIcon.size(circle: 24) == 14,
+          "layout: a circle takes the glyph grid nearest 18 in 32, so the panel's smaller circles get 14 pt glyphs")
     check(kinds.allSatisfy { $0.typeTint(.off) == .muted && $0.typeTint(.willPlay) == .muted },
           "layout: type icons are grey unless the speaker plays")
     check(SpeakerTag.airplay.typeTint(.playing) == .active && SpeakerTag.bluetooth.typeTint(.playing) == .active

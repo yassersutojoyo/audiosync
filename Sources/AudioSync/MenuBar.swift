@@ -2181,7 +2181,8 @@ struct SpeakerBadge: View {
             }
             // Scaled, not inserted, so it grows wherever the row has just moved the badge.
             Circle().fill(Brand.playingDisc).scaleEffect(filled || reduceMotion ? 1 : 0.6).opacity(filled ? 1 : 0)
-            DeviceGlyph(path: symbol.path, size: DeviceIcon.size, evenOdd: symbol.evenOdd)
+            let glyph = DeviceIcon.size(circle: size)
+            DeviceGlyph(path: symbol.path(size: glyph), size: glyph, evenOdd: symbol.evenOdd)
                 .foregroundStyle(iconColor)
         }
         .animation(PowerMotion.animation(reduceMotion: reduceMotion), value: state)

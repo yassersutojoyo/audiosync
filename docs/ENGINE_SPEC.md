@@ -950,8 +950,9 @@ The Mac's `sessionHeard` flag itself (S17, S133: false at a session's start and 
 | layout: transport types map to their tag | S152 |
 | layout: an unknown transport is Other | S152 |
 | layout: only built-in outputs are This Mac | S152 |
-| layout: every device badge and glyph draws inside its 12 or 18 pt grid | S152 |
+| layout: every device badge and glyph draws inside its own grid | S152 |
 | layout: the glyphs are drawn 1:1 in points, straight edges on whole points | S152 |
+| layout: a circle takes the glyph grid nearest 18 in 32, so the panel's smaller circles get 14 pt glyphs | S152 |
 | layout: type icons are grey unless the speaker plays | S152 |
 | layout: a playing speaker's type icon takes its own color | S152 |
 | layout: This Mac keeps Core Audio's order | S152 |
