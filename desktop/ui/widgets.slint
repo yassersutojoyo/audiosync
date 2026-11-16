@@ -1724,8 +1724,7 @@ export component LevelSlider inherits Rectangle {
     in property <bool> enabled: true;
     in property <Orientation> orientation: Orientation.horizontal;
     in property <brush> track: Tokens.text.with-alpha(0.15);
-    // The Mac's small slider (a speaker's or a zone's volume): a 13 px knob
-    // on a 3 px track in a 16 px slot.
+    // The Mac's small slider (a speaker's or a zone's volume).
     in property <bool> small;
     out property <bool> has-focus: focus.has-focus;
     out property <bool> held: touch.pressed;
@@ -1820,7 +1819,8 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? root.thickness : root.span * root.ratio;
         height: root.vertical ? root.span * root.ratio : root.thickness;
         border-radius: root.thickness / 2;
-        background: root.idle ? Tokens.text.with-alpha(0.12) : Tokens.text;
+        // The Mac's disabled small slider shows no fill; on dark its fill is grey, not white.
+        background: root.idle ? Tokens.text.with-alpha(0.07) : root.small && Tokens.dark ? Tokens.text.with-alpha(0.26) : Tokens.text;
     }
 
     thumb := Rectangle {
@@ -1829,10 +1829,12 @@ export component LevelSlider inherits Rectangle {
         x: root.vertical ? (root.width - self.width) / 2 : root.span * root.ratio;
         y: root.vertical ? root.span * (1 - root.ratio) : (root.height - self.height) / 2;
         border-radius: self.width / 2;
-        background: root.small && touch.pressed ? #ebebeb : #ffffff;
-        opacity: root.idle && Tokens.dark ? Tokens.disabled-opacity : 1;
-        border-width: root.small ? max(0.5px, 1phx) : 1px;
-        border-color: root.idle ? Tokens.secondary-text.with-alpha(0.35) : Tokens.secondary-text;
+        // The Mac's small knob on dark is grey (#959595 on its window), faint while disabled.
+        background: root.small && Tokens.dark ? #959595 : root.small && touch.pressed ? #ebebeb : #ffffff;
+        opacity: root.idle && Tokens.dark ? 0.25 : 1;
+        // The small knob has only its shadow for an edge, as the Mac's.
+        border-width: root.small ? 0px : 1px;
+        border-color: Tokens.secondary-text;
         drop-shadow-blur: 1.5px;
         drop-shadow-offset-y: 0.5px;
         drop-shadow-color: #0000004d;
@@ -2090,8 +2092,8 @@ export component VolumeSlider inherits HorizontalLayout {
         // the slider and drops below it.
         vertical-alignment: center;
         wrap: no-wrap;
-        // Segoe's digits are narrower than the Mac's: at its 11 pt they read a size smaller.
-        font-size: Tokens.font-size-callout;
+        // The Mac's subheadline, as its code sets it.
+        font-size: Tokens.font-size-subheadline;
         // The Mac's line: Segoe UI's is 2 px taller, all of it leading, and
         // would break a speaker row's 52 px step.
         height: 14px;
