@@ -102,8 +102,8 @@ component SourceMenu inherits Rectangle {
             row := HorizontalLayout {
                 padding-left: 10px;
                 padding-right: 10px;
-                padding-top: 8px;
-                padding-bottom: 8px;
+                padding-top: 6px;
+                padding-bottom: 6px;
                 spacing: 8px;
 
                 // The chosen app's own icon, as the Mac's button shows it.
@@ -119,7 +119,7 @@ component SourceMenu inherits Rectangle {
 
                 if root.looks[root.index].icon.width == 0: Glyph {
                     glyph: root.is-input ? Glyphs.microphone : Glyphs.volume-high;
-                    color: Tokens.teal-text;
+                    color: Tokens.text;
                     font-size: 20px;
                 }
 

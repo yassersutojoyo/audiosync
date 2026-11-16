@@ -1710,12 +1710,15 @@ export component LevelSlider inherits Rectangle {
     property <length> thickness: root.small ? 3px : 4px;
     property <length> span: (root.vertical ? root.height : root.width) - root.knob;
     property <float> ratio: root.maximum > root.minimum ? (root.value - root.minimum) / (root.maximum - root.minimum) : 0;
+    // The Mac's disabled small slider (a speaker that is off): a track and fill
+    // so pale they almost vanish under a white knob, not the whole slider dimmed.
+    property <bool> idle: root.small && !root.enabled;
 
     min-width: root.vertical ? root.knob : 48px;
     min-height: root.vertical ? 48px : root.knob;
     preferred-height: root.small ? 16px : 22px;
     forward-focus: focus;
-    opacity: root.enabled ? 1 : Tokens.disabled-opacity;
+    opacity: root.enabled || root.idle ? 1 : Tokens.disabled-opacity;
     accessible-role: slider;
     accessible-enabled: root.enabled;
     accessible-value-minimum: root.minimum;
@@ -1780,7 +1783,7 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? root.thickness : root.span;
         height: root.vertical ? root.span : root.thickness;
         border-radius: root.thickness / 2;
-        background: root.track;
+        background: root.idle ? Tokens.text.with-alpha(0.07) : root.track;
     }
 
     Rectangle {
@@ -1789,7 +1792,7 @@ export component LevelSlider inherits Rectangle {
         width: root.vertical ? root.thickness : root.span * root.ratio;
         height: root.vertical ? root.span * root.ratio : root.thickness;
         border-radius: root.thickness / 2;
-        background: Tokens.text;
+        background: root.idle ? Tokens.text.with-alpha(0.12) : Tokens.text;
     }
 
     thumb := Rectangle {
@@ -1799,8 +1802,9 @@ export component LevelSlider inherits Rectangle {
         y: root.vertical ? root.span * (1 - root.ratio) : (root.height - self.height) / 2;
         border-radius: self.width / 2;
         background: root.small && touch.pressed ? #ebebeb : #ffffff;
+        opacity: root.idle && Tokens.dark ? Tokens.disabled-opacity : 1;
         border-width: root.small ? max(0.5px, 1phx) : 1px;
-        border-color: Tokens.secondary-text;
+        border-color: root.idle ? Tokens.secondary-text.with-alpha(0.35) : Tokens.secondary-text;
         drop-shadow-blur: 1.5px;
         drop-shadow-offset-y: 0.5px;
         drop-shadow-color: #0000004d;
@@ -3497,10 +3501,10 @@ export component SpeakerRow inherits Rectangle {
             VerticalLayout {
                 padding-left: Fluent.row-padding-x;
                 padding-right: Fluent.row-padding-x;
-                padding-top: Fluent.row-padding-y;
-                // A pixel less, so the divider keeps the Mac's 52 px step and
+                padding-top: Fluent.row-padding-y - 1px;
+                // Less below, so the divider keeps the Mac's 49 px step and
                 // the 32 px badge stays on whole pixels in its 40 px line.
-                padding-bottom: Fluent.row-padding-y - 1px;
+                padding-bottom: Fluent.row-padding-y - 3px;
 
                 HorizontalLayout {
                     spacing: 8px;

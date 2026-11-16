@@ -11651,10 +11651,10 @@ mod tests {
         }
     }
 
-    /// Speaker rows in one list step 52 px from badge to badge, divider
-    /// included, as the Mac's rows step 52 pt.
+    /// Speaker rows in one list step 49 px from badge to badge, divider
+    /// included, as the Mac's rows step 49 pt.
     #[test]
-    fn speaker_rows_step_52_px_as_on_the_mac() {
+    fn speaker_rows_step_49_px_as_on_the_mac() {
         let app = narrow_app(MockBackend::new());
         let tops: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
             &app.main,
@@ -11666,7 +11666,7 @@ mod tests {
             .windows(2)
             .map(|pair| pair[1] - pair[0])
             .fold(f32::MAX, f32::min);
-        assert_eq!(pitch, 52.0, "badge tops {tops:?}");
+        assert_eq!(pitch, 49.0, "badge tops {tops:?}");
         assert!(
             tops.iter().all(|y| y.fract() == 0.0),
             "on whole pixels: {tops:?}"
@@ -11719,8 +11719,8 @@ mod tests {
         assert_eq!(rule.size().width, 1.0);
         assert_eq!(rule.absolute_position().x, header.absolute_position().x);
         assert_eq!(rule.absolute_position().y, top + height);
-        // Both rows and the line between them, as they step 52 px.
-        assert_eq!(rule.size().height, 52.0 + 51.0);
+        // Both rows and the line between them, as they step 49 px.
+        assert_eq!(rule.size().height, 49.0 + 48.0);
     }
 
     /// A long-named copy of the mock's Kitchen speaker.
@@ -20868,7 +20868,7 @@ mod tests {
     }
 
     /// A speaker's rename field fills its name slot, at least 120 px wide,
-    /// at the Mac's 22 px height, so the row keeps its 52 px step.
+    /// at the Mac's 22 px height, so the row keeps its 49 px step.
     #[test]
     fn a_speaker_rename_field_fills_the_name_slot_at_the_macs_height() {
         let app = narrow_app(MockBackend::new());

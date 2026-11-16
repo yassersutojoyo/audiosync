@@ -362,8 +362,10 @@ fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     assert!(master.contains("font-size: Tokens.font-size-body;"));
     assert!(master.contains("color: Tokens.text;"));
     let slider = component_body(&widgets, "LevelSlider");
-    assert!(slider.contains("background: root.track;"));
-    assert!(slider.contains("border-color: Tokens.secondary-text;"));
+    assert!(slider.contains("background: root.idle ? Tokens.text.with-alpha(0.07) : root.track;"));
+    assert!(slider.contains(
+        "border-color: root.idle ? Tokens.secondary-text.with-alpha(0.35) : Tokens.secondary-text;"
+    ));
 }
 
 /// The interface sources, for the checks below.
