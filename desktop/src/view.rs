@@ -53,7 +53,7 @@ use crate::volume_keys::{self, VolumeKey};
 use crate::window_rules::{Rgb, ambient_breath};
 use crate::{
     AboutDialog, AirPlayProblem, AmbientLook, AmbientStrand, Availability, CalibrationRowItem,
-    CastAddressDialog, CastList, CastProblem, CastState, DeviceVolumeHint, EqualizerWindow, Fold,
+    CastList, CastProblem, CastSheet, CastState, DeviceVolumeHint, EqualizerWindow, Fold,
     GuidePage, GuideStepItem, GuideWindow, HiddenItem, IconLook, KeyboardFocus, LeftOutItem,
     MainControl, MainWindow, MixAppItem, Motion, NameField, NoticeItem, NoticeKind, OutgoingSong,
     Palette, PasswordDialog, PinDialog, PinPhase, PresetItem, RowPart, RowState, ScreenReader,
@@ -804,7 +804,6 @@ pub struct App {
     /// The speaker the password dialog is open for, while it is.
     password_for: RefCell<Option<String>>,
     /// Add by Address…, for a Google Cast speaker discovery can't find.
-    cast_address_dialog: CastAddressDialog,
     /// The answer of the address check Add by Address… is waiting for.
     cast_check: RefCell<Option<std::sync::mpsc::Receiver<cast_address::CheckAnswer>>>,
     /// Looks for that answer while the check runs.
@@ -1295,7 +1294,6 @@ impl App {
             after_main_shows: RefCell::new(None),
             password_dialog: PasswordDialog::new()?,
             password_for: RefCell::new(None),
-            cast_address_dialog: CastAddressDialog::new()?,
             cast_check: RefCell::default(),
             cast_check_timer: Timer::default(),
             about: AboutDialog::new()?,
@@ -2109,9 +2107,6 @@ impl App {
         self.password_dialog
             .global::<Palette>()
             .set_color_scheme(scheme);
-        self.cast_address_dialog
-            .global::<Palette>()
-            .set_color_scheme(scheme);
         self.about.global::<Palette>().set_color_scheme(scheme);
         self.guide.global::<Palette>().set_color_scheme(scheme);
         self.help.global::<Palette>().set_color_scheme(scheme);
@@ -2127,7 +2122,6 @@ impl App {
             self.zone_dialog.window(),
             self.pin_dialog.window(),
             self.password_dialog.window(),
-            self.cast_address_dialog.window(),
             self.about.window(),
             self.guide.window(),
             self.help.window(),
@@ -12425,30 +12419,6 @@ mod tests {
         assert_window_fits(dialog.window(), dialog.get_fit_height(), "New Zone");
     }
 
-    /// The same for Add by Address, at opening and once a turned-down
-    /// address puts its reason above the field.
-    #[test]
-    fn the_add_by_address_dialog_grows_to_show_its_buttons() {
-        let app = app_over(MockBackend::new());
-        let dialog = &app.cast_address_dialog;
-        let window = dialog.window();
-        window.set_size(slint::LogicalSize::new(420.0, 153.0));
-        app.ask_cast_address();
-        let opened = dialog.get_fit_height();
-        assert_window_fits(window, opened, "opened");
-        // Drawn at the window's width, the texts wrap into fewer lines.
-        draw_frames();
-        let opened = dialog.get_fit_height();
-        type_text(window, "bad address:99999");
-        press(window, Key::Return);
-        assert!(!dialog.get_error().is_empty(), "turned down");
-        // The event loop's turn after the key.
-        slint::platform::update_timers_and_animations();
-        let fit = dialog.get_fit_height();
-        assert!(fit > opened, "the reason's row adds {fit} - {opened}");
-        assert_window_fits(window, fit, "turned down");
-    }
-
     #[test]
     fn a_usb_device_with_a_form_still_reads_as_usb() {
         let app = app_over(MockBackend::new());
@@ -15439,20 +15409,34 @@ mod tests {
         }
     }
 
+    /// Add by Address opens as a sheet over the main window, as the Mac's,
+    /// not as a window of its own.
+    #[test]
+    fn add_by_address_opens_as_a_sheet_in_the_main_window() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let title = app.strings().get_cast_add_address_title();
+        let in_main = || ElementHandle::find_by_accessible_label(&app.main, &title).count();
+        assert_eq!(in_main(), 0, "no sheet before it is asked for");
+        app.main.invoke_cast_add_address_requested();
+        draw_frames();
+        assert_eq!(in_main(), 1, "the sheet is in the main window");
+    }
+
     // covers: C18
     #[test]
     fn add_by_address_keeps_a_turned_down_address_open_with_the_reason() {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         app.main.invoke_cast_add_address_requested();
-        let dialog = &app.cast_address_dialog;
-        let window = dialog.window();
-        assert!(window.is_visible(), "Add by Address… opens it");
+        let dialog = app.cast_sheet();
+        let window = app.main.window();
+        assert!(app.cast_sheet().get_shown(), "Add by Address… opens it");
         assert_eq!(dialog.get_error(), "");
 
         type_text(window, "not an address");
         press(window, Key::Return);
-        assert!(window.is_visible(), "stays open");
+        assert!(app.cast_sheet().get_shown(), "stays open");
         assert_eq!(dialog.get_error(), strings.get_cast_address_invalid());
         assert_eq!(
             dialog.get_error(),
@@ -15463,7 +15447,7 @@ mod tests {
         type_text(window, "speaker.invalid");
         press(window, Key::Return);
         settle_cast_check(&app);
-        assert!(window.is_visible());
+        assert!(app.cast_sheet().get_shown());
         assert_eq!(
             dialog.get_error(),
             "AudioSync couldn't find a speaker at that address. Check that it's on and try again."
@@ -15472,7 +15456,7 @@ mod tests {
         type_text(window, "speaker.local");
         press(window, Key::Return);
         settle_cast_check(&app);
-        assert!(!window.is_visible(), "Enter added it");
+        assert!(!app.cast_sheet().get_shown(), "Enter added it");
         assert_eq!(dialog.get_address(), "", "the field is cleared");
         let state = app.snapshot();
         let row = state.speaker("cc:speaker.local").expect("listed");
@@ -15524,7 +15508,7 @@ mod tests {
 
     /// What the dialog's two live regions hold, in order.
     fn cast_address_said(app: &App) -> (String, String) {
-        let dialog = &app.cast_address_dialog;
+        let dialog = app.cast_sheet();
         (dialog.get_said_odd().into(), dialog.get_said_even().into())
     }
 
@@ -15534,7 +15518,7 @@ mod tests {
         let invalid: String = app.strings().get_cast_address_invalid().into();
         let not_found: String = app.strings().get_cast_address_not_found().into();
         app.main.invoke_cast_add_address_requested();
-        let window = app.cast_address_dialog.window();
+        let window = app.main.window();
         assert_eq!(cast_address_said(&app), (String::new(), String::new()));
 
         type_text(window, "not an address");
@@ -15573,14 +15557,14 @@ mod tests {
     fn add_waits_for_an_address_and_enter_on_a_blank_field_does_nothing() {
         let app = app_over(MockBackend::new());
         app.main.invoke_cast_add_address_requested();
-        let dialog = &app.cast_address_dialog;
-        let window = dialog.window();
+        let dialog = app.cast_sheet();
+        let window = app.main.window();
         assert!(!dialog.get_can_add(), "Add is off on an empty field");
         press(window, Key::Return);
         type_text(window, "   ");
         assert!(!dialog.get_can_add(), "spaces alone are no address");
         press(window, Key::Return);
-        assert!(window.is_visible(), "Enter didn't add or close");
+        assert!(app.cast_sheet().get_shown(), "Enter didn't add or close");
         assert_eq!(dialog.get_error(), "", "no reason for an empty field");
         assert_eq!(cast_address_said(&app), (String::new(), String::new()));
 
@@ -15588,7 +15572,7 @@ mod tests {
         assert!(dialog.get_can_add());
         press(window, Key::Return);
         settle_cast_check(&app);
-        assert!(!window.is_visible(), "Enter added it");
+        assert!(!app.cast_sheet().get_shown(), "Enter added it");
         assert!(app.snapshot().speaker("cc:speaker.local").is_some());
     }
 
@@ -15599,8 +15583,8 @@ mod tests {
         let app = app_over(MockBackend::new());
         let strings = app.strings();
         let speakers = app.snapshot().speakers.len();
-        let dialog = &app.cast_address_dialog;
-        let window = dialog.window();
+        let dialog = app.cast_sheet();
+        let window = app.main.window();
         let hold = || {
             MOCK_CAST_HOLD
                 .lock()
@@ -15611,14 +15595,20 @@ mod tests {
         app.main.invoke_cast_add_address_requested();
         type_text(window, "speaker.held");
         press(window, Key::Return);
-        assert!(window.is_visible(), "open while the address is checked");
+        assert!(
+            app.cast_sheet().get_shown(),
+            "open while the address is checked"
+        );
         assert!(dialog.get_checking());
         assert!(!dialog.get_can_add(), "Add is off during the check");
         assert_eq!(strings.get_cast_address_checking(), "Checking…");
         press(window, Key::Return);
         assert!(app.snapshot().speaker("cc:speaker.held").is_none());
         press(window, Key::Escape);
-        assert!(!window.is_visible(), "Escape closes it during the check");
+        assert!(
+            !app.cast_sheet().get_shown(),
+            "Escape closes it during the check"
+        );
         assert!(!dialog.get_checking());
         drop(held);
         std::thread::sleep(Duration::from_millis(200));
@@ -15641,7 +15631,7 @@ mod tests {
         settle_cast_check(&app);
         stop_probe.store(true, std::sync::atomic::Ordering::SeqCst);
         let wakes = probe.join().expect("the probe");
-        if window.is_visible() {
+        if app.cast_sheet().get_shown() {
             let span = let_go.elapsed();
             let starved = unscheduled(&wakes, let_go, let_go + span);
             let what = format!(
@@ -15663,20 +15653,23 @@ mod tests {
     fn reopening_add_by_address_during_a_check_drops_the_old_answer() {
         let app = app_over(MockBackend::new());
         let speakers = app.snapshot().speakers.len();
-        let window = app.cast_address_dialog.window();
+        let window = app.main.window();
         let held = MOCK_CAST_HOLD
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         app.main.invoke_cast_add_address_requested();
         type_text(window, "speaker.held");
         press(window, Key::Return);
-        assert!(app.cast_address_dialog.get_checking());
+        assert!(app.cast_sheet().get_checking());
 
         app.ask_cast_address();
         drop(held);
         settle_cast_check(&app);
         draw_frames();
-        assert!(window.is_visible(), "the reopened dialog stays open");
+        assert!(
+            app.cast_sheet().get_shown(),
+            "the reopened dialog stays open"
+        );
         assert!(app.snapshot().speaker("cc:speaker.held").is_none());
         assert_eq!(app.snapshot().speakers.len(), speakers);
     }
@@ -15687,11 +15680,14 @@ mod tests {
             let app = app_over(MockBackend::new());
             let speakers = app.snapshot().speakers.len();
             app.main.invoke_cast_add_address_requested();
-            let window = app.cast_address_dialog.window();
+            let window = app.main.window();
             type_text(window, "speaker.local");
             tab(window, tabs);
             press(window, Key::Escape);
-            assert!(!window.is_visible(), "Escape closed it ({tabs} tabs)");
+            assert!(
+                !app.cast_sheet().get_shown(),
+                "Escape closed it ({tabs} tabs)"
+            );
             assert_eq!(app.snapshot().speakers.len(), speakers, "nothing added");
         }
     }
@@ -17012,7 +17008,7 @@ mod tests {
         type Open = fn() -> Rc<App>;
         type Find = fn(&App) -> &slint::Window;
         type Close = fn(&slint::Window);
-        let windows: [(&str, Open, Find); 9] = [
+        let windows: [(&str, Open, Find); 8] = [
             (
                 "equalizer",
                 || {
@@ -17081,15 +17077,6 @@ mod tests {
                 "password dialog",
                 || app_asking_password(false),
                 |app| app.password_dialog.window(),
-            ),
-            (
-                "Add by Address dialog",
-                || {
-                    let app = app_over(MockBackend::new());
-                    app.main.invoke_cast_add_address_requested();
-                    app
-                },
-                |app| app.cast_address_dialog.window(),
             ),
         ];
         assert_eq!(

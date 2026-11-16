@@ -16,7 +16,8 @@ import { AirPlayDelayControls, Announcer, MenuDivider, MenuKey, MenuNote, MenuRo
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
 export { TrayFlyout } from "flyout.slint";
-export { CastAddressDialog, ZoneNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
+export { CastSheet, ZoneNameDialog, PasswordDialog, PinDialog } from "dialogs.slint";
+import { CastAddressSheet, CastSheet } from "dialogs.slint";
 export { GuideWindow } from "guide.slint";
 export { HelpWindow } from "help.slint";
 export { RemoteWindow } from "remote.slint";
@@ -3891,6 +3892,37 @@ export component MainWindow inherits Window {
             focus-changed(has) => {
                 root.control-focus-changed(MainControl.calibration, has);
             }
+        }
+    }
+
+    // Add by Address, as the Mac's sheet: centred over the window under a
+    // scrim, a popup so Tab stays in it.
+    property <bool> cast-sheet-shown: CastSheet.shown;
+    changed cast-sheet-shown => {
+        if self.cast-sheet-shown {
+            cast-sheet.show();
+        } else {
+            cast-sheet.close();
+        }
+    }
+
+    cast-sheet := PopupWindow {
+        x: 0;
+        y: title-row.height;
+        width: root.width;
+        height: root.height - title-row.height;
+        close-policy: no-auto-close;
+
+        // Takes the clicks meant for the window under the sheet.
+        TouchArea {
+            Rectangle {
+                background: Tokens.dark ? #00000066 : #ffffff8c;
+            }
+        }
+
+        CastAddressSheet {
+            x: (parent.width - self.width) / 2;
+            y: max(0px, (root.height - self.height) / 2 - title-row.height);
         }
     }
 

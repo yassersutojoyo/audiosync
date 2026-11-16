@@ -65,7 +65,7 @@ fn save_rename_and_delete_are_items_of_the_curve_menu() {
 
 #[test]
 fn add_by_address_reads_as_the_macs_sheet() {
-    let dialog = component(include_str!("../../ui/dialogs.slint"), "CastAddressDialog");
+    let dialog = component(include_str!("../../ui/dialogs.slint"), "CastAddressSheet");
     let at = |text: &str| dialog.find(text).unwrap_or_else(|| panic!("{text}"));
     assert!(dialog.contains("padding: 20px;"));
     assert!(dialog.contains("text: Strings.cast-add-address-title;"));
@@ -85,6 +85,11 @@ fn add_by_address_reads_as_the_macs_sheet() {
         "under the field"
     );
     assert!(dialog.contains("Spinner {"), "a spinner while it checks");
+    assert!(
+        at("text: Strings.cancel;") < at("Strings.add;"),
+        "Cancel, then Add"
+    );
+    assert!(dialog.contains("boxed: true;"), "a boxed field");
 }
 
 #[test]

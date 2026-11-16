@@ -2191,6 +2191,8 @@ export component TextField inherits Rectangle {
     // A rename in a list row: the Mac's 22 px rounded field, so the row
     // keeps its height.
     in property <bool> compact;
+    // The Mac's sheet field: a rounded box with a 2 px focus outline, no underline.
+    in property <bool> boxed;
     out property <bool> has-focus: input.has-focus;
     // Whether the whole text cursor is inside the box (tests read it).
     out property <bool> caret-in-view: input.x + view.caret-x >= 0 && input.x + view.caret-x + input.text-cursor-width <= view.width;
@@ -2211,9 +2213,9 @@ export component TextField inherits Rectangle {
     horizontal-stretch: 1;
     vertical-stretch: 0;
     forward-focus: input;
-    border-radius: root.compact ? 5px : Fluent.radius-control;
-    border-width: 1px;
-    border-color: root.compact && input.has-focus ? Tokens.teal : Fluent.stroke;
+    border-radius: root.compact ? 5px : root.boxed ? 8px : Fluent.radius-control;
+    border-width: root.boxed && input.has-focus ? 2px : 1px;
+    border-color: root.boxed && input.has-focus ? Tokens.focus : root.compact && input.has-focus ? Tokens.teal : Fluent.stroke;
     background: input.has-focus ? Tokens.surface : Tokens.surface.mix(Tokens.text, 0.98);
     clip: true;
     accessible-role: text-input;
@@ -2341,7 +2343,7 @@ export component TextField inherits Rectangle {
         }
     }
 
-    if !root.compact: Rectangle {
+    if !root.compact && !root.boxed: Rectangle {
         x: 0;
         y: parent.height - self.height;
         width: parent.width;
