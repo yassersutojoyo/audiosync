@@ -1558,14 +1558,14 @@ final class CoverLayerView: NSView {
         case (.wait(let since), .slot):
             let look = TrackSlide.oldCover(waited: 1, slid: 0, reduceMotion: reduceMotion)
             let timing = SlideMotion.timing(TrackSlide.waitCurve)
-            SlideMotion.run(card, to: ["transform.scale": CGFloat(look.scale)], seconds: TrackSlide.cap, timing: timing,
+            SlideMotion.run(card, to: ["transform.scale": CGFloat(look.scale)], seconds: TrackSlide.recede, timing: timing,
                             startedAgo: -since.timeIntervalSinceNow)
-            SlideMotion.run(dim, to: ["opacity": CGFloat(look.dim)], seconds: TrackSlide.cap, timing: timing,
+            SlideMotion.run(dim, to: ["opacity": CGFloat(look.dim)], seconds: TrackSlide.recede, timing: timing,
                             startedAgo: -since.timeIntervalSinceNow)
         case (.settle(let since), .slot):
             let timing = SlideMotion.timing(TrackSlide.settleCurve)
-            SlideMotion.run(card, to: ["transform.scale": CGFloat(rest.scale)], seconds: TrackSlide.fadeDuration, timing: timing,
-                            startedAgo: -since.timeIntervalSinceNow)
+            SlideMotion.run(card, to: ["transform.scale": CGFloat(rest.scale), "opacity": CGFloat(rest.opacity)],
+                            seconds: TrackSlide.fadeDuration, timing: timing, startedAgo: -since.timeIntervalSinceNow)
             SlideMotion.run(dim, to: ["opacity": CGFloat(rest.dim)], seconds: TrackSlide.fadeDuration, timing: timing,
                             startedAgo: -since.timeIntervalSinceNow)
         case (.slide(let since), .slot):
@@ -1586,6 +1586,25 @@ final class CoverLayerView: NSView {
             SlideMotion.stop([card], at: ["transform.scale": CGFloat(rest.scale), "transform.translation.x": 0,
                                          "opacity": CGFloat(rest.opacity)])
             SlideMotion.stop([dim], at: ["opacity": CGFloat(rest.dim)])
+        }
+        // Removed after the step above read the breath into its start, so the next motion picks up where it is.
+        guard case .wait(let since) = phase.step, role == .slot, !reduceMotion else {
+            card.removeAnimation(forKey: "breathe")
+            dim.removeAnimation(forKey: "breathe")
+            return
+        }
+        for (target, depth) in [(card, -TrackSlide.breatheDepth), (dim, TrackSlide.breatheDepth)] {
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = 0
+            pulse.toValue = CGFloat(depth)
+            pulse.isAdditive = true
+            pulse.duration = TrackSlide.breathePeriod / 2
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            pulse.beginTime = target.convertTime(CACurrentMediaTime(), from: nil) + TrackSlide.breatheAfter
+                + since.timeIntervalSinceNow
+            target.add(pulse, forKey: "breathe")
         }
     }
 }
@@ -1663,7 +1682,7 @@ final class LineStage: NSView {
         step = phase.step
         switch phase.step {
         case .wait(let since):
-            SlideMotion.run(current.layer, to: ["opacity": CGFloat(TrackSlide.textOpacity(waited: 1))], seconds: TrackSlide.cap,
+            SlideMotion.run(current.layer, to: ["opacity": CGFloat(TrackSlide.textOpacity(waited: 1))], seconds: TrackSlide.recede,
                             timing: SlideMotion.timing(TrackSlide.waitCurve), startedAgo: -since.timeIntervalSinceNow,
                             model: false)
         case .settle(let since):
