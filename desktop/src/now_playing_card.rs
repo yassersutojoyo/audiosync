@@ -9,7 +9,8 @@
 //! while the window or a receiver needs them. With the whole system as the
 //! source, the session that plays counts, else the first paused one; with
 //! a mix of apps, the same among the apps it captures; with one app, that
-//! app's own; an input device has none, so the card hides. Without a session that counts, the card hides too.
+//! app's own; an input device has none, so the card hides. Without a session that counts, the card hides too,
+//! after [`GAP_GRACE`].
 //!
 //! The card keeps the last track while the window is hidden, so it shows at
 //! once when the window comes back, and changes with the first new reading.
@@ -319,6 +320,12 @@ pub trait MediaControls {
 /// cover fetch timeout (`ArtFetches.timeout`), which its hold and slide share.
 pub const ART_HOLD: Duration = Duration::from_secs(4);
 
+/// How long the shown song stays up while no session counts. Spotify drops
+/// its session for about 1 s when it rewrites a title (Windows debug log,
+/// 2026-11-16); 3 s also covers a listing that waits its 1 s `APP_WAIT` on
+/// an app.
+pub const GAP_GRACE: Duration = Duration::from_secs(3);
+
 /// Whether `next` is another song from the player `shown` came from,
 /// with its cover still to come while `shown` has one.
 fn waits_for_cover(shown: &CardTrack, next: &CardTrack) -> bool {
@@ -344,6 +351,8 @@ pub struct NowPlayingCard {
     held: Option<(CardTrack, Instant)>,
     /// The latest Next or Previous press, which a cover hold counts from.
     skipped_at: Option<Instant>,
+    /// Since when no session counts while the card still shows.
+    gap_since: Option<Instant>,
 }
 
 impl NowPlayingCard {
@@ -375,8 +384,21 @@ impl NowPlayingCard {
         if source.is_none() {
             next = None;
         }
-        if let Some(reading) = controls.take_reading() {
-            next = reading;
+        match controls.take_reading() {
+            Some(None) if source.is_some() && self.track.is_some() => {
+                self.gap_since.get_or_insert(now);
+            }
+            Some(reading) => {
+                next = reading;
+                self.gap_since = None;
+            }
+            None => {}
+        }
+        if let Some(since) = self.gap_since
+            && (source.is_none() || now.duration_since(since) >= GAP_GRACE)
+        {
+            next = None;
+            self.gap_since = None;
         }
         if let (Some(shown), Some(song)) = (&self.track, &next)
             && waits_for_cover(shown, song)
@@ -388,7 +410,7 @@ impl NowPlayingCard {
                 .skipped_at
                 .filter(|at| now.saturating_duration_since(*at) <= PRESS_WINDOW)
                 .map_or(since, |at| since.min(at));
-            if now.duration_since(since) < ART_HOLD {
+            if self.gap_since.is_some() || now.duration_since(since) < ART_HOLD {
                 self.held = Some((song.clone(), since));
                 return false;
             }
@@ -405,6 +427,11 @@ impl NowPlayingCard {
         self.held
             .as_ref()
             .map(|(_, since)| ART_HOLD.saturating_sub(since.elapsed()))
+    }
+
+    /// Whether the card shows a song while no session counts.
+    pub fn in_gap(&self) -> bool {
+        self.gap_since.is_some()
     }
 
     /// The track the card shows; `None` while the card is hidden.
@@ -749,14 +776,73 @@ mod tests {
     }
 
     #[test]
-    fn the_card_hides_without_a_session_that_counts() {
+    fn the_card_hides_3_s_into_a_gap_without_a_session_that_counts() {
         let fake = FakeControls::default();
         let mut card = card(&fake);
+        let start = Instant::now();
+        let ms = Duration::from_millis;
         fake.read(Some(track("Spotify.exe", "Song", "Band", true)));
-        card.sync(Some(CardSource::AnyApp), true);
+        card.sync_at(Some(CardSource::AnyApp), true, start);
         fake.read(None);
-        assert!(card.sync(Some(CardSource::AnyApp), true));
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start));
+        fake.read(None);
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(1000)));
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(2999)));
+        assert!(card.sync_at(Some(CardSource::AnyApp), true, start + ms(3000)));
         assert_eq!(card.track(), None);
+    }
+
+    /// A cover hold that runs out during a gap keeps the shown song, so the
+    /// held one never slides in only for the gap to hide it.
+    #[test]
+    fn a_cover_hold_that_ends_in_a_session_gap_keeps_the_shown_song() {
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let source = || Some(CardSource::AnyApp);
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
+        card.sync_at(source(), true, start);
+        card.send_at(Transport::Next, start);
+        fake.read(Some(track("Spotify.exe", "Two", "Band", true)));
+        assert!(!card.sync_at(source(), true, start));
+        fake.read(None);
+        assert!(!card.sync_at(source(), true, start + ms(1500)));
+        assert!(!card.sync_at(source(), true, start + ART_HOLD));
+        assert_eq!(card.track().map(|t| t.title.as_str()), Some("One"));
+        assert!(card.sync_at(source(), true, start + ms(4500)));
+        assert_eq!(card.track(), None);
+    }
+
+    /// Spotify drops its session for about 1 s when it rewrites a title
+    /// (Windows debug log, 2026-11-16), which hid and showed the card.
+    #[test]
+    fn a_session_gap_under_3_s_keeps_the_shown_song() {
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let start = Instant::now();
+        let ms = Duration::from_millis;
+        let hurting = |title: &str| track("Spotify.exe", title, "SG Lewis", true);
+        fake.read(Some(hurting("Hurting")));
+        card.sync_at(Some(CardSource::AnyApp), true, start);
+        fake.read(None);
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(10)));
+        fake.read(Some(hurting("Hurting")));
+        assert!(
+            !card.sync_at(Some(CardSource::AnyApp), true, start + ms(1000)),
+            "the same song came back"
+        );
+
+        fake.read(None);
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(5000)));
+        assert!(!card.sync_at(Some(CardSource::AnyApp), true, start + ms(7900)));
+        assert_eq!(card.track().map(|t| t.title.as_str()), Some("Hurting"));
+        fake.read(Some(hurting("Hurting (feat. AlunaGeorge)")));
+        assert!(card.sync_at(Some(CardSource::AnyApp), true, start + ms(8000)));
+        assert_eq!(
+            card.track().map(|t| t.title.as_str()),
+            Some("Hurting (feat. AlunaGeorge)")
+        );
     }
 
     #[test]
