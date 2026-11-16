@@ -9,8 +9,8 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IncomingCover, OutgoingSong, SlideLook, SlidLine } from "track_slide.slint";
 import { Strings } from "strings.slint";
-import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, MenuState, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
+import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SourceLook, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
+import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, SourceMenuRow, MenuState, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
 
 // The preset row under the source (spec S260, S264): Presets, the name of
 // the preset picked last on a line under it; its menu lists every
@@ -155,6 +155,7 @@ component PresetPicker inherits Rectangle {
 // Several Apps.
 component SourceMenu inherits Rectangle {
     in property <[string]> sources;
+    in property <[SourceLook]> looks;
     in property <int> current;
     callback selected(int);
     callback several-apps-requested();
@@ -235,7 +236,7 @@ component SourceMenu inherits Rectangle {
     menu := PopupWindow {
         x: -MenuRoom.margin;
         y: root.height + 4px - MenuRoom.margin;
-        width: max(root.width + 2 * MenuRoom.margin, 220px + 2 * MenuRoom.margin, panel.preferred-width);
+        width: max(270px + 2 * MenuRoom.margin, panel.preferred-width);
         close-policy: close-on-click-outside;
 
         panel := MenuPanel {
@@ -244,11 +245,12 @@ component SourceMenu inherits Rectangle {
                 menu.close();
             }
 
-            for source[index] in root.sources: MenuRow {
+            for source[index] in root.sources: SourceMenuRow {
                 index: index;
                 text: source;
-                checks: true;
                 checked: index == root.current;
+                look: root.looks[index];
+                above: root.looks[max(index - 1, 0)].kind;
                 current <=> panel.current;
                 keyboard <=> panel.keyboard;
                 pulse: panel.pulse;
@@ -261,6 +263,7 @@ component SourceMenu inherits Rectangle {
             MenuDivider { }
 
             MenuRow {
+                height: 24px;
                 index: root.sources.length;
                 text: Strings.source-mix-more;
                 check-column: true;
@@ -707,6 +710,8 @@ export component TrayFlyout inherits Window {
     in property <bool> mark-breathes;
     in property <string> status;
     in property <[string]> sources;
+    // Each source's section and icon, in the order of sources.
+    in property <[SourceLook]> source-looks;
     in property <int> source-index;
     in property <bool> source-is-input;
     // The chosen input device's channel pairs; none up to two channels.
@@ -1126,6 +1131,7 @@ export component TrayFlyout inherits Window {
                                             padding-left: -2px;
                                             SourceMenu {
                                                 sources: root.sources;
+                                                looks: root.source-looks;
                                                 current: root.source-index;
                                                 selected(index) => {
                                                     root.source-selected(index);
