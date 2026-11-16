@@ -20986,6 +20986,37 @@ mod tests {
         assert_eq!(row().accessible_expanded(), Some(true), "Expand opened it");
     }
 
+    /// A row's options button hides again once the pointer leaves, even after
+    /// a click on the row's slider left the slider with the focus: only the
+    /// keyboard's focus keeps it shown, as on the Mac.
+    #[test]
+    fn a_click_on_a_rows_slider_leaves_no_options_button_behind() {
+        let app = narrow_app(MockBackend::new());
+        let window = app.main.window();
+        let options = app
+            .main
+            .global::<crate::Strings>()
+            .invoke_speaker_options("Speakers".into());
+        let button =
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &options)
+                .next()
+                .expect("the Speakers row's options button");
+        let (at, size) = (button.absolute_position(), button.size());
+        let inked = || {
+            let pixel = pixels(window);
+            (0..size.width as i32)
+                .flat_map(|x| (0..size.height as i32).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel(at.x + x as f32, at.y + y as f32)[0] < 200)
+                .count()
+        };
+        assert_eq!(inked(), 0, "hidden before the pointer comes");
+        click(window, 500.0, at.y + 28.0);
+        click(window, 400.0, 640.0);
+        advance_clock(Duration::from_secs(1));
+        draw_frames_at(776, 680);
+        assert_eq!(inked(), 0, "hidden again after the pointer left");
+    }
+
     /// With many hidden speakers Settings scrolls, so its last box, Check
     /// Setup, can still be reached at the bottom of a window that fits the screen.
     #[test]
