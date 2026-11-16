@@ -258,21 +258,31 @@ extension AppDelegate {
     /// relaunch without it still shows that name.
     func rememberZoneNames() {
         var listed: [String: String] = [:]
+        var icons: [String: String] = [:]
         for key in zones.flatMap(\.members) {
             let name = listedName(key)
             if !name.isEmpty { listed[key] = name }
+            if let member = memberState(key), let icon = listedSymbol(member, name: name) { icons[key] = icon.rawValue }
         }
-        let named = SpeakerZone.remembering(listed, in: zones)
+        let named = SpeakerZone.remembering(listed, icons: icons, in: zones)
         if named != zones { zones = named }
     }
 
+    /// A member that isn't listed keeps the glyph its zone remembered, else a speaker's.
     private func memberSymbol(_ member: ZoneMemberState, name: String) -> DeviceIcon {
+        listedSymbol(member, name: name)
+            ?? zones.first { $0.members.contains(member.key) }?.memberIcons?[member.key].flatMap(DeviceIcon.init(rawValue:))
+            ?? .speaker
+    }
+
+    /// The glyph of a member listed now; nil for a local device that isn't.
+    private func listedSymbol(_ member: ZoneMemberState, name: String) -> DeviceIcon? {
         switch member.kind {
         case .airplay: return SpeakerTag.airplay.symbol(name: name)
         case .cast: return SpeakerTag.cast.symbol(name: name)
         case .local:
             // The rows pick a local badge by the device's own name, as `Speaker.symbol` does.
-            guard let device = localDevices[member.appID] else { return SpeakerTag.other.symbol(name: name) }
+            guard let device = localDevices[member.appID] else { return nil }
             return SpeakerTag(transport: device.transport).symbol(name: device.name.isEmpty ? name : device.name)
         }
     }
