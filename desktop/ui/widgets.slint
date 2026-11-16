@@ -71,7 +71,9 @@ export global Fluent {
     // A list row under the pointer, as the Mac's: primary at 5 %, in over
     // 80 ms and out at once.
     out property <brush> row-hover: Tokens.text.with-alpha(0.05);
-    out property <length> radius-row: 9px;
+    // Dark takes more, as the Mac's dark plate steps further off its window.
+    out property <brush> row-hover-dark: Tokens.text.with-alpha(0.08);
+    out property <length> radius-row: 10px;
     out property <duration> row-hover-in: 80ms;
     // An open list's block (Presets), as the Mac's openRowFill.
     out property <brush> open-row: Tokens.text.with-alpha(0.04);
@@ -2909,9 +2911,9 @@ export global MenuRoom {
         return clamp(at + size > room ? flip - size : at, 0px, max(0px, room - size));
     }
 
-    // A menu's height: 32 px rows, 9 px dividers, 4 px padding at each end.
+    // A menu's height: 24 px rows, as the Mac's, 9 px dividers, 4 px padding at each end.
     public pure function rows(count: int, dividers: int) -> length {
-        return count * 32px + dividers * 9px + 8px;
+        return count * 24px + dividers * 9px + 8px;
     }
 }
 
@@ -3031,7 +3033,7 @@ export component MenuPanel inherits FocusScope {
         background: Tokens.surface;
         border-width: 1px;
         border-color: Fluent.stroke;
-        border-radius: 8px;
+        border-radius: 10px;
         drop-shadow-blur: 6px;
         drop-shadow-offset-y: 2px;
         drop-shadow-color: #00000038;
@@ -3095,7 +3097,7 @@ export component MenuRow inherits Rectangle {
         }
     }
 
-    height: 32px;
+    height: 24px;
     border-radius: Fluent.radius-control;
     background: root.selected ? Fluent.hover : transparent;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
@@ -3131,7 +3133,7 @@ export component MenuRow inherits Rectangle {
         if root.checks || root.check-column: Glyph {
             width: 14px;
             glyph: root.checks && root.checked ? Glyphs.check : "";
-            color: Tokens.teal-text;
+            color: Tokens.text;
         }
 
         if root.icon.width > 0: Rectangle {
@@ -3457,7 +3459,7 @@ export component SpeakerRow inherits Rectangle {
     }
 
     border-radius: Fluent.radius-row;
-    background: !root.grouped && hover.has-hover ? Fluent.row-hover : transparent;
+    background: !root.grouped && hover.has-hover ? (Tokens.dark ? Fluent.row-hover-dark : Fluent.row-hover) : transparent;
     animate background {
         duration: hover.has-hover ? Fluent.row-hover-in : 0ms;
         easing: linear;
