@@ -271,7 +271,7 @@ struct Models {
     sources: Rc<VecModel<SharedString>>,
     source_looks: Rc<VecModel<SourceLook>>,
     /// Each app source's icon by source ID, and each executable's by path.
-    app_icons: RefCell<HashMap<String, (u32, slint::Image)>>,
+    app_icons: RefCell<HashMap<String, (u32, slint::Image, std::time::Instant)>>,
     file_icons: RefCell<HashMap<(std::path::PathBuf, u32), slint::Image>>,
     /// The chosen input device's channel pairs; empty up to two channels.
     input_pairs: Rc<VecModel<SharedString>>,
@@ -2319,7 +2319,9 @@ impl App {
     /// an app whose icon can't be read, which the menu draws as a glyph.
     fn app_icon(&self, id: &str, size: u32) -> slint::Image {
         let m = &self.models;
-        cached_app_icon(&m.app_icons, id, size, || self.read_app_icon(id, size))
+        cached_app_icon(&m.app_icons, id, size, std::time::Instant::now(), || {
+            self.read_app_icon(id, size)
+        })
     }
 
     fn read_app_icon(&self, id: &str, size: u32) -> slint::Image {
@@ -7062,25 +7064,26 @@ fn update_buttons(message: &NoticeMessage) -> ModelRc<UpdateButton> {
     ModelRc::new(VecModel::from(buttons))
 }
 
-/// The icon of the app source `id` at `size` from `cache`, else `read`; a blank
-/// one is not kept, so the icon shows once its app runs.
+/// The icon of the app source `id` at `size` from `cache`, else `read` and
+/// kept; a blank one is read again 2 s on, so the icon shows once its app runs
+/// without a read on every state refresh.
 fn cached_app_icon(
-    cache: &RefCell<HashMap<String, (u32, slint::Image)>>,
+    cache: &RefCell<HashMap<String, (u32, slint::Image, std::time::Instant)>>,
     id: &str,
     size: u32,
+    now: std::time::Instant,
     read: impl FnOnce() -> slint::Image,
 ) -> slint::Image {
-    if let Some((at, icon)) = cache.borrow().get(id)
+    if let Some((at, icon, read_at)) = cache.borrow().get(id)
         && *at == size
+        && (icon.size().width > 0 || now.duration_since(*read_at) < Duration::from_secs(2))
     {
         return icon.clone();
     }
     let icon = read();
-    if icon.size().width > 0 {
-        cache
-            .borrow_mut()
-            .insert(id.to_owned(), (size, icon.clone()));
-    }
+    cache
+        .borrow_mut()
+        .insert(id.to_owned(), (size, icon.clone(), now));
     icon
 }
 
@@ -7089,25 +7092,33 @@ mod tests {
     use super::*;
     use crate::ui_model::{MOCK_CAST_HOLD, MockBackend};
 
-    #[test]
-    fn an_app_icon_not_read_yet_is_read_again_once_its_app_runs() {
-        let cache = RefCell::default();
-        let id = "app:0:Spotify.exe";
-        let blank = cached_app_icon(&cache, id, 16, slint::Image::default);
-        assert_eq!(blank.size().width, 0);
-        let icon = cached_app_icon(&cache, id, 16, || {
-            slint::Image::from_rgba8(slint::SharedPixelBuffer::new(16, 16))
-        });
-        assert_eq!(
-            icon.size().width,
-            16,
-            "the running app's icon replaces the blank one"
-        );
-    }
     use std::sync::PoisonError;
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
     use slint::platform::{Key, PointerEventButton, WindowEvent};
+
+    #[test]
+    fn an_app_icon_not_read_yet_is_read_again_at_most_every_2_s() {
+        let cache = RefCell::default();
+        let id = "app:0:Spotify.exe";
+        let start = std::time::Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        let icon = || slint::Image::from_rgba8(slint::SharedPixelBuffer::new(16, 16));
+        let blank = cached_app_icon(&cache, id, 16, at(0), slint::Image::default);
+        assert_eq!(blank.size().width, 0);
+        let soon = cached_app_icon(&cache, id, 16, at(1), icon);
+        assert_eq!(
+            soon.size().width,
+            0,
+            "a blank icon is read again only after 2 s"
+        );
+        let later = cached_app_icon(&cache, id, 16, at(3), icon);
+        assert_eq!(
+            later.size().width,
+            16,
+            "the running app's icon replaces the blank one"
+        );
+    }
 
     #[test]
     fn a_covers_image_shares_its_pixels_and_is_made_once_per_cover() {
