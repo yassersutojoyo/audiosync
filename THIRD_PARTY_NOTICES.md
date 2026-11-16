@@ -405,9 +405,9 @@ deny check licenses` against `cast/deny.toml`.
 
 ## Trademarks
 
-AirPlay is a trademark of Apple Inc.; the AirPlay icon in the app is Apple's
-SF Symbol, used as the system provides it. The Bluetooth® word mark and logos
-are registered trademarks owned by Bluetooth SIG, Inc.; the app draws the
-Bluetooth rune in code (`BluetoothRune` in `Sources/AudioSync/MenuBar.swift`)
-only to mark speakers connected to this Mac over Bluetooth. AudioSync is not
+AirPlay is a trademark of Apple Inc. The Bluetooth® word mark and logos are
+registered trademarks owned by Bluetooth SIG, Inc. The app's AirPlay icon and
+Bluetooth rune are its own drawings (`brand/icons`, drawn in code by
+`Sources/AudioSync/DeviceIcons.swift`), used only to mark speakers reached over
+AirPlay or connected to this Mac over Bluetooth. AudioSync is not
 affiliated with or endorsed by either company.

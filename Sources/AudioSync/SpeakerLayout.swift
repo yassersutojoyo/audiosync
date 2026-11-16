@@ -43,36 +43,34 @@ enum SpeakerTag: Equatable {
         }
     }
 
-    /// The small SF Symbol after a connected speaker's name. Bluetooth has no
-    /// SF Symbol: `SpeakerTypeIcon` draws the Bluetooth rune instead
-    /// (`BluetoothRune` in MenuBar.swift); this fallback is never shown for it.
-    /// Thunderbolt avoids `bolt`, which already marks auto-connect.
-    var typeSymbol: String {
+    /// The small badge after a connected speaker's name (brand/icons).
+    /// Thunderbolt and FireWire take the cable, as `bolt` already marks auto-connect.
+    var typeSymbol: DeviceBadge {
         switch self {
-        case .airplay, .systemAirPlay: return "airplay.audio"
-        case .cast: return "dot.radiowaves.right"
-        case .bluetooth: return "wave.3.right"
-        case .usb: return "cable.connector"
-        case .thunderbolt, .firewire: return "cable.connector.horizontal"
-        case .hdmi, .displayPort: return "display"
-        case .avb: return "network"
-        case .builtIn: return "laptopcomputer"
-        case .pci, .virtual, .aggregate, .other: return "hifispeaker"
+        case .airplay, .systemAirPlay: return .airplay
+        case .cast: return .cast
+        case .bluetooth: return .bluetooth
+        case .usb: return .usb
+        case .thunderbolt, .firewire: return .cable
+        case .hdmi, .displayPort: return .display
+        case .avb: return .network
+        case .builtIn: return .laptop
+        case .pci, .virtual, .aggregate, .other: return .speaker
         }
     }
 
-    /// The SF Symbol in the speaker's round badge; `name` is the name macOS
+    /// The glyph in the speaker's round icon; `name` is the name macOS
     /// reports. Over Bluetooth only the name tells headphones from a speaker,
     /// by the rule calibration uses (`isHeadphoneName`).
-    func symbol(name: String) -> String {
+    func symbol(name: String) -> DeviceIcon {
         switch self {
-        case .airplay: return "homepod.fill"
-        case .cast: return "hifispeaker.fill"
-        case .builtIn: return "laptopcomputer"
-        case .bluetooth: return Self.isHeadphoneName(name) ? "headphones" : "hifispeaker.fill"
-        case .hdmi, .displayPort: return "display"
-        case .usb, .thunderbolt: return "cable.connector"
-        case .systemAirPlay, .firewire, .pci, .avb, .virtual, .aggregate, .other: return "hifispeaker.fill"
+        case .airplay: return .smartSpeaker
+        case .cast, .systemAirPlay, .firewire, .pci, .avb: return .speaker
+        case .builtIn: return .laptop
+        case .bluetooth: return Self.isHeadphoneName(name) ? .headphones : .speaker
+        case .hdmi, .displayPort: return .monitor
+        case .usb, .thunderbolt: return .usb
+        case .virtual, .aggregate, .other: return .device
         }
     }
 

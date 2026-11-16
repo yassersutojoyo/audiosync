@@ -72,7 +72,7 @@ fn a_notice_with_a_heading_shows_it_semibold_over_its_text() {
         .find("text: notice.heading;")
         .expect("the heading line");
     let heading = &stack[at..at + 200];
-    assert!(heading.contains("font-weight: 600;"));
+    assert!(heading.contains("font-weight: Fluent.weight-semibold;"));
     assert!(
         stack
             .find("text: notice.message;")
@@ -199,7 +199,11 @@ fn master_volumes_number_keeps_1_px_inside_the_rows_edge() {
 fn the_equalizer_switch_reads_equalizer_as_a_headline() {
     let switch = component(include_str!("../../ui/widgets.slint"), "ToggleSwitch");
     assert!(switch.contains("in property <bool> headline;"));
-    assert!(switch.contains("font-weight: root.headline ? 600 : 400;"));
+    assert!(
+        switch.contains(
+            "font-weight: root.headline ? Fluent.weight-semibold : Fluent.weight-regular;"
+        )
+    );
     let eq = include_str!("../../ui/equalizer.slint");
     let at = eq.find("power := ToggleSwitch {").expect("the switch");
     assert!(eq[at..at + 200].contains("headline: true;"));

@@ -103,8 +103,14 @@ fn a_playing_speakers_name_keeps_the_regular_weight() {
     for row in ["SpeakerRow", "ZoneMemberRow"] {
         let body = component(widgets, row);
         let at = body.find("text: root.item.name;").expect(row);
-        assert!(body[at..at + 200].contains("font-weight: 400;"), "{row}");
-        assert!(!body.contains("root.item.plays ? 600"), "{row}");
+        assert!(
+            body[at..at + 200].contains("font-weight: Fluent.weight-regular;"),
+            "{row}"
+        );
+        assert!(
+            !body.contains("root.item.plays ? Fluent.weight-semibold"),
+            "{row}"
+        );
     }
 }
 
@@ -187,6 +193,53 @@ fn text_is_segoe_ui_variable_on_windows_and_inter_elsewhere() {
     }
 }
 
+/// Windows sets the Mac's regular, medium and semibold heavier, so its text
+/// carries the ink the Mac's does at 1:1; Inter keeps the Mac's numbers, and
+/// every weight and window default comes from Fluent.
+// covers: S450
+#[test]
+fn text_weights_are_heavier_on_windows_and_come_from_fluent() {
+    let fluent = component(include_str!("../../ui/widgets.slint"), "Fluent");
+    for (role, windows, elsewhere) in [
+        ("regular", 590, 400),
+        ("medium", 650, 500),
+        ("semibold", 700, 600),
+    ] {
+        assert!(fluent.contains(&format!(
+            "out property <int> weight-{role}: Platform.os == OperatingSystemType.windows ? {windows} : {elsewhere};"
+        )));
+    }
+    for (name, source) in [
+        ("main", include_str!("../../ui/main.slint")),
+        ("flyout", include_str!("../../ui/flyout.slint")),
+        ("widgets", include_str!("../../ui/widgets.slint")),
+        ("equalizer", include_str!("../../ui/equalizer.slint")),
+        ("settings", include_str!("../../ui/settings.slint")),
+        ("dialogs", include_str!("../../ui/dialogs.slint")),
+        ("setup", include_str!("../../ui/setup.slint")),
+        ("remote", include_str!("../../ui/remote.slint")),
+    ] {
+        for literal in ["400", "500", "600", "700"] {
+            assert!(
+                !source.contains(&format!("font-weight: {literal}")),
+                "{name}: {literal}"
+            );
+            let outside_fluent = source.replace(fluent.as_str(), "");
+            assert!(
+                !outside_fluent.contains(&format!("? {literal} :")),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            source.matches("default-font-family: Fluent.font;").count(),
+            source
+                .matches("default-font-weight: Fluent.weight-regular;")
+                .count(),
+            "{name}"
+        );
+    }
+}
+
 /// In the open Presets list with none saved, No Presets, the caption and
 /// Save as Preset… start on the Presets label's column, as the Mac's
 /// PresetListLayout puts them.
@@ -264,4 +317,39 @@ fn no_text_overlaps_another_in_the_default_window() {
             );
         }
     }
+}
+
+/// The source button shows the chosen app's own icon, as the Mac's does, and
+/// keeps the speaker or microphone glyph for anything without one; Presets
+/// shows the stacked squares.
+// covers: S450
+#[test]
+fn the_source_button_shows_the_chosen_apps_icon_and_presets_the_stack() {
+    let menu = component(include_str!("../../ui/main.slint"), "SourceMenu");
+    assert!(menu.contains("if root.looks[root.index].icon.width > 0: Rectangle {"));
+    assert!(menu.contains("source: root.looks[root.index].icon;"));
+    assert!(menu.contains("if root.looks[root.index].icon.width == 0: Glyph {"));
+    let glyphs = component(include_str!("../../ui/widgets.slint"), "Glyphs");
+    assert!(glyphs.contains(r#"out property <string> presets: "\u{E81E}";"#));
+}
+
+/// The header sits 5 px higher than the gap under the title row gave it, as
+/// the Mac's at 1:1 (gear top 43, card top 86), while the columns stay put.
+// covers: S450
+#[test]
+fn the_header_sits_as_high_as_the_macs_and_the_columns_stay() {
+    use i_slint_backend_testing::ElementHandle;
+    use slint::ComponentHandle;
+    let app = app_over(MockBackend::new());
+    app.main.show().expect("the main window shows headless");
+    app.poll();
+    let top = |id: &str| {
+        ElementHandle::find_by_element_id(&app.main, id)
+            .next()
+            .map(|element| element.absolute_position().y)
+            .unwrap_or_else(|| panic!("{id}"))
+    };
+    let gear = top("MainWindow::gear");
+    let column = top("MainWindow::left-column");
+    assert_eq!((gear, column), (33.0, 84.0), "gear, then the left column");
 }

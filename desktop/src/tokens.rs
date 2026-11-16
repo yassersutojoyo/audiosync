@@ -67,6 +67,11 @@ pub const COLORS: &[ColorToken] = &[
         dark: [43, 43, 43],
     },
     ColorToken {
+        name: "playingDisc",
+        light: [20, 113, 103],
+        dark: [20, 113, 103],
+    },
+    ColorToken {
         name: "playingRow",
         light: [237, 247, 246],
         dark: [42, 52, 51],

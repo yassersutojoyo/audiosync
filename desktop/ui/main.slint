@@ -10,8 +10,8 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IconLook, IncomingCover, OutgoingSong, SlideLook, SlidLine, TrackMotion } from "track_slide.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, MenuDivider, MenuKey, MenuNote, MenuRoom, MenuState, MenuPanel, MenuRepaint, MenuRow, TextField, FadeScrollView, FoldPane, BrandMark, Card, CardTitle, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, SourceLook, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
+import { AirPlayDelayControls, Announcer, MenuDivider, MenuKey, MenuNote, MenuRoom, MenuState, MenuPanel, MenuRepaint, MenuRow, SourceMenuRow, TextField, FadeScrollView, FoldPane, BrandMark, Card, CardTitle, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -45,6 +45,7 @@ global MainColumns {
 // teal icon, its name and a chevron, opening the list of sources.
 component SourceMenu inherits Rectangle {
     in property <[string]> sources;
+    in property <[SourceLook]> looks;
     in property <int> index;
     in property <bool> is-input;
     in property <[MixAppItem]> mix-apps;
@@ -105,7 +106,18 @@ component SourceMenu inherits Rectangle {
                 padding-bottom: 8px;
                 spacing: 8px;
 
-                Glyph {
+                // The chosen app's own icon, as the Mac's button shows it.
+                if root.looks[root.index].icon.width > 0: Rectangle {
+                    width: 20px;
+
+                    Image {
+                        width: 16px;
+                        height: 16px;
+                        source: root.looks[root.index].icon;
+                    }
+                }
+
+                if root.looks[root.index].icon.width == 0: Glyph {
                     glyph: root.is-input ? Glyphs.microphone : Glyphs.volume-high;
                     color: Tokens.teal-text;
                     font-size: 20px;
@@ -132,9 +144,9 @@ component SourceMenu inherits Rectangle {
     // The Mac's source menu: the sources, then Several Apps, whose rows
     // unfold under it.
     menu := PopupWindow {
-        x: -MenuRoom.margin;
+        x: 10px - MenuRoom.margin;
         y: root.height + 4px - MenuRoom.margin;
-        width: max(root.width + 2 * MenuRoom.margin, 240px + 2 * MenuRoom.margin, panel.preferred-width);
+        width: max(270px + 2 * MenuRoom.margin, panel.preferred-width);
         close-policy: close-on-click-outside;
 
         panel := MenuPanel {
@@ -147,11 +159,12 @@ component SourceMenu inherits Rectangle {
                 }
             }
 
-            for name[i] in root.sources: MenuRow {
+            for name[i] in root.sources: SourceMenuRow {
                 index: i;
                 text: name;
-                checks: true;
                 checked: i == root.index;
+                look: root.looks[i];
+                above: root.looks[max(i - 1, 0)].kind;
                 current <=> panel.current;
                 keyboard <=> panel.keyboard;
                 pulse: panel.pulse;
@@ -164,6 +177,7 @@ component SourceMenu inherits Rectangle {
             MenuDivider { }
 
             MenuRow {
+                height: 24px;
                 index: panel.sources;
                 text: Strings.source-mix-title;
                 checks: true;
@@ -743,7 +757,7 @@ component SpeakerSection inherits VerticalLayout {
                         text: Strings.in-zones.to-uppercase();
                         accessible-label: Strings.in-zones;
                         font-size: Tokens.font-size-subheadline;
-                        font-weight: 500;
+                        font-weight: Fluent.weight-medium;
                         horizontal-stretch: 0;
                     }
 
@@ -1243,7 +1257,7 @@ component PresetsCard inherits Rectangle {
                             Glyph {
                                 glyph: Glyphs.presets;
                                 color: Tokens.text;
-                                width: 16px;
+                                width: 20px;
                                 height: label.preferred-height;
                             }
 
@@ -1262,7 +1276,7 @@ component PresetsCard inherits Rectangle {
                             }
 
                             name := ChoiceLine {
-                                text: root.presets.length == 0 ? Strings.no-presets : root.current;
+                                text: root.current;
                             }
                         }
 
@@ -1333,9 +1347,9 @@ component PresetsCard inherits Rectangle {
                     }
                 }
 
-                // The names start 32 px in, on the Presets label's column, as on the Mac.
+                // The names start 36 px in, on the Presets label's column, as on the Mac.
                 rows := VerticalLayout {
-                    padding-left: 18px;
+                    padding-left: 22px;
                     padding-right: 6px;
                     padding-bottom: 6px;
 
@@ -1370,7 +1384,7 @@ component PresetsCard inherits Rectangle {
 
                         // Its width set, so the list's height counts every wrapped line.
                         empty-note := Text {
-                            width: root.width-given - 38px;
+                            width: root.width-given - 42px;
                             text: Strings.no-presets-hint;
                             font-size: Tokens.font-size-caption;
                             color: Tokens.secondary-text;
@@ -1482,7 +1496,7 @@ component PresetsCard inherits Rectangle {
                         padding-bottom: 6px;
 
                         save-note := Text {
-                            width: root.width-given - 38px;
+                            width: root.width-given - 42px;
                             text: root.note;
                             font-size: Tokens.font-size-caption;
                             color: Tokens.secondary-text;
@@ -1544,11 +1558,18 @@ component EqualizerCard inherits Rectangle {
         // The glyphs stay on the label's line when the curve's line shows.
         VerticalLayout {
             alignment: center;
-            icon := Glyph {
-                glyph: Glyphs.equalizer;
-                color: Tokens.text;
-                width: 16px;
+            // Turned upright: the Mac's sliders stand, the icon font's lie.
+            Rectangle {
+                width: 20px;
                 height: label.preferred-height;
+                transform-rotation: 90deg;
+
+                icon := Glyph {
+                    glyph: Glyphs.equalizer;
+                    color: Tokens.text;
+                    width: 20px;
+                    height: label.preferred-height;
+                }
             }
 
             Rectangle {
@@ -1680,7 +1701,7 @@ component QuickRow inherits Rectangle {
         Glyph {
             glyph: root.glyph;
             color: Tokens.text;
-            width: 16px;
+            width: 20px;
         }
 
         Text {
@@ -1789,8 +1810,11 @@ component CalibrationCard inherits VerticalLayout {
             }
         }
 
+        // What follows the row keeps to the column the row's fill reaches past.
         if root.privacy: HorizontalLayout {
             alignment: LayoutAlignment.start;
+            padding-left: 8px;
+            padding-right: 8px;
 
             Button {
                 changed has-focus => {
@@ -1804,14 +1828,21 @@ component CalibrationCard inherits VerticalLayout {
             }
         }
 
-        if root.zone != "": Text {
-            text: root.zone;
-            font-size: Tokens.font-size-body;
-            color: Tokens.text;
-            wrap: word-wrap;
+        if root.zone != "": HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+
+            Text {
+                text: root.zone;
+                font-size: Tokens.font-size-body;
+                color: Tokens.text;
+                wrap: word-wrap;
+            }
         }
 
         if root.volume != DeviceVolumeHint.none: VerticalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
             spacing: 4px;
             accessible-role: groupbox;
             accessible-label: Strings.calibrate-before-start;
@@ -1819,7 +1850,7 @@ component CalibrationCard inherits VerticalLayout {
             Text {
                 text: Strings.calibrate-before-start;
                 font-size: Tokens.font-size-caption;
-                font-weight: 600;
+                font-weight: Fluent.weight-semibold;
                 color: Tokens.secondary-text;
                 accessible-role: none;
             }
@@ -1873,6 +1904,8 @@ component CalibrationCard inherits VerticalLayout {
         }
 
         if root.left-out.length > 0: VerticalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
             spacing: 6px;
             accessible-role: groupbox;
             accessible-label: Strings.calibrate-all-left-out-title;
@@ -1883,7 +1916,7 @@ component CalibrationCard inherits VerticalLayout {
                 Text {
                     text: item.name;
                     font-size: Tokens.font-size-body;
-                    font-weight: 600;
+                    font-weight: Fluent.weight-semibold;
                     color: item.included ? Tokens.text : Tokens.secondary-text;
                     wrap: word-wrap;
                 }
@@ -1985,7 +2018,7 @@ component CalibrateAllSheet inherits FocusScope {
             Text {
                 text: root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
                 font-size: Tokens.font-size-title3;
-                font-weight: 600;
+                font-weight: Fluent.weight-semibold;
                 color: Tokens.text;
                 accessible-role: none;
             }
@@ -2028,7 +2061,7 @@ component CalibrateAllSheet inherits FocusScope {
                     Text {
                         text: root.status;
                         font-size: Tokens.font-size-body;
-                        font-weight: 600;
+                        font-weight: Fluent.weight-semibold;
                         color: Tokens.text;
                         horizontal-alignment: center;
                         wrap: word-wrap;
@@ -2077,7 +2110,7 @@ component CalibrateAllSheet inherits FocusScope {
                             Text {
                                 text: row.name;
                                 font-size: Tokens.font-size-body;
-                                font-weight: 600;
+                                font-weight: Fluent.weight-semibold;
                                 color: Tokens.text;
                                 wrap: word-wrap;
                             }
@@ -2397,7 +2430,7 @@ component NowPlayingCard inherits VerticalLayout {
                     old-text: root.outgoing.title;
                     sliding: root.slide.sliding;
                     font-size: Tokens.font-size-title3;
-                    font-weight: 600;
+                    font-weight: Fluent.weight-semibold;
                     offset: root.slide.title-offset;
                     fade: root.slide.title-fade;
                     old-offset: root.slide.old-text-offset;
@@ -2520,6 +2553,8 @@ export component MainWindow inherits Window {
     in property <bool> mark-breathes;
     in property <string> status;
     in property <[string]> sources;
+    // Each source's section and icon, in the order of sources.
+    in property <[SourceLook]> source-looks;
     in property <int> source-index;
     // The chosen input device's channel pairs; none up to two channels.
     in property <[string]> input-pairs;
@@ -2900,6 +2935,7 @@ export component MainWindow inherits Window {
     // White in light mode, as the Mac's window.
     background: Tokens.dark ? Tokens.background : Tokens.surface;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
 
     property <length> content-max-width: Fluent.left-column-wide + Fluent.column-gap + scroll.max-width;
@@ -2939,8 +2975,8 @@ export component MainWindow inherits Window {
 
     VerticalLayout {
         padding: Fluent.window-margin;
-        // The header 4 under the top row, as the Mac's under its title bar.
-        padding-top: title-row.height + 4px;
+        // The header as high as the Mac's at 1:1, a pixel into the top row.
+        padding-top: title-row.height - 1px;
         // The notices and the columns bring their gap above them, so a
         // notice opens and closes its gap with it.
         spacing: 0px;
@@ -3034,6 +3070,11 @@ export component MainWindow inherits Window {
             }
         }
 
+        // The 5 the header moved up, so the notices and columns stay put.
+        Rectangle {
+            height: 5px;
+        }
+
         if root.notices.length > 0: NoticeStack {
             eased: true;
             staying: root.notices-staying;
@@ -3102,6 +3143,7 @@ export component MainWindow inherits Window {
 
                                 source := SourceMenu {
                                     sources: root.sources;
+                                    looks: root.source-looks;
                                     index: root.source-index;
                                     is-input: root.source-is-input;
                                     changed has-focus => {
@@ -3190,7 +3232,7 @@ export component MainWindow inherits Window {
                     VerticalLayout {
                         padding-top: 16px;
                         // The number ends on the rows' chevron edge.
-                        padding-right: 8px;
+                        padding-right: 2px;
                         spacing: 4px;
 
                         // The slider's own label names it for Narrator.
@@ -3209,12 +3251,13 @@ export component MainWindow inherits Window {
                         MasterVolume {
                             // Past the last digit's bearing, as on the Mac.
                             padding-right: 1px;
-                            spacing: 8px;
                             // 8 px clear of the knob at 100.
                             number-gap: 16px;
                             button-size: 24px;
-                            // Its speaker centred over the rows' icons.
-                            padding-left: 4px;
+                            // Its speaker centred over the rows' icons and the track
+                            // starting on their labels' column.
+                            padding-left: -2px;
+                            spacing: -2px;
                             volume: root.master-volume;
                             waves: root.master-volume-waves;
                             mute-toggled => {
@@ -3236,11 +3279,15 @@ export component MainWindow inherits Window {
                         Divider { }
                     }
 
+                    // The rows reach 8 px past the column, as the Mac's do, so their
+                    // icons and labels line up with the master volume above.
                     VerticalLayout {
                         spacing: 6px;
+                        padding-left: -8px;
+                        padding-right: -8px;
 
                         PresetsCard {
-                            width-given: MainColumns.left(root.columns-width);
+                            width-given: MainColumns.left(root.columns-width) + 2 * 8px;
                             presets: root.presets;
                             current: root.current-preset;
                             can-save: root.can-save-preset;

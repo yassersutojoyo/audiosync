@@ -61,7 +61,7 @@ component SettingsBox inherits VerticalLayout {
             text: root.title;
             color: Tokens.secondary-text;
             font-size: Tokens.font-size-callout;
-            font-weight: 600;
+            font-weight: Fluent.weight-semibold;
             accessible-role: text;
             accessible-label: self.text;
         }
@@ -123,7 +123,7 @@ component Segment inherits Rectangle {
         text: root.text;
         color: Tokens.text;
         font-size: Tokens.font-size-callout;
-        font-weight: root.chosen ? 600 : 400;
+        font-weight: root.chosen ? Fluent.weight-semibold : Fluent.weight-regular;
         horizontal-alignment: center;
         vertical-alignment: center;
         accessible-role: none;
@@ -165,6 +165,7 @@ export component SettingsWindow inherits Window {
     background: Tokens.background;
     width: 460px;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     forward-focus: keys;
 
