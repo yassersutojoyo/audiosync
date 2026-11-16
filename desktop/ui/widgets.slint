@@ -438,9 +438,10 @@ export global Glyphs {
 
     // The icon font's Repeat reads poorly at 16 px, it has no circled
     // ellipsis (the Mac's options glyph) and its transport glyphs are
-    // outlines where the Mac's are filled, so these are drawn on Windows too.
+    // outlines where the Mac's are filled, so these are drawn on Windows too;
+    // its Presets, Equalizer, microphone and timer are filled where the Mac's are outlines.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted;
+        return glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause || glyph == root.volume-low || glyph == root.volume-mid || glyph == root.volume-high || glyph == root.volume-muted || glyph == root.presets || glyph == root.equalizer || glyph == root.microphone || glyph == root.timer;
     }
 
     // The Mac's gear and chevrons stand at about 1.5 pt strokes; the icon font's are 1 px.
@@ -497,8 +498,9 @@ export global Glyphs {
         if glyph == root.chevron-down {
             return "M3 6 L8 11 L13 6";
         }
+        // The Mac's slider.vertical.3: three tracks, each with its knob.
         if glyph == root.equalizer {
-            return "M4 2 V14 M8 2 V14 M12 2 V14";
+            return "M4 2 V14 M8 2 V14 M12 2 V14 M2.5 10.5 H5.5 M6.5 5 H9.5 M10.5 8 H13.5";
         }
         if glyph == root.timer {
             return "M8 3.5 A5.5 5.5 0 0 1 8 14.5 A5.5 5.5 0 0 1 8 3.5 Z M6.5 1.5 H9.5 M8 1.5 V3.5 M8 9 V6 M12 4.5 L13 3.5";
@@ -532,8 +534,9 @@ export global Glyphs {
         if glyph == root.repeat-one {
             return "M8 4 H10.5 Q13.5 4 13.5 7 V9 Q13.5 12 10.5 12 H5.5 Q2.5 12 2.5 9 V7 Q2.5 4 5.5 4 H6.25 M4.5 2.25 L6.25 4 L4.5 5.75 M7.25 7 L8.25 6.25 V9.75";
         }
+        // The Mac's square.stack.3d.up: a layer over two more.
         if glyph == root.presets {
-            return "M4 2 H12 V14 L8 10.75 L4 14 Z";
+            return "M8 1.5 L14.5 5 L8 8.5 L1.5 5 Z M1.5 8.25 L8 11.75 L14.5 8.25 M1.5 11.25 L8 14.75 L14.5 11.25";
         }
         if glyph == root.check {
             return "M3 8.5 L6.5 12 L13 4.5";
