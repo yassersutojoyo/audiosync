@@ -29,9 +29,10 @@ export global Fluent {
     out property <string> display-font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Display" : "Inter";
     // The Mac's regular, medium and semibold. Windows sets them heavier: its hinted
     // 1x stems carry less ink than the Mac's Retina text seen at 1:1 (matched per string).
-    out property <int> weight-regular: Platform.os == OperatingSystemType.windows ? 590 : 400;
-    out property <int> weight-medium: Platform.os == OperatingSystemType.windows ? 650 : 500;
-    out property <int> weight-semibold: Platform.os == OperatingSystemType.windows ? 700 : 600;
+    // Light text on a dark window blooms wider under DirectWrite, so dark takes less of it.
+    out property <int> weight-regular: Platform.os == OperatingSystemType.windows ? (Tokens.dark ? 480 : 590) : 400;
+    out property <int> weight-medium: Platform.os == OperatingSystemType.windows ? (Tokens.dark ? 560 : 650) : 500;
+    out property <int> weight-semibold: Platform.os == OperatingSystemType.windows ? (Tokens.dark ? 640 : 700) : 600;
     // Cards, the flyout and the notices (overlay radius).
     out property <length> radius-card: 8px;
     // Buttons, chips and the rows inside a card (control radius).
