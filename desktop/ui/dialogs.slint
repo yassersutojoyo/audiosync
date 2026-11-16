@@ -446,10 +446,11 @@ export component CastAddressSheet inherits FocusScope {
 
     Rectangle {
         background: Tokens.surface;
-        border-width: 1px;
+        // As the Mac's sheet: no edge or shadow on light, where the dimmed window sets it off.
+        border-width: Tokens.dark ? 1px : 0px;
         border-color: Fluent.stroke;
         border-radius: 20px;
-        drop-shadow-blur: 24px;
+        drop-shadow-blur: Tokens.dark ? 24px : 0px;
         drop-shadow-offset-y: 8px;
         drop-shadow-color: #00000040;
     }
@@ -482,7 +483,7 @@ export component CastAddressSheet inherits FocusScope {
         Text {
             text: Strings.cast-add-address-message;
             color: Tokens.secondary-text;
-            font-size: Tokens.font-size-callout;
+            font-size: Tokens.font-size-body;
             wrap: word-wrap;
         }
 
@@ -542,7 +543,8 @@ export component CastAddressSheet inherits FocusScope {
             }
 
             SmallButton {
-                height: 28px;
+                height: 26px;
+                font-size: Tokens.font-size-body;
                 text: Strings.cancel;
                 clicked => {
                     CastSheet.cancelled();
@@ -550,7 +552,8 @@ export component CastAddressSheet inherits FocusScope {
             }
 
             SmallButton {
-                height: 28px;
+                height: 26px;
+                font-size: Tokens.font-size-body;
                 text: CastSheet.checking ? Strings.cast-address-checking : Strings.add;
                 opacity: CastSheet.can-add ? 1 : Tokens.disabled-opacity;
                 accessible-enabled: CastSheet.can-add;

@@ -1181,6 +1181,7 @@ export component SmallButton inherits Rectangle {
     in property <string> text;
     // Shown while the pointer rests on it, and what Narrator adds.
     in property <string> tip;
+    in property <length> font-size: Tokens.font-size-callout;
     callback clicked();
 
     min-width: label.preferred-width + 20px;
@@ -1228,7 +1229,7 @@ export component SmallButton inherits Rectangle {
 
     label := Text {
         text: root.text;
-        font-size: Tokens.font-size-callout;
+        font-size: root.font-size;
         font-weight: Fluent.weight-medium;
         color: Fluent.house-text;
         horizontal-alignment: center;
