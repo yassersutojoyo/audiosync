@@ -19220,7 +19220,7 @@ do {
     let slimCast = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Cast.swift", encoding: .utf8)) ?? ""
     let slimNowPlaying = (try? String(contentsOfFile: "Sources/AudioSync/NowPlaying.swift", encoding: .utf8)) ?? ""
     check(slimAirPlay.contains("ArtPushDelay.wait(") && slimAirPlay.contains("if nowPlayingOnScreen, let before") && slimCast.contains("castArtDelay.isCurrent(")
-            && slimNowPlaying.contains("artFetches.start(") && slimNowPlaying.contains("timeoutInterval: 4") && slimNowPlaying.contains("running[$0.bundleID] ?? Self.isRunning"),
+            && slimNowPlaying.contains("artFetches.start(") && slimNowPlaying.contains("timeoutInterval: 4") && slimNowPlaying.contains("self.runningPlayers.runs($0.bundleID)"),
           "song change: the AirPlay and Cast covers wait for the slide, Spotify covers are fetched once, "
             + "and a reading's main-thread turn asks no running-app list")
 }
