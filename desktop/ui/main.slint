@@ -3773,6 +3773,7 @@ export component MainWindow inherits Window {
                                 if root.connected.length > 0: Divider { }
 
                                 AirPlayDelayControls {
+                                    width-given: scroll.width - root.scroll-gutter;
                                     delay-text: root.airplay-delay-text;
                                     pending: root.airplay-delay-pending;
                                     range-hint: root.airplay-delay-range-hint;

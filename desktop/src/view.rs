@@ -7154,6 +7154,22 @@ mod tests {
         slint::platform::update_timers_and_animations();
     }
 
+    /// Draws every headless window at `width` × `height` (logical pixels
+    /// at 1x), which builds what a resize rebuilt, as a shown window does.
+    fn draw_frames_at(width: u32, height: u32) {
+        slint::platform::update_timers_and_animations();
+        let windows: Vec<_> = HEADLESS_WINDOWS
+            .with(|windows| windows.borrow().iter().filter_map(Weak::upgrade).collect());
+        for window in windows {
+            window.set_size(slint::PhysicalSize::new(width, height));
+            window.draw_if_needed(|renderer| {
+                let mut pixels = vec![Rgb565Pixel::default(); (width * height) as usize];
+                renderer.render(&mut pixels, width as usize);
+            });
+        }
+        slint::platform::update_timers_and_animations();
+    }
+
     /// Presses and releases `key` in `window`, then draws a frame.
     pub(super) fn press(window: &slint::Window, key: impl Into<SharedString>) {
         let text: SharedString = key.into();
@@ -11564,6 +11580,59 @@ mod tests {
             left + width,
             view_left + view_width
         );
+    }
+
+    /// With Add by Address under it, the AirPlay delay's note shows whole
+    /// once the speaker list is scrolled to its end, at a short and a tall
+    /// window: its pane keeps the note's second line and its padding, and
+    /// the note ends above the button.
+    #[test]
+    fn the_airplay_delay_note_shows_whole_above_add_by_address() {
+        use i_slint_backend_testing::ElementHandle;
+        for height in [480, 900] {
+            let app = narrow_app(MockBackend::new());
+            advance_clock(Duration::from_millis(400));
+            draw_frames_at(776, height);
+            let list = element(&app, "MainWindow::scroll").expect("the speaker list");
+            let (at, size) = (list.absolute_position(), list.size());
+            let position =
+                slint::LogicalPosition::new(at.x + size.width / 2.0, at.y + size.height / 2.0);
+            let window = app.main.window();
+            window.dispatch_event(WindowEvent::PointerMoved { position });
+            window.dispatch_event(WindowEvent::PointerScrolled {
+                position,
+                delta_x: 0.0,
+                delta_y: -3000.0,
+            });
+            draw_frames_at(776, height);
+            let note = element(&app, "AirPlayDelayControls::hint").expect("the delay's note");
+            let pane = element(&app, "MainWindow::delay-pane").expect("the delay pane");
+            let add = ElementHandle::find_by_accessible_label(
+                &app.main,
+                &app.main.global::<Strings>().get_cast_add_address(),
+            )
+            .next()
+            .expect("Add by Address");
+            let note_bottom = note.absolute_position().y + note.size().height;
+            let pane_bottom = pane.absolute_position().y + pane.size().height;
+            assert!(
+                note.size().height > 20.0,
+                "the note's two lines: {}",
+                note.size().height
+            );
+            assert!(
+                note_bottom + 12.0 <= pane_bottom + 0.5,
+                "h {height}: note ends {note_bottom}, pane {pane_bottom}"
+            );
+            assert!(
+                note_bottom <= add.absolute_position().y,
+                "h {height}: note runs under the button"
+            );
+            assert!(
+                note_bottom <= at.y + size.height,
+                "h {height}: note past the list's end"
+            );
+        }
     }
 
     /// Speaker rows in one list step 52 px from badge to badge, divider

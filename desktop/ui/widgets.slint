@@ -2666,6 +2666,8 @@ export component AirPlayDelayControls inherits VerticalLayout {
     // Escape in the field or on a step: drop what was typed.
     callback cancelled();
     callback focus-changed(bool);
+    // The list's width, which the note's wrapped lines are measured at.
+    in property <length> width-given;
 
     spacing: 6px;
     padding-left: 12px;
@@ -2793,7 +2795,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     range-hint: root.range-hint;
                 }
 
-                SecondaryText {
+                // Its width set, so the pane's height counts every wrapped line.
+                hint := SecondaryText {
+                    width: root.width-given - 24px - (Fluent.name-inset - Fluent.row-padding-x);
                     text: Strings.airplay-delay-hint;
                 }
             }
