@@ -2302,6 +2302,14 @@ impl App {
                     }
                     app.apply_frame(window(app), name, Frame::Titled);
                 }),
+                WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }
+                    if name == "Settings" =>
+                {
+                    let weak = weak.clone();
+                    Timer::single_shot(Duration::ZERO, move || {
+                        with_app(&weak, App::fit_settings_room);
+                    });
+                }
                 // Slint reads the Windows accent and theme after this filter
                 // returns.
                 WindowEvent::ThemeChanged(_) => {
