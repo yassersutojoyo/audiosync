@@ -355,8 +355,8 @@ component CurveMenu inherits Rectangle {
                 pulse: panel.pulse;
                 done <=> panel.done;
                 activated => {
-                    menu.close();
                     root.rename();
+                    menu.close();
                 }
             }
 
