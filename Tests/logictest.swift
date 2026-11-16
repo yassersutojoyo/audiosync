@@ -1225,10 +1225,19 @@ do {
 
     let kinds: [SpeakerTag] = [.airplay, .systemAirPlay, .builtIn, .bluetooth, .usb, .hdmi, .displayPort,
                                .thunderbolt, .firewire, .pci, .avb, .virtual, .aggregate, .other]
-    let missing = kinds.filter { NSImage(systemSymbolName: $0.typeSymbol, accessibilityDescription: nil) == nil }
-    check(missing.isEmpty, "layout: every type icon is an existing SF Symbol", "\(missing)")
-    check(!kinds.contains { $0.typeSymbol.hasPrefix("bolt") },
-          "layout: no type icon is a bolt (that marks auto-connect)")
+    func fits(_ path: CGPath, _ size: CGFloat) -> Bool {
+        let bounds = path.boundingBoxOfPath
+        return !bounds.isEmpty && bounds.minX >= 0 && bounds.minY >= 0 && max(bounds.maxX, bounds.maxY) <= size + 0.001
+    }
+    let unfit = DeviceBadge.allCases.filter { !fits($0.path, DeviceBadge.size) }.map(\.rawValue)
+        + DeviceIcon.allCases.filter { !fits($0.path, DeviceIcon.size) }.map(\.rawValue)
+    check(unfit.isEmpty, "layout: every device badge and glyph draws inside its 12 or 18 pt grid", "\(unfit)")
+    func box(_ icon: DeviceIcon) -> [Double] {
+        let b = icon.path.boundingBoxOfPath
+        return [b.minX, b.minY, b.maxX, b.maxY].map { (Double($0) * 1000).rounded() / 1000 }
+    }
+    check(box(.laptop) == [1, 3, 17, 15] && box(.speaker) == [4, 1, 14, 17],
+          "layout: the glyphs are drawn 1:1 in points, straight edges on whole points")
     check(kinds.allSatisfy { $0.typeTint(.off) == .muted && $0.typeTint(.willPlay) == .muted },
           "layout: type icons are grey unless the speaker plays")
     check(SpeakerTag.airplay.typeTint(.playing) == .active && SpeakerTag.bluetooth.typeTint(.playing) == .active
@@ -1237,22 +1246,19 @@ do {
           "layout: a playing speaker's type icon takes its own color")
 
     // The badge icon follows the calibration rule: over Bluetooth only a headphone name means headphones.
-    check(SpeakerTag.bluetooth.symbol(name: "soundcore Select 4 Go") == "hifispeaker.fill"
-          && SpeakerTag.bluetooth.symbol(name: "JBL Flip 6") == "hifispeaker.fill"
-          && SpeakerTag.bluetooth.symbol(name: "AirPods Pro") == "headphones"
-          && SpeakerTag.bluetooth.symbol(name: "WH-1000XM5 Headphones") == "headphones"
-          && SpeakerTag.bluetooth.symbol(name: "Galaxy Buds2") == "headphones",
+    check(SpeakerTag.bluetooth.symbol(name: "soundcore Select 4 Go") == .speaker
+          && SpeakerTag.bluetooth.symbol(name: "JBL Flip 6") == .speaker
+          && SpeakerTag.bluetooth.symbol(name: "AirPods Pro") == .headphones
+          && SpeakerTag.bluetooth.symbol(name: "WH-1000XM5 Headphones") == .headphones
+          && SpeakerTag.bluetooth.symbol(name: "Galaxy Buds2") == .headphones,
           "layout: a Bluetooth speaker gets the speaker badge, Bluetooth headphones keep the headphones badge")
-    check(SpeakerTag.builtIn.symbol(name: "AirPods Pro") == "laptopcomputer"
-          && SpeakerTag.usb.symbol(name: "Desk Headphones") == "cable.connector"
-          && SpeakerTag.hdmi.symbol(name: "LG TV") == "display"
-          && SpeakerTag.airplay.symbol(name: "Kitchen") == "homepod.fill"
-          && SpeakerTag.cast.symbol(name: "Nest Audio") == "hifispeaker.fill"
-          && SpeakerTag.virtual.symbol(name: "Headset") == "hifispeaker.fill",
+    check(SpeakerTag.builtIn.symbol(name: "AirPods Pro") == .laptop
+          && SpeakerTag.usb.symbol(name: "Desk Headphones") == .usb
+          && SpeakerTag.hdmi.symbol(name: "LG TV") == .monitor
+          && SpeakerTag.airplay.symbol(name: "Kitchen") == .smartSpeaker
+          && SpeakerTag.cast.symbol(name: "Nest Audio") == .speaker
+          && SpeakerTag.virtual.symbol(name: "Headset") == .device,
           "layout: outside Bluetooth the badge depends on the transport only")
-    let badges = kinds.flatMap { [$0.symbol(name: "Speaker"), $0.symbol(name: "AirPods")] }
-        .filter { NSImage(systemSymbolName: $0, accessibilityDescription: nil) == nil }
-    check(badges.isEmpty, "layout: every badge icon is an existing SF Symbol", "\(badges)")
     check(SpeakerTag.isHeadphoneName("Living Room AirPods Pro") && SpeakerTag.isHeadphoneName("EARBUDS")
           && !SpeakerTag.isHeadphoneName("soundcore Select 4 Go") && !SpeakerTag.isHeadphoneName(""),
           "layout: a headphone word anywhere in the name, in any case, marks headphones")

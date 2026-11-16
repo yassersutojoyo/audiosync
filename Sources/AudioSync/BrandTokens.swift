@@ -38,6 +38,8 @@ enum BrandTokens {
         static let background = BrandRGB(red: 241 / 255, green: 247 / 255, blue: 246 / 255)
         /// Cards and the tray flyout.
         static let surface = BrandRGB(red: 255 / 255, green: 255 / 255, blue: 255 / 255)
+        /// A playing speaker's round icon behind its white device glyph: white on it is 5.85:1.
+        static let playingDisc = BrandRGB(red: 20 / 255, green: 113 / 255, blue: 103 / 255)
         /// A playing speaker's row: the brand teal at 8% on the surface, as on the Mac.
         static let playingRow = BrandRGB(red: 237 / 255, green: 247 / 255, blue: 246 / 255)
         /// Notice background: the Mac's orange notice tint (12%) on the surface.
@@ -86,6 +88,8 @@ enum BrandTokens {
         static let background = BrandRGB(red: 30 / 255, green: 30 / 255, blue: 30 / 255)
         /// Cards and the tray flyout.
         static let surface = BrandRGB(red: 43 / 255, green: 43 / 255, blue: 43 / 255)
+        /// A playing speaker's round icon behind its white device glyph: white on it is 5.85:1.
+        static let playingDisc = BrandRGB(red: 20 / 255, green: 113 / 255, blue: 103 / 255)
         /// A playing speaker's row: the brand teal at 8% on the surface, as on the Mac.
         static let playingRow = BrandRGB(red: 42 / 255, green: 52 / 255, blue: 51 / 255)
         /// Notice background: the Mac's orange notice tint (12%) on the surface.

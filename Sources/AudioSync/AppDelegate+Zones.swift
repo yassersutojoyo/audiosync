@@ -266,7 +266,7 @@ extension AppDelegate {
         if named != zones { zones = named }
     }
 
-    private func memberSymbol(_ member: ZoneMemberState, name: String) -> String {
+    private func memberSymbol(_ member: ZoneMemberState, name: String) -> DeviceIcon {
         switch member.kind {
         case .airplay: return SpeakerTag.airplay.symbol(name: name)
         case .cast: return SpeakerTag.cast.symbol(name: name)
