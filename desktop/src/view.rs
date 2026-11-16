@@ -17961,6 +17961,88 @@ mod tests {
         assert!(!app.flyout.window().is_visible());
     }
 
+    /// A press on the header band's empty middle, below the 32 px top row,
+    /// drags the main window, as the Mac's whole header moves its window.
+    #[test]
+    fn the_header_band_drags_the_main_window() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        let dragged = std::rc::Rc::new(std::cell::Cell::new(false));
+        let seen = dragged.clone();
+        app.main.on_drag_requested(move || seen.set(true));
+        draw_frames();
+        let header = ElementHandle::find_by_element_id(&app.main, "MainWindow::header")
+            .next()
+            .expect("the header band");
+        let (at, size) = (header.absolute_position(), header.size());
+        assert!(at.y >= 30.0, "the band sits under the top row: {}", at.y);
+        let x = app.main.window().size().width as f32 / 2.0;
+        let y = at.y + size.height / 2.0;
+        let window = app.main.window();
+        let position = slint::LogicalPosition::new(x, y);
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        });
+        assert!(dragged.get(), "a press at ({x}, {y}) on the header band drags the window");
+    }
+
+    /// Turning streaming on slides the switch's knob across while its track
+    /// turns teal, together over the same 250 ms, in the main window and the
+    /// tray panel, as the Mac's power switch.
+    #[test]
+    fn the_streaming_switch_knob_slides_with_its_track() {
+        use i_slint_backend_testing::{ElementHandle, ElementRoot};
+        fn slides<C: ElementRoot>(window: &C, name: &str) {
+            let switch = || {
+                ElementHandle::find_by_accessible_label(window, "Streaming")
+                    .next()
+                    .expect("the streaming switch")
+            };
+            let left = || {
+                let knob = ElementHandle::find_by_element_id(window, "PowerSwitch::knob")
+                    .next()
+                    .expect("the switch's knob");
+                knob.absolute_position().x - switch().absolute_position().x
+            };
+            // A headless window evaluates an animated property only when read,
+            // so read the knob once and let any turn still pending finish.
+            left();
+            advance_clock(Duration::from_millis(400));
+            draw_frames();
+            let off = left();
+            switch().invoke_accessible_default_action();
+            let mut seen = vec![];
+            for _ in 0..16 {
+                advance_clock(Duration::from_millis(16));
+                draw_frames();
+                seen.push(left());
+            }
+            let on = *seen.last().unwrap();
+            assert!(on - off > 10.0, "{name}: the knob crosses: {off} to {on}");
+            let halfway = (seen[7] - off) / (on - off);
+            assert!(
+                (0.3..=0.7).contains(&halfway),
+                "{name}: halfway through the turn the knob is halfway across: {seen:?}"
+            );
+            assert!(
+                seen.windows(2).all(|w| w[1] >= w[0] - 0.01),
+                "{name}: the knob never steps back: {seen:?}"
+            );
+        }
+        let app = app_over(MockBackend::new());
+        app.main.show().unwrap();
+        app.flyout.show().unwrap();
+        draw_frames();
+        hold_clock();
+        slides(&app.flyout, "flyout");
+        app.update(|b| b.set_running(false));
+        advance_clock(Duration::from_millis(400));
+        draw_frames();
+        slides(&app.main, "main");
+    }
+
     /// Resting on the flyout's streaming switch shows no tooltip: the switch
     /// says its state itself (maintainer 2026-11-16).
     #[test]

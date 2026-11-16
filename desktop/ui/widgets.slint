@@ -1589,10 +1589,12 @@ export component PowerSwitch inherits Rectangle {
         }
     }
 
-    Rectangle {
+    knob := Rectangle {
         width: root.checked ? 18px : 21px;
         height: self.width;
-        x: root.checked ? root.width - 2px - self.width : 0.5px;
+        // From the end size, not self.width: an x that reads the animating
+        // width restarts its own animation every frame and lags the track.
+        x: root.checked ? root.width - 2px - 18px : 0.5px;
         y: (root.height - self.height) / 2;
         border-radius: self.width / 2;
         background: #ffffff;
