@@ -803,7 +803,6 @@ pub struct App {
     password_dialog: PasswordDialog,
     /// The speaker the password dialog is open for, while it is.
     password_for: RefCell<Option<String>>,
-    /// Add by Address…, for a Google Cast speaker discovery can't find.
     /// The answer of the address check Add by Address… is waiting for.
     cast_check: RefCell<Option<std::sync::mpsc::Receiver<cast_address::CheckAnswer>>>,
     /// Looks for that answer while the check runs.

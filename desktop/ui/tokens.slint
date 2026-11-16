@@ -53,6 +53,18 @@ export global Tokens {
     // Card borders and dividers (decorative, no contrast requirement).
     out property <color> separator: root.dark ? #3d3d3d : #d9dedd;
 
+    // The Settings window's neutral grey, as the Mac's.
+    out property <color> settings-window: root.dark ? #2a2a2a : #efeeed;
+
+    // Settings' boxes: white on light, a step darker than the window on dark, as the Mac's.
+    out property <color> settings-card: root.dark ? #1f1f1f : #ffffff;
+
+    // A chosen segment of a segmented control, as the Mac's tinted one: white text on it is 5.85:1.
+    out property <color> segment-chosen: #147167;
+
+    // The text of a chosen segment.
+    out property <color> segment-chosen-text: #ffffff;
+
     // Keyboard focus ring (3:1 against the surface and the background).
     out property <color> focus: root.dark ? #63dac2 : #147167;
 
