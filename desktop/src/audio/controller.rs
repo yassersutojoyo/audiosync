@@ -1250,11 +1250,15 @@ impl<D: Driver> Controller<D> {
     /// (S470): for one app on Windows every output the app plays on, and
     /// Windows' default output while the whole system streams unswitched.
     fn held_out(&self) -> Vec<String> {
-        let one_app = self.session.as_ref().is_some_and(|session| {
-            matches!(&session.target, CaptureTarget::Loopback(activation)
-                if activation.mode == LoopbackMode::IncludeTree)
-        });
-        if one_app && self.default_output.is_some() {
+        let apps = self
+            .session
+            .as_ref()
+            .is_some_and(|session| match &session.target {
+                CaptureTarget::Loopback(activation) => activation.mode == LoopbackMode::IncludeTree,
+                CaptureTarget::Mix(_) => true,
+                CaptureTarget::Input { .. } => false,
+            });
+        if apps && self.default_output.is_some() {
             return self
                 .routing
                 .played_on
@@ -4224,8 +4228,10 @@ impl<D: Driver> Controller<D> {
             return;
         };
         // An input device is no render stream Windows could play straight.
-        let &CaptureTarget::Loopback(activation) = &session.target else {
-            return;
+        let activations = match &session.target {
+            CaptureTarget::Loopback(activation) => vec![*activation],
+            CaptureTarget::Mix(activations) => activations.clone(),
+            CaptureTarget::Input { .. } => return,
         };
         self.routing.last_check = Some(now);
         let rendered: Vec<String> = session.outputs.keys().cloned().collect();
@@ -4257,10 +4263,17 @@ impl<D: Driver> Controller<D> {
                     .unwrap_or_else(|| endpoint.id.clone());
             }
         }
-        let tree = processes.tree(activation.target_pid);
-        let captured = match activation.mode {
-            LoopbackMode::IncludeTree => Captured::Only(tree),
-            LoopbackMode::ExcludeTree => Captured::AllExcept(tree),
+        let captured = match activations.as_slice() {
+            [activation] if activation.mode == LoopbackMode::ExcludeTree => {
+                Captured::AllExcept(processes.tree(activation.target_pid))
+            }
+            // A mix takes in each app's tree.
+            _ => Captured::Only(
+                activations
+                    .iter()
+                    .flat_map(|activation| processes.tree(activation.target_pid))
+                    .collect(),
+            ),
         };
         let answer = routing::check(&captured, &endpoints, &rendered, &self.routing.played_on);
         if answer.paths != self.routing.reported {
@@ -5311,6 +5324,10 @@ impl<D: Driver> AudioBackend for Controller<D> {
         ended.extend(self.forget_unlisted_unplayable());
         self.tick_fresh_restarts();
         self.sync_default_output(moves_default(self.running_source().as_ref()));
+        // Before the outputs, so one a captured app plays on is held out in
+        // this pass (S470).
+        let now = Instant::now();
+        self.check_routing_if_due(now);
         let failures = self.sync_outputs();
         self.release_held_leads(true);
         // An output that left or joined moves the others (S177).
@@ -5328,8 +5345,6 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // reported of the followed outputs' own volumes.
         self.follow_device_volumes();
         self.read_device_volume_changes();
-        let now = Instant::now();
-        self.check_routing_if_due(now);
         self.follow_mix_apps(now);
         self.log_status_if_due(now);
         self.log_levels_if_due(now);
@@ -6318,6 +6333,26 @@ mod tests {
             .find(|output| output.id == HEADPHONES)
             .expect("listed");
         assert!(headphones.enabled && headphones.plays_original);
+    }
+
+    // covers: S470
+    #[test]
+    fn an_output_an_app_of_a_mix_plays_on_gets_no_copy() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend
+            .start(&SourceId::Apps {
+                root_pids: vec![PLAYER_PID],
+                executables: vec!["player.exe".to_owned()],
+            })
+            .unwrap();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        backend.check_routing_now();
+        backend.poll();
+        assert_eq!(playing(&backend), [SPEAKERS]);
     }
 
     // covers: S382
