@@ -9793,6 +9793,17 @@ mod tests {
         draw_frames();
         assert_eq!(leaving(), 0.0, "gone after 300 ms");
 
+        app.main.global::<Motion>().set_on(false);
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        let fading = leaving();
+        assert!(0.0 < fading && fading < 1.0, "cross-fades with animation effects off: {fading}");
+        advance_clock(Duration::from_millis(300));
+        draw_frames();
+        app.main.global::<Motion>().set_on(true);
+
         // Renamed to sort first, the last connected speaker moves every row
         // under it into another's slot; no delay changed, so nothing rolls.
         let last = app.snapshot().layout().1.last().map(|s| s.id.clone());
@@ -19920,6 +19931,42 @@ mod tests {
         );
         press(window, Key::Escape);
 
+        // With the pointer gone and the focus on another speaker's …, a
+        // closed menu leaves no … shown but that one.
+        let other = app
+            .snapshot()
+            .speakers
+            .iter()
+            .map(|s| s.id.clone())
+            .find(|id| id != "local:desk")
+            .expect("another speaker");
+        let settle = || {
+            window.dispatch_event(WindowEvent::PointerExited);
+            app.main.set_focus_speaker_part(RowPart::Options);
+            app.main.set_focus_speaker_id(other.as_str().into());
+            draw_frames();
+            advance_clock(Duration::from_millis(1000));
+            draw_frames();
+        };
+        let shown = || {
+            app.snapshot()
+                .speakers
+                .iter()
+                .filter(|s| s.id != other)
+                .map(|s| strings.invoke_speaker_options(s.name.as_str().into()))
+                .flat_map(|label| ElementHandle::find_by_accessible_label(&app.main, &label))
+                .map(|button| button.computed_opacity())
+                .fold(0.0, f32::max)
+        };
+        settle();
+        assert_eq!(shown(), 0.0, "Escape's close hides …");
+
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let height = window.size().to_logical(window.scale_factor()).height;
+        click(window, 4.0, height - 4.0);
+        settle();
+        assert_eq!(shown(), 0.0, "a click away hides …");
+
         window.dispatch_event(WindowEvent::PointerExited);
         app.main.set_focus_speaker_part(RowPart::Options);
         app.main.set_focus_speaker_id("local:desk".into());
@@ -19932,6 +19979,11 @@ mod tests {
             1.0,
             "a menu opened by key leaves … shown"
         );
+
+        app.update(|b| b.hide_speaker("local:desk", "USB"));
+        draw_frames();
+        settle();
+        assert_eq!(shown(), 0.0, "a row gone with its menu open leaves no … shown");
     }
 
     /// A menu opened near the window's bottom or right edge stays whole
