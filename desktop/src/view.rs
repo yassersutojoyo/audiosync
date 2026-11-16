@@ -2319,37 +2319,32 @@ impl App {
     /// an app whose icon can't be read, which the menu draws as a glyph.
     fn app_icon(&self, id: &str, size: u32) -> slint::Image {
         let m = &self.models;
-        if let Some((at, icon)) = m.app_icons.borrow().get(id)
-            && *at == size
-        {
-            return icon.clone();
-        }
+        cached_app_icon(&m.app_icons, id, size, || self.read_app_icon(id, size))
+    }
+
+    fn read_app_icon(&self, id: &str, size: u32) -> slint::Image {
+        let m = &self.models;
         let path = crate::os::app_icon::source_image(
             id,
             crate::os::app_icon::process_image,
             crate::os::app_icon::pid_named,
         );
-        let icon = path
-            .map(|path| {
-                m.file_icons
-                    .borrow_mut()
-                    .entry((path, size))
-                    .or_insert_with_key(|(path, size)| {
-                        crate::os::app_icon::file_icon(path, *size)
-                            .map(|rgba| {
-                                slint::Image::from_rgba8(
-                                    slint::SharedPixelBuffer::clone_from_slice(&rgba, *size, *size),
-                                )
-                            })
-                            .unwrap_or_default()
-                    })
-                    .clone()
-            })
-            .unwrap_or_default();
-        m.app_icons
-            .borrow_mut()
-            .insert(id.to_owned(), (size, icon.clone()));
-        icon
+        path.map(|path| {
+            m.file_icons
+                .borrow_mut()
+                .entry((path, size))
+                .or_insert_with_key(|(path, size)| {
+                    crate::os::app_icon::file_icon(path, *size)
+                        .map(|rgba| {
+                            slint::Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(
+                                &rgba, *size, *size,
+                            ))
+                        })
+                        .unwrap_or_default()
+                })
+                .clone()
+        })
+        .unwrap_or_default()
     }
 
     fn attach_models(&self) {
@@ -7067,10 +7062,48 @@ fn update_buttons(message: &NoticeMessage) -> ModelRc<UpdateButton> {
     ModelRc::new(VecModel::from(buttons))
 }
 
+/// The icon of the app source `id` at `size` from `cache`, else `read`; a blank
+/// one is not kept, so the icon shows once its app runs.
+fn cached_app_icon(
+    cache: &RefCell<HashMap<String, (u32, slint::Image)>>,
+    id: &str,
+    size: u32,
+    read: impl FnOnce() -> slint::Image,
+) -> slint::Image {
+    if let Some((at, icon)) = cache.borrow().get(id)
+        && *at == size
+    {
+        return icon.clone();
+    }
+    let icon = read();
+    if icon.size().width > 0 {
+        cache
+            .borrow_mut()
+            .insert(id.to_owned(), (size, icon.clone()));
+    }
+    icon
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui_model::{MOCK_CAST_HOLD, MockBackend};
+
+    #[test]
+    fn an_app_icon_not_read_yet_is_read_again_once_its_app_runs() {
+        let cache = RefCell::default();
+        let id = "app:0:Spotify.exe";
+        let blank = cached_app_icon(&cache, id, 16, slint::Image::default);
+        assert_eq!(blank.size().width, 0);
+        let icon = cached_app_icon(&cache, id, 16, || {
+            slint::Image::from_rgba8(slint::SharedPixelBuffer::new(16, 16))
+        });
+        assert_eq!(
+            icon.size().width,
+            16,
+            "the running app's icon replaces the blank one"
+        );
+    }
     use std::sync::PoisonError;
 
     use slint::platform::software_renderer::{MinimalSoftwareWindow, Rgb565Pixel};
