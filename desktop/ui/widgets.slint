@@ -3531,10 +3531,10 @@ export component SpeakerRow inherits Rectangle {
             VerticalLayout {
                 padding-left: Fluent.row-padding-x;
                 padding-right: Fluent.row-padding-x;
-                padding-top: Fluent.row-padding-y - 1px;
-                // Less below, so the divider keeps the Mac's 49 px step and
-                // the 32 px badge stays on whole pixels in its 40 px line.
-                padding-bottom: Fluent.row-padding-y - 3px;
+                // The Mac's 8 pt above; less below, where Segoe's taller name
+                // line already sits, so the rows keep the Mac's 54 px step.
+                padding-top: Fluent.row-padding-y + 2px;
+                padding-bottom: Fluent.row-padding-y - 1px;
 
                 HorizontalLayout {
                     spacing: 8px;

@@ -11217,7 +11217,7 @@ mod tests {
         app.main
             .invoke_speaker_rename_edited("local:desk".into(), "Desk".into());
         draw_frames();
-        click(app.main.window(), 600.0, 357.0);
+        click(app.main.window(), 600.0, 370.0);
         assert_eq!(name_of(&app, "local:desk"), "Desk");
         assert!(app.ui.borrow().rename.is_none());
         assert!(app.ui.borrow().sync_open.is_empty(), "no delay panel");
@@ -11728,10 +11728,10 @@ mod tests {
         }
     }
 
-    /// Speaker rows in one list step 49 px from badge to badge, divider
-    /// included, as the Mac's rows step 49 pt.
+    /// Speaker rows in one list step 54 px from badge to badge, divider
+    /// included, as the Mac's rows with a volume slider step 54 pt.
     #[test]
-    fn speaker_rows_step_49_px_as_on_the_mac() {
+    fn speaker_rows_step_54_px_as_on_the_mac() {
         let app = narrow_app(MockBackend::new());
         let tops: Vec<f32> = i_slint_backend_testing::ElementHandle::find_by_element_id(
             &app.main,
@@ -11743,7 +11743,7 @@ mod tests {
             .windows(2)
             .map(|pair| pair[1] - pair[0])
             .fold(f32::MAX, f32::min);
-        assert_eq!(pitch, 49.0, "badge tops {tops:?}");
+        assert_eq!(pitch, 54.0, "badge tops {tops:?}");
         assert!(
             tops.iter().all(|y| y.fract() == 0.0),
             "on whole pixels: {tops:?}"
@@ -11796,8 +11796,8 @@ mod tests {
         assert_eq!(rule.size().width, 1.0);
         assert_eq!(rule.absolute_position().x, header.absolute_position().x);
         assert_eq!(rule.absolute_position().y, top + height);
-        // Both rows and the line between them, as they step 49 px.
-        assert_eq!(rule.size().height, 49.0 + 48.0);
+        // Both rows and the line between them, as they step 54 px.
+        assert_eq!(rule.size().height, 54.0 + 53.0);
     }
 
     /// A long-named copy of the mock's Kitchen speaker.
