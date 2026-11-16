@@ -135,7 +135,7 @@ component SourceMenu inherits Rectangle {
 
                 Glyph {
                     glyph: Glyphs.chevron-down;
-                    font-size: 9px;
+                    font-size: 12px;
                     color: Tokens.text;
                 }
             }
@@ -1301,7 +1301,7 @@ component PresetsCard inherits Rectangle {
 
                                 Glyph {
                                     glyph: Glyphs.chevron-right;
-                                    font-size: Tokens.font-size-caption;
+                                    font-size: Tokens.font-size-callout;
                                     color: Tokens.secondary-text;
                                 }
                             }
@@ -1604,7 +1604,7 @@ component EqualizerCard inherits Rectangle {
             alignment: center;
             chevron := Glyph {
                 glyph: Glyphs.chevron-right;
-                font-size: Tokens.font-size-caption;
+                font-size: Tokens.font-size-callout;
                 color: Tokens.secondary-text;
                 height: label.preferred-height;
             }
@@ -1723,7 +1723,7 @@ component QuickRow inherits Rectangle {
 
         Glyph {
             glyph: Glyphs.chevron-right;
-            font-size: Tokens.font-size-caption;
+            font-size: Tokens.font-size-callout;
             color: Tokens.secondary-text;
         }
     }
@@ -3043,7 +3043,7 @@ export component MainWindow inherits Window {
             VerticalLayout {
                 alignment: center;
                 gear := GearButton {
-                    glyph-size: 16px;
+                    glyph-size: 17px;
                     new-zone => {
                         root.new-zone-requested();
                     }
