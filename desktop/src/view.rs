@@ -20969,6 +20969,23 @@ mod tests {
         assert_eq!(app.flyout.get_current_preset(), "Party", "the last preset");
     }
 
+    /// The Presets row opens through UI Automation's Expand, as a screen
+    /// reader opens it, not only through Invoke.
+    #[test]
+    fn the_presets_row_opens_through_expand() {
+        let app = narrow_app(MockBackend::new());
+        let presets = app.main.global::<crate::Strings>().get_presets();
+        let row = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &presets)
+                .find(|e| e.accessible_expandable() == Some(true))
+                .expect("the Presets row")
+        };
+        assert_eq!(row().accessible_expanded(), Some(false));
+        row().invoke_accessible_expand_action();
+        draw_frames();
+        assert_eq!(row().accessible_expanded(), Some(true), "Expand opened it");
+    }
+
     /// Settings lays out the same on light and dark: a text as wide in both,
     /// so a row that fits one line on dark fits it on light too.
     #[test]

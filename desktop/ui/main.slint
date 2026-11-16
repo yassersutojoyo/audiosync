@@ -1240,6 +1240,9 @@ component PresetsCard inherits Rectangle {
             accessible-action-default => {
                 root.open = !root.open;
             }
+            accessible-action-expand => {
+                root.open = true;
+            }
 
             touch := TouchArea {
                 clicked => {
