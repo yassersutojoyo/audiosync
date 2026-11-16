@@ -1518,10 +1518,10 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
     let slider = row.find("VolumeSlider {").expect("the row's slider");
     let hint_at = row
         .find(
-            "accessible-label: Strings.device-volume-hint-label(root.item.name, \
-             hint-box.hint, hint-box.percent);",
+            "accessible-label: hint-box.open ? Strings.device-volume-hint-label(\
+             root.item.name, hint-box.hint, hint-box.percent) : \"\";",
         )
-        .expect("the hint names the output");
+        .expect("the hint names the output, and a shutting hint says nothing");
     let fix_at = row
         .find("label: Strings.device-volume-fix-label(root.item.name, hint-box.hint);")
         .expect("the fix names the output");

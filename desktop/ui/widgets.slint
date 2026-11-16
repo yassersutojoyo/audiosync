@@ -4101,7 +4101,7 @@ export component SpeakerRow inherits Rectangle {
                                             wrap: word-wrap;
                                             min-height: self.preferred-height;
                                             accessible-role: text;
-                                            accessible-label: Strings.device-volume-hint-label(root.item.name, hint-box.hint, hint-box.percent);
+                                            accessible-label: hint-box.open ? Strings.device-volume-hint-label(root.item.name, hint-box.hint, hint-box.percent) : "";
                                         }
 
                                         HorizontalLayout {
@@ -4114,6 +4114,10 @@ export component SpeakerRow inherits Rectangle {
                                                     root.fix-focused = self.keyboard-focused;
                                                 }
                                                 clicked => {
+                                                    // A shutting hint is stale: its link does nothing.
+                                                    if !hint-box.open {
+                                                        return;
+                                                    }
                                                     // The button goes with the hint once
                                                     // Windows reports the change: hand
                                                     // the keyboard focus to the slider
