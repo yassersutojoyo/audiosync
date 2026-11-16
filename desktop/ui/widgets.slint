@@ -3441,8 +3441,9 @@ export component SpeakerRow inherits Rectangle {
         easing: linear;
     }
     // The options button and a delay of 0 ms show under the pointer or the
-    // keyboard focus; Narrator finds them either way.
-    property <bool> revealed: hover.has-hover || root.focused-part != RowPart.none || root.item.sync-open;
+    // keyboard focus, and while the row's menu, which takes both, is open;
+    // Narrator finds them either way.
+    property <bool> revealed: hover.has-hover || root.focused-part != RowPart.none || root.item.sync-open || (MenuState.open != 0 && MenuState.open == root.menu-serial);
     // The Mac's Reveal: a fade with a 4 px slide from the right over 440 ms;
     // with animation effects off, a 150 ms fade alone.
     property <float> reveal: root.revealed ? 1 : 0;

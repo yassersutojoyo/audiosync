@@ -19837,6 +19837,54 @@ mod tests {
         );
     }
 
+    /// The … button stays shown while its menu is open, though the menu
+    /// takes the pointer and the focus from the row.
+    #[test]
+    fn a_speakers_options_button_stays_shown_while_its_menu_is_open() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let label = strings.invoke_speaker_options(name_of(&app, "local:desk").into());
+        let options = || {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the … button")
+        };
+        hold_clock();
+        let (at, size) = (options().absolute_position(), options().size());
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let hide = ElementHandle::find_by_accessible_label(&app.main, &strings.get_hide_speaker())
+            .next()
+            .expect("a click on … opens the menu");
+        let position = slint::LogicalPosition::new(
+            hide.absolute_position().x + hide.size().width / 2.0,
+            hide.absolute_position().y + hide.size().height / 2.0,
+        );
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        advance_clock(Duration::from_millis(1000));
+        draw_frames();
+        assert_eq!(
+            options().computed_opacity(),
+            1.0,
+            "the pointer on the menu leaves … shown"
+        );
+        press(window, Key::Escape);
+
+        window.dispatch_event(WindowEvent::PointerExited);
+        app.main.set_focus_speaker_part(RowPart::Options);
+        app.main.set_focus_speaker_id("local:desk".into());
+        draw_frames();
+        press(window, Key::Menu);
+        advance_clock(Duration::from_millis(1000));
+        draw_frames();
+        assert_eq!(
+            options().computed_opacity(),
+            1.0,
+            "a menu opened by key leaves … shown"
+        );
+    }
+
     /// A menu opened near the window's bottom or right edge stays whole
     /// inside it, a right-click's menu flipped above the pointer.
     // covers: S449
