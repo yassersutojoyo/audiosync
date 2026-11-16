@@ -1516,7 +1516,7 @@ fn the_hint_and_the_fix_name_the_output_for_narrator() {
         .expect("the hint shows only with a hint to show");
     assert!(slider < shown && shown < hint_at);
     let sync = row
-        .find("if root.item.has-delay && root.item.sync-open:")
+        .find("sync-pane := FoldPane {")
         .expect("the sync controls");
     let part = &row[shown..sync];
     assert!(part.contains("accessible-role: text;"));

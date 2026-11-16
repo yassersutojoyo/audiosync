@@ -254,3 +254,36 @@ fn closing_the_equalizer_drops_a_curve_name_being_typed() {
     app.show_equalizer();
     assert!(!eq_window.get_naming_curve(), "it reopens with the menu");
 }
+
+/// The main window's left column takes the Mac's spacing: the Now Playing
+/// stack 4 apart with the art 16 high and 3 clear, the transport 6 below,
+/// Master Volume 16 under the block, the hairline 11 above and 5 below,
+/// and the rows 6 apart, with no scroll bar on either column.
+// covers: S450
+#[test]
+fn the_left_column_takes_the_macs_spacing() {
+    let main = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    let card = component(&main, "NowPlayingCard");
+    assert!(card.contains("padding-top: 2px;\n        spacing: 4px;"));
+    assert!(card.contains(
+        "padding-top: 3px;\n            padding-bottom: 3px;\n\n            AmbientArt {\n                height: 16px;"
+    ));
+    assert!(card.contains("y: 6px;"), "the transport 6 under the artist");
+    assert!(card.contains("spacing: root.shuffle >= 0 || root.repeat >= 0 ? 6px : 22px;"));
+    assert!(card.contains("glyph-size: 22px;"), "Play and Pause at 22");
+    let window = component(&main, "MainWindow");
+    assert_eq!(window.matches("- 28px;").count(), 2, "both covers");
+    assert!(window.contains("padding-top: 16px;\n                        // The number ends"));
+    assert!(window.contains(
+        "spacing: 8px;\n                            // 8 px clear of the knob at 100.\n                            number-gap: 16px;"
+    ));
+    assert!(window.contains(
+        "padding-top: 11px;\n                        padding-bottom: 5px;\n\n                        Divider { }"
+    ));
+    assert!(window.contains(
+        "VerticalLayout {\n                        spacing: 6px;\n\n                        PresetsCard {"
+    ));
+    assert!(window.contains("left-column := FadeScrollView {"));
+    assert!(window.contains("scroll := FadeScrollView {"));
+    assert!(window.contains("property <length> scroll-gutter: 0px;"));
+}

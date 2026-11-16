@@ -1976,6 +1976,54 @@ export component OverlayScrollView {
     }
 }
 
+// A main window column with no scroll bar, as the Mac's. Slint has no mask,
+// so an edge's fade is the window's colour drawn over it.
+export component FadeScrollView {
+    out property <length> visible-height <=> flickable.height;
+    in-out property <length> content-height <=> flickable.content-height;
+    in-out property <length> content-y <=> flickable.content-y;
+    in property <color> fade-color;
+    callback blank-clicked();
+    out property <length> fade: 12px;
+    out property <float> top-fade: clamp(-flickable.content-y / root.fade, 0, 1);
+    out property <float> bottom-fade: clamp((flickable.content-height - flickable.height + flickable.content-y) / root.fade, 0, 1);
+
+    min-height: 50px;
+    min-width: 50px;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
+    preferred-height: 100%;
+    preferred-width: 100%;
+
+    TouchArea {
+        clicked => {
+            root.blank-clicked();
+        }
+
+        flickable := Flickable {
+            width: parent.width;
+            height: parent.height;
+
+            VerticalLayout {
+                padding-bottom: root.fade;
+                @children
+            }
+        }
+    }
+
+    top-edge := Rectangle {
+        y: 0px;
+        height: root.fade;
+        background: @linear-gradient(180deg, root.fade-color.with-alpha(root.top-fade) 0%, root.fade-color.with-alpha(0) 100%);
+    }
+
+    bottom-edge := Rectangle {
+        y: root.height - root.fade;
+        height: root.fade;
+        background: @linear-gradient(0deg, root.fade-color.with-alpha(root.bottom-fade) 0%, root.fade-color.with-alpha(0) 100%);
+    }
+}
+
 // A volume slider with its value. `changed` reports every move.
 export component VolumeSlider inherits HorizontalLayout {
     in property <float> volume;
@@ -2341,6 +2389,64 @@ export component TextField inherits Rectangle {
 // applied (Enter applies it), a red one while that typing is a number out of
 // range. Drawn in the 4 px spacing around the field instead of taking room,
 // so the row is no taller than its buttons.
+// A delay step, as the Mac panel's small bordered button: 20 high, 10 px
+// digits, a hairline edge and a faint fill.
+component DelayStep inherits Rectangle {
+    in property <int> delta;
+    out property <bool> has-focus: focus.has-focus;
+    callback clicked();
+
+    height: 20px;
+    min-width: label.preferred-width + 14px;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: Tokens.text.with-alpha(Tokens.dark ? 0.12 : 0.14);
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : Tokens.text.with-alpha(Tokens.dark ? 0.08 : 0.05);
+    animate background { duration: Fluent.fast; }
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: Strings.delay-step-accessibility(root.delta);
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    // 24 px to hit, the pointer minimum, centred on the 20 px step.
+    touch := TouchArea {
+        y: (root.height - self.height) / 2;
+        height: 24px;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    // A click leaves the focus where it was, as on the Mac, so a step
+    // builds on the field's typing.
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    label := Text {
+        text: Strings.delay-step(root.delta);
+        font-size: Tokens.font-size-caption;
+        color: Tokens.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    FocusRing {
+        visible-focus: focus.has-focus;
+        border-radius: root.border-radius;
+    }
+}
+
 component DraftOutline inherits Rectangle {
     in property <bool> pending;
     in property <bool> out-of-range;
@@ -2459,9 +2565,8 @@ export component SyncControls inherits VerticalLayout {
             spacing: 4px;
             alignment: start;
 
-            for delta in [-100, -10]: Button {
-                text: Strings.delay-step(delta);
-                accessible-label: Strings.delay-step-accessibility(delta);
+            for delta in [-100, -10]: DelayStep {
+                delta: delta;
                 clicked => {
                     root.stepped(delta);
                 }
@@ -2478,6 +2583,9 @@ export component SyncControls inherits VerticalLayout {
 
                 field := TextField {
                     width: 72px;
+                    compact: true;
+                    border-radius: 6px;
+                    font-size: Tokens.font-size-callout;
                     text: root.delay-text;
                     horizontal-alignment: center;
                     accessible-label: Strings.delay-of(root.name);
@@ -2501,14 +2609,14 @@ export component SyncControls inherits VerticalLayout {
 
             Text {
                 text: Strings.milliseconds-unit;
+                font-size: Tokens.font-size-callout;
                 color: Tokens.secondary-text;
                 vertical-alignment: center;
                 accessible-role: none;
             }
 
-            for delta in [10, 100]: Button {
-                text: Strings.delay-step(delta);
-                accessible-label: Strings.delay-step-accessibility(delta);
+            for delta in [10, 100]: DelayStep {
+                delta: delta;
                 clicked => {
                     root.stepped(delta);
                 }
@@ -2661,9 +2769,8 @@ export component AirPlayDelayControls inherits VerticalLayout {
                     spacing: 4px;
                     alignment: start;
 
-                    for delta in [-100, -10]: Button {
-                        text: Strings.delay-step(delta);
-                        accessible-label: Strings.delay-step-accessibility(delta);
+                    for delta in [-100, -10]: DelayStep {
+                        delta: delta;
                         changed has-focus => {
                             root.focus-changed(self.has-focus);
                         }
@@ -2678,6 +2785,9 @@ export component AirPlayDelayControls inherits VerticalLayout {
 
                         field := TextField {
                             width: 72px;
+                            compact: true;
+                            border-radius: 6px;
+                            font-size: Tokens.font-size-callout;
                             text: root.delay-text;
                             horizontal-alignment: center;
                             accessible-label: Strings.airplay-delay-title;
@@ -2701,14 +2811,14 @@ export component AirPlayDelayControls inherits VerticalLayout {
 
                     Text {
                         text: Strings.milliseconds-unit;
+                        font-size: Tokens.font-size-callout;
                         color: Tokens.secondary-text;
                         vertical-alignment: center;
                         accessible-role: none;
                     }
 
-                    for delta in [10, 100]: Button {
-                        text: Strings.delay-step(delta);
-                        accessible-label: Strings.delay-step-accessibility(delta);
+                    for delta in [10, 100]: DelayStep {
+                        delta: delta;
                         changed has-focus => {
                             root.focus-changed(self.has-focus);
                         }
@@ -3084,7 +3194,6 @@ export component SpeakerRow inherits Rectangle {
                 // A pixel less, so the divider keeps the Mac's 52 px step and
                 // the 32 px badge stays on whole pixels in its 40 px line.
                 padding-bottom: Fluent.row-padding-y - 1px;
-                spacing: 4px;
 
                 HorizontalLayout {
                     spacing: 8px;
@@ -3580,63 +3689,68 @@ export component SpeakerRow inherits Rectangle {
                     }
                 }
 
-                if root.item.has-delay && root.item.sync-open: HorizontalLayout {
-                    padding-left: Fluent.name-inset - Fluent.row-padding-x;
-                    padding-bottom: 4px;
+                sync-pane := FoldPane {
+                    open: root.item.has-delay && root.item.sync-open;
 
-                    // A click on the controls' blank space is a click on the
-                    // row's box: it closes them and applies the typing, as
-                    // on the Mac.
-                    SyncControls {
-                        name: root.item.name;
-                        delay-text: root.item.delay-text;
-                        pending: root.item.delay-pending;
-                        range-hint: root.item.delay-range-hint;
-                        reference-name: root.item.reference-name;
-                        cast: root.item.cast;
-                        calibratable: root.item.calibratable;
-                        calibrating: root.item.calibrating;
-                        calibration-enabled: root.item.calibration-enabled;
-                        calibration-status: root.item.calibration-status;
-                        calibration-privacy: root.item.calibration-privacy;
-                        calibration-left-out: root.item.calibration-left-out;
-                        calibrate => {
-                            root.calibrate();
-                        }
-                        cancel-calibration => {
-                            root.cancel-calibration();
-                        }
-                        calibration-privacy-requested => {
-                            root.calibration-privacy();
-                        }
-                        init => {
-                            // The field keeps what was typed (the app's draft).
-                            if root.pending-focus == RowPart.sync {
-                                root.pending-focus = RowPart.none;
-                                self.focus-field();
+                    if sync-pane.shown: HorizontalLayout {
+                        padding-left: Fluent.name-inset - Fluent.row-padding-x;
+                        padding-top: 6px;
+                        padding-bottom: 4px;
+
+                        // A click on the controls' blank space is a click on the
+                        // row's box: it closes them and applies the typing, as
+                        // on the Mac.
+                        SyncControls {
+                            name: root.item.name;
+                            delay-text: root.item.delay-text;
+                            pending: root.item.delay-pending;
+                            range-hint: root.item.delay-range-hint;
+                            reference-name: root.item.reference-name;
+                            cast: root.item.cast;
+                            calibratable: root.item.calibratable;
+                            calibrating: root.item.calibrating;
+                            calibration-enabled: root.item.calibration-enabled;
+                            calibration-status: root.item.calibration-status;
+                            calibration-privacy: root.item.calibration-privacy;
+                            calibration-left-out: root.item.calibration-left-out;
+                            calibrate => {
+                                root.calibrate();
                             }
-                        }
-                        property <bool> focus-asked: root.pending-focus == RowPart.sync;
-                        changed focus-asked => {
-                            if self.focus-asked {
-                                root.pending-focus = RowPart.none;
-                                self.focus-field();
+                            cancel-calibration => {
+                                root.cancel-calibration();
                             }
-                        }
-                        stepped(delta) => {
-                            root.delay-stepped(delta);
-                        }
-                        edited(text) => {
-                            root.delay-edited(text);
-                        }
-                        committed => {
-                            root.delay-committed();
-                        }
-                        cancelled => {
-                            root.delay-cancelled();
-                        }
-                        changed focus-within => {
-                            root.sync-focused = self.focus-within;
+                            calibration-privacy-requested => {
+                                root.calibration-privacy();
+                            }
+                            init => {
+                                // The field keeps what was typed (the app's draft).
+                                if root.pending-focus == RowPart.sync {
+                                    root.pending-focus = RowPart.none;
+                                    self.focus-field();
+                                }
+                            }
+                            property <bool> focus-asked: root.pending-focus == RowPart.sync;
+                            changed focus-asked => {
+                                if self.focus-asked {
+                                    root.pending-focus = RowPart.none;
+                                    self.focus-field();
+                                }
+                            }
+                            stepped(delta) => {
+                                root.delay-stepped(delta);
+                            }
+                            edited(text) => {
+                                root.delay-edited(text);
+                            }
+                            committed => {
+                                root.delay-committed();
+                            }
+                            cancelled => {
+                                root.delay-cancelled();
+                            }
+                            changed focus-within => {
+                                root.sync-focused = self.focus-within;
+                            }
                         }
                     }
                 }
