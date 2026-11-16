@@ -1186,6 +1186,7 @@ impl<A: AudioBackend> AudioAdapter<A> {
             last_update_check: self.view.last_update_check,
             update_record: self.view.update_record.clone(),
             default_output: self.audio.default_output_record(),
+            app_output: self.audio.app_output_record(),
             other_fields: self.saved.other_fields.clone(),
         }
         .clamped()

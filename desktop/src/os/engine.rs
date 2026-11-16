@@ -34,6 +34,27 @@ pub fn backend<D: Driver + 'static>(
             settings_file.path().map(std::path::Path::to_path_buf),
         )),
     );
+    // S471; after S469's restore, so its record's silent endpoint is read.
+    #[cfg(windows)]
+    match crate::platform::windows_version()
+        .and_then(|version| audio::app_output::variant(version.build))
+    {
+        Some(variant) => {
+            let outputs = audio::wasapi::WasapiAppOutputs(variant);
+            match outputs.probe() {
+                Ok(()) => audio.set_app_output(
+                    Box::new(outputs),
+                    Box::new(settings::AppRecordFile(
+                        settings_file.path().map(std::path::Path::to_path_buf),
+                    )),
+                ),
+                Err(error) => log.log(|| {
+                    format!("app output: apps aren't moved, the per-app interface failed: {error}")
+                }),
+            }
+        }
+        None => log.log(|| "app output: apps aren't moved on this Windows build".to_owned()),
+    }
     let read = settings_file.load();
     start_airplay(&mut audio, log);
     let (cast_file, cast_unread) = start_cast(&mut audio, log);

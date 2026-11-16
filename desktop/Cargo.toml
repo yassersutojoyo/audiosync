@@ -124,6 +124,8 @@ windows = { version = "0.62", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Variant",
+    # RoGetActivationFactory: the per-app output policy (src/audio/wasapi/app_output.rs).
+    "Win32_System_WinRT",
     # QueryUnbiasedInterruptTime: a clock that stops while the PC sleeps.
     "Win32_System_WindowsProgramming",
     # UIA's notification: Narrator reads the volume-key pop-up's level

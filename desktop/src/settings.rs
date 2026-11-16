@@ -55,6 +55,7 @@ use audiosync_core::volume::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::audio::app_output::{AppRecord, AppRecordStore};
 use crate::audio::backend::OutputKind;
 use crate::audio::cast_address;
 use crate::audio::default_output::Record as DefaultRecord;
@@ -891,6 +892,13 @@ pub struct Settings {
         deserialize_with = "or_default"
     )]
     pub default_output: Option<DefaultRecord>,
+    /// Each app whose own output AudioSync moved to the silent endpoint,
+    /// with its earlier choice, kept until it is put back (S471).
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "or_default"
+    )]
+    pub app_output: Option<AppRecord>,
     /// The fields this build doesn't know, written back as read so a newer
     /// build's settings survive a downgrade or a restored copy (S212).
     #[serde(flatten)]
@@ -1036,6 +1044,7 @@ impl Default for Settings {
             last_update_check: None,
             update_record: None,
             default_output: None,
+            app_output: None,
             other_fields: BTreeMap::new(),
         }
     }
@@ -1351,6 +1360,7 @@ impl Settings {
             last_update_check: self.last_update_check,
             update_record: self.update_record,
             default_output: self.default_output,
+            app_output: self.app_output,
             // Capped as every list is, so a damaged file's thousands of stray keys aren't carried on.
             other_fields: self.other_fields.into_iter().take(MAX_ENTRIES).collect(),
         }
@@ -1553,6 +1563,7 @@ fn unreadable_fields(text: &str) -> Vec<String> {
         ("last_update_check", reads::<Option<u64>>),
         ("update_record", reads::<Option<UpdateRecord>>),
         ("default_output", reads::<Option<DefaultRecord>>),
+        ("app_output", reads::<Option<AppRecord>>),
     ];
     let Ok(Value::Object(stored)) = serde_json::from_str::<Value>(text) else {
         return Vec::new();
@@ -1898,6 +1909,40 @@ impl RecordStore for DefaultRecordFile {
     }
 }
 
+/// The settings file as the store of S471's restore record, as
+/// [`DefaultRecordFile`] keeps S469's.
+#[cfg(any(windows, test))]
+pub struct AppRecordFile(pub Option<PathBuf>);
+
+#[cfg(any(windows, test))]
+impl AppRecordStore for AppRecordFile {
+    fn load(&mut self) -> Result<Option<AppRecord>, String> {
+        let Some(path) = &self.0 else {
+            return Ok(None);
+        };
+        match SettingsFile::at(path.clone()).load() {
+            (settings, Loaded::Read { .. }) => Ok(settings.app_output),
+            (_, Loaded::NoFile) => Ok(None),
+            (_, Loaded::Ignored(reason)) => Err(reason),
+        }
+    }
+
+    fn save(&mut self, record: Option<&AppRecord>) -> Result<(), String> {
+        let Some(path) = &self.0 else {
+            return Err("there is no settings file".to_owned());
+        };
+        let file = SettingsFile::at(path.clone());
+        let mut settings = match file.load() {
+            (settings, Loaded::Read { .. } | Loaded::NoFile) => settings,
+            (_, Loaded::Ignored(reason)) => return Err(reason),
+        };
+        settings.app_output = record.cloned();
+        file.save(&settings)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Whether `bytes` are a settings file in a format newer than [`VERSION`].
 fn written_by_a_newer_build(bytes: &[u8]) -> bool {
     #[derive(Deserialize)]
@@ -2079,6 +2124,14 @@ mod tests {
                 console: "{0.0.0.00000000}.speakers".to_owned(),
                 multimedia: "{0.0.0.00000000}.speakers".to_owned(),
                 silent: "{0.0.0.00000000}.cable".to_owned(),
+            }),
+            app_output: Some(AppRecord {
+                silent: crate::audio::app_output::render_interface("{0.0.0.00000000}.cable"),
+                apps: vec![crate::audio::app_output::Previous {
+                    exe: "C:/Apps/Player.exe".to_owned(),
+                    console: String::new(),
+                    multimedia: String::new(),
+                }],
             }),
             other_fields: BTreeMap::new(),
         }
@@ -2582,6 +2635,7 @@ mod tests {
             last_update_check,
             update_record,
             default_output,
+            app_output,
             other_fields: _,
         } = every_field();
         assert_ne!(source, default.source);
@@ -2623,6 +2677,7 @@ mod tests {
         assert_ne!(last_update_check, default.last_update_check);
         assert_ne!(update_record, default.update_record);
         assert_ne!(default_output, default.default_output);
+        assert_ne!(app_output, default.app_output);
     }
 
     // covers: S212
@@ -2731,6 +2786,7 @@ mod tests {
             "equalizer_curves",
             "update_record",
             "default_output",
+            "app_output",
         ];
         for name in optional {
             assert!(stored.contains_key(name), "{name} is stored");

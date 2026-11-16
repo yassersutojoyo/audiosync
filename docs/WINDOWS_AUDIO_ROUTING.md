@@ -170,6 +170,24 @@ Windows has no documented call that sets the default output. The Sound control p
 
 Known gaps: a virtual device whose sound reaches speakers (a voice changer, a virtual mixer, or "Listen to this device" on a cable's recording side) qualifies as silent, and AudioSync can't tell: "Listen to this device" shows no capture session, and Windows documents no property for it. Rule 2's preference only puts a device an app records from last. Apps on the silent endpoint run on that endpoint's clock, so the drift correction has to hold, as hardware test 7 asks.
 
+## Moving one app's output
+
+With one app as the source, moving Windows' default output would silence every other app, so AudioSync moves only that app's own output, the per-app choice Settings > System > Sound > Volume mixer offers ([default endpoint selection](https://learn.microsoft.com/en-us/windows-hardware/drivers/audio/default-audio-endpoint-selection)), to the same silent endpoint S469 picks, and puts the app's earlier choice back afterwards. Test 2 measured that process loopback keeps taking the app in at full level there. ENGINE_SPEC clause S471 holds the rules.
+
+### Interface facts
+
+Windows has no documented call for this. These facts come from EarTrumpet ([repository](https://github.com/File-New-Project/EarTrumpet)) and SoundSwitch ([repository](https://github.com/Belphemur/SoundSwitch)), written here as facts only; AudioSync declares the calls itself from this list.
+
+- The runtime class `Windows.Media.Internal.AudioPolicyConfig` gives an activation factory through [`RoGetActivationFactory`](https://learn.microsoft.com/en-us/windows/win32/api/roapi/nf-roapi-rogetactivationfactory). AudioSync asks it for `ab3d4648-e242-459f-b02f-541c70306324` from build 21390 on and for `2a59116d-6c4f-45e0-a74f-707e3fef9258` before that.
+- The interface derives from `IInspectable`. Counting from QueryInterface, slot 25 sets an app's output (process ID, data flow, role, endpoint as an HSTRING) and slot 26 reads it (the same keys, the endpoint returned as an HSTRING the caller frees). Slot 27 clears every app's choice at once; AudioSync never calls it.
+- The endpoint is the [`IMMDevice::GetId`](https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdevice-getid) ID wrapped as `\\?\SWD#MMDEVAPI#` + ID + `#{e6327cad-dcec-4949-ae8a-991e976a79d2}`, the render device-interface class ([DEVINTERFACE_AUDIO_RENDER](https://learn.microsoft.com/en-us/windows/win32/coreaudio/devinterface-xxx-guids)). An empty string puts the app back on the default.
+- The call fails for a process with no audio session, so AudioSync moves only processes of the captured tree that have one, and looks again every check for helpers that start later.
+- Windows keeps the choice per executable and across restarts, which is why the earlier choice goes to a restore record first.
+
+Checked on build 26300 (Windows 11 26H2) with an ignored test, `the_per_app_output_reads_back_on_this_pc` in `desktop/src/audio/wasapi/app_output.rs`, on the test's own process, which holds a stream of silence on the default output so it has a session: the read gave an empty string before any change (so empty means the default), the set to the silent endpoint read back as that endpoint in the wrapped form, and setting the empty string read back empty again. This PC runs only the later variant, so the earlier IID and its HSTRING argument are untested.
+
+What AudioSync doesn't do yet: no notice in the window says why the app is also heard on the PC (no silent endpoint, the endpoint gone, a stream that didn't move); the debug log says it once per stream. An app that picks its own output device ignores the per-app choice.
+
 ## AirPlay on Windows
 
 AirPlay isn't part of this routing question. AudioSync has its own AirPlay sender, written in Rust, in [`airplay/`](../airplay); [AIRPLAY_SPEC.md](AIRPLAY_SPEC.md) describes what it does.

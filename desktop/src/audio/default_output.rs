@@ -91,7 +91,7 @@ pub struct DefaultSwitch {
 
 /// The silent endpoint among `endpoints`: a virtual one that isn't among
 /// the `chosen` outputs, one nobody listens to first, then the smallest ID.
-fn silent_endpoint<'a>(endpoints: &'a [Candidate], chosen: &[&str]) -> Option<&'a str> {
+pub(crate) fn silent_endpoint<'a>(endpoints: &'a [Candidate], chosen: &[&str]) -> Option<&'a str> {
     endpoints
         .iter()
         .filter(|candidate| {

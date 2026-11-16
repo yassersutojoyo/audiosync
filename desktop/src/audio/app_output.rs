@@ -10,10 +10,6 @@
 //! decisions run over the [`AppEndpoints`] and [`AppRecordStore`] seams,
 //! which tests drive with fakes.
 
-// Not wired yet: the Windows side of `AppEndpoints` waits on the per-app
-// interface's method layout, which the behaviour spec doesn't give.
-#![cfg_attr(not(test), allow(dead_code))]
-
 use serde::{Deserialize, Serialize};
 
 use super::default_output::{ROLES, Role};
@@ -287,7 +283,7 @@ impl AppRedirect {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::RefCell;
     use std::collections::BTreeMap;
     use std::rc::Rc;
@@ -296,10 +292,10 @@ mod tests {
 
     const SILENT: &str = "{0.0.0.00000000}.{silent}";
 
-    type Calls = Rc<RefCell<Vec<String>>>;
+    pub(crate) type Calls = Rc<RefCell<Vec<String>>>;
 
     /// Windows' per-app outputs, keyed by executable and role.
-    struct Fake {
+    pub(crate) struct Fake {
         calls: Calls,
         exes: BTreeMap<u32, String>,
         outputs: BTreeMap<(String, &'static str), String>,
@@ -315,7 +311,7 @@ mod tests {
     }
 
     impl Fake {
-        fn new(calls: &Calls, processes: &[Process]) -> Fake {
+        pub(crate) fn new(calls: &Calls, processes: &[Process]) -> Fake {
             Fake {
                 calls: Rc::clone(calls),
                 exes: processes.iter().map(|p| (p.pid, p.exe.clone())).collect(),
@@ -329,12 +325,12 @@ mod tests {
             self.exes.get(&pid).cloned().ok_or("no such process".into())
         }
 
-        fn output(&self, exe: &str, role: Role) -> String {
+        pub(crate) fn output(&self, exe: &str, role: Role) -> String {
             let key = (exe.to_owned(), key(role));
             self.outputs.get(&key).cloned().unwrap_or_default()
         }
 
-        fn put(&mut self, exe: &str, role: Role, device: &str) {
+        pub(crate) fn put(&mut self, exe: &str, role: Role, device: &str) {
             self.outputs
                 .insert((exe.to_owned(), key(role)), device.to_owned());
         }
@@ -361,10 +357,10 @@ mod tests {
         }
     }
 
-    struct Store {
-        calls: Calls,
-        record: Option<AppRecord>,
-        failing: bool,
+    pub(crate) struct Store {
+        pub(crate) calls: Calls,
+        pub(crate) record: Option<AppRecord>,
+        pub(crate) failing: bool,
     }
 
     impl AppRecordStore for Store {
@@ -385,7 +381,7 @@ mod tests {
         }
     }
 
-    fn process(pid: u32, exe: &str) -> Process {
+    pub(crate) fn process(pid: u32, exe: &str) -> Process {
         Process {
             pid,
             exe: exe.to_owned(),
@@ -583,5 +579,34 @@ mod tests {
             store.record.as_ref().map(|record| record.apps.len()),
             Some(1)
         );
+    }
+
+    /// A fake shared with the test once the controller holds it.
+    pub(crate) struct Shared<T>(pub(crate) Rc<RefCell<T>>);
+
+    impl<T> Clone for Shared<T> {
+        fn clone(&self) -> Self {
+            Shared(Rc::clone(&self.0))
+        }
+    }
+
+    impl<T: AppEndpoints> AppEndpoints for Shared<T> {
+        fn app_default(&mut self, pid: u32, role: Role) -> Result<String, String> {
+            self.0.borrow_mut().app_default(pid, role)
+        }
+
+        fn set_app_default(&mut self, pid: u32, role: Role, device: &str) -> Result<(), String> {
+            self.0.borrow_mut().set_app_default(pid, role, device)
+        }
+    }
+
+    impl<T: AppRecordStore> AppRecordStore for Shared<T> {
+        fn load(&mut self) -> Result<Option<AppRecord>, String> {
+            self.0.borrow_mut().load()
+        }
+
+        fn save(&mut self, record: Option<&AppRecord>) -> Result<(), String> {
+            self.0.borrow_mut().save(record)
+        }
     }
 }

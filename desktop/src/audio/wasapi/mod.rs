@@ -10,6 +10,7 @@
 //! atomics cross threads. Calls from the UI thread (listing endpoints,
 //! sessions and processes) use COM in whatever apartment that thread has.
 
+mod app_output;
 mod com;
 mod default_output;
 mod devices;
@@ -42,6 +43,7 @@ use super::process::ProcessTable;
 use super::routing::{EndpointAudio, EndpointVolume};
 use crate::debug_log::DebugLog;
 
+pub use app_output::WasapiAppOutputs;
 pub use default_output::WasapiDefaults;
 pub use media_sessions::read_media_sessions;
 

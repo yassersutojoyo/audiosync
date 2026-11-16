@@ -1221,6 +1221,12 @@ pub trait AudioBackend {
         None
     }
 
+    /// The restore record of the apps' own outputs that the settings file
+    /// holds (S471), which the adapter's own saves keep.
+    fn app_output_record(&self) -> Option<super::app_output::AppRecord> {
+        None
+    }
+
     /// Puts Windows' default output back as Windows asks to end the
     /// session; a stream of the whole system runs on without the switch
     /// (S469, S470).
