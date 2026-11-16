@@ -1,6 +1,6 @@
 //! A player's artwork, decoded and encoded with the `image` crate: receiver
 //! artwork as JPEGs ([`fit_artwork`]) and the Now Playing card's square tile
-//! ([`card_side`], [`cover_size`]), premultiplied as the card draws it.
+//! ([`cover_size`]), premultiplied as the card draws it.
 
 use std::io::Cursor;
 
@@ -10,7 +10,7 @@ use image::{DynamicImage, ExtendedColorType, ImageReader, Limits, RgbaImage};
 
 use crate::audio::now_playing::{FittedArtwork, fit_artwork};
 use crate::debug_log::DebugLog;
-use crate::now_playing_card::{CardArtwork, card_side, cover_size};
+use crate::now_playing_card::{CardArtwork, cover_size};
 
 /// AudioSync's icon, which receivers show while no track's artwork does.
 pub const ICON_PNG: &[u8] = include_bytes!("../../../res/audiosync-256.png");
@@ -64,17 +64,17 @@ pub fn fit_decoded(decoded: &RgbaImage) -> Result<Option<FittedArtwork>, String>
 /// An encoded image scaled to cover the card's tile and cropped to it;
 /// `None` for an empty image.
 #[cfg(test)]
-pub fn card_artwork(image: &[u8]) -> Result<Option<CardArtwork>, String> {
-    Ok(card_decoded(&decode(image)?))
+pub fn card_artwork(image: &[u8], side: u32) -> Result<Option<CardArtwork>, String> {
+    Ok(card_decoded(&decode(image)?, side))
 }
 
-/// A decoded image as the card's tile; `None` for an empty image.
-pub fn card_decoded(decoded: &RgbaImage) -> Option<CardArtwork> {
+/// A decoded image as the card's tile, `side` pixels a side; `None` for
+/// an empty image.
+pub fn card_decoded(decoded: &RgbaImage, side: u32) -> Option<CardArtwork> {
     let (width, height) = decoded.dimensions();
     if width == 0 || height == 0 {
         return None;
     }
-    let side = card_side(width, height);
     let (scaled_width, scaled_height) = cover_size(width, height, side);
     let scaled = imageops::resize(decoded, scaled_width, scaled_height, FilterType::CatmullRom);
     let tile = imageops::crop_imm(
@@ -152,7 +152,7 @@ mod tests {
         assert!(
             artwork.small.len() <= SMALL_ARTWORK.bytes && artwork.small.starts_with(&[0xFF, 0xD8])
         );
-        let tile = card_artwork(ICON_PNG).unwrap().expect("the icon fits");
+        let tile = card_artwork(ICON_PNG, 256).unwrap().expect("the icon fits");
         assert_eq!(tile.side, 256, "the tile keeps the icon's pixels");
         assert_eq!(
             tile.bands,
@@ -171,7 +171,7 @@ mod tests {
         let mut png = Vec::new();
         wide.write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
-        let tile = card_artwork(&png).unwrap().unwrap();
+        let tile = card_artwork(&png, 100).unwrap().unwrap();
         assert_eq!(tile.side, 100);
         assert_eq!(tile.rgba().len(), (100 * 100 * 4) as usize);
         assert_eq!(&tile.rgba()[..4], &[200, 100, 50, 255]);
@@ -187,6 +187,6 @@ mod tests {
     #[test]
     fn bytes_that_are_no_image_fail_to_decode() {
         assert!(fit_image(b"not an image").is_err());
-        assert!(card_artwork(b"not an image").is_err());
+        assert!(card_artwork(b"not an image", 100).is_err());
     }
 }

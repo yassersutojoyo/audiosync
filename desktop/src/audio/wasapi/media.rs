@@ -1,8 +1,7 @@
 //! What the media sessions reader ([`super::media_sessions`]) makes of a
 //! session: its description for track info, and its thumbnail decoded
 //! through the WinRT imaging codecs, as JPEGs for receivers ([`fit_artwork`])
-//! or as the Now Playing card's square tile ([`card_side`],
-//! [`cover_size`]). Decoding works on bytes already read, so it never waits
+//! or as the Now Playing card's square tile ([`cover_size`]). Decoding works on bytes already read, so it never waits
 //! on the app behind a session.
 
 use windows::Foundation::PropertyType;
@@ -32,7 +31,7 @@ use super::com::take_com_string;
 
 use crate::audio::now_playing::{FittedArtwork, MediaSession, fit_artwork};
 use crate::debug_log::DebugLog;
-use crate::now_playing_card::{CardArtwork, card_side, cover_size};
+use crate::now_playing_card::{CardArtwork, cover_size};
 
 /// AudioSync's icon, which receivers show while no track's artwork does.
 pub(super) const ICON_PNG: &[u8] = include_bytes!("../../../res/audiosync-256.png");
@@ -113,15 +112,14 @@ pub(super) fn fit_image(image: &[u8]) -> windows::core::Result<Option<FittedArtw
     }
 }
 
-/// An encoded image scaled to cover the card's tile and cropped to it;
-/// `None` for an empty image.
-pub(super) fn card_artwork(image: &[u8]) -> windows::core::Result<Option<CardArtwork>> {
+/// An encoded image scaled to cover the card's tile, `side` pixels a
+/// side, and cropped to it; `None` for an empty image.
+pub(super) fn card_artwork(image: &[u8], side: u32) -> windows::core::Result<Option<CardArtwork>> {
     let decoder = BitmapDecoder::CreateAsync(&memory_stream(image)?)?.join()?;
     let (width, height) = (decoder.PixelWidth()?, decoder.PixelHeight()?);
     if width == 0 || height == 0 {
         return Ok(None);
     }
-    let side = card_side(width, height);
     let (scaled_width, scaled_height) = cover_size(width, height, side);
     let transform = BitmapTransform::new()?;
     transform.SetScaledWidth(scaled_width)?;
@@ -232,7 +230,7 @@ mod tests {
         assert!(
             artwork.small.len() <= SMALL_ARTWORK.bytes && artwork.small.starts_with(&[0xFF, 0xD8])
         );
-        let tile = card_artwork(ICON_PNG).unwrap().expect("the icon fits");
+        let tile = card_artwork(ICON_PNG, 256).unwrap().expect("the icon fits");
         assert_eq!(tile.side, 256, "the tile keeps the icon's pixels");
         assert_eq!(
             tile.bands,

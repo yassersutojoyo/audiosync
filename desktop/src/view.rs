@@ -1753,6 +1753,7 @@ impl App {
     /// what changed in both. Returns whether the track changed.
     fn sync_now_playing(&self) -> bool {
         let window = self.main.window();
+        crate::now_playing_card::set_cover_scale(window.scale_factor());
         let shows = (window.is_visible() && !window.is_minimized())
             || self.flyout.window().is_visible()
             || self.remote_listening();

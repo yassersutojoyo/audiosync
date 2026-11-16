@@ -174,12 +174,33 @@ impl Eq for CardArtwork {}
 #[cfg(any(windows, target_os = "linux", test))]
 const ARTWORK_SIDE: u32 = 640;
 
-/// How many pixels a side the card's artwork of an image of `width` ×
-/// `height` has: its shorter side, so the window scales it only once, up to
-/// [`ARTWORK_SIDE`].
+/// The main window's widest cover: its widest left column, 280 px, less
+/// the 14 px the block around the cover leaves on each side.
 #[cfg(any(windows, target_os = "linux", test))]
-pub fn card_side(width: u32, height: u32) -> u32 {
-    width.min(height).clamp(1, ARTWORK_SIDE)
+const WIDEST_TILE: u32 = 252;
+
+/// The main window's scale factor in hundredths, which covers are made at.
+#[cfg(any(windows, target_os = "linux", test))]
+static COVER_SCALE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(100);
+
+/// Makes the next covers for a window at `scale`.
+#[cfg(any(windows, target_os = "linux", test))]
+pub fn set_cover_scale(scale: f32) {
+    let percent = (scale * 100.0).round().max(1.0) as u32;
+    COVER_SCALE.store(percent, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How many pixels a side the card's artwork has: the widest cover at the
+/// window's scale factor, up to [`ARTWORK_SIDE`], so a small thumbnail is
+/// scaled up once, smoothly, rather than stretched by the window.
+#[cfg(any(windows, target_os = "linux", test))]
+pub fn card_side() -> u32 {
+    side_at(COVER_SCALE.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[cfg(any(windows, target_os = "linux", test))]
+fn side_at(percent: u32) -> u32 {
+    (WIDEST_TILE * percent).div_ceil(100).clamp(1, ARTWORK_SIDE)
 }
 
 /// The size an image of `width` × `height` is scaled to so that it covers a
@@ -901,17 +922,13 @@ mod tests {
         assert_eq!(cover_size(0, 10, 96), (96, 960));
     }
 
+    /// Every cover is made at the widest tile's pixels, so an 83 px
+    /// thumbnail is scaled up once, smoothly, before the window draws it.
     #[test]
-    fn the_cards_artwork_keeps_the_images_pixels_up_to_the_widest_cover() {
-        assert_eq!(card_side(300, 300), 300);
-        assert_eq!(card_side(640, 480), 480);
-        assert_eq!(
-            card_side(56, 56),
-            56,
-            "never scaled up before the window scales it"
-        );
-        assert_eq!(card_side(1000, 1000), ARTWORK_SIDE);
-        assert_eq!(card_side(0, 10), 1);
+    fn the_cards_artwork_is_made_at_the_widest_tiles_pixels() {
+        assert_eq!(side_at(100), 252, "an 83 px thumbnail at 100 %");
+        assert_eq!(side_at(150), 378);
+        assert_eq!(side_at(300), ARTWORK_SIDE);
     }
 
     #[test]
