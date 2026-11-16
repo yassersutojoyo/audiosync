@@ -1908,10 +1908,7 @@ fn the_preset_and_equalizer_rows_name_their_choice_on_a_second_line() {
     }
     let main = include_str!("../ui/main.slint");
     for (part, text) in [
-        (
-            component_body(main, "PresetsCard"),
-            "text: root.presets.length == 0 ? Strings.no-presets : root.current;",
-        ),
+        (component_body(main, "PresetsCard"), "text: root.current;"),
         (
             component_body(main, "EqualizerCard"),
             "text: root.on ? root.curve : \"\";",
