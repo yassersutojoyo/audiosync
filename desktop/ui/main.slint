@@ -10,8 +10,8 @@ import { Tokens } from "tokens.slint";
 import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IconLook, IncomingCover, OutgoingSong, SlideLook, SlidLine, TrackMotion } from "track_slide.slint";
 import { Strings } from "strings.slint";
-import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, MenuDivider, MenuKey, MenuNote, MenuRoom, MenuState, MenuPanel, MenuRepaint, MenuRow, TextField, FadeScrollView, FoldPane, BrandMark, Card, CardTitle, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, SourceLook, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
+import { AirPlayDelayControls, Announcer, MenuDivider, MenuKey, MenuNote, MenuRoom, MenuState, MenuPanel, MenuRepaint, MenuRow, SourceMenuRow, TextField, FadeScrollView, FoldPane, BrandMark, Card, CardTitle, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -45,6 +45,7 @@ global MainColumns {
 // teal icon, its name and a chevron, opening the list of sources.
 component SourceMenu inherits Rectangle {
     in property <[string]> sources;
+    in property <[SourceLook]> looks;
     in property <int> index;
     in property <bool> is-input;
     in property <[MixAppItem]> mix-apps;
@@ -132,9 +133,9 @@ component SourceMenu inherits Rectangle {
     // The Mac's source menu: the sources, then Several Apps, whose rows
     // unfold under it.
     menu := PopupWindow {
-        x: -MenuRoom.margin;
+        x: 10px - MenuRoom.margin;
         y: root.height + 4px - MenuRoom.margin;
-        width: max(root.width + 2 * MenuRoom.margin, 240px + 2 * MenuRoom.margin, panel.preferred-width);
+        width: max(270px + 2 * MenuRoom.margin, panel.preferred-width);
         close-policy: close-on-click-outside;
 
         panel := MenuPanel {
@@ -147,11 +148,12 @@ component SourceMenu inherits Rectangle {
                 }
             }
 
-            for name[i] in root.sources: MenuRow {
+            for name[i] in root.sources: SourceMenuRow {
                 index: i;
                 text: name;
-                checks: true;
                 checked: i == root.index;
+                look: root.looks[i];
+                above: root.looks[max(i - 1, 0)].kind;
                 current <=> panel.current;
                 keyboard <=> panel.keyboard;
                 pulse: panel.pulse;
@@ -164,6 +166,7 @@ component SourceMenu inherits Rectangle {
             MenuDivider { }
 
             MenuRow {
+                height: 24px;
                 index: panel.sources;
                 text: Strings.source-mix-title;
                 checks: true;
@@ -2520,6 +2523,8 @@ export component MainWindow inherits Window {
     in property <bool> mark-breathes;
     in property <string> status;
     in property <[string]> sources;
+    // Each source's section and icon, in the order of sources.
+    in property <[SourceLook]> source-looks;
     in property <int> source-index;
     // The chosen input device's channel pairs; none up to two channels.
     in property <[string]> input-pairs;
@@ -3103,6 +3108,7 @@ export component MainWindow inherits Window {
 
                                 source := SourceMenu {
                                     sources: root.sources;
+                                    looks: root.source-looks;
                                     index: root.source-index;
                                     is-input: root.source-is-input;
                                     changed has-focus => {

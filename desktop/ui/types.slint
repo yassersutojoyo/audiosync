@@ -57,6 +57,15 @@ export enum SetupNetwork { unknown, private, public, offline }
 // Check Setup's Microphone row (setup_check.rs).
 export enum SetupMicrophone { not-used, working, blocked }
 
+// What a source menu row lists, which decides its section and its icon.
+export enum SourceRowKind { system, app, input }
+
+// A source menu row's kind, and an app's own icon (empty when it has none).
+export struct SourceLook {
+    kind: SourceRowKind,
+    icon: image,
+}
+
 // An app of the several-apps list under the source menu.
 export struct MixAppItem {
     name: string,
