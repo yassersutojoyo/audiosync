@@ -275,13 +275,13 @@ fn the_left_column_takes_the_macs_spacing() {
     assert_eq!(window.matches("- 28px;").count(), 2, "both covers");
     assert!(window.contains("padding-top: 16px;\n                        // The number ends"));
     assert!(window.contains(
-        "spacing: 8px;\n                            // 8 px clear of the knob at 100.\n                            number-gap: 16px;"
+        "padding-right: 1px;\n                            // 8 px clear of the knob at 100.\n                            number-gap: 16px;"
     ));
     assert!(window.contains(
         "padding-top: 11px;\n                        padding-bottom: 5px;\n\n                        Divider { }"
     ));
     assert!(window.contains(
-        "VerticalLayout {\n                        spacing: 6px;\n\n                        PresetsCard {"
+        "VerticalLayout {\n                        spacing: 6px;\n                        padding-left: -8px;\n                        padding-right: -8px;\n\n                        PresetsCard {"
     ));
     assert!(window.contains("left-column := FadeScrollView {"));
     assert!(window.contains("scroll := FadeScrollView {"));
@@ -359,9 +359,10 @@ fn presets_equalizer_and_calibrate_are_36_high_rows_6_apart_with_no_border() {
     }
     assert!(quick.contains("border-radius: Fluent.radius-control;"));
     assert!(equalizer.contains("border-radius: Fluent.radius-control;"));
-    assert!(presets.contains("Strings.no-presets : root.current;"));
+    // As the Mac's: no second line until a preset is picked.
+    assert!(presets.contains("text: root.current;"));
     let window = component(&source, "MainWindow");
-    let rows = &window[window.find("PresetsCard {").unwrap() - 120..];
+    let rows = &window[window.find("PresetsCard {").unwrap() - 240..];
     assert!(rows.contains("spacing: 6px;"));
     assert!(window.contains("button-size: 24px;"));
 }
