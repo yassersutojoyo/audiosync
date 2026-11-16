@@ -215,6 +215,11 @@ impl ArtworkCache {
         self.made.get(key).cloned()
     }
 
+    /// Whether the last attempt for `key` failed.
+    pub fn failed(&self, key: &str) -> bool {
+        self.failed.contains(key)
+    }
+
     /// Takes an attempt for `key`: the artwork, and the error when it is
     /// the track's first.
     pub fn keep<E>(
@@ -251,6 +256,8 @@ pub struct CardTrack {
     pub artist: String,
     pub playing: bool,
     pub artwork: Option<CardArtwork>,
+    /// The cover's read or decode failed, so none is on its way.
+    pub cover_failed: bool,
     pub modes: PlayModes,
 }
 
@@ -308,15 +315,16 @@ pub trait MediaControls {
     fn send(&mut self, command: Transport);
 }
 
-/// The longest the shown song stays up for the next one's cover, as the
-/// Mac's `ArtHold.limit`.
-pub const ART_HOLD: Duration = Duration::from_millis(1500);
+/// The longest the shown song stays up for the next one's cover: the Mac's
+/// cover fetch timeout (`ArtFetches.timeout`), which its hold and slide share.
+pub const ART_HOLD: Duration = Duration::from_secs(4);
 
 /// Whether `next` is another song from the player `shown` came from,
-/// without a cover yet while `shown` has one.
+/// with its cover still to come while `shown` has one.
 fn waits_for_cover(shown: &CardTrack, next: &CardTrack) -> bool {
     shown.artwork.is_some()
         && next.artwork.is_none()
+        && !next.cover_failed
         && shown.app_id == next.app_id
         && (shown.title != next.title || shown.artist != next.artist)
 }
@@ -485,6 +493,7 @@ pub mod fake {
             artist: artist.into(),
             playing,
             artwork: None,
+            cover_failed: false,
             modes: PlayModes::default(),
         }
     }
@@ -624,11 +633,11 @@ mod tests {
         assert_eq!(card.track().map(|t| t.title.as_str()), Some("Three"));
     }
 
-    /// A cover still loading 1.5 s after the hold began gives way: the next
+    /// A cover still loading 4 s after the hold began gives way: the next
     /// song shows without it.
     // covers: S459
     #[test]
-    fn a_cover_still_loading_after_1_5_s_gives_way() {
+    fn a_cover_still_loading_after_4_s_gives_way() {
         let fake = FakeControls::default();
         let mut card = card(&fake);
         let source = || Some(CardSource::AnyApp);
@@ -651,10 +660,10 @@ mod tests {
     }
 
     /// A Next or Previous press starts the wait, so the next song shows
-    /// 1.5 s after the press at most, with or without its cover.
+    /// 4 s after the press at most, with or without its cover.
     // covers: S463
     #[test]
-    fn a_cover_hold_ends_1_5_s_after_a_next_press() {
+    fn a_cover_hold_ends_4_s_after_a_next_press() {
         let fake = FakeControls::default();
         let mut card = card(&fake);
         let source = || Some(CardSource::AnyApp);
@@ -669,16 +678,74 @@ mod tests {
         assert!(card.sync_at(source(), true, start + ART_HOLD));
         assert_eq!(card.track().map(|t| t.title.as_str()), Some("Two"));
 
-        card.send_at(Transport::PlayPause, start + Duration::from_secs(4));
+        card.send_at(Transport::PlayPause, start + Duration::from_secs(6));
         fake.read(Some(with_cover(track("Spotify.exe", "Two", "Band", true))));
-        assert!(card.sync_at(source(), true, start + Duration::from_secs(4)));
+        assert!(card.sync_at(source(), true, start + Duration::from_secs(6)));
         fake.read(Some(track("Spotify.exe", "Three", "Band", true)));
-        let held = start + Duration::from_secs(5);
+        let held = start + Duration::from_secs(7);
         assert!(
             !card.sync_at(source(), true, held),
             "Play/Pause starts no wait"
         );
-        assert!(!card.sync_at(source(), true, held + Duration::from_millis(1400)));
+        assert!(!card.sync_at(source(), true, held + Duration::from_millis(3900)));
+    }
+
+    /// The Mac's rule: a pressed card waits for the new cover up to the
+    /// cover fetch's timeout, and the slide keeps the press's side.
+    // covers: S459, S463
+    #[test]
+    fn a_cover_2_3_or_3_5_s_after_previous_holds_and_slides_from_the_left() {
+        use crate::track_slide::{Direction, Place, TrackSlide};
+        for seconds in [2.3, 3.5] {
+            let fake = FakeControls::default();
+            let mut card = card(&fake);
+            let mut slide = TrackSlide::new(Place::Window);
+            let source = || Some(CardSource::AnyApp);
+            let start = Instant::now();
+            let at = |s: f64| start + Duration::from_secs_f64(s);
+            fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
+            assert!(card.sync_at(source(), true, start));
+            card.send_at(Transport::Previous, start);
+            slide.press(Some(Direction::Previous), true, false, start);
+            fake.read(Some(track("Spotify.exe", "Two", "Band", true)));
+            assert!(!card.sync_at(source(), true, at(0.4)));
+            assert!(
+                !card.sync_at(source(), true, at(seconds - 0.01)),
+                "{seconds} s: the old song still waits"
+            );
+            let old = card.track().cloned();
+            fake.read(Some(with_cover(track("Spotify.exe", "Two", "Band", true))));
+            assert!(card.sync_at(source(), true, at(seconds)));
+            let shown = card.track().expect("the card shows");
+            assert_eq!(shown.title, "Two");
+            assert!(
+                shown.artwork.is_some(),
+                "{seconds} s: it comes with its cover"
+            );
+            assert!(slide.change(old.as_ref(), card.track(), true, false, at(seconds)));
+            assert_eq!(slide.look(at(seconds)).0.side, -1.0, "{seconds} s");
+        }
+    }
+
+    /// A cover that failed to come lets the next song show at once.
+    // covers: S459
+    #[test]
+    fn a_failed_cover_shows_the_next_song_at_once() {
+        let fake = FakeControls::default();
+        let mut card = card(&fake);
+        let source = || Some(CardSource::AnyApp);
+        let start = Instant::now();
+        fake.read(Some(with_cover(track("Spotify.exe", "One", "Band", true))));
+        assert!(card.sync_at(source(), true, start));
+        card.send_at(Transport::Next, start);
+        let mut failed = track("Spotify.exe", "Two", "Band", true);
+        failed.cover_failed = true;
+        fake.read(Some(failed));
+        assert!(card.sync_at(source(), true, start + Duration::from_millis(300)));
+        let shown = card.track().expect("the card shows");
+        assert_eq!(shown.title, "Two");
+        assert!(shown.artwork.is_none());
+        assert_eq!(card.art_hold_left(), None);
     }
 
     #[test]
