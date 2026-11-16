@@ -9760,7 +9760,10 @@ mod tests {
                 .computed_opacity()
         };
         let fading = fade();
-        assert!(0.0 < fading && fading < 1.0, "its content fades in: {fading}");
+        assert!(
+            0.0 < fading && fading < 1.0,
+            "its content fades in: {fading}"
+        );
         after(200);
         assert_eq!(fade(), 1.0, "faded in within 150 ms");
     }
@@ -9788,7 +9791,10 @@ mod tests {
         advance_clock(Duration::from_millis(100));
         draw_frames();
         let rolling = leaving();
-        assert!(0.0 < rolling && rolling < 1.0, "the old value leaves: {rolling}");
+        assert!(
+            0.0 < rolling && rolling < 1.0,
+            "the old value leaves: {rolling}"
+        );
         advance_clock(Duration::from_millis(300));
         draw_frames();
         assert_eq!(leaving(), 0.0, "gone after 300 ms");
@@ -9799,7 +9805,10 @@ mod tests {
         advance_clock(Duration::from_millis(100));
         draw_frames();
         let fading = leaving();
-        assert!(0.0 < fading && fading < 1.0, "cross-fades with animation effects off: {fading}");
+        assert!(
+            0.0 < fading && fading < 1.0,
+            "cross-fades with animation effects off: {fading}"
+        );
         advance_clock(Duration::from_millis(300));
         draw_frames();
         app.main.global::<Motion>().set_on(true);
@@ -20106,7 +20115,9 @@ mod tests {
                 .iter()
                 .filter(|s| s.id != other)
                 .map(|s| strings.invoke_speaker_options(s.name.as_str().into()))
-                .flat_map(|label| ElementHandle::find_by_accessible_label(&app.main, &label))
+                .flat_map(|label| {
+                    ElementHandle::find_by_accessible_label(&app.main, &label).collect::<Vec<_>>()
+                })
                 .map(|button| button.computed_opacity())
                 .fold(0.0, f32::max)
         };
@@ -20135,7 +20146,11 @@ mod tests {
         app.update(|b| b.hide_speaker("local:desk", "USB"));
         draw_frames();
         settle();
-        assert_eq!(shown(), 0.0, "a row gone with its menu open leaves no … shown");
+        assert_eq!(
+            shown(),
+            0.0,
+            "a row gone with its menu open leaves no … shown"
+        );
     }
 
     /// A menu opened near the window's bottom or right edge stays whole
