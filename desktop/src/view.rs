@@ -9688,16 +9688,7 @@ mod tests {
             click(window, x, y);
             assert!(items() > closed, "{name}: a click later opens it again");
             press(window, Key::Escape);
-            // Windows' native menu, still the flyout's, closes on the press,
-            // which then reaches the button as a click.
-            if name == "flyout" {
-                click(window, x, y);
-                assert_eq!(items(), closed, "{name}: the closing click stays closed");
-                advance_clock(Duration::from_millis(1000));
-                draw_frames();
-            } else {
-                assert_eq!(items(), closed, "{name}: Escape closes it");
-            }
+            assert_eq!(items(), closed, "{name}: Escape closes it");
             click(window, x, y);
             assert!(items() > closed, "{name}: the next click opens it");
             press(window, Key::Escape);
@@ -19486,7 +19477,7 @@ mod tests {
         ] {
             assert!(gear.contains(colour), "{colour}");
         }
-        assert!(source.contains("width: 270px;"));
+        assert!(source.contains("width: max(270px + 2 * MenuRoom.margin, panel.preferred-width);"));
         let backend = MockBackend::new();
         let refreshes = backend.refreshes.clone();
         let app = app_over(backend);
@@ -19548,6 +19539,392 @@ mod tests {
             app.main.get_mix_apps().row_data(1).unwrap().checked,
             "the last app"
         );
+    }
+
+    /// Every popup menu but a text field's editing menu is the app's own,
+    /// drawn in its colors as the gear's is, and a click outside it, the
+    /// opener's included, closes it.
+    // covers: S449
+    #[test]
+    fn every_menu_but_the_text_fields_is_the_apps_themed_menu() {
+        let widgets = include_str!("../ui/widgets.slint").replace("\r\n", "\n");
+        let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
+        let equalizer = include_str!("../ui/equalizer.slint").replace("\r\n", "\n");
+        let flyout = include_str!("../ui/flyout.slint").replace("\r\n", "\n");
+        for (source, name) in [
+            (&widgets, "SpeakerRow"),
+            (&widgets, "ZoneMemberRow"),
+            (&widgets, "ZoneHeader"),
+            (&main, "PresetListRow"),
+            (&equalizer, "CurveMenu"),
+            (&flyout, "PresetPicker"),
+            (&flyout, "SourceMenu"),
+        ] {
+            let body = &source[source
+                .find(&format!("component {name} inherits"))
+                .unwrap_or_else(|| panic!("{name}"))..];
+            let body = &body[..body.find("\n}\n").unwrap()];
+            assert!(!body.contains("ContextMenuArea"), "{name}: no native menu");
+            for needle in [
+                "menu := PopupWindow {",
+                "close-policy: close-on-click-outside;",
+                "panel := MenuPanel {",
+            ] {
+                assert!(body.contains(needle), "{name}: {needle}");
+            }
+        }
+        let text_field = &widgets[widgets.find("export component TextField").unwrap()..];
+        let native = [&widgets, &main, &equalizer, &flyout]
+            .iter()
+            .map(|source| source.matches("ContextMenuArea {").count())
+            .sum::<usize>();
+        assert_eq!(native, 1, "the text field's editing menu only");
+        assert!(text_field[..text_field.find("\n}\n").unwrap()].contains("ContextMenuArea {"));
+        let row = &widgets[widgets.find("export component MenuRow").unwrap()..];
+        assert!(row.contains("opacity: root.enabled ? 1 : Tokens.disabled-opacity;"));
+    }
+
+    /// A speaker's options menu opens from its … button, a right-click on
+    /// the row, the Menu key and Shift+F10; End reaches its last item, and
+    /// Escape gives the focus back to the … button.
+    // covers: S449
+    #[test]
+    fn the_speaker_menu_opens_by_click_right_click_and_keys_and_reaches_its_last_item() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let hide = strings.get_hide_speaker();
+        let open = || ElementHandle::find_by_accessible_label(&app.main, &hide).count() > 0;
+        let label = strings.invoke_speaker_options(name_of(&app, "local:desk").into());
+        let options = ElementHandle::find_by_accessible_label(&app.main, &label)
+            .next()
+            .expect("the … button");
+        let (at, size) = (options.absolute_position(), options.size());
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        assert!(open(), "a click on … opens it");
+        press(window, Key::Escape);
+        assert!(!open(), "Escape closes it");
+
+        // The row's padding right of the … button.
+        let position = slint::LogicalPosition::new(at.x + size.width + 4.0, at.y + 2.0);
+        let button = PointerEventButton::Right;
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+        draw_frames();
+        assert!(open(), "a right-click on the row opens it");
+        press(window, Key::Escape);
+
+        let opens: [&[Key]; 2] = [&[Key::Menu], &[Key::Shift, Key::F10]];
+        for open_keys in opens {
+            app.main.set_focus_speaker_part(RowPart::Options);
+            app.main.set_focus_speaker_id("local:desk".into());
+            draw_frames();
+            for key in open_keys {
+                window.dispatch_event(WindowEvent::KeyPressed {
+                    text: (*key).into(),
+                });
+            }
+            for key in open_keys.iter().rev() {
+                window.dispatch_event(WindowEvent::KeyReleased {
+                    text: (*key).into(),
+                });
+            }
+            draw_frames();
+            assert!(open(), "{open_keys:?} opens it");
+            press(window, Key::Escape);
+            assert!(!open());
+            assert_eq!(
+                app.main_focus.borrow().speaker,
+                Some(("local:desk".into(), RowPart::Options)),
+                "{open_keys:?}: Escape gave the … button the focus back"
+            );
+        }
+
+        window.dispatch_event(WindowEvent::KeyPressed {
+            text: Key::Menu.into(),
+        });
+        draw_frames();
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(
+            app.snapshot().speaker("local:desk").is_none(),
+            "End reached Hide Speaker"
+        );
+    }
+
+    /// A menu opened near the window's bottom or right edge stays whole
+    /// inside it, a right-click's menu flipped above the pointer.
+    // covers: S449
+    #[test]
+    fn a_speaker_menu_near_the_bottom_edge_stays_inside_the_window() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = main_window_over(MockBackend::new());
+        let window = app.main.window();
+        let strings = app.strings();
+        let label = strings.invoke_speaker_options(name_of(&app, "local:desk").into());
+        let options = || {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .next()
+                .expect("the … button")
+        };
+        let bottom = options().absolute_position().y + options().size().height;
+        window.set_size(slint::LogicalSize::new(
+            window.size().to_logical(window.scale_factor()).width,
+            bottom + 30.0,
+        ));
+        draw_frames();
+        let (at, size) = (options().absolute_position(), options().size());
+        click(window, at.x + size.width / 2.0, at.y + size.height / 2.0);
+        let height = window.size().to_logical(window.scale_factor()).height;
+        let hide = ElementHandle::find_by_accessible_label(&app.main, &strings.get_hide_speaker())
+            .next()
+            .expect("the menu opened");
+        assert!(
+            hide.absolute_position().y + hide.size().height <= height,
+            "its last row is inside the window"
+        );
+        press(window, Key::Escape);
+
+        let width = at.x + size.width + 20.0;
+        window.set_size(slint::LogicalSize::new(width, height));
+        draw_frames();
+        let (at, size) = (options().absolute_position(), options().size());
+        let width = window.size().to_logical(window.scale_factor()).width;
+        let position = slint::LogicalPosition::new(at.x + size.width + 4.0, at.y + 2.0);
+        let button = PointerEventButton::Right;
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+        window.dispatch_event(WindowEvent::PointerPressed { position, button });
+        window.dispatch_event(WindowEvent::PointerReleased { position, button });
+        draw_frames();
+        let hide = ElementHandle::find_by_accessible_label(&app.main, &strings.get_hide_speaker())
+            .next()
+            .expect("the right-click's menu opened");
+        let (top, extent) = (hide.absolute_position(), hide.size());
+        assert!(top.x + extent.width <= width, "inside the right edge");
+        assert!(
+            top.y + extent.height <= position.y,
+            "above the pointer, with no room below"
+        );
+    }
+
+    /// Only one menu shows at a time, and Invoke (how Narrator presses a
+    /// button) on the button whose menu shows closes it.
+    // covers: S449
+    #[test]
+    fn one_menu_shows_at_a_time_and_invoking_its_button_again_closes_it() {
+        use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+        let app = main_window_over(MockBackend::new());
+        let strings = app.strings();
+        let count = |label: &str| ElementHandle::find_by_accessible_label(&app.main, label).count();
+        let button = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Button))
+                .expect("the button")
+        };
+        let exit = strings.get_menu_exit();
+        let gear = button(&strings.get_more_options());
+        let source = button("Audio Source");
+        let sources_closed = count("Web Browser");
+        gear.invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(count(&exit), 1, "Invoke opens the gear's menu");
+        gear.invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(count(&exit), 0, "a second Invoke closes it");
+        gear.invoke_accessible_default_action();
+        draw_frames();
+        source.invoke_accessible_default_action();
+        draw_frames();
+        assert_eq!(count(&exit), 0, "opening the source menu closed the gear's");
+        assert!(
+            count("Web Browser") > sources_closed,
+            "the source menu shows"
+        );
+        press(app.main.window(), Key::Escape);
+        assert_eq!(count("Web Browser"), sources_closed, "it has the keys");
+        for (name, opener) in [("gear", &gear), ("source", &source)] {
+            let shown = || count(&exit) + count("Web Browser") > sources_closed;
+            for _ in 0..2 {
+                opener.invoke_accessible_default_action();
+                draw_frames();
+                assert!(shown(), "{name}: Invoke opens it");
+                opener.invoke_accessible_default_action();
+                draw_frames();
+                assert!(!shown(), "{name}: Invoke again closes it");
+            }
+            opener.invoke_accessible_default_action();
+            draw_frames();
+            // Narrator may move the focus before it invokes the button.
+            app.main.invoke_focus_gear();
+            draw_frames();
+            opener.invoke_accessible_default_action();
+            draw_frames();
+            assert!(!shown(), "{name}: closed with the focus moved");
+        }
+    }
+
+    /// A menu is as wide as its widest item, so none is cut short: the
+    /// gear's New Zone from Active Speakers… beside Ctrl+N, and a long
+    /// source name, past the picker's width.
+    // covers: S449
+    #[test]
+    fn a_menu_is_as_wide_as_its_widest_item() {
+        use i_slint_backend_testing::ElementHandle;
+        let long = "Microphone (Realtek USB2.0 Audio Device on the front panel)";
+        let mut backend = MockBackend::new();
+        backend.rename_source("app:player", long);
+        let app = main_window_over(backend);
+        let strings = app.strings();
+        let row = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .last()
+                .expect("the row")
+        };
+        app.main.invoke_focus_gear();
+        press(app.main.window(), " ");
+        assert!(
+            row(&strings.get_new_zone()).size().width > 262.0,
+            "wider than the 270 px menu's rows"
+        );
+        press(app.main.window(), Key::Escape);
+        app.main.invoke_open_sources();
+        draw_frames();
+        assert!(
+            row(long).size().width > 360.0,
+            "the long name's row fits it"
+        );
+    }
+
+    /// The keys pass over a disabled item, as the Mac's menus do: Down from
+    /// Rename… on the current preset lands on Delete, past Update.
+    // covers: S449
+    #[test]
+    fn the_keys_pass_over_a_disabled_menu_item() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let window = app.main.window();
+        app.main.set_focus_presets(true);
+        draw_frames();
+        tab(window, 1);
+        press(window, Key::Menu);
+        press(window, Key::DownArrow);
+        press(window, Key::DownArrow);
+        press(window, Key::UpArrow);
+        press(window, Key::DownArrow);
+        press(window, Key::Return);
+        assert!(
+            preset_ids(&app).is_empty(),
+            "Delete ran, Update was passed over"
+        );
+    }
+
+    /// A zone's menus, on its header and on a speaker row in it: the
+    /// keyboard reaches their last items, Delete Zone and Remove from Zone.
+    // covers: S449
+    #[test]
+    fn the_keyboard_reaches_the_last_item_of_a_zones_menus() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        app.main.set_focus_in_zones_part(RowPart::Options);
+        app.main.set_focus_in_zones_id("local:desk".into());
+        draw_frames();
+        press(window, Key::Menu);
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(
+            app.snapshot()
+                .zones
+                .iter()
+                .all(|zone| zone.members.is_empty()),
+            "Remove from Zone ran"
+        );
+
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        app.main.set_focus_zone_part(RowPart::Options);
+        app.main.set_focus_zone_id("zone:den".into());
+        draw_frames();
+        press(window, Key::Menu);
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(app.snapshot().zones.is_empty(), "Delete Zone ran");
+    }
+
+    /// A preset row's menu: the keyboard reaches its last item, Delete.
+    // covers: S449
+    #[test]
+    fn the_keyboard_reaches_delete_in_a_presets_menu() {
+        let app = main_window_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let window = app.main.window();
+        app.main.set_focus_presets(true);
+        draw_frames();
+        tab(window, 1);
+        press(window, Key::Menu);
+        press(window, Key::End);
+        press(window, Key::Return);
+        assert!(preset_ids(&app).is_empty(), "Delete ran");
+    }
+
+    /// The equalizer's Curve menu and the tray panel's Presets menu: a
+    /// second click on the button closes them, and End reaches the last
+    /// item.
+    // covers: S449
+    #[test]
+    fn the_curve_and_tray_presets_menus_close_on_a_second_click_and_reach_their_last_item() {
+        use i_slint_backend_testing::ElementHandle;
+        fn toggles(component: &impl slint::ComponentHandle, button: &str, item: &str) {
+            let window = component.window();
+            let items = || ElementHandle::find_by_accessible_label(component, item).count();
+            let closed = items();
+            use i_slint_backend_testing::AccessibleRole;
+            let button = ElementHandle::find_by_accessible_label(component, button)
+                .find(|e| {
+                    matches!(
+                        e.accessible_role(),
+                        Some(AccessibleRole::Button | AccessibleRole::Combobox)
+                    )
+                })
+                .expect("the button");
+            let (at, size) = (button.absolute_position(), button.size());
+            let (x, y) = (at.x + size.width / 2.0, at.y + size.height / 2.0);
+            click(window, x, y);
+            assert!(items() > closed, "{item}: the first click opens the menu");
+            click(window, x, y);
+            assert_eq!(items(), closed, "{item}: the second click closes it");
+            click(window, x, y);
+            press(window, Key::End);
+            press(window, Key::Return);
+        }
+        let app = app_over(MockBackend::new());
+        app.save_preset("Evening");
+        app.update(|b| b.set_master_volume(30.0));
+        app.save_preset("Party");
+        app.update(|b| b.set_master_volume(60.0));
+        app.refresh();
+        app.flyout.show().expect("the flyout shows headless");
+        app.equalizer.show().expect("the equalizer shows headless");
+        draw_frames();
+        let strings = app.strings();
+        toggles(
+            &app.equalizer,
+            &strings.get_equalizer_curve(),
+            &strings.get_equalizer_save_curve(),
+        );
+        assert!(app.equalizer.get_naming_curve(), "Save Curve… ran");
+        toggles(&app.flyout, &strings.get_presets(), "Party");
+        draw_frames();
+        assert_eq!(app.flyout.get_current_preset(), "Party", "the last preset");
     }
 
     /// Settings… (Ctrl+,) opens the Settings window, which shows the main

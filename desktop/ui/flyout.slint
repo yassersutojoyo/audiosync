@@ -10,7 +10,7 @@ import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IncomingCover, OutgoingSong, SlideLook, SlidLine } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
+import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuDivider, MenuPanel, MenuRoom, MenuRow, MenuState, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
 
 // The preset row under the source (spec S260, S264): Presets, the name of
 // the preset picked last on a line under it; its menu lists every
@@ -21,8 +21,19 @@ component PresetPicker inherits Rectangle {
     in property <string> current;
     callback recalled(string);
 
+    property <int> menu-serial;
+
     function open-menu() {
-        menu.show({ x: 0, y: root.height });
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        focus.focus();
+        root.menu-serial = MenuState.claim();
+        menu.show();
     }
 
     min-height: 36px;
@@ -41,77 +52,64 @@ component PresetPicker inherits Rectangle {
             root.open-menu();
         }
 
-        menu := ContextMenuArea {
-            Menu {
-                for preset in root.presets: MenuItem {
-                    title: preset.name;
-                    checkable: true;
-                    checked: preset.current;
-                    activated => {
-                        root.recalled(preset.id);
-                    }
+        focus := FocusScope {
+            focus-on-click: false;
+            key-pressed(event) => {
+                if event.text == " " || event.text == Key.Return {
+                    root.open-menu();
+                    return accept;
                 }
+                return reject;
             }
 
-            focus := FocusScope {
-                focus-on-click: false;
-                key-pressed(event) => {
-                    if event.text == " " || event.text == Key.Return {
-                        root.open-menu();
-                        return accept;
+            row := HorizontalLayout {
+                // On the column of the volume icon below, centred in its 32 px button.
+                padding-left: 8px;
+                padding-right: 6px;
+                padding-top: 6px;
+                padding-bottom: 6px;
+                spacing: 8px;
+
+                // The glyphs stay on the label's line when the name's line shows.
+                VerticalLayout {
+                    alignment: center;
+                    icon := Glyph {
+                        glyph: Glyphs.presets;
+                        color: Tokens.text;
+                        width: 16px;
+                        height: label.preferred-height;
                     }
-                    return reject;
+
+                    Rectangle {
+                        height: name.min-height;
+                    }
                 }
 
-                row := HorizontalLayout {
-                    // On the column of the volume icon below, centred in its 32 px button.
-                    padding-left: 8px;
-                    padding-right: 6px;
-                    padding-top: 6px;
-                    padding-bottom: 6px;
-                    spacing: 8px;
-
-                    // The glyphs stay on the label's line when the name's line shows.
-                    VerticalLayout {
-                        alignment: center;
-                        icon := Glyph {
-                            glyph: Glyphs.presets;
-                            color: Tokens.text;
-                            width: 16px;
-                            height: label.preferred-height;
-                        }
-
-                        Rectangle {
-                            height: name.min-height;
-                        }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    label := Text {
+                        text: Strings.presets;
+                        color: Tokens.text;
+                        accessible-role: none;
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        horizontal-stretch: 1;
-                        label := Text {
-                            text: Strings.presets;
-                            color: Tokens.text;
-                            accessible-role: none;
-                        }
+                    name := ChoiceLine {
+                        text: root.current;
+                    }
+                }
 
-                        name := ChoiceLine {
-                            text: root.current;
-                        }
+                VerticalLayout {
+                    alignment: center;
+                    chevron := Glyph {
+                        glyph: Glyphs.chevron-down;
+                        font-size: 10px;
+                        color: Tokens.secondary-text;
+                        height: label.preferred-height;
                     }
 
-                    VerticalLayout {
-                        alignment: center;
-                        chevron := Glyph {
-                            glyph: Glyphs.chevron-down;
-                            font-size: 10px;
-                            color: Tokens.secondary-text;
-                            height: label.preferred-height;
-                        }
-
-                        Rectangle {
-                            height: name.min-height;
-                        }
+                    Rectangle {
+                        height: name.min-height;
                     }
                 }
             }
@@ -121,6 +119,34 @@ component PresetPicker inherits Rectangle {
     FocusRing {
         visible-focus: focus.has-focus;
         border-radius: root.border-radius;
+    }
+
+    menu := PopupWindow {
+        x: -MenuRoom.margin;
+        y: root.height + 4px - MenuRoom.margin;
+        width: max(root.width + 2 * MenuRoom.margin, 200px + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            count: root.presets.length;
+            close-requested => {
+                menu.close();
+            }
+
+            for preset[i] in root.presets: MenuRow {
+                index: i;
+                text: preset.name;
+                checks: true;
+                checked: preset.current;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.recalled(preset.id);
+                }
+            }
+        }
     }
 }
 
@@ -134,23 +160,19 @@ component SourceMenu inherits Rectangle {
     callback several-apps-requested();
     property <string> name: root.current >= 0 && root.current < root.sources.length ? root.sources[root.current] : Strings.source-system;
 
-    // Windows' native menu returns from show() once closed, and the press
-    // that closed it then reaches this button: that click must not reopen it.
-    property <bool> just-closed;
+    property <int> menu-serial;
 
     function open-menu() {
-        menu.show({ x: 0, y: root.height });
-        root.just-closed = true;
-        reopen-guard.start();
-    }
-
-    reopen-guard := Timer {
-        interval: 300ms;
-        running: false;
-        triggered => {
-            root.just-closed = false;
-            self.stop();
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
         }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        focus.focus();
+        root.menu-serial = MenuState.claim();
+        menu.show();
     }
 
     min-width: 0px;
@@ -168,60 +190,38 @@ component SourceMenu inherits Rectangle {
 
     touch := TouchArea {
         clicked => {
-            if !root.just-closed {
-                root.open-menu();
-            }
+            root.open-menu();
         }
 
-        menu := ContextMenuArea {
-            Menu {
-                for source[index] in root.sources: MenuItem {
-                    title: source;
-                    checkable: true;
-                    checked: index == root.current;
-                    activated => {
-                        root.selected(index);
-                    }
+        focus := FocusScope {
+            focus-on-click: false;
+            key-pressed(event) => {
+                if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
+                    root.open-menu();
+                    return accept;
                 }
-                MenuSeparator { }
-                MenuItem {
-                    title: Strings.source-mix-more;
-                    activated => {
-                        root.several-apps-requested();
-                    }
-                }
+                return reject;
             }
 
-            focus := FocusScope {
-                focus-on-click: false;
-                key-pressed(event) => {
-                    if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
-                        root.open-menu();
-                        return accept;
-                    }
-                    return reject;
+            row := HorizontalLayout {
+                alignment: start;
+                padding-left: 2px;
+                padding-right: 2px;
+                spacing: 6px;
+
+                label := Text {
+                    text: root.name;
+                    color: Tokens.secondary-text;
+                    vertical-alignment: center;
+                    wrap: no-wrap;
+                    overflow: elide;
+                    accessible-role: none;
                 }
 
-                row := HorizontalLayout {
-                    alignment: start;
-                    padding-left: 2px;
-                    padding-right: 2px;
-                    spacing: 6px;
-
-                    label := Text {
-                        text: root.name;
-                        color: Tokens.secondary-text;
-                        vertical-alignment: center;
-                        wrap: no-wrap;
-                        overflow: elide;
-                        accessible-role: none;
-                    }
-
-                    chevron := Glyph {
-                        glyph: Glyphs.chevron-down;
-                        font-size: 10px;
-                        color: Tokens.secondary-text;
-                    }
+                chevron := Glyph {
+                    glyph: Glyphs.chevron-down;
+                    font-size: 10px;
+                    color: Tokens.secondary-text;
                 }
             }
         }
@@ -230,6 +230,49 @@ component SourceMenu inherits Rectangle {
     FocusRing {
         visible-focus: focus.has-focus;
         border-radius: root.border-radius;
+    }
+
+    menu := PopupWindow {
+        x: -MenuRoom.margin;
+        y: root.height + 4px - MenuRoom.margin;
+        width: max(root.width + 2 * MenuRoom.margin, 220px + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            count: root.sources.length + 1;
+            close-requested => {
+                menu.close();
+            }
+
+            for source[index] in root.sources: MenuRow {
+                index: index;
+                text: source;
+                checks: true;
+                checked: index == root.current;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.selected(index);
+                }
+            }
+
+            MenuDivider { }
+
+            MenuRow {
+                index: root.sources.length;
+                text: Strings.source-mix-more;
+                check-column: true;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.several-apps-requested();
+                }
+            }
+        }
     }
 }
 

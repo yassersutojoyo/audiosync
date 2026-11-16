@@ -6,7 +6,7 @@
 import { Button, Palette } from "std-widgets.slint";
 import { Tokens } from "tokens.slint";
 import { Strings } from "strings.slint";
-import { FocusRing, Fluent, Glyph, Glyphs, NameField, LevelSlider, QuietText, SecondaryText, TextField, ToggleSwitch } from "widgets.slint";
+import { FocusRing, Fluent, Glyph, Glyphs, MenuDivider, MenuPanel, MenuRoom, MenuRow, MenuState, NameField, LevelSlider, QuietText, SecondaryText, TextField, ToggleSwitch } from "widgets.slint";
 
 // One vertical gain slider with its value above and its label below.
 component Band inherits VerticalLayout {
@@ -211,23 +211,19 @@ component CurveMenu inherits Rectangle {
     property <string> shown: root.current >= 0 && root.current < root.names.length ? root.names[root.current] : Strings.equalizer-custom;
     property <string> saved-name: root.saved-shown ? root.shown : "";
 
-    // Windows' native menu returns from show() once closed, and the press
-    // that closed it then reaches this button: that click must not reopen it.
-    property <bool> just-closed;
+    property <int> menu-serial;
 
     function open-menu() {
-        menu.show({ x: 0, y: root.height });
-        root.just-closed = true;
-        reopen-guard.start();
-    }
-
-    reopen-guard := Timer {
-        interval: 300ms;
-        running: false;
-        triggered => {
-            root.just-closed = false;
-            self.stop();
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
         }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        focus.focus();
+        root.menu-serial = MenuState.claim();
+        menu.show();
     }
 
     min-height: 32px;
@@ -245,88 +241,37 @@ component CurveMenu inherits Rectangle {
 
     touch := TouchArea {
         clicked => {
-            if !root.just-closed {
-                root.open-menu();
-            }
+            root.open-menu();
         }
 
-        menu := ContextMenuArea {
-            Menu {
-                for i in root.preset-count: MenuItem {
-                    title: root.names[i];
-                    checkable: true;
-                    checked: i == root.current;
-                    activated => {
-                        root.selected(i);
-                    }
+        focus := FocusScope {
+            focus-on-click: false;
+            key-pressed(event) => {
+                if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
+                    root.open-menu();
+                    return accept;
                 }
-
-                if root.names.length > root.preset-count: MenuSeparator { }
-
-                for i in root.names.length - root.preset-count: MenuItem {
-                    title: root.names[root.preset-count + i];
-                    checkable: true;
-                    checked: root.preset-count + i == root.current;
-                    activated => {
-                        root.selected(root.preset-count + i);
-                    }
-                }
-
-                MenuSeparator { }
-
-                MenuItem {
-                    title: Strings.equalizer-save-curve;
-                    enabled: !root.naming;
-                    activated => {
-                        root.save();
-                    }
-                }
-
-                if root.saved-shown: MenuItem {
-                    title: Strings.equalizer-rename-curve(root.saved-name);
-                    enabled: !root.naming;
-                    activated => {
-                        root.rename();
-                    }
-                }
-
-                if root.saved-shown: MenuItem {
-                    title: Strings.equalizer-delete-curve(root.saved-name);
-                    enabled: !root.naming;
-                    activated => {
-                        root.delete();
-                    }
-                }
+                return reject;
             }
 
-            focus := FocusScope {
-                key-pressed(event) => {
-                    if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
-                        root.open-menu();
-                        return accept;
-                    }
-                    return reject;
+            HorizontalLayout {
+                padding-left: 11px;
+                padding-right: 11px;
+                spacing: 8px;
+
+                Text {
+                    text: root.shown;
+                    color: Tokens.text;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    accessible-role: none;
                 }
 
-                HorizontalLayout {
-                    padding-left: 11px;
-                    padding-right: 11px;
-                    spacing: 8px;
-
-                    Text {
-                        text: root.shown;
-                        color: Tokens.text;
-                        overflow: elide;
-                        horizontal-stretch: 1;
-                        vertical-alignment: center;
-                        accessible-role: none;
-                    }
-
-                    Glyph {
-                        glyph: Glyphs.chevron-down;
-                        font-size: 10px;
-                        color: Tokens.secondary-text;
-                    }
+                Glyph {
+                    glyph: Glyphs.chevron-down;
+                    font-size: 10px;
+                    color: Tokens.secondary-text;
                 }
             }
         }
@@ -335,6 +280,102 @@ component CurveMenu inherits Rectangle {
     FocusRing {
         visible-focus: focus.has-focus;
         border-radius: root.border-radius;
+    }
+
+    menu := PopupWindow {
+        x: -MenuRoom.margin;
+        y: root.height + 4px - MenuRoom.margin;
+        width: max(root.width + 2 * MenuRoom.margin, 240px + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            count: root.names.length + (root.saved-shown ? 3 : 1);
+            close-requested => {
+                menu.close();
+            }
+
+            for i in root.preset-count: MenuRow {
+                index: i;
+                text: root.names[i];
+                checks: true;
+                checked: i == root.current;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.selected(i);
+                }
+            }
+
+            if root.names.length > root.preset-count: MenuDivider { }
+
+            for i in root.names.length - root.preset-count: MenuRow {
+                index: root.preset-count + i;
+                text: root.names[root.preset-count + i];
+                checks: true;
+                checked: root.preset-count + i == root.current;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.selected(root.preset-count + i);
+                }
+            }
+
+            MenuDivider { }
+
+            MenuRow {
+                index: root.names.length;
+                text: Strings.equalizer-save-curve;
+                check-column: true;
+                enabled: !root.naming;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    menu.close();
+                    root.save();
+                }
+            }
+
+            if root.saved-shown: MenuRow {
+                index: root.names.length + 1;
+                text: Strings.equalizer-rename-curve(root.saved-name);
+                check-column: true;
+                enabled: !root.naming;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    menu.close();
+                    root.rename();
+                }
+            }
+
+            if root.saved-shown: MenuRow {
+                index: root.names.length + 2;
+                text: Strings.equalizer-delete-curve(root.saved-name);
+                check-column: true;
+                enabled: !root.naming;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.delete();
+                }
+            }
+        }
     }
 }
 

@@ -148,7 +148,7 @@ one, with a notice that names it.
 | Tab, Shift+Tab | Move through the controls in reading order: header, notices, the left column's cards, then each speaker row |
 | Space, Enter | Turn the focused speaker or zone on or off, or press the focused button |
 | Arrow keys | Move the focused slider (volume in steps of 1, or a Google Cast speaker's own step; equalizer in 0.5 dB) |
-| Menu key, Shift+F10 | Open the focused row's context menu |
+| Menu key, Shift+F10 | Open the focused row's menu, drawn in the app's colors as every AudioSync menu is but a text field's editing menu |
 | Ctrl+S | Apply every typed delay |
 | Ctrl+N | New zone from the speakers that are on, also from the equalizer, either Guide or Web Remote |
 | F5 | Refresh devices, also from the equalizer, either Guide or Web Remote |

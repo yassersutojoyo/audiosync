@@ -11,7 +11,7 @@ import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IconLook, IncomingCover, OutgoingSong, SlideLook, SlidLine, TrackMotion } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { Appearance, CalibrationRowItem, CastList, DeviceVolumeHint, HiddenItem, LeftOutItem, MainControl, MixAppItem, NoticeItem, PresetItem, UpdateButton, RowPart, RowState, SpeakerItem, ZoneItem } from "types.slint";
-import { AirPlayDelayControls, Announcer, MenuDivider, MenuNote, MenuPanel, MenuRow, TextField, FadeScrollView, FoldPane, BrandMark, Card, CardTitle, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
+import { AirPlayDelayControls, Announcer, MenuDivider, MenuKey, MenuNote, MenuRoom, MenuState, MenuPanel, MenuRow, TextField, FadeScrollView, FoldPane, BrandMark, Card, CardTitle, Divider, FocusRing, Fluent, Glyph, Glyphs, IconButton, LevelMeter, ChoiceLine, LinkButton, MarqueeText, MasterVolume, Motion, NoticeStack, OverlayScrollView, PairPicker, PowerSwitch, QuietText, ResizeEdge, ScreenReader, SecondaryText, SmallButton, SpeakerRow, WindowButton, Wordmark, ZoneHeader, ZoneMemberRow } from "widgets.slint";
 
 export { AboutDialog } from "about.slint";
 export { EqualizerWindow } from "equalizer.slint";
@@ -56,8 +56,19 @@ component SourceMenu inherits Rectangle {
     // Several Apps' rows show under it.
     property <bool> mix-expanded;
 
+    property <int> menu-serial;
+
     public function open-menu() {
         root.mix-expanded = false;
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        focus.focus();
+        root.menu-serial = MenuState.claim();
         menu.show();
     }
 
@@ -121,9 +132,9 @@ component SourceMenu inherits Rectangle {
     // The Mac's source menu: the sources, then Several Apps, whose rows
     // unfold under it.
     menu := PopupWindow {
-        x: 0;
-        y: root.height + 4px;
-        width: max(root.width, 240px);
+        x: -MenuRoom.margin;
+        y: root.height + 4px - MenuRoom.margin;
+        width: max(root.width + 2 * MenuRoom.margin, 240px + 2 * MenuRoom.margin, panel.preferred-width);
         close-policy: close-on-click-outside;
 
         panel := MenuPanel {
@@ -241,7 +252,18 @@ component GearButton inherits IconButton {
     callback about();
     callback exit();
 
+    property <int> menu-serial;
+
     public function open-menu() {
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        root.focus();
+        root.menu-serial = MenuState.claim();
         menu.show();
     }
 
@@ -252,9 +274,9 @@ component GearButton inherits IconButton {
     }
 
     menu := PopupWindow {
-        x: root.width - 270px;
-        y: root.height + 4px;
-        width: 270px;
+        x: root.width - self.width + MenuRoom.margin;
+        y: root.height + 4px - MenuRoom.margin;
+        width: max(270px + 2 * MenuRoom.margin, panel.preferred-width);
 
         panel := MenuPanel {
             count: 7;
@@ -892,6 +914,34 @@ component PresetListRow inherits Rectangle {
     property <bool> options-focused;
     // Set once Return or Escape ended the rename, so the field's lost focus adds nothing.
     property <bool> rename-done;
+    property <length> menu-x;
+    property <length> menu-y;
+    property <length> menu-width: 200px;
+
+    // At x, y in the window; past its right or bottom edge the menu
+    // flips to end at flip-x or flip-y.
+    property <int> menu-serial;
+
+    function open-menu(x: length, y: length, flip-x: length, flip-y: length) {
+        root.menu-x = MenuRoom.place(x, root.menu-width, flip-x, MenuRoom.width) - root.absolute-position.x;
+        root.menu-y = MenuRoom.place(y, MenuRoom.rows(3, 1), flip-y, MenuRoom.height) - root.absolute-position.y;
+        if MenuState.open != 0 && MenuState.open == root.menu-serial {
+            menu.close();
+            MenuState.open = 0;
+            return;
+        }
+        // A closing menu gives the focus back to what had it, which is also
+        // how it tells it closed; with nothing focused it couldn't.
+        if !focus.has-focus && !root.options-focused {
+            options.focus();
+        }
+        root.menu-serial = MenuState.claim();
+        menu.show();
+    }
+
+    function open-menu-under-options() {
+        root.open-menu(options.absolute-position.x, options.absolute-position.y + options.height, options.absolute-position.x + options.width, options.absolute-position.y);
+    }
 
     min-height: 40px;
     border-radius: 6px;
@@ -906,31 +956,21 @@ component PresetListRow inherits Rectangle {
             root.recall();
         }
 
-        menu := ContextMenuArea {
-            Menu {
-                MenuItem {
-                    title: Strings.rename-preset;
-                    activated => {
-                        root.rename();
-                    }
-                }
+        pointer-event(event) => {
+            if event.button == PointerEventButton.right && event.kind == PointerEventKind.down {
+                root.open-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+            }
+        }
 
-                MenuItem {
-                    title: Strings.update-preset;
-                    enabled: !root.item.current;
-                    activated => {
-                        root.update();
-                    }
+        FocusScope {
+            focus-on-click: false;
+            focus-on-tab-navigation: false;
+            key-pressed(event) => {
+                if MenuKey.opens(event) {
+                    root.open-menu-under-options();
+                    return accept;
                 }
-
-                MenuSeparator { }
-
-                MenuItem {
-                    title: Strings.delete-preset;
-                    activated => {
-                        root.delete();
-                    }
-                }
+                return reject;
             }
 
             HorizontalLayout {
@@ -1032,22 +1072,75 @@ component PresetListRow inherits Rectangle {
 
                 VerticalLayout {
                     alignment: center;
-                    IconButton {
+                    options := IconButton {
                         height: 24px;
                         glyph: Glyphs.more;
                         label: Strings.speaker-options(root.item.name);
                         glyph-color: Tokens.secondary-text;
                         opacity: hover.has-hover || focus.has-focus || root.options-focused || ScreenReader.on ? 1 : 0;
                         clicked => {
-                            menu.show({
-                                x: self.absolute-position.x - menu.absolute-position.x,
-                                y: self.absolute-position.y - menu.absolute-position.y + self.height,
-                            });
+                            root.open-menu-under-options();
                         }
                         focus-changed(focused) => {
                             root.options-focused = focused;
                         }
                     }
+                }
+            }
+        }
+    }
+
+    menu := PopupWindow {
+        x: root.menu-x - MenuRoom.margin;
+        y: root.menu-y - MenuRoom.margin;
+        width: max(root.menu-width + 2 * MenuRoom.margin, panel.preferred-width);
+        close-policy: close-on-click-outside;
+
+        panel := MenuPanel {
+            count: 3;
+            close-requested => {
+                menu.close();
+            }
+
+            MenuRow {
+                index: 0;
+                text: Strings.rename-preset;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    menu.close();
+                    root.rename();
+                }
+            }
+
+            MenuRow {
+                index: 1;
+                text: Strings.update-preset;
+                enabled: !root.item.current;
+                step: panel.step;
+                count: panel.count;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.update();
+                }
+            }
+
+            MenuDivider { }
+
+            MenuRow {
+                index: 2;
+                text: Strings.delete-preset;
+                current <=> panel.current;
+                keyboard <=> panel.keyboard;
+                pulse: panel.pulse;
+                done <=> panel.done;
+                activated => {
+                    root.delete();
                 }
             }
         }
@@ -2806,9 +2899,15 @@ export component MainWindow inherits Window {
     property <length> columns-width;
     init => {
         self.columns-width = self.width;
+        MenuRoom.width = self.width;
+        MenuRoom.height = self.height;
     }
     changed width => {
         self.columns-width = self.width;
+        MenuRoom.width = self.width;
+    }
+    changed height => {
+        MenuRoom.height = self.height;
     }
     // The columns draw no scroll bar, so nothing keeps clear of one.
     property <length> scroll-gutter: 0px;
