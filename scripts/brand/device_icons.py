@@ -1,4 +1,9 @@
-"""Generates AudioSync's own device icons (18 px circle glyphs, 12 px badges).
+"""Generates AudioSync's own device icons (circle glyphs, 12 px badges).
+
+Circle glyphs are drawn per grid, near the sheet's 18 in 32: 18 px for the
+32 px circle, 16 px for the Windows flyout's 28 px circle and 14 px for the
+Mac's 24 and 26 px circles, each on its own whole pixels rather than scaled;
+the smaller sets go in a subfolder named by their size.
 
 Every straight horizontal or vertical edge is asserted to land on a whole
 pixel; curves and diagonals are left to antialiasing.
@@ -84,8 +89,8 @@ def arc_line(cx, cy, rad, w, a0, a1):
         circ(*pt(cx, cy, rad, a0), w / 2) + circ(*pt(cx, cy, rad, a1), w / 2)
 
 
-# 18 px glyphs: walls 2, gaps 2, outer corner radius 2, cut-out radius 1.
-GLYPHS = {
+# Every grid: walls 2, gaps 2, outer corner radius 2, cut-out radius 1.
+GLYPHS = {18: {
     "laptop": ("evenodd",
                rr(3, 3, 15, 13, tl=2, tr=2, br=0, bl=0) + rr(5, 5, 13, 11, 1)
                + rr(1, 13, 17, 15, 1)),
@@ -111,13 +116,61 @@ GLYPHS = {
              + line([(2, 11), (9, 15), (16, 11)], 2)),
     "device": ("evenodd",
                rr(2, 2, 16, 16, 2) + rr(4, 4, 14, 14, 1) + circ(9, 9, 3)),
-}
+}, 14: {
+    "laptop": ("evenodd",
+               rr(2, 2, 12, 10, tl=2, tr=2, br=0, bl=0) + rr(4, 4, 10, 8, 1) + rr(1, 10, 13, 12, 1)),
+    "speaker": ("evenodd",
+                rr(3, 1, 11, 13, 2) + circ(7, 4, 1) + circ(7, 9, 2.5) + circ(7, 9, 1)),
+    "smart-speaker": ("evenodd",
+                      rr(3, 1, 11, 13, 3) + rr(5, 4, 9, 6, 1) + circ(7, 9.5, 1.5)),
+    "headphones": ("evenodd",
+                   sector(7, 7, 6, 4, 180, 360) + rr(1, 7, 5, 13, 2) + rr(9, 7, 13, 13, 2)),
+    "monitor": ("evenodd",
+                rr(1, 1, 13, 10, 2) + rr(3, 3, 11, 8, 1) + rr(6, 10, 8, 11) + rr(4, 11, 10, 13, 1)),
+    "tv": ("evenodd",
+           rr(1, 2, 13, 11, 2) + rr(3, 4, 11, 9, 1)
+           + rr(3, 11, 5, 13, bl=1, br=1) + rr(9, 11, 11, 13, bl=1, br=1)),
+    "bluetooth": ("nonzero",
+                  line([(3.5, 4.5), (10.5, 9.5), (7, 12.5), (7, 1.5), (10.5, 4.5), (3.5, 9.5)], 2)),
+    "usb": ("evenodd",
+            rr(4, 1, 6, 4, tl=0.5, tr=0.5) + rr(8, 1, 10, 4, tl=0.5, tr=0.5)
+            + rr(3, 4, 11, 10, 2) + rr(6, 10, 8, 13, bl=1, br=1)),
+    "zone": ("nonzero",
+             rounded_poly([(7, 2), (12, 5), (7, 8), (2, 5)], 1)
+             + line([(2, 9), (7, 12), (12, 9)], 2)),
+    "device": ("evenodd",
+               rr(2, 2, 12, 12, 2) + rr(4, 4, 10, 10, 1) + circ(7, 7, 1.5)),
+}, 16: {
+    "laptop": ("evenodd",
+               rr(2, 2, 14, 12, tl=2, tr=2, br=0, bl=0) + rr(4, 4, 12, 10, 1) + rr(1, 12, 15, 14, 1)),
+    "speaker": ("evenodd",
+                rr(3, 1, 13, 15, 2) + circ(8, 4, 1) + circ(8, 10, 2.75) + circ(8, 10, 1)),
+    "smart-speaker": ("evenodd",
+                      rr(3, 1, 13, 15, 4) + rr(5, 4, 11, 6, 1) + circ(8, 10.5, 1.75)),
+    "headphones": ("evenodd",
+                   sector(8, 8, 7, 5, 180, 360) + rr(1, 8, 6, 15, 2) + rr(10, 8, 15, 15, 2)),
+    "monitor": ("evenodd",
+                rr(1, 2, 15, 12, 2) + rr(3, 4, 13, 10, 1) + rr(7, 12, 9, 13) + rr(4, 13, 12, 15, 1)),
+    "tv": ("evenodd",
+           rr(1, 2, 15, 12, 2) + rr(3, 4, 13, 10, 1)
+           + rr(3, 12, 5, 14, bl=1, br=1) + rr(11, 12, 13, 14, bl=1, br=1)),
+    "bluetooth": ("nonzero",
+                  line([(4, 5), (12, 11), (8, 14.5), (8, 1.5), (12, 5), (4, 11)], 2)),
+    "usb": ("evenodd",
+            rr(5, 1, 7, 4, tl=0.5, tr=0.5) + rr(9, 1, 11, 4, tl=0.5, tr=0.5)
+            + rr(3, 4, 13, 11, 2) + rr(7, 11, 9, 15, bl=1, br=1)),
+    "zone": ("nonzero",
+             rounded_poly([(8, 2.5), (14, 6), (8, 9.5), (2, 6)], 1)
+             + line([(2, 10), (8, 13.5), (14, 10)], 2)),
+    "device": ("evenodd",
+               rr(2, 2, 14, 14, 2) + rr(4, 4, 12, 12, 1) + circ(8, 8, 2)),
+}}
 
 # 12 px badges: solid shapes, 1 px gaps, corner radius 1.
 BADGES = {
     "airplay": ("nonzero",
                 poly([(3, 11), (9, 11), (6, 7.5)]) + arc_line(6, 9, 3.25, 1.5, 205, 335)
-                + arc_line(6, 9, 6.25, 1.5, 212, 328)),
+                + arc_line(6, 9, 6.25, 1.5, 214, 326)),
     "cast": ("nonzero",
              circ(2.5, 6, 1.5) + arc_line(2.5, 6, 4.25, 2, -45, 45) + arc_line(2.5, 6, 7.5, 2, -38, 38)),
     "bluetooth": ("nonzero",
@@ -149,8 +202,11 @@ def svg(size, rule, d):
 
 
 os.makedirs(OUT, exist_ok=True)
-for k, (rule, d) in GLYPHS.items():
-    open(os.path.join(OUT, f"{k}.svg"), "w", newline="\n").write(svg(18, rule, d))
+for size, glyphs in GLYPHS.items():
+    folder = OUT if size == 18 else os.path.join(OUT, str(size))
+    os.makedirs(folder, exist_ok=True)
+    for k, (rule, d) in glyphs.items():
+        open(os.path.join(folder, f"{k}.svg"), "w", newline="\n").write(svg(size, rule, d))
 for k, (rule, d) in BADGES.items():
     open(os.path.join(OUT, f"badge-{k}.svg"), "w", newline="\n").write(svg(12, rule, d))
-print(len(GLYPHS), "glyphs,", len(BADGES), "badges")
+print(len(GLYPHS[18]), "glyphs on", len(GLYPHS), "grids,", len(BADGES), "badges")
