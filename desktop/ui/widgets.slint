@@ -38,6 +38,10 @@ export global Fluent {
     out property <length> radius-card: 8px;
     // Buttons, chips and the rows inside a card (control radius).
     out property <length> radius-control: 4px;
+    // The Mac's AppKit bordered small button and segmented track: white with a
+    // soft shadow in light, a filled grey (about #555 on the window) in dark.
+    out property <brush> native-control: Tokens.dark ? Tokens.text.with-alpha(0.2) : Tokens.surface;
+    out property <color> native-control-shadow: Tokens.dark ? transparent : Tokens.text.with-alpha(0.22);
     out property <length> card-padding: 12px;
     // The minimum height of a speaker or group row.
     out property <length> row-height: 48px;
@@ -2392,7 +2396,7 @@ export component TextField inherits Rectangle {
 // range. Drawn in the 4 px spacing around the field instead of taking room,
 // so the row is no taller than its buttons.
 // A delay step, as the Mac panel's small bordered button: 20 high, 10 px
-// digits, a hairline edge and a faint fill.
+// digits, a white pill with a hairline and a soft shadow, or grey in dark.
 component DelayStep inherits Rectangle {
     in property <int> delta;
     out property <bool> has-focus: focus.has-focus;
@@ -2401,9 +2405,12 @@ component DelayStep inherits Rectangle {
     height: 20px;
     min-width: label.preferred-width + 14px;
     border-radius: 5px;
-    border-width: 1px;
-    border-color: Tokens.text.with-alpha(Tokens.dark ? 0.12 : 0.14);
-    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : Tokens.text.with-alpha(Tokens.dark ? 0.08 : 0.05);
+    border-width: Tokens.dark ? 0px : max(0.5px, 1phx);
+    border-color: Fluent.stroke;
+    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : Fluent.native-control;
+    drop-shadow-blur: 2px;
+    drop-shadow-offset-y: 0.5px;
+    drop-shadow-color: Fluent.native-control-shadow;
     animate background { duration: Fluent.fast; }
     forward-focus: focus;
     accessible-role: button;

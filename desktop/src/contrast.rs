@@ -578,6 +578,45 @@ fn custom_controls_are_accessible_and_show_focus() {
     }
 }
 
+/// The delay steps and the light Appearance track look like the Mac's AppKit
+/// controls: white with a hairline and a soft shadow in light, a grey fill in
+/// dark that keeps the text at 4.5:1 on the window and on a card.
+#[test]
+fn delay_steps_and_the_appearance_track_look_like_the_macs_native_controls() {
+    let step = component_body(include_str!("../ui/widgets.slint"), "DelayStep");
+    let settings = include_str!("../ui/settings.slint");
+    let track = settings
+        .split("accessible-label: Strings.appearance;")
+        .next()
+        .and_then(|before| before.rsplit("Rectangle {").next())
+        .expect("the Appearance track");
+    for (name, body) in [("delay step", step), ("Appearance track", track)] {
+        for needle in [
+            "Fluent.native-control",
+            "drop-shadow-color: Fluent.native-control-shadow",
+        ] {
+            assert!(body.contains(needle), "the {name} has {needle}");
+        }
+    }
+    let prefix = "out property <brush> native-control: Tokens.dark ? Tokens.text.with-alpha(";
+    let alpha: f64 = include_str!("../ui/widgets.slint")
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(prefix))
+        .and_then(|rest| rest.split(')').next())
+        .and_then(|value| value.parse().ok())
+        .expect("Fluent.native-control is the text color over the window in dark");
+    let text = srgb("text", Appearance::Dark);
+    for under in ["surface", "settingsCard"] {
+        let below = srgb(under, Appearance::Dark);
+        let fill = [0, 1, 2].map(|i| text[i] * alpha + below[i] * (1.0 - alpha));
+        let value = contrast(text, fill);
+        assert!(
+            value >= MIN_TEXT_CONTRAST,
+            "text on the grey control over {under}: {value:.2}:1"
+        );
+    }
+}
+
 /// The text of `component`'s definition in `source`, up to the next one.
 fn component_body<'a>(source: &'a str, component: &str) -> &'a str {
     let start = source

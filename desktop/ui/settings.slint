@@ -249,7 +249,12 @@ export component SettingsWindow inherits Window {
 
                             Rectangle {
                                 border-radius: 7px;
-                                background: Tokens.text.with-alpha(0.06);
+                                background: Tokens.dark ? Tokens.text.with-alpha(0.06) : Fluent.native-control;
+                                border-width: Tokens.dark ? 0px : max(0.5px, 1phx);
+                                border-color: Fluent.stroke;
+                                drop-shadow-blur: 2px;
+                                drop-shadow-offset-y: 0.5px;
+                                drop-shadow-color: Fluent.native-control-shadow;
                                 accessible-role: groupbox;
                                 accessible-label: Strings.appearance;
 
