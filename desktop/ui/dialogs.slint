@@ -484,7 +484,8 @@ export component CastAddressSheet inherits FocusScope {
         Text {
             text: Strings.cast-add-address-message;
             color: Tokens.secondary-text;
-            font-size: Tokens.font-size-callout;
+            // Segoe UI sets this 2% wider than the Mac's 12 pt, which pushed "8009." to a third line.
+            font-size: Tokens.font-size-callout - 0.25px;
             wrap: word-wrap;
         }
 

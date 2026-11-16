@@ -15516,6 +15516,24 @@ mod tests {
         assert_eq!(in_main(), 1, "the sheet is in the main window");
     }
 
+    /// The sheet's note sets in two lines at its 420 px width, as the Mac's.
+    #[test]
+    fn the_add_by_address_note_takes_two_lines_as_on_the_mac() {
+        use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+        let app = app_over(MockBackend::new());
+        app.main.invoke_cast_add_address_requested();
+        draw_frames();
+        let height = |label: SharedString| {
+            ElementHandle::find_by_accessible_label(&app.main, &label)
+                .find(|e| e.accessible_role() == Some(AccessibleRole::Text))
+                .map(|e| e.size().height)
+                .expect("the text")
+        };
+        let note = height(app.strings().get_cast_add_address_message());
+        // Two 13 px lines of Segoe UI are 35 px high, three are 52.
+        assert!(note < 44.0, "the note is {note} px high");
+    }
+
     /// The sheet keeps Tab inside it: the field, Cancel, Add and round
     /// again; Space on Cancel, Escape and Ctrl+W close it, and the focus goes
     /// back to Add by Address…, where Space opens it again.
