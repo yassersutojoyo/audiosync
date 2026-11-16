@@ -1,8 +1,9 @@
 """Generates AudioSync's own device icons (circle glyphs, 12 px badges).
 
-Circle glyphs are drawn per grid, 18 px for the 32 px circle and 14 px for the
-24 and 26 px circles (the sheet's 18 in 32), each on its own whole pixels
-rather than scaled; the 14 px set goes in a subfolder named 14.
+Circle glyphs are drawn per grid, near the sheet's 18 in 32: 18 px for the
+32 px circle, 16 px for the Windows flyout's 28 px circle and 14 px for the
+Mac's 24 and 26 px circles, each on its own whole pixels rather than scaled;
+the smaller sets go in a subfolder named by their size.
 
 Every straight horizontal or vertical edge is asserted to land on a whole
 pixel; curves and diagonals are left to antialiasing.
@@ -139,6 +140,30 @@ GLYPHS = {18: {
              + line([(2, 9), (7, 12), (12, 9)], 2)),
     "device": ("evenodd",
                rr(2, 2, 12, 12, 2) + rr(4, 4, 10, 10, 1) + circ(7, 7, 1.5)),
+}, 16: {
+    "laptop": ("evenodd",
+               rr(2, 2, 14, 12, tl=2, tr=2, br=0, bl=0) + rr(4, 4, 12, 10, 1) + rr(1, 12, 15, 14, 1)),
+    "speaker": ("evenodd",
+                rr(3, 1, 13, 15, 2) + circ(8, 4, 1) + circ(8, 10, 2.75) + circ(8, 10, 1)),
+    "smart-speaker": ("evenodd",
+                      rr(3, 1, 13, 15, 4) + rr(5, 4, 11, 6, 1) + circ(8, 10.5, 1.75)),
+    "headphones": ("evenodd",
+                   sector(8, 8, 7, 5, 180, 360) + rr(1, 8, 6, 15, 2) + rr(10, 8, 15, 15, 2)),
+    "monitor": ("evenodd",
+                rr(1, 2, 15, 12, 2) + rr(3, 4, 13, 10, 1) + rr(7, 12, 9, 13) + rr(4, 13, 12, 15, 1)),
+    "tv": ("evenodd",
+           rr(1, 2, 15, 12, 2) + rr(3, 4, 13, 10, 1)
+           + rr(3, 12, 5, 14, bl=1, br=1) + rr(11, 12, 13, 14, bl=1, br=1)),
+    "bluetooth": ("nonzero",
+                  line([(4, 5), (12, 11), (8, 14.5), (8, 1.5), (12, 5), (4, 11)], 2)),
+    "usb": ("evenodd",
+            rr(5, 1, 7, 4, tl=0.5, tr=0.5) + rr(9, 1, 11, 4, tl=0.5, tr=0.5)
+            + rr(3, 4, 13, 11, 2) + rr(7, 11, 9, 15, bl=1, br=1)),
+    "zone": ("nonzero",
+             rounded_poly([(8, 2.5), (14, 6), (8, 9.5), (2, 6)], 1)
+             + line([(2, 10), (8, 13.5), (14, 10)], 2)),
+    "device": ("evenodd",
+               rr(2, 2, 14, 14, 2) + rr(4, 4, 12, 12, 1) + circ(8, 8, 2)),
 }}
 
 # 12 px badges: solid shapes, 1 px gaps, corner radius 1.
