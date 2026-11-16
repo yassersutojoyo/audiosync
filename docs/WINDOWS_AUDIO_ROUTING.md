@@ -107,6 +107,17 @@ What it means:
 - The session's mute and volume apply before the process loopback tap, for one app and for the whole system alike: 50% is exactly 6 dB down (a linear gain) and mute is digital silence. Auto-muting the source (3b) would silence AudioSync's copies too, so it's out. Guiding the user to send the app, or the Windows default output, to an output they don't listen to stays the recommendation.
 - Endpoint mute sits after the tap: every output endpoint was muted for the whole test and the unmuted session still came through at full level. So muting the endpoint the app plays on, when AudioSync doesn't play there itself, might be a documented alternative to rerouting the app. It silences everything else on that endpoint too, and nothing beyond this run has tested it.
 
+### Test 2 results: an app on another endpoint
+
+Measured on Windows 11 26H2 (OS build 26300.9711) with `mute_probe on <endpoint ID>`, which starts the same tone player on an endpoint chosen by ID instead of the default, as an app moved there by its own output setting would play, and captures the player's tree with process loopback for 3 seconds, twice. The endpoint was Steam Streaming Speakers, an active virtual output nobody listened to. Unlike the plain run, `on` mutes nothing.
+
+| Player renders on | Process loopback, include tree (peak / RMS dBFS) |
+|---|---|
+| The default output (test 1, row 1) | -26.0 / -29.1 |
+| Steam Streaming Speakers, by ID | -26.0 / -29.1 |
+
+The capture doesn't depend on the endpoint the app plays on, so moving one app's output to a silent endpoint keeps AudioSync's copy at full level, while muting its session silences the copy too (test 1, rerun on the same build: the same process loopback numbers). What this run doesn't show: whether Windows' per-app output setting moves a stream that is already playing, which needs the per-app interface itself.
+
 ## Detection
 
 While AudioSync streams, it looks at every active output every 3 seconds: its mute and volume (`IAudioEndpointVolume`) and the apps with an active session on it (`IAudioSessionManager2`). It only reads. It never changes a mute, a volume or the default output. On Windows the check shows no notice since 17 November 2026: AudioSync moves the default output and holds back copies itself (see [Moving the default output while streaming](#moving-the-default-output-while-streaming)), and the answer only goes to the debug log and to rule 8.
