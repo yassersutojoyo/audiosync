@@ -2129,6 +2129,9 @@ impl App {
             self.settings.window(),
         ] {
             self.theme_frame(window);
+            if !std::ptr::eq(window, self.flyout.window()) {
+                crate::backdrop::set_dark(window, dark);
+            }
             crate::platform::repaint_frame(window, false, dark);
         }
     }
@@ -2174,6 +2177,9 @@ impl App {
     pub fn apply_frame(&self, window: &slint::Window, name: &'static str, frame: Frame) -> bool {
         self.use_brand_accent(window);
         self.theme_frame(window);
+        if frame == Frame::Titled {
+            crate::backdrop::set_dark(window, self.shows_dark());
+        }
         crate::platform::follow_color_set(window);
         // Before the event loop runs there is no native window yet; the
         // window's first focus (see `follow_frame`) tries again.

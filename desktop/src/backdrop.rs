@@ -87,6 +87,45 @@ pub fn apply(_window: &slint::Window, _frame: Frame) -> Option<bool> {
     Some(false)
 }
 
+/// Sets a titled window's title bar dark or light with the app's appearance,
+/// then its backdrop again: Mica set before the switch kept its light tint
+/// under the dark title, which left the white title unreadable.
+#[cfg(windows)]
+pub fn set_dark(window: &slint::Window, dark: bool) {
+    use slint::winit_030::WinitWindowAccessor;
+    use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
+    use windows::core::BOOL;
+
+    window.with_winit_window(|window| {
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return;
+        };
+        let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
+        let value = BOOL::from(dark);
+        // SAFETY: `hwnd` is the live window winit created on this (the UI)
+        // thread, and `value` is a 4-byte BOOL that lives through the call.
+        let _ = unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                (&raw const value).cast(),
+                size_of::<BOOL>() as u32,
+            )
+        };
+        if crate::platform::windows_version().is_some_and(supports_backdrop) {
+            set_frame(hwnd, Frame::Titled);
+        }
+    });
+}
+
+#[cfg(not(windows))]
+pub fn set_dark(_window: &slint::Window, _dark: bool) {}
+
 #[cfg(windows)]
 fn set_frame(hwnd: windows::Win32::Foundation::HWND, frame: Frame) -> bool {
     use windows::Win32::Graphics::Dwm::{
