@@ -170,7 +170,7 @@ GLYPHS = {18: {
 BADGES = {
     "airplay": ("nonzero",
                 poly([(3, 11), (9, 11), (6, 7.5)]) + arc_line(6, 9, 3.25, 1.5, 205, 335)
-                + arc_line(6, 9, 6.25, 1.5, 212, 328)),
+                + arc_line(6, 9, 6.25, 1.5, 214, 326)),
     "cast": ("nonzero",
              circ(2.5, 6, 1.5) + arc_line(2.5, 6, 4.25, 2, -45, 45) + arc_line(2.5, 6, 7.5, 2, -38, 38)),
     "bluetooth": ("nonzero",
