@@ -450,9 +450,10 @@ export component CastAddressSheet inherits FocusScope {
         border-width: Tokens.dark ? 1px : 0px;
         border-color: Fluent.stroke;
         border-radius: 20px;
+        // An unblurred shadow still draws, 8 px under the sheet.
         drop-shadow-blur: Tokens.dark ? 24px : 0px;
         drop-shadow-offset-y: 8px;
-        drop-shadow-color: #00000040;
+        drop-shadow-color: Tokens.dark ? #00000040 : transparent;
     }
 
     Announcer {
@@ -483,7 +484,7 @@ export component CastAddressSheet inherits FocusScope {
         Text {
             text: Strings.cast-add-address-message;
             color: Tokens.secondary-text;
-            font-size: Tokens.font-size-body;
+            font-size: Tokens.font-size-callout;
             wrap: word-wrap;
         }
 
