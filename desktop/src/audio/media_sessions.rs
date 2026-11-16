@@ -579,13 +579,19 @@ impl<L: SessionList> Reader<L> {
                 tile
             }),
         };
+        let cover_failed = artwork.is_none()
+            && (self.tiles.failed(&key)
+                || self
+                    .misses
+                    .get(&key)
+                    .is_some_and(|missed| missed.elapsed() < MISS_RETRY));
         Some(CardTrack {
             app_id: session.app_id,
             title: session.title,
             artist: session.artist,
             playing: session.playing,
             artwork,
-            cover_failed: false,
+            cover_failed,
             modes: self.sessions.modes(&listing.listed[index].1),
         })
     }

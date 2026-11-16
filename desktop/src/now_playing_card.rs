@@ -215,6 +215,11 @@ impl ArtworkCache {
         self.made.get(key).cloned()
     }
 
+    /// Whether the last attempt for `key` failed.
+    pub fn failed(&self, key: &str) -> bool {
+        self.failed.contains(key)
+    }
+
     /// Takes an attempt for `key`: the artwork, and the error when it is
     /// the track's first.
     pub fn keep<E>(
@@ -310,15 +315,16 @@ pub trait MediaControls {
     fn send(&mut self, command: Transport);
 }
 
-/// The longest the shown song stays up for the next one's cover, as the
-/// Mac's `ArtHold.limit`.
-pub const ART_HOLD: Duration = Duration::from_millis(1500);
+/// The longest the shown song stays up for the next one's cover: the Mac's
+/// cover fetch timeout (`ArtFetches.timeout`), which its hold and slide share.
+pub const ART_HOLD: Duration = Duration::from_secs(4);
 
 /// Whether `next` is another song from the player `shown` came from,
-/// without a cover yet while `shown` has one.
+/// with its cover still to come while `shown` has one.
 fn waits_for_cover(shown: &CardTrack, next: &CardTrack) -> bool {
     shown.artwork.is_some()
         && next.artwork.is_none()
+        && !next.cover_failed
         && shown.app_id == next.app_id
         && (shown.title != next.title || shown.artist != next.artist)
 }
@@ -627,11 +633,11 @@ mod tests {
         assert_eq!(card.track().map(|t| t.title.as_str()), Some("Three"));
     }
 
-    /// A cover still loading 1.5 s after the hold began gives way: the next
+    /// A cover still loading 4 s after the hold began gives way: the next
     /// song shows without it.
     // covers: S459
     #[test]
-    fn a_cover_still_loading_after_1_5_s_gives_way() {
+    fn a_cover_still_loading_after_4_s_gives_way() {
         let fake = FakeControls::default();
         let mut card = card(&fake);
         let source = || Some(CardSource::AnyApp);
@@ -654,10 +660,10 @@ mod tests {
     }
 
     /// A Next or Previous press starts the wait, so the next song shows
-    /// 1.5 s after the press at most, with or without its cover.
+    /// 4 s after the press at most, with or without its cover.
     // covers: S463
     #[test]
-    fn a_cover_hold_ends_1_5_s_after_a_next_press() {
+    fn a_cover_hold_ends_4_s_after_a_next_press() {
         let fake = FakeControls::default();
         let mut card = card(&fake);
         let source = || Some(CardSource::AnyApp);
@@ -672,16 +678,16 @@ mod tests {
         assert!(card.sync_at(source(), true, start + ART_HOLD));
         assert_eq!(card.track().map(|t| t.title.as_str()), Some("Two"));
 
-        card.send_at(Transport::PlayPause, start + Duration::from_secs(4));
+        card.send_at(Transport::PlayPause, start + Duration::from_secs(6));
         fake.read(Some(with_cover(track("Spotify.exe", "Two", "Band", true))));
-        assert!(card.sync_at(source(), true, start + Duration::from_secs(4)));
+        assert!(card.sync_at(source(), true, start + Duration::from_secs(6)));
         fake.read(Some(track("Spotify.exe", "Three", "Band", true)));
-        let held = start + Duration::from_secs(5);
+        let held = start + Duration::from_secs(7);
         assert!(
             !card.sync_at(source(), true, held),
             "Play/Pause starts no wait"
         );
-        assert!(!card.sync_at(source(), true, held + Duration::from_millis(1400)));
+        assert!(!card.sync_at(source(), true, held + Duration::from_millis(3900)));
     }
 
     /// The Mac's rule: a pressed card waits for the new cover up to the
