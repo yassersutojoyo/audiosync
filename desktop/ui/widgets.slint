@@ -3489,10 +3489,12 @@ export component SpeakerRow inherits Rectangle {
         }
     }
 
+    // The row keeps its plate while its menu is open, as the Mac's under its menu.
+    property <bool> plated: hover.has-hover || (MenuState.open != 0 && MenuState.open == root.menu-serial);
     border-radius: Fluent.radius-row;
-    background: !root.grouped && hover.has-hover ? (Tokens.dark ? Fluent.row-hover-dark : Fluent.row-hover) : transparent;
+    background: !root.grouped && root.plated ? (Tokens.dark ? Fluent.row-hover-dark : Fluent.row-hover) : transparent;
     animate background {
-        duration: hover.has-hover ? Fluent.row-hover-in : 0ms;
+        duration: root.plated ? Fluent.row-hover-in : 0ms;
         easing: linear;
     }
     // The options button and a delay of 0 ms show under the pointer or the
