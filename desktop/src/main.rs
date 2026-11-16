@@ -287,15 +287,16 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     let os::Started { backend, media } = os::start(log)?;
     let app = view::App::new(backend, log.clone())?;
     #[cfg(windows)]
-    if let Some(record) = renderer_record.clone() {
-        let armed = record.clone();
+    if let Some(armed) = renderer_record.clone() {
+        let shown = armed.clone();
         let arm_log = log.clone();
         app.before_main_shows(move || {
             if let Err(error) = renderer_choice::arm(&armed) {
                 arm_log.log(|| format!("renderer: not recorded ({error})"));
             }
         });
-        renderer_choice::confirm_on_first_frame(app.main.window(), record, log);
+        let confirm_log = log.clone();
+        app.after_main_shows(move || renderer_choice::confirm_when_drawn(shown, confirm_log));
     }
     // Needs the platform the windows above set up, and must come before the
     // first one shows: Wayland matches windows to the .desktop file by it.
@@ -320,9 +321,10 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     {
         let ending = session_ending(&app, log, "Windows session ends");
         let record = renderer_record.clone();
+        let record_log = log.clone();
         platform::on_session_end(Box::new(move || {
             if let Some(record) = &record {
-                renderer_choice::confirm(record);
+                renderer_choice::confirm(record, &record_log);
             }
             ending();
         }));
@@ -429,7 +431,7 @@ fn run(log: &DebugLog, instance: &os::Instance) -> Result<(), StartError> {
     log.log(|| "the event loop ended".to_owned());
     #[cfg(windows)]
     if let Some(record) = &renderer_record {
-        renderer_choice::confirm(record);
+        renderer_choice::confirm(record, log);
     }
     app.at_quit();
     Ok(())
