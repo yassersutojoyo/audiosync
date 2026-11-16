@@ -18012,6 +18012,12 @@ do {
           "Delete Zone: asks first, with Cancel the default and Delete marked destructive")
     check(findingsBar.contains("MasterTrack.level(afterScroll:"),
           "master volume: the wheel and the trackpad over the slider move it")
+    check(MasterTrack.level(afterScroll: 1, precise: false, from: 40) == 46.25
+            && MasterTrack.level(afterScroll: -3, precise: false, from: 40) == 33.75
+            && MasterTrack.level(afterScroll: 20, precise: true, from: 40) == 52.5
+            && MasterTrack.level(afterScroll: 1, precise: false, from: 97) == 100
+            && MasterTrack.level(afterScroll: -1, precise: false, from: 3) == 0,
+          "master volume: a wheel notch moves it by the volume keys' step, 10 trackpad points by one, within 0 and 100")
 }
 
 // MARK: A delay pane closed while its field has the focus leaves no ring on a neighbour (MainWindow.swift, PanelZoneHeader.swift)

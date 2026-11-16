@@ -173,6 +173,18 @@ extension AppDelegate {
         return true
     }
 
+    /// Delete Zone, which the user chose, asks first: Cancel is the default.
+    private func confirmDeleteZone(_ name: String) -> Bool {
+        menuBar?.close()
+        NSApp.activate(ignoringOtherApps: true)
+        let prompt = NSAlert()
+        prompt.messageText = text.deleteZoneTitle(name)
+        prompt.informativeText = text.deleteZoneMessage
+        prompt.addButton(withTitle: text.cancel)
+        prompt.addButton(withTitle: text.deleteZoneConfirm).hasDestructiveAction = true
+        return prompt.runModal() == .alertSecondButtonReturn
+    }
+
     private func acceptPermission(_ permission: Permission) {
         permissions.accept(permission)
         permissions.save(store)
@@ -436,6 +448,7 @@ extension AppDelegate {
         }
         a.toggleZone = { [weak self] id in self?.toggleZone(id) }
         a.deleteZone = { [weak self] id in self?.deleteZone(id) }
+        a.confirmDeleteZone = { [weak self] name in self?.confirmDeleteZone(name) ?? false }
         a.renameZone = { [weak self] id, typed in self?.renameZone(id, to: typed) }
         a.calibrateZone = { [weak self] id in self?.calibrateZone(id) }
         a.setZoneVolume = { [weak self] id, position in self?.setZoneVolume(id, position) }

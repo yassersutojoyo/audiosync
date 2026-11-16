@@ -91,6 +91,8 @@ enum DialogPurpose {
     Message,
     /// Rename in the equalizer, for the saved curve of this name.
     RenameCurve(String),
+    /// Delete Zone's question, for the zone of this ID.
+    DeleteZone(String),
 }
 
 /// Where a name is edited: a speaker's full row (in its section or under
@@ -3481,7 +3483,7 @@ impl App {
         let w = weak.clone();
         main.on_zone_rename_cancelled(move |id| with_app(&w, |app| app.end_rename_in(&id, false)));
         let w = weak.clone();
-        main.on_zone_deleted(move |id| with_app(&w, |app| app.delete_zone(&id)));
+        main.on_zone_deleted(move |id| with_app(&w, |app| app.ask_delete_zone(&id)));
         let w = weak.clone();
         main.on_zone_calibrate_requested(move |id| {
             with_app(&w, |app| {
@@ -5125,6 +5127,24 @@ impl App {
         }
     }
 
+    /// Delete Zone asks first, as on the Mac; Cancel is the default.
+    fn ask_delete_zone(&self, id: &str) {
+        if self.dialog_already_open() {
+            return;
+        }
+        let Some(zone) = self.snapshot().zones.into_iter().find(|z| z.id == id) else {
+            return;
+        };
+        let strings = self.strings();
+        let dialog = &self.zone_dialog;
+        *self.dialog_purpose.borrow_mut() = DialogPurpose::DeleteZone(id.to_owned());
+        dialog.set_heading(strings.invoke_delete_zone_title(zone.name.as_str().into()));
+        dialog.set_message(strings.get_delete_zone_message());
+        dialog.set_show_field(false);
+        dialog.set_confirm_label(strings.get_delete_zone_confirm());
+        self.open_dialog();
+    }
+
     /// Delete Zone: its speakers go back to the plain lists; Narrator says
     /// it went, since its header did.
     fn delete_zone(&self, id: &str) {
@@ -5276,6 +5296,10 @@ impl App {
             self.show_window_error(&error);
             return;
         }
+        self.zone_dialog.set_cancel_default(matches!(
+            *self.dialog_purpose.borrow(),
+            DialogPurpose::DeleteZone(_)
+        ));
         self.zone_dialog.invoke_prepare();
         grow_to_fit(self.zone_dialog.window(), self.zone_dialog.get_fit_height());
         self.equalizer.set_name_dialog_open(true);
@@ -5303,6 +5327,7 @@ impl App {
                 self.update(|b| b.new_zone_with(&id, &name));
             }
             DialogPurpose::Message => {}
+            DialogPurpose::DeleteZone(id) => self.delete_zone(&id),
             DialogPurpose::RenameCurve(old) => {
                 let mut curves = self.snapshot().equalizer_curves;
                 let Some(index) = curves.iter().position(|curve| curve.name == old) else {
@@ -14276,6 +14301,7 @@ mod tests {
         assert!(living().expanded);
 
         app.main.invoke_zone_deleted("zone:office".into());
+        app.confirm_dialog("");
         draw_frames();
         press(window, " ");
         assert!(
@@ -14540,6 +14566,7 @@ mod tests {
 
         let id = zone.id.clone();
         main.invoke_zone_deleted(id.as_str().into());
+        app.confirm_dialog("");
         assert!(app.snapshot().zone_of("local:headphones").is_none());
         assert_eq!(app.models.zones.row_count(), 3);
     }
@@ -14587,6 +14614,7 @@ mod tests {
         assert!(office().renaming);
 
         app.main.invoke_zone_deleted("zone:office".into());
+        app.confirm_dialog("");
         assert!(
             app.ui.borrow().rename.is_none(),
             "a deleted zone's field goes"
@@ -20134,6 +20162,7 @@ mod tests {
         press(window, Key::Menu);
         press(window, Key::End);
         press(window, Key::Return);
+        app.confirm_dialog("");
         assert!(app.snapshot().zones.is_empty(), "Delete Zone ran");
     }
 

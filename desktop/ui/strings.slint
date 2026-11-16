@@ -284,6 +284,9 @@ export global Strings {
     out property <string> remove-from-zone: @tr("Remove from Zone");
     out property <string> rename-zone: @tr("Rename…");
     out property <string> delete-zone: @tr("Delete Zone");
+    // The question Delete Zone asks first, as the Mac asks it.
+    out property <string> delete-zone-message: @tr("Its speakers go back to the speaker list.");
+    out property <string> delete-zone-confirm: @tr("Delete");
     // Calibrate Zone (spec S255): in a zone's menu, then what the Calibrate
     // All card says for a zone run.
     out property <string> calibrate-zone-item: @tr("Calibrate Zone…");
@@ -2161,6 +2164,10 @@ export global Strings {
 
     public pure function zone-deleted(name: string) -> string {
         return @tr("{} deleted", name);
+    }
+
+    public pure function delete-zone-title(name: string) -> string {
+        return @tr("Delete “{}”?", name);
     }
 
     public pure function equalizer-caption(max-gain: int) -> string {

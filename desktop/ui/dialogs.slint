@@ -19,6 +19,8 @@ export component ZoneNameDialog inherits Dialog {
     in-out property <string> name;
     // False for a message without a name field.
     in property <bool> show-field: true;
+    // A question whose answer can't be undone: Cancel is the default.
+    in property <bool> cancel-default;
     // Whether the name field shows its text cursor (tests read it).
     out property <bool> name-caret-in-view: true;
     callback confirmed(string);
@@ -55,7 +57,11 @@ export component ZoneNameDialog inherits Dialog {
                 return accept;
             }
             if !root.show-field && event.text == Key.Return {
-                root.confirmed(root.name);
+                if root.cancel-default {
+                    root.cancelled();
+                } else {
+                    root.confirmed(root.name);
+                }
                 return accept;
             }
             return reject;
@@ -97,7 +103,7 @@ export component ZoneNameDialog inherits Dialog {
 
     DialogButton {
         text: root.confirm-label;
-        primary: true;
+        primary: !root.cancel-default;
         dialog-button-role: accept;
         clicked => {
             root.confirmed(root.name);
@@ -109,6 +115,7 @@ export component ZoneNameDialog inherits Dialog {
 
     DialogButton {
         text: Strings.cancel;
+        primary: root.cancel-default;
         dialog-button-role: reject;
         clicked => {
             root.cancelled();

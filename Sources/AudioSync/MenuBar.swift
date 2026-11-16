@@ -192,6 +192,8 @@ final class AppModel: ObservableObject {
         var permissionNotNow: (Permission) -> Void = { _ in }
         var toggleZone: (String) -> Void = { _ in }
         var deleteZone: (String) -> Void = { _ in }
+        /// Asks before Delete Zone deletes the zone of this name; true on Delete.
+        var confirmDeleteZone: (String) -> Bool = { _ in false }
         /// Zone ID, the name typed (`ZoneEdit.renaming`).
         var renameZone: (String, String) -> Void = { _, _ in }
         /// Calibrate Zone… for zone `id` (S255).
@@ -571,8 +573,9 @@ final class AppModel: ObservableObject {
         AccessibilityNotification.Announcement(text.speakerMovedToZone(member.name, zone: zone.name)).post()
     }
 
-    /// Delete Zone: its members go back to the plain lists, without asking.
+    /// Delete Zone: once the user confirms, its members go back to the plain lists.
     func delete(_ zone: Zone) {
+        guard actions.confirmDeleteZone(zone.name) else { return }
         actions.deleteZone(zone.id)
         AccessibilityNotification.Announcement(text.zoneDeleted(zone.name)).post()
     }
@@ -928,10 +931,18 @@ final class MenuBarController: NSObject, NSPopoverDelegate {
         if presented { dismiss() }
         let actions = model.actions
         MainActor.assumeIsolated {
-            StatusItemMenu.make(text: model.text, running: model.running, launchAtLogin: model.launchAtLogin,
-                                open: actions.openMainWindow, setPower: actions.setPower,
-                                setLaunchAtLogin: actions.setLaunchAtLogin, quit: actions.quit)
-                .popUp(under: button)
+            let menu = StatusItemMenu.make(text: model.text, running: model.running,
+                                           launchAtLogin: model.launchAtLogin, open: actions.openMainWindow,
+                                           setPower: actions.setPower, setLaunchAtLogin: actions.setLaunchAtLogin,
+                                           quit: actions.quit)
+            // The app's theme, not the menu bar's.
+            menu.appearance = NSApp.effectiveAppearance
+            menu.keepUntilNextPopUp()
+            // As the status item's own menu AppKit places it under the menu bar; a
+            // pop-up at the button reached into the bar and scrolled its first item away.
+            statusItem.menu = menu
+            button.performClick(nil)
+            statusItem.menu = nil
         }
     }
 
@@ -2993,6 +3004,11 @@ struct MasterSlider: View {
             })
         }
         .frame(height: MasterSlider.height)
+        .background(ScrollWatch { event in
+            let up = event.isDirectionInvertedFromDevice ? -event.scrollingDeltaY : event.scrollingDeltaY
+            model.actions.setMaster(MasterTrack.level(afterScroll: Double(up), precise: event.hasPreciseScrollingDeltas,
+                                                      from: model.master))
+        })
         .focusable()
         .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { press in
             guard let key = MasterSlider.key(press.key) else { return .ignored }
@@ -3004,5 +3020,32 @@ struct MasterSlider: View {
         }
         .accessibilityLabel(text.masterVolume)
         .accessibilityValue(text.volumeValue(model.master))
+    }
+}
+
+/// Hands the scrolls over the view it backs to `scrolled` and keeps them from
+/// the column's scroll view: SwiftUI's own views here let them pass.
+private struct ScrollWatch: NSViewRepresentable {
+    let scrolled: (NSEvent) -> Void
+
+    func makeNSView(context: Context) -> WatchView { WatchView() }
+    func updateNSView(_ view: WatchView, context: Context) { view.scrolled = scrolled }
+
+    final class WatchView: NSView {
+        var scrolled: (NSEvent) -> Void = { _ in }
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                guard let self, let window = self.window, event.window === window,
+                      self.bounds.contains(self.convert(event.locationInWindow, from: nil)) else { return event }
+                self.scrolled(event)
+                return nil
+            }
+        }
     }
 }

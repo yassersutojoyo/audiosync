@@ -1697,6 +1697,8 @@ export component LevelSlider inherits Rectangle {
     // The Mac's small slider (a speaker's or a zone's volume): a 13 px knob
     // on a 3 px track in a 16 px slot.
     in property <bool> small;
+    // How far a wheel notch moves it; 0 lets the wheel pass by.
+    in property <float> scroll-step;
     out property <bool> has-focus: focus.has-focus;
     out property <bool> held: touch.pressed;
     callback changed(float);
@@ -1819,6 +1821,15 @@ export component LevelSlider inherits Rectangle {
             if self.pressed {
                 root.move-to(root.value-at(self.mouse-x, self.mouse-y));
             }
+        }
+        scroll-event(event) => {
+            if root.scroll-step <= 0 {
+                return reject;
+            }
+            // Slint turns a wheel notch into 60 px.
+            root.move-to(root.value + root.scroll-step * event.delta-y / 60px);
+            root.released(root.value);
+            accept
         }
     }
 }
@@ -1973,6 +1984,7 @@ export component VolumeSlider inherits HorizontalLayout {
     in property <brush> track <=> slider.track;
     in property <bool> shows-value: true;
     in property <bool> small <=> slider.small;
+    in property <float> scroll-step <=> slider.scroll-step;
     callback changed(float);
     // True from the first move of a drag or key press to its release.
     callback editing(bool);
@@ -2091,6 +2103,8 @@ export component MasterVolume inherits HorizontalLayout {
             label: Strings.master-volume;
             track: Tokens.secondary-text;
             shows-value: false;
+            // volume_keys::STEP, as the volume keys move the master.
+            scroll-step: 2;
             changed(value) => {
                 root.changed(value);
             }
