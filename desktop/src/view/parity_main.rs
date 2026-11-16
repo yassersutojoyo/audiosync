@@ -103,8 +103,14 @@ fn a_playing_speakers_name_keeps_the_regular_weight() {
     for row in ["SpeakerRow", "ZoneMemberRow"] {
         let body = component(widgets, row);
         let at = body.find("text: root.item.name;").expect(row);
-        assert!(body[at..at + 200].contains("font-weight: 400;"), "{row}");
-        assert!(!body.contains("root.item.plays ? 600"), "{row}");
+        assert!(
+            body[at..at + 200].contains("font-weight: Fluent.weight-regular;"),
+            "{row}"
+        );
+        assert!(
+            !body.contains("root.item.plays ? Fluent.weight-semibold"),
+            "{row}"
+        );
     }
 }
 
@@ -184,6 +190,53 @@ fn text_is_segoe_ui_variable_on_windows_and_inter_elsewhere() {
             "{name}"
         );
         assert!(!source.contains("font-family: \"Inter\""), "{name}");
+    }
+}
+
+/// Windows sets the Mac's regular, medium and semibold heavier, so its text
+/// carries the ink the Mac's does at 1:1; Inter keeps the Mac's numbers, and
+/// every weight and window default comes from Fluent.
+// covers: S450
+#[test]
+fn text_weights_are_heavier_on_windows_and_come_from_fluent() {
+    let fluent = component(include_str!("../../ui/widgets.slint"), "Fluent");
+    for (role, windows, elsewhere) in [
+        ("regular", 590, 400),
+        ("medium", 650, 500),
+        ("semibold", 700, 600),
+    ] {
+        assert!(fluent.contains(&format!(
+            "out property <int> weight-{role}: Platform.os == OperatingSystemType.windows ? {windows} : {elsewhere};"
+        )));
+    }
+    for (name, source) in [
+        ("main", include_str!("../../ui/main.slint")),
+        ("flyout", include_str!("../../ui/flyout.slint")),
+        ("widgets", include_str!("../../ui/widgets.slint")),
+        ("equalizer", include_str!("../../ui/equalizer.slint")),
+        ("settings", include_str!("../../ui/settings.slint")),
+        ("dialogs", include_str!("../../ui/dialogs.slint")),
+        ("setup", include_str!("../../ui/setup.slint")),
+        ("remote", include_str!("../../ui/remote.slint")),
+    ] {
+        for literal in ["400", "500", "600", "700"] {
+            assert!(
+                !source.contains(&format!("font-weight: {literal}")),
+                "{name}: {literal}"
+            );
+            let outside_fluent = source.replace(fluent.as_str(), "");
+            assert!(
+                !outside_fluent.contains(&format!("? {literal} :")),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            source.matches("default-font-family: Fluent.font;").count(),
+            source
+                .matches("default-font-weight: Fluent.weight-regular;")
+                .count(),
+            "{name}"
+        );
     }
 }
 

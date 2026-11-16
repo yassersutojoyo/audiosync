@@ -432,7 +432,7 @@ component FlyoutRow inherits Rectangle {
                     height: 100%;
                     text: root.name;
                     color: Tokens.text;
-                    font-weight: root.plays ? 600 : 400;
+                    font-weight: root.plays ? Fluent.weight-semibold : Fluent.weight-regular;
                     vertical-alignment: center;
                     wrap: no-wrap;
                     overflow: elide;
@@ -590,7 +590,7 @@ component FlyoutZoneHeader inherits Rectangle {
                     height: 100%;
                     text: root.item.name;
                     color: Tokens.text;
-                    font-weight: root.item.state == RowState.playing ? 600 : 400;
+                    font-weight: root.item.state == RowState.playing ? Fluent.weight-semibold : Fluent.weight-regular;
                     vertical-alignment: center;
                     wrap: no-wrap;
                     overflow: elide;
@@ -789,6 +789,7 @@ export component TrayFlyout inherits Window {
     in property <bool> revealed: true;
     background: Tokens.surface;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
     // Key events go to the focused item, so Escape needs the scope focused.
     forward-focus: focus;
@@ -1145,7 +1146,7 @@ export component TrayFlyout inherits Window {
                                                 old-text: root.now-playing-outgoing.title;
                                                 sliding: root.now-playing-slide.sliding;
                                                 font-size: Tokens.font-size-title3;
-                                                font-weight: 600;
+                                                font-weight: Fluent.weight-semibold;
                                                 offset: root.now-playing-slide.title-offset;
                                                 fade: root.now-playing-slide.title-fade;
                                                 old-offset: root.now-playing-slide.old-text-offset;
