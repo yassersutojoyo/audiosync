@@ -95,7 +95,9 @@ pub fn set_dark(window: &slint::Window, dark: bool) {
     use slint::winit_030::WinitWindowAccessor;
     use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
+    use windows::Win32::Graphics::Dwm::{
+        DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWINDOWATTRIBUTE, DwmSetWindowAttribute,
+    };
     use windows::core::BOOL;
 
     window.with_winit_window(|window| {
@@ -107,16 +109,22 @@ pub fn set_dark(window: &slint::Window, dark: bool) {
         };
         let hwnd = HWND(handle.hwnd.get() as *mut core::ffi::c_void);
         let value = BOOL::from(dark);
-        // SAFETY: `hwnd` is the live window winit created on this (the UI)
-        // thread, and `value` is a 4-byte BOOL that lives through the call.
-        let _ = unsafe {
-            DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_USE_IMMERSIVE_DARK_MODE,
-                (&raw const value).cast(),
-                size_of::<BOOL>() as u32,
-            )
-        };
+        // Windows 10 before build 18985 knows the attribute only as 19.
+        for attribute in [DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWINDOWATTRIBUTE(19)] {
+            // SAFETY: `hwnd` is the live window winit created on this (the UI)
+            // thread, and `value` is a 4-byte BOOL that lives through the call.
+            let set = unsafe {
+                DwmSetWindowAttribute(
+                    hwnd,
+                    attribute,
+                    (&raw const value).cast(),
+                    size_of::<BOOL>() as u32,
+                )
+            };
+            if set.is_ok() {
+                break;
+            }
+        }
         if crate::platform::windows_version().is_some_and(supports_backdrop) {
             set_frame(hwnd, Frame::Titled);
         }
