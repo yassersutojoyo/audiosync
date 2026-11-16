@@ -9230,7 +9230,7 @@ do {
     check(sourceMenuStyle.contains("if hero {\n            content.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)")
             && bar.contains(".modifier(SourceMenuStyle(hero: hero))"),
           "menu bar panel source: the card's source name and chevron are SwiftUI's own drawing, so they glide with the card as it opens and closes")
-    let mainSource =(try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let quickIconSource = mainSource.components(separatedBy: "struct QuickRowIcon: View {").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
     check(quickIconSource.contains(".font(.system(size: QuickRowIcon.point))"),
