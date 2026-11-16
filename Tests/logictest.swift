@@ -9219,7 +9219,16 @@ do {
             && panelPresetSource.contains(".font(.system(size: QuickRowIcon.point))")
             && muteSource.contains(".system(size: QuickRowIcon.point)"),
           "menu bar panel source: the preset and volume icons share This Mac's circle box, inside what opens them, and the main window rows' icon size; their text starts on the names' column; with no preset row the volume keeps the card's gap")
-    let mainSource = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
+    // 16 Nov at 2x: with a preset's name under it the centred row put its icon 4.5 pt under the card, not 12.
+    check(panelPresetSource.contains("PresetRowLayout {") && !panelPresetSource.contains("minHeight: 34, alignment: .leading"),
+          "menu bar panel source: the preset row keeps its label where a plain row has it when the preset's name shows under it, so the card's gap holds")
+    // 16 Nov at 60 fps: the borderless menu's AppKit label moved in whole pixels while the intro moved the card in fractions.
+    let sourceMenuStyle = bar.components(separatedBy: "private struct SourceMenuStyle: ViewModifier {").dropFirst().first?
+        .components(separatedBy: "\n}\n").first ?? ""
+    check(sourceMenuStyle.contains("if hero {\n            content.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)")
+            && bar.contains(".modifier(SourceMenuStyle(hero: hero))"),
+          "menu bar panel source: the card's source name and chevron are SwiftUI's own drawing, so they glide with the card as it opens and closes")
+    let mainSource =(try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
     let quickIconSource = mainSource.components(separatedBy: "struct QuickRowIcon: View {").dropFirst().first?
         .components(separatedBy: "\n}\n").first ?? ""
     check(quickIconSource.contains(".font(.system(size: QuickRowIcon.point))"),
