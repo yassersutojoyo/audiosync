@@ -65,6 +65,8 @@ mod help_window;
 #[cfg(test)]
 mod parity_calibrate;
 #[cfg(test)]
+mod parity_main;
+#[cfg(test)]
 mod parity_rest;
 #[cfg(test)]
 mod parity_screens;
@@ -6135,7 +6137,8 @@ struct CalibrateAllCard {
     running: bool,
     can_start: bool,
     status: SharedString,
-    /// The status only says what a run does, so it is the row's tooltip.
+    /// The status only says what a run does, or that streaming is off (the
+    /// dimmed row says that, as on the Mac), so it is the row's tooltip.
     status_is_hint: bool,
     privacy: bool,
     results_shown: bool,
@@ -6208,7 +6211,13 @@ fn calibrate_all_card(strings: &Strings<'_>, state: &AppState) -> CalibrateAllCa
         outcome.clone()
     };
     CalibrateAllCard {
-        status_is_hint: all.phase == AllPhase::Idle && !all.other_running && all.blocked.is_none(),
+        status_is_hint: all.phase == AllPhase::Idle
+            && !all.other_running
+            && match all.blocked {
+                None => true,
+                Some(Failure::NotPlaying(missing)) => missing.streaming,
+                Some(_) => false,
+            },
         running: matches!(all.phase, AllPhase::Running(_)),
         can_start: !busy && all.blocked.is_none(),
         privacy: offers_privacy(
@@ -7720,9 +7729,10 @@ mod tests {
         slint::platform::update_timers_and_animations();
         let content = app.main.get_left_content_height();
         // As on the Mac, the open list says there is none yet over Save as
-        // Preset…, about 100 px, and the column scrolls the rows below it.
+        // Preset…, about 100 px (120 in Segoe UI's larger text), and the
+        // column scrolls the rows below it.
         assert!(
-            content > room && content <= room + 110.0,
+            content > room && content <= room + 125.0,
             "open with no presets: {content} of {room}"
         );
         let main = include_str!("../ui/main.slint").replace("\r\n", "\n");
@@ -19824,9 +19834,9 @@ mod tests {
         }
     }
 
-    /// A menu is as wide as its widest item, so none is cut short: the
-    /// gear's New Zone from Active Speakers… beside Ctrl+N, and a long
-    /// source name, past the picker's width.
+    /// A menu is as wide as its widest item, so none is cut short: a long
+    /// source name, past the picker's width. The gear's New Zone from
+    /// Active Speakers… beside Ctrl+N fits its 270 px in Segoe UI.
     // covers: S449
     #[test]
     fn a_menu_is_as_wide_as_its_widest_item() {
@@ -19844,8 +19854,8 @@ mod tests {
         app.main.invoke_focus_gear();
         press(app.main.window(), " ");
         assert!(
-            row(&strings.get_new_zone()).size().width > 262.0,
-            "wider than the 270 px menu's rows"
+            row(&strings.get_new_zone()).size().width >= 262.0,
+            "the 270 px menu's rows"
         );
         press(app.main.window(), Key::Escape);
         app.main.invoke_open_sources();

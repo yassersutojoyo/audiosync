@@ -20,12 +20,13 @@ import "../res/fonts/Inter-Bold.ttf";
 // Windows 11 metrics and states, for this app only: the shared design tokens
 // keep the colors and the wordmark, these give the Windows look (Fluent's
 // corner radii, list row height, hover and pressed fills, and its short
-// motion). Text is set in Inter, the Mac mockups' family, compiled into the
-// executable so it looks the same on every machine; glyphs Inter lacks fall
-// back to the system font.
+// motion). Text is set in the system font as on the Mac: Segoe UI Variable,
+// which every Windows 11 ships (Inter rendered narrow and thin there), and
+// elsewhere Inter, compiled into the executable; glyphs a font lacks fall
+// back to the system's.
 export global Fluent {
-    out property <string> font: "Inter";
-    out property <string> display-font: "Inter";
+    out property <string> font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Text" : "Inter";
+    out property <string> display-font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Display" : "Inter";
     // Cards, the flyout and the notices (overlay radius).
     out property <length> radius-card: 8px;
     // Buttons, chips and the rows inside a card (control radius).
@@ -76,8 +77,9 @@ export global Fluent {
     // The small button's text, the Mac's house button ink (tealDeep, and
     // logo on dark).
     out property <color> house-text: Tokens.dark ? #63dac2 : #0f574f;
-    // The tray panel's block of what plays and the source.
-    out property <brush> hero: Tokens.text.with-alpha(0.04);
+    // The block of what plays and the source, in the main window and the
+    // tray panel: as grey on the white window as the Mac's on its grey one.
+    out property <brush> hero: Tokens.text.with-alpha(0.06);
     // A 1 px edge that sets a card off a light background.
     out property <brush> stroke: Tokens.dark ? Tokens.separator : #0000001a;
     // Windows' two-tone keyboard focus ring, as the style's own controls draw it.
@@ -423,10 +425,11 @@ export global Glyphs {
         return root.volume-high;
     }
 
-    // The icon font's Repeat reads poorly at 16 px and it has no circled
-    // ellipsis (the Mac's options glyph), so these are drawn on Windows too.
+    // The icon font's Repeat reads poorly at 16 px, it has no circled
+    // ellipsis (the Mac's options glyph) and its transport glyphs are
+    // outlines where the Mac's are filled, so these are drawn on Windows too.
     public pure function drawn-everywhere(glyph: string) -> bool {
-        return glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more;
+        return glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause;
     }
 
     // What the speaker is; how it is reached is the kind's glyph after the
@@ -551,12 +554,6 @@ export global Glyphs {
         if glyph == root.music-note {
             return "M10.5 11.5 V2 Q10.5 4 13.5 5.5";
         }
-        if glyph == root.previous {
-            return "M3.5 3 V13";
-        }
-        if glyph == root.next {
-            return "M12.5 3 V13";
-        }
         if glyph == root.shuffle {
             return "M2 4.5 H5 L11 11.5 H14 M2 11.5 H5 L11 4.5 H14 M12 2.5 L14 4.5 L12 6.5 M12 9.5 L14 11.5 L12 13.5";
         }
@@ -605,17 +602,19 @@ export global Glyphs {
         if glyph == root.music-note {
             return "M5.5 11.5 A2.5 2 0 0 1 10.5 11.5 A2.5 2 0 0 1 5.5 11.5 Z";
         }
+        // Two solid triangles across the whole box, as the Mac's
+        // backward.fill and forward.fill: about 7 wide to 4 high.
         if glyph == root.previous {
-            return "M13 3 L5.5 8 L13 13 Z";
+            return "M8 3.45 L0 8 L8 12.55 Z M16 3.45 L8 8 L16 12.55 Z";
         }
         if glyph == root.next {
-            return "M3 3 L10.5 8 L3 13 Z";
+            return "M0 3.45 L8 8 L0 12.55 Z M8 3.45 L16 8 L8 12.55 Z";
         }
         if glyph == root.play {
-            return "M4.5 2.5 L13 8 L4.5 13.5 Z";
+            return "M3.5 1 L14.5 8 L3.5 15 Z";
         }
         if glyph == root.pause {
-            return "M4 2.5 H6.5 V13.5 H4 Z M9.5 2.5 H12 V13.5 H9.5 Z";
+            return "M3.5 1.5 H6.75 V14.5 H3.5 Z M9.25 1.5 H12.5 V14.5 H9.25 Z";
         }
         return "";
     }
@@ -1978,6 +1977,9 @@ export component VolumeSlider inherits HorizontalLayout {
         vertical-alignment: center;
         wrap: no-wrap;
         font-size: Tokens.font-size-subheadline;
+        // The Mac's line: Segoe UI's is 2 px taller, all of it leading, and
+        // would break a speaker row's 52 px step.
+        height: 14px;
     }
 }
 
@@ -3421,7 +3423,7 @@ export component SpeakerRow inherits Rectangle {
                                             height: 100%;
                                             text: root.item.name;
                                             font-size: Tokens.font-size-body;
-                                            font-weight: root.item.plays ? 600 : 400;
+                                            font-weight: 400;
                                             text-color: root.item.zone-dimmed ? Tokens.secondary-text : Tokens.text;
                                             accessible-role: none;
                                         }
@@ -4286,7 +4288,7 @@ export component ZoneMemberRow inherits Rectangle {
                                 height: 100%;
                                 text: root.item.name;
                                 font-size: Tokens.font-size-body;
-                                font-weight: root.item.plays ? 600 : 400;
+                                font-weight: 400;
                                 text-color: Tokens.text;
                                 accessible-role: none;
                             }
