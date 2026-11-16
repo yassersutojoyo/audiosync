@@ -3812,7 +3812,8 @@ export component SpeakerRow inherits Rectangle {
                                         // 300 ms, up as the delay grows and down as it
                                         // shrinks; with Motion off the two only cross-fade.
                                         delay-roll := Rectangle {
-                                            preferred-width: delay-new.preferred-width;
+                                            // Wide enough for the leaving value until it is gone.
+                                            preferred-width: max(delay-new.preferred-width, self.roll < 1 ? delay-old.preferred-width : 0px);
                                             clip: true;
                                             property <int> delay: root.item.delay-ms;
                                             property <int> last;
