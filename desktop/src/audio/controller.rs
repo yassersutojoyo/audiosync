@@ -1210,7 +1210,7 @@ impl<D: Driver> Controller<D> {
     }
 
     /// Starts, checks or ends the default output's switch for a stream that
-    /// captures what apps play or not (S469); one that plays to no output
+    /// is of the whole system or not (S469); one that plays to no output
     /// counts as not, since moving the default would silence the PC. The
     /// check runs every [`ROUTING_INTERVAL`].
     fn sync_default_output(&mut self, streams_system: bool) {
@@ -1247,28 +1247,28 @@ impl<D: Driver> Controller<D> {
     }
 
     /// The outputs that get no copy, since the original plays there
-    /// (S470): Windows' default output, and for one app every output the
-    /// app plays on.
+    /// (S470): for one app on Windows every output the app plays on, and
+    /// Windows' default output while the whole system streams unswitched.
     fn held_out(&self) -> Vec<String> {
-        if !self.default_switch.holds_out_default() {
-            return Vec::new();
-        }
         let one_app = self.session.as_ref().is_some_and(|session| {
             matches!(&session.target, CaptureTarget::Loopback(activation)
                 if activation.mode == LoopbackMode::IncludeTree)
         });
-        let played_on = self
-            .routing
-            .played_on
-            .iter()
-            .filter(|_| one_app)
-            .map(|played| played.endpoint_id.as_str());
+        if one_app && self.default_output.is_some() {
+            return self
+                .routing
+                .played_on
+                .iter()
+                .map(|played| played.endpoint_id.clone())
+                .collect();
+        }
+        if !self.default_switch.holds_out_default() {
+            return Vec::new();
+        }
         self.present
             .iter()
             .filter(|endpoint| endpoint.is_default)
-            .map(|endpoint| endpoint.id.as_str())
-            .chain(played_on)
-            .map(str::to_owned)
+            .map(|endpoint| endpoint.id.clone())
             .collect()
     }
 
@@ -4316,10 +4316,10 @@ impl<D: Driver> Controller<D> {
     }
 }
 
-/// Whether streaming `source` moves Windows' default output (S469): every
-/// source of what apps play does, an input device doesn't.
+/// Whether streaming `source` moves Windows' default output (S469): only
+/// the whole system does, so an app source never silences other apps.
 fn moves_default(source: Option<&SourceId>) -> bool {
-    source.is_some_and(|source| !matches!(source, SourceId::Input { .. }))
+    source == Some(&SourceId::WholeSystem)
 }
 
 impl<D: Driver> Drop for Controller<D> {
@@ -6243,12 +6243,11 @@ mod tests {
 
     // covers: S469
     #[test]
-    fn an_input_leaves_the_default_alone() {
+    fn one_app_or_an_input_leaves_the_default_alone() {
         let mut backend = backend();
         let (calls, _, _) = with_switch(&mut backend);
-        backend.connect_input("mic", "Microphone", "USB");
-        let source = SourceId::Input {
-            endpoint_id: "mic".to_owned(),
+        let source = SourceId::App {
+            root_pid: PLAYER_PID,
         };
         backend.start(&source).unwrap();
         backend.poll();
@@ -6273,10 +6272,9 @@ mod tests {
             .expect("listed");
         assert!(speakers.enabled && speakers.plays_original);
         backend.stop();
-        backend.connect_input("mic", "Microphone", "USB");
         backend
-            .start(&SourceId::Input {
-                endpoint_id: "mic".to_owned(),
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
             })
             .unwrap();
         assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
@@ -6297,27 +6295,11 @@ mod tests {
         assert_eq!(playing(&backend), [HEADPHONES]);
     }
 
-    // covers: S469
-    #[test]
-    fn an_app_source_moves_the_default_too() {
-        let mut backend = backend();
-        let (_, fake, _) = with_switch(&mut backend);
-        backend
-            .start(&SourceId::App {
-                root_pid: PLAYER_PID,
-            })
-            .unwrap();
-        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::CABLE));
-        backend.stop();
-        assert_eq!(console(&fake).as_deref(), Some(switch_fakes::SPEAKERS));
-    }
-
     // covers: S470
     #[test]
-    fn without_the_switch_an_output_the_app_plays_on_gets_no_copy() {
+    fn an_output_the_app_plays_on_gets_no_copy() {
         let mut backend = backend();
-        let (_, fake, _) = with_switch(&mut backend);
-        fake.0.borrow_mut().broken = true;
+        with_switch(&mut backend);
         backend.set_default_output(SPEAKERS);
         backend.list_outputs().unwrap();
         backend
@@ -6325,11 +6307,11 @@ mod tests {
                 root_pid: PLAYER_PID,
             })
             .unwrap();
-        assert_eq!(playing(&backend), [HEADPHONES]);
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
         backend.play_on(PLAYER_PID, HEADPHONES);
         backend.check_routing_now();
         backend.poll();
-        assert!(playing(&backend).is_empty(), "{:?}", playing(&backend));
+        assert_eq!(playing(&backend), [SPEAKERS]);
         let headphones = backend
             .outputs()
             .into_iter()
