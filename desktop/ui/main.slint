@@ -1000,10 +1000,12 @@ component PresetListRow inherits Rectangle {
                         }
                     }
 
+                    // 1 px over and under the two lines, so Segoe UI's taller
+                    // lines keep the Mac's 40 px row.
                     HorizontalLayout {
                         padding-left: 14px;
-                        padding-top: 4px;
-                        padding-bottom: 4px;
+                        padding-top: 1px;
+                        padding-bottom: 1px;
                         spacing: 8px;
 
                         VerticalLayout {
@@ -1331,9 +1333,9 @@ component PresetsCard inherits Rectangle {
                     }
                 }
 
-                // The names start 36 px in, as on the Mac.
+                // The names start 32 px in, on the Presets label's column, as on the Mac.
                 rows := VerticalLayout {
-                    padding-left: 22px;
+                    padding-left: 18px;
                     padding-right: 6px;
                     padding-bottom: 6px;
 
@@ -1368,7 +1370,7 @@ component PresetsCard inherits Rectangle {
 
                         // Its width set, so the list's height counts every wrapped line.
                         empty-note := Text {
-                            width: root.width-given - 42px;
+                            width: root.width-given - 38px;
                             text: Strings.no-presets-hint;
                             font-size: Tokens.font-size-caption;
                             color: Tokens.secondary-text;
@@ -1414,7 +1416,7 @@ component PresetsCard inherits Rectangle {
                             }
                         }
 
-                        if !root.saving: Text {
+                        if !root.saving: save-label := Text {
                             x: 14px;
                             width: parent.width - 20px;
                             text: Strings.save-preset;
@@ -1480,7 +1482,7 @@ component PresetsCard inherits Rectangle {
                         padding-bottom: 6px;
 
                         save-note := Text {
-                            width: root.width-given - 42px;
+                            width: root.width-given - 38px;
                             text: root.note;
                             font-size: Tokens.font-size-caption;
                             color: Tokens.secondary-text;
@@ -2387,7 +2389,10 @@ component NowPlayingCard inherits VerticalLayout {
                 spacing: 2px;
                 horizontal-stretch: 1;
 
+                // At most the Mac's lines: Segoe UI's are 2 px taller, all of
+                // it leading, which the default window has no room for.
                 SlidLine {
+                    max-height: 20px;
                     text: root.title;
                     old-text: root.outgoing.title;
                     sliding: root.slide.sliding;
@@ -2400,6 +2405,7 @@ component NowPlayingCard inherits VerticalLayout {
                 }
 
                 if root.subtitle != "" || (root.slide.sliding && root.outgoing.subtitle != ""): SlidLine {
+                    max-height: 16px;
                     text: root.subtitle;
                     old-text: root.outgoing.subtitle;
                     sliding: root.slide.sliding;
@@ -2441,8 +2447,10 @@ component NowPlayingCard inherits VerticalLayout {
                     }
                 }
 
+                // As wide as the Mac's 16 pt backward.fill and forward.fill.
                 IconButton {
                     glyph: Glyphs.previous;
+                    glyph-size: 21px;
                     label: Strings.previous-track;
                     clicked => {
                         root.transport(0);
@@ -2468,6 +2476,7 @@ component NowPlayingCard inherits VerticalLayout {
 
                 IconButton {
                     glyph: Glyphs.next;
+                    glyph-size: 21px;
                     label: Strings.next-track;
                     clicked => {
                         root.transport(2);
@@ -2965,7 +2974,10 @@ export component MainWindow inherits Window {
                     size: Fluent.wordmark;
                 }
 
+                // The Mac's line, as the track's lines.
                 SecondaryText {
+                    min-height: 0px;
+                    max-height: 16px;
                     text: root.status;
                     font-size: Tokens.font-size-callout;
                     accessible-role: text;
@@ -3187,6 +3199,9 @@ export component MainWindow inherits Window {
                                 text: Strings.master-volume-title;
                                 font-size: Tokens.font-size-subheadline;
                                 color: Tokens.secondary-text;
+                                // The Mac's line; Segoe UI's is 2 px taller, all of it
+                                // leading, which the default window has no room for.
+                                height: 14px;
                                 accessible-role: none;
                             }
                         }

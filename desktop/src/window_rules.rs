@@ -913,21 +913,28 @@ mod tests {
         }
     }
 
+    /// Segoe UI Variable sets smaller than the Mac's system font, so on
+    /// Windows each Mac style is 14/13 of its point size; Inter keeps it.
     #[test]
     fn text_sizes_are_the_macs_text_styles_in_logical_pixels() {
         let tokens = include_str!("../ui/tokens.slint");
-        for (style, size) in [
-            ("caption", 10),
-            ("caption2", 10),
-            ("subheadline", 11),
-            ("callout", 12),
-            ("body", 13),
-            ("headline", 13),
-            ("title3", 15),
-            ("title2", 17),
-            ("wordmark", 21),
-            ("pairing-code", 28),
+        for (style, windows, mac) in [
+            ("caption", 11, 10),
+            ("caption2", 11, 10),
+            ("subheadline", 12, 11),
+            ("callout", 13, 12),
+            ("body", 14, 13),
+            ("headline", 14, 13),
+            ("title3", 16, 15),
+            ("title2", 18, 17),
         ] {
+            let line = format!(
+                "out property <length> font-size-{style}: \
+                 Platform.os == OperatingSystemType.windows ? {windows}px : {mac}px;"
+            );
+            assert!(tokens.contains(&line), "{line}");
+        }
+        for (style, size) in [("wordmark", 21), ("pairing-code", 28)] {
             let line = format!("out property <length> font-size-{style}: {size}px;");
             assert!(tokens.contains(&line), "{line}");
         }
