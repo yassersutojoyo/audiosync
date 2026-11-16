@@ -18008,8 +18008,10 @@ do {
           "menu bar icon menu: it takes the app's theme, not the menu bar's")
     check(findingsBar.contains("guard actions.confirmDeleteZone(zone.name) else { return }")
             && findingsAlerts.contains("a.confirmDeleteZone = ")
-            && findingsAlerts.contains("prompt.addButton(withTitle: text.cancel)\n        prompt.addButton(withTitle: text.deleteZoneConfirm).hasDestructiveAction = true"),
-          "Delete Zone: asks first, with Cancel the default and Delete marked destructive")
+            && findingsAlerts.contains("let cancel = prompt.addButton(withTitle: text.cancel)\n        cancel.keyEquivalent = \"\\r\"\n        prompt.addButton(withTitle: text.deleteZoneConfirm).hasDestructiveAction = true")
+            && findingsAlerts.contains("guard event.keyCode == 53 else { return event }")
+            && findingsAlerts.contains("cancel.performClick(nil)"),
+          "Delete Zone: asks first, Return and Escape press Cancel (AppKit gives a Cancel title only Escape), Delete is destructive")
     check(findingsBar.contains("MasterTrack.level(afterScroll:"),
           "master volume: the wheel and the trackpad over the slider move it")
     check(MasterTrack.level(afterScroll: 1, precise: false, from: 40) == 46.25
