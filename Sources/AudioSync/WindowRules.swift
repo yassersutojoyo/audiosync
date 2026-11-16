@@ -1104,9 +1104,8 @@ enum PanelLayout {
     /// capture) and above its bottom, a speaker's circle inside its 36 pt
     /// row; the slider's knob fills its row.
     static let presetTopInset: CGFloat = 11.5, presetInset: CGFloat = 9.5, rowInset: CGFloat = 5
-    /// What a borderless menu draws left of its label's ink and right of its chevron (14 Nov captures:
-    /// 2.5 pt to the label's frame, then its ink 1 pt right of the title's).
-    static let menuLeadingInset: CGFloat = 3.5, menuChevronInset: CGFloat = 6.5
+    /// What a borderless menu kept right of its chevron (14 Nov capture), kept by the card's and the preset row's own.
+    static let menuChevronInset: CGFloat = 6.5
     /// What the volume number's frame keeps right of its last digit.
     static let digitBearing: CGFloat = 1.5
     /// The now playing card's padding.
@@ -1136,10 +1135,16 @@ enum PanelLayout {
     static let rowsToDivider: CGFloat = gap - rowInset
     /// Under the divider (on top of the stack's spacing).
     static let dividerToList: CGFloat = gap - spacing - rowInset
-    /// The source menu's leading padding in the card.
-    static let sourceLeading: CGFloat = -menuLeadingInset
     /// The preset menu's and the volume row's trailing padding.
     static let presetTrailing: CGFloat = cardPadding + menuChevronInset, volumeTrailing: CGFloat = cardPadding + menuChevronInset - digitBearing
+
+    static let presetRowHeight: CGFloat = 34
+    /// The preset row's label stays where a plain row centres it, so the card's gap above
+    /// holds when the picked preset's name shows under it; the row grows down by that much.
+    static func presetRow(label: CGFloat, line: CGFloat) -> (labelTop: CGFloat, height: CGFloat) {
+        let top = max(0, (presetRowHeight - label) / 2)
+        return (top, max(presetRowHeight, top + label + line + max(0, top - line / 2)))
+    }
 
     /// The gaps that show, top to bottom.
     static var gaps: [CGFloat] {
