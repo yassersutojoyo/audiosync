@@ -2745,9 +2745,9 @@ export component NameEditor inherits FocusScope {
         return reject;
     }
 
-    // Fills the name slot, as the Mac's field capped at 220 pt.
+    // Fills the name's whole room, up to the icons at the row's end, as the
+    // Mac's field does, so a long name shows whole.
     min-width: 120px;
-    max-width: 220px;
     horizontal-stretch: 1;
 
     field := TextField {
@@ -3464,7 +3464,8 @@ export component SpeakerRow inherits Rectangle {
                                     if root.item.renaming: Rectangle {
                                         horizontal-stretch: 1;
                                         min-width: 120px;
-                                        max-width: 220px;
+                                        // The line starts its items at their preferred width.
+                                        preferred-width: 100000px;
 
                                         NameEditor {
                                             y: (parent.height - self.height) / 2;
@@ -4805,7 +4806,7 @@ export component ZoneHeader inherits Rectangle {
                         }
 
                         Rectangle {
-                            horizontal-stretch: 1;
+                            horizontal-stretch: root.item.renaming ? 0 : 1;
                         }
                     }
 

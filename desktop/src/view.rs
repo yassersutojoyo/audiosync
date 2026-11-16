@@ -19856,6 +19856,64 @@ mod tests {
         );
     }
 
+    /// A rename field takes the name's whole width, up to the icons at the
+    /// row's end, as the Mac's does, so a long name shows whole: a
+    /// speaker's reaches its delay button, a zone's its volume and a
+    /// preset's its … button.
+    // covers: S228
+    #[test]
+    fn a_rename_field_is_as_wide_as_the_name_room() {
+        use i_slint_backend_testing::ElementHandle;
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        app.save_preset("Evening");
+        app.main.set_presets_open(true);
+        draw_frames();
+        let strings = app.strings();
+        let right = |label: &str| {
+            let element = ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"));
+            element.absolute_position().x + element.size().width
+        };
+        let left = |label: &str| {
+            ElementHandle::find_by_accessible_label(&app.main, label)
+                .next()
+                .unwrap_or_else(|| panic!("{label}"))
+                .absolute_position()
+                .x
+        };
+
+        let speaker = app.snapshot().speakers[1].clone();
+        app.start_rename(&speaker.id, RenamePlace::Row);
+        draw_frames();
+        let device = row_of(&app, &speaker.id).device_name;
+        assert!(
+            right(&strings.invoke_speaker_name_field(device))
+                > left(&strings.invoke_speaker_options(speaker.name.into())) - 100.0,
+            "the speaker's field reaches the delay button beside its … button"
+        );
+        app.end_rename(false);
+
+        app.start_rename("zone:den", RenamePlace::Zone);
+        draw_frames();
+        assert!(
+            right(&strings.get_new_zone_field_label())
+                > left(&strings.invoke_zone_volume("Den".into())) - 20.0,
+            "the zone's field reaches its volume"
+        );
+        app.end_rename(false);
+
+        app.ask_rename_preset(&preset_ids(&app)[0]);
+        draw_frames();
+        assert!(
+            right(&strings.get_preset_field_label())
+                > left(&strings.invoke_speaker_options("Evening".into())) - 20.0,
+            "the preset's field reaches its … button"
+        );
+    }
+
     /// The keys pass over a disabled item, as the Mac's menus do: Down from
     /// Rename… on the current preset lands on Delete, past Update.
     // covers: S449
@@ -20126,8 +20184,8 @@ mod tests {
         assert!(!app.settings.window().is_visible());
     }
 
-    /// A speaker's rename field fills its name slot, 120 to 220 px wide, at
-    /// the Mac's 22 px height, so the row keeps its 52 px step.
+    /// A speaker's rename field fills its name slot, at least 120 px wide,
+    /// at the Mac's 22 px height, so the row keeps its 52 px step.
     #[test]
     fn a_speaker_rename_field_fills_the_name_slot_at_the_macs_height() {
         let app = narrow_app(MockBackend::new());
@@ -20145,7 +20203,7 @@ mod tests {
         slint::platform::update_timers_and_animations();
         let field = element(&app, "NameEditor::field").expect("the rename field");
         let size = field.size();
-        assert!((120.0..=220.0).contains(&size.width), "{size:?}");
+        assert!(size.width >= 120.0, "{size:?}");
         assert_eq!(size.height, 22.0);
         assert_eq!(tops(), before, "no row moves while one renames");
     }
