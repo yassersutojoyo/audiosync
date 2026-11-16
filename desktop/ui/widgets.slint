@@ -438,55 +438,6 @@ export global Glyphs {
         return glyph == root.repeat-all || glyph == root.repeat-one || glyph == root.more || glyph == root.previous || glyph == root.next || glyph == root.play || glyph == root.pause;
     }
 
-    // What the speaker is; how it is reached is the kind's glyph after the
-    // name, so a network speaker's toggle shows a speaker, as on the Mac.
-    public pure function speaker(kind: SpeakerKind) -> string {
-        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 || kind == SpeakerKind.cast {
-            return root.speakers;
-        }
-        // The device's form wins over its bus; the kind line still says USB.
-        if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
-            return root.headphones;
-        }
-        if kind == SpeakerKind.bluetooth {
-            return root.bluetooth;
-        }
-        if kind == SpeakerKind.usb {
-            return root.usb;
-        }
-        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
-            return root.display;
-        }
-        if kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
-            return root.speakers;
-        }
-        return root.device;
-    }
-
-    // The small glyph after a speaker's name: how it is reached, where the
-    // toggle's glyph shows what it is.
-    public pure function kind-icon(kind: SpeakerKind) -> string {
-        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 || kind == SpeakerKind.cast {
-            return root.network;
-        }
-        if kind == SpeakerKind.bluetooth {
-            return root.bluetooth;
-        }
-        if kind == SpeakerKind.usb || kind == SpeakerKind.usb-headphones || kind == SpeakerKind.usb-speakers {
-            return root.usb;
-        }
-        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
-            return root.display;
-        }
-        if kind == SpeakerKind.headphones {
-            return root.headphones;
-        }
-        if kind == SpeakerKind.built-in {
-            return root.speakers;
-        }
-        return root.device;
-    }
-
     public pure function outline(glyph: string) -> string {
         if glyph == root.more {
             return "M8 1.5 A6.5 6.5 0 0 1 8 14.5 A6.5 6.5 0 0 1 8 1.5 Z";
@@ -822,6 +773,108 @@ export component LabelTip inherits Rectangle {
     }
 }
 
+// AudioSync's own device drawings (brand/icons): an 18 px glyph for a
+// speaker's 32 px round toggle, and a 12 px badge after its name for how it is
+// reached. The toggle shows what the speaker is, as on the Mac.
+export global DeviceIcons {
+    out property <image> zone: @image-url("../../brand/icons/zone.svg");
+    out property <image> zone16: @image-url("../../brand/icons/16/zone.svg");
+
+    public pure function glyph(kind: SpeakerKind) -> image {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
+            return @image-url("../../brand/icons/smart-speaker.svg");
+        }
+        // The device's form wins over its bus; the badge still says USB.
+        if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
+            return @image-url("../../brand/icons/headphones.svg");
+        }
+        if kind == SpeakerKind.bluetooth {
+            return @image-url("../../brand/icons/bluetooth.svg");
+        }
+        if kind == SpeakerKind.usb {
+            return @image-url("../../brand/icons/usb.svg");
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return @image-url("../../brand/icons/monitor.svg");
+        }
+        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
+            return @image-url("../../brand/icons/speaker.svg");
+        }
+        return @image-url("../../brand/icons/device.svg");
+    }
+
+    // The same drawings at 16 px, for the tray panel's 28 px circles.
+    public pure function glyph16(kind: SpeakerKind) -> image {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
+            return @image-url("../../brand/icons/16/smart-speaker.svg");
+        }
+        if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
+            return @image-url("../../brand/icons/16/headphones.svg");
+        }
+        if kind == SpeakerKind.bluetooth {
+            return @image-url("../../brand/icons/16/bluetooth.svg");
+        }
+        if kind == SpeakerKind.usb {
+            return @image-url("../../brand/icons/16/usb.svg");
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return @image-url("../../brand/icons/16/monitor.svg");
+        }
+        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
+            return @image-url("../../brand/icons/16/speaker.svg");
+        }
+        return @image-url("../../brand/icons/16/device.svg");
+    }
+
+    // The same drawings at 14 px, for the 24 px circles of a zone's speakers.
+    public pure function glyph14(kind: SpeakerKind) -> image {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
+            return @image-url("../../brand/icons/14/smart-speaker.svg");
+        }
+        if kind == SpeakerKind.headphones || kind == SpeakerKind.usb-headphones {
+            return @image-url("../../brand/icons/14/headphones.svg");
+        }
+        if kind == SpeakerKind.bluetooth {
+            return @image-url("../../brand/icons/14/bluetooth.svg");
+        }
+        if kind == SpeakerKind.usb {
+            return @image-url("../../brand/icons/14/usb.svg");
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return @image-url("../../brand/icons/14/monitor.svg");
+        }
+        if kind == SpeakerKind.cast || kind == SpeakerKind.built-in || kind == SpeakerKind.usb-speakers {
+            return @image-url("../../brand/icons/14/speaker.svg");
+        }
+        return @image-url("../../brand/icons/14/device.svg");
+    }
+
+    public pure function badge(kind: SpeakerKind) -> image {
+        if kind == SpeakerKind.airplay || kind == SpeakerKind.airplay2 {
+            return @image-url("../../brand/icons/badge-airplay.svg");
+        }
+        if kind == SpeakerKind.cast {
+            return @image-url("../../brand/icons/badge-cast.svg");
+        }
+        if kind == SpeakerKind.bluetooth {
+            return @image-url("../../brand/icons/badge-bluetooth.svg");
+        }
+        if kind == SpeakerKind.usb || kind == SpeakerKind.usb-headphones || kind == SpeakerKind.usb-speakers {
+            return @image-url("../../brand/icons/badge-usb.svg");
+        }
+        if kind == SpeakerKind.hdmi || kind == SpeakerKind.display-port {
+            return @image-url("../../brand/icons/badge-display.svg");
+        }
+        if kind == SpeakerKind.headphones {
+            return @image-url("../../brand/icons/badge-headphones.svg");
+        }
+        if kind == SpeakerKind.built-in {
+            return @image-url("../../brand/icons/badge-laptop.svg");
+        }
+        return @image-url("../../brand/icons/badge-speaker.svg");
+    }
+}
+
 // A speaker's kind as a small glyph after its name, as on the Mac. The
 // tooltip names the kind; Narrator reads it from the row's toggle.
 export component KindIcon inherits Rectangle {
@@ -830,14 +883,15 @@ export component KindIcon inherits Rectangle {
     in property <bool> lit;
     callback clicked();
 
-    width: Tokens.font-size-caption + 2px;
+    width: 12px;
 
-    Glyph {
-        width: 100%;
-        height: 100%;
-        glyph: Glyphs.kind-icon(root.kind);
-        font-size: Tokens.font-size-caption;
-        color: !root.lit ? Tokens.secondary-text : root.kind == SpeakerKind.airplay || root.kind == SpeakerKind.airplay2 || root.kind == SpeakerKind.bluetooth ? Fluent.active-blue : Tokens.teal-text;
+    Image {
+        y: round((root.height - 12px) / 2px) * 1px;
+        width: 12px;
+        height: 12px;
+        source: DeviceIcons.badge(root.kind);
+        colorize: !root.lit ? Tokens.secondary-text : root.kind == SpeakerKind.airplay || root.kind == SpeakerKind.airplay2 || root.kind == SpeakerKind.bluetooth ? Fluent.active-blue : Tokens.teal-text;
+        accessible-role: none;
     }
 
     TouchArea {
@@ -1210,7 +1264,8 @@ export component DialogButton inherits FocusScope {
 // plays, outlined while it waits (for streaming, or for a device or an
 // AirPlay speaker while streaming), grey while off.
 export component SpeakerBadge inherits Rectangle {
-    in property <string> glyph;
+    // DeviceIcons.glyph at 32 px, DeviceIcons.glyph14 at 24 px.
+    in property <image> icon;
     in property <RowState> state;
     // Filled: a speaker row passes its item's `plays`.
     in property <bool> plays: root.state == RowState.playing;
@@ -1244,8 +1299,8 @@ export component SpeakerBadge inherits Rectangle {
     height: root.size;
     border-radius: root.size / 2;
     // As the Mac's (Badge in src/window_rules.rs): a grey disc while off, a
-    // faint teal disc in a teal ring while it is on and waits, a teal disc
-    // while it plays. The disc grows in; with animation effects off it fades in.
+    // faint teal disc in a teal ring while it is on and waits, a dark teal
+    // disc while it plays. The disc grows in; with animation effects off it fades in.
     property <bool> hovered: touch.has-hover && root.enabled;
     property <bool> waits: !root.plays && root.state != RowState.off;
     property <float> fill: root.plays ? 1 : 0;
@@ -1255,7 +1310,7 @@ export component SpeakerBadge inherits Rectangle {
     }
     background: root.bare || root.plays ? transparent : root.waits ? Tokens.teal.with-alpha(0.14) : root.hovered ? #80808042 : #8080802e;
     animate background { duration: Motion.on ? 250ms : 150ms; }
-    border-width: !root.bare && root.waits ? max(1.5px, root.size / 18) : 0px;
+    border-width: !root.bare && root.waits ? (root.size == 32px ? 2px : max(1.5px, root.size / 18)) : 0px;
     border-color: Tokens.teal-text;
     opacity: root.enabled ? 1 : Tokens.disabled-opacity;
     forward-focus: focus;
@@ -1323,14 +1378,21 @@ export component SpeakerBadge inherits Rectangle {
         width: root.width * (Motion.on ? 0.6 + 0.4 * root.fill : 1);
         height: self.width;
         border-radius: self.width / 2;
-        background: root.hovered ? Tokens.teal.darker(0.15) : Tokens.teal;
+        background: root.hovered ? #147167.darker(0.15) : #147167;
         opacity: root.fill;
     }
 
-    if !root.bare: Glyph {
-        glyph: root.glyph;
-        font-size: root.size * 0.43;
-        color: root.plays ? #ffffff : root.state == RowState.off ? Tokens.secondary-text : Tokens.teal-text;
+    property <color> ink: root.plays ? #ffffff : root.state == RowState.off ? (Tokens.dark ? #e8eaea : #3a3f3f) : Tokens.teal-text;
+
+    // Centred on whole pixels: 7 px in the 32 px circle, 5 px in the 24 px one.
+    if !root.bare: Image {
+        x: (root.size - self.width) / 2;
+        y: self.x;
+        width: root.size == 32px ? 18px : 14px;
+        height: self.width;
+        source: root.icon;
+        colorize: root.ink;
+        accessible-role: none;
     }
 
     FocusRing {
@@ -3432,7 +3494,7 @@ export component SpeakerRow inherits Rectangle {
                         padding-right: 4px;
                         min-height: Fluent.row-height - 16px;
                         badge := SpeakerBadge {
-                            glyph: Glyphs.speaker(root.item.kind);
+                            icon: DeviceIcons.glyph(root.item.kind);
                             state: root.item.state;
                             plays: root.item.plays;
                             enabled: !root.item.missing;
@@ -4314,7 +4376,7 @@ export component ZoneMemberRow inherits Rectangle {
                         alignment: center;
                         badge := SpeakerBadge {
                             size: 24px;
-                            glyph: Glyphs.speaker(root.item.kind);
+                            icon: DeviceIcons.glyph14(root.item.kind);
                             state: root.item.state;
                             plays: root.item.plays;
                             name: root.item.name;
@@ -4726,7 +4788,7 @@ export component ZoneHeader inherits Rectangle {
                         alignment: center;
                         padding-right: 4px;
                         badge := SpeakerBadge {
-                            glyph: Glyphs.zone;
+                            icon: DeviceIcons.zone;
                             state: root.item.state;
                             enabled: root.live;
                             narrated: root.live;

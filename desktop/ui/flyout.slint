@@ -10,7 +10,7 @@ import { AmbientArt, AmbientLook } from "ambient.slint";
 import { IncomingCover, OutgoingSong, SlideLook, SlidLine } from "track_slide.slint";
 import { Strings } from "strings.slint";
 import { CastList, DeviceVolumeHint, NoticeItem, PresetItem, UpdateButton, RowState, SourceLook, SpeakerItem, SpeakerKind, ZoneItem } from "types.slint";
-import { Announcer, BrandMark, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, SourceMenuRow, MenuState, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
+import { Announcer, BrandMark, DeviceIcons, Divider, FocusRing, Fluent, Glyph, Glyphs, KindIcon, LabelTip, ChoiceLine, LinkButton, MarqueeText, MasterVolume, MenuDivider, MenuPanel, MenuRepaint, MenuRoom, MenuRow, SourceMenuRow, MenuState, NoticeStack, OverlayScrollView, PairPicker, QuietText, SecondaryText, SpeakerBadge, PowerSwitch, Wordmark, ZoneArrowFocus, Motion, FoldPane } from "widgets.slint";
 
 // The preset row under the source (spec S260, S264): Presets, the name of
 // the preset picked last on a line under it; its menu lists every
@@ -284,7 +284,7 @@ component SourceMenu inherits Rectangle {
 // disc grows in as the speaker starts playing; with animation effects off it
 // fades in.
 component RowDisc inherits Rectangle {
-    in property <string> glyph;
+    in property <image> icon;
     in property <bool> on;
     in property <bool> plays;
     property <float> fill: root.plays ? 1 : 0;
@@ -307,10 +307,14 @@ component RowDisc inherits Rectangle {
         opacity: Motion.on ? 1 : root.fill;
     }
 
-    Glyph {
-        glyph: root.glyph;
-        font-size: 13px;
-        color: root.plays ? #ffffff : root.on ? Tokens.teal-text : Tokens.secondary-text;
+    Image {
+        x: 6px;
+        y: 6px;
+        width: 16px;
+        height: 16px;
+        source: root.icon;
+        colorize: root.plays ? #ffffff : root.on ? Tokens.teal-text : Tokens.secondary-text;
+        accessible-role: none;
     }
 }
 
@@ -322,7 +326,7 @@ component RowDisc inherits Rectangle {
 // Windows is low or muted (spec S198). The flyout has no volume sliders, so
 // the fix is in the main window; the hint itself is in the description.
 component FlyoutRow inherits Rectangle {
-    in property <string> glyph;
+    in property <image> icon;
     in property <string> name;
     in property <string> label;
     in property <string> description;
@@ -405,7 +409,7 @@ component FlyoutRow inherits Rectangle {
         VerticalLayout {
             alignment: center;
             RowDisc {
-                glyph: root.glyph;
+                icon: root.icon;
                 on: root.state != RowState.off;
                 plays: root.plays;
                 opacity: root.enabled ? 1 : Tokens.disabled-opacity;
@@ -550,7 +554,7 @@ component FlyoutZoneHeader inherits Rectangle {
                 height: 28px;
 
                 RowDisc {
-                    glyph: Glyphs.zone;
+                    icon: DeviceIcons.zone16;
                     on: root.item.state != RowState.off;
                     plays: root.item.state == RowState.playing;
                     opacity: root.live ? 1 : Tokens.disabled-opacity;
@@ -559,7 +563,6 @@ component FlyoutZoneHeader inherits Rectangle {
                 SpeakerBadge {
                     bare: true;
                     size: 28px;
-                    glyph: Glyphs.zone;
                     state: root.item.state;
                     enabled: root.live;
                     narrated: root.live;
@@ -1250,7 +1253,7 @@ export component TrayFlyout inherits Window {
 
                                 this-pc-list := VerticalLayout {
                                     for speaker in root.this-pc: FlyoutRow {
-                                        glyph: Glyphs.speaker(speaker.kind);
+                                        icon: DeviceIcons.glyph16(speaker.kind);
                                         name: speaker.name;
                                         label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                                         description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
@@ -1370,7 +1373,7 @@ export component TrayFlyout inherits Window {
 
                                         for speaker in zone-members.shown ? zone.members : []: FlyoutRow {
                                             indent: 12px;
-                                            glyph: Glyphs.speaker(speaker.kind);
+                                            icon: DeviceIcons.glyph16(speaker.kind);
                                             name: speaker.name;
                                             label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                                             description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
@@ -1394,7 +1397,7 @@ export component TrayFlyout inherits Window {
                                 }
 
                                 for speaker in root.speakers: FlyoutRow {
-                                    glyph: Glyphs.speaker(speaker.kind);
+                                    icon: DeviceIcons.glyph16(speaker.kind);
                                     name: speaker.name;
                                     label: speaker.cast-group ? Strings.cast-group-label(speaker.name, speaker.cast-group-note) : Strings.speaker-label(speaker.name, speaker.kind, speaker.show-kind, speaker.system-name);
                                     description: Strings.flyout-speaker-description(Strings.help(speaker.state), Strings.device-volume-hint(speaker.device-volume, speaker.device-volume-percent));
