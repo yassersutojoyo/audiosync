@@ -16318,6 +16318,44 @@ mod tests {
         );
     }
 
+    /// The wheel over the master volume moves it by the volume keys' step,
+    /// a notch at a time, in the main window and the tray panel.
+    #[test]
+    fn the_wheel_over_the_master_volume_steps_it_as_the_volume_keys_do() {
+        use i_slint_backend_testing::ElementHandle;
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        app.flyout.show().expect("the tray panel shows");
+        draw_frames();
+        for (window, component) in [
+            (
+                app.main.window(),
+                ElementHandle::find_by_accessible_label(&app.main, "Master volume").next(),
+            ),
+            (
+                app.flyout.window(),
+                ElementHandle::find_by_accessible_label(&app.flyout, "Master volume").next(),
+            ),
+        ] {
+            let master = component.expect("the master volume");
+            let (at, size) = (master.absolute_position(), master.size());
+            let (x, y) = (at.x + size.width / 2.0, at.y + size.height / 2.0);
+            app.update(|b| b.set_master_volume(50.0));
+            scroll(window, x, y, 60.0);
+            assert_eq!(
+                app.snapshot().master_volume,
+                50.0 + volume_keys::STEP,
+                "a notch up"
+            );
+            scroll(window, x, y, -120.0);
+            assert_eq!(
+                app.snapshot().master_volume,
+                50.0 - volume_keys::STEP,
+                "two notches down"
+            );
+        }
+    }
+
     /// A backend with the playing Cast speaker "cc:attic", which steps by 5.
     fn cast_backend(volume_fixed: bool) -> MockBackend {
         let mut backend = MockBackend::new();
@@ -20097,6 +20135,39 @@ mod tests {
         press(window, Key::End);
         press(window, Key::Return);
         assert!(app.snapshot().zones.is_empty(), "Delete Zone ran");
+    }
+
+    /// Delete Zone asks first, as on the Mac: the zone goes only on Delete;
+    /// Cancel is the default, so Return keeps it.
+    #[test]
+    fn delete_zone_asks_first_and_return_keeps_the_zone() {
+        let mut backend = MockBackend::new();
+        backend.add_zone("zone:den", "Den", &["local:desk"]);
+        let app = main_window_over(backend);
+        let window = app.main.window();
+        let choose_delete = || {
+            app.main.set_focus_zone_part(RowPart::Options);
+            app.main.set_focus_zone_id("zone:den".into());
+            draw_frames();
+            press(window, Key::Menu);
+            press(window, Key::End);
+            press(window, Key::Return);
+        };
+        choose_delete();
+        assert_eq!(app.snapshot().zones.len(), 1, "nothing deleted yet");
+        assert!(
+            app.zone_dialog.window().is_visible(),
+            "Delete Zone asks first"
+        );
+        assert_eq!(app.zone_dialog.get_heading(), "Delete “Den”?");
+        assert_eq!(app.zone_dialog.get_confirm_label(), "Delete");
+        assert!(!app.zone_dialog.get_show_field(), "no name field");
+        press(app.zone_dialog.window(), Key::Return);
+        assert!(!app.zone_dialog.window().is_visible(), "Return answered");
+        assert_eq!(app.snapshot().zones.len(), 1, "Return cancels");
+        choose_delete();
+        app.zone_dialog.invoke_confirmed(SharedString::new());
+        assert!(app.snapshot().zones.is_empty(), "Delete deleted it");
     }
 
     /// Rename… in a speaker's, a zone's or a preset's menu, run by UI

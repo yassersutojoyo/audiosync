@@ -17996,6 +17996,24 @@ do {
           "zone header: both focusable parts take Left and Right through ZoneHeaderHit.arrowFolds, in the panel and the main window")
 }
 
+// MARK: The menu bar icon's menu, Delete Zone and the wheel over the master (MenuBar.swift, AppDelegate+Windows.swift)
+do {
+    let findingsBar = (try? String(contentsOfFile: "Sources/AudioSync/MenuBar.swift", encoding: .utf8)) ?? ""
+    let findingsAlerts = (try? String(contentsOfFile: "Sources/AudioSync/AppDelegate+Windows.swift", encoding: .utf8)) ?? ""
+    check(!findingsBar.contains(".popUp(under: button)")
+            && findingsBar.contains("statusItem.menu = menu")
+            && findingsBar.contains("button.performClick(nil)"),
+          "menu bar icon menu: AppKit places it as the status item's own menu, so no scroll arrow hides Open AudioSync")
+    check(findingsBar.contains("menu.appearance = NSApp.effectiveAppearance"),
+          "menu bar icon menu: it takes the app's theme, not the menu bar's")
+    check(findingsBar.contains("guard actions.confirmDeleteZone(zone.name) else { return }")
+            && findingsAlerts.contains("a.confirmDeleteZone = ")
+            && findingsAlerts.contains("prompt.addButton(withTitle: text.cancel)\n        prompt.addButton(withTitle: text.deleteZoneConfirm).hasDestructiveAction = true"),
+          "Delete Zone: asks first, with Cancel the default and Delete marked destructive")
+    check(findingsBar.contains("MasterTrack.level(afterScroll:"),
+          "master volume: the wheel and the trackpad over the slider move it")
+}
+
 // MARK: A delay pane closed while its field has the focus leaves no ring on a neighbour (MainWindow.swift, PanelZoneHeader.swift)
 do {
     let ringWindow = (try? String(contentsOfFile: "Sources/AudioSync/MainWindow.swift", encoding: .utf8)) ?? ""
