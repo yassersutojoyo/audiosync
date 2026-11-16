@@ -27,6 +27,11 @@ import "../res/fonts/Inter-Bold.ttf";
 export global Fluent {
     out property <string> font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Text" : "Inter";
     out property <string> display-font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Display" : "Inter";
+    // The Mac's regular, medium and semibold. Windows sets them heavier: its hinted
+    // 1x stems carry less ink than the Mac's Retina text seen at 1:1 (matched per string).
+    out property <int> weight-regular: Platform.os == OperatingSystemType.windows ? 590 : 400;
+    out property <int> weight-medium: Platform.os == OperatingSystemType.windows ? 650 : 500;
+    out property <int> weight-semibold: Platform.os == OperatingSystemType.windows ? 700 : 600;
     // Cards, the flyout and the notices (overlay radius).
     out property <length> radius-card: 8px;
     // Buttons, chips and the rows inside a card (control radius).
@@ -733,7 +738,7 @@ export component SectionTitle inherits HorizontalLayout {
     Text {
         text: root.text;
         font-size: Tokens.font-size-subheadline;
-        font-weight: 600;
+        font-weight: Fluent.weight-semibold;
         color: Tokens.text;
         accessible-role: none;
     }
@@ -1084,7 +1089,7 @@ export component LinkButton inherits Rectangle {
         Text {
             text: root.text;
             font-size: Tokens.font-size-caption;
-            font-weight: 600;
+            font-weight: Fluent.weight-semibold;
             color: root.text-color;
             vertical-alignment: center;
             overflow: root.overflow;
@@ -1153,7 +1158,7 @@ export component SmallButton inherits Rectangle {
     label := Text {
         text: root.text;
         font-size: Tokens.font-size-callout;
-        font-weight: 500;
+        font-weight: Fluent.weight-medium;
         color: Fluent.house-text;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -1580,7 +1585,7 @@ export component ToggleSwitch {
         Text {
             text: root.text;
             color: Tokens.text;
-            font-weight: root.headline ? 600 : 400;
+            font-weight: root.headline ? Fluent.weight-semibold : Fluent.weight-regular;
             vertical-alignment: center;
             accessible-role: none;
         }
@@ -3423,7 +3428,7 @@ export component SpeakerRow inherits Rectangle {
                                             height: 100%;
                                             text: root.item.name;
                                             font-size: Tokens.font-size-body;
-                                            font-weight: 400;
+                                            font-weight: Fluent.weight-regular;
                                             text-color: root.item.zone-dimmed ? Tokens.secondary-text : Tokens.text;
                                             accessible-role: none;
                                         }
@@ -4288,7 +4293,7 @@ export component ZoneMemberRow inherits Rectangle {
                                 height: 100%;
                                 text: root.item.name;
                                 font-size: Tokens.font-size-body;
-                                font-weight: 400;
+                                font-weight: Fluent.weight-regular;
                                 text-color: Tokens.text;
                                 accessible-role: none;
                             }
@@ -4707,7 +4712,7 @@ export component ZoneHeader inherits Rectangle {
                                         height: 100%;
                                         text: root.item.name;
                                         font-size: Tokens.font-size-body;
-                                        font-weight: root.item.state == RowState.playing ? 600 : 400;
+                                        font-weight: root.item.state == RowState.playing ? Fluent.weight-semibold : Fluent.weight-regular;
                                         text-color: Tokens.text;
                                         accessible-role: none;
                                     }
@@ -5081,7 +5086,7 @@ export component NoticeStack inherits VerticalLayout {
                             text: notice.heading;
                             color: Tokens.text;
                             font-size: Tokens.font-size-caption;
-                            font-weight: 600;
+                            font-weight: Fluent.weight-semibold;
                             overflow: elide;
                             accessible-role: none;
                         }

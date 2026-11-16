@@ -743,7 +743,7 @@ component SpeakerSection inherits VerticalLayout {
                         text: Strings.in-zones.to-uppercase();
                         accessible-label: Strings.in-zones;
                         font-size: Tokens.font-size-subheadline;
-                        font-weight: 500;
+                        font-weight: Fluent.weight-medium;
                         horizontal-stretch: 0;
                     }
 
@@ -1819,7 +1819,7 @@ component CalibrationCard inherits VerticalLayout {
             Text {
                 text: Strings.calibrate-before-start;
                 font-size: Tokens.font-size-caption;
-                font-weight: 600;
+                font-weight: Fluent.weight-semibold;
                 color: Tokens.secondary-text;
                 accessible-role: none;
             }
@@ -1883,7 +1883,7 @@ component CalibrationCard inherits VerticalLayout {
                 Text {
                     text: item.name;
                     font-size: Tokens.font-size-body;
-                    font-weight: 600;
+                    font-weight: Fluent.weight-semibold;
                     color: item.included ? Tokens.text : Tokens.secondary-text;
                     wrap: word-wrap;
                 }
@@ -1985,7 +1985,7 @@ component CalibrateAllSheet inherits FocusScope {
             Text {
                 text: root.zone != "" ? Strings.calibrate-zone : Strings.calibrate-all;
                 font-size: Tokens.font-size-title3;
-                font-weight: 600;
+                font-weight: Fluent.weight-semibold;
                 color: Tokens.text;
                 accessible-role: none;
             }
@@ -2028,7 +2028,7 @@ component CalibrateAllSheet inherits FocusScope {
                     Text {
                         text: root.status;
                         font-size: Tokens.font-size-body;
-                        font-weight: 600;
+                        font-weight: Fluent.weight-semibold;
                         color: Tokens.text;
                         horizontal-alignment: center;
                         wrap: word-wrap;
@@ -2077,7 +2077,7 @@ component CalibrateAllSheet inherits FocusScope {
                             Text {
                                 text: row.name;
                                 font-size: Tokens.font-size-body;
-                                font-weight: 600;
+                                font-weight: Fluent.weight-semibold;
                                 color: Tokens.text;
                                 wrap: word-wrap;
                             }
@@ -2397,7 +2397,7 @@ component NowPlayingCard inherits VerticalLayout {
                     old-text: root.outgoing.title;
                     sliding: root.slide.sliding;
                     font-size: Tokens.font-size-title3;
-                    font-weight: 600;
+                    font-weight: Fluent.weight-semibold;
                     offset: root.slide.title-offset;
                     fade: root.slide.title-fade;
                     old-offset: root.slide.old-text-offset;
@@ -2900,6 +2900,7 @@ export component MainWindow inherits Window {
     // White in light mode, as the Mac's window.
     background: Tokens.dark ? Tokens.background : Tokens.surface;
     default-font-family: Fluent.font;
+    default-font-weight: Fluent.weight-regular;
     default-font-size: Tokens.font-size-body;
 
     property <length> content-max-width: Fluent.left-column-wide + Fluent.column-gap + scroll.max-width;
