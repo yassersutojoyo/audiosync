@@ -788,6 +788,8 @@ pub struct App {
     pin_preview: Cell<bool>,
     /// Runs once, right before the main window first shows.
     before_main_shows: RefCell<Option<Box<dyn FnOnce()>>>,
+    /// Runs once, right after the main window first shows without an error.
+    after_main_shows: RefCell<Option<Box<dyn FnOnce()>>>,
     /// The password prompt of a speaker protected by a password.
     password_dialog: PasswordDialog,
     /// The speaker the password dialog is open for, while it is.
@@ -1278,6 +1280,7 @@ impl App {
             pin_for: RefCell::new(None),
             pin_preview: Cell::new(false),
             before_main_shows: RefCell::new(None),
+            after_main_shows: RefCell::new(None),
             password_dialog: PasswordDialog::new()?,
             password_for: RefCell::new(None),
             cast_address_dialog: CastAddressDialog::new()?,
@@ -1950,6 +1953,12 @@ impl App {
         *self.before_main_shows.borrow_mut() = Some(Box::new(before));
     }
 
+    /// Runs `after` once, right after the main window first shows without an error.
+    #[cfg(windows)]
+    pub fn after_main_shows(&self, after: impl FnOnce() + 'static) {
+        *self.after_main_shows.borrow_mut() = Some(Box::new(after));
+    }
+
     /// Shows the main window and brings it to the front.
     pub fn show_main(&self) {
         #[cfg(any(windows, target_os = "linux"))]
@@ -1994,6 +2003,9 @@ impl App {
         if let Err(error) = self.main.show() {
             self.show_window_error(&error);
             return;
+        }
+        if let Some(after) = self.after_main_shows.take() {
+            after();
         }
         self.apply_frame(self.main.window(), "main window", Frame::Titled);
         crate::platform::bring_to_front(self.main.window());
@@ -7233,6 +7245,21 @@ mod tests {
         chunk(&mut out, b"IDAT", &zlib);
         chunk(&mut out, b"IEND", &[]);
         out
+    }
+
+    // The renderer record is cleared from this hook, so a main window whose show fails must not run it.
+    #[cfg(windows)]
+    #[test]
+    fn the_after_main_shows_hook_runs_once_the_main_window_has_shown() {
+        let app = app_over(MockBackend::new());
+        let ran = Rc::new(Cell::new(0));
+        let count = ran.clone();
+        app.after_main_shows(move || count.set(count.get() + 1));
+        assert_eq!(ran.get(), 0);
+        app.show_main();
+        assert_eq!(ran.get(), 1);
+        app.show_main();
+        assert_eq!(ran.get(), 1);
     }
 
     // covers: S388
