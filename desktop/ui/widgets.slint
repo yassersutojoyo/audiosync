@@ -1835,12 +1835,13 @@ export component LevelSlider inherits Rectangle {
         // The Mac's small knob on dark is grey (#959595 on its window), faint while disabled.
         background: root.small && Tokens.dark ? #959595 : root.small && touch.pressed ? #ebebeb : #ffffff;
         opacity: root.idle && Tokens.dark ? 0.25 : 1;
-        // The small knob has only its shadow for an edge, as the Mac's.
-        border-width: root.small ? 0px : 1px;
-        border-color: Tokens.secondary-text;
-        drop-shadow-blur: 1.5px;
-        drop-shadow-offset-y: 0.5px;
-        drop-shadow-color: #0000004d;
+        // The Mac's small knob: on light a faint ring and a soft shadow keep it
+        // off a white window at 100; on dark the shadow alone.
+        border-width: root.small && Tokens.dark ? 0px : 1px;
+        border-color: root.small ? #0000001f : Tokens.secondary-text;
+        drop-shadow-blur: root.small && !Tokens.dark ? 3px : 1.5px;
+        drop-shadow-offset-y: root.small && !Tokens.dark ? 1px : 0.5px;
+        drop-shadow-color: root.small && !Tokens.dark ? #00000033 : #0000004d;
     }
 
     touch := TouchArea {

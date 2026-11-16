@@ -380,7 +380,7 @@ fn the_master_volume_draws_its_levels_waves_and_a_3_to_1_track() {
     assert!(master.contains("color: Tokens.text;"));
     let slider = component_body(&widgets, "LevelSlider");
     assert!(slider.contains("background: root.idle ? Tokens.text.with-alpha(0.07) : root.track;"));
-    assert!(slider.contains("border-width: root.small ? 0px : 1px;"));
+    assert!(slider.contains("border-width: root.small && Tokens.dark ? 0px : 1px;"));
 }
 
 /// The interface sources, for the checks below.
@@ -1883,13 +1883,13 @@ fn a_preset_rows_second_line_reaches_4_5_to_1_under_its_fills() {
         row[second_line..].lines().nth(1).map(str::trim),
         Some("color: Tokens.secondary-text;")
     );
-    assert!(main.contains("background: Tokens.dark ? Tokens.background : Tokens.surface;"));
-    for (appearance, window) in [
-        (Appearance::Light, "surface"),
-        (Appearance::Dark, "background"),
-    ] {
-        let text = srgb("text", appearance);
+    assert!(
+        main.contains("    background: Tokens.surface;\n    default-font-family: Fluent.font;")
+    );
+    for appearance in [Appearance::Light, Appearance::Dark] {
+        let window = "surface";
         let under = srgb(window, appearance);
+        let text = srgb("text", appearance);
         // Over the open list's own tint.
         let open = fluent_fill_alpha("open-row");
         for fill in ["row-hover", "pressed"] {
