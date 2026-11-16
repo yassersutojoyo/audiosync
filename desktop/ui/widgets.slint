@@ -112,7 +112,8 @@ export global Fold {
 }
 
 // A pane under its row, laid out from one progress that runs 0.25 s, so the
-// rows below follow it frame by frame; with Motion off it folds at once.
+// rows below follow it frame by frame; with Motion off its edge moves at
+// once and its content fades over 150 ms, as the Mac's under Reduce Motion.
 export component FoldPane inherits Rectangle {
     in property <bool> open;
     // The content may go only once the pane is folded shut.
@@ -121,7 +122,7 @@ export component FoldPane inherits Rectangle {
     in property <bool> escape-folds;
     callback fold();
     property <float> progress: root.open ? 1 : 0;
-    animate progress { duration: Motion.on ? 250ms : 0ms; }
+    animate progress { duration: Motion.on ? 250ms : 150ms; }
     property <length> height-open: max(body.min-height, body.preferred-height);
 
     min-width: body.min-width;
@@ -3807,12 +3808,53 @@ export component SpeakerRow inherits Rectangle {
                                             color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
                                         }
 
-                                        Text {
-                                            text: Strings.delay-value(root.item.delay-ms);
-                                            font-size: Tokens.font-size-subheadline;
-                                            color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
-                                            vertical-alignment: center;
-                                            accessible-role: none;
+                                        // The Mac's numeric text: a new value rolls in over
+                                        // 300 ms, up as the delay grows and down as it
+                                        // shrinks; with Motion off the two only cross-fade.
+                                        delay-roll := Rectangle {
+                                            preferred-width: delay-new.preferred-width;
+                                            clip: true;
+                                            property <int> delay: root.item.delay-ms;
+                                            property <int> last;
+                                            property <int> from;
+                                            property <int> rolls;
+                                            property <float> rolled: self.rolls;
+                                            animate rolled {
+                                                duration: 300ms;
+                                                easing: ease-out;
+                                            }
+                                            property <float> roll: clamp(1 - (self.rolls - self.rolled), 0, 1);
+                                            property <length> rise: !Motion.on ? 0px : self.delay > self.from ? self.height : -self.height;
+                                            init => {
+                                                self.last = self.delay;
+                                            }
+                                            changed delay => {
+                                                self.from = self.last;
+                                                self.last = self.delay;
+                                                self.rolls += 1;
+                                            }
+
+                                            delay-new := Text {
+                                                y: (1 - delay-roll.roll) * delay-roll.rise;
+                                                height: parent.height;
+                                                opacity: delay-roll.roll;
+                                                text: Strings.delay-value(root.item.delay-ms);
+                                                font-size: Tokens.font-size-subheadline;
+                                                color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
+                                                vertical-alignment: center;
+                                                accessible-role: none;
+                                            }
+
+                                            delay-old := Text {
+                                                y: -delay-roll.roll * delay-roll.rise;
+                                                height: parent.height;
+                                                opacity: 1 - delay-roll.roll;
+                                                text: Strings.delay-value(delay-roll.from);
+                                                font-size: Tokens.font-size-subheadline;
+                                                color: root.item.sync-open ? Tokens.teal-text : Tokens.secondary-text;
+                                                vertical-alignment: center;
+                                                accessible-role: none;
+                                            }
                                         }
                                     }
 

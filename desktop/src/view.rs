@@ -9751,8 +9751,47 @@ mod tests {
 
         app.main.global::<Motion>().set_on(false);
         app.main.invoke_sync_toggled("local:desk".into());
+        assert_eq!(after(1), full, "at once with animation effects off");
+        let step = app.strings().invoke_delay_step_accessibility(-10);
+        let fade = || {
+            i_slint_backend_testing::ElementHandle::find_by_accessible_label(&app.main, &step)
+                .next()
+                .expect("the -10 step")
+                .computed_opacity()
+        };
+        let fading = fade();
+        assert!(0.0 < fading && fading < 1.0, "its content fades in: {fading}");
+        after(200);
+        assert_eq!(fade(), 1.0, "faded in within 150 ms");
+    }
+
+    /// A row's delay rolls to a new value as the Mac's numeric text does:
+    /// the old value leaves over 300 ms as the new one comes in.
+    // covers: S450
+    #[test]
+    fn a_changed_delay_rolls_to_its_new_value() {
+        let app = app_over(MockBackend::new());
+        app.main.show().expect("the main window shows");
+        hold_clock();
         draw_frames();
-        assert_eq!(height(), full, "at once with animation effects off");
+        let leaving = || {
+            i_slint_backend_testing::ElementHandle::find_by_element_id(
+                &app.main,
+                "SpeakerRow::delay-old",
+            )
+            .map(|text| text.computed_opacity())
+            .fold(0.0, f32::max)
+        };
+        app.main.invoke_delay_stepped("local:desk".into(), 10);
+        // The row takes the new value as a frame is drawn.
+        draw_frames();
+        advance_clock(Duration::from_millis(100));
+        draw_frames();
+        let rolling = leaving();
+        assert!(0.0 < rolling && rolling < 1.0, "the old value leaves: {rolling}");
+        advance_clock(Duration::from_millis(300));
+        draw_frames();
+        assert_eq!(leaving(), 0.0, "gone after 300 ms");
     }
 
     /// The delay panel holds the Mac's small steps, 20 px high and 4 px
