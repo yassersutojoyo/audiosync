@@ -20157,6 +20157,10 @@ do {
     check(!menuBar.contains("static let zoneSymbol = \"square.stack.3d.up.fill\"")
             && !window.contains("Image(systemName: MenuBarView.zoneSymbol)"),
           "device icons: a zone's circle and its tag on a zoned speaker use the zone icon")
+    let small = read("brand/icons/14/laptop.svg")
+    check(small.contains("viewBox=\"0 0 14 14\"") && icons.contains("static let sizes: [CGFloat] = [14, 18]")
+            && badge.contains("DeviceIcon.size(circle: size)"),
+          "device icons: a smaller circle takes a glyph drawn on its own smaller grid, as 18 in 32 on the sheet")
 }
 
 print(failedChecks == 0 ? "\nALL LOGIC TESTS PASSED" : "\n\(failedChecks) FAILURE(S)")
