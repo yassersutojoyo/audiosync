@@ -650,32 +650,24 @@ mod tests {
             "the About dialog shows the copyright and the license"
         );
         assert!(
-            main.contains("help-menu := ContextMenuArea {")
-                && main.contains("root.about-requested();"),
-            "the top-level menu opens the About dialog"
+            main.contains("component GearButton")
+                && lf(main).contains("about => {\n                        root.about-requested();"),
+            "the gear's menu opens the About dialog"
         );
     }
 
     /// The Mac's menu shortcuts and what each is on Windows: the `Strings`
-    /// title of the menu item, its `@keys`, and how the docs write it. The
+    /// title of the gear's menu item (empty for a shortcut with no item, as
+    /// on the Mac's speaker panels and Equalizer row), its `@keys`, and how
+    /// the docs write it. The
     /// Mac's Hide (Command-H), Hide Others (Option-Command-H), Minimize
     /// (Command-M) and AudioSync window (Command-0) have none: Windows has no
     /// hiding an app, minimizing is the title bar's (Windows+Down), and the
     /// menu bar is in the main window itself. Its Edit menu is the text
     /// fields' own Ctrl keys.
     const MENU_SHORTCUTS: &[(&str, &str, &str, &str)] = &[
-        (
-            "Apply Typed Delay, Command-S",
-            "menu-apply-delay",
-            "Control + S",
-            "Ctrl+S",
-        ),
-        (
-            "Close Window, Command-W",
-            "menu-close-window",
-            "Control + W",
-            "Ctrl+W",
-        ),
+        ("Apply Typed Delay, Command-S", "", "Control + S", "Ctrl+S"),
+        ("Close Window, Command-W", "", "Control + W", "Ctrl+W"),
         (
             "Quit AudioSync, Command-Q",
             "menu-exit",
@@ -689,13 +681,14 @@ mod tests {
             "Ctrl+N",
         ),
         ("Refresh Devices, Command-R", "refresh-devices", "F5", "F5"),
-        (
-            "Equalizer, Option-Command-E",
-            "equalizer",
-            "Control + E",
-            "Ctrl+E",
-        ),
+        ("Equalizer, Option-Command-E", "", "Control + E", "Ctrl+E"),
         ("AudioSync Guide, Command-?", "help-title", "F1", "F1"),
+        (
+            "Settings…, Command-,",
+            "settings-menu",
+            "Control + ,",
+            "Ctrl+,",
+        ),
     ];
 
     /// Keys Windows itself takes, so no menu item may use them.
@@ -713,17 +706,21 @@ mod tests {
     fn each_mac_menu_shortcut_has_its_windows_key_in_the_menu_and_the_docs() {
         let main = include_str!("../ui/main.slint");
         let docs = include_str!("../../docs/WINDOWS_UI.md");
-        let menu = &main[main.find("title-row := ").expect("the menus are there")..];
+        let menu = &main[main
+            .find("component GearButton")
+            .expect("the gear is there")..];
+        let menu = &menu[..menu.find("\n}").unwrap_or(menu.len())];
         let shortcuts = &main[main
             .find("public function shortcut(")
             .expect("the window runs the shortcuts")..];
         let mut seen = std::collections::BTreeSet::new();
         for (mac, title, keys, written) in MENU_SHORTCUTS {
             assert!(
-                menu.contains(&format!(
-                    "title: Strings.with-keys(Strings.{title}, \"{written}\");"
-                )),
-                "{mac}: the menu shows its item with {written}"
+                title.is_empty()
+                    || menu.contains(&format!(
+                        "text: Strings.{title};\n                keys: \"{written}\";"
+                    )),
+                "{mac}: the gear's menu shows its item with {written}"
             );
             let key = match keys.strip_prefix("Control + ") {
                 Some(letter) => format!("text == \"{}\"", letter.to_lowercase()),
@@ -740,10 +737,13 @@ mod tests {
                 "{mac}: docs/WINDOWS_UI.md lists {written} under Keyboard"
             );
         }
-        let shown = menu.matches("Strings.with-keys(Strings.").count();
+        let shown = menu.matches("\n                keys: \"").count();
         assert_eq!(
             shown,
-            MENU_SHORTCUTS.len(),
+            MENU_SHORTCUTS
+                .iter()
+                .filter(|(_, t, _, _)| !t.is_empty())
+                .count(),
             "every menu shortcut is in the table"
         );
     }

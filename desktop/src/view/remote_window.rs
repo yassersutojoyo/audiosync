@@ -1,4 +1,4 @@
-//! View > Web Remote (`ui/remote.slint`) and the server behind it.
+//! Web Remote (`ui/remote.slint`) and the server behind it.
 //!
 //! The setting is kept with the windows' own settings and starts the server
 //! at launch when it was on. Every refresh publishes the page's snapshot

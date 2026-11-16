@@ -1,4 +1,4 @@
-// File > Check Setup… (S435): what AudioSync needs from Windows, one row per
+// Settings > Check Setup… (S435): what AudioSync needs from Windows, one row per
 // need with its state in words and an icon, and a line under the heading that
 // names the rows needing the user. The network and microphone rows change by
 // themselves while it shows. Escape, Ctrl+W or Close closes it.
@@ -230,7 +230,7 @@ export component SetupWindow inherits Window {
     callback open-network-settings();
     callback open-privacy-settings();
     callback close-requested();
-    // Ctrl+Q, File > Exit from this window.
+    // Ctrl+Q, the gear's Exit, from this window.
     callback exit-requested();
 
     public pure function network-status(network: SetupNetwork) -> string {

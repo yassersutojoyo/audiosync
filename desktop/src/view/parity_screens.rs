@@ -287,3 +287,81 @@ fn the_left_column_takes_the_macs_spacing() {
     assert!(window.contains("scroll := FadeScrollView {"));
     assert!(window.contains("property <length> scroll-gutter: 0px;"));
 }
+
+#[test]
+fn the_main_window_has_no_menu_row_and_a_gear_left_of_the_switch() {
+    let source = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    let window = component(&source, "MainWindow");
+    let title_row = &window[window.find("title-row := HorizontalLayout {").unwrap()..];
+    let title_row = &title_row[..title_row.find("\n    }\n").unwrap()];
+    assert!(
+        !title_row.contains("ContextMenuArea"),
+        "no menus in the top row"
+    );
+    assert!(window.contains("padding-top: title-row.height + 4px;"));
+    let gear = window.find("gear := GearButton {").expect("the gear");
+    assert!(gear < window.find("power := PowerSwitch {").unwrap());
+    assert!(window[gear..].contains("glyph-size: 16px;"));
+    let widgets = include_str!("../../ui/widgets.slint").replace("\r\n", "\n");
+    let button = component(&widgets, "IconButton");
+    assert!(button.contains("width: 32px;") && button.contains("height: 32px;"));
+    let gear = component(&source, "GearButton");
+    assert!(
+        gear.contains("label: Strings.more-options;"),
+        "Narrator names it"
+    );
+}
+
+#[test]
+fn settings_is_460_wide_with_the_macs_boxes_and_rows() {
+    let source = include_str!("../../ui/settings.slint").replace("\r\n", "\n");
+    let window = component(&source, "SettingsWindow");
+    assert!(window.contains("width: 460px;"));
+    assert!(window.contains("padding: 20px;") && window.contains("spacing: 16px;"));
+    assert!(component(&source, "SettingsRow").contains("min-height: 48px;"));
+    for title in [
+        "Strings.settings-general",
+        "Strings.menu-speakers",
+        "Strings.settings-updates",
+        "Strings.setup-title",
+    ] {
+        assert!(window.contains(&format!("title: {title};")), "{title}");
+    }
+}
+
+#[test]
+fn the_tray_panel_is_300_wide_with_the_macs_padding_and_rows() {
+    let source = include_str!("../../ui/flyout.slint").replace("\r\n", "\n");
+    let panel = component(&source, "TrayFlyout");
+    assert!(panel.contains("width: 300px;"));
+    assert!(panel.contains("padding: 14px;\n            padding-bottom: 8px;"));
+    assert!(component(&source, "FlyoutRow").contains("min-height: 36px;"));
+    assert!(panel.contains("max(6 * 36px, list.preferred-height - root.list-cut)"));
+}
+
+#[test]
+fn presets_equalizer_and_calibrate_are_36_high_rows_6_apart_with_no_border() {
+    let source = include_str!("../../ui/main.slint").replace("\r\n", "\n");
+    let quick = component(&source, "QuickRow");
+    let equalizer = component(&source, "EqualizerCard");
+    let presets = component(&source, "PresetsCard");
+    let presets = &presets[..presets.find("list := FoldPane").unwrap()];
+    for row in [quick, equalizer, presets] {
+        assert!(row.contains("min-height: 36px;"));
+        assert!(
+            !row.lines().any(|line| line.starts_with("    border-width")),
+            "no border"
+        );
+        assert!(
+            !row.contains("padding-top: 6px;\n"),
+            "both lines inside the 36"
+        );
+    }
+    assert!(quick.contains("border-radius: Fluent.radius-control;"));
+    assert!(equalizer.contains("border-radius: Fluent.radius-control;"));
+    assert!(presets.contains("Strings.no-presets : root.current;"));
+    let window = component(&source, "MainWindow");
+    let rows = &window[window.find("PresetsCard {").unwrap() - 120..];
+    assert!(rows.contains("spacing: 6px;"));
+    assert!(window.contains("button-size: 24px;"));
+}

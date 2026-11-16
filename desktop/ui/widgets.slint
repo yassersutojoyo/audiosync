@@ -394,6 +394,7 @@ export global Glyphs {
     out property <string> presets: "\u{E728}";
     out property <string> check: "\u{E73E}";
     out property <string> microphone: "\u{E720}";
+    out property <string> gear: "\u{E713}";
 
     // A switched-on output's own volume in Windows: the muted speaker while
     // muted, the speaker with one wave while low (spec S198).
@@ -489,6 +490,9 @@ export global Glyphs {
         }
         if glyph == root.bluetooth {
             return "M4.5 5 L11 10.75 L8 13.75 V2.25 L11 5.25 L4.5 11";
+        }
+        if glyph == root.gear {
+            return "M8 5.7 A2.3 2.3 0 0 1 8 10.3 A2.3 2.3 0 0 1 8 5.7 Z M8 3.4 A4.6 4.6 0 0 1 8 12.6 A4.6 4.6 0 0 1 8 3.4 Z M8 1.5 V3.4 M8 12.6 V14.5 M1.5 8 H3.4 M12.6 8 H14.5 M3.4 3.4 L4.75 4.75 M11.25 11.25 L12.6 12.6 M3.4 12.6 L4.75 11.25 M11.25 4.75 L12.6 3.4";
         }
         if glyph == root.microphone {
             return "M6 3.5 A2 2 0 0 1 10 3.5 V7.5 A2 2 0 0 1 6 7.5 Z M3.5 7.5 A4.5 4.5 0 0 0 12.5 7.5 M8 12 V14.5 M5.5 14.5 H10.5";
@@ -961,71 +965,6 @@ export component IconButton inherits Rectangle {
     }
 }
 
-// A menu's name in the main window's top row. Only Alt or F10 reaches it by
-// keyboard, as a menu bar, so Tab keeps starting at the window's content.
-// Its menu goes in as a child (a ContextMenuArea), which `open` shows.
-export component MenuName inherits Rectangle {
-    in property <string> title;
-    callback open();
-    // Left (-1) or Right (+1) asks for the neighbouring menu.
-    callback step(int);
-
-    height: 32px;
-    horizontal-stretch: 0;
-    min-width: label.preferred-width + 20px;
-    border-radius: Fluent.radius-control;
-    background: touch.pressed ? Fluent.pressed : touch.has-hover || focus.has-focus ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
-    forward-focus: focus;
-    accessible-role: button;
-    accessible-label: root.title;
-    accessible-action-default => {
-        root.open();
-    }
-
-    focus := FocusScope {
-        focus-on-click: false;
-        focus-on-tab-navigation: false;
-        key-pressed(event) => {
-            if event.text == Key.LeftArrow || event.text == Key.RightArrow {
-                root.step(event.text == Key.LeftArrow ? -1 : 1);
-                return accept;
-            }
-            if event.text == " " || event.text == Key.Return || event.text == Key.DownArrow {
-                root.open();
-                return accept;
-            }
-            if event.text == Key.Escape {
-                self.clear-focus();
-                return accept;
-            }
-            return reject;
-        }
-    }
-
-    touch := TouchArea {
-        clicked => {
-            root.open();
-        }
-    }
-
-    label := Text {
-        text: root.title;
-        color: Tokens.text;
-        font-size: Tokens.font-size-callout;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-        accessible-role: none;
-    }
-
-    FocusRing {
-        visible-focus: focus.has-focus;
-        border-radius: root.border-radius;
-    }
-
-    @children
-}
-
 // The main window's own minimize, maximize or restore, and close button.
 // Windows reports the pointer on the maximize button itself (so its snap
 // layouts open on hover), through `system-hover` and `system-pressed`.
@@ -1220,74 +1159,6 @@ export component SmallButton inherits Rectangle {
         horizontal-alignment: center;
         vertical-alignment: center;
         accessible-role: none;
-    }
-
-    FocusRing {
-        visible-focus: focus.has-focus;
-        border-radius: root.border-radius;
-    }
-}
-
-// A button that shows or hides the controls under it, with a chevron that
-// points down while they show.
-export component Disclosure inherits Rectangle {
-    in property <string> text;
-    in property <bool> expanded;
-    callback toggled();
-
-    min-width: content.min-width;
-    min-height: content.min-height;
-    preferred-width: content.preferred-width;
-    preferred-height: content.preferred-height;
-    border-radius: Fluent.radius-control;
-    background: touch.pressed ? Fluent.pressed : touch.has-hover ? Fluent.hover : transparent;
-    animate background { duration: Fluent.fast; }
-    forward-focus: focus;
-    accessible-role: button;
-    accessible-label: root.text;
-    accessible-expandable: true;
-    accessible-expanded: root.expanded;
-    accessible-action-default => {
-        root.toggled();
-    }
-
-    focus := FocusScope {
-        focus-on-click: false;
-        key-pressed(event) => {
-            if event.text == " " || event.text == Key.Return || (event.text == Key.Escape && root.expanded) {
-                root.toggled();
-                return accept;
-            }
-            return reject;
-        }
-    }
-
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.toggled();
-        }
-    }
-
-    content := HorizontalLayout {
-        padding-left: 2px;
-        padding-right: 2px;
-        spacing: 4px;
-
-        Text {
-            text: root.text;
-            font-size: Tokens.font-size-caption;
-            font-weight: 600;
-            color: Tokens.teal-text;
-            vertical-alignment: center;
-            accessible-role: none;
-        }
-
-        Glyph {
-            glyph: root.expanded ? Glyphs.chevron-down : Glyphs.chevron-right;
-            font-size: 10px;
-            color: Tokens.teal-text;
-        }
     }
 
     FocusRing {
@@ -2118,6 +1989,8 @@ export component MasterVolume inherits HorizontalLayout {
     in property <int> waves;
     // From the track's end to the number.
     in property <length> number-gap: 6px;
+    // The mute button's side: 24 in the main window, as the Mac's.
+    in property <length> button-size: 32px;
     out property <bool> slider-focused: slider.slider-focused;
     callback changed(float);
     callback mute-toggled();
@@ -2125,6 +1998,8 @@ export component MasterVolume inherits HorizontalLayout {
     spacing: 4px;
 
     IconButton {
+        width: root.button-size;
+        height: root.button-size;
         label: root.waves == 0 ? Strings.unmute-master : Strings.mute-master;
         clicked => {
             root.mute-toggled();
@@ -4763,5 +4638,206 @@ export component NoticeStack inherits VerticalLayout {
                 }
             }
         }
+    }
+}
+
+// The app's own menus (the gear's, the source picker's, a speaker's options):
+// a popup drawn in the app's colors, so it is dark with the app as the Mac's
+// menus are. MenuPanel holds the rows and the keys: the arrows, Home and End
+// pick a row with a focus ring, Enter or Space runs it, Escape or Tab closes.
+// Each MenuRow shares `current`, `keyboard`, `pulse` and `done` with it.
+export component MenuPanel inherits FocusScope {
+    in property <int> count;
+    in-out property <int> current: -1;
+    in-out property <bool> keyboard;
+    // Enter or Space bumps it; the picked row runs on the change.
+    out property <int> pulse;
+    // A row that ran bumps it, which closes the menu.
+    in-out property <int> done;
+    callback close-requested(bool);
+
+    changed done => {
+        root.close-requested(false);
+    }
+
+    init => {
+        self.focus();
+    }
+    key-pressed(event) => {
+        if root.count > 0 && event.text == Key.DownArrow {
+            root.current = mod(root.current + 1, root.count);
+            root.keyboard = true;
+            return accept;
+        }
+        if root.count > 0 && event.text == Key.UpArrow {
+            root.current = mod(max(root.current, 0) + root.count - 1, root.count);
+            root.keyboard = true;
+            return accept;
+        }
+        if root.count > 0 && (event.text == Key.Home || event.text == Key.End) {
+            root.current = event.text == Key.Home ? 0 : root.count - 1;
+            root.keyboard = true;
+            return accept;
+        }
+        if (event.text == Key.Return || event.text == " ") && root.current >= 0 {
+            root.pulse += 1;
+            return accept;
+        }
+        if event.text == Key.Escape || event.text == Key.Tab || event.text == Key.Backtab {
+            root.close-requested(true);
+            return accept;
+        }
+        return reject;
+    }
+
+    Rectangle {
+        background: Tokens.surface;
+        border-width: 1px;
+        border-color: Fluent.stroke;
+        border-radius: 8px;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 8px;
+        drop-shadow-color: #00000038;
+    }
+
+    VerticalLayout {
+        padding: 4px;
+        @children
+    }
+}
+
+// A menu row: a check column when the menu has checks, the name, and its keys
+// or a submenu's chevron at the right in the secondary color.
+export component MenuRow inherits Rectangle {
+    in property <int> index;
+    in property <string> text;
+    in property <string> keys;
+    in property <bool> checks;
+    in property <bool> checked;
+    // A submenu's row, which unfolds its rows under it and keeps the menu open.
+    in property <bool> submenu;
+    in property <bool> expanded;
+    // A submenu's rows sit a step in.
+    in property <bool> nested;
+    in-out property <int> current;
+    in-out property <bool> keyboard;
+    in property <int> pulse;
+    in-out property <int> done;
+    callback activated();
+    property <bool> selected: root.current == root.index;
+
+    function run() {
+        root.activated();
+        if !root.submenu {
+            root.done += 1;
+        }
+    }
+
+    changed pulse => {
+        if root.selected {
+            root.run();
+        }
+    }
+
+    height: 32px;
+    border-radius: Fluent.radius-control;
+    background: root.selected ? Fluent.hover : transparent;
+    accessible-role: button;
+    accessible-checkable: root.checks;
+    accessible-checked: root.checked;
+    accessible-expandable: root.submenu;
+    accessible-expanded: root.expanded;
+    accessible-label: root.text;
+    accessible-description: root.keys;
+    accessible-action-default => {
+        root.run();
+    }
+
+    TouchArea {
+        changed has-hover => {
+            if self.has-hover {
+                root.current = root.index;
+                root.keyboard = false;
+            }
+        }
+        clicked => {
+            root.run();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: root.nested ? 26px : 10px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        if root.checks: Glyph {
+            width: 14px;
+            glyph: root.checked ? Glyphs.check : "";
+            color: Tokens.teal-text;
+        }
+
+        Text {
+            text: root.text;
+            color: Tokens.text;
+            font-size: Tokens.font-size-body;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+            accessible-role: none;
+        }
+
+        if root.keys != "": Text {
+            text: root.keys;
+            color: Tokens.secondary-text;
+            font-size: Tokens.font-size-subheadline;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        if root.submenu: Rectangle {
+            width: 12px;
+            transform-rotation: root.expanded ? 90deg : 0deg;
+
+            Glyph {
+                glyph: Glyphs.chevron-right;
+                font-size: Tokens.font-size-caption;
+                color: Tokens.secondary-text;
+            }
+        }
+    }
+
+    FocusRing {
+        visible-focus: root.selected && root.keyboard;
+        border-radius: root.border-radius;
+    }
+}
+
+// A menu section's name, or a line no one picks.
+export component MenuNote inherits HorizontalLayout {
+    in property <string> text;
+    in property <bool> nested;
+
+    padding-left: root.nested ? 26px : 10px;
+    padding-right: 10px;
+    padding-top: 6px;
+    padding-bottom: 2px;
+
+    Text {
+        text: root.text;
+        color: Tokens.secondary-text;
+        font-size: Tokens.font-size-subheadline;
+        wrap: word-wrap;
+    }
+}
+
+export component MenuDivider inherits HorizontalLayout {
+    padding-left: 6px;
+    padding-right: 6px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+
+    Rectangle {
+        height: 1px;
+        background: Tokens.separator;
     }
 }

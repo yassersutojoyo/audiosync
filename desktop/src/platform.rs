@@ -688,7 +688,7 @@ pub fn bring_to_front(window: &slint::Window) {
 /// muda 0.19.3's private `MENU_UPDATE_THEME`: draws a window's menu bar dark
 /// (0) or light (1) and repaints its frame. Slint asks for muda ^0.19, so only
 /// Cargo.lock holds the version (a test checks it). Slint sends it only when
-/// Windows changes theme, so View > Appearance sends it too.
+/// Windows changes theme, so Settings > Appearance sends it too.
 #[cfg(windows)]
 const MUDA_MENU_BAR_THEME: u32 = 201;
 

@@ -4,7 +4,7 @@
 //! and offers its snap layouts on the maximize button.
 
 use crate::MainWindow;
-use crate::title_bar::{MenuKey, MenuKeyInput, MenuKeys, Mods};
+use crate::title_bar::{MenuKeyInput, MenuKeys, Mods};
 use slint::ComponentHandle;
 use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::event::{ElementState, WindowEvent};
@@ -57,9 +57,9 @@ pub fn connect(main: &MainWindow) {
 /// What a key did in the main window before Slint saw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyOutcome {
-    /// Alt or F10 put the focus on the first menu.
+    /// Alt or F10 put the focus on the gear.
     MenuFocused,
-    /// A menu opened or a menu shortcut ran; Slint doesn't get the key.
+    /// A shortcut ran; Slint doesn't get the key.
     Taken,
 }
 
@@ -92,13 +92,6 @@ impl WindowKeys {
         let input = match &key.logical_key {
             Key::Named(NamedKey::Alt) => MenuKeyInput::Alt,
             Key::Named(NamedKey::F10) => MenuKeyInput::F10,
-            Key::Character(text) => {
-                let mut chars = text.chars();
-                match (chars.next(), chars.next()) {
-                    (Some(c), None) => MenuKeyInput::Char(c),
-                    _ => MenuKeyInput::Other,
-                }
-            }
             _ => MenuKeyInput::Other,
         };
         let mods = Mods {
@@ -106,30 +99,9 @@ impl WindowKeys {
             ctrl: self.mods.control_key(),
             shift: self.mods.shift_key(),
         };
-        let strings = main.global::<crate::Strings>();
-        let titles = [
-            strings.get_menu_file(),
-            strings.get_menu_speakers(),
-            strings.get_menu_view(),
-            strings.get_menu_help(),
-        ];
-        let titles = titles.each_ref().map(|title| title.as_str());
-        match self.menus.key(input, pressed, mods, &titles) {
-            Some(MenuKey::FocusRow) => {
-                main.invoke_focus_menu(0);
-                return Some(KeyOutcome::MenuFocused);
-            }
-            Some(MenuKey::Open(index)) => {
-                // The menu runs its own modal loop: open it after this event.
-                let weak = main.as_weak();
-                slint::Timer::single_shot(std::time::Duration::ZERO, move || {
-                    if let Some(main) = weak.upgrade() {
-                        main.invoke_open_menu(index as i32);
-                    }
-                });
-                return Some(KeyOutcome::Taken);
-            }
-            None => {}
+        if self.menus.key(input, pressed, mods) {
+            main.invoke_focus_gear();
+            return Some(KeyOutcome::MenuFocused);
         }
         if !pressed {
             return None;
@@ -155,15 +127,6 @@ pub fn attach_native(main: &MainWindow) {
 
 #[cfg(not(windows))]
 pub fn attach_native(_main: &MainWindow) {}
-
-/// Tells the Windows hit test where the menus end; Slint lays them out.
-#[cfg(windows)]
-pub fn note_layout(main: &MainWindow) {
-    native::CAPTION_START.with(|start| start.set(main.get_caption_start()));
-}
-
-#[cfg(not(windows))]
-pub fn note_layout(_main: &MainWindow) {}
 
 #[cfg(windows)]
 mod native {
@@ -195,14 +158,12 @@ mod native {
 
     thread_local! {
         // A window procedure takes no context of ours; it runs on this thread.
-        pub(super) static CAPTION_START: Cell<f32> = const { Cell::new(f32::MAX) };
         static MAIN: RefCell<Option<slint::Weak<MainWindow>>> = const { RefCell::new(None) };
         static POINTER: Cell<(bool, bool)> = const { Cell::new((false, false)) };
     }
 
     pub fn attach(main: &MainWindow) {
         MAIN.with(|slot| *slot.borrow_mut() = Some(main.as_weak()));
-        super::note_layout(main);
         main.window().with_winit_window(|window| {
             use slint::winit_030::winit::platform::windows::WindowExtWindows;
             window.set_undecorated_shadow(true);
@@ -266,7 +227,6 @@ mod native {
         let layout = Layout {
             width: (rect.right - rect.left) as f32 / scale,
             height: (rect.bottom - rect.top) as f32 / scale,
-            caption_start: CAPTION_START.with(Cell::get),
             maximized,
         };
         Some(hit_test(
