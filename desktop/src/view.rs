@@ -2212,7 +2212,7 @@ impl App {
 
     /// Shows the main window and brings it to the front.
     pub fn show_main(&self) {
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(all(any(windows, target_os = "linux"), not(test)))]
         self.main
             .global::<Motion>()
             .set_on(crate::platform::animation_effects());

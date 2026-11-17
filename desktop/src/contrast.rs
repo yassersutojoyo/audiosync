@@ -2568,7 +2568,8 @@ fn shuffle_and_repeat_match_the_mac() {
         env!("CARGO_MANIFEST_DIR"),
         "/../Sources/AudioSync/MainWindow.swift"
     ))
-    .expect("the Mac's main window");
+    .expect("the Mac's main window")
+    .replace("\r\n", "\n");
     let mac = &swift[swift.find("struct ModeGlyph: View {").expect("ModeGlyph")..];
     for name in [
         "shuffleLines",

@@ -27,6 +27,8 @@ import "../res/fonts/Inter-Bold.ttf";
 export global Fluent {
     out property <string> font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Text" : "Inter";
     out property <string> display-font: Platform.os == OperatingSystemType.windows ? "Segoe UI Variable Display" : "Inter";
+    // Skia sets Segoe's small digits 1 px under their box's middle; Inter's sit on it.
+    out property <length> digit-lift: Platform.os == OperatingSystemType.windows ? 1px : 0px;
     // The Mac's regular, medium and semibold. Windows sets them heavier: its hinted
     // 1x stems carry less ink than the Mac's Retina text seen at 1:1 (matched per string).
     // One weight for both themes: a heavier weight sets the text wider, and a row
@@ -2190,9 +2192,9 @@ export component VolumeSlider inherits HorizontalLayout {
         height: 14px;
 
         QuietText {
-            // Skia draws the digits 1 px under the box's middle (measured
+            // Skia draws Segoe's digits 1 px under the box's middle (measured
             // at 1x); the Mac centres their ink on the track.
-            y: -1px;
+            y: -Fluent.digit-lift;
             width: parent.width;
             height: parent.height;
             text: root.percent ? Strings.system-volume-percent(round(slider.value)) : Strings.volume-value(slider.value);
@@ -2436,8 +2438,8 @@ export component TextField inherits Rectangle {
         HorizontalLayout {
             padding-left: root.compact ? 6px : 10px;
             padding-right: root.compact ? 6px : 10px;
-            // Skia sets the delay fields' 12 px digits 1 px under the middle.
-            padding-bottom: root.raised ? 2px : 0px;
+            // Skia sets the delay fields' 12 px Segoe digits 1 px under the middle.
+            padding-bottom: root.raised ? 2 * Fluent.digit-lift : 0px;
 
             // The text slides left under this clip so the cursor stays in
             // view: `offset` is how far, never past the end of the text.
@@ -2547,9 +2549,9 @@ component DelayStep inherits Rectangle {
         }
     }
 
-    // Skia sets the caption 1 px under its box's middle; the Mac's sits on it.
+    // Skia sets the Segoe caption 1 px under its box's middle; the Mac's sits on it.
     label := Text {
-        y: -1px;
+        y: -Fluent.digit-lift;
         height: parent.height;
         text: Strings.delay-step(root.delta);
         font-size: Tokens.font-size-caption;
@@ -4210,8 +4212,8 @@ export component SpeakerRow inherits Rectangle {
 
                                     // The Mac's 5 px ink gap: the timer's drawing is inset in its box.
                                     delay-row := HorizontalLayout {
-                                        // Skia sets the 11 px number 1 px under the box's middle.
-                                        y: -1px;
+                                        // Skia sets the 11 px Segoe number 1 px under the box's middle.
+                                        y: -Fluent.digit-lift;
                                         spacing: 2px;
                                         padding-left: 3px;
                                         padding-right: 3px;
