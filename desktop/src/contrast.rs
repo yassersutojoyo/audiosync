@@ -1282,7 +1282,7 @@ fn windows_texts_with_a_linux_twin_are_unchanged() {
 #[test]
 fn windows_help_on_hearing_twice_asks_for_no_change() {
     let text = tr_text(include_str!("../ui/strings.slint"), "help-double");
-    for wording in ["Sound settings", "shows a notice", "Show How"] {
+    for wording in ["Sound settings", "shows a notice", "Show How", "row says"] {
         assert!(!text.contains(wording), "{wording} in: {text}");
     }
     for sentence in text.split('.') {

@@ -4927,11 +4927,8 @@ impl<A: AudioBackend> AudioAdapter<A> {
                 .filter(|_| output.enabled)
                 .and_then(|device_volume| device_volume.hint()),
             system_volume: output.device_volume,
-            waiting: if output.enabled && output.plays_original {
-                Some(Waiting::PlaysOriginal)
-            } else {
-                (output.enabled && self.busy.contains(&output.id)).then_some(Waiting::ForDevice)
-            },
+            waiting: (output.enabled && self.busy.contains(&output.id))
+                .then_some(Waiting::ForDevice),
             cast: None,
             group: None,
             mic_left_out,

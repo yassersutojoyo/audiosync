@@ -460,10 +460,6 @@ pub enum Waiting {
     ForPassword,
     /// Its PIN pairing runs (S223).
     ForPin,
-    /// Windows' default output while the whole system streams without a
-    /// silent default: the original plays there, so it gets no copy and its
-    /// volume, equalizer and delay don't apply (S470).
-    PlaysOriginal,
 }
 
 /// Where a pairing's PIN prompt is.
