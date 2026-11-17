@@ -373,6 +373,12 @@ pub trait Driver {
     /// output.
     fn session_pids(&mut self) -> Result<Vec<u32>, BackendError>;
 
+    /// The IDs of the processes that show a top-level window on the
+    /// desktop, so an app can be offered before it plays.
+    fn window_pids(&mut self) -> Vec<u32> {
+        Vec::new()
+    }
+
     /// The connected render endpoints, and notes for the log on the ones
     /// left out or listed without their properties.
     fn outputs(&mut self) -> Result<Listing, BackendError>;
@@ -4699,7 +4705,13 @@ impl<D: Driver> Controller<D> {
     fn read_sources(&mut self) -> Result<Vec<SourceInfo>, BackendError> {
         let processes = self.driver.processes()?;
         let session_pids = self.driver.session_pids()?;
-        let mut sources = source_list(&processes, &session_pids, self.driver.own_pid());
+        let window_pids = self.driver.window_pids();
+        let mut sources = source_list(
+            &processes,
+            &session_pids,
+            &window_pids,
+            self.driver.own_pid(),
+        );
         match self.driver.inputs() {
             Ok(readings) => {
                 if self.inputs_error.take().is_some() {

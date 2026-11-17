@@ -94,6 +94,10 @@ impl Driver for WasapiDriver {
         processes::audio_session_pids()
     }
 
+    fn window_pids(&mut self) -> Vec<u32> {
+        processes::window_pids()
+    }
+
     fn outputs(&mut self) -> Result<Listing, BackendError> {
         devices::render_endpoints()
     }

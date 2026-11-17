@@ -356,6 +356,7 @@ impl RendererHandle for MockRenderer {
 pub struct MockDriver {
     processes: Vec<ProcessEntry>,
     session_pids: Vec<u32>,
+    window_pids: Vec<u32>,
     outputs: Vec<Endpoint>,
     /// The active capture endpoints, as Windows would describe them.
     inputs: Vec<EndpointReading>,
@@ -450,6 +451,7 @@ impl MockDriver {
                 },
             ],
             session_pids: Vec::new(),
+            window_pids: Vec::new(),
             outputs: Vec::new(),
             inputs: Vec::new(),
             inputs_error: None,
@@ -683,6 +685,10 @@ impl Driver for MockDriver {
             return Err(error.clone());
         }
         Ok(self.session_pids.clone())
+    }
+
+    fn window_pids(&mut self) -> Vec<u32> {
+        self.window_pids.clone()
     }
 
     fn outputs(&mut self) -> Result<Listing, BackendError> {
@@ -980,6 +986,13 @@ impl Controller<MockDriver> {
     /// stream yet.
     pub fn add_silent_app(&mut self, pid: u32, executable: &str) {
         self.add_process(pid, EXPLORER_PID, executable, false);
+    }
+
+    /// Starts an app, started by Explorer, that shows a window but hasn't
+    /// opened an audio stream yet.
+    pub fn add_windowed_app(&mut self, pid: u32, executable: &str) {
+        self.add_process(pid, EXPLORER_PID, executable, false);
+        self.driver_mut().window_pids.push(pid);
     }
 
     /// Ends the audio session of process `pid`, which keeps running (as an

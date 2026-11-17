@@ -8129,6 +8129,27 @@ mod tests {
         assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
     }
 
+    // covers: S12
+    #[test]
+    fn a_running_app_with_a_window_is_offered_before_it_plays() {
+        let mut adapter = adapter();
+        adapter.audio_mut().add_windowed_app(2600, "spotify.exe");
+        adapter.audio_mut().add_windowed_app(2700, "Spotify.exe");
+        adapter.refresh_devices();
+        let offered: Vec<_> = adapter
+            .snapshot()
+            .sources
+            .into_iter()
+            .filter(|s| s.name == "Spotify")
+            .collect();
+        assert_eq!(offered.len(), 1, "one entry per executable: {offered:?}");
+        adapter.select_source(&offered[0].id);
+        turn_on(&mut adapter, SPEAKERS);
+        assert!(adapter.snapshot().running);
+        assert_eq!(captures(&adapter), [(LoopbackMode::IncludeTree, 2600)]);
+        assert!(messages(&adapter).is_empty(), "{:?}", messages(&adapter));
+    }
+
     // covers: S163
     #[test]
     fn a_new_source_while_streaming_starts_capture_again() {
