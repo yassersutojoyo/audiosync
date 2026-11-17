@@ -411,6 +411,13 @@ pub trait Driver {
     /// output changes.
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError>;
 
+    /// Whether an audio session was created on a render endpoint since the
+    /// last call (S470). The notification runs on a system thread and only
+    /// marks.
+    fn new_audio_sessions(&mut self) -> bool {
+        false
+    }
+
     /// Starts following the endpoint `id`'s own mute and master volume
     /// (spec S195): a change notification from Windows marks it for
     /// [`Driver::endpoint_volume_changes`]. The notification runs on a system
@@ -1410,6 +1417,11 @@ impl<D: Driver> Controller<D> {
                 own.as_ref()
                     .is_some_and(|own| own.eq_ignore_ascii_case(&process.exe))
             });
+        // A paused app moves too, so its first note plays where nobody
+        // listens; Windows refuses a process with no audio session at all.
+        let idle_root = own
+            .filter(|_| !playing.iter().any(|process| process.pid == root))
+            .map(|exe| Process { pid: root, exe });
         if let Some(helper) = shared.first() {
             let exe = helper.exe.clone();
             self.say_once("shared", || {
@@ -1438,8 +1450,31 @@ impl<D: Driver> Controller<D> {
         let lines =
             self.app_redirect
                 .redirect(endpoints.as_mut(), store.as_mut(), &silent, &playing);
+        let idle_lines = idle_root.map(|root| {
+            let lines = self.app_redirect.redirect(
+                endpoints.as_mut(),
+                store.as_mut(),
+                &silent,
+                std::slice::from_ref(&root),
+            );
+            let moved = self
+                .app_redirect
+                .record()
+                .is_some_and(|record| record.apps.iter().any(|app| app.exe == root.exe));
+            (lines, moved)
+        });
         for line in lines {
             self.log.log(|| line);
+        }
+        // Refused until the app opens a session: said once, not every check.
+        if let Some((lines, moved)) = idle_lines {
+            for line in lines {
+                if moved {
+                    self.log.log(|| line);
+                } else {
+                    self.say_once("idle", || line);
+                }
+            }
         }
     }
 
@@ -4714,6 +4749,9 @@ impl<D: Driver> AudioBackend for Controller<D> {
                 if self.next_start.is_some() {
                     self.switch_from = from;
                 }
+                // Moved now, not at the first poll: a paused app's first note
+                // would double on the output it plays on (S471).
+                self.sync_app_output(true);
                 Ok(())
             }
             Err(error) => {
@@ -5608,8 +5646,15 @@ impl<D: Driver> AudioBackend for Controller<D> {
         // Before the outputs, so one a captured app plays on is held out in
         // this pass (S470).
         let now = Instant::now();
-        self.check_routing_if_due(now);
-        self.sync_app_output(false);
+        // A new session may be the app starting to play: checked at once,
+        // so its output is held out or the app moved before its first note.
+        let new_session = self.driver.new_audio_sessions();
+        if new_session {
+            self.check_routing(now);
+        } else {
+            self.check_routing_if_due(now);
+        }
+        self.sync_app_output(new_session);
         let failures = self.sync_outputs();
         self.release_held_leads(true);
         // An output that left or joined moves the others (S177).
@@ -6681,6 +6726,43 @@ mod tests {
 
     fn player_output(fake: &app_fakes::Shared<app_fakes::Fake>) -> String {
         fake.0.borrow().output("player.exe", Role::Console)
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_app_with_no_active_session_is_moved_as_the_stream_starts() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn a_new_session_of_the_app_is_checked_at_once() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        apps.0.borrow_mut().sessionless.push(PLAYER_PID);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        backend.poll();
+        assert_eq!(player_output(&apps), "");
+        apps.0.borrow_mut().sessionless.clear();
+        backend.open_session(PLAYER_PID, SPEAKERS);
+        backend.poll();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        assert_eq!(playing(&backend), [HEADPHONES]);
     }
 
     // covers: S471

@@ -400,6 +400,8 @@ pub struct MockDriver {
     /// The listeners, notifications and writes of the outputs' own volumes.
     device_volumes: DeviceVolumes,
     endpoint_audio_error: Option<BackendError>,
+    /// An audio session was created since the controller last asked.
+    new_sessions: bool,
     faded: Arc<AtomicUsize>,
     hold_fades: Arc<AtomicBool>,
     captures_started: Vec<CaptureTarget>,
@@ -472,6 +474,7 @@ impl MockDriver {
             volumes: BTreeMap::new(),
             device_volumes: DeviceVolumes::default(),
             endpoint_audio_error: None,
+            new_sessions: false,
             faded: Arc::new(AtomicUsize::new(0)),
             hold_fades: Arc::new(AtomicBool::new(false)),
             captures_started: Vec::new(),
@@ -780,6 +783,10 @@ impl Driver for MockDriver {
         self.device_volumes.record.lock().watched.remove(id);
         self.device_volumes.changed.remove(id);
         self.device_volumes.held.remove(id);
+    }
+
+    fn new_audio_sessions(&mut self) -> bool {
+        std::mem::take(&mut self.new_sessions)
     }
 
     fn endpoint_volume_changes(&mut self) -> Vec<String> {
@@ -1420,6 +1427,13 @@ impl Controller<MockDriver> {
         if let Some(pids) = self.driver_mut().active_sessions.get_mut(id) {
             pids.retain(|&active| active != pid);
         }
+    }
+
+    /// Gives process `pid` a new active audio session on output `id`, and
+    /// raises Windows' notice of a new session.
+    pub fn open_session(&mut self, pid: u32, id: &str) {
+        self.play_on(pid, id);
+        self.driver_mut().new_sessions = true;
     }
 
     /// Moves the active session of process `pid` from output `from` to

@@ -22,6 +22,7 @@ mod microphone;
 pub(crate) mod power;
 mod processes;
 mod routing;
+mod sessions;
 mod volume;
 
 use std::sync::Arc;
@@ -57,6 +58,8 @@ pub struct WasapiDriver {
     formats: endpoint::FormatReads,
     own_pid: u32,
     power: power::PowerWatch,
+    /// New audio sessions, when the watcher could start.
+    sessions: Option<sessions::SessionWatcher>,
 }
 
 impl WasapiDriver {
@@ -68,6 +71,7 @@ impl WasapiDriver {
             formats: endpoint::FormatReads::default(),
             own_pid: std::process::id(),
             power: power::PowerWatch::start(),
+            sessions: sessions::SessionWatcher::start().ok(),
         })
     }
 }
@@ -118,6 +122,12 @@ impl Driver for WasapiDriver {
 
     fn endpoint_audio(&mut self) -> Result<Vec<EndpointAudio>, BackendError> {
         routing::endpoint_audio()
+    }
+
+    fn new_audio_sessions(&mut self) -> bool {
+        self.sessions
+            .as_ref()
+            .is_some_and(sessions::SessionWatcher::take_created)
     }
 
     fn watch_endpoint_volume(&mut self, id: &str) -> Result<(), BackendError> {
