@@ -332,6 +332,12 @@ final class FreshLinkWatch {
     private var pending: [String: (ticket: Int, session: Int)] = [:]
     private var leftIn: [String: Int] = [:]
     private var calm: [String: (ticket: Int, session: Int)] = [:]
+    /// Outputs whose next start in that session re-seats the others: the first
+    /// after a return mid-session, and the one after the calm restart.
+    private var reseat: [String: Int] = [:]
+    /// The uptime of each output's latest re-seat; the next waits `reseatEveryS`.
+    private var reseatedAt: [String: Double] = [:]
+    static let reseatEveryS = 300.0
     private var nextTicket = 0
     /// Outputs between their restart's fade-out and their new start: the
     /// sync leaves them off.
@@ -347,6 +353,7 @@ final class FreshLinkWatch {
         if let before = listed {
             for uid in before.subtracting(current) {
                 calm[uid] = nil
+                reseat[uid] = nil
                 leftIn[uid] = session
             }
             for uid in current.subtracting(before) {
@@ -355,6 +362,7 @@ final class FreshLinkWatch {
                 guard let session, left == session else { continue }
                 nextTicket += 1
                 calm[uid] = (nextTicket, session)
+                reseat[uid] = session
                 armed[uid] = nextTicket
             }
         }
@@ -393,6 +401,7 @@ final class FreshLinkWatch {
         } else if let late = calm[uid], late.ticket == ticket {
             calm[uid] = nil
             armed = late
+            reseat[uid] = late.session
         } else {
             return false
         }
@@ -403,10 +412,31 @@ final class FreshLinkWatch {
 
     func release(uid: String) { held.remove(uid) }
 
+    /// Whether output `uid`, just started in `session` at `now`, re-seats the
+    /// other outputs; true once per arming, and at most once per `reseatEveryS`.
+    func takeReseat(uid: String, session: Int, now: Double) -> Bool {
+        guard reseat.removeValue(forKey: uid) == session else { return false }
+        if let last = reseatedAt[uid], now - last < Self.reseatEveryS { return false }
+        reseatedAt[uid] = now
+        return true
+    }
+
+    /// The re-seat armed for `uid` goes: its restart's new start failed.
+    func dropReseat(uid: String) { reseat[uid] = nil }
+
+    /// The forced `setDelay` calls that re-seat every running output but
+    /// `uid`, each at its current hold-back; one whose hold-back moved from
+    /// `before` was re-timed by the same sync and already faded once.
+    static func reseats(of uid: String, running: [String], holdBacks: [String: Double],
+                        before: [String: Double]) -> [String: Double] {
+        holdBacks.filter { $0.key != uid && running.contains($0.key) && before[$0.key] == $0.value }
+    }
+
     /// The output stopped another way (switched off, lost): no restart.
     func cancel(uid: String) {
         pending[uid] = nil
         calm[uid] = nil
+        reseat[uid] = nil
     }
 
     /// The Mac goes to sleep: the restarts still due are dropped, since the link's
@@ -416,6 +446,7 @@ final class FreshLinkWatch {
         let dropped = Array(pending.keys)
         pending = [:]
         calm = [:]
+        reseat = [:]
         return dropped
     }
 }
