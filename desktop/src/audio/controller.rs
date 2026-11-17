@@ -4192,6 +4192,11 @@ impl<D: Driver> Controller<D> {
             said_waiting: false,
         });
         self.refresh_if_needed(false);
+        // An app already playing holds its output out from the first pass,
+        // not the first poll (S470).
+        if self.default_output.is_some() && !matches!(source, SourceId::WholeSystem) {
+            self.check_routing(Instant::now());
+        }
         let failures = self.sync_outputs();
         self.report_failures(failures);
         // An output that couldn't start was turned off: the others no
@@ -6700,6 +6705,22 @@ mod tests {
         backend.play_on(PLAYER_PID, HEADPHONES);
         backend.check_routing_now();
         backend.poll();
+        assert_eq!(playing(&backend), [SPEAKERS]);
+    }
+
+    // covers: S470
+    #[test]
+    fn an_output_the_app_already_plays_on_gets_no_copy_at_the_start() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.list_outputs().unwrap();
+        backend.play_on(PLAYER_PID, HEADPHONES);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
         assert_eq!(playing(&backend), [SPEAKERS]);
     }
 
