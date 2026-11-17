@@ -2752,6 +2752,11 @@ export component MainWindow inherits Window {
     property <string> status-b;
     property <bool> status-b-front;
     property <bool> status-was-running;
+    // The latest flip's progress, stepped by frames rather than the clock: a
+    // start that keeps the UI thread busy then delays the fade instead of
+    // skipping it, as the Mac's runs on while its main thread is busy.
+    property <float> status-progress: 1;
+    property <float> status-eased: Motion.on ? root.status-progress * root.status-progress * (3 - 2 * root.status-progress) : root.status-progress;
     // For the layout tests (src/view.rs): the left column's content and its room.
     out property <length> left-content-height: left-column.content-height;
     out property <length> left-visible-height: left-column.visible-height;
@@ -3006,9 +3011,17 @@ export component MainWindow inherits Window {
     changed running => {
         power.checked = root.running;
     }
+    Timer {
+        interval: 16ms;
+        running: root.status-progress < 1;
+        triggered => {
+            root.status-progress = min(1, root.status-progress + 16ms / (Motion.on ? 250ms : 150ms));
+        }
+    }
     changed status => {
         if root.running != root.status-was-running {
             root.status-was-running = root.running;
+            root.status-progress = 1 - root.status-progress;
             if root.status-b-front {
                 root.status-a = root.status;
             } else {
@@ -3090,11 +3103,7 @@ export component MainWindow inherits Window {
                         wrap: no-wrap;
                         overflow: elide;
                         font-size: Tokens.font-size-callout;
-                        opacity: root.status-b-front ? 0 : 1;
-                        animate opacity {
-                            duration: Motion.on ? 250ms : 150ms;
-                            easing: Motion.on ? ease-in-out : linear;
-                        }
+                        opacity: root.status-b-front ? 1 - root.status-eased : root.status-eased;
                     }
 
                     header-status-other := QuietText {
@@ -3104,11 +3113,7 @@ export component MainWindow inherits Window {
                         wrap: no-wrap;
                         overflow: elide;
                         font-size: Tokens.font-size-callout;
-                        opacity: root.status-b-front ? 1 : 0;
-                        animate opacity {
-                            duration: Motion.on ? 250ms : 150ms;
-                            easing: Motion.on ? ease-in-out : linear;
-                        }
+                        opacity: root.status-b-front ? root.status-eased : 1 - root.status-eased;
                     }
                 }
             }
