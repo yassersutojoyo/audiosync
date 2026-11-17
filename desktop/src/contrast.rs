@@ -437,6 +437,29 @@ fn camel_case(kebab: &str) -> String {
     out
 }
 
+/// Dark body text is the Mac's label color as its window shows it
+/// (Color.primary, Brand.swift:54: white at 84.7% over #323232, 223.6),
+/// not the wordmark's off-white; secondary text follows at 0.7.
+#[test]
+fn dark_body_text_is_the_macs_label_color() {
+    assert_eq!(token("text").dark, [0xe0, 0xe0, 0xe0]);
+}
+
+/// An off speaker's toggle glyph is the Mac's `.secondary`
+/// (MenuBar.swift:2199-2205): black at 50% on light, white at 55% on dark.
+#[test]
+fn an_off_speakers_glyph_is_the_macs_secondary() {
+    let line = include_str!("../ui/widgets.slint")
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("property <color> ink: root.plays ?"))
+        .expect("the toggle's ink");
+    assert!(
+        line.contains("RowState.off ? (Tokens.dark ? #ffffff8c : #00000080)"),
+        "{line}"
+    );
+}
+
 /// Every token color the UI draws text or icons in is covered by the
 /// contrast pairs, so a new text color can't skip the check above.
 #[test]
