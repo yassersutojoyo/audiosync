@@ -4192,10 +4192,17 @@ impl<D: Driver> Controller<D> {
             said_waiting: false,
         });
         self.refresh_if_needed(false);
-        // An app already playing holds its output out from the first pass,
-        // not the first poll (S470).
+        // An app already playing is moved, then holds its output out from
+        // the first pass, not the first poll (S470, S471).
         if self.default_output.is_some() && !matches!(source, SourceId::WholeSystem) {
+            self.sync_app_output(true);
             self.check_routing(Instant::now());
+            // The app may still be following the move: what this check saw
+            // drops at its first idle check, and the first poll checks again.
+            for played in &mut self.routing.played_on {
+                played.idle_checks = routing::HOLD_CHECKS;
+            }
+            self.routing.last_check = None;
         }
         let failures = self.sync_outputs();
         self.report_failures(failures);
@@ -6784,6 +6791,27 @@ mod tests {
         backend.poll();
         assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
         assert_eq!(playing(&backend), [HEADPHONES]);
+    }
+
+    // covers: S470, S471
+    #[test]
+    fn an_output_the_app_leaves_for_the_move_at_the_start_plays_at_the_first_poll() {
+        let mut backend = backend();
+        with_switch(&mut backend);
+        backend.set_default_output(SPEAKERS);
+        backend.connect_output_as(CABLE, "Cable Input", OutputKind::Virtual);
+        backend.list_outputs().unwrap();
+        let (apps, _) = with_app_outputs(&mut backend, None);
+        backend.play_on(PLAYER_PID, SPEAKERS);
+        backend
+            .start(&SourceId::App {
+                root_pid: PLAYER_PID,
+            })
+            .unwrap();
+        assert_eq!(player_output(&apps), render_interface(switch_fakes::CABLE));
+        backend.move_session(PLAYER_PID, SPEAKERS, CABLE);
+        backend.poll();
+        assert_eq!(playing(&backend), [HEADPHONES, SPEAKERS]);
     }
 
     // covers: S471
